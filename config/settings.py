@@ -14,13 +14,16 @@ class Settings(BaseSettings):
 
     # Temporal
     temporal_host: str = "localhost:7233"
-    temporal_namespace: str = "deal-sourcing"
-    temporal_task_queue: str = "deal-sourcing-tasks"
+    temporal_namespace: str = "commercial-resi"
+    temporal_task_queue: str = "commercial-resi-tasks"
 
     # API
     api_secret_key: str = "change-me-in-production"
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000"]
+
+    # External APIs
+    epc_api_key: str = ""
 
     # Scraping controls
     scrape_concurrency: int = 3
