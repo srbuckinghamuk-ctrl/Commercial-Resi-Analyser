@@ -2,8 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system deps for Playwright
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget curl gnupg ca-certificates \
     libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libdbus-1-3 libxcb1 libxkbcommon0 libx11-6 \
@@ -12,9 +11,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+COPY app/__init__.py app/__init__.py
 RUN pip install --no-cache-dir -e ".[dev]"
 
-# Install Playwright browsers
 RUN playwright install chromium
 
 COPY . .
@@ -23,3 +22,5 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 EXPOSE 8000
+
+CMD ["uvicorn", "app.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
