@@ -52,7 +52,7 @@ export function buildAppraisalContent(project: Project, appraisal: FinancialAppr
   lines.push(`  Profit on Cost: ${appraisal.profit_on_cost_pct != null ? formatPct(appraisal.profit_on_cost_pct) : 'N/A'}`);
   lines.push(`  Profit on GDV: ${appraisal.profit_on_gdv_pct != null ? formatPct(appraisal.profit_on_gdv_pct) : 'N/A'}`);
   lines.push(`  Return on Equity: ${appraisal.return_on_equity_pct != null ? formatPct(appraisal.return_on_equity_pct) : 'N/A'}`);
-  lines.push(`  IRR: ${appraisal.irr != null ? formatPct(appraisal.irr * 100) : 'N/A'}`);
+  lines.push(`  IRR: ${appraisal.irr != null ? formatPct(appraisal.irr) : 'N/A'}`);
   lines.push(`  Residual Land Value: ${appraisal.rlv_pence ? formatPence(appraisal.rlv_pence) : 'N/A'}`);
   lines.push('');
   lines.push(`Report generated: ${new Date().toLocaleDateString('en-GB')}`);

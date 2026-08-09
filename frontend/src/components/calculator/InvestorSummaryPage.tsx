@@ -1,15 +1,12 @@
 import type { Project } from '../../types';
 import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../../lib/conversion-types';
+import { penceToPounds } from '../../lib/format';
 
 interface Props {
   inputs: CalculatorInputs;
   metrics: AppraisalMetrics;
   cashflow: CashflowResult;
   project: Project;
-}
-
-function penceToPounds(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
 }
 
 export default function InvestorSummaryPage({ inputs, metrics, cashflow, project }: Props) {

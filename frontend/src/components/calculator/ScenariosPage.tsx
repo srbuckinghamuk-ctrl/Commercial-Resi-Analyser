@@ -1,14 +1,11 @@
 import { useMemo } from 'react';
 import type { CalculatorInputs, ScenarioOverrides } from '../../lib/conversion-types';
 import { calculateAppraisal } from '../../lib/conversion-calc-engine';
+import { penceToPounds } from '../../lib/format';
 
 interface Props {
   inputs: CalculatorInputs;
   onChange: (partial: Partial<CalculatorInputs>) => void;
-}
-
-function penceToPounds(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
 }
 
 type ScenarioKey = 'base' | 'upside' | 'downside';

@@ -85,7 +85,7 @@ describe('calculateTotalProfessionalFees', () => {
       sound_insulation_pence: 0,
       part_l_compliance_pence: 0,
     };
-    expect(calculateTotalProfessionalFees(costs)).toBe(3_609_600);
+    expect(calculateTotalProfessionalFees(costs, 1)).toBe(3_609_600);
   });
 });
 

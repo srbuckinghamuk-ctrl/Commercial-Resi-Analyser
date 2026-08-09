@@ -1,14 +1,11 @@
 import { useCallback } from 'react';
 import type { CalculatorInputs, AppraisalMetrics, ProposedUnit, UnitType } from '../../lib/conversion-types';
+import { penceToPounds } from '../../lib/format';
 
 interface Props {
   inputs: CalculatorInputs;
   onChange: (partial: Partial<CalculatorInputs>) => void;
   metrics: AppraisalMetrics;
-}
-
-function penceToPounds(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
 }
 
 const UNIT_TYPES: { value: UnitType; label: string }[] = [

@@ -110,7 +110,6 @@ export interface AppraisalMetrics {
   profit_on_cost_pct: number;
   profit_on_gdv_pct: number;
   return_on_equity_pct: number;
-  development_margin_pct: number;
   irr_monthly: number;
   irr_annual: number;
   rlv_pence: number;

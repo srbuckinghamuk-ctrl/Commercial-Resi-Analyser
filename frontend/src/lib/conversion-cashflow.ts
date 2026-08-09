@@ -14,7 +14,7 @@ export function buildCashflow(inputs: CalculatorInputs): CashflowResult {
 
   const acquisition = calculateTotalAcquisitionCost(inputs.acquisition);
   const construction = calculateTotalConstructionCost(inputs.conversion_costs);
-  const professional = calculateTotalProfessionalFees(inputs.conversion_costs);
+  const professional = calculateTotalProfessionalFees(inputs.conversion_costs, inputs.unit_mix.units.length);
   const gdv = calculateGdv(inputs.unit_mix.units);
 
   const monthlyRate = inputs.finance.interest_rate_annual_pct / 100 / 12;
@@ -37,11 +37,11 @@ export function buildCashflow(inputs: CalculatorInputs): CashflowResult {
       drawdown = acquisition;
     }
 
-    if (m >= 1 && m <= constructionMonths) {
+    if ((totalMonths === 1 || m >= 1) && m <= constructionMonths) {
       drawdown += monthlyConstruction;
     }
 
-    if (m >= 1 && m <= professionalMonths) {
+    if ((totalMonths === 1 || m >= 1) && m <= professionalMonths) {
       drawdown += monthlyProfessional;
     }
 

@@ -31,9 +31,9 @@ export function calculateTotalConstructionCost(costs: ConversionCostInputs): num
   return baseCost + contingency + compliance;
 }
 
-export function calculateTotalProfessionalFees(costs: ConversionCostInputs): number {
+export function calculateTotalProfessionalFees(costs: ConversionCostInputs, unitCount: number = 1): number {
   return (
-    costs.prior_approval_fee_per_dwelling_pence +
+    costs.prior_approval_fee_per_dwelling_pence * Math.max(1, unitCount) +
     costs.cil_s106_pence +
     costs.architect_pence +
     costs.structural_engineer_pence +
@@ -78,7 +78,7 @@ export function calculateAppraisal(inputs: CalculatorInputs): AppraisalMetrics {
   const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
   const totalAcquisition = calculateTotalAcquisitionCost(inputs.acquisition);
   const totalConstruction = calculateTotalConstructionCost(inputs.conversion_costs);
-  const totalProfessional = calculateTotalProfessionalFees(inputs.conversion_costs);
+  const totalProfessional = calculateTotalProfessionalFees(inputs.conversion_costs, inputs.unit_mix.units.length);
 
   const totalCostBeforeFinance = totalAcquisition + totalConstruction + totalProfessional;
   const loanAmount = Math.round((totalCostBeforeFinance * inputs.finance.ltv_pct) / 100);
@@ -96,7 +96,6 @@ export function calculateAppraisal(inputs: CalculatorInputs): AppraisalMetrics {
   const profitOnCost = totalCost > 0 ? (profit / totalCost) * 100 : 0;
   const profitOnGdv = gdv > 0 ? (profit / gdv) * 100 : 0;
   const returnOnEquity = equityRequired > 0 ? (profit / equityRequired) * 100 : 0;
-  const devMargin = gdv > 0 ? (profit / gdv) * 100 : 0;
 
   const cashflows: number[] = [];
   cashflows.push(-equityRequired);
@@ -123,7 +122,6 @@ export function calculateAppraisal(inputs: CalculatorInputs): AppraisalMetrics {
     profit_on_cost_pct: Math.round(profitOnCost * 100) / 100,
     profit_on_gdv_pct: Math.round(profitOnGdv * 100) / 100,
     return_on_equity_pct: Math.round(returnOnEquity * 100) / 100,
-    development_margin_pct: Math.round(devMargin * 100) / 100,
     irr_monthly: Math.round(irrMonthly * 100) / 100,
     irr_annual: Math.round(irrAnnual * 100) / 100,
     rlv_pence: rlv,

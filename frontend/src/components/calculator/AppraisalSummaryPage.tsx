@@ -1,12 +1,9 @@
 import type { CalculatorInputs, AppraisalMetrics } from '../../lib/conversion-types';
+import { penceToPounds } from '../../lib/format';
 
 interface Props {
   metrics: AppraisalMetrics;
   inputs: CalculatorInputs;
-}
-
-function penceToPounds(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
 }
 
 function MetricCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {

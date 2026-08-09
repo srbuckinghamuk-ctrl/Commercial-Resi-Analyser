@@ -9,6 +9,7 @@ from app.eligibility.criteria import (
     get_criteria_for_class,
 )
 from app.integrations.article4 import Article4Result, lookup_article4
+from app.integrations.epc import EpcResult, lookup_epc
 from app.integrations.flood import FloodRiskResult, lookup_flood_risk
 from app.integrations.postcodes import PostcodeLookupResult, lookup_postcode
 from app.models import (
@@ -64,6 +65,7 @@ async def run_eligibility(
     pc_result: PostcodeLookupResult | None = None
     flood_result: FloodRiskResult | None = None
     article4_result: Article4Result | None = None
+    epc_result: EpcResult | None = None
 
     if project.address_postcode:
         pc_result = await lookup_postcode(project.address_postcode)
@@ -72,13 +74,19 @@ async def run_eligibility(
                 project.address_postcode, pc_result.latitude, pc_result.longitude
             )
             article4_result = await lookup_article4(pc_result.lpa_code)
+        if epc_api_key:
+            epc_result = await lookup_epc(
+                project.address_postcode,
+                address_fragment=project.address_raw,
+                api_key=epc_api_key,
+            )
 
     evaluated: list[EligibilityCriterion] = []
     next_steps: list[str] = []
 
     for cdef in criteria_defs:
         criterion = _evaluate_criterion(
-            cdef, project, pdr_class, pc_result, flood_result, article4_result, overrides
+            cdef, project, pdr_class, pc_result, flood_result, article4_result, epc_result, overrides
         )
         evaluated.append(criterion)
         if criterion.passed is None:
@@ -103,6 +111,7 @@ def _evaluate_criterion(
     pc_result: PostcodeLookupResult | None,
     flood_result: FloodRiskResult | None,
     article4_result: Article4Result | None,
+    epc_result: EpcResult | None,
     overrides: dict[str, bool | None],
 ) -> EligibilityCriterion:
     if cdef.key in overrides:
@@ -116,15 +125,20 @@ def _evaluate_criterion(
 
     if cdef.key == "floor_area_limit":
         limit = FLOOR_AREA_LIMITS.get(pdr_class)
-        if limit and project.floor_area_sqm is not None:
-            passed = project.floor_area_sqm <= limit
+        floor_area = project.floor_area_sqm
+        source_label = "project"
+        if floor_area is None and epc_result and epc_result.floor_area_sqm:
+            floor_area = epc_result.floor_area_sqm
+            source_label = "EPC"
+        if limit and floor_area is not None:
+            passed = floor_area <= limit
             return EligibilityCriterion(
                 key=cdef.key,
                 label=cdef.label,
                 passed=passed,
                 source="auto",
                 auto_checked=True,
-                value=f"{project.floor_area_sqm:.0f} sq m (limit: {limit:.0f} sq m)",
+                value=f"{floor_area:.0f} sq m (limit: {limit:.0f} sq m, from {source_label})",
             )
         return EligibilityCriterion(
             key=cdef.key,

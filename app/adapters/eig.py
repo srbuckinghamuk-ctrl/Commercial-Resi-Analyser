@@ -6,30 +6,16 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.adapters.base import BaseAdapter
+from app.adapters.patterns import (
+    POSTCODE_RE,
+    PRICE_RE,
+    SQFT_RE,
+    TYPE_TO_USE_CLASS,
+    TENURE_MAP,
+    sqft_to_sqm,
+)
 from app.adapters.registry import register_adapter
 from app.models import Address, CommercialListing, PriceInfo, Tenure, UseClass
-
-
-_POSTCODE_RE = re.compile(r"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}", re.IGNORECASE)
-_PRICE_RE = re.compile(r"£([\d,]+)")
-_SQFT_RE = re.compile(r"([\d,]+)\s*sq\s*ft", re.IGNORECASE)
-
-_TYPE_TO_USE_CLASS: dict[str, UseClass] = {
-    "office": UseClass.OFFICE,
-    "retail": UseClass.RETAIL,
-    "shop": UseClass.RETAIL,
-    "light industrial": UseClass.LIGHT_INDUSTRIAL,
-    "industrial": UseClass.LIGHT_INDUSTRIAL,
-    "restaurant": UseClass.RESTAURANT_CAFE,
-    "cafe": UseClass.RESTAURANT_CAFE,
-    "takeaway": UseClass.TAKEAWAY,
-    "agricultural": UseClass.AGRICULTURAL,
-}
-
-_TENURE_MAP: dict[str, Tenure] = {
-    "freehold": Tenure.FREEHOLD,
-    "leasehold": Tenure.LEASEHOLD,
-}
 
 
 def _parse_listing(html: str, url: str) -> CommercialListing | None:
@@ -42,13 +28,13 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
     if not address_raw:
         return None
 
-    postcode_match = _POSTCODE_RE.search(address_raw)
+    postcode_match = POSTCODE_RE.search(address_raw)
     postcode = postcode_match.group(0).strip().upper() if postcode_match else None
 
     price_pence = 0
     for el in soup.find_all(["span", "div"], class_=re.compile(r"price", re.IGNORECASE)):
         txt = el.get_text()
-        match = _PRICE_RE.search(txt)
+        match = PRICE_RE.search(txt)
         if match:
             price_pence = int(match.group(1).replace(",", "")) * 100
             break
@@ -64,14 +50,14 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
 
         if "type:" in lower and use_class == UseClass.UNKNOWN:
             value = txt.split(":", 1)[-1].strip()
-            for keyword, uc in _TYPE_TO_USE_CLASS.items():
+            for keyword, uc in TYPE_TO_USE_CLASS.items():
                 if keyword in value.lower():
                     use_class = uc
                     break
 
         if "size:" in lower and floor_area_sqft is None:
             value = txt.split(":", 1)[-1].strip()
-            sqft_match = _SQFT_RE.search(value.replace(",", ""))
+            sqft_match = SQFT_RE.search(value.replace(",", ""))
             if sqft_match:
                 try:
                     floor_area_sqft = float(sqft_match.group(1).replace(",", ""))
@@ -80,7 +66,7 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
 
         if "tenure:" in lower and tenure == Tenure.UNKNOWN:
             value = txt.split(":", 1)[-1].strip()
-            for keyword, t in _TENURE_MAP.items():
+            for keyword, t in TENURE_MAP.items():
                 if keyword in value.lower():
                     tenure = t
                     break
@@ -101,7 +87,7 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
         if src.startswith("http") and ("estatesgazette" in src or "egi" in src):
             image_urls.append(src)
 
-    floor_area_sqm = round(floor_area_sqft * 0.092903, 1) if floor_area_sqft else None
+    floor_area_sqm = sqft_to_sqm(floor_area_sqft)
 
     return CommercialListing(
         address=Address(raw=address_raw, postcode=postcode),
