@@ -116,7 +116,7 @@ export default function App() {
         {activeTab === 'map' && (
           <PropertyMap projects={projects} selectedProject={selectedProject} onSelectProject={handleSelectProject} />
         )}
-        {activeTab === 'export' && <ExportPage />}
+        {activeTab === 'export' && <ExportPage projects={projects} selectedProject={selectedProject} />}
       </main>
     </div>
   );
