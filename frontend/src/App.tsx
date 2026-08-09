@@ -113,7 +113,9 @@ export default function App() {
           <EligibilityAssessment projects={projects} selectedProject={selectedProject} />
         )}
         {activeTab === 'calculator' && <ConversionCalculator project={selectedProject} />}
-        {activeTab === 'map' && <PropertyMap />}
+        {activeTab === 'map' && (
+          <PropertyMap projects={projects} selectedProject={selectedProject} onSelectProject={handleSelectProject} />
+        )}
         {activeTab === 'export' && <ExportPage />}
       </main>
     </div>
