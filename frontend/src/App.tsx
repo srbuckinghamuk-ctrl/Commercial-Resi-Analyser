@@ -8,8 +8,9 @@ import EligibilityAssessment from './components/EligibilityAssessment';
 import ConversionCalculator from './components/ConversionCalculator';
 import PropertyMap from './components/PropertyMap';
 import ExportPage from './components/ExportPage';
+import ProjectDetail from './components/ProjectDetail';
 
-type Tab = 'pipeline' | 'new_project' | 'eligibility' | 'calculator' | 'map' | 'export';
+type Tab = 'pipeline' | 'new_project' | 'eligibility' | 'calculator' | 'map' | 'export' | 'project_detail';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'pipeline', label: 'Pipeline' },
@@ -31,6 +32,10 @@ export default function App() {
       const data = await listProjects();
       setProjects(data);
       setBackendOffline(false);
+      setSelectedProject((prev) => {
+        if (!prev) return null;
+        return data.find((p) => p.id === prev.id) ?? null;
+      });
     } catch {
       setBackendOffline(true);
     }
@@ -47,6 +52,7 @@ export default function App() {
 
   const handleSelectProject = useCallback((project: Project) => {
     setSelectedProject(project);
+    setActiveTab('project_detail');
   }, []);
 
   return (
@@ -80,25 +86,36 @@ export default function App() {
           overflowX: 'auto',
         }}
       >
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            style={{
-              padding: '10px 20px',
-              border: 'none',
-              borderBottom: activeTab === tab.key ? '2px solid #2563eb' : '2px solid transparent',
-              background: 'transparent',
-              color: activeTab === tab.key ? '#e2e8f0' : '#64748b',
-              cursor: 'pointer',
-              fontSize: 14,
-              fontWeight: activeTab === tab.key ? 600 : 400,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {TABS.map((tab) => {
+          const isActive = activeTab === tab.key || (tab.key === 'pipeline' && activeTab === 'project_detail');
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              style={{
+                padding: '10px 20px',
+                border: 'none',
+                borderBottom: isActive ? '2px solid #2563eb' : '2px solid transparent',
+                background: 'transparent',
+                color: isActive ? '#e2e8f0' : '#64748b',
+                cursor: 'pointer',
+                fontSize: 14,
+                fontWeight: isActive ? 600 : 400,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+        {activeTab === 'project_detail' && selectedProject && (
+          <span style={{ padding: '10px 16px', color: '#60a5fa', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ color: '#475569' }}>/</span>
+            {selectedProject.address_raw.length > 30
+              ? selectedProject.address_raw.slice(0, 30) + '...'
+              : selectedProject.address_raw}
+          </span>
+        )}
       </nav>
 
       {/* Tab Content */}
@@ -117,6 +134,14 @@ export default function App() {
           <PropertyMap projects={projects} selectedProject={selectedProject} onSelectProject={handleSelectProject} />
         )}
         {activeTab === 'export' && <ExportPage projects={projects} selectedProject={selectedProject} />}
+        {activeTab === 'project_detail' && selectedProject && (
+          <ProjectDetail
+            project={selectedProject}
+            projects={projects}
+            onBack={() => setActiveTab('pipeline')}
+            onProjectUpdated={loadProjects}
+          />
+        )}
       </main>
     </div>
   );

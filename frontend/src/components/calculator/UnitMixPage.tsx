@@ -99,14 +99,16 @@ export default function UnitMixPage({ inputs, onChange, metrics }: Props) {
               />
             </div>
             <div>
-              <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Est. value (pence)</label>
-              <input
-                type="number"
-                value={unit.estimated_value_pence}
-                onChange={(e) => updateUnit(unit.id, { estimated_value_pence: Number(e.target.value) })}
-                style={{ width: 160, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-              />
-              <span style={{ color: '#64748b', fontSize: 12, marginLeft: 8 }}>{penceToPounds(unit.estimated_value_pence)}</span>
+              <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Est. value (£)</label>
+              <div style={{ position: 'relative', display: 'inline-block', width: 160 }}>
+                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+                <input
+                  type="number"
+                  value={unit.estimated_value_pence ? unit.estimated_value_pence / 100 : ''}
+                  onChange={(e) => updateUnit(unit.id, { estimated_value_pence: Math.round(Number(e.target.value) * 100) })}
+                  style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                />
+              </div>
             </div>
             <div style={{ flex: 1, minWidth: 200 }}>
               <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Comparable notes</label>

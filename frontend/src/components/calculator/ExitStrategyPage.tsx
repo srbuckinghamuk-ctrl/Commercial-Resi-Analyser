@@ -82,8 +82,11 @@ export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
           <input type="number" step="0.1" value={exit.selling_agent_fee_pct} onChange={(e) => updateExit({ selling_agent_fee_pct: Number(e.target.value) })} style={{ width: 100, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label style={{ color: '#94a3b8', fontSize: 14 }}>Legal fee (pence)</label>
-          <input type="number" value={exit.selling_legal_fee_pence} onChange={(e) => updateExit({ selling_legal_fee_pence: Number(e.target.value) })} style={{ width: 140, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
+          <label style={{ color: '#94a3b8', fontSize: 14 }}>Legal fee (£)</label>
+          <div style={{ position: 'relative', width: 140, display: 'inline-block' }}>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+            <input type="number" value={exit.selling_legal_fee_pence ? exit.selling_legal_fee_pence / 100 : ''} onChange={(e) => updateExit({ selling_legal_fee_pence: Math.round(Number(e.target.value) * 100) })} style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
+          </div>
         </div>
       </div>
 
@@ -95,13 +98,16 @@ export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
             return (
               <div key={unit.id} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                 <span style={{ color: '#94a3b8', width: 140, fontSize: 14 }}>Unit {i + 1} ({unit.type})</span>
-                <input
-                  type="number"
-                  value={retained?.monthly_rent_pence ?? 0}
-                  onChange={(e) => updateRetained(unit.id, Number(e.target.value))}
-                  style={{ width: 140, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                />
-                <span style={{ color: '#64748b', fontSize: 13 }}>{penceToPounds(retained?.monthly_rent_pence ?? 0)}/month</span>
+                <div style={{ position: 'relative', width: 140, display: 'inline-block' }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+                  <input
+                    type="number"
+                    value={(retained?.monthly_rent_pence ?? 0) ? (retained?.monthly_rent_pence ?? 0) / 100 : ''}
+                    onChange={(e) => updateRetained(unit.id, Math.round(Number(e.target.value) * 100))}
+                    style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                  />
+                </div>
+                <span style={{ color: '#64748b', fontSize: 13 }}>/month</span>
               </div>
             );
           })}

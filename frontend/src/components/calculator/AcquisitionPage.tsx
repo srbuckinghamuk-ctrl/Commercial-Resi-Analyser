@@ -9,6 +9,35 @@ interface Props {
   metrics: AppraisalMetrics;
 }
 
+function PenceInputRow({ label, penceValue, onChangePence }: {
+  label: string;
+  penceValue: number;
+  onChangePence: (v: number) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+      <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>{label}</label>
+      <div style={{ position: 'relative', width: 160 }}>
+        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+        <input
+          type="number"
+          value={penceValue ? penceValue / 100 : ''}
+          onChange={(e) => onChangePence(Math.round(Number(e.target.value) * 100))}
+          style={{
+            width: '100%',
+            padding: '6px 10px 6px 24px',
+            background: '#0f172a',
+            border: '1px solid #1e3a5f',
+            borderRadius: 4,
+            color: '#e2e8f0',
+            fontSize: 14,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function InputRow({ label, value, onChangeValue, suffix }: {
   label: string;
   value: number;
@@ -49,23 +78,20 @@ export default function AcquisitionPage({ inputs, onChange, metrics }: Props) {
     <div>
       <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>1. Acquisition Inputs</h3>
 
-      <InputRow
-        label="Purchase price (pence)"
-        value={acq.purchase_price_pence}
-        onChangeValue={(v) => updateAcq({ purchase_price_pence: v })}
-        suffix={penceToPounds(acq.purchase_price_pence)}
+      <PenceInputRow
+        label="Purchase price (£)"
+        penceValue={acq.purchase_price_pence}
+        onChangePence={(v) => updateAcq({ purchase_price_pence: v })}
       />
-      <InputRow
-        label="Legal fees (pence)"
-        value={acq.legal_fees_pence}
-        onChangeValue={(v) => updateAcq({ legal_fees_pence: v })}
-        suffix={penceToPounds(acq.legal_fees_pence)}
+      <PenceInputRow
+        label="Legal fees (£)"
+        penceValue={acq.legal_fees_pence}
+        onChangePence={(v) => updateAcq({ legal_fees_pence: v })}
       />
-      <InputRow
-        label="Survey cost (pence)"
-        value={acq.survey_cost_pence}
-        onChangeValue={(v) => updateAcq({ survey_cost_pence: v })}
-        suffix={penceToPounds(acq.survey_cost_pence)}
+      <PenceInputRow
+        label="Survey cost (£)"
+        penceValue={acq.survey_cost_pence}
+        onChangePence={(v) => updateAcq({ survey_cost_pence: v })}
       />
       <InputRow
         label="Broker fee (%)"
@@ -73,11 +99,10 @@ export default function AcquisitionPage({ inputs, onChange, metrics }: Props) {
         onChangeValue={(v) => updateAcq({ broker_fee_pct: v })}
         suffix={penceToPounds(Math.round(acq.purchase_price_pence * acq.broker_fee_pct / 100))}
       />
-      <InputRow
-        label="Other costs (pence)"
-        value={acq.other_acquisition_costs_pence}
-        onChangeValue={(v) => updateAcq({ other_acquisition_costs_pence: v })}
-        suffix={penceToPounds(acq.other_acquisition_costs_pence)}
+      <PenceInputRow
+        label="Other costs (£)"
+        penceValue={acq.other_acquisition_costs_pence}
+        onChangePence={(v) => updateAcq({ other_acquisition_costs_pence: v })}
       />
 
       <div style={{ marginTop: 24, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>

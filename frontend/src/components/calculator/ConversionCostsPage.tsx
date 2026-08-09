@@ -7,11 +7,31 @@ interface Props {
   metrics: AppraisalMetrics;
 }
 
-function CostRow({ label, value, onChangeValue, suffix }: {
+function PenceCostRow({ label, penceValue, onChangePence }: {
+  label: string;
+  penceValue: number;
+  onChangePence: (v: number) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+      <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label}</label>
+      <div style={{ position: 'relative', width: 140 }}>
+        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+        <input
+          type="number"
+          value={penceValue ? penceValue / 100 : ''}
+          onChange={(e) => onChangePence(Math.round(Number(e.target.value) * 100))}
+          style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CostRow({ label, value, onChangeValue }: {
   label: string;
   value: number;
   onChangeValue: (v: number) => void;
-  suffix?: string;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
@@ -22,7 +42,6 @@ function CostRow({ label, value, onChangeValue, suffix }: {
         onChange={(e) => onChangeValue(Number(e.target.value))}
         style={{ width: 140, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
       />
-      {suffix && <span style={{ color: '#64748b', fontSize: 13 }}>{suffix}</span>}
     </div>
   );
 }
@@ -39,26 +58,26 @@ export default function ConversionCostsPage({ inputs, onChange, metrics }: Props
       <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>3. Conversion Costs</h3>
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Statutory Fees</h4>
-      <CostRow label="Prior approval fee / dwelling (p)" value={costs.prior_approval_fee_per_dwelling_pence} onChangeValue={(v) => updateCosts({ prior_approval_fee_per_dwelling_pence: v })} suffix={penceToPounds(costs.prior_approval_fee_per_dwelling_pence)} />
-      <CostRow label="CIL / S106 (pence)" value={costs.cil_s106_pence} onChangeValue={(v) => updateCosts({ cil_s106_pence: v })} suffix={penceToPounds(costs.cil_s106_pence)} />
+      <PenceCostRow label="Prior approval fee / dwelling (£)" penceValue={costs.prior_approval_fee_per_dwelling_pence} onChangePence={(v) => updateCosts({ prior_approval_fee_per_dwelling_pence: v })} />
+      <PenceCostRow label="CIL / S106 (£)" penceValue={costs.cil_s106_pence} onChangePence={(v) => updateCosts({ cil_s106_pence: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Professional Fees</h4>
-      <CostRow label="Architect (pence)" value={costs.architect_pence} onChangeValue={(v) => updateCosts({ architect_pence: v })} suffix={penceToPounds(costs.architect_pence)} />
-      <CostRow label="Structural engineer (pence)" value={costs.structural_engineer_pence} onChangeValue={(v) => updateCosts({ structural_engineer_pence: v })} suffix={penceToPounds(costs.structural_engineer_pence)} />
-      <CostRow label="M&E (pence)" value={costs.mande_pence} onChangeValue={(v) => updateCosts({ mande_pence: v })} suffix={penceToPounds(costs.mande_pence)} />
-      <CostRow label="Planning consultant (pence)" value={costs.planning_consultant_pence} onChangeValue={(v) => updateCosts({ planning_consultant_pence: v })} suffix={penceToPounds(costs.planning_consultant_pence)} />
-      <CostRow label="Building control (pence)" value={costs.building_control_pence} onChangeValue={(v) => updateCosts({ building_control_pence: v })} suffix={penceToPounds(costs.building_control_pence)} />
-      <CostRow label="Other professional fees (pence)" value={costs.other_professional_fees_pence} onChangeValue={(v) => updateCosts({ other_professional_fees_pence: v })} suffix={penceToPounds(costs.other_professional_fees_pence)} />
+      <PenceCostRow label="Architect (£)" penceValue={costs.architect_pence} onChangePence={(v) => updateCosts({ architect_pence: v })} />
+      <PenceCostRow label="Structural engineer (£)" penceValue={costs.structural_engineer_pence} onChangePence={(v) => updateCosts({ structural_engineer_pence: v })} />
+      <PenceCostRow label="M&E (£)" penceValue={costs.mande_pence} onChangePence={(v) => updateCosts({ mande_pence: v })} />
+      <PenceCostRow label="Planning consultant (£)" penceValue={costs.planning_consultant_pence} onChangePence={(v) => updateCosts({ planning_consultant_pence: v })} />
+      <PenceCostRow label="Building control (£)" penceValue={costs.building_control_pence} onChangePence={(v) => updateCosts({ building_control_pence: v })} />
+      <PenceCostRow label="Other professional fees (£)" penceValue={costs.other_professional_fees_pence} onChangePence={(v) => updateCosts({ other_professional_fees_pence: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Construction</h4>
-      <CostRow label="Cost per sq ft (pence)" value={costs.construction_cost_per_sqft_pence} onChangeValue={(v) => updateCosts({ construction_cost_per_sqft_pence: v })} suffix={penceToPounds(costs.construction_cost_per_sqft_pence) + '/sqft'} />
+      <PenceCostRow label="Cost per sq ft (£)" penceValue={costs.construction_cost_per_sqft_pence} onChangePence={(v) => updateCosts({ construction_cost_per_sqft_pence: v })} />
       <CostRow label="Total construction sq ft" value={costs.total_construction_sqft} onChangeValue={(v) => updateCosts({ total_construction_sqft: v })} />
       <CostRow label="Contingency (%)" value={costs.contingency_pct} onChangeValue={(v) => updateCosts({ contingency_pct: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Building Regs Compliance</h4>
-      <CostRow label="Fire safety (pence)" value={costs.fire_safety_pence} onChangeValue={(v) => updateCosts({ fire_safety_pence: v })} suffix={penceToPounds(costs.fire_safety_pence)} />
-      <CostRow label="Sound insulation (pence)" value={costs.sound_insulation_pence} onChangeValue={(v) => updateCosts({ sound_insulation_pence: v })} suffix={penceToPounds(costs.sound_insulation_pence)} />
-      <CostRow label="Part L compliance (pence)" value={costs.part_l_compliance_pence} onChangeValue={(v) => updateCosts({ part_l_compliance_pence: v })} suffix={penceToPounds(costs.part_l_compliance_pence)} />
+      <PenceCostRow label="Fire safety (£)" penceValue={costs.fire_safety_pence} onChangePence={(v) => updateCosts({ fire_safety_pence: v })} />
+      <PenceCostRow label="Sound insulation (£)" penceValue={costs.sound_insulation_pence} onChangePence={(v) => updateCosts({ sound_insulation_pence: v })} />
+      <PenceCostRow label="Part L compliance (£)" penceValue={costs.part_l_compliance_pence} onChangePence={(v) => updateCosts({ part_l_compliance_pence: v })} />
 
       <div style={{ marginTop: 24, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
