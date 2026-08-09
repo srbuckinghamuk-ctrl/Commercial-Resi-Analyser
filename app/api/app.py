@@ -226,6 +226,7 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
         assessment = await elig_repo.update(
             project_id,
             EligibilityAssessmentUpdate(
+                pdr_class=engine_result.pdr_class,
                 criteria=engine_result.criteria,
                 verdict=engine_result.verdict,
                 suggested_next_steps=engine_result.suggested_next_steps,
@@ -243,8 +244,8 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
         )
     await db.commit()
 
-    auto_checks = [c.key for c in engine_result.criteria if c.auto_checked]
-    manual_pending = [c.key for c in engine_result.criteria if not c.auto_checked and c.passed is None]
+    auto_checks = [c.key for c in engine_result.criteria if c.auto_checked and c.passed is not None]
+    manual_pending = [c.key for c in engine_result.criteria if c.passed is None]
 
     return EligibilityRunResponse(
         assessment=assessment,
@@ -296,7 +297,26 @@ scrape_router = APIRouter()
 
 @scrape_router.post("/scrape-url", response_model=ApiResponse)
 async def scrape_url_endpoint(request: ScrapeUrlRequest):
-    return ApiResponse(error="Scraping not yet implemented — commercial adapters coming in Plan 4")
+    from app.adapters.registry import source_id_from_url, get_adapter
+
+    source_id = source_id_from_url(request.url)
+    if source_id is None:
+        return ApiResponse(error=f"No adapter for this URL. Supported sources: use a commercial property listing URL from a supported site.")
+
+    adapter_cls = get_adapter(source_id)
+    if adapter_cls is None:
+        return ApiResponse(error=f"No adapter registered for source '{source_id}'.")
+
+    adapter = adapter_cls()
+    try:
+        listing = await adapter.fetch_listing(request.url)
+    except Exception as exc:
+        return ApiResponse(error=f"Scrape failed: {exc}")
+
+    if listing is None:
+        return ApiResponse(error="Could not extract listing data from this page.")
+
+    return ApiResponse(listing=listing)
 
 
 # --- Lookup Router ---
