@@ -10,11 +10,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.eligibility.engine import run_eligibility
 from app.models import (
     ApiResponse,
     EligibilityAssessment,
     EligibilityAssessmentCreate,
     EligibilityAssessmentUpdate,
+    EligibilityRunRequest,
+    EligibilityRunResponse,
     FinancialAppraisal,
     FinancialAppraisalCreate,
     FinancialAppraisalUpdate,
@@ -202,6 +205,52 @@ async def update_eligibility(project_id: UUID, body: EligibilityAssessmentUpdate
         raise HTTPException(status_code=404, detail="Eligibility assessment not found")
     await db.commit()
     return assessment
+
+
+@eligibility_router.post("/{project_id}/run", response_model=EligibilityRunResponse, status_code=201)
+async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest, db: DbDep):
+    project_repo = ProjectRepository(db)
+    project = await project_repo.get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    engine_result = await run_eligibility(
+        project,
+        manual_overrides=body.manual_overrides,
+        epc_api_key=settings.epc_api_key,
+    )
+
+    elig_repo = EligibilityAssessmentRepository(db)
+    existing = await elig_repo.get_by_project_id(project_id)
+    if existing:
+        assessment = await elig_repo.update(
+            project_id,
+            EligibilityAssessmentUpdate(
+                criteria=engine_result.criteria,
+                verdict=engine_result.verdict,
+                suggested_next_steps=engine_result.suggested_next_steps,
+            ),
+        )
+    else:
+        assessment = await elig_repo.create(
+            EligibilityAssessmentCreate(
+                project_id=project_id,
+                pdr_class=engine_result.pdr_class,
+                criteria=engine_result.criteria,
+                verdict=engine_result.verdict,
+                suggested_next_steps=engine_result.suggested_next_steps,
+            )
+        )
+    await db.commit()
+
+    auto_checks = [c.key for c in engine_result.criteria if c.auto_checked]
+    manual_pending = [c.key for c in engine_result.criteria if not c.auto_checked and c.passed is None]
+
+    return EligibilityRunResponse(
+        assessment=assessment,
+        auto_checks_performed=auto_checks,
+        manual_checks_pending=manual_pending,
+    )
 
 
 # --- Appraisals Router ---

@@ -176,6 +176,16 @@ class Article4Response(BaseModel):
     note: str = ""
 
 
+class EligibilityRunRequest(BaseModel):
+    manual_overrides: dict[str, bool | None] = Field(default_factory=dict)
+
+
+class EligibilityRunResponse(BaseModel):
+    assessment: "EligibilityAssessment"
+    auto_checks_performed: list[str] = Field(default_factory=list)
+    manual_checks_pending: list[str] = Field(default_factory=list)
+
+
 # --- Project ---
 
 

@@ -26,3 +26,17 @@ class TestLookupRoutesExist:
                 break
         else:
             pytest.fail("Flood lookup route not found")
+
+
+class TestEligibilityRunRouteExists:
+    def test_eligibility_run_route_registered(self):
+        paths = {r.path for r in app.routes if hasattr(r, "path")}
+        assert any("eligibility" in p and "run" in p for p in paths)
+
+    def test_eligibility_run_is_post(self):
+        for route in app.routes:
+            if hasattr(route, "path") and "eligibility" in route.path and "run" in route.path:
+                assert "POST" in route.methods
+                break
+        else:
+            pytest.fail("Eligibility run route not found")
