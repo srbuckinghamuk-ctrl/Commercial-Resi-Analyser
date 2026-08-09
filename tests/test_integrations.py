@@ -3,6 +3,7 @@ import httpx
 import respx
 
 from app.integrations.postcodes import lookup_postcode, PostcodeLookupResult
+from app.integrations.flood import lookup_flood_risk, FloodRiskResult
 
 
 class TestPostcodesLookup:
@@ -57,4 +58,57 @@ class TestPostcodesLookup:
             return_value=httpx.Response(500, text="Internal Server Error")
         )
         result = await lookup_postcode("SW1A 1AA")
+        assert result is None
+
+
+class TestFloodRiskLookup:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_flood_zone_1_returns_safe(self):
+        respx.get(
+            "https://environment.data.gov.uk/flood-monitoring/id/floods",
+            params={"lat": "51.501", "long": "-0.142", "dist": "1"},
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={"items": []},
+            )
+        )
+        result = await lookup_flood_risk("SW1A 1AA", 51.501, -0.142)
+        assert result is not None
+        assert isinstance(result, FloodRiskResult)
+        assert result.in_flood_zone_2_or_3 is False
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_flood_zone_with_warnings_returns_at_risk(self):
+        respx.get(
+            "https://environment.data.gov.uk/flood-monitoring/id/floods",
+            params={"lat": "51.501", "long": "-0.142", "dist": "1"},
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "floodArea": {"notation": "ABC123"},
+                            "severityLevel": 2,
+                            "description": "Flood warning for River Thames",
+                        }
+                    ]
+                },
+            )
+        )
+        result = await lookup_flood_risk("SW1A 1AA", 51.501, -0.142)
+        assert result is not None
+        assert result.in_flood_zone_2_or_3 is True
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_api_error_returns_none(self):
+        respx.get(
+            "https://environment.data.gov.uk/flood-monitoring/id/floods",
+            params={"lat": "51.501", "long": "-0.142", "dist": "1"},
+        ).mock(return_value=httpx.Response(500, text="Server Error"))
+        result = await lookup_flood_risk("SW1A 1AA", 51.501, -0.142)
         assert result is None
