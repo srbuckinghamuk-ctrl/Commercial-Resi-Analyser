@@ -109,7 +109,9 @@ export default function App() {
         {activeTab === 'new_project' && (
           <NewProject onProjectCreated={handleProjectCreated} />
         )}
-        {activeTab === 'eligibility' && <EligibilityAssessment />}
+        {activeTab === 'eligibility' && (
+          <EligibilityAssessment projects={projects} selectedProject={selectedProject} />
+        )}
         {activeTab === 'calculator' && <ConversionCalculator />}
         {activeTab === 'map' && <PropertyMap />}
         {activeTab === 'export' && <ExportPage />}
