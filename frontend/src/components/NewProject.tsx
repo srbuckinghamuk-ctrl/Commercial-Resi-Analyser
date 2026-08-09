@@ -33,8 +33,22 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
       if (response.error) {
         setScrapeStatus('error');
         setErrorMsg(response.error);
-      } else {
+      } else if (response.listing) {
+        const l = response.listing;
+        setAddressRaw(l.address.raw || '');
+        setAddressPostcode(l.address.postcode || '');
+        setPricePounds(l.price.amount ? String(l.price.amount / 100) : '');
+        setUseClass(l.use_class || 'unknown');
+        setFloorAreaSqft(l.floor_area_sqft ? String(l.floor_area_sqft) : '');
+        setFloors(l.floors ? String(l.floors) : '');
+        setTenure(l.tenure || 'unknown');
+        setDescription(l.description || '');
+        setIsVacant(l.is_vacant ?? false);
         setScrapeStatus('success');
+        setMode('manual');
+      } else {
+        setScrapeStatus('error');
+        setErrorMsg('Could not extract listing data from this page.');
       }
     } catch (e) {
       setScrapeStatus('error');
@@ -140,7 +154,7 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
           )}
           {scrapeStatus === 'success' && (
             <p style={{ color: '#22c55e', marginTop: 8, fontSize: 13 }}>
-              Scrape successful — commercial adapters coming in Plan 4
+              Listing scraped — review details below and save.
             </p>
           )}
         </div>
