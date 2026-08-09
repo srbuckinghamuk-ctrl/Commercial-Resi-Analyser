@@ -34,6 +34,7 @@ def _auto_register() -> None:
     import app.adapters.rightmove_commercial  # noqa: F401
     import app.adapters.allsop  # noqa: F401
     import app.adapters.eig  # noqa: F401
+    import app.adapters.savills  # noqa: F401
 
 
 _auto_register()
