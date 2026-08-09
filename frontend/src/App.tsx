@@ -104,7 +104,7 @@ export default function App() {
       {/* Tab Content */}
       <main>
         {activeTab === 'pipeline' && (
-          <Pipeline projects={projects} onSelectProject={handleSelectProject} />
+          <Pipeline projects={projects} onSelectProject={handleSelectProject} onProjectsChanged={loadProjects} />
         )}
         {activeTab === 'new_project' && (
           <NewProject onProjectCreated={handleProjectCreated} />
