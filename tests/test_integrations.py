@@ -5,6 +5,7 @@ import respx
 from app.integrations.postcodes import lookup_postcode, PostcodeLookupResult
 from app.integrations.flood import lookup_flood_risk, FloodRiskResult
 from app.integrations.epc import lookup_epc, EpcResult
+from app.integrations.article4 import lookup_article4, Article4Result, Article4Direction
 
 
 class TestPostcodesLookup:
@@ -220,3 +221,30 @@ class TestEpcLookup:
         ).mock(return_value=httpx.Response(403, text="Forbidden"))
         result = await lookup_epc("SW1A 1AA", api_key="bad-key")
         assert result is None
+
+
+class TestArticle4Lookup:
+    @pytest.mark.asyncio
+    async def test_known_lpa_with_article4(self):
+        result = await lookup_article4("E09000033")
+        assert result is not None
+        assert isinstance(result, Article4Result)
+        assert result.lpa_code == "E09000033"
+        assert result.has_article4 is True
+        assert len(result.directions) > 0
+        assert isinstance(result.directions[0], Article4Direction)
+        assert "class_ma" in result.directions[0].pdr_classes_restricted
+
+    @pytest.mark.asyncio
+    async def test_lpa_without_article4(self):
+        result = await lookup_article4("E07000999")
+        assert result is not None
+        assert result.has_article4 is False
+        assert result.directions == []
+        assert "verify" in result.note.lower()
+
+    @pytest.mark.asyncio
+    async def test_empty_lpa_code(self):
+        result = await lookup_article4("")
+        assert result is not None
+        assert result.has_article4 is False
