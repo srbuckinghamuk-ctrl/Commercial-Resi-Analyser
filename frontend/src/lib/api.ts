@@ -8,6 +8,11 @@ import type {
   FinancialAppraisalCreate,
   ApiResponse,
   PipelineStage,
+  PostcodeLookup,
+  FloodRisk,
+  EpcData,
+  Article4Data,
+  EligibilityRunResponse,
 } from '../types';
 
 const HEADERS = { 'Content-Type': 'application/json' };
@@ -132,5 +137,49 @@ export async function scrapeUrl(url: string): Promise<ApiResponse> {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ url }),
+  });
+}
+
+// --- Lookups ---
+
+export async function lookupPostcode(postcode: string): Promise<PostcodeLookup> {
+  return request<PostcodeLookup>(
+    `/api/v1/lookup/postcode/${encodeURIComponent(postcode)}`,
+    { headers: HEADERS },
+  );
+}
+
+export async function lookupFlood(postcode: string): Promise<FloodRisk> {
+  return request<FloodRisk>(
+    `/api/v1/lookup/flood/${encodeURIComponent(postcode)}`,
+    { headers: HEADERS },
+  );
+}
+
+export async function lookupEpc(postcode: string, address?: string): Promise<EpcData> {
+  const params = address ? `?address=${encodeURIComponent(address)}` : '';
+  return request<EpcData>(
+    `/api/v1/lookup/epc/${encodeURIComponent(postcode)}${params}`,
+    { headers: HEADERS },
+  );
+}
+
+export async function lookupArticle4(lpaCode: string): Promise<Article4Data> {
+  return request<Article4Data>(
+    `/api/v1/lookup/article4/${encodeURIComponent(lpaCode)}`,
+    { headers: HEADERS },
+  );
+}
+
+// --- Eligibility Engine ---
+
+export async function runEligibility(
+  projectId: string,
+  manualOverrides: Record<string, boolean | null>,
+): Promise<EligibilityRunResponse> {
+  return request<EligibilityRunResponse>(`/api/v1/eligibility/${projectId}/run`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify({ manual_overrides: manualOverrides }),
   });
 }

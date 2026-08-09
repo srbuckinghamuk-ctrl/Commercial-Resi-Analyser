@@ -231,3 +231,58 @@ export interface ApiResponse {
   listing: CommercialListing | null;
   error: string | null;
 }
+
+export interface PostcodeLookup {
+  postcode: string;
+  latitude: number;
+  longitude: number;
+  lpa_name: string;
+  lpa_code: string;
+  region: string;
+  country: string;
+  admin_district: string;
+}
+
+export interface FloodRisk {
+  postcode: string;
+  flood_zone: string;
+  flood_zone_numeric: number;
+  in_flood_zone_2_or_3: boolean;
+  source: string;
+}
+
+export interface EpcData {
+  address: string;
+  postcode: string;
+  rating: string;
+  score: number;
+  certificate_date: string;
+  certificate_url: string;
+  property_type: string;
+  floor_area_sqm: number | null;
+}
+
+export interface Article4DirectionItem {
+  name: string;
+  pdr_classes_restricted: string[];
+  date_made: string | null;
+  coverage: string;
+}
+
+export interface Article4Data {
+  lpa_code: string;
+  lpa_name: string;
+  has_article4: boolean;
+  directions: Article4DirectionItem[];
+  note: string;
+}
+
+export interface EligibilityRunRequest {
+  manual_overrides: Record<string, boolean | null>;
+}
+
+export interface EligibilityRunResponse {
+  assessment: EligibilityAssessment;
+  auto_checks_performed: string[];
+  manual_checks_pending: string[];
+}

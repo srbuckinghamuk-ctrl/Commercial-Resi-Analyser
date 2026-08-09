@@ -10,11 +10,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.eligibility.engine import run_eligibility
 from app.models import (
     ApiResponse,
     EligibilityAssessment,
     EligibilityAssessmentCreate,
     EligibilityAssessmentUpdate,
+    EligibilityRunRequest,
+    EligibilityRunResponse,
     FinancialAppraisal,
     FinancialAppraisalCreate,
     FinancialAppraisalUpdate,
@@ -70,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(eligibility_router, prefix=settings.api_prefix, tags=["eligibility"])
     app.include_router(appraisals_router, prefix=settings.api_prefix, tags=["appraisals"])
     app.include_router(scrape_router, prefix=settings.api_prefix, tags=["scrape"])
+    app.include_router(lookup_router, prefix=settings.api_prefix, tags=["lookup"])
     app.include_router(system_router, tags=["system"])
 
     dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
@@ -203,6 +207,53 @@ async def update_eligibility(project_id: UUID, body: EligibilityAssessmentUpdate
     return assessment
 
 
+@eligibility_router.post("/{project_id}/run", response_model=EligibilityRunResponse, status_code=201)
+async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest, db: DbDep):
+    project_repo = ProjectRepository(db)
+    project = await project_repo.get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    engine_result = await run_eligibility(
+        project,
+        manual_overrides=body.manual_overrides,
+        epc_api_key=settings.epc_api_key,
+    )
+
+    elig_repo = EligibilityAssessmentRepository(db)
+    existing = await elig_repo.get_by_project_id(project_id)
+    if existing:
+        assessment = await elig_repo.update(
+            project_id,
+            EligibilityAssessmentUpdate(
+                pdr_class=engine_result.pdr_class,
+                criteria=engine_result.criteria,
+                verdict=engine_result.verdict,
+                suggested_next_steps=engine_result.suggested_next_steps,
+            ),
+        )
+    else:
+        assessment = await elig_repo.create(
+            EligibilityAssessmentCreate(
+                project_id=project_id,
+                pdr_class=engine_result.pdr_class,
+                criteria=engine_result.criteria,
+                verdict=engine_result.verdict,
+                suggested_next_steps=engine_result.suggested_next_steps,
+            )
+        )
+    await db.commit()
+
+    auto_checks = [c.key for c in engine_result.criteria if c.auto_checked and c.passed is not None]
+    manual_pending = [c.key for c in engine_result.criteria if c.passed is None]
+
+    return EligibilityRunResponse(
+        assessment=assessment,
+        auto_checks_performed=auto_checks,
+        manual_checks_pending=manual_pending,
+    )
+
+
 # --- Appraisals Router ---
 
 appraisals_router = APIRouter(prefix="/appraisals")
@@ -246,7 +297,114 @@ scrape_router = APIRouter()
 
 @scrape_router.post("/scrape-url", response_model=ApiResponse)
 async def scrape_url_endpoint(request: ScrapeUrlRequest):
-    return ApiResponse(error="Scraping not yet implemented — commercial adapters coming in Plan 4")
+    from app.adapters.registry import source_id_from_url, get_adapter
+
+    source_id = source_id_from_url(request.url)
+    if source_id is None:
+        return ApiResponse(error="No adapter for this URL. Supported sources: use a commercial property listing URL from a supported site.")
+
+    adapter_cls = get_adapter(source_id)
+    if adapter_cls is None:
+        return ApiResponse(error=f"No adapter registered for source '{source_id}'.")
+
+    adapter = adapter_cls()
+    try:
+        listing = await adapter.fetch_listing(request.url)
+    except Exception as exc:
+        return ApiResponse(error=f"Scrape failed: {exc}")
+
+    if listing is None:
+        return ApiResponse(error="Could not extract listing data from this page.")
+
+    return ApiResponse(listing=listing)
+
+
+# --- Lookup Router ---
+
+from app.integrations.postcodes import lookup_postcode
+from app.integrations.flood import lookup_flood_risk
+from app.integrations.epc import lookup_epc
+from app.integrations.article4 import lookup_article4
+from app.models import (
+    PostcodeLookupResponse,
+    FloodRiskResponse,
+    EpcResponse,
+    Article4Response,
+    Article4DirectionResponse,
+)
+
+lookup_router = APIRouter(prefix="/lookup")
+
+
+@lookup_router.get("/postcode/{postcode}", response_model=PostcodeLookupResponse)
+async def postcode_lookup(postcode: str):
+    result = await lookup_postcode(postcode)
+    if not result:
+        raise HTTPException(status_code=404, detail="Postcode not found")
+    return PostcodeLookupResponse(
+        postcode=result.postcode,
+        latitude=result.latitude,
+        longitude=result.longitude,
+        lpa_name=result.lpa_name,
+        lpa_code=result.lpa_code,
+        region=result.region,
+        country=result.country,
+        admin_district=result.admin_district,
+    )
+
+
+@lookup_router.get("/flood/{postcode}", response_model=FloodRiskResponse)
+async def flood_lookup(postcode: str):
+    pc = await lookup_postcode(postcode)
+    if not pc:
+        raise HTTPException(status_code=404, detail="Postcode not found — cannot look up flood risk")
+    result = await lookup_flood_risk(postcode, pc.latitude, pc.longitude)
+    if not result:
+        raise HTTPException(status_code=502, detail="Flood risk API unavailable")
+    return FloodRiskResponse(
+        postcode=pc.postcode,
+        flood_zone=result.flood_zone,
+        flood_zone_numeric=result.flood_zone_numeric,
+        in_flood_zone_2_or_3=result.in_flood_zone_2_or_3,
+        source=result.source,
+    )
+
+
+@lookup_router.get("/epc/{postcode}", response_model=EpcResponse)
+async def epc_lookup(postcode: str, address: str | None = None):
+    result = await lookup_epc(postcode, address_fragment=address, api_key=settings.epc_api_key)
+    if not result:
+        raise HTTPException(status_code=404, detail="No EPC certificate found")
+    return EpcResponse(
+        address=result.address,
+        postcode=result.postcode,
+        rating=result.rating,
+        score=result.score,
+        certificate_date=result.certificate_date,
+        certificate_url=result.certificate_url,
+        property_type=result.property_type,
+        floor_area_sqm=result.floor_area_sqm,
+    )
+
+
+@lookup_router.get("/article4/{lpa_code}", response_model=Article4Response)
+async def article4_lookup(lpa_code: str):
+    result = await lookup_article4(lpa_code)
+    return Article4Response(
+        lpa_code=result.lpa_code,
+        lpa_name=result.lpa_name,
+        has_article4=result.has_article4,
+        directions=[
+            Article4DirectionResponse(
+                name=d.name,
+                pdr_classes_restricted=d.pdr_classes_restricted,
+                date_made=d.date_made,
+                coverage=d.coverage,
+            )
+            for d in result.directions
+        ],
+        note=result.note,
+    )
 
 
 # --- System Router ---

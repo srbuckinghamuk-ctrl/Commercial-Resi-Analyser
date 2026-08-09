@@ -104,15 +104,19 @@ export default function App() {
       {/* Tab Content */}
       <main>
         {activeTab === 'pipeline' && (
-          <Pipeline projects={projects} onSelectProject={handleSelectProject} />
+          <Pipeline projects={projects} onSelectProject={handleSelectProject} onProjectsChanged={loadProjects} />
         )}
         {activeTab === 'new_project' && (
           <NewProject onProjectCreated={handleProjectCreated} />
         )}
-        {activeTab === 'eligibility' && <EligibilityAssessment />}
-        {activeTab === 'calculator' && <ConversionCalculator />}
-        {activeTab === 'map' && <PropertyMap />}
-        {activeTab === 'export' && <ExportPage />}
+        {activeTab === 'eligibility' && (
+          <EligibilityAssessment projects={projects} selectedProject={selectedProject} />
+        )}
+        {activeTab === 'calculator' && <ConversionCalculator project={selectedProject} />}
+        {activeTab === 'map' && (
+          <PropertyMap projects={projects} selectedProject={selectedProject} onSelectProject={handleSelectProject} />
+        )}
+        {activeTab === 'export' && <ExportPage projects={projects} selectedProject={selectedProject} />}
       </main>
     </div>
   );

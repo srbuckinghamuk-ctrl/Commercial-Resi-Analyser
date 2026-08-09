@@ -128,6 +128,64 @@ class ApiResponse(BaseModel):
     error: str | None = None
 
 
+# --- Lookup responses ---
+
+
+class PostcodeLookupResponse(BaseModel):
+    postcode: str
+    latitude: float
+    longitude: float
+    lpa_name: str
+    lpa_code: str
+    region: str
+    country: str
+    admin_district: str
+
+
+class FloodRiskResponse(BaseModel):
+    postcode: str
+    flood_zone: str
+    flood_zone_numeric: int
+    in_flood_zone_2_or_3: bool
+    source: str
+
+
+class EpcResponse(BaseModel):
+    address: str
+    postcode: str
+    rating: str
+    score: int
+    certificate_date: str
+    certificate_url: str
+    property_type: str
+    floor_area_sqm: float | None = None
+
+
+class Article4DirectionResponse(BaseModel):
+    name: str
+    pdr_classes_restricted: list[str]
+    date_made: str | None = None
+    coverage: str = ""
+
+
+class Article4Response(BaseModel):
+    lpa_code: str
+    lpa_name: str
+    has_article4: bool
+    directions: list[Article4DirectionResponse] = Field(default_factory=list)
+    note: str = ""
+
+
+class EligibilityRunRequest(BaseModel):
+    manual_overrides: dict[str, bool | None] = Field(default_factory=dict)
+
+
+class EligibilityRunResponse(BaseModel):
+    assessment: "EligibilityAssessment"
+    auto_checks_performed: list[str] = Field(default_factory=list)
+    manual_checks_pending: list[str] = Field(default_factory=list)
+
+
 # --- Project ---
 
 
@@ -240,6 +298,7 @@ class EligibilityAssessmentCreate(BaseModel):
 
 
 class EligibilityAssessmentUpdate(BaseModel):
+    pdr_class: PdrClass | None = None
     criteria: list[EligibilityCriterion] | None = None
     verdict: EligibilityVerdict | None = None
     suggested_next_steps: list[str] | None = None
