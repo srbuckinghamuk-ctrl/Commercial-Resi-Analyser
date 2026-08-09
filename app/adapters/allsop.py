@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import re
+
+import httpx
+from bs4 import BeautifulSoup
+
+from app.adapters.base import BaseAdapter
+from app.adapters.registry import register_adapter
+from app.models import Address, AuctionInfo, CommercialListing, PriceInfo, Tenure, UseClass
+
+
+_POSTCODE_RE = re.compile(r"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}", re.IGNORECASE)
+_PRICE_RE = re.compile(r"£([\d,]+)")
+_SQFT_RE = re.compile(r"([\d,]+)\s*sq\s*ft", re.IGNORECASE)
+_LOT_RE = re.compile(r"(?:lot\s*(?:number)?:?\s*)(\d+)", re.IGNORECASE)
+
+_TYPE_TO_USE_CLASS: dict[str, UseClass] = {
+    "office": UseClass.OFFICE,
+    "retail": UseClass.RETAIL,
+    "shop": UseClass.RETAIL,
+    "light industrial": UseClass.LIGHT_INDUSTRIAL,
+    "industrial": UseClass.LIGHT_INDUSTRIAL,
+    "restaurant": UseClass.RESTAURANT_CAFE,
+    "cafe": UseClass.RESTAURANT_CAFE,
+    "takeaway": UseClass.TAKEAWAY,
+    "agricultural": UseClass.AGRICULTURAL,
+}
+
+_TENURE_MAP: dict[str, Tenure] = {
+    "freehold": Tenure.FREEHOLD,
+    "leasehold": Tenure.LEASEHOLD,
+}
+
+
+def _parse_listing(html: str, url: str) -> CommercialListing | None:
+    soup = BeautifulSoup(html, "lxml")
+
+    h1 = soup.find("h1")
+    if not h1:
+        return None
+    address_raw = h1.get_text(strip=True)
+    if not address_raw:
+        return None
+
+    postcode_match = _POSTCODE_RE.search(address_raw)
+    postcode = postcode_match.group(0).strip().upper() if postcode_match else None
+
+    price_pence = 0
+    price_qualifier: str | None = None
+    price_el = soup.find(class_=re.compile(r"price-value|guide-price|lot-price", re.IGNORECASE))
+    if price_el:
+        price_text = price_el.get_text()
+        match = _PRICE_RE.search(price_text)
+        if match:
+            price_pence = int(match.group(1).replace(",", "")) * 100
+    if price_pence == 0:
+        for el in soup.find_all(["div", "span"]):
+            txt = el.get_text()
+            match = _PRICE_RE.search(txt)
+            if match:
+                price_pence = int(match.group(1).replace(",", "")) * 100
+                break
+
+    label_el = soup.find(class_=re.compile(r"price-label", re.IGNORECASE))
+    if label_el:
+        qualifier_text = label_el.get_text(strip=True).rstrip("*")
+        if qualifier_text:
+            price_qualifier = qualifier_text
+
+    lot_number: str | None = None
+    for el in soup.find_all(["span", "div"]):
+        txt = el.get_text(strip=True)
+        if el.find_previous(string=re.compile(r"lot\s*number", re.IGNORECASE)):
+            try:
+                lot_number = str(int(txt))
+                break
+            except ValueError:
+                pass
+        lot_match = _LOT_RE.search(txt)
+        if lot_match:
+            lot_number = lot_match.group(1)
+            break
+    if lot_number is None:
+        for el in soup.find_all(class_=re.compile(r"detail-value")):
+            prev_label = el.find_previous(class_=re.compile(r"detail-label"))
+            if prev_label and "lot" in prev_label.get_text(strip=True).lower():
+                lot_number = el.get_text(strip=True)
+                break
+
+    auction_date: str | None = None
+    date_el = soup.find(class_=re.compile(r"auction.?date", re.IGNORECASE))
+    if date_el:
+        auction_date = date_el.get_text(strip=True)
+
+    use_class = UseClass.UNKNOWN
+    tenure = Tenure.UNKNOWN
+    floor_area_sqft: float | None = None
+
+    for el in soup.find_all(class_=re.compile(r"detail-value")):
+        txt = el.get_text(strip=True)
+        prev_label = el.find_previous(class_=re.compile(r"detail-label"))
+        label_txt = prev_label.get_text(strip=True).lower() if prev_label else ""
+
+        if "type" in label_txt and use_class == UseClass.UNKNOWN:
+            for keyword, uc in _TYPE_TO_USE_CLASS.items():
+                if keyword in txt.lower():
+                    use_class = uc
+                    break
+
+        if "tenure" in label_txt and tenure == Tenure.UNKNOWN:
+            for keyword, t in _TENURE_MAP.items():
+                if keyword in txt.lower():
+                    tenure = t
+                    break
+
+        if "area" in label_txt and floor_area_sqft is None:
+            sqft_match = _SQFT_RE.search(txt.replace(",", ""))
+            if sqft_match:
+                try:
+                    floor_area_sqft = float(sqft_match.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+
+    description: str | None = None
+    desc_el = soup.find(class_=re.compile(r"description", re.IGNORECASE))
+    if desc_el:
+        description = desc_el.get_text(strip=True) or None
+
+    image_urls: list[str] = []
+    for img in soup.find_all("img", src=True):
+        src = img["src"]
+        if src.startswith("http") and "allsop" in src:
+            image_urls.append(src)
+
+    floor_area_sqm = round(floor_area_sqft * 0.092903, 1) if floor_area_sqft else None
+
+    return CommercialListing(
+        address=Address(raw=address_raw, postcode=postcode),
+        price=PriceInfo(amount=price_pence, qualifier=price_qualifier),
+        use_class=use_class,
+        floor_area_sqft=floor_area_sqft,
+        floor_area_sqm=floor_area_sqm,
+        tenure=tenure,
+        source_url=url,
+        source_name="Allsop",
+        auction=AuctionInfo(
+            house="Allsop",
+            lot_number=lot_number,
+            date=auction_date,
+        ),
+        image_urls=image_urls,
+        description=description,
+    )
+
+
+class AllsopAdapter(BaseAdapter):
+    async def fetch_listing(self, url: str) -> CommercialListing | None:
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=15.0,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; CommercialResiBot/1.0)"},
+            ) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    return None
+                return _parse_listing(resp.text, url)
+        except httpx.HTTPError:
+            return None
+
+
+register_adapter("allsop", AllsopAdapter, ["allsop.co.uk"])

@@ -32,6 +32,7 @@ def source_id_from_url(url: str) -> str | None:
 
 def _auto_register() -> None:
     import app.adapters.rightmove_commercial  # noqa: F401
+    import app.adapters.allsop  # noqa: F401
 
 
 _auto_register()
