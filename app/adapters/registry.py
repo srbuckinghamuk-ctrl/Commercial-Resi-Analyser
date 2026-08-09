@@ -28,3 +28,10 @@ def source_id_from_url(url: str) -> str | None:
     hostname = urlparse(url).hostname or ""
     hostname = hostname.removeprefix("www.")
     return _URL_TO_SOURCE.get(hostname)
+
+
+def _auto_register() -> None:
+    import app.adapters.rightmove_commercial  # noqa: F401
+
+
+_auto_register()
