@@ -226,7 +226,6 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
         assessment = await elig_repo.update(
             project_id,
             EligibilityAssessmentUpdate(
-                pdr_class=engine_result.pdr_class,
                 criteria=engine_result.criteria,
                 verdict=engine_result.verdict,
                 suggested_next_steps=engine_result.suggested_next_steps,
@@ -244,8 +243,8 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
         )
     await db.commit()
 
-    auto_checks = [c.key for c in engine_result.criteria if c.auto_checked and c.passed is not None]
-    manual_pending = [c.key for c in engine_result.criteria if c.passed is None]
+    auto_checks = [c.key for c in engine_result.criteria if c.auto_checked]
+    manual_pending = [c.key for c in engine_result.criteria if not c.auto_checked and c.passed is None]
 
     return EligibilityRunResponse(
         assessment=assessment,
@@ -301,7 +300,7 @@ async def scrape_url_endpoint(request: ScrapeUrlRequest):
 
     source_id = source_id_from_url(request.url)
     if source_id is None:
-        return ApiResponse(error=f"No adapter for this URL. Supported sources: use a commercial property listing URL from a supported site.")
+        return ApiResponse(error="No adapter for this URL. Supported sources: use a commercial property listing URL from a supported site.")
 
     adapter_cls = get_adapter(source_id)
     if adapter_cls is None:

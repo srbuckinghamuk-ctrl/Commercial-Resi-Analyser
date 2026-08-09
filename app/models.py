@@ -298,6 +298,7 @@ class EligibilityAssessmentCreate(BaseModel):
 
 
 class EligibilityAssessmentUpdate(BaseModel):
+    pdr_class: PdrClass | None = None
     criteria: list[EligibilityCriterion] | None = None
     verdict: EligibilityVerdict | None = None
     suggested_next_steps: list[str] | None = None

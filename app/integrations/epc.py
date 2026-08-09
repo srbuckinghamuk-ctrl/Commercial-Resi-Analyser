@@ -49,7 +49,10 @@ async def lookup_epc(
         else:
             row = rows[0]
         floor_area_raw = row.get("total-floor-area")
-        floor_area = float(floor_area_raw) if floor_area_raw else None
+        try:
+            floor_area = float(floor_area_raw) if floor_area_raw else None
+        except (ValueError, TypeError):
+            floor_area = None
         lmk_key = row.get("lmk-key", "")
         return EpcResult(
             address=row.get("address", ""),

@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import AsyncMock
 
 from app.adapters.base import BaseAdapter
 from app.adapters.registry import register_adapter, get_adapter, source_id_from_url, _REGISTRY, _URL_TO_SOURCE

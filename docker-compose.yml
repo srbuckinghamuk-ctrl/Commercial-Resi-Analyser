@@ -41,7 +41,7 @@ services:
         condition: service_healthy
 
   temporal-ui:
-    image: temporalio/ui:latest
+    image: temporalio/ui:2.26.2
     ports:
       - "8080:8080"
     environment:

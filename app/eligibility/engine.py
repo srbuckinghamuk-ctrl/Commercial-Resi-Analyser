@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from app.eligibility.criteria import (
     CriterionDef,
     FLOOR_AREA_LIMITS,
+    USE_CLASS_TO_PDR,
     detect_pdr_class,
     get_criteria_for_class,
 )
@@ -37,7 +38,26 @@ async def run_eligibility(
 
     pdr_class = detect_pdr_class(project.use_class, project.floor_area_sqm)
     if pdr_class is None:
-        pdr_class = PdrClass.CLASS_MA
+        mapped_class = USE_CLASS_TO_PDR.get(project.use_class)
+        if mapped_class is None:
+            return EligibilityEngineResult(
+                pdr_class=PdrClass.CLASS_MA,
+                criteria=[
+                    EligibilityCriterion(
+                        key="no_pdr_route",
+                        label="No PDR route available",
+                        passed=False,
+                        source="auto",
+                        auto_checked=True,
+                        value=f"Use class '{project.use_class}' has no applicable Permitted Development Right.",
+                    ),
+                ],
+                verdict=EligibilityVerdict.RED,
+                suggested_next_steps=[
+                    "Consider a full planning application or verify the property's use class."
+                ],
+            )
+        pdr_class = mapped_class
 
     criteria_defs = get_criteria_for_class(pdr_class)
 
@@ -143,15 +163,12 @@ def _evaluate_criterion(
                 if pdr_class.value in d.pdr_classes_restricted
             ]
             if relevant:
-                # Bundled dataset is not exhaustive/authoritative — a match flags a
-                # likely restriction but requires manual LPA confirmation rather
-                # than an automatic hard fail.
                 return EligibilityCriterion(
                     key=cdef.key,
                     label=cdef.label,
                     passed=None,
                     source="semi_auto",
-                    auto_checked=True,
+                    auto_checked=False,
                     value=f"Possible Article 4 direction: {relevant[0].name}",
                     risk_flag="Verify current Article 4 status with the LPA before relying on PDR.",
                 )
@@ -174,22 +191,14 @@ def _evaluate_criterion(
         )
 
     if cdef.key == "aonb_national_park":
-        if pc_result:
-            return EligibilityCriterion(
-                key=cdef.key,
-                label=cdef.label,
-                passed=True,
-                source="auto",
-                auto_checked=True,
-                value=f"Region: {pc_result.region}",
-                risk_flag="Postcode-level check only — confirm site is not within a designated area",
-            )
         return EligibilityCriterion(
             key=cdef.key,
             label=cdef.label,
             passed=None,
-            source="auto",
+            source="semi_auto",
             auto_checked=False,
+            value=f"Region: {pc_result.region}" if pc_result else "Postcode lookup failed",
+            risk_flag="No AONB/National Park boundary data available — confirm with LPA or check Magic Maps",
         )
 
     if cdef.key == "conservation_area":

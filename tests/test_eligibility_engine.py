@@ -186,6 +186,8 @@ class TestEligibilityEngine:
             "use_class_check": True,
             "vacancy_period": True,
             "conservation_area": True,
+            "aonb_national_park": True,
+            "article_4": True,
             "listed_building": True,
             "natural_light": True,
             "transport_access": True,
