@@ -23,8 +23,8 @@ function applyScenario(inputs: CalculatorInputs, overrides: ScenarioOverrides): 
     },
     conversion_costs: {
       ...inputs.conversion_costs,
-      construction_cost_per_sqft_pence: Math.round(
-        inputs.conversion_costs.construction_cost_per_sqft_pence * costMultiplier,
+      construction_cost_per_sqm_pence: Math.round(
+        inputs.conversion_costs.construction_cost_per_sqm_pence * costMultiplier,
       ),
     },
     finance: {

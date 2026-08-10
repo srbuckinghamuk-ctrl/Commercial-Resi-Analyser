@@ -20,7 +20,7 @@ export default function InvestorSummaryPage({ inputs, metrics, cashflow, project
       <div style={{ padding: 24, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <h2 style={{ color: '#e2e8f0', fontSize: 20, marginBottom: 4 }}>{project.address_raw}</h2>
         <p style={{ color: '#64748b', fontSize: 14, marginBottom: 24 }}>
-          {project.use_class.replace('_', ' ')} | {project.floor_area_sqft?.toLocaleString() ?? '—'} sq ft | {project.tenure}
+          {project.use_class.replace('_', ' ')} | {project.floor_area_sqm?.toLocaleString() ?? '—'} m² | {project.tenure}
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
@@ -59,7 +59,7 @@ export default function InvestorSummaryPage({ inputs, metrics, cashflow, project
             ) : (
               inputs.unit_mix.units.map((u, i) => (
                 <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: '#e2e8f0', fontSize: 14 }}>
-                  <span>Unit {i + 1} — {u.type} ({u.floor_area_sqft} sqft)</span>
+                  <span>Unit {i + 1} — {u.type} ({u.floor_area_sqm} m²)</span>
                   <span>{penceToPounds(u.estimated_value_pence)}</span>
                 </div>
               ))

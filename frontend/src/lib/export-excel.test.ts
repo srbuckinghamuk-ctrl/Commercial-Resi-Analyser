@@ -60,7 +60,7 @@ describe('formatProjectRow', () => {
 
   it('includes floor area', () => {
     const row = formatProjectRow(mockProject);
-    expect(row['Floor Area (sq ft)']).toBe(2000);
+    expect(row['Floor Area (m²)']).toBe(185.8);
   });
 
   it('includes tenure', () => {

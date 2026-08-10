@@ -17,7 +17,7 @@ export function buildEligibilityContent(project: Project, assessment: Eligibilit
   lines.push(`Postcode: ${project.address_postcode || 'N/A'}`);
   lines.push(`Use Class: ${project.use_class.replace(/_/g, ' ')}`);
   lines.push(`Price: ${formatPence(project.price_pence)}`);
-  lines.push(`Floor Area: ${project.floor_area_sqft ? `${project.floor_area_sqft} sq ft` : 'N/A'}`);
+  lines.push(`Floor Area: ${project.floor_area_sqm ? `${project.floor_area_sqm} m²` : 'N/A'}`);
   lines.push('');
   lines.push(`PDR Class: ${assessment.pdr_class.replace(/_/g, ' ').toUpperCase()}`);
   lines.push(`Verdict: ${assessment.verdict.toUpperCase()}`);

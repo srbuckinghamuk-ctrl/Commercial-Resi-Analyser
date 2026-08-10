@@ -7,6 +7,7 @@ from app.models import Tenure, UseClass
 POSTCODE_RE = re.compile(r"[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}", re.IGNORECASE)
 PRICE_RE = re.compile(r"£([\d,]+)")
 SQFT_RE = re.compile(r"([\d,]+)\s*sq\s*ft", re.IGNORECASE)
+SQM_RE = re.compile(r"([\d,.]+)\s*(?:sq\s*m|m²|m2)", re.IGNORECASE)
 
 TYPE_TO_USE_CLASS: dict[str, UseClass] = {
     "office": UseClass.OFFICE,
@@ -68,6 +69,16 @@ def parse_sqft(text: str) -> float | None:
     if match:
         try:
             return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
+def parse_sqm(text: str) -> float | None:
+    match = SQM_RE.search(text.replace(",", ""))
+    if match:
+        try:
+            return round(float(match.group(1).replace(",", "")), 1)
         except ValueError:
             return None
     return None

@@ -10,6 +10,7 @@ from app.adapters.patterns import (
     POSTCODE_RE,
     PRICE_RE,
     SQFT_RE,
+    SQM_RE,
     TYPE_TO_USE_CLASS,
     TENURE_MAP,
     sqft_to_sqm,
@@ -119,6 +120,7 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
                 break
 
     floor_area_sqft: float | None = None
+    floor_area_sqm_direct: float | None = None
     area_text = _parse_detail(soup, "Total GIA") or _parse_detail(soup, "Floor Area") or ""
     sqft_match = SQFT_RE.search(area_text.replace(",", ""))
     if not sqft_match:
@@ -128,6 +130,15 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
             floor_area_sqft = float(sqft_match.group(1).replace(",", ""))
         except ValueError:
             pass
+    else:
+        sqm_match = SQM_RE.search(area_text.replace(",", ""))
+        if not sqm_match:
+            sqm_match = SQM_RE.search(page_text.replace(",", ""))
+        if sqm_match:
+            try:
+                floor_area_sqm_direct = round(float(sqm_match.group(1).replace(",", "")), 1)
+            except ValueError:
+                pass
 
     is_vacant: bool | None = None
     tenancy_text = _parse_detail(soup, "Tenancy") or ""
@@ -162,7 +173,7 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
             if "logo" not in src.lower() and "svg" not in src.lower():
                 image_urls.append(src)
 
-    floor_area_sqm = sqft_to_sqm(floor_area_sqft)
+    floor_area_sqm = floor_area_sqm_direct or sqft_to_sqm(floor_area_sqft)
 
     return CommercialListing(
         address=Address(raw=address_raw, postcode=postcode),

@@ -13,6 +13,7 @@ from app.adapters.patterns import (
     extract_postcode,
     parse_price,
     parse_sqft,
+    parse_sqm,
     sqft_to_sqm,
 )
 from app.adapters.registry import register_adapter
@@ -46,6 +47,7 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
     use_class = UseClass.UNKNOWN
     tenure = Tenure.UNKNOWN
     floor_area_sqft: float | None = None
+    floor_area_sqm_direct: float | None = None
 
     for detail_el in soup.find_all(["div", "span", "li"]):
         txt = detail_el.get_text(strip=True)
@@ -62,8 +64,10 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
             if detected_tenure != Tenure.UNKNOWN:
                 tenure = detected_tenure
 
-        if floor_area_sqft is None:
+        if floor_area_sqft is None and floor_area_sqm_direct is None:
             floor_area_sqft = parse_sqft(txt)
+            if floor_area_sqft is None:
+                floor_area_sqm_direct = parse_sqm(txt)
 
     description = ""
     desc_el = soup.find("div", class_=re.compile(r"STw8|description", re.IGNORECASE))
@@ -82,7 +86,7 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
         if "rightmove" in src and src.startswith("http"):
             image_urls.append(src)
 
-    floor_area_sqm = sqft_to_sqm(floor_area_sqft)
+    floor_area_sqm = floor_area_sqm_direct or sqft_to_sqm(floor_area_sqft)
 
     return CommercialListing(
         address=Address(raw=address_raw, postcode=postcode),

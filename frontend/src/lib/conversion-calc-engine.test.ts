@@ -17,8 +17,8 @@ describe('calculateGdv', () => {
 
   it('sums unit values', () => {
     const units: ProposedUnit[] = [
-      { id: '1', type: '1bed', floor_area_sqft: 500, estimated_value_pence: 25_000_000, comparable_notes: '' },
-      { id: '2', type: '2bed', floor_area_sqft: 700, estimated_value_pence: 35_000_000, comparable_notes: '' },
+      { id: '1', type: '1bed', floor_area_sqm: 500, estimated_value_pence: 25_000_000, comparable_notes: '' },
+      { id: '2', type: '2bed', floor_area_sqm: 700, estimated_value_pence: 35_000_000, comparable_notes: '' },
     ];
     expect(calculateGdv(units)).toBe(60_000_000);
   });
@@ -52,8 +52,8 @@ describe('calculateTotalConstructionCost', () => {
       planning_consultant_pence: 0,
       building_control_pence: 0,
       other_professional_fees_pence: 0,
-      construction_cost_per_sqft_pence: 10_000,
-      total_construction_sqft: 1000,
+      construction_cost_per_sqm_pence: 10_000,
+      total_construction_sqm: 1000,
       contingency_pct: 10,
       fire_safety_pence: 100_000,
       sound_insulation_pence: 50_000,
@@ -78,8 +78,8 @@ describe('calculateTotalProfessionalFees', () => {
       planning_consultant_pence: 300_000,
       building_control_pence: 200_000,
       other_professional_fees_pence: 100_000,
-      construction_cost_per_sqft_pence: 0,
-      total_construction_sqft: 0,
+      construction_cost_per_sqm_pence: 0,
+      total_construction_sqm: 0,
       contingency_pct: 0,
       fire_safety_pence: 0,
       sound_insulation_pence: 0,
@@ -113,14 +113,14 @@ describe('calculateIrr', () => {
 
 describe('calculateAppraisal', () => {
   it('produces complete metrics for valid inputs', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 30_000_000, floor_area_sqft: 2000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 30_000_000, floor_area_sqm: 2000 });
     inputs.unit_mix.units = [
-      { id: '1', type: '1bed', floor_area_sqft: 500, estimated_value_pence: 25_000_000, comparable_notes: '' },
-      { id: '2', type: '2bed', floor_area_sqft: 700, estimated_value_pence: 35_000_000, comparable_notes: '' },
-      { id: '3', type: '1bed', floor_area_sqft: 450, estimated_value_pence: 22_000_000, comparable_notes: '' },
+      { id: '1', type: '1bed', floor_area_sqm: 500, estimated_value_pence: 25_000_000, comparable_notes: '' },
+      { id: '2', type: '2bed', floor_area_sqm: 700, estimated_value_pence: 35_000_000, comparable_notes: '' },
+      { id: '3', type: '1bed', floor_area_sqm: 450, estimated_value_pence: 22_000_000, comparable_notes: '' },
     ];
-    inputs.conversion_costs.construction_cost_per_sqft_pence = 7_500;
-    inputs.conversion_costs.total_construction_sqft = 2000;
+    inputs.conversion_costs.construction_cost_per_sqm_pence = 7_500;
+    inputs.conversion_costs.total_construction_sqm = 2000;
 
     const metrics = calculateAppraisal(inputs);
 
@@ -137,7 +137,7 @@ describe('calculateAppraisal', () => {
   });
 
   it('returns zero profit metrics when no units', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     const metrics = calculateAppraisal(inputs);
     expect(metrics.total_gdv_pence).toBe(0);
     expect(metrics.profit_pence).toBeLessThan(0);

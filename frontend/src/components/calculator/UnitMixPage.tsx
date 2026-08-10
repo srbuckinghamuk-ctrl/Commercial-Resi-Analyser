@@ -31,7 +31,7 @@ export default function UnitMixPage({ inputs, onChange, metrics }: Props) {
       {
         id: crypto.randomUUID(),
         type: '1bed',
-        floor_area_sqft: 500,
+        floor_area_sqm: 46,
         estimated_value_pence: 25_000_000,
         comparable_notes: '',
       },
@@ -90,11 +90,11 @@ export default function UnitMixPage({ inputs, onChange, metrics }: Props) {
               </select>
             </div>
             <div>
-              <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Floor area (sq ft)</label>
+              <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Floor area (m²)</label>
               <input
                 type="number"
-                value={unit.floor_area_sqft}
-                onChange={(e) => updateUnit(unit.id, { floor_area_sqft: Number(e.target.value) })}
+                value={unit.floor_area_sqm}
+                onChange={(e) => updateUnit(unit.id, { floor_area_sqm: Number(e.target.value) })}
                 style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
               />
             </div>
@@ -133,7 +133,7 @@ export default function UnitMixPage({ inputs, onChange, metrics }: Props) {
       <div style={{ marginTop: 24, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
           <span>Units: {units.length}</span>
-          <span>Total floor area: {units.reduce((s, u) => s + u.floor_area_sqft, 0).toLocaleString()} sq ft</span>
+          <span>Total floor area: {units.reduce((s, u) => s + u.floor_area_sqm, 0).toLocaleString()} m²</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
           <span>Total GDV</span>

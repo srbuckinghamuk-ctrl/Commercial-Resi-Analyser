@@ -143,7 +143,7 @@ export default function ProjectDetail({ project, projects, onBack, onProjectUpda
           <span>£{(project.price_pence / 100).toLocaleString()}</span>
           <span>{project.use_class.replace(/_/g, ' ')}</span>
           {project.address_postcode && <span>{project.address_postcode}</span>}
-          {project.floor_area_sqft && <span>{project.floor_area_sqft.toLocaleString()} sq ft</span>}
+          {project.floor_area_sqm && <span>{project.floor_area_sqm.toLocaleString()} m²</span>}
           {project.tenure !== 'unknown' && <span>{project.tenure}</span>}
         </div>
         {project.source_url && (

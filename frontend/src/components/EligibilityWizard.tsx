@@ -77,7 +77,7 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
         <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{project.address_raw}</div>
         <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
           {project.use_class} · £{(project.price_pence / 100).toLocaleString()}
-          {project.floor_area_sqm != null && ` · ${project.floor_area_sqm} sq m`}
+          {project.floor_area_sqm != null && ` · ${project.floor_area_sqm} m²`}
           {project.address_postcode && ` · ${project.address_postcode}`}
         </div>
       </div>

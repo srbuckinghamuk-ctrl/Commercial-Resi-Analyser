@@ -17,7 +17,7 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
   const [addressPostcode, setAddressPostcode] = useState('');
   const [pricePounds, setPricePounds] = useState('');
   const [useClass, setUseClass] = useState<UseClass>('office');
-  const [floorAreaSqft, setFloorAreaSqft] = useState('');
+  const [floorAreaSqm, setFloorAreaSqm] = useState('');
   const [floors, setFloors] = useState('');
   const [tenure, setTenure] = useState<Tenure>('unknown');
   const [description, setDescription] = useState('');
@@ -39,7 +39,7 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
         setAddressPostcode(l.address.postcode || '');
         setPricePounds(l.price.amount ? String(l.price.amount / 100) : '');
         setUseClass(l.use_class || 'unknown');
-        setFloorAreaSqft(l.floor_area_sqft ? String(l.floor_area_sqft) : '');
+        setFloorAreaSqm(l.floor_area_sqm ? String(l.floor_area_sqm) : '');
         setFloors(l.floors ? String(l.floors) : '');
         setTenure(l.tenure || 'unknown');
         setDescription(l.description || '');
@@ -65,7 +65,7 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
         address_postcode: addressPostcode || undefined,
         price_pence: Math.round(parseFloat(pricePounds) * 100),
         use_class: useClass,
-        floor_area_sqft: floorAreaSqft ? parseFloat(floorAreaSqft) : undefined,
+        floor_area_sqm: floorAreaSqm ? parseFloat(floorAreaSqm) : undefined,
         floors: floors ? parseInt(floors, 10) : undefined,
         tenure,
         description: description || undefined,
@@ -77,7 +77,7 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
     } catch {
       setSaveStatus('error');
     }
-  }, [addressRaw, addressPostcode, pricePounds, useClass, floorAreaSqft, floors, tenure, description, isVacant, onProjectCreated]);
+  }, [addressRaw, addressPostcode, pricePounds, useClass, floorAreaSqm, floors, tenure, description, isVacant, onProjectCreated]);
 
   const inputStyle = {
     width: '100%',
@@ -183,8 +183,8 @@ export default function NewProject({ onProjectCreated }: NewProjectProps) {
             </select>
           </div>
           <div>
-            <label style={labelStyle}>Floor Area (sq ft)</label>
-            <input style={inputStyle} type="number" value={floorAreaSqft} onChange={(e) => setFloorAreaSqft(e.target.value)} />
+            <label style={labelStyle}>Floor Area (m²)</label>
+            <input style={inputStyle} type="number" value={floorAreaSqm} onChange={(e) => setFloorAreaSqm(e.target.value)} />
           </div>
           <div>
             <label style={labelStyle}>Number of Floors</label>

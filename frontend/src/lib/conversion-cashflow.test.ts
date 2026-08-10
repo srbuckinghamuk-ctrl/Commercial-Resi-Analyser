@@ -4,14 +4,14 @@ import { defaultCalculatorInputs } from './conversion-defaults';
 
 describe('buildCashflow', () => {
   it('returns months array matching loan term', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     inputs.finance.loan_term_months = 12;
     const result = buildCashflow(inputs);
     expect(result.months).toHaveLength(12);
   });
 
   it('month 1 has acquisition drawdown', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     inputs.finance.loan_term_months = 12;
     const result = buildCashflow(inputs);
     expect(result.months[0].drawdown_pence).toBeGreaterThan(0);
@@ -19,9 +19,9 @@ describe('buildCashflow', () => {
   });
 
   it('final month has income from sales', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     inputs.unit_mix.units = [
-      { id: '1', type: '1bed', floor_area_sqft: 500, estimated_value_pence: 30_000_000, comparable_notes: '' },
+      { id: '1', type: '1bed', floor_area_sqm: 500, estimated_value_pence: 30_000_000, comparable_notes: '' },
     ];
     inputs.finance.loan_term_months = 12;
     const result = buildCashflow(inputs);
@@ -30,7 +30,7 @@ describe('buildCashflow', () => {
   });
 
   it('tracks cumulative drawdown', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     inputs.finance.loan_term_months = 6;
     const result = buildCashflow(inputs);
     for (let i = 1; i < result.months.length; i++) {
@@ -41,7 +41,7 @@ describe('buildCashflow', () => {
   });
 
   it('accrues interest each month for rolled-up finance', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     inputs.finance.interest_type = 'rolled_up';
     inputs.finance.loan_term_months = 6;
     const result = buildCashflow(inputs);
@@ -49,7 +49,7 @@ describe('buildCashflow', () => {
   });
 
   it('calculates peak funding', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqft: 5000 });
+    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
     inputs.finance.loan_term_months = 12;
     const result = buildCashflow(inputs);
     expect(result.peak_funding_pence).toBeGreaterThan(0);

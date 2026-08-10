@@ -25,7 +25,7 @@ export function calculateTotalAcquisitionCost(acq: AcquisitionInputs): number {
 }
 
 export function calculateTotalConstructionCost(costs: ConversionCostInputs): number {
-  const baseCost = costs.construction_cost_per_sqft_pence * costs.total_construction_sqft;
+  const baseCost = costs.construction_cost_per_sqm_pence * costs.total_construction_sqm;
   const contingency = Math.round((baseCost * costs.contingency_pct) / 100);
   const compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence;
   return baseCost + contingency + compliance;

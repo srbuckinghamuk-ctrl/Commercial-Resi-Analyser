@@ -3,7 +3,7 @@ export type UnitType = 'studio' | '1bed' | '2bed' | '3bed';
 export interface ProposedUnit {
   id: string;
   type: UnitType;
-  floor_area_sqft: number;
+  floor_area_sqm: number;
   estimated_value_pence: number;
   comparable_notes: string;
 }
@@ -29,8 +29,8 @@ export interface ConversionCostInputs {
   planning_consultant_pence: number;
   building_control_pence: number;
   other_professional_fees_pence: number;
-  construction_cost_per_sqft_pence: number;
-  total_construction_sqft: number;
+  construction_cost_per_sqm_pence: number;
+  total_construction_sqm: number;
   contingency_pct: number;
   fire_safety_pence: number;
   sound_insulation_pence: number;

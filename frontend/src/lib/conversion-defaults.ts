@@ -30,8 +30,8 @@ export const DEFAULT_CONVERSION_COSTS: ConversionCostInputs = {
   planning_consultant_pence: 300_000,
   building_control_pence: 200_000,
   other_professional_fees_pence: 0,
-  construction_cost_per_sqft_pence: 7_500,
-  total_construction_sqft: 0,
+  construction_cost_per_sqm_pence: 80_730,
+  total_construction_sqm: 0,
   contingency_pct: 10.0,
   fire_safety_pence: 0,
   sound_insulation_pence: 0,
@@ -124,7 +124,7 @@ export const DEFAULT_SCENARIOS: {
 export function defaultCalculatorInputs(project?: {
   id: string;
   price_pence: number;
-  floor_area_sqft: number | null;
+  floor_area_sqm: number | null;
 }): CalculatorInputs {
   return {
     project_id: project?.id ?? null,
@@ -135,7 +135,7 @@ export function defaultCalculatorInputs(project?: {
     unit_mix: { ...DEFAULT_UNIT_MIX },
     conversion_costs: {
       ...DEFAULT_CONVERSION_COSTS,
-      total_construction_sqft: project?.floor_area_sqft ?? 0,
+      total_construction_sqm: project?.floor_area_sqm ?? 0,
     },
     finance: { ...DEFAULT_FINANCE },
     exit_strategy: { ...DEFAULT_EXIT_STRATEGY },

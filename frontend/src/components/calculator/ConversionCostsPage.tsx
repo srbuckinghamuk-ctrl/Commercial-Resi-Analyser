@@ -70,8 +70,8 @@ export default function ConversionCostsPage({ inputs, onChange, metrics }: Props
       <PenceCostRow label="Other professional fees (£)" penceValue={costs.other_professional_fees_pence} onChangePence={(v) => updateCosts({ other_professional_fees_pence: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Construction</h4>
-      <PenceCostRow label="Cost per sq ft (£)" penceValue={costs.construction_cost_per_sqft_pence} onChangePence={(v) => updateCosts({ construction_cost_per_sqft_pence: v })} />
-      <CostRow label="Total construction sq ft" value={costs.total_construction_sqft} onChangeValue={(v) => updateCosts({ total_construction_sqft: v })} />
+      <PenceCostRow label="Cost per m² (£)" penceValue={costs.construction_cost_per_sqm_pence} onChangePence={(v) => updateCosts({ construction_cost_per_sqm_pence: v })} />
+      <CostRow label="Total construction m²" value={costs.total_construction_sqm} onChangeValue={(v) => updateCosts({ total_construction_sqm: v })} />
       <CostRow label="Contingency (%)" value={costs.contingency_pct} onChangeValue={(v) => updateCosts({ contingency_pct: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Building Regs Compliance</h4>
