@@ -2,10 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createProject,
   listProjects,
-  getProject,
-  updateProject,
   deleteProject,
-  changeStage,
   scrapeUrl,
   lookupPostcode,
   lookupFlood,
@@ -14,7 +11,7 @@ import {
 } from './api';
 
 const mockFetch = vi.fn();
-global.fetch = mockFetch;
+(globalThis as Record<string, unknown>).fetch = mockFetch;
 
 beforeEach(() => {
   mockFetch.mockReset();
@@ -72,7 +69,7 @@ describe('scrapeUrl', () => {
       json: () => Promise.resolve({ listing: null, error: 'not implemented' }),
     });
 
-    const result = await scrapeUrl('https://example.com');
+    await scrapeUrl('https://example.com');
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/scrape-url', expect.objectContaining({
       method: 'POST',
     }));

@@ -137,7 +137,6 @@ export default function App() {
         {activeTab === 'project_detail' && selectedProject && (
           <ProjectDetail
             project={selectedProject}
-            projects={projects}
             onBack={() => setActiveTab('pipeline')}
             onProjectUpdated={loadProjects}
           />

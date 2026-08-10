@@ -7,7 +7,6 @@ import ConversionCalculator from './ConversionCalculator';
 
 interface ProjectDetailProps {
   project: Project;
-  projects: Project[];
   onBack: () => void;
   onProjectUpdated: () => void;
 }
@@ -34,7 +33,7 @@ const STAGE_ACTIONS: Record<PipelineStage, { label: string; view: DetailView } |
   complete: null,
 };
 
-export default function ProjectDetail({ project, projects, onBack, onProjectUpdated }: ProjectDetailProps) {
+export default function ProjectDetail({ project, onBack, onProjectUpdated }: ProjectDetailProps) {
   const [view, setView] = useState<DetailView>('overview');
   const [eligibility, setEligibility] = useState<EligibilityType | null>(null);
   const [appraisal, setAppraisal] = useState<FinancialAppraisal | null>(null);
@@ -202,8 +201,6 @@ export default function ProjectDetail({ project, projects, onBack, onProjectUpda
             {PIPELINE_STAGES.map((stage, i) => {
               const isCompleted = i < currentStageIndex;
               const isCurrent = i === currentStageIndex;
-              const isFuture = i > currentStageIndex;
-
               return (
                 <div
                   key={stage.value}

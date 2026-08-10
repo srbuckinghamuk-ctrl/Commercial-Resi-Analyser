@@ -8,12 +8,6 @@ interface ProjectCardProps {
   onDelete: (projectId: string) => void;
 }
 
-const VERDICT_COLORS: Record<string, string> = {
-  green: '#22c55e',
-  amber: '#f59e0b',
-  red: '#ef4444',
-};
-
 export default function ProjectCard({ project, onStageChange, onSelect, onDelete }: ProjectCardProps) {
   const currentIndex = PIPELINE_STAGES.findIndex((s) => s.value === project.stage);
   const nextStage = currentIndex < PIPELINE_STAGES.length - 1 ? PIPELINE_STAGES[currentIndex + 1] : null;

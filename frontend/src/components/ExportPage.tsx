@@ -1,8 +1,12 @@
 import { useState, useCallback } from 'react';
 import type { Project } from '../types';
+import type { CalculatorInputs } from '../lib/conversion-types';
 import { getEligibility, getAppraisal } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
 import { generateProjectsExcel } from '../lib/export-excel';
+import { generateInvestmentMemo } from '../lib/export-investment-memo';
+import { calculateAppraisal } from '../lib/conversion-calc-engine';
+import { buildCashflow } from '../lib/conversion-cashflow';
 
 interface ExportPageProps {
   projects: Project[];
@@ -54,6 +58,60 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
     }
   }, [selectedProject]);
 
+  const handleInvestmentMemo = useCallback(async () => {
+    if (!selectedProject) return;
+    setLoading('memo');
+    setError(null);
+    try {
+      const appraisal = await getAppraisal(selectedProject.id);
+      const raw = appraisal.inputs_snapshot as unknown as CalculatorInputs & {
+        unit_mix?: { units?: Array<Record<string, unknown>> };
+      };
+      if (!raw || !raw.unit_mix || !raw.acquisition) {
+        throw new Error('No calculator data found in appraisal snapshot');
+      }
+      const inputs: CalculatorInputs = {
+        ...raw,
+        unit_mix: {
+          units: raw.unit_mix.units.map((u: Record<string, unknown>) => ({
+            ...u,
+            floor_area_sqm:
+              typeof u.floor_area_sqm === 'number'
+                ? u.floor_area_sqm
+                : typeof u.floor_area_sqft === 'number'
+                  ? Math.round(u.floor_area_sqft as number * 0.092903 * 100) / 100
+                  : 0,
+          })),
+        } as CalculatorInputs['unit_mix'],
+      };
+      const metrics = calculateAppraisal(inputs);
+      const cashflow = buildCashflow(inputs);
+
+      let eligibility = null;
+      try {
+        eligibility = await getEligibility(selectedProject.id);
+      } catch {
+        // eligibility is optional for the memo
+      }
+
+      const blob = generateInvestmentMemo(
+        selectedProject,
+        inputs,
+        metrics,
+        cashflow,
+        eligibility,
+      );
+      const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
+      downloadBlob(blob, `investment-memo-${safeName}.pdf`);
+    } catch (err) {
+      setError(
+        'Could not generate Investment Memorandum. Ensure a financial appraisal has been saved with full calculator data.',
+      );
+    } finally {
+      setLoading(null);
+    }
+  }, [selectedProject]);
+
   const handleExcel = useCallback(() => {
     if (projects.length === 0) return;
     setLoading('excel');
@@ -78,9 +136,45 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
         </div>
       )}
 
+      {/* Investment Memorandum */}
+      <div style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+        <h3 style={{ color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Investment Memorandum (PDF)</h3>
+        <p style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+          Comprehensive report with full cost plan, sensitivity analysis, risk register, cashflow, and funding request. Suitable for equity investors and senior debt funders.
+        </p>
+        {selectedProject ? (
+          <div>
+            <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: 12 }}>
+              Selected: <strong style={{ color: '#e2e8f0' }}>{selectedProject.address_raw}</strong>
+            </div>
+            <button
+              onClick={handleInvestmentMemo}
+              disabled={loading === 'memo'}
+              style={{
+                padding: '10px 20px',
+                background: '#1e3a5f',
+                color: '#93c5fd',
+                border: '1px solid #2563eb',
+                borderRadius: 6,
+                cursor: loading ? 'not-allowed' : 'pointer',
+                fontSize: 14,
+                fontWeight: 600,
+                opacity: loading === 'memo' ? 0.6 : 1,
+              }}
+            >
+              {loading === 'memo' ? 'Generating...' : 'Download Investment Memorandum'}
+            </button>
+          </div>
+        ) : (
+          <p style={{ color: '#64748b', fontSize: 13 }}>
+            Select a project from the Pipeline tab to generate its Investment Memorandum.
+          </p>
+        )}
+      </div>
+
       {/* Project-specific exports */}
       <div style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-        <h3 style={{ color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Project Reports (PDF)</h3>
+        <h3 style={{ color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Quick Reports (PDF)</h3>
         {selectedProject ? (
           <div>
             <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: 12 }}>

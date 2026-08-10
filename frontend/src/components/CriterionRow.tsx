@@ -12,12 +12,6 @@ export default function CriterionRow({ criterion, onOverride }: CriterionRowProp
       ? '❌'
       : '❓';
 
-  const statusColor = criterion.passed === true
-    ? '#22c55e'
-    : criterion.passed === false
-      ? '#ef4444'
-      : '#f59e0b';
-
   return (
     <div
       style={{
