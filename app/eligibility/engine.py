@@ -330,7 +330,6 @@ def _compute_verdict(criteria: list[EligibilityCriterion]) -> EligibilityVerdict
 NEXT_STEPS: dict[str, str] = {
     "use_class_check": "Confirm the property's current planning use class with the LPA or lease documents.",
     "class_e_use_period": "Verify the building has been in Class E use for a continuous period of at least 2 years before the prior approval application date (lease records, rates records).",
-    "vacancy_period": "Verify the property has been vacant for at least 3 continuous months with evidence (utility bills, rates records).",
     "conservation_area": "Check with the LPA whether the property is in a conservation area.",
     "listed_building": "Confirm the building is not listed (check Historic England's National Heritage List).",
     "natural_light": "Assess whether habitable rooms will have adequate natural light (site visit recommended).",

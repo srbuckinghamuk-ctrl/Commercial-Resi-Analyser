@@ -52,17 +52,20 @@ class TestCriteriaDefinitions:
         assert len(ALL_CRITERIA) > 0
         assert all(isinstance(c, CriterionDef) for c in ALL_CRITERIA)
 
-    def test_class_ma_has_14_criteria(self):
+    def test_class_ma_has_12_criteria(self):
         criteria = get_criteria_for_class(PdrClass.CLASS_MA)
-        assert len(criteria) == 14
+        assert len(criteria) == 12
 
     def test_class_ma_criteria_keys(self):
         criteria = get_criteria_for_class(PdrClass.CLASS_MA)
         keys = {c.key for c in criteria}
         assert "use_class_check" in keys
-        assert "floor_area_limit" in keys
+        # GPDO Amendment Order 2024 (SI 2024/141, in force 5 March 2024)
+        # removed the 1,500 sqm floorspace cap and the 3-month vacancy
+        # requirement from Class MA.
+        assert "floor_area_limit" not in keys
+        assert "vacancy_period" not in keys
         assert "class_e_use_period" in keys
-        assert "vacancy_period" in keys
         assert "conservation_area" in keys
         assert "aonb_national_park" in keys
         assert "article_4" in keys
@@ -114,9 +117,16 @@ class TestPdrClassDetection:
         result = detect_pdr_class(UseClass.OFFICE, floor_area_sqm=500.0)
         assert result == PdrClass.CLASS_MA
 
-    def test_office_over_1500_sqm_returns_none(self):
+    def test_office_over_1500_sqm_still_class_ma(self):
+        # The 1,500 sqm Class MA cap was removed in March 2024 — large
+        # offices remain eligible.
         result = detect_pdr_class(UseClass.OFFICE, floor_area_sqm=1600.0)
-        assert result is None
+        assert result == PdrClass.CLASS_MA
+
+    def test_class_ma_has_no_floor_area_cap(self):
+        from app.eligibility.criteria import FLOOR_AREA_LIMITS
+
+        assert PdrClass.CLASS_MA not in FLOOR_AREA_LIMITS
 
     def test_retail_detects_class_ma(self):
         # Retail is Class E since Sept 2020 — routes to Class MA, not Class G.
@@ -199,9 +209,9 @@ class TestEligibilityEngine:
         assert isinstance(result, EligibilityEngineResult)
         assert result.pdr_class == PdrClass.CLASS_MA
         assert result.verdict == EligibilityVerdict.AMBER
-        assert len(result.criteria) == 14
-        auto_passed = [c for c in result.criteria if c.auto_checked and c.passed is True]
-        assert len(auto_passed) >= 1
+        assert len(result.criteria) == 12
+        # No floor-area criterion for Class MA since the 2024 amendments.
+        assert all(c.key != "floor_area_limit" for c in result.criteria)
         manual_pending = [c for c in result.criteria if not c.auto_checked and c.passed is None]
         assert len(manual_pending) >= 1
 
@@ -232,7 +242,6 @@ class TestEligibilityEngine:
         overrides = {
             "use_class_check": True,
             "class_e_use_period": True,
-            "vacancy_period": True,
             "conservation_area": True,
             "aonb_national_park": True,
             "article_4": True,
@@ -305,7 +314,9 @@ class TestEligibilityEngine:
             return_value=httpx.Response(200, json={"items": []})
         )
 
-        project = _make_project(floor_area_sqm=1600.0)
+        # Class MA no longer has a floorspace cap, so the auto-fail path is
+        # exercised through Class Q's 1,000 sqm cumulative limit instead.
+        project = _make_project(use_class="agricultural", floor_area_sqm=1100.0)
         result = await run_eligibility(project)
 
         floor_criterion = next(c for c in result.criteria if c.key == "floor_area_limit")
@@ -459,7 +470,9 @@ class TestEngineHonesty:
                 },
             )
         )
-        project = _make_project(floor_area_sqm=None, floor_area_sqft=None)
+        # Uses Class Q — the only route with a floorspace cap that also has
+        # realistic EPC coverage (Class MA lost its cap in March 2024).
+        project = _make_project(use_class="agricultural", floor_area_sqm=None, floor_area_sqft=None)
         result = await run_eligibility(project, epc_api_key="test-key")
         floor = next(c for c in result.criteria if c.key == "floor_area_limit")
         assert floor.passed is None
@@ -492,7 +505,7 @@ class TestEngineHonesty:
                 },
             )
         )
-        project = _make_project(floor_area_sqm=None, floor_area_sqft=None)
+        project = _make_project(use_class="agricultural", floor_area_sqm=None, floor_area_sqft=None)
         result = await run_eligibility(project, epc_api_key="test-key")
         floor = next(c for c in result.criteria if c.key == "floor_area_limit")
         assert floor.passed is True
@@ -508,7 +521,7 @@ class TestEngineHonesty:
         _mock_flood([])
         result = await run_eligibility(_make_project())
         assert result.ruleset_version == RULESET_VERSION
-        assert result.ruleset_version == "gpdo-2026-08.1"
+        assert result.ruleset_version == "gpdo-2026-08.2"
 
 
 class TestTwoTierVerdict:
@@ -518,7 +531,6 @@ class TestTwoTierVerdict:
     ALL_PASS_OVERRIDES = {
         "use_class_check": True,
         "class_e_use_period": True,
-        "vacancy_period": True,
         "conservation_area": True,
         "aonb_national_park": True,
         "article_4": True,

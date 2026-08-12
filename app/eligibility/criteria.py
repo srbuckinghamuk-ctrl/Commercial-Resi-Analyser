@@ -5,7 +5,7 @@ from app.models import PdrClass, UseClass
 # Version stamp for the eligibility ruleset. Bump when criteria definitions
 # or evaluation logic change, so stored assessments record which rules
 # produced them.
-RULESET_VERSION = "gpdo-2026-08.1"
+RULESET_VERSION = "gpdo-2026-08.2"
 
 # ---------------------------------------------------------------------------
 # IMPORTANT — screening baseline only.
@@ -40,7 +40,9 @@ class CriterionDef:
 
 
 FLOOR_AREA_LIMITS: dict[PdrClass, float] = {
-    PdrClass.CLASS_MA: 1500.0,
+    # Class MA has NO floorspace cap: the GPDO Amendment Order 2024
+    # (SI 2024/141, in force 5 March 2024) removed the 1,500 sqm limit
+    # (and the 3-month vacancy requirement).
     # Class G retains its statutory 150 sqm cap, but since the Sept 2020
     # use-class reform no use class here routes to it for straight
     # conversions (retail is Class E and routes to Class MA).
@@ -64,7 +66,9 @@ ALL_CRITERIA: list[CriterionDef] = [
     CriterionDef(
         key="floor_area_limit",
         label="Floor area within limit",
-        applicable_classes=[PdrClass.CLASS_MA, PdrClass.CLASS_G, PdrClass.CLASS_M, PdrClass.CLASS_N, PdrClass.CLASS_Q],
+        # Class MA is excluded: its 1,500 sqm cap was removed by the GPDO
+        # Amendment Order 2024 (in force 5 March 2024).
+        applicable_classes=[PdrClass.CLASS_G, PdrClass.CLASS_M, PdrClass.CLASS_N, PdrClass.CLASS_Q],
         check_type="auto",
         description=(
             "Floor area must not exceed the PDR class limit. For Class Q the "
@@ -84,14 +88,8 @@ ALL_CRITERIA: list[CriterionDef] = [
         ),
         category=CATEGORY_STATUTORY,
     ),
-    CriterionDef(
-        key="vacancy_period",
-        label="Building vacant for ≥ 3 continuous months",
-        applicable_classes=[PdrClass.CLASS_MA],
-        check_type="manual",
-        description="The building must have been vacant for at least 3 continuous months prior to the application.",
-        category=CATEGORY_STATUTORY,
-    ),
+    # The former Class MA "vacant for 3 continuous months" criterion was
+    # removed by the GPDO Amendment Order 2024 (in force 5 March 2024).
     # Class MA: a conservation area does NOT block the right — it adds a
     # prior-approval consideration (impact of losing ground-floor
     # commercial use).
