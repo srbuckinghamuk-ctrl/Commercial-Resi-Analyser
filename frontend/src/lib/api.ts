@@ -18,13 +18,35 @@ import type {
 
 const HEADERS = { 'Content-Type': 'application/json' };
 
+/** API failure carrying the HTTP status so callers can branch on it. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, body: string) {
+    super(`HTTP ${status}: ${body}`);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/** True when the error represents an HTTP 404 (missing record, not a failure). */
+export function isNotFound(e: unknown): boolean {
+  if (e instanceof ApiError) return e.status === 404;
+  return e instanceof Error && e.message.startsWith('HTTP 404');
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    throw new ApiError(response.status, text);
   }
   if (response.status === 204) return undefined as T;
+  // A static-file fallback can answer an API path with index.html and a 200.
+  // Refuse to parse it so the failure is reported honestly, not as JSON noise.
+  const contentType = response.headers?.get?.('content-type');
+  if (contentType != null && !contentType.includes('json')) {
+    throw new Error(`Unexpected non-JSON response from the API (${contentType})`);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -58,7 +80,7 @@ export async function deleteProject(id: string): Promise<void> {
   const response = await fetch(`/api/v1/projects/${id}`, { method: 'DELETE', headers: HEADERS });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    throw new ApiError(response.status, text);
   }
 }
 

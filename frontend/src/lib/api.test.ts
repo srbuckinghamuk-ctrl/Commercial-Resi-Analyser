@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  ApiError,
+  isNotFound,
   createProject,
   listProjects,
   deleteProject,
+  getAppraisal,
   scrapeUrl,
   lookupPostcode,
   lookupFlood,
@@ -121,6 +124,54 @@ describe('lookupArticle4', () => {
       expect.any(Object),
     );
     expect(result.has_article4).toBe(true);
+  });
+});
+
+describe('ApiError', () => {
+  it('a 404 rejects with ApiError carrying the status', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('Financial appraisal not found'),
+    });
+
+    const err = await getAppraisal('missing-id').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(404);
+    expect((err as ApiError).message).toBe('HTTP 404: Financial appraisal not found');
+    expect(isNotFound(err)).toBe(true);
+  });
+
+  it('a 500 rejects with ApiError and isNotFound is false', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve('boom'),
+    });
+
+    const err = await listProjects().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(500);
+    expect(isNotFound(err)).toBe(false);
+  });
+
+  it('isNotFound still recognises legacy string-formatted errors', () => {
+    expect(isNotFound(new Error('HTTP 404: nope'))).toBe(true);
+    expect(isNotFound(new Error('HTTP 500: boom'))).toBe(false);
+    expect(isNotFound('not an error')).toBe(false);
+  });
+
+  it('a 200 with an HTML body rejects instead of parsing garbage', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) },
+      json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+    });
+
+    const err = await listProjects().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('non-JSON');
   });
 });
 

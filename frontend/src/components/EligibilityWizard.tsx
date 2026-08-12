@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { Project, EligibilityAssessment as EligAssessment } from '../types';
-import { runEligibility, getEligibility } from '../lib/api';
+import { runEligibility, getEligibility, isNotFound } from '../lib/api';
 import { formatUseClass } from '../lib/format';
 import EligibilityVerdictDisplay from './EligibilityVerdict';
 
@@ -9,10 +9,6 @@ interface EligibilityWizardProps {
 }
 
 type WizardState = 'loading' | 'idle' | 'running' | 'complete' | 'error';
-
-function isNotFound(e: unknown): boolean {
-  return e instanceof Error && e.message.startsWith('HTTP 404');
-}
 
 export default function EligibilityWizard({ project }: EligibilityWizardProps) {
   const [state, setState] = useState<WizardState>('loading');
