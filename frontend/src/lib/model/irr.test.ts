@@ -47,14 +47,15 @@ describe('solveIrr', () => {
   it('falls through to bisection when Newton converges but fails NPV acceptance: regression', () => {
     // Regression test for critical fix: when Newton step converges (|next - guess| < 1e-9)
     // but NPV acceptance fails (|npvAt| >= 1e-3), code breaks to bisection instead of returning null.
-    // This vector (found via instrumented search, seed 1) exercises that exact path: Newton
-    // converges after 46 iterations to a point with bad NPV, then bisection finds the true root.
-    // Severe-loss shape: large negative flows with eventual recovery.
-    const flows = [-1000000, -69877, -75005, 139568];
+    // Verified path: Newton converges after 17 iterations at guess ≈ −0.8915944581764597 with
+    // |npv| = 0.015625 (>= 1e-3, fails acceptance), then breaks to bisection which returns
+    // ≈ −0.8915944581766244. Pre-fix code returns null for this vector. Steep curve near
+    // LOWER bound (−0.99); absolute NPV residual large (~123) but rate accurate within bracket.
+    const flows = [-1992399, -264982, 222404, 230870, -124126, 283789, 201626, 159610, -168999, -138187, 16731];
     const irr = solveIrr(flows);
     expect(irr).not.toBeNull();
-    // On steep NPV curves, absolute residual can be large while rate is accurate (±1e-6 bracket).
-    // Assert rate precision via sign-change bracketing: npvAt must change sign within ±1e-6.
+    expect(irr!).toBeCloseTo(-0.8916, 3);
+    // Assert rate precision via sign-change bracketing (not absolute NPV residual).
     const npvMinus = npvAt(flows, irr! - 1e-6);
     const npvPlus = npvAt(flows, irr! + 1e-6);
     expect(npvMinus * npvPlus).toBeLessThanOrEqual(0); // Sign change → root bracketed within ±1e-6
