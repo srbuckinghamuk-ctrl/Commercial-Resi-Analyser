@@ -5,7 +5,7 @@ import { defaultCalculatorInputs } from '../lib/conversion-defaults';
 import { calculateAppraisal } from '../lib/conversion-calc-engine';
 import { buildCashflow } from '../lib/conversion-cashflow';
 import { normaliseSnapshot } from '../lib/snapshot';
-import { createAppraisal, getAppraisal, updateAppraisal } from '../lib/api';
+import { createAppraisal, getAppraisal, updateAppraisal, isNotFound } from '../lib/api';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
 import UnitMixPage from './calculator/UnitMixPage';
@@ -47,6 +47,8 @@ interface Props {
   project: Project | null;
 }
 
+type LoadState = 'loading' | 'ready' | 'error';
+
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
   const [inputs, setInputs] = useState<CalculatorInputs>(() =>
@@ -56,27 +58,53 @@ export default function ConversionCalculator({ project }: Props) {
   const [savedId, setSavedId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>('loading');
   const autosaveTimer = useRef<number | null>(null);
+  // Latest props/state for effects keyed on the project *id* — background
+  // refetches mint new project object identities and must not reset edits.
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const inputsRef = useRef(inputs);
+  inputsRef.current = inputs;
+  const loadSeq = useRef(0);
+
+  const projectId = project?.id ?? null;
+
+  const loadAppraisal = useCallback(() => {
+    const proj = projectRef.current;
+    if (!proj) return;
+    const seq = ++loadSeq.current;
+    setLoadState('loading');
+    setInputs(defaultCalculatorInputs(proj));
+    setSavedId(null);
+    setSaveError(null);
+    setDirty(false);
+    getAppraisal(proj.id)
+      .then((appraisal) => {
+        if (seq !== loadSeq.current) return;
+        const restored = normaliseSnapshot(appraisal.inputs_snapshot);
+        if (restored) {
+          setInputs(restored);
+          setSavedId(appraisal.id);
+        }
+        setLoadState('ready');
+      })
+      .catch((e) => {
+        if (seq !== loadSeq.current) return;
+        if (isNotFound(e)) {
+          // No saved appraisal yet — start from defaults.
+          setLoadState('ready');
+        } else {
+          // A transient failure must NOT fall through to defaults: saving
+          // over the top would silently destroy the stored appraisal.
+          setLoadState('error');
+        }
+      });
+  }, []);
 
   useEffect(() => {
-    if (project) {
-      setInputs(defaultCalculatorInputs(project));
-      setSavedId(null);
-      setSaveError(null);
-      setDirty(false);
-      getAppraisal(project.id)
-        .then((appraisal) => {
-          const restored = normaliseSnapshot(appraisal.inputs_snapshot);
-          if (restored) {
-            setInputs(restored);
-            setSavedId(appraisal.id);
-          }
-        })
-        .catch(() => {
-          // 404 = no saved appraisal yet; start from defaults.
-        });
-    }
-  }, [project]);
+    if (projectId) loadAppraisal();
+  }, [projectId, loadAppraisal]);
 
   const metrics: AppraisalMetrics = useMemo(() => calculateAppraisal(inputs), [inputs]);
   const cashflow: CashflowResult = useMemo(() => buildCashflow(inputs), [inputs]);
@@ -87,9 +115,10 @@ export default function ConversionCalculator({ project }: Props) {
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!project) return;
+    if (!project || loadState !== 'ready') return;
     setSaving(true);
     setSaveError(null);
+    const sentInputs = inputs;
     try {
       const payload = {
         project_id: project.id,
@@ -109,18 +138,22 @@ export default function ConversionCalculator({ project }: Props) {
         const result = await createAppraisal(payload);
         setSavedId(result.id);
       }
-      setDirty(false);
+      // Edits typed while the request was in flight are NOT in the payload
+      // just sent — only mark clean when nothing changed since.
+      if (inputsRef.current === sentInputs) {
+        setDirty(false);
+      }
     } catch {
       setSaveError('Could not save the appraisal — check your connection and try again.');
     } finally {
       setSaving(false);
     }
-  }, [project, inputs, metrics, savedId]);
+  }, [project, inputs, metrics, savedId, loadState]);
 
-  // Autosave: once an appraisal exists, persist edits a few seconds after
-  // the user stops typing, so tab switches and refreshes lose nothing.
+  // Autosave: persist edits a few seconds after the user stops typing —
+  // from the very first edit, so tab switches and refreshes lose nothing.
   useEffect(() => {
-    if (!dirty || !savedId || saving) return;
+    if (!dirty || saving || loadState !== 'ready') return;
     if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
     autosaveTimer.current = window.setTimeout(() => {
       void handleSave();
@@ -128,7 +161,7 @@ export default function ConversionCalculator({ project }: Props) {
     return () => {
       if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
     };
-  }, [dirty, savedId, saving, handleSave]);
+  }, [dirty, saving, loadState, handleSave]);
 
   // Warn before the browser tab closes with unsaved work.
   useEffect(() => {
@@ -195,6 +228,43 @@ export default function ConversionCalculator({ project }: Props) {
 
       {/* Page content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        {loadState === 'error' && (
+          <div
+            role="alert"
+            style={{
+              padding: '12px 16px',
+              marginBottom: 16,
+              background: '#450a0a',
+              border: '1px solid #ef4444',
+              borderRadius: 8,
+              color: '#fca5a5',
+              fontSize: 13,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+            }}
+          >
+            <span style={{ flex: 1 }}>
+              Could not load the saved appraisal — your saved data is untouched. Saving is
+              disabled until it loads, so nothing gets overwritten.
+            </span>
+            <button
+              onClick={loadAppraisal}
+              style={{
+                padding: '6px 14px',
+                background: '#1e3a5f',
+                color: '#e2e8f0',
+                border: 'none',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: 13,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {activePage === 'acquisition' && (
           <AcquisitionPage inputs={inputs} onChange={updateInputs} metrics={metrics} />
         )}
@@ -258,24 +328,24 @@ export default function ConversionCalculator({ project }: Props) {
             <span role="alert" style={{ color: '#f87171', fontSize: 13 }}>{saveError}</span>
           ) : (
             <span style={{ color: dirty ? '#f59e0b' : '#22c55e', fontSize: 13 }}>
-              {saving ? 'Saving…' : dirty ? 'Unsaved changes' : savedId ? 'Saved' : ''}
+              {loadState === 'loading' ? 'Loading…' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : savedId ? 'Saved' : ''}
             </span>
           )}
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || loadState !== 'ready'}
             style={{
               padding: '8px 24px',
-              background: '#2563eb',
-              color: '#fff',
+              background: saving || loadState !== 'ready' ? '#1e293b' : '#2563eb',
+              color: saving || loadState !== 'ready' ? '#8b95a5' : '#fff',
               border: 'none',
               borderRadius: 6,
-              cursor: saving ? 'default' : 'pointer',
+              cursor: saving || loadState !== 'ready' ? 'not-allowed' : 'pointer',
               fontSize: 14,
               fontWeight: 600,
             }}
           >
-            {saving ? 'Saving...' : savedId ? 'Update Appraisal' : 'Save Appraisal'}
+            {saving ? 'Saving…' : savedId ? 'Update Appraisal' : 'Save Appraisal'}
           </button>
         </div>
         <button
