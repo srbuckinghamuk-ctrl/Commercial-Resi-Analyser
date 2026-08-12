@@ -174,7 +174,7 @@ export interface FinancialAppraisalCreate {
   profit_on_cost_pct?: number;
   profit_on_gdv_pct?: number;
   return_on_equity_pct?: number;
-  irr?: number;
+  irr?: number | null;
   rlv_pence?: number;
 }
 

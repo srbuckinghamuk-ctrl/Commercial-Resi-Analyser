@@ -188,6 +188,9 @@ class TestEligibilityEngine:
             "conservation_area": True,
             "aonb_national_park": True,
             "article_4": True,
+            # flood_zone is never auto-passed (the EA warnings feed cannot
+            # answer the flood-zone question) so it must be manually confirmed
+            "flood_zone": True,
             "listed_building": True,
             "natural_light": True,
             "transport_access": True,
@@ -292,3 +295,168 @@ class TestEligibilityEngine:
     def test_no_postcode_project_cannot_auto_check(self):
         project = _make_project(address_postcode=None)
         # Should not crash — just can't auto-check location-based criteria
+
+
+def _mock_postcode(lpa_code: str = "E09000033") -> None:
+    respx.get("https://api.postcodes.io/postcodes/SW1A1AA").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": 200,
+                "result": {
+                    "postcode": "SW1A 1AA",
+                    "latitude": 51.501,
+                    "longitude": -0.142,
+                    "admin_district": "Somewhere",
+                    "region": "London",
+                    "country": "England",
+                    "codes": {"admin_district": lpa_code},
+                },
+            },
+        )
+    )
+
+
+def _mock_flood(items: list | None = None) -> None:
+    respx.get("https://environment.data.gov.uk/flood-monitoring/id/floods").mock(
+        return_value=httpx.Response(200, json={"items": items or []})
+    )
+
+
+class TestEngineHonesty:
+    """The engine must never auto-pass criteria its data sources cannot answer."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_flood_criterion_never_auto_passed_with_no_warnings(self):
+        _mock_postcode()
+        _mock_flood([])
+        result = await run_eligibility(_make_project())
+        flood = next(c for c in result.criteria if c.key == "flood_zone")
+        assert flood.passed is None
+        assert flood.auto_checked is False
+        assert "Flood Map for Planning" in flood.value
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_flood_criterion_never_auto_failed_with_active_warning(self):
+        _mock_postcode()
+        _mock_flood([{"severityLevel": 1, "description": "Severe flood warning"}])
+        result = await run_eligibility(_make_project())
+        flood = next(c for c in result.criteria if c.key == "flood_zone")
+        assert flood.passed is None
+        assert flood.auto_checked is False
+        assert flood.risk_flag is not None
+        assert "flood alert" in flood.risk_flag.lower() or "flood alert/warning" in flood.risk_flag.lower()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_flood_next_step_suggested(self):
+        _mock_postcode()
+        _mock_flood([])
+        result = await run_eligibility(_make_project())
+        assert any("Flood Map for Planning" in s for s in result.suggested_next_steps)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unknown_lpa_article4_is_pending_not_pass(self):
+        _mock_postcode(lpa_code="E07000100")  # not in the bundled dataset
+        _mock_flood([])
+        result = await run_eligibility(_make_project())
+        art4 = next(c for c in result.criteria if c.key == "article_4")
+        assert art4.passed is None
+        assert art4.auto_checked is False
+        assert "not in the bundled Article 4 dataset" in art4.value
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_known_lpa_without_relevant_direction_auto_passes(self, monkeypatch):
+        import app.integrations.article4 as article4_mod
+
+        monkeypatch.setattr(
+            article4_mod,
+            "_dataset",
+            {"E07000100": {"lpa_name": "Testshire", "directions": []}},
+        )
+        _mock_postcode(lpa_code="E07000100")
+        _mock_flood([])
+        result = await run_eligibility(_make_project())
+        art4 = next(c for c in result.criteria if c.key == "article_4")
+        assert art4.passed is True
+        assert art4.auto_checked is True
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_unmatched_epc_floor_area_does_not_drive_floorspace(self):
+        _mock_postcode()
+        _mock_flood([])
+        respx.get("https://epc.opendatacommunities.org/api/v1/non-domestic/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "rows": [
+                        {
+                            "address": "999 Completely Different Road, LONDON",
+                            "postcode": "SW1A 1AA",
+                            "asset-rating-band": "D",
+                            "asset-rating": "55",
+                            "lodgement-date": "2022-06-01",
+                            "lmk-key": "DEF456",
+                            "property-type": "Office",
+                            "floor-area": "90",
+                        }
+                    ],
+                    "column-names": [],
+                },
+            )
+        )
+        project = _make_project(floor_area_sqm=None, floor_area_sqft=None)
+        result = await run_eligibility(project, epc_api_key="test-key")
+        floor = next(c for c in result.criteria if c.key == "floor_area_limit")
+        assert floor.passed is None
+        assert floor.auto_checked is False
+        assert floor.value == "Floor area unknown — add it to the project"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_matched_epc_floor_area_may_be_used(self):
+        _mock_postcode()
+        _mock_flood([])
+        respx.get("https://epc.opendatacommunities.org/api/v1/non-domestic/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "rows": [
+                        {
+                            # Contains the full project address fragment
+                            "address": "10 Test Office, London, SW1A 1AA",
+                            "postcode": "SW1A 1AA",
+                            "asset-rating-band": "C",
+                            "asset-rating": "68",
+                            "lodgement-date": "2023-01-15",
+                            "lmk-key": "ABC123",
+                            "property-type": "Office",
+                            "floor-area": "400",
+                        }
+                    ],
+                    "column-names": [],
+                },
+            )
+        )
+        project = _make_project(floor_area_sqm=None, floor_area_sqft=None)
+        result = await run_eligibility(project, epc_api_key="test-key")
+        floor = next(c for c in result.criteria if c.key == "floor_area_limit")
+        assert floor.passed is True
+        assert floor.auto_checked is True
+        assert "address-matched" in floor.value
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_result_carries_ruleset_version(self):
+        from app.eligibility.criteria import RULESET_VERSION
+
+        _mock_postcode()
+        _mock_flood([])
+        result = await run_eligibility(_make_project())
+        assert result.ruleset_version == RULESET_VERSION
+        assert result.ruleset_version == "gpdo-baseline-2026-08"

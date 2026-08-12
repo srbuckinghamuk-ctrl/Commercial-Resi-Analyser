@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import type { CalculatorInputs, ScenarioOverrides } from '../../lib/conversion-types';
 import { calculateAppraisal } from '../../lib/conversion-calc-engine';
-import { penceToPounds } from '../../lib/format';
+import { applyScenario } from '../../lib/conversion-scenarios';
+import { penceToPounds, formatPct } from '../../lib/format';
 
 interface Props {
   inputs: CalculatorInputs;
@@ -10,34 +11,9 @@ interface Props {
 
 type ScenarioKey = 'base' | 'upside' | 'downside';
 
-function applyScenario(inputs: CalculatorInputs, overrides: ScenarioOverrides): CalculatorInputs {
-  const gdvMultiplier = 1 + overrides.gdv_adjustment_pct / 100;
-  const costMultiplier = 1 + overrides.construction_cost_adjustment_pct / 100;
-  return {
-    ...inputs,
-    unit_mix: {
-      units: inputs.unit_mix.units.map((u) => ({
-        ...u,
-        estimated_value_pence: Math.round(u.estimated_value_pence * gdvMultiplier),
-      })),
-    },
-    conversion_costs: {
-      ...inputs.conversion_costs,
-      construction_cost_per_sqm_pence: Math.round(
-        inputs.conversion_costs.construction_cost_per_sqm_pence * costMultiplier,
-      ),
-    },
-    finance: {
-      ...inputs.finance,
-      loan_term_months: inputs.finance.loan_term_months + overrides.timeline_adjustment_months,
-      interest_rate_annual_pct: inputs.finance.interest_rate_annual_pct + overrides.interest_rate_adjustment_pct,
-    },
-  };
-}
+const scenarioKeys: ScenarioKey[] = ['base', 'upside', 'downside'];
 
 export default function ScenariosPage({ inputs, onChange }: Props) {
-  const scenarioKeys: ScenarioKey[] = ['base', 'upside', 'downside'];
-
   const scenarioMetrics = useMemo(
     () =>
       Object.fromEntries(
@@ -59,10 +35,10 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
     { label: 'GDV', accessor: (m) => penceToPounds(m.total_gdv_pence) },
     { label: 'Total Cost', accessor: (m) => penceToPounds(m.total_cost_pence) },
     { label: 'Profit', accessor: (m) => penceToPounds(m.profit_pence) },
-    { label: 'Profit on Cost', accessor: (m) => `${m.profit_on_cost_pct.toFixed(1)}%` },
-    { label: 'Profit on GDV', accessor: (m) => `${m.profit_on_gdv_pct.toFixed(1)}%` },
-    { label: 'IRR (Annual)', accessor: (m) => `${m.irr_annual.toFixed(1)}%` },
-    { label: 'Return on Equity', accessor: (m) => `${m.return_on_equity_pct.toFixed(1)}%` },
+    { label: 'Profit on Cost', accessor: (m) => formatPct(m.profit_on_cost_pct) },
+    { label: 'Profit on GDV', accessor: (m) => formatPct(m.profit_on_gdv_pct) },
+    { label: 'IRR (Annual)', accessor: (m) => formatPct(m.irr_annual) },
+    { label: 'Return on Equity', accessor: (m) => formatPct(m.return_on_equity_pct) },
   ];
 
   return (

@@ -183,7 +183,22 @@ async def create_eligibility(project_id: UUID, body: EligibilityAssessmentCreate
         raise HTTPException(status_code=404, detail="Project not found")
     body.project_id = project_id
     repo = EligibilityAssessmentRepository(db)
-    assessment = await repo.create(body)
+    # Upsert: only one assessment may exist per project.
+    existing = await repo.get_by_project_id(project_id)
+    if existing:
+        assessment = await repo.update(
+            project_id,
+            EligibilityAssessmentUpdate(
+                pdr_class=body.pdr_class,
+                criteria=body.criteria,
+                verdict=body.verdict,
+                suggested_next_steps=body.suggested_next_steps,
+                notes=body.notes,
+                ruleset_version=body.ruleset_version,
+            ),
+        )
+    else:
+        assessment = await repo.create(body)
     await db.commit()
     return assessment
 
@@ -230,6 +245,7 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
                 criteria=engine_result.criteria,
                 verdict=engine_result.verdict,
                 suggested_next_steps=engine_result.suggested_next_steps,
+                ruleset_version=engine_result.ruleset_version,
             ),
         )
     else:
@@ -240,6 +256,7 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
                 criteria=engine_result.criteria,
                 verdict=engine_result.verdict,
                 suggested_next_steps=engine_result.suggested_next_steps,
+                ruleset_version=engine_result.ruleset_version,
             )
         )
     await db.commit()
@@ -266,7 +283,15 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     repo = FinancialAppraisalRepository(db)
-    appraisal = await repo.create(body)
+    # Upsert: only one appraisal may exist per project.
+    existing = await repo.get_by_project_id(body.project_id)
+    if existing:
+        appraisal = await repo.update(
+            body.project_id,
+            FinancialAppraisalUpdate(**body.model_dump(exclude={"project_id"})),
+        )
+    else:
+        appraisal = await repo.create(body)
     await db.commit()
     return appraisal
 
@@ -322,7 +347,7 @@ async def scrape_url_endpoint(request: ScrapeUrlRequest):
 # --- Lookup Router ---
 
 from app.integrations.postcodes import lookup_postcode
-from app.integrations.flood import lookup_flood_risk
+from app.integrations.flood import lookup_flood_warnings
 from app.integrations.epc import lookup_epc
 from app.integrations.article4 import lookup_article4
 from app.models import (
@@ -357,15 +382,20 @@ async def postcode_lookup(postcode: str):
 async def flood_lookup(postcode: str):
     pc = await lookup_postcode(postcode)
     if not pc:
-        raise HTTPException(status_code=404, detail="Postcode not found — cannot look up flood risk")
-    result = await lookup_flood_risk(postcode, pc.latitude, pc.longitude)
+        raise HTTPException(status_code=404, detail="Postcode not found — cannot look up flood warnings")
+    result = await lookup_flood_warnings(postcode, pc.latitude, pc.longitude)
     if not result:
-        raise HTTPException(status_code=502, detail="Flood risk API unavailable")
+        raise HTTPException(status_code=502, detail="EA flood warnings API unavailable")
     return FloodRiskResponse(
         postcode=pc.postcode,
-        flood_zone=result.flood_zone,
-        flood_zone_numeric=result.flood_zone_numeric,
-        in_flood_zone_2_or_3=result.in_flood_zone_2_or_3,
+        flood_zone=(
+            "Unknown — check the EA Flood Map for Planning "
+            "(flood-map-for-planning.service.gov.uk)"
+        ),
+        flood_zone_numeric=None,
+        in_flood_zone_2_or_3=None,
+        has_active_warnings=result.has_active_warnings,
+        warning_count=result.warning_count,
         source=result.source,
     )
 
@@ -384,6 +414,7 @@ async def epc_lookup(postcode: str, address: str | None = None):
         certificate_url=result.certificate_url,
         property_type=result.property_type,
         floor_area_sqm=result.floor_area_sqm,
+        matched_address=result.matched_address,
     )
 
 
@@ -393,6 +424,7 @@ async def article4_lookup(lpa_code: str):
     return Article4Response(
         lpa_code=result.lpa_code,
         lpa_name=result.lpa_name,
+        lpa_in_dataset=result.lpa_in_dataset,
         has_article4=result.has_article4,
         directions=[
             Article4DirectionResponse(

@@ -22,7 +22,9 @@ export const DEFAULT_UNIT_MIX: UnitMixInputs = {
 };
 
 export const DEFAULT_CONVERSION_COSTS: ConversionCostInputs = {
-  prior_approval_fee_per_dwelling_pence: 9_600,
+  // Indicative prior approval application fee per dwelling (post-Dec 2023
+  // uplift). Verify against the current LPA fee schedule.
+  prior_approval_fee_per_dwelling_pence: 12_000,
   cil_s106_pence: 0,
   architect_pence: 1_500_000,
   structural_engineer_pence: 500_000,
@@ -30,7 +32,9 @@ export const DEFAULT_CONVERSION_COSTS: ConversionCostInputs = {
   planning_consultant_pence: 300_000,
   building_control_pence: 200_000,
   other_professional_fees_pence: 0,
-  construction_cost_per_sqm_pence: 80_730,
+  // £1,500/m² — indicative mid-range for office-to-residential conversion.
+  // Always verify with a QS; conversions commonly range £1,200–£2,000/m².
+  construction_cost_per_sqm_pence: 150_000,
   total_construction_sqm: 0,
   contingency_pct: 10.0,
   fire_safety_pence: 0,
@@ -55,43 +59,50 @@ export const DEFAULT_EXIT_STRATEGY: ExitStrategyInputs = {
   retained_units: [],
 };
 
-export const DEFAULT_RISK_REGISTER: RiskItem[] = [
+/** UUID with a fallback for non-secure contexts (plain-HTTP LAN dev servers). */
+export function newId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const RISK_TEMPLATES: Omit<RiskItem, 'id'>[] = [
   {
-    id: crypto.randomUUID(),
     description: 'Prior approval refusal',
     likelihood: 'medium',
     impact: 'high',
     mitigation: 'Pre-application consultation with LPA',
   },
   {
-    id: crypto.randomUUID(),
     description: 'Article 4 direction introduced mid-project',
     likelihood: 'low',
     impact: 'high',
     mitigation: 'Monitor LPA consultations and planning policy changes',
   },
   {
-    id: crypto.randomUUID(),
     description: 'Construction cost overrun',
     likelihood: 'medium',
     impact: 'medium',
     mitigation: 'Fixed-price contract with contingency allowance',
   },
   {
-    id: crypto.randomUUID(),
     description: 'GDV falls due to market movement',
     likelihood: 'medium',
     impact: 'high',
     mitigation: 'Conservative comparable evidence, stress test scenarios',
   },
   {
-    id: crypto.randomUUID(),
     description: 'Void periods on retained units',
     likelihood: 'medium',
     impact: 'low',
     mitigation: 'Realistic rental assumptions, marketing budget',
   },
 ];
+
+export function defaultRiskRegister(): RiskItem[] {
+  return RISK_TEMPLATES.map((r) => ({ ...r, id: newId() }));
+}
 
 export const DEFAULT_SCENARIOS: {
   base: ScenarioOverrides;
@@ -139,7 +150,7 @@ export function defaultCalculatorInputs(project?: {
     },
     finance: { ...DEFAULT_FINANCE },
     exit_strategy: { ...DEFAULT_EXIT_STRATEGY },
-    risks: DEFAULT_RISK_REGISTER.map((r) => ({ ...r, id: crypto.randomUUID() })),
+    risks: defaultRiskRegister(),
     scenarios: {
       base: { ...DEFAULT_SCENARIOS.base },
       upside: { ...DEFAULT_SCENARIOS.upside },

@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project } from '../types';
 import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../lib/conversion-types';
 import { defaultCalculatorInputs } from '../lib/conversion-defaults';
 import { calculateAppraisal } from '../lib/conversion-calc-engine';
 import { buildCashflow } from '../lib/conversion-cashflow';
+import { normaliseSnapshot } from '../lib/snapshot';
 import { createAppraisal, getAppraisal, updateAppraisal } from '../lib/api';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
@@ -53,19 +54,27 @@ export default function ConversionCalculator({ project }: Props) {
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const autosaveTimer = useRef<number | null>(null);
 
   useEffect(() => {
     if (project) {
       setInputs(defaultCalculatorInputs(project));
       setSavedId(null);
+      setSaveError(null);
+      setDirty(false);
       getAppraisal(project.id)
         .then((appraisal) => {
-          if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            setInputs(appraisal.inputs_snapshot as unknown as CalculatorInputs);
+          const restored = normaliseSnapshot(appraisal.inputs_snapshot);
+          if (restored) {
+            setInputs(restored);
             setSavedId(appraisal.id);
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          // 404 = no saved appraisal yet; start from defaults.
+        });
     }
   }, [project]);
 
@@ -74,11 +83,13 @@ export default function ConversionCalculator({ project }: Props) {
 
   const updateInputs = useCallback((partial: Partial<CalculatorInputs>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
+    setDirty(true);
   }, []);
 
   const handleSave = useCallback(async () => {
     if (!project) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const payload = {
         project_id: project.id,
@@ -98,10 +109,36 @@ export default function ConversionCalculator({ project }: Props) {
         const result = await createAppraisal(payload);
         setSavedId(result.id);
       }
+      setDirty(false);
+    } catch {
+      setSaveError('Could not save the appraisal — check your connection and try again.');
     } finally {
       setSaving(false);
     }
   }, [project, inputs, metrics, savedId]);
+
+  // Autosave: once an appraisal exists, persist edits a few seconds after
+  // the user stops typing, so tab switches and refreshes lose nothing.
+  useEffect(() => {
+    if (!dirty || !savedId || saving) return;
+    if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = window.setTimeout(() => {
+      void handleSave();
+    }, 2500);
+    return () => {
+      if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
+    };
+  }, [dirty, savedId, saving, handleSave]);
+
+  // Warn before the browser tab closes with unsaved work.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
 
   const pageIndex = PAGES.findIndex((p) => p.key === activePage);
 
@@ -123,7 +160,7 @@ export default function ConversionCalculator({ project }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 100px)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 150px)' }}>
       {/* Sub-nav */}
       <div
         style={{
@@ -216,22 +253,31 @@ export default function ConversionCalculator({ project }: Props) {
         >
           Previous
         </button>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            padding: '8px 24px',
-            background: '#2563eb',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontSize: 14,
-            fontWeight: 600,
-          }}
-        >
-          {saving ? 'Saving...' : savedId ? 'Update Appraisal' : 'Save Appraisal'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {saveError ? (
+            <span role="alert" style={{ color: '#f87171', fontSize: 13 }}>{saveError}</span>
+          ) : (
+            <span style={{ color: dirty ? '#f59e0b' : '#22c55e', fontSize: 13 }}>
+              {saving ? 'Saving…' : dirty ? 'Unsaved changes' : savedId ? 'Saved' : ''}
+            </span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{
+              padding: '8px 24px',
+              background: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: saving ? 'default' : 'pointer',
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            {saving ? 'Saving...' : savedId ? 'Update Appraisal' : 'Save Appraisal'}
+          </button>
+        </div>
         <button
           onClick={goNext}
           disabled={pageIndex === PAGES.length - 1}

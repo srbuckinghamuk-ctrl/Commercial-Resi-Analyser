@@ -1,1 +1,41 @@
 @import "tailwindcss";
+
+/*
+ * The app is styled with inline styles; Tailwind's preflight reset is still
+ * loaded and strips heading weights and list markers. Restore sensible
+ * document defaults so headings read as headings and lists as lists.
+ */
+:root {
+  color-scheme: dark;
+}
+
+h1 { font-size: 1.5rem; font-weight: 700; }
+h2 { font-size: 1.25rem; font-weight: 700; }
+h3 { font-size: 1.125rem; font-weight: 600; }
+h4 { font-size: 1rem; font-weight: 600; }
+
+ul { list-style: disc; }
+ol { list-style: decimal; }
+
+/* Visible keyboard focus on the dark palette. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

@@ -98,20 +98,34 @@ export interface CalculatorInputs {
   };
 }
 
+export interface FinanceSummary {
+  loan_amount_pence: number;
+  arrangement_fee_pence: number;
+  exit_fee_pence: number;
+  total_interest_pence: number;
+  total_finance_cost_pence: number;
+  monthly_interest_pence: number[];
+}
+
 export interface AppraisalMetrics {
   total_gdv_pence: number;
   total_acquisition_cost_pence: number;
   sdlt_pence: number;
   total_construction_cost_pence: number;
   total_professional_fees_pence: number;
+  total_selling_costs_pence: number;
   total_finance_cost_pence: number;
+  arrangement_fee_pence: number;
+  exit_fee_pence: number;
+  total_interest_pence: number;
   total_cost_pence: number;
   profit_pence: number;
   profit_on_cost_pct: number;
   profit_on_gdv_pct: number;
   return_on_equity_pct: number;
-  irr_monthly: number;
-  irr_annual: number;
+  /** null when no meaningful IRR exists (e.g. loss-making deal) */
+  irr_monthly: number | null;
+  irr_annual: number | null;
   rlv_pence: number;
   equity_required_pence: number;
   loan_amount_pence: number;

@@ -2,6 +2,11 @@ from dataclasses import dataclass
 
 from app.models import PdrClass, UseClass
 
+# Version stamp for the eligibility ruleset. Bump when criteria definitions
+# or evaluation logic change, so stored assessments record which rules
+# produced them.
+RULESET_VERSION = "gpdo-baseline-2026-08"
+
 
 @dataclass(frozen=True)
 class CriterionDef:
@@ -67,8 +72,12 @@ ALL_CRITERIA: list[CriterionDef] = [
         key="flood_zone",
         label="Not in flood zone 2 or 3",
         applicable_classes=[PdrClass.CLASS_MA, PdrClass.CLASS_G, PdrClass.CLASS_M, PdrClass.CLASS_N, PdrClass.CLASS_Q],
-        check_type="auto",
-        description="Checked via EA Flood Risk API.",
+        check_type="manual",
+        description=(
+            "Flood zone must be confirmed on the Environment Agency Flood Map for "
+            "Planning (flood-map-for-planning.service.gov.uk). Live EA flood "
+            "warnings are surfaced as advisory context only."
+        ),
     ),
     CriterionDef(
         key="listed_building",

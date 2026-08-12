@@ -4,6 +4,7 @@ import CriterionRow from './CriterionRow';
 interface EligibilityVerdictDisplayProps {
   assessment: EligibilityAssessment;
   onOverride?: (key: string, value: boolean | null) => void;
+  overrides?: Record<string, boolean | null>;
 }
 
 const VERDICT_STYLES: Record<string, { bg: string; border: string; text: string; label: string }> = {
@@ -15,6 +16,7 @@ const VERDICT_STYLES: Record<string, { bg: string; border: string; text: string;
 export default function EligibilityVerdictDisplay({
   assessment,
   onOverride,
+  overrides,
 }: EligibilityVerdictDisplayProps) {
   const style = VERDICT_STYLES[assessment.verdict] || VERDICT_STYLES.amber;
 
@@ -36,13 +38,13 @@ export default function EligibilityVerdictDisplay({
       >
         <div style={{ fontSize: 22, fontWeight: 700, color: style.text }}>{style.label}</div>
         <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-          PDR Class: {assessment.pdr_class.replace('_', ' ').toUpperCase()} | {passedCount} passed · {failedCount} failed · {pendingCount} pending
+          PDR Class: {assessment.pdr_class.replace(/_/g, ' ').toUpperCase()} · {passedCount} passed · {failedCount} failed · {pendingCount} pending
         </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
         {assessment.criteria.map((c) => (
-          <CriterionRow key={c.key} criterion={c} onOverride={onOverride} />
+          <CriterionRow key={c.key} criterion={c} onOverride={onOverride} overrideValue={overrides?.[c.key]} />
         ))}
       </div>
 

@@ -1,6 +1,6 @@
 import type { Project } from '../../types';
 import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../../lib/conversion-types';
-import { penceToPounds } from '../../lib/format';
+import { penceToPounds, formatPct, humanise } from '../../lib/format';
 
 interface Props {
   inputs: CalculatorInputs;
@@ -20,7 +20,7 @@ export default function InvestorSummaryPage({ inputs, metrics, cashflow, project
       <div style={{ padding: 24, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <h2 style={{ color: '#e2e8f0', fontSize: 20, marginBottom: 4 }}>{project.address_raw}</h2>
         <p style={{ color: '#64748b', fontSize: 14, marginBottom: 24 }}>
-          {project.use_class.replace('_', ' ')} | {project.floor_area_sqm?.toLocaleString() ?? '—'} m² | {project.tenure}
+          {humanise(project.use_class)} · {project.floor_area_sqm?.toLocaleString() ?? '—'} m² · {humanise(project.tenure)}
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
@@ -39,10 +39,10 @@ export default function InvestorSummaryPage({ inputs, metrics, cashflow, project
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
           {[
-            { label: 'Profit on Cost', value: `${metrics.profit_on_cost_pct.toFixed(1)}%` },
-            { label: 'Profit on GDV', value: `${metrics.profit_on_gdv_pct.toFixed(1)}%` },
-            { label: 'IRR (Annual)', value: `${metrics.irr_annual.toFixed(1)}%` },
-            { label: 'Return on Equity', value: `${metrics.return_on_equity_pct.toFixed(1)}%` },
+            { label: 'Profit on Cost', value: formatPct(metrics.profit_on_cost_pct) },
+            { label: 'Profit on GDV', value: formatPct(metrics.profit_on_gdv_pct) },
+            { label: 'IRR (Annual)', value: formatPct(metrics.irr_annual) },
+            { label: 'Return on Equity', value: formatPct(metrics.return_on_equity_pct) },
           ].map((m) => (
             <div key={m.label}>
               <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 4 }}>{m.label}</div>
@@ -69,7 +69,7 @@ export default function InvestorSummaryPage({ inputs, metrics, cashflow, project
             <h4 style={{ color: '#94a3b8', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Finance & Timeline</h4>
             <div style={{ color: '#e2e8f0', fontSize: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                <span>Funding</span><span>{inputs.finance.funding_source.replace('_', ' ')}</span>
+                <span>Funding</span><span>{humanise(inputs.finance.funding_source)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
                 <span>Equity required</span><span>{penceToPounds(metrics.equity_required_pence)}</span>

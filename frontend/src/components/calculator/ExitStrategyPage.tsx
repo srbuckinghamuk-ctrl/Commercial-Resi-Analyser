@@ -46,11 +46,7 @@ export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
 
   const grossYield = retainedCapitalValue > 0 ? (totalAnnualRent / retainedCapitalValue) * 100 : 0;
 
-  const sellingCosts = useMemo(() => {
-    const soldUnitsValue = metrics.total_gdv_pence - retainedCapitalValue;
-    const agentFee = Math.round((soldUnitsValue * exit.selling_agent_fee_pct) / 100);
-    return agentFee + exit.selling_legal_fee_pence;
-  }, [metrics, retainedCapitalValue, exit]);
+  const sellingCosts = metrics.total_selling_costs_pence;
 
   return (
     <div>

@@ -143,10 +143,19 @@ class PostcodeLookupResponse(BaseModel):
 
 
 class FloodRiskResponse(BaseModel):
+    """Flood information for a postcode.
+
+    Flood *zone* data is not available from the live EA warnings feed, so the
+    zone fields are always unknown/None — only live warning/alert status is
+    reported. Check the EA Flood Map for Planning for the flood zone.
+    """
+
     postcode: str
     flood_zone: str
-    flood_zone_numeric: int
-    in_flood_zone_2_or_3: bool
+    flood_zone_numeric: int | None = None
+    in_flood_zone_2_or_3: bool | None = None
+    has_active_warnings: bool = False
+    warning_count: int = 0
     source: str
 
 
@@ -159,6 +168,7 @@ class EpcResponse(BaseModel):
     certificate_url: str
     property_type: str
     floor_area_sqm: float | None = None
+    matched_address: bool = False
 
 
 class Article4DirectionResponse(BaseModel):
@@ -171,6 +181,7 @@ class Article4DirectionResponse(BaseModel):
 class Article4Response(BaseModel):
     lpa_code: str
     lpa_name: str
+    lpa_in_dataset: bool = False
     has_article4: bool
     directions: list[Article4DirectionResponse] = Field(default_factory=list)
     note: str = ""
@@ -295,6 +306,7 @@ class EligibilityAssessmentCreate(BaseModel):
     verdict: EligibilityVerdict
     suggested_next_steps: list[str] = Field(default_factory=list)
     notes: str | None = None
+    ruleset_version: str | None = None
 
 
 class EligibilityAssessmentUpdate(BaseModel):
@@ -303,6 +315,7 @@ class EligibilityAssessmentUpdate(BaseModel):
     verdict: EligibilityVerdict | None = None
     suggested_next_steps: list[str] | None = None
     notes: str | None = None
+    ruleset_version: str | None = None
 
 
 class EligibilityAssessment(BaseModel):
@@ -315,6 +328,7 @@ class EligibilityAssessment(BaseModel):
     verdict: EligibilityVerdict
     suggested_next_steps: list[str] = Field(default_factory=list)
     notes: str | None = None
+    ruleset_version: str | None = None
     created_at: datetime
     updated_at: datetime
 

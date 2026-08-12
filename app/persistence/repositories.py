@@ -126,6 +126,7 @@ class EligibilityAssessmentRepository:
             verdict=row.verdict,
             suggested_next_steps=row.suggested_next_steps or [],
             notes=row.notes,
+            ruleset_version=row.ruleset_version,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -140,11 +141,19 @@ class EligibilityAssessmentRepository:
         return self._to_domain(orm)
 
     async def get_by_project_id(self, project_id: UUID) -> EligibilityAssessment | None:
-        stmt = select(EligibilityAssessmentORM).where(
-            EligibilityAssessmentORM.project_id == project_id
+        # Resilient to legacy duplicate rows: return the most recent one
+        # instead of raising MultipleResultsFound.
+        stmt = (
+            select(EligibilityAssessmentORM)
+            .where(EligibilityAssessmentORM.project_id == project_id)
+            .order_by(
+                EligibilityAssessmentORM.updated_at.desc(),
+                EligibilityAssessmentORM.created_at.desc(),
+            )
+            .limit(1)
         )
         result = await self.db.execute(stmt)
-        row = result.scalar_one_or_none()
+        row = result.scalars().first()
         return self._to_domain(row) if row else None
 
     async def update(
@@ -198,11 +207,19 @@ class FinancialAppraisalRepository:
         return self._to_domain(orm)
 
     async def get_by_project_id(self, project_id: UUID) -> FinancialAppraisal | None:
-        stmt = select(FinancialAppraisalORM).where(
-            FinancialAppraisalORM.project_id == project_id
+        # Resilient to legacy duplicate rows: return the most recent one
+        # instead of raising MultipleResultsFound.
+        stmt = (
+            select(FinancialAppraisalORM)
+            .where(FinancialAppraisalORM.project_id == project_id)
+            .order_by(
+                FinancialAppraisalORM.updated_at.desc(),
+                FinancialAppraisalORM.created_at.desc(),
+            )
+            .limit(1)
         )
         result = await self.db.execute(stmt)
-        row = result.scalar_one_or_none()
+        row = result.scalars().first()
         return self._to_domain(row) if row else None
 
     async def update(

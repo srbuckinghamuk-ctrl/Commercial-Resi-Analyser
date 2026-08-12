@@ -4,13 +4,14 @@ from dataclasses import dataclass, field
 from app.eligibility.criteria import (
     CriterionDef,
     FLOOR_AREA_LIMITS,
+    RULESET_VERSION,
     USE_CLASS_TO_PDR,
     detect_pdr_class,
     get_criteria_for_class,
 )
 from app.integrations.article4 import Article4Result, lookup_article4
 from app.integrations.epc import EpcResult, lookup_epc
-from app.integrations.flood import FloodRiskResult, lookup_flood_risk
+from app.integrations.flood import FloodWarningsResult, lookup_flood_warnings
 from app.integrations.postcodes import PostcodeLookupResult, lookup_postcode
 from app.models import (
     EligibilityCriterion,
@@ -28,6 +29,7 @@ class EligibilityEngineResult:
     criteria: list[EligibilityCriterion]
     verdict: EligibilityVerdict
     suggested_next_steps: list[str] = field(default_factory=list)
+    ruleset_version: str = RULESET_VERSION
 
 
 async def run_eligibility(
@@ -63,14 +65,14 @@ async def run_eligibility(
     criteria_defs = get_criteria_for_class(pdr_class)
 
     pc_result: PostcodeLookupResult | None = None
-    flood_result: FloodRiskResult | None = None
+    flood_result: FloodWarningsResult | None = None
     article4_result: Article4Result | None = None
     epc_result: EpcResult | None = None
 
     if project.address_postcode:
         pc_result = await lookup_postcode(project.address_postcode)
         if pc_result:
-            flood_result = await lookup_flood_risk(
+            flood_result = await lookup_flood_warnings(
                 project.address_postcode, pc_result.latitude, pc_result.longitude
             )
             article4_result = await lookup_article4(pc_result.lpa_code)
@@ -109,7 +111,7 @@ def _evaluate_criterion(
     project: Project,
     pdr_class: PdrClass,
     pc_result: PostcodeLookupResult | None,
-    flood_result: FloodRiskResult | None,
+    flood_result: FloodWarningsResult | None,
     article4_result: Article4Result | None,
     epc_result: EpcResult | None,
     overrides: dict[str, bool | None],
@@ -127,9 +129,17 @@ def _evaluate_criterion(
         limit = FLOOR_AREA_LIMITS.get(pdr_class)
         floor_area = project.floor_area_sqm
         source_label = "project"
-        if floor_area is None and epc_result and epc_result.floor_area_sqm:
+        # EPC floor area may only be used when the EPC row actually matched
+        # the project address — an unmatched row can describe a neighbouring
+        # property and must never drive a statutory test.
+        if (
+            floor_area is None
+            and epc_result
+            and epc_result.matched_address
+            and epc_result.floor_area_sqm
+        ):
             floor_area = epc_result.floor_area_sqm
-            source_label = "EPC"
+            source_label = "EPC (address-matched)"
         if limit and floor_area is not None:
             passed = floor_area <= limit
             return EligibilityCriterion(
@@ -146,31 +156,31 @@ def _evaluate_criterion(
             passed=None,
             source="auto",
             auto_checked=False,
-            value="Floor area not provided",
+            value="Floor area unknown — add it to the project",
         )
 
     if cdef.key == "flood_zone":
-        if flood_result:
-            passed = not flood_result.in_flood_zone_2_or_3
-            return EligibilityCriterion(
-                key=cdef.key,
-                label=cdef.label,
-                passed=passed,
-                source="auto",
-                auto_checked=True,
-                value=flood_result.flood_zone,
-            )
+        # The EA live warnings feed cannot answer the flood-zone question,
+        # so this criterion is NEVER auto-passed. Live warnings, if any,
+        # are surfaced as an additional risk note only.
+        risk_flag = None
+        if flood_result and flood_result.has_active_warnings:
+            risk_flag = "Active flood alert/warning in this area as of assessment date"
         return EligibilityCriterion(
             key=cdef.key,
             label=cdef.label,
             passed=None,
-            source="auto",
+            source="manual",
             auto_checked=False,
-            value="Could not check — postcode lookup failed",
+            value=(
+                "Flood zone data unavailable — check the Environment Agency "
+                "Flood Map for Planning (flood-map-for-planning.service.gov.uk)"
+            ),
+            risk_flag=risk_flag,
         )
 
     if cdef.key == "article_4":
-        if article4_result:
+        if article4_result and article4_result.lpa_in_dataset:
             relevant = [
                 d
                 for d in article4_result.directions
@@ -186,14 +196,28 @@ def _evaluate_criterion(
                     value=f"Possible Article 4 direction: {relevant[0].name}",
                     risk_flag="Verify current Article 4 status with the LPA before relying on PDR.",
                 )
+            # Only an LPA that is actually covered by the bundled dataset may
+            # auto-pass this criterion.
             return EligibilityCriterion(
                 key=cdef.key,
                 label=cdef.label,
                 passed=True,
                 source="semi_auto",
                 auto_checked=True,
-                value="No Article 4 direction found in dataset",
+                value="No Article 4 direction recorded for this LPA in the bundled dataset",
                 risk_flag="Dataset may not be exhaustive — verify with LPA",
+            )
+        if article4_result and not article4_result.lpa_in_dataset and article4_result.lpa_code:
+            return EligibilityCriterion(
+                key=cdef.key,
+                label=cdef.label,
+                passed=None,
+                source="semi_auto",
+                auto_checked=False,
+                value=(
+                    "This council is not in the bundled Article 4 dataset — "
+                    "check the LPA's Article 4 register"
+                ),
             )
         return EligibilityCriterion(
             key=cdef.key,
@@ -266,6 +290,11 @@ NEXT_STEPS: dict[str, str] = {
     "agricultural_use_period": "Verify the building has been in agricultural use for at least 10 continuous years.",
     "agricultural_building_date": "Confirm the agricultural building existed before 20 March 2013.",
     "article_4": "Verify current Article 4 direction status with the local planning authority.",
+    "flood_zone": (
+        "Check the flood zone on the Environment Agency Flood Map for Planning "
+        "(flood-map-for-planning.service.gov.uk)."
+    ),
+    "floor_area_limit": "Add the property's floor area (sq m) to the project.",
 }
 
 

@@ -1,4 +1,5 @@
 import type { Project, PipelineStage, UseClass } from '../types';
+import { PIPELINE_STAGES } from '../types';
 
 export interface PipelineFilters {
   stage: PipelineStage | 'all';
@@ -7,6 +8,8 @@ export interface PipelineFilters {
 
 export type SortField = 'created_at' | 'price_pence' | 'stage';
 export type SortDirection = 'asc' | 'desc';
+
+const STAGE_ORDER = new Map(PIPELINE_STAGES.map((s, i) => [s.value, i]));
 
 export function filterProjects(projects: Project[], filters: PipelineFilters): Project[] {
   return projects.filter((p) => {
@@ -27,7 +30,7 @@ export function sortProjects(projects: Project[], sortBy: SortField, sortDir: So
       case 'price_pence':
         return dir * (a.price_pence - b.price_pence);
       case 'stage':
-        return dir * a.stage.localeCompare(b.stage);
+        return dir * ((STAGE_ORDER.get(a.stage) ?? 0) - (STAGE_ORDER.get(b.stage) ?? 0));
       default:
         return 0;
     }

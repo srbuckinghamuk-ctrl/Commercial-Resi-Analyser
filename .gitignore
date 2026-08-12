@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments & secrets
+.env
+.venv/
+venv/
+
+# Node / frontend build output
+node_modules/
+frontend/dist/
+
+# Local databases
+*.db
+*.sqlite3
+
+# OS junk
+.DS_Store

@@ -1,43 +1,83 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Routes, Route, NavLink, Link, Navigate, useParams, useNavigate } from 'react-router-dom';
 import type { Project } from './types';
 import { listProjects } from './lib/api';
 
 import Pipeline from './components/Pipeline';
 import NewProject from './components/NewProject';
-import EligibilityAssessment from './components/EligibilityAssessment';
 import ConversionCalculator from './components/ConversionCalculator';
 import PropertyMap from './components/PropertyMap';
 import ExportPage from './components/ExportPage';
 import ProjectDetail from './components/ProjectDetail';
 
-type Tab = 'pipeline' | 'new_project' | 'eligibility' | 'calculator' | 'map' | 'export' | 'project_detail';
-
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'pipeline', label: 'Pipeline' },
-  { key: 'new_project', label: 'New Project' },
-  { key: 'eligibility', label: 'Eligibility' },
-  { key: 'calculator', label: 'Calculator' },
-  { key: 'map', label: 'Map' },
-  { key: 'export', label: 'Export' },
+const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
+  { to: '/', label: 'Pipeline', end: true },
+  { to: '/new', label: 'New Project' },
+  { to: '/map', label: 'Map' },
+  { to: '/export', label: 'Export' },
 ];
 
+function ProjectRoute({
+  projects,
+  loading,
+  onProjectsChanged,
+  view,
+}: {
+  projects: Project[];
+  loading: boolean;
+  onProjectsChanged: () => void;
+  view: 'overview' | 'eligibility' | 'calculator';
+}) {
+  const { id } = useParams<{ id: string }>();
+  const project = projects.find((p) => p.id === id) ?? null;
+
+  if (!project) {
+    if (loading) {
+      return <p style={{ padding: 24, color: '#94a3b8' }}>Loading project…</p>;
+    }
+    return (
+      <div style={{ padding: 24, maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
+        <h2 style={{ color: '#e2e8f0', fontSize: 20, marginBottom: 8 }}>Project not found</h2>
+        <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 16 }}>
+          It may have been deleted, or the link is out of date.
+        </p>
+        <Link to="/" style={{ color: '#60a5fa', fontSize: 14 }}>← Back to Pipeline</Link>
+      </div>
+    );
+  }
+
+  if (view === 'calculator') {
+    return (
+      <div>
+        <Link
+          to={`/projects/${project.id}`}
+          style={{ display: 'inline-block', margin: '16px 24px 0', padding: '8px 16px', background: '#1e3a5f', color: '#93c5fd', border: '1px solid #2563eb', borderRadius: 6, fontSize: 13, textDecoration: 'none' }}
+        >
+          ← Back to project
+        </Link>
+        <ConversionCalculator project={project} />
+      </div>
+    );
+  }
+
+  return <ProjectDetail project={project} view={view} onProjectUpdated={onProjectsChanged} />;
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('pipeline');
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [loading, setLoading] = useState(true);
   const [backendOffline, setBackendOffline] = useState(false);
+  const navigate = useNavigate();
 
   const loadProjects = useCallback(async () => {
     try {
       const data = await listProjects();
       setProjects(data);
       setBackendOffline(false);
-      setSelectedProject((prev) => {
-        if (!prev) return null;
-        return data.find((p) => p.id === prev.id) ?? null;
-      });
     } catch {
       setBackendOffline(true);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -45,15 +85,22 @@ export default function App() {
     loadProjects();
   }, [loadProjects]);
 
-  const handleProjectCreated = useCallback(() => {
-    loadProjects();
-    setActiveTab('pipeline');
-  }, [loadProjects]);
+  // Keep retrying quietly while the backend is unreachable.
+  useEffect(() => {
+    if (!backendOffline) return;
+    const timer = window.setInterval(() => {
+      void loadProjects();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [backendOffline, loadProjects]);
 
-  const handleSelectProject = useCallback((project: Project) => {
-    setSelectedProject(project);
-    setActiveTab('project_detail');
-  }, []);
+  const handleProjectCreated = useCallback(
+    (project: Project) => {
+      void loadProjects();
+      navigate(`/projects/${project.id}`);
+    },
+    [loadProjects, navigate],
+  );
 
   return (
     <div style={{ minHeight: '100vh', background: '#050d18', color: '#e2e8f0' }}>
@@ -69,15 +116,24 @@ export default function App() {
         }}
       >
         <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
-          Commercial-Resi-Analyser
+          <Link to="/" style={{ color: '#e2e8f0', textDecoration: 'none' }}>Commercial to Resi</Link>
         </h1>
         {backendOffline && (
-          <span style={{ color: '#ef4444', fontSize: 13 }}>Backend offline</span>
+          <span role="status" style={{ color: '#ef4444', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+            Can't reach the server — retrying…
+            <button
+              onClick={() => void loadProjects()}
+              style={{ padding: '4px 12px', background: '#1e3a5f', color: '#e2e8f0', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
+            >
+              Retry now
+            </button>
+          </span>
         )}
       </header>
 
-      {/* Tab Navigation */}
+      {/* Navigation */}
       <nav
+        aria-label="Main"
         style={{
           display: 'flex',
           gap: 0,
@@ -86,61 +142,50 @@ export default function App() {
           overflowX: 'auto',
         }}
       >
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.key || (tab.key === 'pipeline' && activeTab === 'project_detail');
-          return (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              style={{
-                padding: '10px 20px',
-                border: 'none',
-                borderBottom: isActive ? '2px solid #2563eb' : '2px solid transparent',
-                background: 'transparent',
-                color: isActive ? '#e2e8f0' : '#64748b',
-                cursor: 'pointer',
-                fontSize: 14,
-                fontWeight: isActive ? 600 : 400,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-        {activeTab === 'project_detail' && selectedProject && (
-          <span style={{ padding: '10px 16px', color: '#60a5fa', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ color: '#475569' }}>/</span>
-            {selectedProject.address_raw.length > 30
-              ? selectedProject.address_raw.slice(0, 30) + '...'
-              : selectedProject.address_raw}
-          </span>
-        )}
+        {NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            style={({ isActive }) => ({
+              padding: '10px 20px',
+              borderBottom: isActive ? '2px solid #2563eb' : '2px solid transparent',
+              color: isActive ? '#e2e8f0' : '#64748b',
+              fontSize: 14,
+              fontWeight: isActive ? 600 : 400,
+              whiteSpace: 'nowrap',
+              textDecoration: 'none',
+            })}
+          >
+            {item.label}
+          </NavLink>
+        ))}
       </nav>
 
-      {/* Tab Content */}
+      {/* Routes */}
       <main>
-        {activeTab === 'pipeline' && (
-          <Pipeline projects={projects} onSelectProject={handleSelectProject} onProjectsChanged={loadProjects} />
-        )}
-        {activeTab === 'new_project' && (
-          <NewProject onProjectCreated={handleProjectCreated} />
-        )}
-        {activeTab === 'eligibility' && (
-          <EligibilityAssessment projects={projects} selectedProject={selectedProject} />
-        )}
-        {activeTab === 'calculator' && <ConversionCalculator project={selectedProject} />}
-        {activeTab === 'map' && (
-          <PropertyMap projects={projects} selectedProject={selectedProject} onSelectProject={handleSelectProject} />
-        )}
-        {activeTab === 'export' && <ExportPage projects={projects} selectedProject={selectedProject} />}
-        {activeTab === 'project_detail' && selectedProject && (
-          <ProjectDetail
-            project={selectedProject}
-            onBack={() => setActiveTab('pipeline')}
-            onProjectUpdated={loadProjects}
+        <Routes>
+          <Route
+            path="/"
+            element={<Pipeline projects={projects} loading={loading} onProjectsChanged={loadProjects} />}
           />
-        )}
+          <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
+          <Route
+            path="/projects/:id"
+            element={<ProjectRoute projects={projects} loading={loading} onProjectsChanged={loadProjects} view="overview" />}
+          />
+          <Route
+            path="/projects/:id/eligibility"
+            element={<ProjectRoute projects={projects} loading={loading} onProjectsChanged={loadProjects} view="eligibility" />}
+          />
+          <Route
+            path="/projects/:id/calculator"
+            element={<ProjectRoute projects={projects} loading={loading} onProjectsChanged={loadProjects} view="calculator" />}
+          />
+          <Route path="/map" element={<PropertyMap projects={projects} />} />
+          <Route path="/export" element={<ExportPage projects={projects} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
     </div>
   );

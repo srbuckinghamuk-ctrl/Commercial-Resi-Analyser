@@ -4,9 +4,13 @@ import {
   calculateTotalAcquisitionCost,
   calculateTotalConstructionCost,
   calculateTotalProfessionalFees,
+  calculateSellingCosts,
+  calculateFinance,
   calculateIrr,
   calculateAppraisal,
 } from './conversion-calc-engine';
+import { buildCashflow } from './conversion-cashflow';
+import { applyScenario } from './conversion-scenarios';
 import type { ProposedUnit, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
 import { defaultCalculatorInputs } from './conversion-defaults';
 
@@ -94,20 +98,173 @@ describe('calculateIrr', () => {
     // Invest 100, get 120 back after 12 months
     const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 120];
     const monthly = calculateIrr(cashflows);
-    expect(monthly).toBeGreaterThan(0);
-    expect(monthly).toBeLessThan(5);
+    expect(monthly).not.toBeNull();
+    expect(monthly!).toBeGreaterThan(0);
+    expect(monthly!).toBeLessThan(5);
   });
 
   it('returns 0 for break-even', () => {
     const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100];
     const monthly = calculateIrr(cashflows);
-    expect(monthly).toBeCloseTo(0, 1);
+    expect(monthly).not.toBeNull();
+    expect(monthly!).toBeCloseTo(0, 1);
   });
 
   it('returns negative for loss-making', () => {
     const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80];
     const monthly = calculateIrr(cashflows);
-    expect(monthly).toBeLessThan(0);
+    expect(monthly).not.toBeNull();
+    expect(monthly!).toBeLessThan(0);
+  });
+
+  it('returns null when cashflows never turn positive', () => {
+    // The old Newton solver diverged to ~3e11% on this shape.
+    const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -200];
+    expect(calculateIrr(cashflows)).toBeNull();
+  });
+
+  it('returns null for all-positive or single-element cashflows', () => {
+    expect(calculateIrr([100, 100])).toBeNull();
+    expect(calculateIrr([-100])).toBeNull();
+  });
+
+  it('never returns a non-finite rate', () => {
+    const cases = [
+      [-1000, 1200],
+      [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, -200],
+      [-1, 1000000],
+    ];
+    for (const cf of cases) {
+      const irr = calculateIrr(cf);
+      if (irr !== null) {
+        expect(Number.isFinite(irr)).toBe(true);
+      }
+    }
+  });
+});
+
+describe('calculateFinance', () => {
+  function financedInputs() {
+    const inputs = defaultCalculatorInputs({ id: 't', price_pence: 50_000_000, floor_area_sqm: 1000 });
+    inputs.unit_mix.units = [
+      { id: '1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 40_000_000, comparable_notes: '' },
+    ];
+    return inputs;
+  }
+
+  it('charges nothing for a cash purchase', () => {
+    const inputs = financedInputs();
+    inputs.finance.funding_source = 'cash';
+    const finance = calculateFinance(inputs);
+    expect(finance.loan_amount_pence).toBe(0);
+    expect(finance.total_finance_cost_pence).toBe(0);
+
+    const metrics = calculateAppraisal(inputs);
+    expect(metrics.total_finance_cost_pence).toBe(0);
+    expect(metrics.loan_amount_pence).toBe(0);
+    expect(metrics.equity_required_pence).toBe(metrics.total_cost_pence);
+  });
+
+  it('rolled-up interest costs at least as much as serviced', () => {
+    const rolled = financedInputs();
+    rolled.finance.interest_type = 'rolled_up';
+    const serviced = financedInputs();
+    serviced.finance.interest_type = 'serviced';
+    expect(calculateFinance(rolled).total_interest_pence).toBeGreaterThanOrEqual(
+      calculateFinance(serviced).total_interest_pence,
+    );
+  });
+
+  it('drawdown interest is below full-loan-full-term simple interest', () => {
+    const inputs = financedInputs();
+    const finance = calculateFinance(inputs);
+    const monthlyRate = inputs.finance.interest_rate_annual_pct / 100 / 12;
+    const naive = finance.loan_amount_pence * monthlyRate * inputs.finance.loan_term_months;
+    expect(finance.total_interest_pence).toBeLessThan(naive);
+    expect(finance.total_interest_pence).toBeGreaterThan(0);
+  });
+
+  it('cashflow interest agrees with the engine interest', () => {
+    const inputs = financedInputs();
+    const finance = calculateFinance(inputs);
+    const cashflow = buildCashflow(inputs);
+    expect(cashflow.total_interest_pence).toBe(finance.total_interest_pence);
+  });
+
+  it('zero or negative loan term produces no interest and no cashflow', () => {
+    const inputs = financedInputs();
+    inputs.finance.loan_term_months = 0;
+    expect(calculateFinance(inputs).total_interest_pence).toBe(0);
+    expect(buildCashflow(inputs).months).toHaveLength(0);
+    inputs.finance.loan_term_months = -3;
+    expect(calculateFinance(inputs).total_interest_pence).toBe(0);
+  });
+});
+
+describe('calculateSellingCosts', () => {
+  const units: ProposedUnit[] = [
+    { id: 'a', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 20_000_000, comparable_notes: '' },
+    { id: 'b', type: '2bed', floor_area_sqm: 70, estimated_value_pence: 30_000_000, comparable_notes: '' },
+  ];
+
+  it('charges agent fee on full GDV when selling all', () => {
+    const cost = calculateSellingCosts(
+      { route: 'sell_all', selling_agent_fee_pct: 2, selling_legal_fee_pence: 100_000, retained_units: [] },
+      units,
+    );
+    // 2% of 50,000,000 = 1,000,000 + 100,000 legal
+    expect(cost).toBe(1_100_000);
+  });
+
+  it('charges nothing when retaining everything', () => {
+    const cost = calculateSellingCosts(
+      { route: 'retain_all', selling_agent_fee_pct: 2, selling_legal_fee_pence: 100_000, retained_units: [] },
+      units,
+    );
+    expect(cost).toBe(0);
+  });
+
+  it('charges only on sold value for a blended exit', () => {
+    const cost = calculateSellingCosts(
+      {
+        route: 'blended',
+        selling_agent_fee_pct: 2,
+        selling_legal_fee_pence: 100_000,
+        retained_units: [{ unit_id: 'b', monthly_rent_pence: 100_000 }],
+      },
+      units,
+    );
+    // 2% of 20,000,000 (unit a only) = 400,000 + 100,000
+    expect(cost).toBe(500_000);
+  });
+
+  it('selling costs reduce profit in the appraisal', () => {
+    const inputs = defaultCalculatorInputs({ id: 't', price_pence: 30_000_000, floor_area_sqm: 500 });
+    inputs.unit_mix.units = [...units];
+    const withCosts = calculateAppraisal(inputs);
+    const noCosts = calculateAppraisal({
+      ...inputs,
+      exit_strategy: { ...inputs.exit_strategy, selling_agent_fee_pct: 0, selling_legal_fee_pence: 0 },
+    });
+    expect(withCosts.total_selling_costs_pence).toBeGreaterThan(0);
+    expect(withCosts.profit_pence).toBe(noCosts.profit_pence - withCosts.total_selling_costs_pence);
+  });
+});
+
+describe('applyScenario', () => {
+  it('floors the loan term at one month', () => {
+    const inputs = defaultCalculatorInputs({ id: 't', price_pence: 10_000_000, floor_area_sqm: 100 });
+    inputs.finance.loan_term_months = 2;
+    const adjusted = applyScenario(inputs, {
+      label: 'x',
+      gdv_adjustment_pct: 0,
+      construction_cost_adjustment_pct: 0,
+      timeline_adjustment_months: -6,
+      interest_rate_adjustment_pct: 0,
+    });
+    expect(adjusted.finance.loan_term_months).toBe(1);
+    // A shortened programme must never create negative interest / free money.
+    expect(calculateFinance(adjusted).total_interest_pence).toBeGreaterThanOrEqual(0);
   });
 });
 

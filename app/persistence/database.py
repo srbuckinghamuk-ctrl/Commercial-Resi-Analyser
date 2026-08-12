@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     String,
     Text,
     func,
@@ -61,6 +62,11 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 class ProjectORM(Base):
     __tablename__ = "projects"
+    __table_args__ = (
+        Index("ix_projects_postcode", "address_postcode"),
+        Index("ix_projects_stage", "stage"),
+        Index("ix_projects_use_class", "use_class"),
+    )
 
     id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
     address_raw: Mapped[str] = mapped_column(Text, nullable=False)
@@ -105,6 +111,11 @@ class ProjectORM(Base):
 
 class EligibilityAssessmentORM(Base):
     __tablename__ = "eligibility_assessments"
+    __table_args__ = (
+        Index("ix_eligibility_project_id", "project_id"),
+        # One assessment per project, enforced at the schema level.
+        Index("uq_eligibility_project_id", "project_id", unique=True),
+    )
 
     id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[uuid4] = mapped_column(
@@ -115,6 +126,7 @@ class EligibilityAssessmentORM(Base):
     verdict: Mapped[str] = mapped_column(String(16), nullable=False)
     suggested_next_steps: Mapped[list] = mapped_column(JSON, default=list)
     notes: Mapped[str | None] = mapped_column(Text)
+    ruleset_version: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -125,6 +137,11 @@ class EligibilityAssessmentORM(Base):
 
 class FinancialAppraisalORM(Base):
     __tablename__ = "financial_appraisals"
+    __table_args__ = (
+        Index("ix_appraisal_project_id", "project_id"),
+        # One appraisal per project, enforced at the schema level.
+        Index("uq_appraisal_project_id", "project_id", unique=True),
+    )
 
     id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[uuid4] = mapped_column(
@@ -149,6 +166,9 @@ class FinancialAppraisalORM(Base):
 
 class StageTransitionORM(Base):
     __tablename__ = "stage_transitions"
+    __table_args__ = (
+        Index("ix_transition_project_id", "project_id"),
+    )
 
     id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
     project_id: Mapped[uuid4] = mapped_column(

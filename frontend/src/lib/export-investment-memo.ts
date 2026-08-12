@@ -5,9 +5,9 @@ import type {
   CalculatorInputs,
   AppraisalMetrics,
   CashflowResult,
-  ScenarioOverrides,
 } from './conversion-types';
 import { calculateAppraisal } from './conversion-calc-engine';
+import { applyScenario } from './conversion-scenarios';
 import { calculateCommercialSdlt } from './commercial-sdlt';
 
 const PAGE_W = 210;
@@ -25,12 +25,20 @@ function fmt(pence: number): string {
   });
 }
 
-function fmtPct(pct: number): string {
+function fmtPct(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return '—';
   return `${pct.toFixed(1)}%`;
 }
 
-function fmtPctDp2(pct: number): string {
+function fmtPctDp2(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return '—';
   return `${pct.toFixed(2)}%`;
+}
+
+/** Percentage share guarded against a zero denominator. */
+function fmtShare(part: number, whole: number): string {
+  if (whole <= 0) return '—';
+  return `${((part / whole) * 100).toFixed(1)}%`;
 }
 
 function fmtDate(iso: string | null): string {
@@ -124,6 +132,11 @@ function bodyText(doc: jsPDF, y: number, text: string): number {
   return y + 2;
 }
 
+/** Bottom Y of the most recent autoTable (the plugin stores it on the doc). */
+function lastTableY(doc: jsPDF): number {
+  return (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
+}
+
 function infoRequired(doc: jsPDF, y: number, label: string): number {
   doc.setFontSize(10);
   doc.setFont('helvetica', 'italic');
@@ -137,31 +150,6 @@ function infoRequired(doc: jsPDF, y: number, label: string): number {
   return y + 6;
 }
 
-function applyScenario(inputs: CalculatorInputs, overrides: ScenarioOverrides): CalculatorInputs {
-  const gdvMult = 1 + overrides.gdv_adjustment_pct / 100;
-  const costMult = 1 + overrides.construction_cost_adjustment_pct / 100;
-  return {
-    ...inputs,
-    unit_mix: {
-      units: inputs.unit_mix.units.map((u) => ({
-        ...u,
-        estimated_value_pence: Math.round(u.estimated_value_pence * gdvMult),
-      })),
-    },
-    conversion_costs: {
-      ...inputs.conversion_costs,
-      construction_cost_per_sqm_pence: Math.round(
-        inputs.conversion_costs.construction_cost_per_sqm_pence * costMult,
-      ),
-    },
-    finance: {
-      ...inputs.finance,
-      loan_term_months: inputs.finance.loan_term_months + overrides.timeline_adjustment_months,
-      interest_rate_annual_pct:
-        inputs.finance.interest_rate_annual_pct + overrides.interest_rate_adjustment_pct,
-    },
-  };
-}
 
 export function generateInvestmentMemo(
   project: Project,
@@ -297,22 +285,27 @@ export function generateInvestmentMemo(
       [
         'Acquisition (inc. SDLT)',
         fmt(metrics.total_acquisition_cost_pence),
-        fmtPct((metrics.total_acquisition_cost_pence / metrics.total_cost_pence) * 100),
+        fmtShare(metrics.total_acquisition_cost_pence, metrics.total_cost_pence),
       ],
       [
         'Construction',
         fmt(metrics.total_construction_cost_pence),
-        fmtPct((metrics.total_construction_cost_pence / metrics.total_cost_pence) * 100),
+        fmtShare(metrics.total_construction_cost_pence, metrics.total_cost_pence),
       ],
       [
         'Professional Fees',
         fmt(metrics.total_professional_fees_pence),
-        fmtPct((metrics.total_professional_fees_pence / metrics.total_cost_pence) * 100),
+        fmtShare(metrics.total_professional_fees_pence, metrics.total_cost_pence),
       ],
       [
         'Finance Costs',
         fmt(metrics.total_finance_cost_pence),
-        fmtPct((metrics.total_finance_cost_pence / metrics.total_cost_pence) * 100),
+        fmtShare(metrics.total_finance_cost_pence, metrics.total_cost_pence),
+      ],
+      [
+        'Disposal Costs',
+        fmt(metrics.total_selling_costs_pence),
+        fmtShare(metrics.total_selling_costs_pence, metrics.total_cost_pence),
       ],
       ['Total', fmt(metrics.total_cost_pence), '100.0%'],
     ],
@@ -325,7 +318,7 @@ export function generateInvestmentMemo(
       2: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastTableY(doc) + 8;
 
   y = subHeading(doc, y, 'Headline Returns');
   y = bodyText(
@@ -414,7 +407,7 @@ export function generateInvestmentMemo(
       5: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = subHeading(doc, y, 'Planning Position');
   if (eligibility) {
@@ -495,7 +488,7 @@ export function generateInvestmentMemo(
     bodyStyles: { textColor: [51, 65, 85] },
     columnStyles: { 1: { halign: 'right' } },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = subHeading(doc, y, 'Cost Plan');
   const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence);
@@ -508,13 +501,9 @@ export function generateInvestmentMemo(
   const contingencyAmt = Math.round(
     (baseBuild * inputs.conversion_costs.contingency_pct) / 100,
   );
-  const arrangementFee = Math.round(
-    (metrics.loan_amount_pence * inputs.finance.arrangement_fee_pct) / 100,
-  );
-  const exitFee = Math.round(
-    (metrics.loan_amount_pence * inputs.finance.exit_fee_pct) / 100,
-  );
-  const totalInterest = metrics.total_finance_cost_pence - arrangementFee - exitFee;
+  const arrangementFee = metrics.arrangement_fee_pence;
+  const exitFee = metrics.exit_fee_pence;
+  const totalInterest = metrics.total_interest_pence;
 
   autoTable(doc, {
     startY: y,
@@ -552,8 +541,13 @@ export function generateInvestmentMemo(
       ['FINANCE COSTS', '', ''],
       [`  Arrangement fee (${fmtPct(inputs.finance.arrangement_fee_pct)})`, fmt(arrangementFee), ''],
       [`  Exit fee (${fmtPct(inputs.finance.exit_fee_pct)})`, fmt(exitFee), ''],
-      [`  Interest (${fmtPct(inputs.finance.interest_rate_annual_pct)} p.a., ${inputs.finance.loan_term_months} months)`, fmt(totalInterest), ''],
+      [`  Interest (${fmtPct(inputs.finance.interest_rate_annual_pct)} p.a., ${inputs.finance.loan_term_months} months, drawdown basis)`, fmt(totalInterest), ''],
       ['  Sub-total finance costs', fmt(metrics.total_finance_cost_pence), ''],
+      ['', '', ''],
+      ['DISPOSAL COSTS', '', ''],
+      [`  Selling agent (${fmtPct(inputs.exit_strategy.selling_agent_fee_pct)} of sale proceeds)`, fmt(metrics.total_selling_costs_pence > 0 ? metrics.total_selling_costs_pence - inputs.exit_strategy.selling_legal_fee_pence : 0), ''],
+      ['  Sales legal fees', fmt(metrics.total_selling_costs_pence > 0 ? inputs.exit_strategy.selling_legal_fee_pence : 0), ''],
+      ['  Sub-total disposal costs', fmt(metrics.total_selling_costs_pence), ''],
       ['', '', ''],
       ['TOTAL DEVELOPMENT COST', fmt(metrics.total_cost_pence), perSqftPence(metrics.total_cost_pence, totalSqm)],
     ],
@@ -571,6 +565,7 @@ export function generateInvestmentMemo(
         text.startsWith('CONSTRUCTION') ||
         text.startsWith('PROFESSIONAL') ||
         text.startsWith('FINANCE') ||
+        text.startsWith('DISPOSAL') ||
         text.startsWith('TOTAL')
       ) {
         data.cell.styles.fontStyle = 'bold';
@@ -581,7 +576,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = subHeading(doc, y, 'Appraisal Metrics');
   autoTable(doc, {
@@ -605,7 +600,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = subHeading(doc, y, 'Residual Land Value Check');
   const rlvDiff = metrics.rlv_pence - inputs.acquisition.purchase_price_pence;
@@ -663,7 +658,7 @@ export function generateInvestmentMemo(
       7: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastTableY(doc) + 8;
 
   // ── Section 7: Funding Request ──
   if (y > 200) {
@@ -688,7 +683,7 @@ export function generateInvestmentMemo(
       [
         'Equity',
         fmt(metrics.equity_required_pence),
-        fmtPct((metrics.equity_required_pence / metrics.total_cost_pence) * 100),
+        fmtShare(metrics.equity_required_pence, metrics.total_cost_pence),
         '',
         'Acquisition (inc. SDLT)',
         fmt(metrics.total_acquisition_cost_pence),
@@ -718,6 +713,14 @@ export function generateInvestmentMemo(
         fmt(metrics.total_finance_cost_pence),
       ],
       [
+        '',
+        '',
+        '',
+        '',
+        'Disposal Costs',
+        fmt(metrics.total_selling_costs_pence),
+      ],
+      [
         'Total',
         fmt(metrics.total_cost_pence),
         '100.0%',
@@ -743,7 +746,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = subHeading(doc, y, 'Key Lending Metrics');
   autoTable(doc, {
@@ -768,7 +771,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = infoRequired(doc, y, 'Security package — first charge, debenture, personal guarantees');
   y = infoRequired(doc, y, 'Drawdown profile, priority of repayment');
@@ -805,22 +808,24 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = infoRequired(doc, y, 'Waterfall / promote structure (if JV)');
 
   y = subHeading(doc, y, 'Lender Position');
-  const dayOneLtv = inputs.acquisition.purchase_price_pence > 0
-    ? (metrics.loan_amount_pence / inputs.acquisition.purchase_price_pence) * 100
-    : 0;
+  const exitDebt =
+    metrics.loan_amount_pence +
+    (inputs.finance.interest_type === 'rolled_up' ? metrics.total_interest_pence : 0) +
+    metrics.exit_fee_pence;
+  const exitLtgdv = metrics.total_gdv_pence > 0 ? (exitDebt / metrics.total_gdv_pence) * 100 : 0;
 
   autoTable(doc, {
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     body: [
-      ['Day-one LTV (loan / purchase price)', fmtPct(dayOneLtv)],
-      ['Peak LTGDV (loan / GDV)', fmtPct(ltgdv)],
-      ['Exit LTGDV', fmtPct(ltgdv)],
+      ['Loan-to-Cost (LTC)', fmtPct(ltc)],
+      ['LTGDV (loan / GDV)', fmtPct(ltgdv)],
+      ['Exit LTGDV (incl. rolled interest and exit fee)', fmtPct(exitLtgdv)],
       ['Headroom (GDV less total cost)', fmt(metrics.profit_pence)],
       ['Headroom as % of GDV', fmtPct(metrics.profit_on_gdv_pct)],
     ],
@@ -832,7 +837,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastTableY(doc) + 8;
 
   // ── Section 9: Risk Register ──
   doc.addPage();
@@ -872,7 +877,7 @@ export function generateInvestmentMemo(
         }
       },
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = lastTableY(doc) + 6;
   } else {
     y = infoRequired(doc, y, 'Risk register — no risks have been entered in the calculator');
   }
@@ -883,14 +888,23 @@ export function generateInvestmentMemo(
     'The risk register should cover: planning risk, cost inflation, contractor insolvency, ground conditions / existing structure, MEES/EPC compliance, building safety (Gateway 2/3 where applicable), sales rate, interest rate, and exit liquidity.',
   );
 
-  const missingRiskCategories = [
-    'planning', 'cost inflation', 'contractor insolvency', 'ground conditions',
-    'MEES/EPC', 'building safety', 'sales rate', 'interest rate', 'exit liquidity',
+  // Each category matches on any of several keywords so differently-worded
+  // risk descriptions (including the app's own defaults) are recognised.
+  const riskCategories: { label: string; keywords: string[] }[] = [
+    { label: 'planning', keywords: ['planning', 'prior approval', 'article 4', 'permitted development'] },
+    { label: 'cost inflation', keywords: ['cost inflation', 'cost overrun', 'construction cost', 'build cost'] },
+    { label: 'contractor insolvency', keywords: ['contractor insolvency', 'contractor failure', 'contractor'] },
+    { label: 'ground conditions', keywords: ['ground condition', 'existing structure', 'structural', 'asbestos'] },
+    { label: 'MEES/EPC', keywords: ['mees', 'epc'] },
+    { label: 'building safety', keywords: ['building safety', 'gateway', 'fire'] },
+    { label: 'sales rate', keywords: ['sales rate', 'sales velocity', 'absorption', 'void', 'demand', 'gdv'] },
+    { label: 'interest rate', keywords: ['interest rate', 'rate rise', 'finance cost'] },
+    { label: 'exit liquidity', keywords: ['exit liquidity', 'exit risk', 'refinance', 'saleability'] },
   ];
   const enteredDescriptions = inputs.risks.map((r) => r.description.toLowerCase());
-  const missing = missingRiskCategories.filter(
-    (cat) => !enteredDescriptions.some((d) => d.includes(cat.toLowerCase())),
-  );
+  const missing = riskCategories
+    .filter((cat) => !enteredDescriptions.some((d) => cat.keywords.some((k) => d.includes(k))))
+    .map((cat) => cat.label);
   if (missing.length > 0) {
     y = infoRequired(doc, y, `Risks not yet addressed: ${missing.join(', ')}`);
   }
@@ -936,7 +950,7 @@ export function generateInvestmentMemo(
       3: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastTableY(doc) + 8;
 
   y = subHeading(doc, y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
   const gdvSteps = [-15, -10, -5, 0, 5];
@@ -980,7 +994,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   y = subHeading(doc, y, 'Two-Way Sensitivity Matrix: Lender LTGDV (%)');
 
@@ -1025,7 +1039,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastTableY(doc) + 6;
 
   // Impairment analysis
   y = subHeading(doc, y, 'Impairment Thresholds');
@@ -1034,12 +1048,16 @@ export function generateInvestmentMemo(
   y = bodyText(
     doc,
     y,
-    `Equity is impaired (profit falls to zero) at approximately ${fmtPct(equityImpairGdv)} GDV reduction (all else equal).`,
+    equityImpairGdv === null
+      ? 'Equity is not impaired within a 50% GDV reduction (all else equal).'
+      : `Equity is impaired (profit falls to zero) at approximately ${fmtPct(equityImpairGdv)} GDV reduction (all else equal).`,
   );
   y = bodyText(
     doc,
     y,
-    `Senior debt is impaired (GDV falls below total cost) at approximately ${fmtPct(debtImpairGdv)} GDV reduction (all else equal). This represents the lender's margin of safety.`,
+    debtImpairGdv === null
+      ? 'Senior debt is not impaired within a 50% GDV reduction (all else equal). This represents the lender\'s margin of safety.'
+      : `Senior debt is impaired (GDV falls below total cost) at approximately ${fmtPct(debtImpairGdv)} GDV reduction (all else equal). This represents the lender's margin of safety.`,
   );
 
   // ── Section 11: Exit Strategy ──
@@ -1097,7 +1115,7 @@ export function generateInvestmentMemo(
         5: { halign: 'right' },
       },
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = lastTableY(doc) + 6;
   }
 
   y = subHeading(doc, y, 'Contingent Exit');
@@ -1140,7 +1158,7 @@ export function generateInvestmentMemo(
     bodyStyles: { textColor: [51, 65, 85] },
     alternateRowStyles: { fillColor: [241, 245, 249] },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastTableY(doc) + 8;
 
   y = subHeading(doc, y, 'B. Information Required');
   const infoItems = [
@@ -1172,7 +1190,7 @@ export function generateInvestmentMemo(
     alternateRowStyles: { fillColor: [255, 251, 235] },
     columnStyles: { 0: { cellWidth: 10, halign: 'center' } },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastTableY(doc) + 8;
 
   y = subHeading(doc, y, 'C. Additional Appendices Required');
   y = infoRequired(doc, y, 'Team CVs');
@@ -1188,7 +1206,7 @@ export function generateInvestmentMemo(
 function findImpairmentPoint(
   inputs: CalculatorInputs,
   type: 'equity' | 'debt',
-): number {
+): number | null {
   for (let pct = 1; pct <= 50; pct++) {
     const adjusted = applyScenario(inputs, {
       label: '',
@@ -1201,5 +1219,5 @@ function findImpairmentPoint(
     if (type === 'equity' && m.profit_pence <= 0) return pct;
     if (type === 'debt' && m.total_gdv_pence <= m.total_cost_pence) return pct;
   }
-  return 50;
+  return null; // not impaired within a 50% GDV fall
 }

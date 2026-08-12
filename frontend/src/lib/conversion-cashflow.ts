@@ -1,27 +1,15 @@
 import type { CalculatorInputs, CashflowMonth, CashflowResult } from './conversion-types';
-import {
-  calculateTotalAcquisitionCost,
-  calculateTotalConstructionCost,
-  calculateTotalProfessionalFees,
-  calculateGdv,
-} from './conversion-calc-engine';
+import { buildDrawdownSchedule, calculateFinance, calculateGdv } from './conversion-calc-engine';
 
 export function buildCashflow(inputs: CalculatorInputs): CashflowResult {
-  const totalMonths = inputs.finance.loan_term_months;
-  if (totalMonths <= 0) {
+  const drawdowns = buildDrawdownSchedule(inputs);
+  if (drawdowns.length === 0) {
     return { months: [], peak_funding_pence: 0, total_interest_pence: 0 };
   }
 
-  const acquisition = calculateTotalAcquisitionCost(inputs.acquisition);
-  const construction = calculateTotalConstructionCost(inputs.conversion_costs);
-  const professional = calculateTotalProfessionalFees(inputs.conversion_costs, inputs.unit_mix.units.length);
   const gdv = calculateGdv(inputs.unit_mix.units);
-
-  const monthlyRate = inputs.finance.interest_rate_annual_pct / 100 / 12;
-  const constructionMonths = Math.max(1, totalMonths - 2);
-  const monthlyConstruction = Math.round(construction / constructionMonths);
-  const professionalMonths = Math.max(1, Math.ceil(constructionMonths / 2));
-  const monthlyProfessional = Math.round(professional / professionalMonths);
+  const finance = calculateFinance(inputs);
+  const totalMonths = drawdowns.length;
 
   const months: CashflowMonth[] = [];
   let cumulativeDrawdown = 0;
@@ -30,27 +18,11 @@ export function buildCashflow(inputs: CalculatorInputs): CashflowResult {
   let peakFunding = 0;
 
   for (let m = 0; m < totalMonths; m++) {
-    let drawdown = 0;
-    let income = 0;
-
-    if (m === 0) {
-      drawdown = acquisition;
-    }
-
-    if ((totalMonths === 1 || m >= 1) && m <= constructionMonths) {
-      drawdown += monthlyConstruction;
-    }
-
-    if ((totalMonths === 1 || m >= 1) && m <= professionalMonths) {
-      drawdown += monthlyProfessional;
-    }
-
-    if (m === totalMonths - 1) {
-      income = gdv;
-    }
+    const drawdown = drawdowns[m];
+    const income = m === totalMonths - 1 ? gdv : 0;
 
     cumulativeDrawdown += drawdown;
-    const interest = Math.round(cumulativeDrawdown * monthlyRate);
+    const interest = finance.monthly_interest_pence[m] ?? 0;
     cumulativeInterest += interest;
 
     const netCashflow = income - drawdown - interest;
