@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.eligibility.engine import run_eligibility
 from app.integrations.http import close_client
@@ -62,6 +63,39 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
+class SpaStaticFiles(StaticFiles):
+    """Serve the built SPA with a history-API fallback.
+
+    BrowserRouter deep links like /projects/<id> are client-side routes with
+    no file on disk — a plain StaticFiles mount 404s them on refresh. Any
+    404 under the mount falls back to index.html so the SPA can route it.
+    API paths never reach here (register_api_fallback catches them first).
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except (HTTPException, StarletteHTTPException) as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
+def register_api_fallback(app: FastAPI) -> None:
+    """Unmatched /api/* paths return a JSON 404 instead of index.html-as-200.
+
+    Must be registered after the real API routers and before the SPA mount.
+    """
+
+    @app.api_route(
+        "/api/{rest:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def api_not_found(rest: str):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Commercial-Resi-Analyser",
@@ -85,9 +119,12 @@ def create_app() -> FastAPI:
     app.include_router(lookup_router, prefix=settings.api_prefix, tags=["lookup"])
     app.include_router(system_router, tags=["system"])
 
-    dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    register_api_fallback(app)
+
+    # repo_root/frontend/dist — __file__ is repo_root/app/api/app.py.
+    dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
     if dist.is_dir():
-        app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
+        app.mount("/", SpaStaticFiles(directory=str(dist), html=True), name="spa")
 
     return app
 
