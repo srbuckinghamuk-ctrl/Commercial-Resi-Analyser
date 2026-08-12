@@ -10,6 +10,7 @@ import type {
   CalculatorInputs,
 } from './conversion-types';
 import { CLASS_MA_AXES } from './deal-spider';
+import type { CalculatorInputsV2, EquitySource, FacilityTerms } from './model/finance-types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -219,5 +220,61 @@ export function mergeCalculatorInputs(
       ...(saved.deal_spider ?? {}),
       weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
     },
+  };
+}
+
+export const DEFAULT_FACILITY_TERMS: FacilityTerms = {
+  funding_source: 'development_finance',
+  day_one_advance_pence: null,
+  day_one_market_value_pence: null,
+  development_cost_advance_pct: 100,
+  committed_net_facility_pence: null,
+  committed_gross_facility_pence: null,
+  annual_interest_rate_pct: 8.0,
+  interest_type: 'rolled_up',
+  arrangement_fee_pct: 2.0,
+  arrangement_fee_basis: 'committed_net_facility',
+  exit_fee_pct: 1.0,
+  exit_fee_basis: 'committed_gross_facility',
+  broker_fee_pence: 0,
+  lender_legal_fee_pence: 0,
+  valuation_fee_pence: 0,
+  monitoring_surveyor_fee_pence: 0,
+  interest_reserve_pence: null,
+  term_months: 12,
+  equity_draw_rule: 'equity_first',
+  sales_sweep_pct: 100,
+  legacy_leverage_pct: null,
+  requires_confirmation: false,
+};
+
+export function defaultEquitySources(): EquitySource[] {
+  return [{
+    id: crypto.randomUUID(),
+    classification: 'cash',
+    amount_pence: 0,
+    timing_month: 0,
+    repayment_priority: 1,
+    evidence_status: 'unconfirmed',
+    notes: '',
+  }];
+}
+
+export function defaultCalculatorInputsV2(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV2 {
+  const v1 = defaultCalculatorInputs(project);
+  return {
+    inputs_version: 2,
+    project_id: v1.project_id,
+    acquisition: v1.acquisition,
+    unit_mix: v1.unit_mix,
+    conversion_costs: v1.conversion_costs,
+    finance: { ...DEFAULT_FACILITY_TERMS },
+    equity_sources: defaultEquitySources(),
+    exit_strategy: v1.exit_strategy,
+    risks: v1.risks,
+    scenarios: v1.scenarios,
+    deal_spider: v1.deal_spider,
   };
 }
