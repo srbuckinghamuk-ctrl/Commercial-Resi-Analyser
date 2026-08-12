@@ -109,6 +109,7 @@ const mockEligibility: EligibilityAssessment = {
   verdict: 'green',
   suggested_next_steps: ['Submit prior approval application'],
   notes: null,
+  ruleset_version: null,
   created_at: '2026-02-01T00:00:00Z',
   updated_at: '2026-02-01T00:00:00Z',
 };

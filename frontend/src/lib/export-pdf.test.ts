@@ -45,6 +45,7 @@ const mockAssessment: EligibilityAssessment = {
   verdict: 'red',
   suggested_next_steps: ['Verify floor area', 'Check Article 4'],
   notes: null,
+  ruleset_version: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 };

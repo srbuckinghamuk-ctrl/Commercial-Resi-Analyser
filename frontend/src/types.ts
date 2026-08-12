@@ -142,6 +142,8 @@ export interface EligibilityAssessment {
   verdict: EligibilityVerdict;
   suggested_next_steps: string[];
   notes: string | null;
+  /** Version of the eligibility ruleset that produced this assessment. */
+  ruleset_version: string | null;
   created_at: string;
   updated_at: string;
 }

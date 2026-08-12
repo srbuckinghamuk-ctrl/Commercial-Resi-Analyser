@@ -40,6 +40,11 @@ export default function EligibilityVerdictDisplay({
         <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
           PDR Class: {assessment.pdr_class.replace(/_/g, ' ').toUpperCase()} · {passedCount} passed · {failedCount} failed · {pendingCount} pending
         </div>
+        <div style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
+          {assessment.ruleset_version && `Ruleset ${assessment.ruleset_version} · `}
+          assessed {new Date(assessment.updated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+          {' '}— screening guidance, not planning advice
+        </div>
       </div>
 
       {(() => {
