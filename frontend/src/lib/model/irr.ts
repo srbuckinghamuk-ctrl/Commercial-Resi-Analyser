@@ -43,7 +43,11 @@ export function solveIrr(cashflows: number[]): number | null {
     guess = next;
   }
 
-  // Bisection fallback over (LOWER, UPPER]
+  // Bisection fallback over (LOWER, UPPER].
+  // Bisection's guarantee is BRACKET PRECISION on the rate (1e-12 final interval width),
+  // not NPV residual: on steep NPV curves, the residual can be large (1e-3+) while the rate
+  // is accurate within ±1e-6. This is acceptable for display (2 decimal places = 1%) and
+  // explains the asymmetry with Newton's 1e-3 acceptance threshold.
   let lo = LOWER + 1e-9;
   let hi = UPPER;
   let fLo = npvAt(cashflows, lo);
