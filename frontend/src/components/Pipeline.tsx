@@ -10,10 +10,11 @@ import ProjectCard from './ProjectCard';
 interface PipelineProps {
   projects: Project[];
   loading: boolean;
+  backendOffline: boolean;
   onProjectsChanged: () => void;
 }
 
-export default function Pipeline({ projects, loading, onProjectsChanged }: PipelineProps) {
+export default function Pipeline({ projects, loading, backendOffline, onProjectsChanged }: PipelineProps) {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<PipelineFilters>({
     stage: 'all',
@@ -69,6 +70,25 @@ export default function Pipeline({ projects, loading, onProjectsChanged }: Pipel
     },
     [onProjectsChanged],
   );
+
+  // A connection failure must never render as an empty portfolio.
+  if (backendOffline && projects.length === 0) {
+    return (
+      <div style={{ padding: '64px 24px', maxWidth: 560, margin: '0 auto', textAlign: 'center' }}>
+        <h2 style={{ color: '#e2e8f0', fontSize: 22, marginBottom: 10 }}>Can't reach the server</h2>
+        <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 20 }}>
+          Your projects are safe — this is a connection problem, not data loss. Retrying
+          automatically every few seconds…
+        </p>
+        <button
+          onClick={onProjectsChanged}
+          style={{ padding: '10px 24px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}
+        >
+          Retry now
+        </button>
+      </div>
+    );
+  }
 
   if (!loading && projects.length === 0) {
     return (

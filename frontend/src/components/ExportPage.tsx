@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import type { Project } from '../types';
 import { getEligibility, getAppraisal } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
@@ -7,9 +8,17 @@ import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { calculateAppraisal } from '../lib/conversion-calc-engine';
 import { buildCashflow } from '../lib/conversion-cashflow';
 import { normaliseSnapshot } from '../lib/snapshot';
+import { exportErrorMessage, SnapshotMissingError } from '../lib/export-errors';
+
+const NO_APPRAISAL =
+  'no financial appraisal is saved for this project yet — open the Conversion Calculator and save one first';
+const NO_ELIGIBILITY =
+  'no eligibility assessment exists for this project yet — run one from the project page first';
 
 interface ExportPageProps {
   projects: Project[];
+  projectsLoading: boolean;
+  backendOffline: boolean;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -21,7 +30,7 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function ExportPage({ projects }: ExportPageProps) {
+export default function ExportPage({ projects, projectsLoading, backendOffline }: ExportPageProps) {
   const [selectedId, setSelectedId] = useState<string>('');
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,8 +58,9 @@ export default function ExportPage({ projects }: ExportPageProps) {
       const blob = generateEligibilityPdf(selected, assessment);
       const safeName = selected.address_postcode || selected.id.slice(0, 8);
       downloadBlob(blob, `eligibility-${safeName}.pdf`);
-    } catch {
-      setError('Could not generate the eligibility PDF — run an eligibility assessment for this project first.');
+    } catch (err) {
+      console.error('Eligibility PDF export failed:', err);
+      setError(exportErrorMessage('eligibility PDF', NO_ELIGIBILITY, err));
     } finally {
       setLoading(null);
     }
@@ -65,8 +75,9 @@ export default function ExportPage({ projects }: ExportPageProps) {
       const blob = generateAppraisalPdf(selected, appraisal);
       const safeName = selected.address_postcode || selected.id.slice(0, 8);
       downloadBlob(blob, `appraisal-${safeName}.pdf`);
-    } catch {
-      setError('Could not generate the appraisal PDF — save a financial appraisal for this project first.');
+    } catch (err) {
+      console.error('Appraisal PDF export failed:', err);
+      setError(exportErrorMessage('appraisal PDF', NO_APPRAISAL, err));
     } finally {
       setLoading(null);
     }
@@ -80,7 +91,7 @@ export default function ExportPage({ projects }: ExportPageProps) {
       const appraisal = await getAppraisal(selected.id);
       const inputs = normaliseSnapshot(appraisal.inputs_snapshot);
       if (!inputs) {
-        throw new Error('No calculator data found in appraisal snapshot');
+        throw new SnapshotMissingError();
       }
       const metrics = calculateAppraisal(inputs);
       const cashflow = buildCashflow(inputs);
@@ -95,8 +106,9 @@ export default function ExportPage({ projects }: ExportPageProps) {
       const blob = generateInvestmentMemo(selected, inputs, metrics, cashflow, eligibility);
       const safeName = selected.address_postcode || selected.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);
-    } catch {
-      setError('Could not generate the Investment Memorandum — save a financial appraisal with full calculator data first.');
+    } catch (err) {
+      console.error('Investment memorandum export failed:', err);
+      setError(exportErrorMessage('Investment Memorandum', NO_APPRAISAL, err));
     } finally {
       setLoading(null);
     }
@@ -110,15 +122,16 @@ export default function ExportPage({ projects }: ExportPageProps) {
       const appraisal = await getAppraisal(selected.id);
       const inputs = normaliseSnapshot(appraisal.inputs_snapshot);
       if (!inputs) {
-        throw new Error('No calculator data found in appraisal snapshot');
+        throw new SnapshotMissingError();
       }
       const metrics = calculateAppraisal(inputs);
       const cashflow = buildCashflow(inputs);
       const blob = generateAppraisalExcel(selected, inputs, metrics, cashflow);
       const safeName = selected.address_postcode || selected.id.slice(0, 8);
       downloadBlob(blob, `appraisal-${safeName}.xlsx`);
-    } catch {
-      setError('Could not generate the appraisal workbook — save a financial appraisal with full calculator data first.');
+    } catch (err) {
+      console.error('Appraisal workbook export failed:', err);
+      setError(exportErrorMessage('appraisal workbook', NO_APPRAISAL, err));
     } finally {
       setLoading(null);
     }
@@ -162,9 +175,17 @@ export default function ExportPage({ projects }: ExportPageProps) {
       <h2 style={{ color: '#e2e8f0', fontSize: 20, fontWeight: 600, marginBottom: 20 }}>Export</h2>
 
       {projects.length === 0 ? (
-        <p style={{ color: '#94a3b8', fontSize: 14 }}>
-          Nothing to export yet — add a property from the New Project page first.
-        </p>
+        projectsLoading ? (
+          <p style={{ color: '#94a3b8', fontSize: 14 }}>Loading projects…</p>
+        ) : backendOffline ? (
+          <p role="alert" style={{ color: '#f87171', fontSize: 14 }}>
+            Can't reach the server — your projects will appear here once the connection recovers.
+          </p>
+        ) : (
+          <p style={{ color: '#94a3b8', fontSize: 14 }}>
+            Nothing to export yet — <Link to="/new" style={{ color: '#60a5fa' }}>add a property</Link> first.
+          </p>
+        )
       ) : (
         <>
           <div style={{ marginBottom: 20 }}>

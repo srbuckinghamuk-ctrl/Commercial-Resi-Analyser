@@ -20,12 +20,16 @@ const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
 function ProjectRoute({
   projects,
   loading,
+  backendOffline,
   onProjectsChanged,
+  onRetry,
   view,
 }: {
   projects: Project[];
   loading: boolean;
+  backendOffline: boolean;
   onProjectsChanged: () => void;
+  onRetry: () => void;
   view: 'overview' | 'eligibility' | 'calculator';
 }) {
   const { id } = useParams<{ id: string }>();
@@ -34,6 +38,24 @@ function ProjectRoute({
   if (!project) {
     if (loading) {
       return <p style={{ padding: 24, color: '#94a3b8' }}>Loading project…</p>;
+    }
+    // A connection failure must never masquerade as a missing project.
+    if (backendOffline) {
+      return (
+        <div style={{ padding: 24, maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
+          <h2 style={{ color: '#e2e8f0', fontSize: 20, marginBottom: 8 }}>Can't reach the server</h2>
+          <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 16 }}>
+            This project can't be loaded right now — it's a connection problem, not a missing
+            project. Retrying automatically…
+          </p>
+          <button
+            onClick={onRetry}
+            style={{ padding: '8px 20px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14 }}
+          >
+            Retry now
+          </button>
+        </div>
+      );
     }
     return (
       <div style={{ padding: 24, maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
@@ -96,6 +118,9 @@ export default function App() {
 
   const handleProjectCreated = useCallback(
     (project: Project) => {
+      // Insert the created project immediately so the detail page never
+      // flashes "Project not found" while the background refetch runs.
+      setProjects((prev) => [project, ...prev.filter((p) => p.id !== project.id)]);
       void loadProjects();
       navigate(`/projects/${project.id}`);
     },
@@ -167,23 +192,23 @@ export default function App() {
         <Routes>
           <Route
             path="/"
-            element={<Pipeline projects={projects} loading={loading} onProjectsChanged={loadProjects} />}
+            element={<Pipeline projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} />}
           />
           <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
           <Route
             path="/projects/:id"
-            element={<ProjectRoute projects={projects} loading={loading} onProjectsChanged={loadProjects} view="overview" />}
+            element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="overview" />}
           />
           <Route
             path="/projects/:id/eligibility"
-            element={<ProjectRoute projects={projects} loading={loading} onProjectsChanged={loadProjects} view="eligibility" />}
+            element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="eligibility" />}
           />
           <Route
             path="/projects/:id/calculator"
-            element={<ProjectRoute projects={projects} loading={loading} onProjectsChanged={loadProjects} view="calculator" />}
+            element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="calculator" />}
           />
-          <Route path="/map" element={<PropertyMap projects={projects} />} />
-          <Route path="/export" element={<ExportPage projects={projects} />} />
+          <Route path="/map" element={<PropertyMap projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
+          <Route path="/export" element={<ExportPage projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

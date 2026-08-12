@@ -16,6 +16,8 @@ L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl });
 
 interface PropertyMapProps {
   projects: Project[];
+  projectsLoading: boolean;
+  backendOffline: boolean;
 }
 
 interface ProjectCoord {
@@ -41,7 +43,7 @@ function Recenter({ center, zoom }: { center: [number, number]; zoom: number }) 
   return null;
 }
 
-export default function PropertyMap({ projects }: PropertyMapProps) {
+export default function PropertyMap({ projects, projectsLoading, backendOffline }: PropertyMapProps) {
   const navigate = useNavigate();
   const [coords, setCoords] = useState<ProjectCoord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -156,7 +158,17 @@ export default function PropertyMap({ projects }: PropertyMapProps) {
         </MapContainer>
       </div>
 
-      {projects.length > 0 && coords.length === 0 && !loading && (
+      {backendOffline && (
+        <p role="alert" style={{ color: '#f87171', fontSize: 13, marginTop: 12 }}>
+          Can't reach the server — map data is unavailable until the connection recovers.
+        </p>
+      )}
+      {!backendOffline && !projectsLoading && projects.length === 0 && (
+        <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 12 }}>
+          No projects yet — add one from the New Project page and it will appear on the map.
+        </p>
+      )}
+      {!backendOffline && projects.length > 0 && coords.length === 0 && !loading && (
         <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 12 }}>
           No projects have postcodes yet. Open a project and use Edit to add one — it will appear here.
         </p>
