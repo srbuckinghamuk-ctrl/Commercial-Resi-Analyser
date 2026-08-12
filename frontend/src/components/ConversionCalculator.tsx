@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { Project } from '../types';
 import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../lib/conversion-types';
-import { defaultCalculatorInputs } from '../lib/conversion-defaults';
+import { defaultCalculatorInputs, mergeCalculatorInputs } from '../lib/conversion-defaults';
 import { calculateAppraisal } from '../lib/conversion-calc-engine';
 import { buildCashflow } from '../lib/conversion-cashflow';
 import { createAppraisal, getAppraisal, updateAppraisal } from '../lib/api';
@@ -15,6 +15,7 @@ import AppraisalSummaryPage from './calculator/AppraisalSummaryPage';
 import ScenariosPage from './calculator/ScenariosPage';
 import ExitStrategyPage from './calculator/ExitStrategyPage';
 import RiskRegisterPage from './calculator/RiskRegisterPage';
+import DealSpiderPage from './calculator/DealSpiderPage';
 import InvestorSummaryPage from './calculator/InvestorSummaryPage';
 
 type CalcPage =
@@ -27,6 +28,7 @@ type CalcPage =
   | 'scenarios'
   | 'exit_strategy'
   | 'risk_register'
+  | 'deal_spider'
   | 'investor_summary';
 
 const PAGES: { key: CalcPage; label: string; num: number }[] = [
@@ -39,7 +41,8 @@ const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'scenarios', label: 'Scenarios', num: 7 },
   { key: 'exit_strategy', label: 'Exit', num: 8 },
   { key: 'risk_register', label: 'Risk', num: 9 },
-  { key: 'investor_summary', label: 'Investor', num: 10 },
+  { key: 'deal_spider', label: 'Deal Spider', num: 10 },
+  { key: 'investor_summary', label: 'Investor', num: 11 },
 ];
 
 interface Props {
@@ -61,7 +64,9 @@ export default function ConversionCalculator({ project }: Props) {
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            setInputs(appraisal.inputs_snapshot as unknown as CalculatorInputs);
+            // Merge onto defaults so snapshots saved before newer sections
+            // existed (severe scenario, deal_spider) still load cleanly.
+            setInputs(mergeCalculatorInputs(appraisal.inputs_snapshot, project));
             setSavedId(appraisal.id);
           }
         })
@@ -184,6 +189,9 @@ export default function ConversionCalculator({ project }: Props) {
         )}
         {activePage === 'risk_register' && (
           <RiskRegisterPage inputs={inputs} onChange={updateInputs} />
+        )}
+        {activePage === 'deal_spider' && (
+          <DealSpiderPage inputs={inputs} onChange={updateInputs} project={project} />
         )}
         {activePage === 'investor_summary' && (
           <InvestorSummaryPage inputs={inputs} metrics={metrics} cashflow={cashflow} project={project} />

@@ -4,6 +4,7 @@ import type { Project, EligibilityAssessment } from '../types';
 import type { CalculatorInputs } from './conversion-types';
 import { calculateAppraisal } from './conversion-calc-engine';
 import { buildCashflow } from './conversion-cashflow';
+import { DEFAULT_DEAL_SPIDER } from './conversion-defaults';
 
 const mockProject: Project = {
   id: 'test-id',
@@ -92,7 +93,9 @@ const mockInputs: CalculatorInputs = {
     base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0 },
     upside: { label: 'Upside', gdv_adjustment_pct: 5, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0 },
     downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 10, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1 },
+    severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2 },
   },
+  deal_spider: { ...DEFAULT_DEAL_SPIDER },
 };
 
 const mockEligibility: EligibilityAssessment = {

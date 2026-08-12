@@ -83,6 +83,23 @@ export interface ScenarioOverrides {
   interest_rate_adjustment_pct: number;
 }
 
+export interface DealSpiderInputs {
+  storeys: number;
+  building_height_m: number;
+  bsa_higher_risk: boolean;
+  daylight_pass_pct: number;
+  absorption_months: number;
+  exit_sell: boolean;
+  exit_refinance: boolean;
+  exit_hold: boolean;
+  exit_part_sale: boolean;
+  prior_approval_window_months: number;
+  programme_contingency_months: number;
+  cil_offset_pence: number;
+  target_profit_on_cost_pct: number;
+  weights: Record<string, number>;
+}
+
 export interface CalculatorInputs {
   project_id: string | null;
   acquisition: AcquisitionInputs;
@@ -95,7 +112,9 @@ export interface CalculatorInputs {
     base: ScenarioOverrides;
     upside: ScenarioOverrides;
     downside: ScenarioOverrides;
+    severe: ScenarioOverrides;
   };
+  deal_spider: DealSpiderInputs;
 }
 
 export interface AppraisalMetrics {

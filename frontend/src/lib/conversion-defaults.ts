@@ -6,8 +6,10 @@ import type {
   ExitStrategyInputs,
   RiskItem,
   ScenarioOverrides,
+  DealSpiderInputs,
   CalculatorInputs,
 } from './conversion-types';
+import { CLASS_MA_AXES } from './deal-spider';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -97,6 +99,7 @@ export const DEFAULT_SCENARIOS: {
   base: ScenarioOverrides;
   upside: ScenarioOverrides;
   downside: ScenarioOverrides;
+  severe: ScenarioOverrides;
 } = {
   base: {
     label: 'Base Case',
@@ -119,13 +122,43 @@ export const DEFAULT_SCENARIOS: {
     timeline_adjustment_months: 3,
     interest_rate_adjustment_pct: 1,
   },
+  severe: {
+    label: 'Severe',
+    gdv_adjustment_pct: -15,
+    construction_cost_adjustment_pct: 20,
+    timeline_adjustment_months: 6,
+    interest_rate_adjustment_pct: 2,
+  },
+};
+
+export function defaultSpiderWeights(): Record<string, number> {
+  return Object.fromEntries(CLASS_MA_AXES.map((axis) => [axis.id, 1]));
+}
+
+export const DEFAULT_DEAL_SPIDER: DealSpiderInputs = {
+  storeys: 2,
+  building_height_m: 7,
+  bsa_higher_risk: false,
+  daylight_pass_pct: 100,
+  absorption_months: 9,
+  exit_sell: true,
+  exit_refinance: true,
+  exit_hold: false,
+  exit_part_sale: false,
+  prior_approval_window_months: 2,
+  programme_contingency_months: 1,
+  cil_offset_pence: 0,
+  target_profit_on_cost_pct: 20,
+  weights: defaultSpiderWeights(),
 };
 
 export function defaultCalculatorInputs(project?: {
   id: string;
   price_pence: number;
   floor_area_sqm: number | null;
+  floors?: number | null;
 }): CalculatorInputs {
+  const storeys = project?.floors ?? DEFAULT_DEAL_SPIDER.storeys;
   return {
     project_id: project?.id ?? null,
     acquisition: {
@@ -144,6 +177,47 @@ export function defaultCalculatorInputs(project?: {
       base: { ...DEFAULT_SCENARIOS.base },
       upside: { ...DEFAULT_SCENARIOS.upside },
       downside: { ...DEFAULT_SCENARIOS.downside },
+      severe: { ...DEFAULT_SCENARIOS.severe },
+    },
+    deal_spider: {
+      ...DEFAULT_DEAL_SPIDER,
+      storeys,
+      building_height_m: storeys * 3.5,
+      weights: defaultSpiderWeights(),
+    },
+  };
+}
+
+/**
+ * Merge a saved inputs snapshot onto current defaults so appraisals saved
+ * before newer sections existed (severe scenario, deal_spider) still load
+ * with every value they were saved with.
+ */
+export function mergeCalculatorInputs(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputs {
+  const defaults = defaultCalculatorInputs(project);
+  const saved = snapshot as Partial<CalculatorInputs>;
+  return {
+    ...defaults,
+    ...saved,
+    acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+    unit_mix: saved.unit_mix ?? defaults.unit_mix,
+    conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+    finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+    exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+    risks: saved.risks ?? defaults.risks,
+    scenarios: {
+      base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+      upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+      downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+      severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+    },
+    deal_spider: {
+      ...defaults.deal_spider,
+      ...(saved.deal_spider ?? {}),
+      weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
     },
   };
 }

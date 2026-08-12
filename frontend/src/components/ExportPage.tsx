@@ -7,6 +7,8 @@ import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { calculateAppraisal } from '../lib/conversion-calc-engine';
 import { buildCashflow } from '../lib/conversion-cashflow';
+import { computeSpider } from '../lib/deal-spider';
+import { mergeCalculatorInputs } from '../lib/conversion-defaults';
 
 interface ExportPageProps {
   projects: Project[];
@@ -48,7 +50,22 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
     setError(null);
     try {
       const appraisal = await getAppraisal(selectedProject.id);
-      const blob = generateAppraisalPdf(selectedProject, appraisal);
+
+      // Deal Spider section — computed from the saved snapshot when it holds
+      // calculator data; eligibility feeds the prior-approval axis.
+      let spider;
+      const raw = appraisal.inputs_snapshot as Record<string, unknown> | null;
+      if (raw && typeof raw === 'object' && 'acquisition' in raw && 'unit_mix' in raw) {
+        let eligibility = null;
+        try {
+          eligibility = await getEligibility(selectedProject.id);
+        } catch {
+          // eligibility optional — spider marks the axis provisional
+        }
+        spider = computeSpider(mergeCalculatorInputs(raw, selectedProject), eligibility);
+      }
+
+      const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `appraisal-${safeName}.pdf`);
     } catch (err) {
