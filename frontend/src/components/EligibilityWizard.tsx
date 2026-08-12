@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Project, EligibilityAssessment as EligAssessment } from '../types';
 import { runEligibility, getEligibility, isNotFound } from '../lib/api';
+import { overridesFromAssessment } from '../lib/eligibility-overrides';
 import { formatUseClass } from '../lib/format';
 import EligibilityVerdictDisplay from './EligibilityVerdict';
 
@@ -16,6 +17,10 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
   const [manualOverrides, setManualOverrides] = useState<Record<string, boolean | null>>({});
   const [updating, setUpdating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  // Monotonic sequence for engine runs: a response is applied only if no
+  // newer run has started since, so rapid answers can't interleave stale
+  // server state over fresh clicks.
+  const runSeq = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,6 +29,9 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
         const existing = await getEligibility(project.id);
         if (!cancelled) {
           setAssessment(existing);
+          // Seed overrides from the stored answers so a re-run (or a new
+          // answer after a reload) preserves them instead of wiping them.
+          setManualOverrides(overridesFromAssessment(existing));
           setState('complete');
         }
       } catch (e) {
@@ -40,13 +48,17 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
   }, [project.id]);
 
   const handleRun = useCallback(async () => {
+    const seq = ++runSeq.current;
     setState('running');
     setErrorMsg('');
     try {
       const result = await runEligibility(project.id, manualOverrides);
+      if (seq !== runSeq.current) return; // a newer run superseded this one
       setAssessment(result.assessment);
+      setManualOverrides(overridesFromAssessment(result.assessment));
       setState('complete');
     } catch {
+      if (seq !== runSeq.current) return;
       setState('error');
       setErrorMsg('Could not run the eligibility checks — check your connection and try again.');
     }
@@ -56,6 +68,7 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
   // screen — no full-page flash, and answers can be changed or cleared.
   const handleOverride = useCallback(
     (key: string, value: boolean | null) => {
+      const seq = ++runSeq.current;
       const updated = { ...manualOverrides };
       if (value === null) {
         delete updated[key];
@@ -67,12 +80,16 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
       setErrorMsg('');
       runEligibility(project.id, updated)
         .then((result) => {
+          if (seq !== runSeq.current) return;
           setAssessment(result.assessment);
         })
         .catch(() => {
+          if (seq !== runSeq.current) return;
           setErrorMsg('Could not save your answer — check your connection and try again.');
         })
-        .finally(() => setUpdating(false));
+        .finally(() => {
+          if (seq === runSeq.current) setUpdating(false);
+        });
     },
     [project.id, manualOverrides],
   );
