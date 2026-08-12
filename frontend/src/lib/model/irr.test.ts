@@ -42,4 +42,14 @@ describe('solveIrr', () => {
     expect(irr).not.toBeNull();
     expect(irr!).toBeCloseTo(-0.9, 6);
   });
+
+  it('uses bisection when Newton converges to non-root: regression for acceptance-check fallback', () => {
+    // Regression test: when Newton converges (|next - guess| < 1e-9) but |npvAt| >= 1e-3,
+    // the fixed code breaks to bisection instead of returning null.
+    // This vector has severe early loss and distributed recovery, forcing bisection fallback.
+    const flows = [-1000000, 100000, 100000, 100000, 100000, 100000, 100000, 100000];
+    const irr = solveIrr(flows);
+    expect(irr).not.toBeNull();
+    expect(Math.abs(npvAt(flows, irr!))).toBeLessThan(1e-6);
+  });
 });

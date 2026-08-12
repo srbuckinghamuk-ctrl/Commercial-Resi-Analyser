@@ -34,7 +34,11 @@ export function solveIrr(cashflows: number[]): number | null {
     const next = guess - npv / dnpv;
     if (!Number.isFinite(next) || next <= LOWER || next > UPPER) break;
     if (Math.abs(next - guess) < 1e-9) {
-      return Math.abs(npvAt(cashflows, next)) < 1e-3 ? next : null;
+      if (Math.abs(npvAt(cashflows, next)) < 1e-3) {
+        return next;
+      } else {
+        break; // Fall through to bisection fallback when Newton converges to bad point
+      }
     }
     guess = next;
   }
