@@ -5,6 +5,19 @@ from app.adapters.registry import register_adapter, get_adapter, source_id_from_
 from app.models import CommercialListing, Address, PriceInfo
 
 
+@pytest.fixture(autouse=True)
+def _restore_registry():
+    """These tests clear the global adapter registry; snapshot and restore it
+    so the real adapters remain registered for other test modules."""
+    registry_snapshot = dict(_REGISTRY)
+    url_snapshot = dict(_URL_TO_SOURCE)
+    yield
+    _REGISTRY.clear()
+    _REGISTRY.update(registry_snapshot)
+    _URL_TO_SOURCE.clear()
+    _URL_TO_SOURCE.update(url_snapshot)
+
+
 class FakeAdapter(BaseAdapter):
     async def fetch_listing(self, url: str) -> CommercialListing | None:
         return CommercialListing(

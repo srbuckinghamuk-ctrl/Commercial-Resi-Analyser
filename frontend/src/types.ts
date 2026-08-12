@@ -84,6 +84,10 @@ export interface Project {
   description: string | null;
   image_urls: string[];
   stage: PipelineStage;
+  /** ISO date the prior approval application was submitted (starts the 56-day clock). */
+  pa_submitted_date: string | null;
+  /** ISO date prior approval was granted (starts the 3-year completion window). */
+  pa_decision_date: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,6 +130,8 @@ export interface EligibilityCriterion {
   auto_checked: boolean;
   value: string | null;
   risk_flag: string | null;
+  /** "statutory" = failing removes the PDR route; "prior_approval" = approvability risk. */
+  category?: 'statutory' | 'prior_approval';
 }
 
 export interface EligibilityAssessment {
@@ -184,7 +190,7 @@ export interface StageTransition {
   from_stage: PipelineStage | null;
   to_stage: PipelineStage;
   notes: string | null;
-  transitioned_at: string;
+  created_at: string;
 }
 
 export interface CommercialListing {

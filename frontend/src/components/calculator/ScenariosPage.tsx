@@ -48,7 +48,12 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
         {scenarioKeys.map((key) => (
           <div key={key} style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
-            <h4 style={{ color: '#e2e8f0', fontSize: 15, marginBottom: 12 }}>{inputs.scenarios[key].label}</h4>
+            <input
+              value={inputs.scenarios[key].label}
+              onChange={(e) => updateScenario(key, { label: e.target.value })}
+              aria-label={`Name of the ${key} scenario`}
+              style={{ width: '100%', background: 'transparent', border: 'none', borderBottom: '1px dashed #1e3a5f', color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 12, padding: '2px 0' }}
+            />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <label style={{ color: '#94a3b8', fontSize: 13 }}>
                 GDV adjustment (%)

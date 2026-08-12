@@ -1,6 +1,6 @@
 """Core domain models for the Commercial-Resi Analyser."""
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -225,6 +225,8 @@ class ProjectCreate(BaseModel):
     description: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     stage: PipelineStage = PipelineStage.OPPORTUNITY_IDENTIFIED
+    pa_submitted_date: date | None = None
+    pa_decision_date: date | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -252,6 +254,8 @@ class ProjectUpdate(BaseModel):
     description: str | None = None
     image_urls: list[str] | None = None
     stage: PipelineStage | None = None
+    pa_submitted_date: date | None = None
+    pa_decision_date: date | None = None
 
 
 class Project(BaseModel):
@@ -282,6 +286,8 @@ class Project(BaseModel):
     description: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     stage: PipelineStage
+    pa_submitted_date: date | None = None
+    pa_decision_date: date | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -297,6 +303,11 @@ class EligibilityCriterion(BaseModel):
     auto_checked: bool = False
     value: str | None = None
     risk_flag: str | None = None
+    # "statutory": failing means the PDR route is not available.
+    # "prior_approval": failing is an approvability risk the LPA weighs at
+    # prior-approval stage, not loss of the right.
+    # Defaults to "statutory" for back-compat with stored assessments.
+    category: str = "statutory"
 
 
 class EligibilityAssessmentCreate(BaseModel):
@@ -398,3 +409,14 @@ class StageTransition(BaseModel):
     to_stage: PipelineStage
     notes: str | None = None
     transitioned_at: datetime
+
+
+class StageTransitionResponse(BaseModel):
+    """API shape for GET /projects/{id}/transitions (created_at = transitioned_at)."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    from_stage: PipelineStage | None = None
+    to_stage: PipelineStage
+    notes: str | None = None
+    created_at: datetime

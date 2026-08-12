@@ -4,13 +4,15 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.eligibility.engine import run_eligibility
+from app.integrations.http import close_client
+from app.logging_config import configure_logging
 from app.models import (
     ApiResponse,
     EligibilityAssessment,
@@ -27,6 +29,7 @@ from app.models import (
     ProjectUpdate,
     ScrapeUrlRequest,
     StageTransitionCreate,
+    StageTransitionResponse,
     UseClass,
 )
 from app.persistence.database import Base, engine, get_db
@@ -37,6 +40,11 @@ from app.persistence.repositories import (
     StageTransitionRepository,
 )
 from config.settings import get_settings
+
+# Docker runs `uvicorn app.api.app:app` directly, bypassing main.py where
+# logging is normally configured — configure at import time here too
+# (configure_logging is idempotent).
+configure_logging()
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -50,6 +58,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("commercial-resi-analyser started")
     yield
+    await close_client()
     await engine.dispose()
 
 
@@ -95,9 +104,11 @@ async def list_projects(
     db: DbDep,
     stage: PipelineStage | None = None,
     use_class: UseClass | None = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ):
     repo = ProjectRepository(db)
-    return await repo.list_all(stage=stage, use_class=use_class)
+    return await repo.list_all(stage=stage, use_class=use_class, limit=limit, offset=offset)
 
 
 @projects_router.post("", response_model=Project, status_code=201)
@@ -168,6 +179,28 @@ async def change_stage(project_id: UUID, body: StageChangeRequest, db: DbDep):
     )
     await db.commit()
     return updated
+
+
+@projects_router.get("/{project_id}/transitions", response_model=list[StageTransitionResponse])
+async def list_stage_transitions(project_id: UUID, db: DbDep):
+    """Stage-transition timeline for a project, newest first."""
+    project_repo = ProjectRepository(db)
+    project = await project_repo.get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    transition_repo = StageTransitionRepository(db)
+    transitions = await transition_repo.list_by_project_id(project_id)
+    return [
+        StageTransitionResponse(
+            id=t.id,
+            project_id=t.project_id,
+            from_stage=t.from_stage,
+            to_stage=t.to_stage,
+            notes=t.notes,
+            created_at=t.transitioned_at,
+        )
+        for t in transitions
+    ]
 
 
 # --- Eligibility Router ---
@@ -340,6 +373,20 @@ async def scrape_url_endpoint(request: ScrapeUrlRequest):
 
     if listing is None:
         return ApiResponse(error="Could not extract listing data from this page.")
+
+    # Reject obviously-garbage extractions (login pages, empty shells)
+    # rather than returning them as listings.
+    address_raw = (listing.address.raw or "").strip()
+    address_lower = address_raw.lower()
+    if not address_raw or "sign in" in address_lower or "log in" in address_lower:
+        logger.warning("Scrape of %s produced a garbage address: %r", request.url, address_raw)
+        return ApiResponse(error="Could not extract meaningful data from this page")
+    has_floor_area = listing.floor_area_sqm is not None or listing.floor_area_sqft is not None
+    if listing.price.amount <= 0 and not has_floor_area:
+        logger.warning(
+            "Scrape of %s produced no price and no floor area — rejecting", request.url
+        )
+        return ApiResponse(error="Could not extract meaningful data from this page")
 
     return ApiResponse(listing=listing)
 

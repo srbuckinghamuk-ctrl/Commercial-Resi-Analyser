@@ -28,6 +28,8 @@ const makeProject = (overrides: Partial<Project> = {}): Project => ({
   description: null,
   image_urls: [],
   stage: 'opportunity_identified',
+  pa_submitted_date: null,
+  pa_decision_date: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   ...overrides,

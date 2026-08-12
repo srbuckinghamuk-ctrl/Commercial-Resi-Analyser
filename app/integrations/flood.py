@@ -11,7 +11,7 @@ flood-zone criterion.
 import logging
 from dataclasses import dataclass
 
-import httpx
+from app.integrations.http import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,11 @@ async def lookup_flood_warnings(
         "dist": "1",
     }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
+        resp = await get_client().get(url, params=params, timeout=15.0)
         if resp.status_code != 200:
+            logger.warning(
+                "EA flood warnings lookup for %s returned HTTP %s", postcode, resp.status_code
+            )
             return None
         items = resp.json().get("items", [])
         active = [

@@ -1,6 +1,13 @@
 import type { Project, PipelineStage } from '../types';
 import { PIPELINE_STAGES } from '../types';
 import { formatUseClass } from '../lib/format';
+import { activeDeadline } from '../lib/deadlines';
+
+const DEADLINE_COLORS = {
+  ok: { bg: '#0f2a1e', fg: '#22c55e' },
+  warning: { bg: '#3b2f1e', fg: '#fbbf24' },
+  overdue: { bg: '#450a0a', fg: '#ef4444' },
+} as const;
 
 interface ProjectCardProps {
   project: Project;
@@ -12,6 +19,7 @@ interface ProjectCardProps {
 export default function ProjectCard({ project, onStageChange, onSelect, onDelete }: ProjectCardProps) {
   const currentIndex = PIPELINE_STAGES.findIndex((s) => s.value === project.stage);
   const nextStage = currentIndex < PIPELINE_STAGES.length - 1 ? PIPELINE_STAGES[currentIndex + 1] : null;
+  const deadline = activeDeadline(project);
 
   return (
     <div
@@ -63,6 +71,23 @@ export default function ProjectCard({ project, onStageChange, onSelect, onDelete
       </div>
       {project.address_postcode && (
         <div style={{ color: '#94a3b8', fontSize: 11, marginTop: 2 }}>{project.address_postcode}</div>
+      )}
+      {deadline && (
+        <div
+          style={{
+            display: 'inline-block',
+            marginTop: 6,
+            padding: '2px 8px',
+            borderRadius: 10,
+            fontSize: 11,
+            fontWeight: 600,
+            background: DEADLINE_COLORS[deadline.status].bg,
+            color: DEADLINE_COLORS[deadline.status].fg,
+          }}
+          title={`${deadline.label} — due ${deadline.due}`}
+        >
+          {deadline.chip}
+        </div>
       )}
       {nextStage && (
         <button

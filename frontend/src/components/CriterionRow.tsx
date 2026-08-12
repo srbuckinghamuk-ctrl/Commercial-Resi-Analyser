@@ -72,6 +72,25 @@ export default function CriterionRow({ criterion, onOverride, overrideValue }: C
           >
             {criterion.auto_checked ? 'Verified automatically' : criterion.source === 'user' ? 'Your answer' : 'Needs your answer'}
           </span>
+          {criterion.category && (
+            <span
+              style={{
+                fontSize: 11,
+                padding: '2px 6px',
+                borderRadius: 4,
+                background: '#111a26',
+                color: criterion.category === 'statutory' ? '#c4b5fd' : '#7dd3fc',
+                border: '1px solid #1e3a5f',
+              }}
+              title={
+                criterion.category === 'statutory'
+                  ? 'Failing this removes the permitted development right entirely'
+                  : 'A matter the council weighs at prior-approval stage — failing is a risk, not automatic ineligibility'
+              }
+            >
+              {criterion.category === 'statutory' ? 'Statutory requirement' : 'Prior-approval matter'}
+            </span>
+          )}
           {criterion.risk_flag && (
             <span style={{ fontSize: 11, color: '#f59e0b' }}>{criterion.risk_flag}</span>
           )}

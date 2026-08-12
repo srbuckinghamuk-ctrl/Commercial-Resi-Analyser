@@ -12,7 +12,7 @@ describe a neighbouring property in the same postcode.
 import logging
 from dataclasses import dataclass
 
-import httpx
+from app.integrations.http import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,9 @@ async def lookup_epc(
         "Authorization": f"Basic {api_key}",
     }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
+        resp = await get_client().get(url, params=params, headers=headers, timeout=15.0)
         if resp.status_code != 200:
+            logger.warning("EPC lookup for %s returned HTTP %s", postcode, resp.status_code)
             return None
         rows = resp.json().get("rows", [])
         if not rows:

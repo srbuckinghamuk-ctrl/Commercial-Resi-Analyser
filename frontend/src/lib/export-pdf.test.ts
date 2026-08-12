@@ -28,6 +28,8 @@ const mockProject: Project = {
   description: null,
   image_urls: [],
   stage: 'eligibility_assessed',
+  pa_submitted_date: null,
+  pa_decision_date: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 };

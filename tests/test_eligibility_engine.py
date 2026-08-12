@@ -52,15 +52,16 @@ class TestCriteriaDefinitions:
         assert len(ALL_CRITERIA) > 0
         assert all(isinstance(c, CriterionDef) for c in ALL_CRITERIA)
 
-    def test_class_ma_has_12_criteria(self):
+    def test_class_ma_has_14_criteria(self):
         criteria = get_criteria_for_class(PdrClass.CLASS_MA)
-        assert len(criteria) == 12
+        assert len(criteria) == 14
 
     def test_class_ma_criteria_keys(self):
         criteria = get_criteria_for_class(PdrClass.CLASS_MA)
         keys = {c.key for c in criteria}
         assert "use_class_check" in keys
         assert "floor_area_limit" in keys
+        assert "class_e_use_period" in keys
         assert "vacancy_period" in keys
         assert "conservation_area" in keys
         assert "aonb_national_park" in keys
@@ -70,7 +71,28 @@ class TestCriteriaDefinitions:
         assert "natural_light" in keys
         assert "transport_access" in keys
         assert "contamination" in keys
+        assert "noise_impact" in keys
         assert "prior_refusal" in keys
+
+    def test_class_e_use_period_is_manual_and_statutory(self):
+        criteria = get_criteria_for_class(PdrClass.CLASS_MA)
+        crit = next(c for c in criteria if c.key == "class_e_use_period")
+        assert crit.check_type == "manual"
+        assert crit.category == "statutory"
+
+    def test_class_ma_conservation_area_is_prior_approval(self):
+        criteria = get_criteria_for_class(PdrClass.CLASS_MA)
+        crit = next(c for c in criteria if c.key == "conservation_area")
+        assert crit.category == "prior_approval"
+
+    def test_class_m_conservation_area_stays_statutory(self):
+        criteria = get_criteria_for_class(PdrClass.CLASS_M)
+        crit = next(c for c in criteria if c.key == "conservation_area")
+        assert crit.category == "statutory"
+
+    def test_each_criterion_has_valid_category(self):
+        for c in ALL_CRITERIA:
+            assert c.category in ("statutory", "prior_approval")
 
     def test_class_g_has_criteria(self):
         criteria = get_criteria_for_class(PdrClass.CLASS_G)
@@ -96,20 +118,45 @@ class TestPdrClassDetection:
         result = detect_pdr_class(UseClass.OFFICE, floor_area_sqm=1600.0)
         assert result is None
 
-    def test_retail_detects_class_g(self):
+    def test_retail_detects_class_ma(self):
+        # Retail is Class E since Sept 2020 — routes to Class MA, not Class G.
         result = detect_pdr_class(UseClass.RETAIL, floor_area_sqm=100.0)
-        assert result == PdrClass.CLASS_G
+        assert result == PdrClass.CLASS_MA
 
-    def test_retail_over_150_sqm_returns_none(self):
+    def test_retail_over_150_sqm_still_class_ma(self):
+        # The obsolete 150 sqm Class G cap no longer applies to retail.
         result = detect_pdr_class(UseClass.RETAIL, floor_area_sqm=200.0)
-        assert result is None
+        assert result == PdrClass.CLASS_MA
+
+    def test_restaurant_cafe_detects_class_ma(self):
+        # A3 is within Class E since Sept 2020 (Class M's A3 element removed Aug 2021).
+        result = detect_pdr_class(UseClass.RESTAURANT_CAFE, floor_area_sqm=100.0)
+        assert result == PdrClass.CLASS_MA
+
+    def test_light_industrial_detects_class_ma(self):
+        # E(g)(iii) is within Class E — previously fell through to "no route".
+        result = detect_pdr_class(UseClass.LIGHT_INDUSTRIAL, floor_area_sqm=400.0)
+        assert result == PdrClass.CLASS_MA
+
+    def test_takeaway_stays_class_m(self):
+        result = detect_pdr_class(UseClass.TAKEAWAY, floor_area_sqm=100.0)
+        assert result == PdrClass.CLASS_M
 
     def test_agricultural_detects_class_q(self):
         result = detect_pdr_class(UseClass.AGRICULTURAL, floor_area_sqm=300.0)
         assert result == PdrClass.CLASS_Q
 
-    def test_agricultural_over_465_sqm_returns_none(self):
-        result = detect_pdr_class(UseClass.AGRICULTURAL, floor_area_sqm=500.0)
+    def test_class_q_limit_is_1000(self):
+        from app.eligibility.criteria import FLOOR_AREA_LIMITS
+
+        assert FLOOR_AREA_LIMITS[PdrClass.CLASS_Q] == 1000.0
+
+    def test_agricultural_under_1000_sqm_allowed(self):
+        result = detect_pdr_class(UseClass.AGRICULTURAL, floor_area_sqm=900.0)
+        assert result == PdrClass.CLASS_Q
+
+    def test_agricultural_over_1000_sqm_returns_none(self):
+        result = detect_pdr_class(UseClass.AGRICULTURAL, floor_area_sqm=1100.0)
         assert result is None
 
     def test_office_no_area_defaults_class_ma(self):
@@ -152,7 +199,7 @@ class TestEligibilityEngine:
         assert isinstance(result, EligibilityEngineResult)
         assert result.pdr_class == PdrClass.CLASS_MA
         assert result.verdict == EligibilityVerdict.AMBER
-        assert len(result.criteria) == 12
+        assert len(result.criteria) == 14
         auto_passed = [c for c in result.criteria if c.auto_checked and c.passed is True]
         assert len(auto_passed) >= 1
         manual_pending = [c for c in result.criteria if not c.auto_checked and c.passed is None]
@@ -184,6 +231,7 @@ class TestEligibilityEngine:
 
         overrides = {
             "use_class_check": True,
+            "class_e_use_period": True,
             "vacancy_period": True,
             "conservation_area": True,
             "aonb_national_park": True,
@@ -195,6 +243,7 @@ class TestEligibilityEngine:
             "natural_light": True,
             "transport_access": True,
             "contamination": True,
+            "noise_impact": True,
             "prior_refusal": True,
         }
         project = _make_project()
@@ -459,4 +508,76 @@ class TestEngineHonesty:
         _mock_flood([])
         result = await run_eligibility(_make_project())
         assert result.ruleset_version == RULESET_VERSION
-        assert result.ruleset_version == "gpdo-baseline-2026-08"
+        assert result.ruleset_version == "gpdo-2026-08.1"
+
+
+class TestTwoTierVerdict:
+    """Statutory failures are red (route unavailable); prior-approval
+    failures are amber (approvability risk, not ineligibility)."""
+
+    ALL_PASS_OVERRIDES = {
+        "use_class_check": True,
+        "class_e_use_period": True,
+        "vacancy_period": True,
+        "conservation_area": True,
+        "aonb_national_park": True,
+        "article_4": True,
+        "flood_zone": True,
+        "listed_building": True,
+        "natural_light": True,
+        "transport_access": True,
+        "contamination": True,
+        "noise_impact": True,
+        "prior_refusal": True,
+    }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_failed_prior_approval_criterion_yields_amber_not_red(self):
+        _mock_postcode()
+        _mock_flood([])
+        overrides = dict(self.ALL_PASS_OVERRIDES, transport_access=False)
+        result = await run_eligibility(_make_project(), manual_overrides=overrides)
+        assert result.verdict == EligibilityVerdict.AMBER
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_failed_statutory_criterion_yields_red(self):
+        _mock_postcode()
+        _mock_flood([])
+        overrides = dict(self.ALL_PASS_OVERRIDES, natural_light=False)
+        result = await run_eligibility(_make_project(), manual_overrides=overrides)
+        assert result.verdict == EligibilityVerdict.RED
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_failed_class_e_use_period_yields_red(self):
+        _mock_postcode()
+        _mock_flood([])
+        overrides = dict(self.ALL_PASS_OVERRIDES, class_e_use_period=False)
+        result = await run_eligibility(_make_project(), manual_overrides=overrides)
+        assert result.verdict == EligibilityVerdict.RED
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_failed_prior_approval_suggests_mitigation(self):
+        _mock_postcode()
+        _mock_flood([])
+        overrides = dict(self.ALL_PASS_OVERRIDES, contamination=False)
+        result = await run_eligibility(_make_project(), manual_overrides=overrides)
+        assert result.verdict == EligibilityVerdict.AMBER
+        assert any("contamination" in s.lower() for s in result.suggested_next_steps)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_criteria_carry_categories(self):
+        _mock_postcode()
+        _mock_flood([])
+        result = await run_eligibility(_make_project())
+        by_key = {c.key: c for c in result.criteria}
+        assert by_key["natural_light"].category == "statutory"
+        assert by_key["article_4"].category == "statutory"
+        assert by_key["flood_zone"].category == "prior_approval"
+        assert by_key["transport_access"].category == "prior_approval"
+        assert by_key["noise_impact"].category == "prior_approval"
+        assert by_key["conservation_area"].category == "prior_approval"

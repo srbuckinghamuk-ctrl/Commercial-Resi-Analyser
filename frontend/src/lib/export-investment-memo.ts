@@ -137,6 +137,92 @@ function lastTableY(doc: jsPDF): number {
   return (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
 }
 
+/**
+ * Line chart of the funding requirement (cumulative drawdown + interest)
+ * and cumulative cashflow over the programme. Drawn with jsPDF primitives —
+ * no external chart library.
+ */
+function drawCashflowChart(
+  doc: jsPDF,
+  y: number,
+  cashflow: CashflowResult,
+): number {
+  const CHART_H = 55;
+  const CHART_W = CONTENT_W;
+  if (y + CHART_H + 20 > 270) {
+    doc.addPage();
+    y = MARGIN_T;
+  }
+
+  const months = cashflow.months;
+  const funding = months.map((m) => m.cumulative_drawdown_pence + m.cumulative_interest_pence - (m.income_pence > 0 ? m.income_pence : 0));
+  const cumCf = months.map((m) => m.cumulative_cashflow_pence);
+  const allValues = [...funding, ...cumCf, 0];
+  const maxV = Math.max(...allValues);
+  const minV = Math.min(...allValues);
+  const range = maxV - minV || 1;
+
+  const x0 = MARGIN_L + 8;
+  const plotW = CHART_W - 16;
+  const yTop = y;
+  const toX = (i: number) => x0 + (i / (months.length - 1)) * plotW;
+  const toY = (v: number) => yTop + ((maxV - v) / range) * CHART_H;
+
+  // Frame + zero line
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.2);
+  doc.rect(x0, yTop, plotW, CHART_H);
+  const zeroY = toY(0);
+  doc.setDrawColor(148, 163, 184);
+  doc.line(x0, zeroY, x0 + plotW, zeroY);
+
+  // Quarter gridlines + month labels
+  doc.setFontSize(6);
+  doc.setTextColor(148, 163, 184);
+  const step = Math.max(1, Math.floor(months.length / 6));
+  for (let i = 0; i < months.length; i += step) {
+    const gx = toX(i);
+    doc.setDrawColor(226, 232, 240);
+    doc.line(gx, yTop, gx, yTop + CHART_H);
+    doc.text(`M${i + 1}`, gx, yTop + CHART_H + 4, { align: 'center' });
+  }
+
+  // Series
+  const drawSeries = (values: number[], r: number, g: number, b: number) => {
+    doc.setDrawColor(r, g, b);
+    doc.setLineWidth(0.5);
+    for (let i = 1; i < values.length; i++) {
+      doc.line(toX(i - 1), toY(values[i - 1]), toX(i), toY(values[i]));
+    }
+  };
+  drawSeries(funding, 37, 99, 235); // funding requirement — blue
+  drawSeries(cumCf, 220, 38, 38); // cumulative cashflow — red
+
+  // Peak funding marker
+  const peakIdx = funding.indexOf(Math.max(...funding));
+  doc.setFillColor(37, 99, 235);
+  doc.circle(toX(peakIdx), toY(funding[peakIdx]), 0.9, 'F');
+  doc.setFontSize(7);
+  doc.setTextColor(37, 99, 235);
+  doc.text(`Peak ${fmt(cashflow.peak_funding_pence)}`, toX(peakIdx), toY(funding[peakIdx]) - 2, {
+    align: peakIdx > months.length / 2 ? 'right' : 'left',
+  });
+
+  // Legend
+  const ly = yTop + CHART_H + 9;
+  doc.setFontSize(7);
+  doc.setDrawColor(37, 99, 235);
+  doc.setLineWidth(0.7);
+  doc.line(x0, ly - 1, x0 + 6, ly - 1);
+  doc.setTextColor(51, 65, 85);
+  doc.text('Funding requirement (cum. drawdown + interest)', x0 + 8, ly);
+  doc.setDrawColor(220, 38, 38);
+  doc.line(x0 + 82, ly - 1, x0 + 88, ly - 1);
+  doc.text('Cumulative cashflow', x0 + 90, ly);
+
+  return ly + 8;
+}
+
 function infoRequired(doc: jsPDF, y: number, label: string): number {
   doc.setFontSize(10);
   doc.setFont('helvetica', 'italic');
@@ -626,6 +712,11 @@ export function generateInvestmentMemo(
   );
   y = infoRequired(doc, y, 'Key dates — start on site, practical completion, sales/letting period');
   y = infoRequired(doc, y, 'Critical path, long-lead items');
+
+  if (cashflow.months.length > 1) {
+    y = subHeading(doc, y, 'Funding Curve');
+    y = drawCashflowChart(doc, y, cashflow);
+  }
 
   y = subHeading(doc, y, 'Monthly Cashflow');
   const cfRows = cashflow.months.map((m) => [

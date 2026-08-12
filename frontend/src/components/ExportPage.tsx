@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import type { Project } from '../types';
 import { getEligibility, getAppraisal } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
-import { generateProjectsExcel } from '../lib/export-excel';
+import { generateProjectsExcel, generateAppraisalExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { calculateAppraisal } from '../lib/conversion-calc-engine';
 import { buildCashflow } from '../lib/conversion-cashflow';
@@ -102,6 +102,28 @@ export default function ExportPage({ projects }: ExportPageProps) {
     }
   }, [selected]);
 
+  const handleAppraisalExcel = useCallback(async () => {
+    if (!selected) return;
+    setLoading('appraisal-excel');
+    setError(null);
+    try {
+      const appraisal = await getAppraisal(selected.id);
+      const inputs = normaliseSnapshot(appraisal.inputs_snapshot);
+      if (!inputs) {
+        throw new Error('No calculator data found in appraisal snapshot');
+      }
+      const metrics = calculateAppraisal(inputs);
+      const cashflow = buildCashflow(inputs);
+      const blob = generateAppraisalExcel(selected, inputs, metrics, cashflow);
+      const safeName = selected.address_postcode || selected.id.slice(0, 8);
+      downloadBlob(blob, `appraisal-${safeName}.xlsx`);
+    } catch {
+      setError('Could not generate the appraisal workbook — save a financial appraisal with full calculator data first.');
+    } finally {
+      setLoading(null);
+    }
+  }, [selected]);
+
   const handleExcel = useCallback(() => {
     if (projects.length === 0) return;
     setLoading('excel');
@@ -183,7 +205,11 @@ export default function ExportPage({ projects }: ExportPageProps) {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               {projectButton('eligibility', 'Download eligibility report', handleEligibilityPdf)}
               {projectButton('appraisal', 'Download appraisal summary', handleAppraisalPdf)}
+              {projectButton('appraisal-excel', 'Download appraisal workbook (Excel)', handleAppraisalExcel)}
             </div>
+            <p style={{ color: '#64748b', fontSize: 12, margin: '10px 0 0' }}>
+              The workbook includes the summary, full cost plan, unit schedule, month-by-month cashflow, and assumption schedule.
+            </p>
           </div>
 
           {/* Bulk export */}

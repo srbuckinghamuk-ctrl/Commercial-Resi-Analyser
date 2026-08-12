@@ -15,7 +15,7 @@ function PenceInputRow({ label, penceValue, onChangePence }: {
   onChangePence: (v: number) => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const, marginBottom: 12 }}>
       <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>{label}</label>
       <div style={{ position: 'relative', width: 160 }}>
         <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
@@ -45,7 +45,7 @@ function InputRow({ label, value, onChangeValue, suffix }: {
   suffix?: string;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const, marginBottom: 12 }}>
       <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>{label}</label>
       <input
         type="number"

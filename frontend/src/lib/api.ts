@@ -8,6 +8,7 @@ import type {
   FinancialAppraisalCreate,
   ApiResponse,
   PipelineStage,
+  StageTransition,
   PostcodeLookup,
   FloodRisk,
   EpcData,
@@ -70,6 +71,12 @@ export async function changeStage(
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ to_stage: toStage, notes }),
+  });
+}
+
+export async function listTransitions(projectId: string): Promise<StageTransition[]> {
+  return request<StageTransition[]>(`/api/v1/projects/${projectId}/transitions`, {
+    headers: HEADERS,
   });
 }
 

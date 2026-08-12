@@ -31,6 +31,8 @@ const mockProject: Project = {
   description: 'Three-storey former office building in Guildford town centre.',
   image_urls: [],
   stage: 'financial_appraisal',
+  pa_submitted_date: null,
+  pa_decision_date: null,
   created_at: '2026-01-15T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z',
 };

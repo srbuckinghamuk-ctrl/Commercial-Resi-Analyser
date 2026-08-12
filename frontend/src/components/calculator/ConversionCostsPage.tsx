@@ -13,7 +13,7 @@ function PenceCostRow({ label, penceValue, onChangePence }: {
   onChangePence: (v: number) => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const, marginBottom: 10 }}>
       <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label}</label>
       <div style={{ position: 'relative', width: 140 }}>
         <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
@@ -34,7 +34,7 @@ function CostRow({ label, value, onChangeValue }: {
   onChangeValue: (v: number) => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const, marginBottom: 10 }}>
       <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label}</label>
       <input
         type="number"

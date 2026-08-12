@@ -73,11 +73,11 @@ export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
           <label style={{ color: '#94a3b8', fontSize: 14 }}>Agent fee (%)</label>
           <input type="number" step="0.1" value={exit.selling_agent_fee_pct} onChange={(e) => updateExit({ selling_agent_fee_pct: Number(e.target.value) })} style={{ width: 100, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
           <label style={{ color: '#94a3b8', fontSize: 14 }}>Legal fee (£)</label>
           <div style={{ position: 'relative', width: 140, display: 'inline-block' }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
@@ -92,7 +92,7 @@ export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
           {units.map((unit, i) => {
             const retained = exit.retained_units.find((r) => r.unit_id === unit.id);
             return (
-              <div key={unit.id} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <div key={unit.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const, marginBottom: 8 }}>
                 <span style={{ color: '#94a3b8', width: 140, fontSize: 14 }}>Unit {i + 1} ({unit.type})</span>
                 <div style={{ position: 'relative', width: 140, display: 'inline-block' }}>
                   <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { Project, PipelineStage, UseClass, Tenure, EligibilityAssessment as EligibilityType, FinancialAppraisal } from '../types';
+import type { Project, PipelineStage, UseClass, Tenure, EligibilityAssessment as EligibilityType, FinancialAppraisal, StageTransition } from '../types';
 import { PIPELINE_STAGES, USE_CLASS_OPTIONS, TENURE_OPTIONS } from '../types';
-import { changeStage, getEligibility, getAppraisal, updateProject } from '../lib/api';
+import { changeStage, getEligibility, getAppraisal, updateProject, listTransitions } from '../lib/api';
 import { formatPct, formatUseClass, humanise } from '../lib/format';
+import { activeDeadline, todayIso } from '../lib/deadlines';
 import EligibilityWizard from './EligibilityWizard';
 
 interface ProjectDetailProps {
@@ -36,6 +37,7 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
   const navigate = useNavigate();
   const [eligibility, setEligibility] = useState<EligibilityType | null>(null);
   const [appraisal, setAppraisal] = useState<FinancialAppraisal | null>(null);
+  const [transitions, setTransitions] = useState<StageTransition[]>([]);
   const [advancing, setAdvancing] = useState(false);
   const [stageError, setStageError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -43,12 +45,14 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
   const currentStageIndex = PIPELINE_STAGES.findIndex((s) => s.value === project.stage);
   const nextStage = currentStageIndex < PIPELINE_STAGES.length - 1 ? PIPELINE_STAGES[currentStageIndex + 1] : null;
   const prevStage = currentStageIndex > 0 ? PIPELINE_STAGES[currentStageIndex - 1] : null;
+  const deadline = activeDeadline(project);
 
   useEffect(() => {
     if (view !== 'overview') return;
     getEligibility(project.id).then(setEligibility).catch(() => setEligibility(null));
     getAppraisal(project.id).then(setAppraisal).catch(() => setAppraisal(null));
-  }, [project.id, view]);
+    listTransitions(project.id).then(setTransitions).catch(() => setTransitions([]));
+  }, [project.id, view, project.stage]);
 
   const handleStageMove = async (stage: PipelineStage) => {
     if (advancing) return;
@@ -56,11 +60,27 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
     setStageError(null);
     try {
       await changeStage(project.id, stage);
+      // Entering a deadline-bearing stage starts its statutory clock — default
+      // the date to today so the countdown is live immediately (editable below).
+      if (stage === 'prior_approval_submitted' && !project.pa_submitted_date) {
+        await updateProject(project.id, { pa_submitted_date: todayIso() });
+      } else if (stage === 'approved' && !project.pa_decision_date) {
+        await updateProject(project.id, { pa_decision_date: todayIso() });
+      }
       onProjectUpdated();
     } catch {
       setStageError('Could not change the stage — check your connection and try again.');
     } finally {
       setAdvancing(false);
+    }
+  };
+
+  const handleDateChange = async (field: 'pa_submitted_date' | 'pa_decision_date', value: string) => {
+    try {
+      await updateProject(project.id, { [field]: value || null });
+      onProjectUpdated();
+    } catch {
+      setStageError('Could not save the date — check your connection and try again.');
     }
   };
 
@@ -124,6 +144,23 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
           >
             View listing →
           </a>
+        )}
+        {project.image_urls.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, overflowX: 'auto', paddingBottom: 4 }}>
+            {project.image_urls.slice(0, 6).map((url, i) => (
+              <img
+                key={i}
+                src={url}
+                alt={`Listing photo ${i + 1} of ${project.address_raw}`}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                style={{ height: 90, borderRadius: 6, border: '1px solid #1e3a5f', objectFit: 'cover', flexShrink: 0 }}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            ))}
+          </div>
         )}
         {editing && (
           <EditProjectForm
@@ -289,6 +326,50 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
           {stageError && (
             <p role="alert" style={{ color: '#f87171', fontSize: 13, margin: '10px 0 0' }}>{stageError}</p>
           )}
+
+          {/* Statutory deadline tracking */}
+          {(project.stage === 'prior_approval_submitted' ||
+            project.stage === 'approved' ||
+            project.stage === 'in_conversion') && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1e3a5f', display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+              {project.stage === 'prior_approval_submitted' && (
+                <label style={{ color: '#94a3b8', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  Application submitted
+                  <input
+                    type="date"
+                    value={project.pa_submitted_date ?? ''}
+                    onChange={(e) => void handleDateChange('pa_submitted_date', e.target.value)}
+                    style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', padding: '4px 8px', fontSize: 13 }}
+                  />
+                </label>
+              )}
+              {(project.stage === 'approved' || project.stage === 'in_conversion') && (
+                <label style={{ color: '#94a3b8', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  Approval decision date
+                  <input
+                    type="date"
+                    value={project.pa_decision_date ?? ''}
+                    onChange={(e) => void handleDateChange('pa_decision_date', e.target.value)}
+                    style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', padding: '4px 8px', fontSize: 13 }}
+                  />
+                </label>
+              )}
+              {deadline && (
+                <span
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 12,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background: deadline.status === 'overdue' ? '#450a0a' : deadline.status === 'warning' ? '#3b2f1e' : '#0f2a1e',
+                    color: deadline.status === 'overdue' ? '#ef4444' : deadline.status === 'warning' ? '#fbbf24' : '#22c55e',
+                  }}
+                >
+                  {deadline.chip} · due {deadline.due}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -371,6 +452,42 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
             {appraisal.rlv_pence != null && (
               <MetricTile label="Residual Land Value" value={`£${(appraisal.rlv_pence / 100).toLocaleString()}`} />
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Activity timeline */}
+      {transitions.length > 0 && (
+        <div
+          style={{
+            background: '#0a1628',
+            border: '1px solid #1e3a5f',
+            borderRadius: 10,
+            padding: 24,
+            marginTop: 24,
+          }}
+        >
+          <h3 style={{ color: '#e2e8f0', fontSize: 16, margin: '0 0 16px 0' }}>Activity</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {transitions.map((t, i) => (
+              <div key={t.id} style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: i === 0 ? '#2563eb' : '#1e3a5f', marginTop: 6, flexShrink: 0 }} />
+                  {i < transitions.length - 1 && <span style={{ width: 2, flex: 1, background: '#1e3a5f' }} />}
+                </div>
+                <div style={{ paddingBottom: i < transitions.length - 1 ? 16 : 0 }}>
+                  <div style={{ color: '#e2e8f0', fontSize: 13 }}>
+                    {t.from_stage
+                      ? `${humanise(t.from_stage)} → ${humanise(t.to_stage)}`
+                      : `Added to pipeline at ${humanise(t.to_stage)}`}
+                  </div>
+                  {t.notes && <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 2 }}>{t.notes}</div>}
+                  <div style={{ color: '#64748b', fontSize: 11, marginTop: 2 }}>
+                    {new Date(t.created_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

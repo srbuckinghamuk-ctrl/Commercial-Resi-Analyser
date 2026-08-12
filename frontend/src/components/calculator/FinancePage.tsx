@@ -19,7 +19,7 @@ export default function FinancePage({ inputs, onChange, metrics }: Props) {
       <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>4. Finance Structure</h3>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
           <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>Funding source</label>
           <select
             value={fin.funding_source}
@@ -34,27 +34,27 @@ export default function FinancePage({ inputs, onChange, metrics }: Props) {
 
         {fin.funding_source !== 'cash' && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
               <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>LTV (%)</label>
               <input type="number" value={fin.ltv_pct} onChange={(e) => updateFinance({ ltv_pct: Number(e.target.value) })} style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
               <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>Interest rate (% p.a.)</label>
               <input type="number" step="0.1" value={fin.interest_rate_annual_pct} onChange={(e) => updateFinance({ interest_rate_annual_pct: Number(e.target.value) })} style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
               <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>Arrangement fee (%)</label>
               <input type="number" step="0.1" value={fin.arrangement_fee_pct} onChange={(e) => updateFinance({ arrangement_fee_pct: Number(e.target.value) })} style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
               <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>Exit fee (%)</label>
               <input type="number" step="0.1" value={fin.exit_fee_pct} onChange={(e) => updateFinance({ exit_fee_pct: Number(e.target.value) })} style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
               <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>Loan term (months)</label>
               <input type="number" value={fin.loan_term_months} onChange={(e) => updateFinance({ loan_term_months: Number(e.target.value) })} style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
               <label style={{ color: '#94a3b8', width: 220, fontSize: 14 }}>Interest type</label>
               <select
                 value={fin.interest_type}
