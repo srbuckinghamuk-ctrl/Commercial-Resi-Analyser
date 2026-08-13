@@ -1119,17 +1119,21 @@ describe('Fixture E — funding gap: overruns never create facility', () => {
 
   it('caps the draw at undrawn net facility and records the gap', () => {
     const m = model();
-    expect(m.months[2].draw_pence).toBe(4_000_000);
-    expect(m.months[2].funding_gap_pence).toBe(6_000_000);
-    expect(m.totals.funding_gap_pence).toBe(6_000_000);
+    // Arrangement fee recomputes from its basis: 2% × committed net facility (£350,000) = £7,000.
+    expect(m.months[0].capitalised_fees_pence).toBe(700_000);
+    expect(m.months[2].draw_pence).toBe(4_300_000);
+    expect(m.months[2].funding_gap_pence).toBe(5_700_000);
+    expect(m.totals.funding_gap_pence).toBe(5_700_000);
     const gap = m.flags.find((f) => f.code === 'funding_gap');
     expect(gap?.severity).toBe('red');
     expect(gap?.month).toBe(2);
-    expect(m.months[2].closing_balance_pence).toBe(35_979_331);
-    expect(m.months[3].repayment_pence).toBe(36_339_124);
-    expect(m.months[3].distribution_pence).toBe(41_510_876);
+    expect(m.months[2].closing_balance_pence).toBe(35_973_241);
+    expect(m.months[3].repayment_pence).toBe(36_332_973);
+    expect(m.months[3].distribution_pence).toBe(41_517_027);
   });
 });
+
+// Fixture E figures corrected during implementation: arrangement fee recomputes from its basis (2% × £350,000 net).
 
 describe('Cash funding produces exactly zero debt cost', () => {
   it('has no draws, interest, or fees under cash', () => {

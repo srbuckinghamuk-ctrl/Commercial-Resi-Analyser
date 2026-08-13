@@ -127,7 +127,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 - **Formula:** Σ over months of (interest accrued) + arrangement fee + exit fee + other lender fees (broker on debt, lender legal, valuation, monitoring surveyor, non-utilisation, extension — as provided).
 - **Fee bases (each disclosed wherever the fee is shown):**
-  - `arrangement_fee_basis`: `committed_net_facility` (default) or `committed_gross_facility`. Charged and capitalised at first drawdown (month 0 if drawn).
+  - `arrangement_fee_basis`: `committed_net_facility` (default) or `committed_gross_facility`. Charged on commitment and capitalised in month 0 whenever a facility is committed.
   - `exit_fee_basis`: `committed_gross_facility` (default), `peak_debt`, or `redemption_balance`. Charged at final redemption, added to the amount required to discharge the loan.
 - **Interest:** accrues on the actual senior balance per §4 — never on cumulative project spend and never as flat full-term interest on the nominal facility.
 - **Zero-debt (cash funding):** finance costs are exactly **zero** — engine invariant, not just an expectation.
