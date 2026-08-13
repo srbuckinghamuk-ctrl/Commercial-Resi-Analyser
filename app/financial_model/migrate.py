@@ -174,7 +174,10 @@ def default_equity_sources() -> list[dict[str, Any]]:
 
 
 def default_calculator_inputs_v2(project: dict[str, Any] | None = None) -> dict[str, Any]:
-    storeys = (project or {}).get("floors") or DEFAULT_DEAL_SPIDER["storeys"]
+    # `?? DEFAULT_DEAL_SPIDER.storeys` in TS: only None/absent falls through --
+    # floors: 0 (e.g. a single-storey unit) must be preserved, not treated as
+    # falsy. Bare `or` would wrongly substitute the default here.
+    storeys = _coalesce((project or {}).get("floors"), DEFAULT_DEAL_SPIDER["storeys"])
     return {
         "inputs_version": 2,
         "project_id": (project or {}).get("id"),

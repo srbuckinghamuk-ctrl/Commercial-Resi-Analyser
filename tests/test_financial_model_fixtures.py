@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.financial_model import run_appraisal
+from app.financial_model.migrate import migrate_inputs
 from app.financial_model.types import CalculatorInputsV2
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
@@ -31,3 +32,15 @@ def test_invariants(path: Path) -> None:
         )
         assert m.closing_balance_pence >= 0
     assert run.reconciliation.sources_equal_uses
+
+
+def test_migration_preserves_floors_zero() -> None:
+    """conversion-defaults.ts:162 uses `project?.floors ?? DEFAULT_DEAL_SPIDER.storeys`
+    -- nullish coalescing, which only falls through on None/absent. A Python port
+    using `or` instead of a None-check would wrongly replace a genuine `floors: 0`
+    (e.g. a single-storey unit) with the default storeys (2), and cascade into a
+    non-zero building_height_m. Both must come out as exactly 0."""
+    project = {"id": "p1", "price_pence": 0, "floor_area_sqm": 0, "floors": 0}
+    run = migrate_inputs({}, project)
+    assert run.deal_spider.storeys == 0
+    assert run.deal_spider.building_height_m == 0
