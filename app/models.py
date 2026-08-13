@@ -325,7 +325,9 @@ class EligibilityAssessment(BaseModel):
 class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
-    inputs_snapshot: dict
+    inputs_snapshot: dict  # validated/migrated in the endpoint; may be v1 or v2
+    # optional client-computed values, used ONLY for mismatch recording -- the
+    # server always recalculates and never trusts these for persistence:
     gdv_pence: int | None = None
     total_cost_pence: int | None = None
     profit_on_cost_pct: float | None = None
@@ -335,16 +337,10 @@ class FinancialAppraisalCreate(BaseModel):
     rlv_pence: int | None = None
 
 
-class FinancialAppraisalUpdate(BaseModel):
+class FinancialAppraisalUpdate(FinancialAppraisalCreate):
+    project_id: uuid.UUID | None = None
     name: str | None = None
     inputs_snapshot: dict | None = None
-    gdv_pence: int | None = None
-    total_cost_pence: int | None = None
-    profit_on_cost_pct: float | None = None
-    profit_on_gdv_pct: float | None = None
-    return_on_equity_pct: float | None = None
-    irr: float | None = None
-    rlv_pence: int | None = None
 
 
 class FinancialAppraisal(BaseModel):
@@ -354,6 +350,14 @@ class FinancialAppraisal(BaseModel):
     project_id: uuid.UUID
     name: str
     inputs_snapshot: dict
+    outputs: dict | None = None            # authoritative AppraisalResultV2 + reconciliation
+    validation: dict | None = None         # {issues, client_mismatches}
+    calc_version: str | None = None
+    inputs_version: int = 1
+    status: str = "draft"                  # draft | reconciled | legacy_unreconciled
+    input_hash: str | None = None
+    outputs_hash: str | None = None
+    # legacy columns retained for backward-compat, now always server-computed:
     gdv_pence: int | None = None
     total_cost_pence: int | None = None
     profit_on_cost_pct: float | None = None

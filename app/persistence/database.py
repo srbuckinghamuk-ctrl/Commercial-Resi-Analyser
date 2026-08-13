@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
     func,
@@ -132,6 +133,19 @@ class FinancialAppraisalORM(Base):
     )
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     inputs_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # --- governance columns (Task 12) --------------------------------------
+    outputs: Mapped[dict | None] = mapped_column(JSON)
+    validation: Mapped[dict | None] = mapped_column(JSON)
+    calc_version: Mapped[str | None] = mapped_column(String(32))
+    inputs_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # 'legacy_unreconciled' marks every pre-Task-12 row as unmigrated until it
+    # is next saved through the server-side recalculation path.
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="legacy_unreconciled"
+    )
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    outputs_hash: Mapped[str | None] = mapped_column(String(64))
+    # --- legacy metric columns, now always server-computed -----------------
     gdv_pence: Mapped[int | None] = mapped_column(BigInteger)
     total_cost_pence: Mapped[int | None] = mapped_column(BigInteger)
     profit_on_cost_pct: Mapped[float | None] = mapped_column(Float)

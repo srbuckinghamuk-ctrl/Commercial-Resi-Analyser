@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -7,10 +8,14 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.eligibility.engine import run_eligibility
+from app.financial_model import CALC_VERSION, run_appraisal
+from app.financial_model.hashing import canonical_hash, input_hash
+from app.financial_model.migrate import migrate_inputs
+from app.financial_model.types import CalculatorInputsV2
 from app.models import (
     ApiResponse,
     EligibilityAssessment,
@@ -258,6 +263,84 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
 
 appraisals_router = APIRouter(prefix="/appraisals")
 
+# Client-submitted "legacy metric" fields (from FinancialAppraisalCreate) mapped
+# to the corresponding server-authoritative AppraisalResultV2 field. Used only
+# to record mismatches -- the server value always wins for persistence.
+CLIENT_METRIC_MAP = {
+    "gdv_pence": "gdv_pence",
+    "total_cost_pence": "total_development_cost_pence",
+    "profit_on_cost_pct": "profit_on_cost_pct",
+    "profit_on_gdv_pct": "profit_on_gdv_pct",
+    "return_on_equity_pct": "return_on_equity_pct",
+    "irr": "irr_annual_pct",
+    "rlv_pence": "rlv_pence",
+}
+
+
+def metrics_dict(metrics) -> dict:
+    return asdict(metrics)
+
+
+def rec_dict(reconciliation) -> dict:
+    return asdict(reconciliation)
+
+
+def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
+    """The only path by which appraisal outputs/governance columns are ever
+    produced. Client-supplied metrics in `payload` are never persisted --
+    they are compared against the server calculation purely to record
+    mismatches for audit purposes (Task 12)."""
+    raw = payload.inputs_snapshot
+    was_v1 = raw.get("inputs_version") != 2
+
+    try:
+        inputs = migrate_inputs(raw)
+        inputs = CalculatorInputsV2.model_validate(inputs.model_dump(mode="json"))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+    run = run_appraisal(inputs)
+    hard_errors = [issue for issue in run.validation if issue.severity == "error"]
+    if hard_errors:
+        raise HTTPException(status_code=422, detail=[issue.__dict__ for issue in hard_errors])
+
+    mismatches = []
+    for client_field, metric_field in CLIENT_METRIC_MAP.items():
+        client_value = getattr(payload, client_field, None)
+        server_value = getattr(run.metrics, metric_field)
+        if client_value is not None and client_value != server_value:
+            mismatches.append(
+                {"field": client_field, "client": client_value, "server": server_value}
+            )
+
+    status = (
+        "legacy_unreconciled" if was_v1
+        else "reconciled" if run.reconciliation.report_safe
+        else "draft"
+    )
+    outputs = {"metrics": metrics_dict(run.metrics), "reconciliation": rec_dict(run.reconciliation)}
+    return {
+        "inputs_snapshot": inputs.model_dump(mode="json"),
+        "outputs": outputs,
+        "validation": {
+            "issues": [issue.__dict__ for issue in run.validation],
+            "client_mismatches": mismatches,
+        },
+        "calc_version": CALC_VERSION,
+        "inputs_version": 2,
+        "status": status,
+        "input_hash": input_hash(inputs),
+        "outputs_hash": canonical_hash(outputs),
+        # legacy columns from the server calculation, never from the client:
+        "gdv_pence": run.metrics.gdv_pence,
+        "total_cost_pence": run.metrics.total_development_cost_pence,
+        "profit_on_cost_pct": run.metrics.profit_on_cost_pct,
+        "profit_on_gdv_pct": run.metrics.profit_on_gdv_pct,
+        "return_on_equity_pct": run.metrics.return_on_equity_pct,
+        "irr": run.metrics.irr_annual_pct,
+        "rlv_pence": run.metrics.rlv_pence,
+    }
+
 
 @appraisals_router.post("", response_model=FinancialAppraisal, status_code=201)
 async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
@@ -265,8 +348,9 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     project = await project_repo.get_by_id(body.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    computed = calculate_authoritative(body)
     repo = FinancialAppraisalRepository(db)
-    appraisal = await repo.create(body)
+    appraisal = await repo.create({"project_id": body.project_id, "name": body.name, **computed})
     await db.commit()
     return appraisal
 
@@ -283,7 +367,31 @@ async def get_appraisal(project_id: UUID, db: DbDep):
 @appraisals_router.put("/{project_id}", response_model=FinancialAppraisal)
 async def update_appraisal(project_id: UUID, body: FinancialAppraisalUpdate, db: DbDep):
     repo = FinancialAppraisalRepository(db)
-    appraisal = await repo.update(project_id, body)
+    existing = await repo.get_by_project_id(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Financial appraisal not found")
+
+    # A partial PUT (e.g. just re-confirming metrics) must still recalculate --
+    # from the STORED snapshot when the caller omits inputs_snapshot, never by
+    # trusting stale/absent client-side outputs.
+    name = body.name if body.name is not None else existing.name
+    inputs_snapshot = (
+        body.inputs_snapshot if body.inputs_snapshot is not None else existing.inputs_snapshot
+    )
+    create_payload = FinancialAppraisalCreate(
+        project_id=project_id,
+        name=name,
+        inputs_snapshot=inputs_snapshot,
+        gdv_pence=body.gdv_pence,
+        total_cost_pence=body.total_cost_pence,
+        profit_on_cost_pct=body.profit_on_cost_pct,
+        profit_on_gdv_pct=body.profit_on_gdv_pct,
+        return_on_equity_pct=body.return_on_equity_pct,
+        irr=body.irr,
+        rlv_pence=body.rlv_pence,
+    )
+    computed = calculate_authoritative(create_payload)
+    appraisal = await repo.update(project_id, {"name": name, **computed})
     if not appraisal:
         raise HTTPException(status_code=404, detail="Financial appraisal not found")
     await db.commit()

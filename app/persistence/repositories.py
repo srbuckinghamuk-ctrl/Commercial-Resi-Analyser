@@ -10,8 +10,6 @@ from app.models import (
     EligibilityAssessmentUpdate,
     EligibilityCriterion,
     FinancialAppraisal,
-    FinancialAppraisalCreate,
-    FinancialAppraisalUpdate,
     PipelineStage,
     Project,
     ProjectCreate,
@@ -170,6 +168,12 @@ class EligibilityAssessmentRepository:
 
 
 class FinancialAppraisalRepository:
+    """Reads/writes pre-computed appraisal dicts. Task 12 made the server the
+    sole author of appraisal outputs/governance columns, so `create`/`update`
+    take a plain dict (built by app.api.app.calculate_authoritative) rather
+    than a client-facing Pydantic model -- there is no longer a 1:1 mapping
+    between the request schema and the persisted columns."""
+
     def __init__(self, db: AsyncSession):
         self.db = db
 
@@ -179,6 +183,13 @@ class FinancialAppraisalRepository:
             project_id=row.project_id,
             name=row.name,
             inputs_snapshot=row.inputs_snapshot,
+            outputs=row.outputs,
+            validation=row.validation,
+            calc_version=row.calc_version,
+            inputs_version=row.inputs_version,
+            status=row.status,
+            input_hash=row.input_hash,
+            outputs_hash=row.outputs_hash,
             gdv_pence=row.gdv_pence,
             total_cost_pence=row.total_cost_pence,
             profit_on_cost_pct=row.profit_on_cost_pct,
@@ -190,8 +201,8 @@ class FinancialAppraisalRepository:
             updated_at=row.updated_at,
         )
 
-    async def create(self, data: FinancialAppraisalCreate) -> FinancialAppraisal:
-        orm = FinancialAppraisalORM(**data.model_dump())
+    async def create(self, data: dict) -> FinancialAppraisal:
+        orm = FinancialAppraisalORM(**data)
         self.db.add(orm)
         await self.db.flush()
         await self.db.refresh(orm)
@@ -205,16 +216,13 @@ class FinancialAppraisalRepository:
         row = result.scalar_one_or_none()
         return self._to_domain(row) if row else None
 
-    async def update(
-        self, project_id: UUID, updates: FinancialAppraisalUpdate
-    ) -> FinancialAppraisal | None:
-        values = updates.model_dump(exclude_unset=True)
-        if not values:
+    async def update(self, project_id: UUID, data: dict) -> FinancialAppraisal | None:
+        if not data:
             return await self.get_by_project_id(project_id)
         stmt = (
             update(FinancialAppraisalORM)
             .where(FinancialAppraisalORM.project_id == project_id)
-            .values(**values)
+            .values(**data)
             .returning(FinancialAppraisalORM)
         )
         result = await self.db.execute(stmt)

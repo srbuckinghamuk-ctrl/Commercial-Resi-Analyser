@@ -1,0 +1,213 @@
+"""Task 12: the FastAPI backend becomes the authority for persisted appraisal
+outputs. These tests hit the real appraisal endpoints end-to-end (project ->
+appraisal create/get/update) against an isolated in-memory sqlite database so
+we exercise the actual server-side recalculation path, not mocks.
+"""
+import copy
+import json
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.api.app import app
+from app.persistence.database import Base, get_db
+
+FIXTURE_A_PATH = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "a-all-cash.json"
+)
+FIXTURE_A_INPUTS = json.loads(FIXTURE_A_PATH.read_text())["inputs"]
+
+
+def fixture_a_inputs() -> dict:
+    """A fresh deep copy of fixture A's inputs, safe for a test to mutate."""
+    return copy.deepcopy(FIXTURE_A_INPUTS)
+
+
+@pytest.fixture
+async def db_engine():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(db_engine):
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async def override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+async def project(client):
+    resp = await client.post(
+        "/api/v1/projects",
+        json={
+            "address_raw": "1 Test Street, London, E1 1AA",
+            "price_pence": 40_000_000,
+            "use_class": "office",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_save_recalculates_outputs_server_side(client, project):
+    """POST with fixture A inputs and deliberately wrong client outputs
+    (gdv_pence=1) -> stored/returned gdv_pence == 120_000_000 (server wins),
+    and validation payload records a client_mismatch entry."""
+    payload = {
+        "project_id": project["id"],
+        "name": "Fixture A appraisal",
+        "inputs_snapshot": fixture_a_inputs(),
+        "gdv_pence": 1,
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    assert body["gdv_pence"] == 120_000_000
+    assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
+
+    mismatches = body["validation"]["client_mismatches"]
+    assert any(
+        m["field"] == "gdv_pence" and m["client"] == 1 and m["server"] == 120_000_000
+        for m in mismatches
+    ), mismatches
+
+
+async def test_negative_costs_rejected(client, project):
+    """POST with part_l_compliance_pence = -1 (the York defect) -> 422."""
+    inputs = fixture_a_inputs()
+    inputs["conversion_costs"]["part_l_compliance_pence"] = -1
+    payload = {
+        "project_id": project["id"],
+        "name": "Bad appraisal",
+        "inputs_snapshot": inputs,
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 422, resp.text
+
+
+async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
+    """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
+    response status == 'legacy_unreconciled', outputs recalculated under
+    calc_version 2.0.0, and finance.requires_confirmation True in the stored
+    (migrated) snapshot."""
+    v1_snapshot = {
+        "acquisition": FIXTURE_A_INPUTS["acquisition"],
+        "unit_mix": FIXTURE_A_INPUTS["unit_mix"],
+        "conversion_costs": FIXTURE_A_INPUTS["conversion_costs"],
+        "finance": {
+            "funding_source": "bridging",
+            "ltv_pct": 70,
+            "interest_rate_annual_pct": 8,
+            "arrangement_fee_pct": 2,
+            "exit_fee_pct": 1,
+            "loan_term_months": 12,
+            "interest_type": "rolled_up",
+        },
+        "exit_strategy": FIXTURE_A_INPUTS["exit_strategy"],
+    }
+    payload = {
+        "project_id": project["id"],
+        "name": "Legacy appraisal",
+        "inputs_snapshot": v1_snapshot,
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    assert body["status"] == "legacy_unreconciled"
+    assert body["calc_version"] == "2.0.0"
+    assert body["inputs_snapshot"]["inputs_version"] == 2
+    assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
+    # Outputs were recalculated by the v2 engine, not just passed through.
+    assert body["outputs"]["metrics"]["calc_version"] == "2.0.0"
+
+
+async def test_input_hash_and_outputs_hash_persisted(client, project):
+    """Saved record has non-empty input_hash/outputs_hash; PUT with identical
+    inputs produces identical hashes (determinism)."""
+    payload = {
+        "project_id": project["id"],
+        "name": "Hash appraisal",
+        "inputs_snapshot": fixture_a_inputs(),
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["input_hash"]
+    assert body["outputs_hash"]
+
+    resp2 = await client.put(
+        f"/api/v1/appraisals/{project['id']}",
+        json={"inputs_snapshot": fixture_a_inputs()},
+    )
+    assert resp2.status_code == 200, resp2.text
+    body2 = resp2.json()
+
+    assert body2["input_hash"] == body["input_hash"]
+    assert body2["outputs_hash"] == body["outputs_hash"]
+
+
+async def test_status_reconciled_only_when_report_safe(client, project):
+    """Fixture A (clean) -> status 'reconciled'. A case with a funding gap
+    (tiny net facility, tiny equity) -> status 'draft' with issues listed."""
+    payload = {
+        "project_id": project["id"],
+        "name": "Clean appraisal",
+        "inputs_snapshot": fixture_a_inputs(),
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["status"] == "reconciled"
+
+    gap_inputs = fixture_a_inputs()
+    gap_inputs["finance"]["funding_source"] = "development_finance"
+    gap_inputs["finance"]["committed_net_facility_pence"] = 100_000
+    gap_inputs["finance"]["committed_gross_facility_pence"] = 100_000
+    gap_inputs["equity_sources"] = [{
+        "id": "e1", "classification": "cash", "amount_pence": 1_000, "timing_month": 0,
+        "repayment_priority": 1, "evidence_status": "confirmed", "notes": "",
+    }]
+    resp2 = await client.put(
+        f"/api/v1/appraisals/{project['id']}",
+        json={"inputs_snapshot": gap_inputs},
+    )
+    assert resp2.status_code == 200, resp2.text
+    body2 = resp2.json()
+    assert body2["status"] == "draft"
+    assert len(body2["outputs"]["reconciliation"]["issues"]) > 0
+
+
+async def test_get_returns_authoritative_outputs(client, project):
+    """GET returns the server-stored outputs and calc_version - no client
+    fields influence it."""
+    payload = {
+        "project_id": project["id"],
+        "name": "Get appraisal",
+        "inputs_snapshot": fixture_a_inputs(),
+        "gdv_pence": 999,  # deliberately wrong; must not leak into storage
+    }
+    post_resp = await client.post("/api/v1/appraisals", json=payload)
+    assert post_resp.status_code == 201, post_resp.text
+
+    resp = await client.get(f"/api/v1/appraisals/{project['id']}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
+    assert body["gdv_pence"] == 120_000_000
+    assert body["calc_version"] == "2.0.0"
