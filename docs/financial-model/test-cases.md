@@ -186,8 +186,11 @@ value after the Task 4 brief error was caught and re-derived mid-implementation 
 2's required draw of £50,000 is capped at the undrawn net facility, giving a draw of £43,000 and a
 `funding_gap_pence` of £57,000, flagged red at month 2. The gap is never absorbed by an automatic
 facility increase — it accumulates and is reported (spec §4.2 step 3, and audit P0 "downside costs
-automatically produce a larger loan" — corrected). Month 3: closing £359,732.41, repayment
-£363,329.73, distribution £415,170.27. **Python:** `TestFixtureEFundingGap` —
+automatically produce a larger loan" — corrected). Month 2: closing £359,732.41
+(`months[2].closing_balance_pence == 35_973_241`). Month 3: repayment £363,329.73 + the £5,500
+exit fee (1% of the unchanged £550,000 committed gross facility — TERMS.exit_fee_basis/
+committed_gross_facility_pence are not overridden in this fixture, only committed_net_facility_pence
+is), distribution £415,170.27. **Python:** `TestFixtureEFundingGap` —
 `assert m.months[0].capitalised_fees_pence == 700_000` (the corrected 2%×£350,000 arrangement fee),
 `assert m.months[3].repayment_pence == 36_332_973`, `assert m.months[3].distribution_pence ==
 41_517_027` (`test_financial_model_engine.py:200-209`) — the same corrected values as the TS
