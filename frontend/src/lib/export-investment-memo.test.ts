@@ -1,10 +1,73 @@
 import { describe, it, expect } from 'vitest';
 import { generateInvestmentMemo } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
-import type { CalculatorInputs } from './conversion-types';
-import { calculateAppraisal } from './conversion-calc-engine';
-import { buildCashflow } from './conversion-cashflow';
+import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from './conversion-types';
+import {
+  calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost, calculateTotalProfessionalFees,
+} from './conversion-calc-engine';
+import { calculateCommercialSdlt } from './commercial-sdlt';
 import { DEFAULT_DEAL_SPIDER } from './conversion-defaults';
+
+// generateInvestmentMemo's exported signature still takes v1-shaped
+// CalculatorInputs/AppraisalMetrics/CashflowResult (Task 10 rewrites this
+// properly). These are minimal, self-contained fixture builders — the
+// shared engine's v1 flat-rate formulas were deleted as prohibited
+// (spec §11), so this test builds its own throwaway metrics/cashflow
+// fixtures rather than depending on them.
+function mockMetrics(inputs: CalculatorInputs): AppraisalMetrics {
+  const gdv = calculateGdv(inputs.unit_mix.units);
+  const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
+  const totalAcquisition = calculateTotalAcquisitionCost(inputs.acquisition);
+  const totalConstruction = calculateTotalConstructionCost(inputs.conversion_costs);
+  const totalProfessional = calculateTotalProfessionalFees(inputs.conversion_costs, inputs.unit_mix.units.length);
+  const totalCostBeforeFinance = totalAcquisition + totalConstruction + totalProfessional;
+  const loanAmount = Math.round((totalCostBeforeFinance * inputs.finance.ltv_pct) / 100);
+  const equityRequired = totalCostBeforeFinance - loanAmount;
+  const arrangementFee = Math.round((loanAmount * inputs.finance.arrangement_fee_pct) / 100);
+  const exitFee = Math.round((loanAmount * inputs.finance.exit_fee_pct) / 100);
+  const monthlyRate = inputs.finance.interest_rate_annual_pct / 100 / 12;
+  const totalInterest = Math.round(loanAmount * monthlyRate * inputs.finance.loan_term_months);
+  const totalFinanceCost = arrangementFee + exitFee + totalInterest;
+  const totalCost = totalCostBeforeFinance + totalFinanceCost;
+  const profit = gdv - totalCost;
+  return {
+    total_gdv_pence: gdv,
+    total_acquisition_cost_pence: totalAcquisition,
+    sdlt_pence: sdlt,
+    total_construction_cost_pence: totalConstruction,
+    total_professional_fees_pence: totalProfessional,
+    total_finance_cost_pence: totalFinanceCost,
+    total_cost_pence: totalCost,
+    profit_pence: profit,
+    profit_on_cost_pct: totalCost > 0 ? Math.round((profit / totalCost) * 10000) / 100 : 0,
+    profit_on_gdv_pct: gdv > 0 ? Math.round((profit / gdv) * 10000) / 100 : 0,
+    return_on_equity_pct: equityRequired > 0 ? Math.round((profit / equityRequired) * 10000) / 100 : 0,
+    irr_monthly: 1.2,
+    irr_annual: 15.4,
+    rlv_pence: Math.round(gdv / 1.2 - (totalCost - inputs.acquisition.purchase_price_pence - sdlt)),
+    equity_required_pence: equityRequired,
+    loan_amount_pence: loanAmount,
+  };
+}
+
+function mockCashflow(inputs: CalculatorInputs): CashflowResult {
+  const months = inputs.finance.loan_term_months;
+  return {
+    months: Array.from({ length: months }, (_, i) => ({
+      month: i + 1,
+      label: `Month ${i + 1}`,
+      drawdown_pence: 0,
+      cumulative_drawdown_pence: 0,
+      interest_pence: 0,
+      cumulative_interest_pence: 0,
+      income_pence: 0,
+      net_cashflow_pence: 0,
+      cumulative_cashflow_pence: 0,
+    })),
+    peak_funding_pence: 10_000_000,
+    total_interest_pence: 500_000,
+  };
+}
 
 const mockProject: Project = {
   id: 'test-id',
@@ -115,8 +178,8 @@ const mockEligibility: EligibilityAssessment = {
 };
 
 describe('generateInvestmentMemo', () => {
-  const metrics = calculateAppraisal(mockInputs);
-  const cashflow = buildCashflow(mockInputs);
+  const metrics = mockMetrics(mockInputs);
+  const cashflow = mockCashflow(mockInputs);
 
   it('returns a non-empty Blob', () => {
     const blob = generateInvestmentMemo(mockProject, mockInputs, metrics, cashflow, mockEligibility);
@@ -143,8 +206,8 @@ describe('generateInvestmentMemo', () => {
         ],
       },
     };
-    const retainedMetrics = calculateAppraisal(retainedInputs);
-    const retainedCashflow = buildCashflow(retainedInputs);
+    const retainedMetrics = mockMetrics(retainedInputs);
+    const retainedCashflow = mockCashflow(retainedInputs);
     const blob = generateInvestmentMemo(mockProject, retainedInputs, retainedMetrics, retainedCashflow);
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.size).toBeGreaterThan(10000);

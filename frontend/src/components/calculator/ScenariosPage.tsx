@@ -1,24 +1,29 @@
 import { useMemo } from 'react';
-import type { CalculatorInputs, ScenarioOverrides } from '../../lib/conversion-types';
-import { calculateAppraisal } from '../../lib/conversion-calc-engine';
+import type { ScenarioOverrides } from '../../lib/conversion-types';
+import type { AppraisalRun, CalculatorInputsV2 } from '../../lib/model';
+import { runAppraisal } from '../../lib/model';
 import { applyScenario } from '../../lib/apply-scenario';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputs;
-  onChange: (partial: Partial<CalculatorInputs>) => void;
+  inputs: CalculatorInputsV2;
+  onChange: (partial: Partial<CalculatorInputsV2>) => void;
 }
 
 type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';
 
+function pctOrNa(v: number | null): string {
+  return v == null ? 'n/a' : `${v.toFixed(1)}%`;
+}
+
 export default function ScenariosPage({ inputs, onChange }: Props) {
   const scenarioKeys: ScenarioKey[] = ['base', 'upside', 'downside', 'severe'];
 
-  const scenarioMetrics = useMemo(
+  const scenarioRuns = useMemo(
     () =>
       Object.fromEntries(
-        scenarioKeys.map((key) => [key, calculateAppraisal(applyScenario(inputs, inputs.scenarios[key]))]),
-      ) as Record<ScenarioKey, ReturnType<typeof calculateAppraisal>>,
+        scenarioKeys.map((key) => [key, runAppraisal(applyScenario(inputs, inputs.scenarios[key]))]),
+      ) as Record<ScenarioKey, AppraisalRun>,
     [inputs],
   );
 
@@ -31,14 +36,14 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
     });
   };
 
-  const metricRows: { label: string; accessor: (m: ReturnType<typeof calculateAppraisal>) => string }[] = [
-    { label: 'GDV', accessor: (m) => penceToPounds(m.total_gdv_pence) },
-    { label: 'Total Cost', accessor: (m) => penceToPounds(m.total_cost_pence) },
-    { label: 'Profit', accessor: (m) => penceToPounds(m.profit_pence) },
-    { label: 'Profit on Cost', accessor: (m) => `${m.profit_on_cost_pct.toFixed(1)}%` },
-    { label: 'Profit on GDV', accessor: (m) => `${m.profit_on_gdv_pct.toFixed(1)}%` },
-    { label: 'IRR (Annual)', accessor: (m) => `${m.irr_annual.toFixed(1)}%` },
-    { label: 'Return on Equity', accessor: (m) => `${m.return_on_equity_pct.toFixed(1)}%` },
+  const metricRows: { label: string; accessor: (r: AppraisalRun) => string }[] = [
+    { label: 'GDV', accessor: (r) => penceToPounds(r.metrics.gdv_pence) },
+    { label: 'Total Development Cost', accessor: (r) => penceToPounds(r.metrics.total_development_cost_pence) },
+    { label: 'Profit', accessor: (r) => penceToPounds(r.metrics.profit_pence) },
+    { label: 'Profit on Cost', accessor: (r) => pctOrNa(r.metrics.profit_on_cost_pct) },
+    { label: 'Profit on GDV', accessor: (r) => pctOrNa(r.metrics.profit_on_gdv_pct) },
+    { label: 'IRR (Annual)', accessor: (r) => pctOrNa(r.metrics.irr_annual_pct) },
+    { label: 'Return on Equity', accessor: (r) => pctOrNa(r.metrics.return_on_equity_pct) },
   ];
 
   return (
@@ -71,7 +76,7 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
         ))}
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
+      <div style={{ overflowX: 'auto', marginBottom: 24 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
@@ -86,12 +91,38 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
               <tr key={row.label} style={{ borderBottom: '1px solid #0f172a' }}>
                 <td style={{ padding: '8px 12px', color: '#e2e8f0' }}>{row.label}</td>
                 {scenarioKeys.map((key) => (
-                  <td key={key} style={{ padding: '8px 12px', color: '#e2e8f0', textAlign: 'right', fontWeight: key === 'base' ? 600 : 400 }}>{row.accessor(scenarioMetrics[key])}</td>
+                  <td key={key} style={{ padding: '8px 12px', color: '#e2e8f0', textAlign: 'right', fontWeight: key === 'base' ? 600 : 400 }}>{row.accessor(scenarioRuns[key])}</td>
                 ))}
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      <h4 style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Flags by Scenario</h4>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
+        {scenarioKeys.map((key) => {
+          const flags = scenarioRuns[key].model.flags;
+          return (
+            <div key={key} style={{ padding: 12, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', minHeight: 40 }}>
+              {flags.length === 0 ? (
+                <span style={{ color: '#22c55e', fontSize: 12 }}>No flags</span>
+              ) : (
+                flags.map((f, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      fontSize: 12, marginBottom: 6,
+                      color: f.severity === 'red' ? '#fca5a5' : f.severity === 'amber' ? '#fbbf24' : '#94a3b8',
+                    }}
+                  >
+                    {f.message}
+                  </div>
+                ))
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

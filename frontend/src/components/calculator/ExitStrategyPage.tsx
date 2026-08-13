@@ -1,14 +1,15 @@
 import { useMemo, useCallback } from 'react';
-import type { CalculatorInputs, AppraisalMetrics, ExitRoute } from '../../lib/conversion-types';
+import type { ExitRoute } from '../../lib/conversion-types';
+import type { CalculatorInputsV2, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputs;
-  onChange: (partial: Partial<CalculatorInputs>) => void;
-  metrics: AppraisalMetrics;
+  inputs: CalculatorInputsV2;
+  onChange: (partial: Partial<CalculatorInputsV2>) => void;
+  run: AppraisalRun;
 }
 
-export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
+export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   const exit = inputs.exit_strategy;
   const units = inputs.unit_mix.units;
 
@@ -46,11 +47,9 @@ export default function ExitStrategyPage({ inputs, onChange, metrics }: Props) {
 
   const grossYield = retainedCapitalValue > 0 ? (totalAnnualRent / retainedCapitalValue) * 100 : 0;
 
-  const sellingCosts = useMemo(() => {
-    const soldUnitsValue = metrics.total_gdv_pence - retainedCapitalValue;
-    const agentFee = Math.round((soldUnitsValue * exit.selling_agent_fee_pct) / 100);
-    return agentFee + exit.selling_legal_fee_pence;
-  }, [metrics, retainedCapitalValue, exit]);
+  // Selling costs come from the shared engine (run.schedule / run.metrics) —
+  // component-local disposal formulas are prohibited.
+  const sellingCosts = run.metrics.selling_costs_pence;
 
   return (
     <div>

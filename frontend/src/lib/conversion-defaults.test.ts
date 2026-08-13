@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { defaultCalculatorInputs, mergeCalculatorInputs, DEFAULT_SCENARIOS } from './conversion-defaults';
+import { defaultCalculatorInputs, DEFAULT_SCENARIOS } from './conversion-defaults';
+import { migrateInputs } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
 
 describe('defaultCalculatorInputs', () => {
@@ -26,7 +27,7 @@ describe('defaultCalculatorInputs', () => {
   });
 });
 
-describe('mergeCalculatorInputs', () => {
+describe('migrateInputs (legacy v1 snapshot merge)', () => {
   it('fills severe scenario and deal_spider on a legacy snapshot without losing saved values', () => {
     const legacy = defaultCalculatorInputs();
     legacy.acquisition.purchase_price_pence = 42_000_000;
@@ -36,7 +37,7 @@ describe('mergeCalculatorInputs', () => {
     delete (snapshot as { scenarios?: { severe?: unknown } }).scenarios!.severe;
     delete (snapshot as { deal_spider?: unknown }).deal_spider;
 
-    const merged = mergeCalculatorInputs(snapshot);
+    const merged = migrateInputs(snapshot);
     expect(merged.acquisition.purchase_price_pence).toBe(42_000_000);
     expect(merged.scenarios.downside.gdv_adjustment_pct).toBe(-12);
     expect(merged.scenarios.severe).toEqual(DEFAULT_SCENARIOS.severe);
@@ -51,7 +52,7 @@ describe('mergeCalculatorInputs', () => {
       margin_resilience: 2,
     };
 
-    const merged = mergeCalculatorInputs(snapshot);
+    const merged = migrateInputs(snapshot);
     expect(merged.deal_spider.absorption_months).toBe(14);
     expect(merged.deal_spider.weights.margin_resilience).toBe(2);
     expect(merged.deal_spider.weights.tax_advantage).toBe(1);

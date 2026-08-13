@@ -1,6 +1,14 @@
-import type { CalculatorInputs, ScenarioOverrides } from './conversion-types';
+import type { ScenarioOverrides } from './conversion-types';
+import type { CalculatorInputsV2 } from './model/finance-types';
 
-export function applyScenario(inputs: CalculatorInputs, overrides: ScenarioOverrides): CalculatorInputs {
+/**
+ * Applies a scenario's GDV / cost / timeline / rate adjustments to a v2 inputs
+ * document. The committed facility (`committed_net_facility_pence`,
+ * `committed_gross_facility_pence`, `day_one_advance_pence`) and
+ * `equity_sources` are held fixed — a scenario stresses the deal's
+ * assumptions, not the lender's commitment or the capital already raised.
+ */
+export function applyScenario(inputs: CalculatorInputsV2, overrides: ScenarioOverrides): CalculatorInputsV2 {
   const gdvMultiplier = 1 + overrides.gdv_adjustment_pct / 100;
   const costMultiplier = 1 + overrides.construction_cost_adjustment_pct / 100;
   return {
@@ -19,8 +27,9 @@ export function applyScenario(inputs: CalculatorInputs, overrides: ScenarioOverr
     },
     finance: {
       ...inputs.finance,
-      loan_term_months: inputs.finance.loan_term_months + overrides.timeline_adjustment_months,
-      interest_rate_annual_pct: inputs.finance.interest_rate_annual_pct + overrides.interest_rate_adjustment_pct,
+      term_months: inputs.finance.term_months + overrides.timeline_adjustment_months,
+      annual_interest_rate_pct:
+        inputs.finance.annual_interest_rate_pct + overrides.interest_rate_adjustment_pct,
     },
   };
 }

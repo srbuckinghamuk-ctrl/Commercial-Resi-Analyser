@@ -1,9 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { Project } from '../types';
-import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../lib/conversion-types';
-import { defaultCalculatorInputs, mergeCalculatorInputs } from '../lib/conversion-defaults';
-import { calculateAppraisal } from '../lib/conversion-calc-engine';
-import { buildCashflow } from '../lib/conversion-cashflow';
+import { runAppraisal, migrateInputs } from '../lib/model';
+import type { AppraisalRun, CalculatorInputsV2 } from '../lib/model';
+import { defaultCalculatorInputsV2 } from '../lib/conversion-defaults';
 import { createAppraisal, getAppraisal, updateAppraisal } from '../lib/api';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
@@ -51,22 +50,22 @@ interface Props {
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputs>(() =>
-    defaultCalculatorInputs(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV2>(() =>
+    defaultCalculatorInputsV2(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputs(project));
+      setInputs(defaultCalculatorInputsV2(project));
       setSavedId(null);
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            // Merge onto defaults so snapshots saved before newer sections
-            // existed (severe scenario, deal_spider) still load cleanly.
-            setInputs(mergeCalculatorInputs(appraisal.inputs_snapshot, project));
+            // Migrate onto v2 defaults so snapshots saved before newer
+            // sections (or v1 snapshots) existed still load cleanly.
+            setInputs(migrateInputs(appraisal.inputs_snapshot as Record<string, unknown>, project));
             setSavedId(appraisal.id);
           }
         })
@@ -74,10 +73,9 @@ export default function ConversionCalculator({ project }: Props) {
     }
   }, [project]);
 
-  const metrics: AppraisalMetrics = useMemo(() => calculateAppraisal(inputs), [inputs]);
-  const cashflow: CashflowResult = useMemo(() => buildCashflow(inputs), [inputs]);
+  const run: AppraisalRun = useMemo(() => runAppraisal(inputs), [inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputs>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV2>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -89,13 +87,13 @@ export default function ConversionCalculator({ project }: Props) {
         project_id: project.id,
         name: `Appraisal — ${project.address_raw}`,
         inputs_snapshot: inputs as unknown as Record<string, unknown>,
-        gdv_pence: metrics.total_gdv_pence,
-        total_cost_pence: metrics.total_cost_pence,
-        profit_on_cost_pct: metrics.profit_on_cost_pct,
-        profit_on_gdv_pct: metrics.profit_on_gdv_pct,
-        return_on_equity_pct: metrics.return_on_equity_pct,
-        irr: metrics.irr_annual,
-        rlv_pence: metrics.rlv_pence,
+        gdv_pence: run.metrics.gdv_pence,
+        total_cost_pence: run.metrics.total_development_cost_pence,
+        profit_on_cost_pct: run.metrics.profit_on_cost_pct ?? 0,
+        profit_on_gdv_pct: run.metrics.profit_on_gdv_pct ?? 0,
+        return_on_equity_pct: run.metrics.return_on_equity_pct ?? 0,
+        irr: run.metrics.irr_annual_pct ?? 0,
+        rlv_pence: run.metrics.rlv_pence,
       };
       if (savedId) {
         await updateAppraisal(project.id, payload);
@@ -106,7 +104,7 @@ export default function ConversionCalculator({ project }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [project, inputs, metrics, savedId]);
+  }, [project, inputs, run, savedId]);
 
   const pageIndex = PAGES.findIndex((p) => p.key === activePage);
 
@@ -164,28 +162,28 @@ export default function ConversionCalculator({ project }: Props) {
       {/* Page content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
         {activePage === 'acquisition' && (
-          <AcquisitionPage inputs={inputs} onChange={updateInputs} metrics={metrics} />
+          <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'unit_mix' && (
-          <UnitMixPage inputs={inputs} onChange={updateInputs} metrics={metrics} />
+          <UnitMixPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'conversion_costs' && (
-          <ConversionCostsPage inputs={inputs} onChange={updateInputs} metrics={metrics} />
+          <ConversionCostsPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'finance' && (
-          <FinancePage inputs={inputs} onChange={updateInputs} metrics={metrics} />
+          <FinancePage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'cashflow' && (
-          <CashflowPage inputs={inputs} cashflow={cashflow} />
+          <CashflowPage run={run} />
         )}
         {activePage === 'appraisal' && (
-          <AppraisalSummaryPage metrics={metrics} inputs={inputs} />
+          <AppraisalSummaryPage run={run} />
         )}
         {activePage === 'scenarios' && (
           <ScenariosPage inputs={inputs} onChange={updateInputs} />
         )}
         {activePage === 'exit_strategy' && (
-          <ExitStrategyPage inputs={inputs} onChange={updateInputs} metrics={metrics} />
+          <ExitStrategyPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'risk_register' && (
           <RiskRegisterPage inputs={inputs} onChange={updateInputs} />
@@ -194,7 +192,7 @@ export default function ConversionCalculator({ project }: Props) {
           <DealSpiderPage inputs={inputs} onChange={updateInputs} project={project} />
         )}
         {activePage === 'investor_summary' && (
-          <InvestorSummaryPage inputs={inputs} metrics={metrics} cashflow={cashflow} project={project} />
+          <InvestorSummaryPage inputs={inputs} run={run} project={project} />
         )}
       </div>
 

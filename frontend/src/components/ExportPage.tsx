@@ -1,14 +1,12 @@
 import { useState, useCallback } from 'react';
 import type { Project } from '../types';
-import type { CalculatorInputs } from '../lib/conversion-types';
+import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../lib/conversion-types';
 import { getEligibility, getAppraisal } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
 import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
-import { calculateAppraisal } from '../lib/conversion-calc-engine';
-import { buildCashflow } from '../lib/conversion-cashflow';
 import { computeSpider } from '../lib/deal-spider';
-import { mergeCalculatorInputs } from '../lib/conversion-defaults';
+import { runAppraisal, migrateInputs } from '../lib/model';
 
 interface ExportPageProps {
   projects: Project[];
@@ -62,7 +60,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
         } catch {
           // eligibility optional — spider marks the axis provisional
         }
-        spider = computeSpider(mergeCalculatorInputs(raw, selectedProject), eligibility);
+        spider = computeSpider(migrateInputs(raw, selectedProject), eligibility);
       }
 
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
@@ -87,6 +85,14 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
       if (!raw || !raw.unit_mix || !raw.acquisition) {
         throw new Error('No calculator data found in appraisal snapshot');
       }
+      // The memo's exported signature is still v1-shaped (CalculatorInputs /
+      // AppraisalMetrics / CashflowResult) — Task 10 rewrites it against the
+      // v2 engine properly. For now: `inputs` keeps the memo's existing v1
+      // display shape (acquisition/unit_mix/conversion_costs/exit_strategy/
+      // risks/scenarios are unchanged between v1 and v2), while `metrics`
+      // and `cashflow` are adapted from a real runAppraisal(migrateInputs())
+      // result so the numbers reported are authoritative, not recomputed
+      // with the deleted flat-rate engine.
       const inputs: CalculatorInputs = {
         ...raw,
         unit_mix: {
@@ -101,8 +107,54 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
           })),
         } as CalculatorInputs['unit_mix'],
       };
-      const metrics = calculateAppraisal(inputs);
-      const cashflow = buildCashflow(inputs);
+
+      const run = runAppraisal(migrateInputs(raw as unknown as Record<string, unknown>, selectedProject));
+      const m = run.metrics;
+      const metrics: AppraisalMetrics = {
+        total_gdv_pence: m.gdv_pence,
+        total_acquisition_cost_pence: m.acquisition_cost_pence,
+        sdlt_pence: m.sdlt_pence,
+        total_construction_cost_pence: m.construction_cost_pence,
+        // Statutory costs are broken out separately in v2; folded back into
+        // professional fees here so the memo's cost-plan totals still sum.
+        total_professional_fees_pence: m.professional_fees_pence + m.statutory_costs_pence,
+        total_finance_cost_pence: m.finance_costs_pence,
+        total_cost_pence: m.total_development_cost_pence,
+        profit_pence: m.profit_pence,
+        profit_on_cost_pct: m.profit_on_cost_pct ?? 0,
+        profit_on_gdv_pct: m.profit_on_gdv_pct ?? 0,
+        return_on_equity_pct: m.return_on_equity_pct ?? 0,
+        irr_monthly: m.irr_monthly_pct ?? 0,
+        irr_annual: m.irr_annual_pct ?? 0,
+        rlv_pence: m.rlv_pence,
+        equity_required_pence: m.equity_contributed_pence,
+        loan_amount_pence: m.peak_debt_pence,
+      };
+
+      let cumDraw = 0;
+      let cumInterest = 0;
+      let cumCashflow = 0;
+      const cashflow: CashflowResult = {
+        months: run.model.months.map((mm) => {
+          cumDraw += mm.draw_pence;
+          cumInterest += mm.interest_accrued_pence;
+          const net = mm.gross_receipts_pence - mm.draw_pence - mm.interest_accrued_pence;
+          cumCashflow += net;
+          return {
+            month: mm.month + 1,
+            label: `Month ${mm.month + 1}`,
+            drawdown_pence: mm.draw_pence,
+            cumulative_drawdown_pence: cumDraw,
+            interest_pence: mm.interest_accrued_pence,
+            cumulative_interest_pence: cumInterest,
+            income_pence: mm.gross_receipts_pence,
+            net_cashflow_pence: net,
+            cumulative_cashflow_pence: cumCashflow,
+          };
+        }),
+        peak_funding_pence: run.model.peak_debt_pence,
+        total_interest_pence: run.model.totals.interest_pence,
+      };
 
       let eligibility = null;
       try {

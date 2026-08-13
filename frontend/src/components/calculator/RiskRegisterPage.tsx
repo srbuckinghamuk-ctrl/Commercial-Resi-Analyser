@@ -1,9 +1,10 @@
 import { useCallback } from 'react';
-import type { CalculatorInputs, RiskItem, Likelihood, Impact } from '../../lib/conversion-types';
+import type { RiskItem, Likelihood, Impact } from '../../lib/conversion-types';
+import type { CalculatorInputsV2 } from '../../lib/model';
 
 interface Props {
-  inputs: CalculatorInputs;
-  onChange: (partial: Partial<CalculatorInputs>) => void;
+  inputs: CalculatorInputsV2;
+  onChange: (partial: Partial<CalculatorInputsV2>) => void;
 }
 
 const LIKELIHOOD_OPTIONS: Likelihood[] = ['low', 'medium', 'high'];

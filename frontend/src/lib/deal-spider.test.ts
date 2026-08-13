@@ -8,18 +8,18 @@ import {
   SCENARIO_COLORS,
   HARD_GATE_KEYS,
 } from './deal-spider';
-import { defaultCalculatorInputs } from './conversion-defaults';
+import { defaultCalculatorInputsV2 } from './conversion-defaults';
 import { applyScenario } from './apply-scenario';
-import { calculateAppraisal } from './conversion-calc-engine';
+import { runAppraisal } from './model';
 import { calculateCommercialSdlt } from './commercial-sdlt';
 import { calculateResidentialSdlt } from './residential-sdlt';
-import type { CalculatorInputs } from './conversion-types';
+import type { CalculatorInputsV2 } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
 
 // ── Fixtures ─────────────────────────────────────────────
 
-function fixtureInputs(): CalculatorInputs {
-  const inputs = defaultCalculatorInputs();
+function fixtureInputs(): CalculatorInputsV2 {
+  const inputs = defaultCalculatorInputsV2();
   inputs.acquisition.purchase_price_pence = 50_000_000; // £500k
   inputs.unit_mix.units = [
     { id: 'u1', type: '2bed', floor_area_sqm: 65, estimated_value_pence: 32_000_000, comparable_notes: '' },
@@ -65,7 +65,7 @@ const ALL_PASS = fixtureAssessment([
   criterion({ key: 'natural_light' }),
 ]);
 
-function axisResult(inputs: CalculatorInputs, id: string, eligibility: EligibilityAssessment | null = ALL_PASS) {
+function axisResult(inputs: CalculatorInputsV2, id: string, eligibility: EligibilityAssessment | null = ALL_PASS) {
   const result = computeSpider(inputs, eligibility);
   const axis = result.axes.find((a) => a.id === id);
   if (!axis) throw new Error(`axis ${id} missing`);
@@ -193,9 +193,9 @@ describe('prior approval axis and the hard gate', () => {
 describe('margin resilience axis', () => {
   it('uses profit on cost under the saved downside scenario, not base case', () => {
     const inputs = fixtureInputs();
-    const downside = calculateAppraisal(applyScenario(inputs, inputs.scenarios.downside));
+    const downside = runAppraisal(applyScenario(inputs, inputs.scenarios.downside)).metrics;
     const axis = axisResult(inputs, 'margin_resilience');
-    expect(axis.raw).toBeCloseTo(downside.profit_on_cost_pct, 3);
+    expect(axis.raw).toBeCloseTo(downside.profit_on_cost_pct ?? 0, 3);
   });
 });
 
@@ -239,22 +239,22 @@ describe('tax advantage axis', () => {
   it('captures SDLT saving + VAT saving + CIL offset as % of GDV', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.cil_offset_pence = 1_000_000;
-    const metrics = calculateAppraisal(inputs);
+    const metrics = runAppraisal(inputs).metrics;
     const resSdlt = calculateResidentialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
     const commSdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
-    const vatSaving = Math.round(metrics.total_construction_cost_pence * 0.15);
+    const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
     const expected =
-      ((resSdlt - commSdlt + vatSaving + 1_000_000) / metrics.total_gdv_pence) * 100;
+      ((resSdlt - commSdlt + vatSaving + 1_000_000) / metrics.gdv_pence) * 100;
     expect(axisResult(inputs, 'tax_advantage').raw).toBeCloseTo(expected, 3);
   });
 });
 
 describe('programme axis', () => {
-  it('totals prior approval window + loan term + contingency', () => {
+  it('totals prior approval window + facility term + contingency', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.prior_approval_window_months = 2;
     inputs.deal_spider.programme_contingency_months = 1;
-    inputs.finance.loan_term_months = 12;
+    inputs.finance.term_months = 12;
     expect(axisResult(inputs, 'programme').raw).toBe(15);
   });
 });
@@ -274,7 +274,7 @@ describe('acquisition headroom axis', () => {
   it('measures cushion between max bid (RLV at target return) and purchase price', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.target_profit_on_cost_pct = 20;
-    const metrics = calculateAppraisal(inputs); // rlv_pence is at 20% PoC
+    const metrics = runAppraisal(inputs).metrics; // rlv_pence is at 20% PoC
     const expected =
       ((metrics.rlv_pence - inputs.acquisition.purchase_price_pence) / metrics.rlv_pence) * 100;
     expect(axisResult(inputs, 'acquisition_headroom').raw).toBeCloseTo(expected, 3);
@@ -283,7 +283,7 @@ describe('acquisition headroom axis', () => {
   it('exposes the max bid figure on the result', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.target_profit_on_cost_pct = 20;
-    const metrics = calculateAppraisal(inputs);
+    const metrics = runAppraisal(inputs).metrics;
     const result = computeSpider(inputs, ALL_PASS);
     expect(result.max_bid_pence).toBe(metrics.rlv_pence);
   });

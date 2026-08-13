@@ -1,12 +1,12 @@
 import { useMemo } from 'react';
-import type { CalculatorInputs, AppraisalMetrics } from '../../lib/conversion-types';
+import type { CalculatorInputsV2, AppraisalRun } from '../../lib/model';
 import { calculateCommercialSdlt } from '../../lib/commercial-sdlt';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputs;
-  onChange: (partial: Partial<CalculatorInputs>) => void;
-  metrics: AppraisalMetrics;
+  inputs: CalculatorInputsV2;
+  onChange: (partial: Partial<CalculatorInputsV2>) => void;
+  run: AppraisalRun;
 }
 
 function PenceInputRow({ label, penceValue, onChangePence }: {
@@ -66,7 +66,7 @@ function InputRow({ label, value, onChangeValue, suffix }: {
   );
 }
 
-export default function AcquisitionPage({ inputs, onChange, metrics }: Props) {
+export default function AcquisitionPage({ inputs, onChange, run }: Props) {
   const acq = inputs.acquisition;
   const sdlt = useMemo(() => calculateCommercialSdlt(acq.purchase_price_pence), [acq.purchase_price_pence]);
 
@@ -122,7 +122,7 @@ export default function AcquisitionPage({ inputs, onChange, metrics }: Props) {
       <div style={{ marginTop: 24, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
           <span>Total Acquisition Cost</span>
-          <span>{penceToPounds(metrics.total_acquisition_cost_pence)}</span>
+          <span>{penceToPounds(run.metrics.acquisition_cost_pence)}</span>
         </div>
       </div>
     </div>

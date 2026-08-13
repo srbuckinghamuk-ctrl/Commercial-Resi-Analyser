@@ -4,11 +4,8 @@ import {
   calculateTotalAcquisitionCost,
   calculateTotalConstructionCost,
   calculateTotalProfessionalFees,
-  calculateIrr,
-  calculateAppraisal,
 } from './conversion-calc-engine';
 import type { ProposedUnit, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
-import { defaultCalculatorInputs } from './conversion-defaults';
 
 describe('calculateGdv', () => {
   it('returns zero for empty units', () => {
@@ -89,57 +86,3 @@ describe('calculateTotalProfessionalFees', () => {
   });
 });
 
-describe('calculateIrr', () => {
-  it('returns reasonable IRR for simple cashflow', () => {
-    // Invest 100, get 120 back after 12 months
-    const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 120];
-    const monthly = calculateIrr(cashflows);
-    expect(monthly).toBeGreaterThan(0);
-    expect(monthly).toBeLessThan(5);
-  });
-
-  it('returns 0 for break-even', () => {
-    const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100];
-    const monthly = calculateIrr(cashflows);
-    expect(monthly).toBeCloseTo(0, 1);
-  });
-
-  it('returns negative for loss-making', () => {
-    const cashflows = [-100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80];
-    const monthly = calculateIrr(cashflows);
-    expect(monthly).toBeLessThan(0);
-  });
-});
-
-describe('calculateAppraisal', () => {
-  it('produces complete metrics for valid inputs', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 30_000_000, floor_area_sqm: 2000 });
-    inputs.unit_mix.units = [
-      { id: '1', type: '1bed', floor_area_sqm: 500, estimated_value_pence: 25_000_000, comparable_notes: '' },
-      { id: '2', type: '2bed', floor_area_sqm: 700, estimated_value_pence: 35_000_000, comparable_notes: '' },
-      { id: '3', type: '1bed', floor_area_sqm: 450, estimated_value_pence: 22_000_000, comparable_notes: '' },
-    ];
-    inputs.conversion_costs.construction_cost_per_sqm_pence = 7_500;
-    inputs.conversion_costs.total_construction_sqm = 2000;
-
-    const metrics = calculateAppraisal(inputs);
-
-    expect(metrics.total_gdv_pence).toBe(82_000_000);
-    expect(metrics.sdlt_pence).toBeGreaterThan(0);
-    expect(metrics.total_acquisition_cost_pence).toBeGreaterThan(30_000_000);
-    expect(metrics.total_construction_cost_pence).toBeGreaterThan(0);
-    expect(metrics.total_cost_pence).toBeGreaterThan(0);
-    expect(metrics.profit_pence).toBe(metrics.total_gdv_pence - metrics.total_cost_pence);
-    expect(metrics.profit_on_cost_pct).toBeGreaterThan(0);
-    expect(metrics.profit_on_gdv_pct).toBeGreaterThan(0);
-    expect(metrics.loan_amount_pence).toBeGreaterThan(0);
-    expect(metrics.equity_required_pence).toBeGreaterThan(0);
-  });
-
-  it('returns zero profit metrics when no units', () => {
-    const inputs = defaultCalculatorInputs({ id: 'test', price_pence: 50_000_000, floor_area_sqm: 5000 });
-    const metrics = calculateAppraisal(inputs);
-    expect(metrics.total_gdv_pence).toBe(0);
-    expect(metrics.profit_pence).toBeLessThan(0);
-  });
-});

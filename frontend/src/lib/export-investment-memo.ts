@@ -7,8 +7,100 @@ import type {
   CashflowResult,
   ScenarioOverrides,
 } from './conversion-types';
-import { calculateAppraisal } from './conversion-calc-engine';
+import {
+  calculateGdv,
+  calculateTotalAcquisitionCost,
+  calculateTotalConstructionCost,
+  calculateTotalProfessionalFees,
+} from './conversion-calc-engine';
 import { calculateCommercialSdlt } from './commercial-sdlt';
+
+// ── Legacy v1 appraisal maths (private to this file) ──────
+//
+// The shared engine (frontend/src/lib/model) is now the sole authoritative
+// calculator — the flat-rate LTV/IRR formulas below were removed from
+// conversion-calc-engine.ts as prohibited formulas (spec §11). This memo's
+// sensitivity/impairment sections still operate on the legacy v1
+// CalculatorInputs shape and are rewritten properly in Task 10; until then
+// they use this private, unexported copy so the shared engine stays clean.
+
+function legacyCalculateIrr(cashflows: number[], maxIterations = 1000, tolerance = 1e-7): number {
+  let guess = 0.01;
+  for (let i = 0; i < maxIterations; i++) {
+    let npv = 0;
+    let dnpv = 0;
+    for (let t = 0; t < cashflows.length; t++) {
+      const factor = Math.pow(1 + guess, t);
+      npv += cashflows[t] / factor;
+      if (t > 0) {
+        dnpv -= (t * cashflows[t]) / Math.pow(1 + guess, t + 1);
+      }
+    }
+    if (Math.abs(dnpv) < 1e-15) break;
+    const newGuess = guess - npv / dnpv;
+    if (Math.abs(newGuess - guess) < tolerance) return newGuess * 100;
+    guess = newGuess;
+  }
+  return guess * 100;
+}
+
+function legacyCalculateAppraisal(inputs: CalculatorInputs): AppraisalMetrics {
+  const gdv = calculateGdv(inputs.unit_mix.units);
+  const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
+  const totalAcquisition = calculateTotalAcquisitionCost(inputs.acquisition);
+  const totalConstruction = calculateTotalConstructionCost(inputs.conversion_costs);
+  const totalProfessional = calculateTotalProfessionalFees(inputs.conversion_costs, inputs.unit_mix.units.length);
+
+  const totalCostBeforeFinance = totalAcquisition + totalConstruction + totalProfessional;
+  const loanAmount = Math.round((totalCostBeforeFinance * inputs.finance.ltv_pct) / 100);
+  const equityRequired = totalCostBeforeFinance - loanAmount;
+
+  const arrangementFee = Math.round((loanAmount * inputs.finance.arrangement_fee_pct) / 100);
+  const exitFee = Math.round((loanAmount * inputs.finance.exit_fee_pct) / 100);
+  const monthlyRate = inputs.finance.interest_rate_annual_pct / 100 / 12;
+  const totalInterest = Math.round(loanAmount * monthlyRate * inputs.finance.loan_term_months);
+  const totalFinanceCost = arrangementFee + exitFee + totalInterest;
+
+  const totalCost = totalCostBeforeFinance + totalFinanceCost;
+  const profit = gdv - totalCost;
+
+  const profitOnCost = totalCost > 0 ? (profit / totalCost) * 100 : 0;
+  const profitOnGdv = gdv > 0 ? (profit / gdv) * 100 : 0;
+  const returnOnEquity = equityRequired > 0 ? (profit / equityRequired) * 100 : 0;
+
+  const cashflows: number[] = [];
+  cashflows.push(-equityRequired);
+  for (let m = 1; m < inputs.finance.loan_term_months; m++) {
+    cashflows.push(0);
+  }
+  cashflows.push(profit + equityRequired);
+
+  const irrMonthly = cashflows.length > 1 ? legacyCalculateIrr(cashflows) : 0;
+  const irrAnnual = (Math.pow(1 + irrMonthly / 100, 12) - 1) * 100;
+
+  const totalCostExLand = totalCost - inputs.acquisition.purchase_price_pence - sdlt;
+  const targetMultiplier = 1 + 20 / 100;
+  const rlv = Math.round(gdv / targetMultiplier - totalCostExLand);
+
+  return {
+    total_gdv_pence: gdv,
+    total_acquisition_cost_pence: totalAcquisition,
+    sdlt_pence: sdlt,
+    total_construction_cost_pence: totalConstruction,
+    total_professional_fees_pence: totalProfessional,
+    total_finance_cost_pence: totalFinanceCost,
+    total_cost_pence: totalCost,
+    profit_pence: profit,
+    profit_on_cost_pct: Math.round(profitOnCost * 100) / 100,
+    profit_on_gdv_pct: Math.round(profitOnGdv * 100) / 100,
+    return_on_equity_pct: Math.round(returnOnEquity * 100) / 100,
+    irr_monthly: Math.round(irrMonthly * 100) / 100,
+    irr_annual: Math.round(irrAnnual * 100) / 100,
+    rlv_pence: rlv,
+    equity_required_pence: equityRequired,
+    loan_amount_pence: loanAmount,
+  };
+}
 
 const PAGE_W = 210;
 const MARGIN_L = 20;
@@ -906,7 +998,7 @@ export function generateInvestmentMemo(
   const scenarioKeys = ['base', 'upside', 'downside'] as const;
   const scenarioMetrics = scenarioKeys.map((key) => ({
     label: inputs.scenarios[key].label,
-    metrics: calculateAppraisal(applyScenario(inputs, inputs.scenarios[key])),
+    metrics: legacyCalculateAppraisal(applyScenario(inputs, inputs.scenarios[key])),
     overrides: inputs.scenarios[key],
   }));
 
@@ -953,7 +1045,7 @@ export function generateInvestmentMemo(
         timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: 0,
       });
-      const m = calculateAppraisal(adjusted);
+      const m = legacyCalculateAppraisal(adjusted);
       row.push(fmtPct(m.profit_on_cost_pct));
     }
     matrixRows.push(row);
@@ -995,7 +1087,7 @@ export function generateInvestmentMemo(
         timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: 0,
       });
-      const m = calculateAppraisal(adjusted);
+      const m = legacyCalculateAppraisal(adjusted);
       const scenLtgdv = m.total_gdv_pence > 0
         ? (m.loan_amount_pence / m.total_gdv_pence) * 100
         : 0;
@@ -1197,7 +1289,7 @@ function findImpairmentPoint(
       timeline_adjustment_months: 0,
       interest_rate_adjustment_pct: 0,
     });
-    const m = calculateAppraisal(adjusted);
+    const m = legacyCalculateAppraisal(adjusted);
     if (type === 'equity' && m.profit_pence <= 0) return pct;
     if (type === 'debt' && m.total_gdv_pence <= m.total_cost_pence) return pct;
   }

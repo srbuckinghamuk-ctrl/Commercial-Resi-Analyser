@@ -9,7 +9,7 @@ import type {
   DealSpiderInputs,
   CalculatorInputs,
 } from './conversion-types';
-import { CLASS_MA_AXES } from './deal-spider';
+import { CLASS_MA_AXES } from './spider-axes';
 import type { CalculatorInputsV2, EquitySource, FacilityTerms } from './model/finance-types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
@@ -185,40 +185,6 @@ export function defaultCalculatorInputs(project?: {
       storeys,
       building_height_m: storeys * 3.5,
       weights: defaultSpiderWeights(),
-    },
-  };
-}
-
-/**
- * Merge a saved inputs snapshot onto current defaults so appraisals saved
- * before newer sections existed (severe scenario, deal_spider) still load
- * with every value they were saved with.
- */
-export function mergeCalculatorInputs(
-  snapshot: Record<string, unknown>,
-  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
-): CalculatorInputs {
-  const defaults = defaultCalculatorInputs(project);
-  const saved = snapshot as Partial<CalculatorInputs>;
-  return {
-    ...defaults,
-    ...saved,
-    acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
-    unit_mix: saved.unit_mix ?? defaults.unit_mix,
-    conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
-    finance: { ...defaults.finance, ...(saved.finance ?? {}) },
-    exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
-    risks: saved.risks ?? defaults.risks,
-    scenarios: {
-      base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
-      upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
-      downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
-      severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
-    },
-    deal_spider: {
-      ...defaults.deal_spider,
-      ...(saved.deal_spider ?? {}),
-      weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
     },
   };
 }

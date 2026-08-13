@@ -1,11 +1,12 @@
 import { useCallback } from 'react';
-import type { CalculatorInputs, AppraisalMetrics, ProposedUnit, UnitType } from '../../lib/conversion-types';
+import type { ProposedUnit, UnitType } from '../../lib/conversion-types';
+import type { CalculatorInputsV2, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputs;
-  onChange: (partial: Partial<CalculatorInputs>) => void;
-  metrics: AppraisalMetrics;
+  inputs: CalculatorInputsV2;
+  onChange: (partial: Partial<CalculatorInputsV2>) => void;
+  run: AppraisalRun;
 }
 
 const UNIT_TYPES: { value: UnitType; label: string }[] = [
@@ -15,7 +16,7 @@ const UNIT_TYPES: { value: UnitType; label: string }[] = [
   { value: '3bed', label: '3 Bed' },
 ];
 
-export default function UnitMixPage({ inputs, onChange, metrics }: Props) {
+export default function UnitMixPage({ inputs, onChange, run }: Props) {
   const units = inputs.unit_mix.units;
 
   const updateUnits = useCallback(
@@ -137,7 +138,7 @@ export default function UnitMixPage({ inputs, onChange, metrics }: Props) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
           <span>Total GDV</span>
-          <span>{penceToPounds(metrics.total_gdv_pence)}</span>
+          <span>{penceToPounds(run.metrics.gdv_pence)}</span>
         </div>
       </div>
     </div>

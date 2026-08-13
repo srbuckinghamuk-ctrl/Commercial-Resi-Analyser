@@ -1,9 +1,16 @@
-import type { CalculatorInputs, ProposedUnit, UnitType } from './conversion-types';
+import type { ProposedUnit, UnitType, DealSpiderInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
-import { calculateAppraisal, calculateRlv } from './conversion-calc-engine';
+import { calculateRlv } from './conversion-calc-engine';
 import { calculateCommercialSdlt } from './commercial-sdlt';
 import { calculateResidentialSdlt } from './residential-sdlt';
 import { applyScenario } from './apply-scenario';
+import { runAppraisal } from './model';
+import type { CalculatorInputsV2 } from './model';
+import { CLASS_MA_AXES } from './spider-axes';
+import type { SpiderAxisId, SpiderAxisDef } from './spider-axes';
+
+export { CLASS_MA_AXES };
+export type { SpiderAxisId, SpiderAxisDef };
 
 // ── Scenario palette (ported from the refurb calculator) ─
 
@@ -35,121 +42,8 @@ export function scenarioColor(name: string, fallback: string): string {
 }
 
 // ── Axis definitions ─────────────────────────────────────
-
-export type SpiderAxisId =
-  | 'margin_resilience'
-  | 'prior_approval'
-  | 'deliverability'
-  | 'building_safety'
-  | 'tax_advantage'
-  | 'programme'
-  | 'sales_velocity'
-  | 'exit_optionality'
-  | 'acquisition_headroom';
-
-export interface SpiderAxisDef {
-  id: SpiderAxisId;
-  label: string; // radar label, may contain \n
-  short: string;
-  min: number;
-  max: number;
-  direction: 'higher' | 'lower';
-  unit: string;
-  help: string;
-}
-
-export const CLASS_MA_AXES: SpiderAxisDef[] = [
-  {
-    id: 'margin_resilience',
-    label: 'Margin\nResilience',
-    short: 'Resilience',
-    min: -5,
-    max: 15,
-    direction: 'higher',
-    unit: '%',
-    help: 'Profit on cost (%) recomputed under the saved Downside scenario, not the base case. Normalised linearly from -5% (score 0) to +15% (score 5).',
-  },
-  {
-    id: 'prior_approval',
-    label: 'Prior Approval\nRisk',
-    short: 'Approval',
-    min: 0,
-    max: 5,
-    direction: 'higher',
-    unit: '/5',
-    help: 'Derived from the Eligibility gate: 5 × (passed checks ÷ applicable checks). Any hard-gate fail forces 0 and blocks the overall score. An unverified Article 4 or vacancy-period check caps the axis at 2 and marks it provisional.',
-  },
-  {
-    id: 'deliverability',
-    label: 'Daylight &\nLayout',
-    short: 'Layout',
-    min: 0,
-    max: 100,
-    direction: 'higher',
-    unit: '%',
-    help: 'The lower of (a) % of proposed units meeting NDSS minimum floor areas (studio 37m², 1-bed 50m², 2-bed 61m², 3-bed 74m²) and (b) the manual daylight pass % entered on this page. Normalised 0–100% to 0–5.',
-  },
-  {
-    id: 'building_safety',
-    label: 'Building\nSafety',
-    short: 'Safety',
-    min: 0,
-    max: 5,
-    direction: 'higher',
-    unit: '/5',
-    help: 'Banded from height/storeys: higher-risk building (≥18m, ≥7 storeys, or flagged HRB) scores 0; 11–18m or 5–6 storeys scores 3 (EWS1 / remediation exposure); below that scores 5.',
-  },
-  {
-    id: 'tax_advantage',
-    label: 'Tax\nAdvantage',
-    short: 'Tax',
-    min: 0,
-    max: 6,
-    direction: 'higher',
-    unit: '% GDV',
-    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + 15% VAT saving on construction (5% conversion rate vs 20%) + CIL existing-floorspace offset. Normalised 0–6% of GDV to 0–5.',
-  },
-  {
-    id: 'programme',
-    label: 'Programme\nRisk',
-    short: 'Programme',
-    min: 8,
-    max: 30,
-    direction: 'lower',
-    unit: 'mo',
-    help: 'Total months from exchange to practical completion: 56-day prior approval window (as months) + loan term + programme contingency. Normalised 8 months (score 5) to 30 months (score 0).',
-  },
-  {
-    id: 'sales_velocity',
-    label: 'Sales\nVelocity',
-    short: 'Sales',
-    min: 3,
-    max: 18,
-    direction: 'lower',
-    unit: 'mo',
-    help: 'Absorption months to dispose of the full unit count, entered manually on this page. Normalised 3 months (score 5) to 18 months (score 0).',
-  },
-  {
-    id: 'exit_optionality',
-    label: 'Exit\nOptionality',
-    short: 'Exit',
-    min: 0,
-    max: 4,
-    direction: 'higher',
-    unit: 'routes',
-    help: 'Count of viable exits ticked on this page: sell / refinance / hold / part-sale-part-hold. Normalised 0 routes (score 0) to 4 routes (score 5).',
-  },
-  {
-    id: 'acquisition_headroom',
-    label: 'Acquisition\nHeadroom',
-    short: 'Headroom',
-    min: 0,
-    max: 30,
-    direction: 'higher',
-    unit: '%',
-    help: '(Max bid − purchase price) ÷ max bid, where max bid is the residual land value at the target profit on cost set on this page. Normalised 0% (score 0) to 30% (score 5). Negative headroom scores 0.',
-  },
-];
+// SpiderAxisId, SpiderAxisDef and CLASS_MA_AXES live in ./spider-axes and
+// are re-exported above.
 
 // Eligibility checks that legally gate Class MA — a confirmed fail means the
 // scheme cannot proceed under permitted development rights.
@@ -269,7 +163,7 @@ function scorePriorApproval(eligibility: EligibilityAssessment | null): PriorApp
   };
 }
 
-function buildingSafetyBand(spider: CalculatorInputs['deal_spider']): number {
+function buildingSafetyBand(spider: DealSpiderInputs): number {
   const higherRisk =
     spider.bsa_higher_risk || spider.building_height_m >= 18 || spider.storeys >= 7;
   if (higherRisk) return 0;
@@ -278,29 +172,29 @@ function buildingSafetyBand(spider: CalculatorInputs['deal_spider']): number {
 }
 
 export function computeSpider(
-  inputs: CalculatorInputs,
+  inputs: CalculatorInputsV2,
   eligibility: EligibilityAssessment | null,
 ): SpiderResult {
   const spider = inputs.deal_spider;
-  const metrics = calculateAppraisal(inputs);
-  const downsideMetrics = calculateAppraisal(applyScenario(inputs, inputs.scenarios.downside));
+  const metrics = runAppraisal(inputs).metrics;
+  const downsideMetrics = runAppraisal(applyScenario(inputs, inputs.scenarios.downside)).metrics;
   const priorApproval = scorePriorApproval(eligibility);
 
   // Tax advantage
   const price = inputs.acquisition.purchase_price_pence;
   const residentialSdlt = calculateResidentialSdlt(price).total_pence;
   const commercialSdlt = calculateCommercialSdlt(price).total_pence;
-  const vatSaving = Math.round(metrics.total_construction_cost_pence * 0.15);
+  const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
   const taxAdvantagePct =
-    metrics.total_gdv_pence > 0
+    metrics.gdv_pence > 0
       ? ((residentialSdlt - commercialSdlt + vatSaving + spider.cil_offset_pence) /
-          metrics.total_gdv_pence) *
+          metrics.gdv_pence) *
         100
       : 0;
 
   // Acquisition headroom against max bid (RLV at the configured target return)
-  const totalCostExLand = metrics.total_cost_pence - price - metrics.sdlt_pence;
-  const maxBid = calculateRlv(totalCostExLand, metrics.total_gdv_pence, spider.target_profit_on_cost_pct);
+  const totalCostExLand = metrics.total_development_cost_pence - price - metrics.sdlt_pence;
+  const maxBid = calculateRlv(totalCostExLand, metrics.gdv_pence, spider.target_profit_on_cost_pct);
   const headroomPct = maxBid > 0 ? ((maxBid - price) / maxBid) * 100 : -100;
 
   const exitCount = [spider.exit_sell, spider.exit_refinance, spider.exit_hold, spider.exit_part_sale].filter(
@@ -308,12 +202,12 @@ export function computeSpider(
   ).length;
 
   const programmeMonths =
-    spider.prior_approval_window_months + inputs.finance.loan_term_months + spider.programme_contingency_months;
+    spider.prior_approval_window_months + inputs.finance.term_months + spider.programme_contingency_months;
 
   const deliverabilityPct = Math.min(ndssPassPct(inputs.unit_mix.units), spider.daylight_pass_pct);
 
   const raws: Record<SpiderAxisId, number> = {
-    margin_resilience: downsideMetrics.profit_on_cost_pct,
+    margin_resilience: downsideMetrics.profit_on_cost_pct ?? 0,
     prior_approval: priorApproval.raw,
     deliverability: deliverabilityPct,
     building_safety: buildingSafetyBand(spider),

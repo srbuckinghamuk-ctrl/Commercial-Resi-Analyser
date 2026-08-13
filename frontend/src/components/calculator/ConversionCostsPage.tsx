@@ -1,10 +1,10 @@
-import type { CalculatorInputs, AppraisalMetrics } from '../../lib/conversion-types';
+import type { CalculatorInputsV2, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputs;
-  onChange: (partial: Partial<CalculatorInputs>) => void;
-  metrics: AppraisalMetrics;
+  inputs: CalculatorInputsV2;
+  onChange: (partial: Partial<CalculatorInputsV2>) => void;
+  run: AppraisalRun;
 }
 
 function PenceCostRow({ label, penceValue, onChangePence }: {
@@ -46,7 +46,7 @@ function CostRow({ label, value, onChangeValue }: {
   );
 }
 
-export default function ConversionCostsPage({ inputs, onChange, metrics }: Props) {
+export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
   const costs = inputs.conversion_costs;
 
   const updateCosts = (partial: Partial<typeof costs>) => {
@@ -82,15 +82,25 @@ export default function ConversionCostsPage({ inputs, onChange, metrics }: Props
       <div style={{ marginTop: 24, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
           <span>Construction cost</span>
-          <span>{penceToPounds(metrics.total_construction_cost_pence)}</span>
+          <span>{penceToPounds(run.metrics.construction_cost_pence)}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
           <span>Professional fees</span>
-          <span>{penceToPounds(metrics.total_professional_fees_pence)}</span>
+          <span>{penceToPounds(run.metrics.professional_fees_pence)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
+          <span>Statutory costs</span>
+          <span>{penceToPounds(run.metrics.statutory_costs_pence)}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e2e8f0', fontWeight: 600, fontSize: 16, paddingTop: 8, borderTop: '1px solid #1e3a5f' }}>
           <span>Total Conversion Costs</span>
-          <span>{penceToPounds(metrics.total_construction_cost_pence + metrics.total_professional_fees_pence)}</span>
+          <span>
+            {penceToPounds(
+              run.metrics.construction_cost_pence +
+                run.metrics.professional_fees_pence +
+                run.metrics.statutory_costs_pence,
+            )}
+          </span>
         </div>
       </div>
     </div>

@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { buildSpiderContent } from './export-pdf';
 import { computeSpider } from './deal-spider';
-import { defaultCalculatorInputs } from './conversion-defaults';
-import type { CalculatorInputs } from './conversion-types';
+import { defaultCalculatorInputsV2 } from './conversion-defaults';
+import type { CalculatorInputsV2 } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
 
-function fixtureInputs(): CalculatorInputs {
-  const inputs = defaultCalculatorInputs();
+function fixtureInputs(): CalculatorInputsV2 {
+  const inputs = defaultCalculatorInputsV2();
   inputs.acquisition.purchase_price_pence = 50_000_000;
   inputs.unit_mix.units = [
     { id: 'u1', type: '2bed', floor_area_sqm: 65, estimated_value_pence: 32_000_000, comparable_notes: '' },
