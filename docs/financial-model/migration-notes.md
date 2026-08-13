@@ -73,7 +73,7 @@ as falsy. The Task 11 review caught this drift (progress ledger: "migrate.py:177
 drift") and it is now pinned by a dedicated test — spec §1.5's "unknown vs zero" distinction
 depends on this being right.
 
-## 2. DB migration 002 (`migrations/002_appraisal_governance.py`)
+## 2. DB migration 002 (`migrations/versions/002_appraisal_governance.py`)
 
 Adds seven columns to `financial_appraisals` (revision `002`, `down_revision = "001"`):
 
@@ -190,6 +190,16 @@ columns to existing ones), and `alembic_version` contained a stale revision
 3. Verify: `docker compose run --rm api alembic current` reports `002 (head)`.
 4. Restart the api service:
    `docker compose start api`
+
+**If something goes wrong:** Restore from the backup taken in step 1. First, drop and recreate the database:
+   ```
+   docker compose exec -T postgres psql -U postgres -c "DROP DATABASE commercial_resi WITH (FORCE)"
+   docker compose exec -T postgres psql -U postgres -c "CREATE DATABASE commercial_resi"
+   ```
+   Then restore the backup and re-run the diagnosis step before retrying:
+   ```
+   docker compose exec -T postgres psql -U postgres -d commercial_resi < backup-<date>.sql
+   ```
 
 From now on, schema changes ship as new scripts in `migrations/versions/`
 and are applied with `docker compose run --rm api alembic upgrade head`.
