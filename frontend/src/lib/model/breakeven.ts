@@ -38,7 +38,7 @@ export function solveSeniorBreakeven(t: SeniorBreakevenTerms): number | null {
   while (lo < hi) {
     if (iterations >= 200) return null;
     iterations++;
-    const mid = (lo + hi) >> 1;
+    const mid = Math.floor((lo + hi) / 2);
     if (feasible(mid)) hi = mid; else lo = mid + 1;
   }
   return feasible(lo) ? lo : null;

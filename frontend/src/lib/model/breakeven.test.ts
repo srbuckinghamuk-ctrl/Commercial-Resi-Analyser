@@ -64,26 +64,36 @@ describe('solveSeniorBreakeven (spec §5.11)', () => {
     expect(p).toBe(2);
   });
 
-  it('iteration-cap guard: returns null rather than a wrong number when the search cannot converge', () => {
-    // JS's `(lo+hi) >> 1` coerces to a 32-bit signed integer (spec-mandated bisection
-    // shape). For a redemption balance at or above 2^31 pence (~£21.47m — a realistic
-    // scale for a large commercial deal), `hi` computed from the closed form exceeds the
-    // safe 32-bit range and the bit-shift corrupts `mid`, breaking normal bisection
-    // convergence. The 200-iteration cap is the load-bearing guard that turns this into a
-    // clean `null` (never a silently wrong number) rather than an incorrect answer or an
-    // infinite loop — empirically confirmed to hit exactly the 200-iteration cap at this
-    // scale (see task-4-report.md for the reproduction and the cross-language note: the
-    // Python solver has no such 32-bit limitation and converges correctly at this scale).
+  it('regression: converges to the exact integer for a large deal that a 32-bit `>>1` midpoint ' +
+    'used to break (fixed — see docs/financial-model/test-cases.md)', () => {
+    // Historical bug (fixed in the same change that added this regression test): the
+    // midpoint used to be computed as `(lo + hi) >> 1`, which coerces to a 32-bit signed
+    // integer in JS. For a redemption balance at or above 2^31 pence (~£21.47m — a
+    // realistic scale for a large commercial deal), the closed-form `hi` exceeded the safe
+    // 32-bit range and the bit-shift corrupted `mid`, exhausting the 200-iteration cap and
+    // returning null for a genuinely solvable deal. `mid` is now `Math.floor((lo+hi)/2)`,
+    // which has no such ceiling. Closed-form worksheet: fee_floor = 5,000,000,000 +
+    // 100,000 + 400,000 = 5,000,500,000; guess = 5,000,500,000 / 0.985 =
+    // 5,076,649,746.19…; hand-checked boundary — at P=5,076,649,745,
+    // round(1.5% × P) = 76,149,746, RHS = 5,076,649,746, P < RHS (infeasible); at
+    // P=5,076,649,746, round(1.5% × P) = 76,149,746, RHS = 5,076,649,746, P >= RHS
+    // (feasible, equality) — minimum feasible P = 5,076,649,746. Python's `//2` midpoint
+    // (which never had the 32-bit issue) converges to the identical integer — see
+    // tests/test_financial_model_breakeven.py's matching regression test; both languages
+    // must agree exactly.
     const p = solveSeniorBreakeven(terms({
       redemption_balance_pence: 5_000_000_000,
       exit_fee_pence: 100_000,
       selling_agent_fee_pct: 1.5,
       selling_legal_fee_pence: 400_000,
     }));
-    expect(p).toBeNull();
+    expect(p).toBe(5_076_649_746);
+    const feeFloor = 5_000_000_000 + 100_000 + 400_000;
+    expect(feeFloor + Math.round((5_076_649_745 * 1.5) / 100)).toBe(5_076_649_746);
+    expect(5_076_649_745).toBeLessThan(5_076_649_746);
   });
 
-  it('converges correctly for realistic large deals just under the 32-bit-safe boundary', () => {
+  it('converges correctly for realistic large deals', () => {
     const p = solveSeniorBreakeven(terms({
       redemption_balance_pence: 500_000_000, // £5m senior balance
       exit_fee_pence: 100_000,
@@ -93,5 +103,19 @@ describe('solveSeniorBreakeven (spec §5.11)', () => {
     expect(p).not.toBeNull();
     const disposalCost = Math.round((p! * 1.5) / 100);
     expect(p!).toBeGreaterThanOrEqual(500_000_000 + 100_000 + disposalCost + 400_000);
+  });
+
+  it('iteration-cap guard: returns null rather than a wrong number when the search genuinely ' +
+    'cannot converge within 200 steps', () => {
+    // `Math.floor((lo+hi)/2)` has no 32-bit ceiling, but IEEE-754 double precision still
+    // bounds how many meaningful bisection steps are possible: at an astronomic fee floor
+    // (10^80 — far beyond any real financial figure), the ~266 steps needed
+    // (log2(10^80) ≈ 265.75) genuinely exceed the 200-iteration cap, which correctly
+    // returns null (never a partially-bisected, wrong number) rather than looping forever
+    // or silently returning early. Mirrors the Python regression
+    // (test_iteration_cap_guard_genuinely_reachable_at_extreme_magnitude) at the same
+    // magnitude.
+    const p = solveSeniorBreakeven(terms({ selling_legal_fee_pence: 1e80, selling_agent_fee_pct: 50 }));
+    expect(p).toBeNull();
   });
 });

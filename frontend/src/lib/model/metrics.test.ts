@@ -142,6 +142,28 @@ describe('deriveMetrics on retain_all (Fixture D shape)', () => {
   });
 });
 
+describe('deriveMetrics — senior_breakeven_unsolvable flag (spec §5.11)', () => {
+  it('nulls senior_breakeven_pence and raises the flag exactly once when the agent fee is >= 100%', () => {
+    const inputs = defaultCalculatorInputsV2();
+    inputs.finance = { ...TERMS };
+    inputs.equity_sources = equity(30_000_000);
+    inputs.acquisition.purchase_price_pence = 40_000_000;
+    inputs.exit_strategy = { ...inputs.exit_strategy, selling_agent_fee_pct: 100 };
+    const schedule = mkSchedule(USES, SALE); // month 3 disposal — non-null redemption balance
+    const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
+    const r = deriveMetrics(inputs, schedule, model);
+
+    expect(model.redemption_balance_at_disposal_pence).not.toBeNull();
+    expect(r.senior_breakeven_pence).toBeNull();
+    const flags = model.flags.filter((f) => f.code === 'senior_breakeven_unsolvable');
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toEqual({
+      code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+      message: 'agent fee ≥ 100% — break-even unsolvable',
+    });
+  });
+});
+
 describe('deriveMetrics under cash funding', () => {
   it('zeroes every debt metric', () => {
     const inputs = defaultCalculatorInputsV2();

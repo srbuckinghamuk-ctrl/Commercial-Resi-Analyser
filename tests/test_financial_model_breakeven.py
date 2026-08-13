@@ -63,31 +63,39 @@ class TestSolveSeniorBreakeven:
         assert p == 2
 
     def test_iteration_cap_guard_genuinely_reachable_at_extreme_magnitude(self):
-        # Python integers are arbitrary precision (no 32-bit truncation the way JS's
-        # `(lo+hi) >> 1` has -- see the TS test for that divergence), so reaching the
-        # 200-iteration cap here requires a genuinely astronomic fee_floor: 10**80
-        # needs ~266 bisection steps (log2(10**80) =~ 265.75), which the 200-iteration
-        # cap correctly refuses to exceed, returning None rather than a partially
-        # bisected (wrong) number.
+        # Python integers are arbitrary precision, and TS's midpoint (`Math.floor((lo+hi)/2)`)
+        # has no 32-bit ceiling either -- so in both languages, reaching the 200-iteration
+        # cap requires a genuinely astronomic fee_floor: 10**80 needs ~266 bisection steps
+        # (log2(10**80) =~ 265.75), which the 200-iteration cap correctly refuses to
+        # exceed, returning None rather than a partially bisected (wrong) number. Mirrors
+        # the TS regression at the same magnitude.
         p = solve_senior_breakeven(terms(selling_legal_fee_pence=10**80, selling_agent_fee_pct=50))
         assert p is None
 
-    def test_converges_correctly_for_realistic_large_deals_where_ts_cannot(self):
-        # Cross-language divergence (see task-4-report.md): the same
-        # redemption_balance_pence=5,000,000,000 (~GBP50m senior balance -- a
-        # realistic scale for a large commercial deal) that forces JS's
-        # `solveSeniorBreakeven` to hit its 200-iteration cap and return null (because
-        # `(lo+hi) >> 1` truncates to a 32-bit signed integer once hi exceeds 2**31)
-        # converges cleanly in Python, which has no such bit-width limitation.
+    def test_converges_to_the_exact_integer_for_a_large_deal_regression(self):
+        # Regression (see docs/financial-model/test-cases.md): TS's midpoint used to be
+        # `(lo + hi) >> 1`, which coerces to a 32-bit signed integer in JS and, for a
+        # redemption balance at or above 2**31 pence (~GBP21.47m), corrupted `mid` and
+        # exhausted the 200-iteration cap -- returning null for a genuinely solvable
+        # deal. TS's midpoint is now `Math.floor((lo+hi)/2)`, which (like Python's `//2`,
+        # which never had this issue) converges to the exact same integer. Both
+        # languages must agree exactly -- see breakeven.test.ts's matching regression
+        # test. Closed-form worksheet: fee_floor = 5,000,000,000 + 100,000 + 400,000 =
+        # 5,000,500,000; guess = 5,000,500,000 / 0.985 = 5,076,649,746.19...;
+        # hand-checked boundary -- at P=5,076,649,745, round(1.5% x P) = 76,149,746,
+        # RHS = 5,076,649,746, P < RHS (infeasible); at P=5,076,649,746,
+        # round(1.5% x P) = 76,149,746, RHS = 5,076,649,746, P >= RHS (feasible,
+        # equality) -- minimum feasible P = 5,076,649,746.
         p = solve_senior_breakeven(terms(
             redemption_balance_pence=5_000_000_000, exit_fee_pence=100_000,
             selling_agent_fee_pct=1.5, selling_legal_fee_pence=400_000,
         ))
-        assert p is not None
-        disposal_cost = money_round((p * 1.5) / 100)
-        assert p >= 5_000_000_000 + 100_000 + disposal_cost + 400_000
+        assert p == 5_076_649_746
+        fee_floor = 5_000_000_000 + 100_000 + 400_000
+        assert fee_floor + money_round((5_076_649_745 * 1.5) / 100) == 5_076_649_746
+        assert 5_076_649_745 < 5_076_649_746
 
-    def test_converges_for_realistic_large_deals_just_under_the_32_bit_safe_boundary(self):
+    def test_converges_for_realistic_large_deals(self):
         p = solve_senior_breakeven(terms(
             redemption_balance_pence=500_000_000, exit_fee_pence=100_000,
             selling_agent_fee_pct=1.5, selling_legal_fee_pence=400_000,

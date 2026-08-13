@@ -246,17 +246,23 @@ the ledger-field (`redemption_balance_at_disposal_pence`) and solver-unit RED/GR
    lender GDV is present, and sum to 100.00 (within rounding) when both are present.
 4. Cash fixture A: all three fields are null (asserted directly, not just via the iff invariant).
 
-**Cross-language note (not a fixture divergence, but recorded for anyone extending the solver to a
-very large deal):** `solveSeniorBreakeven`'s bisection midpoint (`(lo + hi) >> 1`, spec-mandated
-shape) uses JavaScript's 32-bit-signed-integer bitwise `>>`. For a redemption balance at or above
-`2**31` pence (~£21.47m), `hi` exceeds the safe 32-bit range and the bit-shift corrupts `mid`,
-exhausting the 200-iteration cap and returning `null` — empirically confirmed at
-`redemption_balance_pence = 5,000,000,000` (~£50m). Python's `(lo + hi) // 2` has no such limitation
-and converges correctly at the same scale (`tests/test_financial_model_breakeven.py::
-test_converges_correctly_for_realistic_large_deals_where_ts_cannot`). Both fixtures F/G's redemption
-balances (~£586k) are far below this boundary, so neither pinned value is affected — this is a
-documented behavioural limit for future large-deal fixtures, not a defect in the current pins. See
-`task-4-report.md` for the full reproduction and reasoning.
+**Bisection midpoint: floor-divide, never a 32-bit bit-shift.** `solveSeniorBreakeven`'s midpoint is
+`Math.floor((lo + hi) / 2)` (TS) / `(lo + hi) // 2` (Python) — **never** `(lo + hi) >> 1`. An earlier
+draft of this task used `>>1` in TS, which coerces its operands to a 32-bit signed integer. For a
+redemption balance at or above `2**31` pence (~£21.47m — a realistic scale for a large commercial
+deal), the closed-form `hi` exceeded the safe 32-bit range and the bit-shift corrupted `mid`,
+exhausting the 200-iteration cap and returning `null` for a genuinely solvable deal — empirically
+confirmed, at the time, at `redemption_balance_pence = 5,000,000,000` (~£50m), where the correct
+answer is **5,076,649,746** (worksheet: `fee_floor = 5,000,000,000 + 100,000 + 400,000 =
+5,000,500,000`; closed-form guess `5,000,500,000 / 0.985 = 5,076,649,746.19…`; hand-checked boundary
+— `P = 5,076,649,745` is infeasible (`round(1.5% × P) = 76,149,746`, RHS `= 5,076,649,746`, `P < RHS`);
+`P = 5,076,649,746` is feasible at equality). This is now fixed to `Math.floor((lo+hi)/2)`, which has
+no such ceiling, and both languages converge to the identical integer — a permanent regression test
+at this exact scale in both `breakeven.test.ts` and `tests/test_financial_model_breakeven.py` pins
+`5,076,649,746` in both languages, so a future re-introduction of `>>1` (or any other language-specific
+divergence at scale) fails immediately. Both fixtures F/G's redemption balances (~£586k) are far below
+this scale, so neither pinned value was ever affected. See `task-4-report.md` for the full history
+(the bug was caught, then confirmed genuine by direct reproduction, before the fix landed).
 
 ---
 

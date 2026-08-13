@@ -109,6 +109,25 @@ def test_senior_breakeven_all_null_for_cash_fixture_a() -> None:
     assert run.metrics.senior_breakeven_fall_from_lender_gdv_pct is None
 
 
+def test_senior_breakeven_unsolvable_flag_raised_once_when_agent_fee_at_100_pct() -> None:
+    """Release 2b Task 4 (spec Sec 5.11): when the agent fee is >= 100%, the solver
+    returns None and derive_metrics raises exactly one senior_breakeven_unsolvable red
+    flag on the model, with the exact spec-mandated message."""
+    doc = json.loads((FIXTURE_DIR / "f-dev-finance-12mo.json").read_text())
+    doc["inputs"]["exit_strategy"]["selling_agent_fee_pct"] = 100
+    inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+    run = run_appraisal(inputs)
+
+    assert run.model.redemption_balance_at_disposal_pence is not None
+    assert run.metrics.senior_breakeven_pence is None
+    flags = [f for f in run.model.flags if f.code == "senior_breakeven_unsolvable"]
+    assert len(flags) == 1
+    assert flags[0].severity == "red"
+    assert flags[0].month is None
+    assert flags[0].amount_pence is None
+    assert flags[0].message == "agent fee ≥ 100% — break-even unsolvable"
+
+
 def test_migration_preserves_floors_zero() -> None:
     """conversion-defaults.ts:162 uses `project?.floors ?? DEFAULT_DEAL_SPIDER.storeys`
     -- nullish coalescing, which only falls through on None/absent. A Python port
