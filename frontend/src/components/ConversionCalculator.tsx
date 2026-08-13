@@ -174,10 +174,10 @@ export default function ConversionCalculator({ project }: Props) {
           <FinancePage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'cashflow' && (
-          <CashflowPage run={run} />
+          <CashflowPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'appraisal' && (
-          <AppraisalSummaryPage run={run} />
+          <AppraisalSummaryPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'scenarios' && (
           <ScenariosPage inputs={inputs} onChange={updateInputs} />
