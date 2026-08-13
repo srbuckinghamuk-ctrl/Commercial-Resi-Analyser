@@ -24,9 +24,12 @@ export interface LenderGdvResult {
  * `global_value` is null, or a `per_unit` id is missing, or a resulting unit
  * value is not positive. There is no numeric fallback for these that would
  * not silently misstate the lender's position, so this fails closed rather
- * than guessing. `validation.ts` mirrors the same conditions as
- * `ValidationIssue`s (by catching this function's own thrown message, so the
- * wording never drifts) without interrupting the rest of the pipeline.
+ * than guessing. Both callers catch this: `validation.ts` reports the same
+ * condition as a hard `ValidationIssue` (by catching this function's own
+ * thrown message, so the wording never drifts), and `metrics.ts` catches it
+ * too so an invalid block degrades to null lender metrics instead of crashing
+ * `runAppraisal` outright (metrics runs before validation in the pipeline, so
+ * validation hasn't had a chance to report anything yet at that point).
  */
 export function computeLenderGdv(inputs: CalculatorInputsV3): LenderGdvResult | null {
   const lv = inputs.lender_valuation;

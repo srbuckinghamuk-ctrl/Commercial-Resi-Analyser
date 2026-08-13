@@ -4,6 +4,7 @@ merely with each other. If Python disagrees with a fixture, the Python port
 is wrong -- never adjust these numbers to make peace."""
 import pytest
 
+from app.financial_model import run_appraisal
 from app.financial_model.lender_valuation import SQFT_PER_SQM, compute_lender_gdv
 from app.financial_model.migrate import default_calculator_inputs_v2, migrate_v2_to_v3
 from app.financial_model.types import CalculatorInputsV3, LenderValuation, ProposedUnit
@@ -109,3 +110,66 @@ class TestComputeLenderGdv:
         lv = LenderValuation(basis="fixed_amount", global_value=0, per_key_values=None, **PROVENANCE)
         with pytest.raises(ValueError, match="Lender GDV must be a positive value"):
             compute_lender_gdv(base_inputs(lv))
+
+    def test_fixed_amount_does_not_truncate_fractional_pence(self):
+        """Task-3-review IMPORTANT fix: compute_lender_gdv used to silently
+        truncate fractional pence via int() on the fixed_amount/per_unit paths
+        -- a genuine cross-language divergence from lender-valuation.ts, which
+        never truncates. Fractional pence is rejected by validate_inputs, not
+        this function (the whole-number rule lives in exactly one place)."""
+        lv = LenderValuation(basis="fixed_amount", global_value=50_000_000.5, per_key_values=None, **PROVENANCE)
+        result = compute_lender_gdv(base_inputs(lv))
+        assert result.lender_gdv_pence == 50_000_000.5
+
+    def test_per_unit_does_not_truncate_fractional_pence(self):
+        """Task-3-review IMPORTANT fix (see above), per_unit path."""
+        lv = LenderValuation(
+            basis="per_unit", global_value=None,
+            per_key_values={"u1": 9_500_000.5, "u2": 14_000_000}, **PROVENANCE,
+        )
+        result = compute_lender_gdv(base_inputs(lv))
+        assert result.unit_values_pence == [9_500_000.5, 14_000_000]
+        assert result.lender_gdv_pence == 23_500_000.5
+
+
+class TestRunAppraisalContainsAnInvalidLenderValuation:
+    """Task-3-review CRITICAL fix: an invalid-but-present lender_valuation block
+    must never crash the pipeline. compute_lender_gdv raises for these three
+    cases (see TestComputeLenderGdv above); run_appraisal must contain that
+    raise, not propagate it, and validation must independently flag the same
+    condition as a hard error."""
+
+    @pytest.mark.parametrize(
+        ("lv_kwargs", "message_contains"),
+        [
+            pytest.param(
+                {"basis": "fixed_amount", "global_value": None, "per_key_values": None},
+                "requires a global_value",
+                id="missing-global-value",
+            ),
+            pytest.param(
+                {"basis": "per_unit", "global_value": None, "per_key_values": {"u1": 9_500_000}},
+                'missing a value for unit "u2"',
+                id="missing-per-unit-id",
+            ),
+            pytest.param(
+                {"basis": "global_pct", "global_value": -100, "per_key_values": None},
+                "must be positive",
+                id="non-positive-computed-value",
+            ),
+        ],
+    )
+    def test_does_not_raise_lender_metrics_are_none_and_a_hard_issue_is_present(
+        self, lv_kwargs, message_contains,
+    ):
+        lv = LenderValuation(**lv_kwargs, **PROVENANCE)
+        inputs = base_inputs(lv)
+        run = run_appraisal(inputs)  # must not raise
+        assert run.metrics.lender_gdv_pence is None
+        assert run.metrics.lender_gdv_variance_pence is None
+        assert run.metrics.lender_gdv_variance_pct is None
+        assert run.metrics.ltgdv_lender_pct is None
+        assert any(
+            i.severity == "error" and i.field == "lender_valuation" and message_contains in i.message
+            for i in run.validation
+        ), run.validation

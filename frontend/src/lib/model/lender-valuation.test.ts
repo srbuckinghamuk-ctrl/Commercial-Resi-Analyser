@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeLenderGdv, SQFT_PER_SQM } from './lender-valuation';
 import { migrateV2toV3 } from './migrate';
+import { runAppraisal } from './index';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import type { CalculatorInputsV3, LenderValuation } from './finance-types';
 
@@ -92,4 +93,43 @@ describe('computeLenderGdv — spec §3.2', () => {
     const inputs = baseInputs({ basis: 'fixed_amount', global_value: 0, per_key_values: null, ...PROVENANCE });
     expect(() => computeLenderGdv(inputs)).toThrow('Lender GDV must be a positive value.');
   });
+});
+
+// Task-3-review CRITICAL fix: an invalid-but-present lender_valuation block must
+// never crash the pipeline. computeLenderGdv throws for these three cases (see
+// above); runAppraisal must contain that throw, not propagate it, and validation
+// must independently flag the same condition as a hard error.
+describe('runAppraisal — an invalid lender_valuation degrades to null metrics + a hard error, never a crash', () => {
+  const cases: Array<{ label: string; lv: LenderValuation; messageIncludes: string }> = [
+    {
+      label: 'missing global_value on a basis that requires it',
+      lv: { basis: 'fixed_amount', global_value: null, per_key_values: null, ...PROVENANCE },
+      messageIncludes: 'requires a global_value',
+    },
+    {
+      label: 'missing per_unit id',
+      lv: { basis: 'per_unit', global_value: null, per_key_values: { u1: 9_500_000 }, ...PROVENANCE },
+      messageIncludes: 'missing a value for unit "u2"',
+    },
+    {
+      label: 'non-positive computed unit value',
+      lv: { basis: 'global_pct', global_value: -100, per_key_values: null, ...PROVENANCE },
+      messageIncludes: 'must be positive',
+    },
+  ];
+
+  for (const { label, lv, messageIncludes } of cases) {
+    it(`${label}: does not throw, lender metrics are null, and a hard ValidationIssue is present`, () => {
+      const inputs = baseInputs(lv);
+      let run: ReturnType<typeof runAppraisal> | undefined;
+      expect(() => { run = runAppraisal(inputs); }).not.toThrow();
+      expect(run).toBeDefined();
+      expect(run!.metrics.lender_gdv_pence).toBeNull();
+      expect(run!.metrics.lender_gdv_variance_pence).toBeNull();
+      expect(run!.metrics.lender_gdv_variance_pct).toBeNull();
+      expect(run!.metrics.ltgdv_lender_pct).toBeNull();
+      expect(run!.validation.some((i) => i.severity === 'error' && i.field === 'lender_valuation'
+        && i.message.includes(messageIncludes))).toBe(true);
+    });
+  }
 });

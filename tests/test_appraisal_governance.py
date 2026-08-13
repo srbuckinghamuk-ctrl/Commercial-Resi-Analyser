@@ -100,6 +100,31 @@ async def test_negative_costs_rejected(client, project):
     assert resp.status_code == 422, resp.text
 
 
+async def test_invalid_lender_valuation_rejected_with_422(client, project):
+    """Task-3-review CRITICAL fix: a present-but-invalid lender_valuation block
+    (here, fixed_amount with no global_value) must be rejected as an ordinary
+    422 -- the same hard-error path as test_negative_costs_rejected -- not an
+    unhandled 500 from run_appraisal crashing inside calculate_authoritative."""
+    inputs = fixture_a_inputs()
+    inputs["lender_valuation"] = {
+        "basis": "fixed_amount",
+        "global_value": None,
+        "per_key_values": None,
+        "reason": "Test",
+        "author": "test-author",
+        "date": "2026-08-13",
+    }
+    payload = {
+        "project_id": project["id"],
+        "name": "Invalid lender valuation appraisal",
+        "inputs_snapshot": inputs,
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert any("global_value" in str(issue) for issue in detail), detail
+
+
 async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
     response status == 'legacy_unreconciled', outputs recalculated under

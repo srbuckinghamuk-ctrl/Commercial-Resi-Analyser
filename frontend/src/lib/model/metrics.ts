@@ -17,9 +17,23 @@ export function deriveMetrics(
 ): AppraisalResultV2 {
   const t = schedule.totals;
   // Lender-underwritten GDV (spec §3.2, Release 2b Task 3). null for v2 inputs
-  // (no lender_valuation field at all) or v3 inputs with the block absent —
-  // never silently defaulted to developer GDV (spec §2).
-  const lenderGdv = 'lender_valuation' in inputs ? computeLenderGdv(inputs) : null;
+  // (no lender_valuation field at all), v3 inputs with the block absent, or a
+  // present-but-invalid block. computeLenderGdv throws for the last case
+  // (missing global_value, missing per_unit id, a non-positive value) — caught
+  // here so an invalid block degrades to "lender metrics unavailable" instead
+  // of crashing the whole appraisal (metrics runs before validation in
+  // runAppraisal, so nothing has reported the problem yet at this point).
+  // validateInputs independently re-derives the exact same condition as a hard
+  // ValidationIssue, so the failure is never silent — just never fatal, and
+  // never a substitute number standing in for "unknown" (spec §2).
+  let lenderGdv: ReturnType<typeof computeLenderGdv> = null;
+  if ('lender_valuation' in inputs) {
+    try {
+      lenderGdv = computeLenderGdv(inputs);
+    } catch {
+      lenderGdv = null;
+    }
+  }
   const lenderGdvVariance = lenderGdv == null ? null : lenderGdv.lender_gdv_pence - t.gdv_pence;
   const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
   const costBeforeFinance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence;

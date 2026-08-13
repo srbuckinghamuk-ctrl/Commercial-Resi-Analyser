@@ -162,9 +162,22 @@ def derive_metrics(
 ) -> AppraisalResultV2:
     t = schedule.totals
     # Lender-underwritten GDV (spec Sec 3.2, Release 2b Task 3). None for v2
-    # inputs (no lender_valuation field at all) or v3 inputs with the block
-    # absent -- never silently defaulted to developer GDV (spec Sec 2).
-    lender_gdv = compute_lender_gdv(inputs) if isinstance(inputs, CalculatorInputsV3) else None
+    # inputs (no lender_valuation field at all), v3 inputs with the block
+    # absent, or a present-but-invalid block. compute_lender_gdv raises for the
+    # last case (missing global_value, missing per_unit id, a non-positive
+    # value) -- caught here so an invalid block degrades to "lender metrics
+    # unavailable" instead of crashing the whole appraisal (metrics runs before
+    # validation in run_appraisal, so nothing has reported the problem yet at
+    # this point). validate_inputs independently re-derives the exact same
+    # condition as a hard ValidationIssue, so the failure is never silent --
+    # just never fatal, and never a substitute number standing in for "unknown"
+    # (spec Sec 2).
+    lender_gdv = None
+    if isinstance(inputs, CalculatorInputsV3):
+        try:
+            lender_gdv = compute_lender_gdv(inputs)
+        except ValueError:
+            lender_gdv = None
     lender_gdv_variance = None if lender_gdv is None else lender_gdv.lender_gdv_pence - t.gdv_pence
     sdlt = calculate_commercial_sdlt(inputs.acquisition.purchase_price_pence).total_pence
     cost_before_finance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence
