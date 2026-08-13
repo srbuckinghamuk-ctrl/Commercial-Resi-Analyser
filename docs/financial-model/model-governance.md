@@ -200,6 +200,15 @@ to pages reached via the module's own pagination.
   recalculates/validates), but it means the client can display a wrong number for one render cycle
   before a save is attempted. Recorded as a deferred minor for Release 2 UI validation
   tightening, not a governance risk.
-- **Ledger-fixture parity gap** — see `test-cases.md` §7: fixtures B–F (the ledger-level TS
-  fixtures) do not have Python-native equivalents; only the two whole-pipeline golden fixtures
-  (A, F) and the invariant subset are cross-language pinned today.
+- **Ledger fixtures B–F ARE pinned in both languages** (correcting an earlier, wrong statement in
+  an initial draft of this document — see `test-cases.md` §3/§7): `tests/test_financial_model_engine.py`
+  is an explicit, reviewed transliteration of `frontend/src/lib/model/monthly-engine.test.ts`,
+  asserting the same pence values for fixtures B–F including both mid-implementation corrections
+  (Fixture E's £7,000 arrangement fee, Fixture F's gross-headroom-cap numbers). The two remaining,
+  narrower cross-language gaps are: (1) the invariant suite's variant matrix is lighter in
+  Python — it checks 2 of the 7 invariants (roll-forward, sources-equal-uses) across the 2 base
+  golden fixtures only, without TS's `retain_all`/`serviced`/`term=1` derived-variant generation;
+  and (2) there is no shared migration-mapping fixture — TS has a dedicated hand-derived unit-test
+  file for v1→v2 migration (`migrate.test.ts`, 4 cases) with no direct Python counterpart (Python's
+  migration coverage is a narrow floors-zero regression plus an end-to-end API test, not a
+  case-for-case port). Both are recorded as Release 2 scope in `test-cases.md` §7.

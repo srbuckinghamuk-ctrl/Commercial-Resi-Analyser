@@ -122,7 +122,7 @@ the memo generator itself, including the forced-multi-page watermark regression 
 
 | File | Tests | Covers |
 |---|--:|---|
-| `test_financial_model_engine.py` | 9 | Python-native ledger/engine unit tests |
+| `test_financial_model_engine.py` | 9 | Python transliteration of TS ledger fixtures B–F (`monthly-engine.test.ts`), asserting the same pence values incl. both mid-implementation corrections — see `docs/financial-model/test-cases.md` §3 |
 | `test_financial_model_fixtures.py` | 5 | Golden-fixture parity (`test_golden_fixture_parity`, `test_invariants`) + the floors-zero migration regression |
 | `test_appraisal_governance.py` | 6 | Server-authoritative persistence end-to-end: v1→`legacy_unreconciled` migration, server-side recalculation overriding client values, `report_safe`-gated status, hash persistence/determinism, the York "negative costs rejected" case |
 | **Subtotal** | **20** | |
@@ -492,6 +492,14 @@ build's own review record (`.superpowers/sdd/2026-08-12-release-1-p0-financial-c
   non-negativity (`docs/financial-model/model-governance.md` §8) — backend rejects at save time
   regardless, so this is not a data-integrity risk, only a client-side UX gap (a negative
   percentage could render for one cycle before a save fails).
+- **Two narrower cross-language test gaps** (`docs/financial-model/test-cases.md` §7 — note the
+  ledger fixtures B–F themselves are **not** a gap: they are pinned in both languages, see §5
+  above and test-cases.md §3): the TS invariant suite's 4-way derived-variant matrix
+  (`base`/`retain_all`/`serviced`/`term=1`) has no Python counterpart — Python's `test_invariants`
+  checks only roll-forward and sources-equal-uses, on the 2 base fixtures directly; and there is no
+  shared migration-mapping fixture — `migrate.test.ts`'s 4 hand-derived v1→v2 unit cases have no
+  direct Python port (Python's migration coverage is a narrow regression plus an end-to-end API
+  test). Both are Release 2 scope.
 - **`was_v1` is a weaker check than `is_v2`**, and the appraisal repository's dict typing is loose
   — both parked as minors during the Task 12 review, not believed to cause incorrect behaviour
   today but worth tightening.

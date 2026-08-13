@@ -12,9 +12,9 @@ explains how the two are kept in parity.
 
 | Layer | Purpose | Language(s) |
 |---|---|---|
-| **Golden fixtures** (`fixtures/financial-model/*.json`) | Whole-pipeline (`runAppraisal`/`run_appraisal`) hand-derived expectations, shared verbatim between TS and Python | TS + Python |
-| **Ledger fixtures** (`monthly-engine.test.ts`, fixtures B–F) | Hand-derived expectations for the monthly senior-debt ledger in isolation (`runLedger`), TS-only | TS only |
-| **Invariant suite** (`invariants.test.ts` / `test_invariants` in `test_financial_model_fixtures.py`) | Structural properties that must hold for *every* fixture and several derived variants, not tied to one hand-computed number | TS + Python (subset) |
+| **Golden fixtures** (`fixtures/financial-model/*.json`) | Whole-pipeline (`runAppraisal`/`run_appraisal`) hand-derived expectations, shared verbatim between TS and Python | TS + Python (shared JSON) |
+| **Ledger fixtures** (fixtures B–F, `monthly-engine.test.ts` / `test_financial_model_engine.py`) | Hand-derived expectations for the monthly senior-debt ledger in isolation (`runLedger`/`run_ledger`) | TS + Python (independently transliterated, same pence values — see §3) |
+| **Invariant suite** (`invariants.test.ts` / `test_invariants` in `test_financial_model_fixtures.py`) | Structural properties that must hold for *every* fixture and several derived variants, not tied to one hand-computed number | TS + Python (Python subset — see §4) |
 | **IRR regression vector** (`irr.test.ts`) | A specific pathological cash-flow vector that caught a real solver defect | TS only (the Python IRR solver shares the same algorithm and is exercised indirectly through the golden fixtures' `irr_annual_pct`) |
 
 ---
@@ -114,14 +114,29 @@ hand-derivable numbers.
 
 ---
 
-## 3. Ledger fixtures B–F (`frontend/src/lib/model/monthly-engine.test.ts`, TS only)
+## 3. Ledger fixtures B–F — pinned in BOTH languages
 
-These are hand-built four-month ledgers that call `runLedger` directly (not the full pipeline),
-sharing a common `TERMS` base (spec §8 rolled-up base case: day-one advance £300,000; committed
-net £500,000; committed gross £550,000; 12% p.a. → 1%/month; arrangement 2% of net; exit fee 1% of
-gross; rolled-up interest; `equity_first`; 100% sweep) and a common uses/sale schedule (month 0
-acquisition £400,000; month 1 construction £150,000; month 2 construction £100,000; month 3 sale
-£800,000 gross, agent fee £16,000).
+**Files:** `frontend/src/lib/model/monthly-engine.test.ts` (TS, the original) and
+`tests/test_financial_model_engine.py` (Python, an explicit transliteration — its module docstring
+says so verbatim: *"Transliteration of frontend/src/lib/model/monthly-engine.test.ts fixtures B-F.
+Both implementations must agree with the hand-computed ledger (spec Sec 8), not merely with each
+other. If Python disagrees with a fixture, the Python port is wrong — never adjust these numbers to
+make peace."*).
+
+These are hand-built four-month ledgers that call `runLedger`/`run_ledger` directly (not the full
+pipeline), sharing a common `TERMS` base (spec §8 rolled-up base case: day-one advance £300,000;
+committed net £500,000; committed gross £550,000; 12% p.a. → 1%/month; arrangement 2% of net; exit
+fee 1% of gross; rolled-up interest; `equity_first`; 100% sweep) and a common uses/sale schedule
+(month 0 acquisition £400,000; month 1 construction £150,000; month 2 construction £100,000; month
+3 sale £800,000 gross, agent fee £16,000) — reproduced independently in each language's test file
+(`TERMS`/`USES`/`SALE`/`NO_SALE` in TS; the same names in `test_financial_model_engine.py`), not
+loaded from a shared JSON file the way the whole-pipeline golden fixtures (§2) are. Every pence
+value asserted below is asserted identically, by hand-transliterated test code, in both
+`TestFixtureBRolledUpInterest`/`TestFixtureCServicedInterest`/`TestFixtureDRetainAll`/
+`TestFixtureEFundingGap`/`TestFixtureFGrossHeadroomCap`/`TestCashFunding` (Python) and the
+corresponding `describe` blocks (TS). This was ported and reviewed as part of Task 11
+(`.superpowers/sdd/2026-08-12-release-1-p0-financial-correction/progress.md`: *"Task 11: complete
+... port fidelity line-by-line verified; 139/139 backend"*).
 
 ### Fixture B — rolled-up interest (spec §8 worked example, reproduced in code)
 
@@ -132,7 +147,10 @@ interest £3,698.93, exit fee £5,500 (1% × £550,000), repayment £373,592.24,
 distribution £404,907.76. Peak debt £373,592.24 (month 3). Total interest £13,592.24; finance
 costs £29,092.24. Equity cash flows `[-100,000, -150,000, -50,000, +404,907.76]`. Roll-forward
 invariant (`closing = opening + draw + capitalised_fees + interest_capitalised − repayment`) and
-non-negativity are checked every month.
+non-negativity are checked every month. **Python:** `TestFixtureBRolledUpInterest` in
+`test_financial_model_engine.py` (three test methods) asserts the identical pence values, e.g.
+`assert m.months[3].repayment_pence == 37_359_224`, `assert m.equity_cashflows_pence ==
+[-10_000_000, -15_000_000, -5_000_000, 40_490_776]`.
 
 ### Fixture C — serviced interest differs from rolled-up
 
@@ -144,6 +162,8 @@ explicit "additional equity required to service interest" flag (spec §4.3), not
 Peak debt £346,200. Total interest £13,124; total additional equity £6,924. Distribution £432,300.
 This fixture is the one that demonstrates `interest_type` is an effective model switch (audit P0:
 "the selected...serviced/rolled-up interest choice do[es] not change the calculation" — corrected).
+**Python:** `TestFixtureCServicedInterest` — same pence values, e.g.
+`assert m.peak_debt_pence == 34_620_000`, `assert sum(m.equity_cashflows_pence) == 10_537_600`.
 
 ### Fixture D — `retain_all` books no receipts and flags outstanding debt
 
@@ -153,7 +173,9 @@ identically to Fixture B through month 3 (closing £373,592.24) but is **never r
 `totals.distributions_pence = 0`, and a red `senior_outstanding_at_maturity` flag is raised.
 Equity cash flows `[-100,000, -150,000, -50,000, 0]` — no terminal distribution, which is what
 forces IRR to `null` by construction (spec §3.17). Directly corrects audit P0: "`retain_all` still
-books the entire GDV as sale income in the final month."
+books the entire GDV as sale income in the final month." **Python:** `TestFixtureDRetainAll` —
+`assert m.senior_outstanding_at_maturity_pence == 37_359_224`,
+`assert m.equity_cashflows_pence == [-10_000_000, -15_000_000, -5_000_000, 0]`.
 
 ### Fixture E — funding gap: overruns never create facility
 
@@ -165,7 +187,11 @@ value after the Task 4 brief error was caught and re-derived mid-implementation 
 `funding_gap_pence` of £57,000, flagged red at month 2. The gap is never absorbed by an automatic
 facility increase — it accumulates and is reported (spec §4.2 step 3, and audit P0 "downside costs
 automatically produce a larger loan" — corrected). Month 3: closing £359,732.41, repayment
-£363,329.73, distribution £415,170.27.
+£363,329.73, distribution £415,170.27. **Python:** `TestFixtureEFundingGap` —
+`assert m.months[0].capitalised_fees_pence == 700_000` (the corrected 2%×£350,000 arrangement fee),
+`assert m.months[3].repayment_pence == 36_332_973`, `assert m.months[3].distribution_pence ==
+41_517_027` (`test_financial_model_engine.py:200-209`) — the same corrected values as the TS
+fixture, not the brief's original (uncorrected) numbers.
 
 ### Fixture "F-grosscap" — gross-headroom draw cap (spec §4.2(c))
 
@@ -195,10 +221,17 @@ This is the fixture that proves the audit P0 "no facility-exceeded warning despi
 exceeding the nominal loan" cannot recur: the ledger physically cannot draw past the committed
 gross facility, and any shortfall is a visible, flagged funding gap rather than a silent breach.
 
-A further zero-debt sanity check sits at the bottom of the same file (`funding_source: 'cash'`,
-equity £650,000): all draws, finance costs and peak debt are exactly zero, and every closing
-balance is zero — the same zero-debt invariant as Fixture A, exercised directly at the ledger
-level.
+**Python:** `TestFixtureFGrossHeadroomCap` (`test_financial_model_engine.py:212-235`) asserts the
+identical values — `assert m.months[2].draw_pence == 4_515_513`, `assert
+m.months[2].funding_gap_pence == 484_487`, `assert m.months[2].closing_balance_pence ==
+36_499_999`, and the same `<= 36_500_000` ceiling check on every month — with the same inline
+derivation comment reproduced in the Python test.
+
+A further zero-debt sanity check sits at the bottom of both files (`funding_source: 'cash'`, equity
+£650,000): all draws, finance costs and peak debt are exactly zero, and every closing balance is
+zero — the same zero-debt invariant as Fixture A, exercised directly at the ledger level. TS:
+the trailing block in `monthly-engine.test.ts`. Python: `TestCashFunding` in
+`test_financial_model_engine.py`.
 
 ---
 
@@ -235,13 +268,23 @@ variants = 8 independent checks of each invariant below, not just the two litera
    explicit `+ capitalised_fees_pence` term (a Task 6 correction against the first draft of the
    spec's §7 reading).
 
-The Python-side `test_invariants` reuses the same shared fixtures and checks #1 and (implicitly,
-via `run.reconciliation.sources_equal_uses`) #6 — it does not currently port #2–#5, #7. This is
-recorded as a known coverage gap, not a silent omission: the whole-pipeline golden-fixture parity
-test (§2) still pins the Python engine's numeric output for every fixture to the penny, so a
-regression in #2–#5/#7-shaped behaviour would generally also move a golden-fixture number and be
-caught there; but a genuine gap exists for any future fixture whose invariant violation would not
-move a currently-asserted `expected_metrics` value.
+The Python-side `test_invariants` (`tests/test_financial_model_fixtures.py:25-34`) is a **lighter**
+counterpart, not a full port: it is parametrised only over the two raw fixture files (A, F)
+directly — it does not generate or run the four derived variants (`base`/`retain_all`/`serviced`/
+`term=1`) that give the TS suite its 8-way coverage — and per fixture it checks only #1
+(roll-forward, verbatim) and #6's `sources_equal_uses` half (via
+`run.reconciliation.sources_equal_uses`); it does not port #2 (peak debt correctness), #3
+(zero-debt zero finance cost as a standalone check — though this is separately covered by
+`TestCashFunding` in `test_financial_model_engine.py`, §3), #4 (retained exits receive no
+proceeds), #5 (schedule spreads sum to totals) or #7 (the TDC identity) as invariant checks, nor
+the profit-equals-equity-flows half of #6. This is a real, recorded coverage gap — it is **not**
+the same gap as the ledger fixtures (§3), which *are* fully pinned in both languages. The
+whole-pipeline golden-fixture parity test (§2) still pins the Python engine's numeric output for
+every fixture to the penny, so a regression in most of #2–#5/#7-shaped behaviour would generally
+also move a golden-fixture number and be caught there; but a genuine gap exists for any future
+fixture whose invariant violation would not move a currently-asserted `expected_metrics` value, and
+for the variant-matrix breadth (retain_all/serviced/term=1 shapes) that TS exercises but Python
+does not.
 
 ---
 
@@ -308,15 +351,34 @@ to the explicit `tests/` form.
 
 ## 7. The cross-language parity contract
 
-- **What is shared:** the golden-fixture JSON documents in `fixtures/financial-model/` — one
-  physical file per fixture, read byte-identical by both languages. This is the actual contract:
-  a change to a fixture's `inputs` or `expected_metrics` is a single edit that both suites pick up.
-- **What is not shared (yet):** the ledger-level fixtures B–F in `monthly-engine.test.ts` are
-  TS-only hand-built `runLedger` calls; there is no Python-native equivalent of these specific
-  numbers (only the invariant-suite overlap noted in §4). Any Python-specific ledger defect that
-  doesn't move a golden-fixture metric would not be caught by fixtures B–F today — a gap to close
-  in Release 2 by porting the ledger fixtures into the shared directory or a Python-only mirror
-  file with the same hand-derivations.
+- **What is shared as literal JSON:** the golden-fixture documents in `fixtures/financial-model/`
+  — one physical file per fixture, read byte-identical by both languages. This is the tightest form
+  of the contract: a change to a fixture's `inputs` or `expected_metrics` is a single edit that
+  both suites pick up automatically.
+- **What is pinned in both languages, but as independently-written (not shared-file) test code:**
+  the ledger fixtures B–F (§3) — `test_financial_model_engine.py` is an explicit, reviewed
+  transliteration of `monthly-engine.test.ts` (Task 11; "port fidelity line-by-line verified" per
+  the progress ledger), asserting the same pence values including the two mid-implementation
+  corrections (Fixture E's £7,000 arrangement fee, Fixture F's gross-headroom-cap numbers). A
+  divergence here would require someone to edit both files inconsistently and have neither review
+  catch it — a materially different (and lower) risk than "no Python coverage exists at all".
+- **Genuine, narrower cross-language gaps that remain (corrected from an earlier, wrong statement
+  in this section — see the Task 14 correction record for how this was caught):**
+  - The **invariant suite's variant matrix** (§4) is lighter in Python: TS checks 7 invariants
+    across 2 fixtures × 4 derived variants (8 runs); Python checks 2 of those invariants
+    (roll-forward, sources-equal-uses) across the 2 base fixtures only, with no `retain_all`/
+    `serviced`/`term=1` variant generation on the Python side.
+  - **No shared migration-mapping fixture.** TS has a dedicated hand-derived unit-test file for
+    the v1→v2 migration itself, `frontend/src/lib/model/migrate.test.ts` (4 tests). Python's only
+    migration-specific tests are a narrow regression
+    (`test_financial_model_fixtures.py::test_migration_preserves_floors_zero`) and the end-to-end
+    `test_appraisal_governance.py::test_v1_snapshot_migrates_to_legacy_unreconciled`, which
+    exercises migration indirectly through the API rather than asserting `migrate_inputs()`'s
+    output directly against a set of hand-derived cases the way `migrate.test.ts` does. There is
+    no shared JSON fixture for the migration mapping (unlike golden fixtures A/F) and no
+    dedicated Python unit-test file mirroring `migrate.test.ts` case-for-case. Closing this is
+    Release 2 scope: either add a shared migration-fixture JSON or a Python-side
+    `test_migrate.py` with the same hand-derived v1→v2 cases as `migrate.test.ts`.
 - **Rounding parity (spec §1.1):** TypeScript rounds with `Math.round` (half-up toward +∞);
   Python must use `math.floor(x + 0.5)`, explicitly *not* `round()` (Python's banker's rounding
   would disagree with TS on `.5` boundaries). Both are required to agree to the penny on every
