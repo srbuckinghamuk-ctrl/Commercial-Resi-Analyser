@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { runLedger } from './monthly-engine';
-import { DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
+import { reconcile } from './validation';
+import { DEFAULT_FACILITY_TERMS, defaultCalculatorInputsV2 } from '../conversion-defaults';
 import type { EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule } from './finance-types';
 
 function uses(partial: Partial<MonthUses>): MonthUses {
@@ -194,6 +195,81 @@ describe('Fixture F — draws are capped by gross facility headroom after projec
     for (const mo of m.months) {
       expect(mo.closing_balance_pence).toBeLessThanOrEqual(36_500_000);
     }
+  });
+});
+
+describe('Fixture B variant — exit-fee vanishing band (spec §4.4, I2)', () => {
+  // Fixture B's month-3 pre-repayment balance is 37,359,224 and its exit fee is
+  // 550,000 (basis = committed_gross_facility, so the fee doesn't depend on the
+  // receipt amount). agent_fee/selling_legal are zeroed here so net_receipt ==
+  // gross_sale_pence == sweepAvailable at sales_sweep_pct 100, letting the
+  // receipt be tuned to land exactly in/at the edge of the [balance, balance+fee)
+  // band that used to zero the balance while silently dropping the fee.
+  const BALANCE = 37_359_224;
+  const FEE = 550_000;
+
+  function saleOf(grossSale: number): MonthReceipts[] {
+    return [receipts({}), receipts({}), receipts({}), receipts({ gross_sale_pence: grossSale })];
+  }
+
+  it('band case (sweep = balance + fee − 1p): balance carries, no exit fee, discharge withheld', () => {
+    const schedule = mkSchedule(USES, saleOf(BALANCE + FEE - 1));
+    const m = runLedger(schedule, TERMS, equity(30_000_000));
+    expect(m.months[3].exit_fee_pence).toBe(0);
+    expect(m.months[3].closing_balance_pence).toBe(1);
+    expect(m.senior_outstanding_at_maturity_pence).toBe(1);
+    expect(m.totals.exit_fee_pence).toBe(0);
+    expect(m.flags.some((f) => f.code === 'senior_outstanding_at_maturity' && f.severity === 'red')).toBe(true);
+
+    // senior_repaid is false (debt outstanding); this is a warning-level issue
+    // (spec: senior debt not repaid), so it does not by itself flip report_safe —
+    // matching how retain_all's undischarged balance is treated (§4.4).
+    const rec = reconcile(defaultCalculatorInputsV2(), schedule, m);
+    expect(rec.senior_repaid).toBe(false);
+    expect(rec.funding_complete).toBe(true);
+    expect(rec.sources_equal_uses).toBe(true);
+    expect(rec.debt_rollforward_ok).toBe(true);
+  });
+
+  it('boundary case (sweep = balance + fee exactly): full discharge with fee charged', () => {
+    const schedule = mkSchedule(USES, saleOf(BALANCE + FEE));
+    const m = runLedger(schedule, TERMS, equity(30_000_000));
+    expect(m.months[3].exit_fee_pence).toBe(FEE);
+    expect(m.months[3].closing_balance_pence).toBe(0);
+    expect(m.senior_outstanding_at_maturity_pence).toBe(0);
+    expect(m.totals.exit_fee_pence).toBe(FEE);
+    expect(m.flags.some((f) => f.code === 'senior_outstanding_at_maturity')).toBe(false);
+
+    const rec = reconcile(defaultCalculatorInputsV2(), schedule, m);
+    expect(rec.senior_repaid).toBe(true);
+    expect(rec.funding_complete).toBe(true);
+  });
+});
+
+describe('Fixture G — non-cash equity does not fund the waterfall (spec §2, C1)', () => {
+  // The review's exploit: an unconfirmed planning_uplift source large enough to
+  // cover every cost must not be treated as committed equity. Only
+  // classification === 'cash' counts — evidence_status is irrelevant to a
+  // non-cash source, since it was never eligible to fund in the first place.
+  const nonCashEquity: EquitySource[] = [{
+    id: 'e-uplift', classification: 'planning_uplift', amount_pence: 100_000_000,
+    timing_month: 0, repayment_priority: 1, evidence_status: 'unconfirmed', notes: '',
+  }];
+
+  it('treats committed equity as zero, producing a funding gap from month 0', () => {
+    const m = runLedger(mkSchedule(USES, SALE), TERMS, nonCashEquity);
+    expect(m.months[0].equity_contribution_pence).toBe(0);
+    expect(m.totals.funding_gap_pence).toBeGreaterThan(0);
+    expect(m.flags.some((f) => f.code === 'funding_gap' && f.severity === 'red')).toBe(true);
+  });
+
+  it('does not fund costs even mixed with a rejected cash source', () => {
+    const mixed: EquitySource[] = [
+      ...nonCashEquity,
+      { id: 'e-cash-rejected', classification: 'cash', amount_pence: 100_000_000, timing_month: 0, repayment_priority: 1, evidence_status: 'rejected', notes: '' },
+    ];
+    const m = runLedger(mkSchedule(USES, SALE), TERMS, mixed);
+    expect(m.totals.funding_gap_pence).toBeGreaterThan(0);
   });
 });
 

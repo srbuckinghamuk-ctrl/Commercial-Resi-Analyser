@@ -9,9 +9,15 @@ export function calculateGdv(units: ProposedUnit[]): number {
   return units.reduce((sum, u) => sum + u.estimated_value_pence, 0);
 }
 
+/** Spec §11.9: broker fee = round(purchase price × broker_fee_pct / 100). Single source
+ * of truth — also used for the Acquisition page's inline display so the two never drift. */
+export function calculateBrokerFee(pricePence: number, pct: number): number {
+  return Math.round((pricePence * pct) / 100);
+}
+
 export function calculateTotalAcquisitionCost(acq: AcquisitionInputs): number {
   const sdlt = calculateCommercialSdlt(acq.purchase_price_pence).total_pence;
-  const brokerFee = Math.round((acq.purchase_price_pence * acq.broker_fee_pct) / 100);
+  const brokerFee = calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct);
   return (
     acq.purchase_price_pence +
     sdlt +

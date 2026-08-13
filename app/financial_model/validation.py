@@ -125,6 +125,12 @@ def validate_inputs(inputs: CalculatorInputsV2) -> list[ValidationIssue]:
                 f"equity_sources[{idx}]",
                 "Planning/revaluation uplift is not cash equity - evidence required.",
             )
+        if e.classification != "cash" and e.amount_pence > 0:
+            warn(
+                f"equity_sources[{idx}]",
+                "Non-cash equity (land/uplift/vendor/deferred) is recorded but not yet "
+                "modelled as funding - Release 2; it does not fund monthly costs.",
+            )
 
     unit_area = sum(u.floor_area_sqm for u in inputs.unit_mix.units)
     const_area = inputs.conversion_costs.total_construction_sqm

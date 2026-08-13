@@ -315,4 +315,29 @@ describe('generateInvestmentMemo', () => {
     });
     expect(text).toContain(`Sources and uses both total ${totalStr}`);
   });
+
+  // I3 (spec §4 — interest_reserve_remaining is floored at reporting; exhaustion
+  // is flagged, not hidden). A reserve set far below the interest that accrues
+  // over the term drives the raw (unfloored) figure deeply negative — the memo
+  // must never print that negative figure.
+  it('floors interest reserve remaining at zero instead of printing a negative figure', async () => {
+    const inputs = baseInputs();
+    inputs.finance.interest_reserve_pence = 100;
+    const run = runAppraisal(inputs);
+    expect(run.metrics.interest_reserve_remaining_pence).not.toBeNull();
+    expect(run.metrics.interest_reserve_remaining_pence!).toBeLessThan(0);
+    expect(run.model.flags.some((f) => f.code === 'interest_reserve_exhausted')).toBe(true);
+
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    expect(text).toContain('Interest reserve remaining');
+    const rawNegativeStr = (run.metrics.interest_reserve_remaining_pence! / 100).toLocaleString('en-GB', {
+      style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+    });
+    const flooredStr = (0).toLocaleString('en-GB', {
+      style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+    });
+    expect(text).not.toContain(rawNegativeStr);
+    expect(text).toContain(flooredStr);
+  });
 });

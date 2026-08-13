@@ -137,6 +137,35 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert body["outputs"]["metrics"]["calc_version"] == "2.0.0"
 
 
+async def test_malformed_v2_snapshot_migrates_to_legacy_unreconciled(client, project):
+    """M4 (round-2 review): `was_v1` must use the same `is_v2` predicate as
+    migrate.py, not a bare `inputs_version == 2` check. A snapshot claiming
+    inputs_version 2 but missing committed_net_facility_pence in `finance`
+    (malformed/incomplete v2, e.g. a partially-migrated or hand-edited row)
+    fails `is_v2` and must be treated as a legacy migration -> status
+    'legacy_unreconciled', not 'draft'."""
+    malformed_v2_snapshot = {
+        "inputs_version": 2,
+        "acquisition": FIXTURE_A_INPUTS["acquisition"],
+        "unit_mix": FIXTURE_A_INPUTS["unit_mix"],
+        "conversion_costs": FIXTURE_A_INPUTS["conversion_costs"],
+        # Missing committed_net_facility_pence -- is_v2() returns False for this.
+        "finance": {"funding_source": "cash"},
+        "exit_strategy": FIXTURE_A_INPUTS["exit_strategy"],
+    }
+    payload = {
+        "project_id": project["id"],
+        "name": "Malformed v2 appraisal",
+        "inputs_snapshot": malformed_v2_snapshot,
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    assert body["status"] == "legacy_unreconciled"
+    assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
+
+
 async def test_input_hash_and_outputs_hash_persisted(client, project):
     """Saved record has non-empty input_hash/outputs_hash; PUT with identical
     inputs produces identical hashes (determinism)."""

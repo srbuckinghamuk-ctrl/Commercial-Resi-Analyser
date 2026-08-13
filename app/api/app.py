@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, run_appraisal
 from app.financial_model.hashing import canonical_hash, input_hash
-from app.financial_model.migrate import migrate_inputs
+from app.financial_model.migrate import is_v2, migrate_inputs
 from app.financial_model.types import CalculatorInputsV2
 from app.models import (
     ApiResponse,
@@ -291,7 +291,7 @@ def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
     they are compared against the server calculation purely to record
     mismatches for audit purposes (Task 12)."""
     raw = payload.inputs_snapshot
-    was_v1 = raw.get("inputs_version") != 2
+    was_v1 = not is_v2(raw)
 
     try:
         inputs = migrate_inputs(raw)

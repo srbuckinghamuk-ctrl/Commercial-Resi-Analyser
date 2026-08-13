@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { CalculatorInputsV2, AppraisalRun } from '../../lib/model';
 import { calculateCommercialSdlt } from '../../lib/commercial-sdlt';
+import { calculateBrokerFee } from '../../lib/conversion-calc-engine';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
@@ -97,7 +98,7 @@ export default function AcquisitionPage({ inputs, onChange, run }: Props) {
         label="Broker fee (%)"
         value={acq.broker_fee_pct}
         onChangeValue={(v) => updateAcq({ broker_fee_pct: v })}
-        suffix={penceToPounds(Math.round(acq.purchase_price_pence * acq.broker_fee_pct / 100))}
+        suffix={penceToPounds(calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct))}
       />
       <PenceInputRow
         label="Other costs (£)"

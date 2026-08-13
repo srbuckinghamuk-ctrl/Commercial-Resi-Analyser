@@ -89,6 +89,9 @@ export function validateInputs(inputs: CalculatorInputsV2): ValidationIssue[] {
     if (e.classification === 'planning_uplift' && e.evidence_status !== 'confirmed') {
       warn(`equity_sources[${idx}]`, 'Planning/revaluation uplift is not cash equity — evidence required.');
     }
+    if (e.classification !== 'cash' && e.amount_pence > 0) {
+      warn(`equity_sources[${idx}]`, 'Non-cash equity (land/uplift/vendor/deferred) is recorded but not yet modelled as funding — Release 2; it does not fund monthly costs.');
+    }
   }
 
   const unitArea = inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0);

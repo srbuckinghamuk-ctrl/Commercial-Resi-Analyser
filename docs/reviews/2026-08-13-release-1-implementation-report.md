@@ -459,6 +459,13 @@ available" rather than a substitute formula):
   GDV** — all defined in spec §3.2/§5.10–§5.12 but not implemented; UI/reports must show these as
   "not available", never a substitute formula (spec §11 prohibited calculations #5).
 - **No pari-passu draw rule** — defined but rejected with a validation error until implemented.
+- **Equity `timing_month` is not yet enforced by the waterfall** — cash equity sources (spec §2)
+  are treated as available from month 0 regardless of the recorded `timing_month`; a source dated
+  later than the month it is drawn is not yet rejected or deferred by the engine. Fixed in this
+  fix wave: the waterfall now correctly restricts committed equity to `classification === 'cash'`
+  sources only (round-2 review C1) — non-cash sources (land/uplift/vendor/deferred) never fund
+  monthly costs and surface a validation warning instead. Enforcing `timing_month` against the
+  draw schedule remains R2.
 - **Refinance proceeds for `retain_all` are not modelled** — the ledger correctly reports "senior
   debt outstanding at maturity — repayment source (refinance) not yet modelled" rather than
   inventing a receipt.
@@ -500,9 +507,11 @@ build's own review record (`.superpowers/sdd/2026-08-12-release-1-p0-financial-c
   shared migration-mapping fixture — `migrate.test.ts`'s 4 hand-derived v1→v2 unit cases have no
   direct Python port (Python's migration coverage is a narrow regression plus an end-to-end API
   test). Both are Release 2 scope.
-- **`was_v1` is a weaker check than `is_v2`**, and the appraisal repository's dict typing is loose
-  — both parked as minors during the Task 12 review, not believed to cause incorrect behaviour
-  today but worth tightening.
+- **`was_v1` is a weaker check than `is_v2`** — fixed in this fix wave (round-2 review M4):
+  `app/api/app.py`'s `was_v1` now calls `migrate.is_v2` directly instead of a bare
+  `inputs_version == 2` check, so malformed v2 snapshots correctly get `legacy_unreconciled`
+  rather than `draft`. The appraisal repository's dict typing is loose — still parked as a minor,
+  not believed to cause incorrect behaviour today but worth tightening.
 - **Frontend UX minors, all parked deliberately (spec-compliant as briefed, not defects):** the
   cash-flow assumptions display has some duplication between the spend-window note and the table
   itself; `ReconciliationStrip` omits `reconciliation.issues` from its compact view (the full issue

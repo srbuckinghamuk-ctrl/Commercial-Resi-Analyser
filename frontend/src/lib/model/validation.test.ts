@@ -78,6 +78,32 @@ describe('validateInputs — hard errors', () => {
     const issuesBelow = errorsFor((i) => { i.deal_spider.target_profit_on_cost_pct = -150; });
     expect(issuesBelow.some((x) => x.severity === 'error' && x.field === 'deal_spider.target_profit_on_cost_pct')).toBe(true);
   });
+
+  // C1 (spec §2): non-cash equity is recorded but does not fund the waterfall —
+  // the review's exploit was an unconfirmed planning_uplift source masquerading
+  // as committed equity.
+  it('warns when a non-cash equity source with a positive amount is present', () => {
+    const issues = errorsFor((i) => {
+      i.equity_sources = [{
+        id: 'e1', classification: 'land', amount_pence: 10_000_000, timing_month: 0,
+        repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+      }];
+    });
+    expect(issues.some((x) => x.severity === 'warning'
+      && x.field === 'equity_sources[0]'
+      && x.message.includes('Non-cash equity')
+      && x.message.includes('not yet modelled as funding'))).toBe(true);
+  });
+
+  it('does not warn for a zero-amount non-cash source or a cash source', () => {
+    const issues = errorsFor((i) => {
+      i.equity_sources = [
+        { id: 'e1', classification: 'vendor_finance', amount_pence: 0, timing_month: 0, repayment_priority: 1, evidence_status: 'confirmed', notes: '' },
+        { id: 'e2', classification: 'cash', amount_pence: 10_000_000, timing_month: 0, repayment_priority: 1, evidence_status: 'confirmed', notes: '' },
+      ];
+    });
+    expect(issues.some((x) => x.message.includes('Non-cash equity'))).toBe(false);
+  });
 });
 
 describe('reconcile', () => {
@@ -103,6 +129,31 @@ describe('reconcile', () => {
     expect(rec.senior_repaid).toBe(true);
     expect(rec.funding_complete).toBe(true);
     expect(rec.report_safe).toBe(true);
+  });
+
+  // C1 pinning test (spec §2, round-2 review exploit): an unconfirmed
+  // planning_uplift source large enough to cover every cost must not be
+  // treated as committed equity — it produces a real funding gap.
+  it('fails report_safe when the only equity is an unconfirmed planning uplift source', () => {
+    const inputs = defaultCalculatorInputsV2();
+    inputs.acquisition.purchase_price_pence = 40_000_000;
+    inputs.unit_mix.units = [1, 2, 3, 4].map((n) => ({
+      id: `u${n}`, type: '1bed' as const, floor_area_sqm: 50,
+      estimated_value_pence: 30_000_000, comparable_notes: '',
+    }));
+    inputs.conversion_costs.total_construction_sqm = 200;
+    inputs.conversion_costs.construction_cost_per_sqm_pence = 100_000;
+    inputs.finance.funding_source = 'cash';
+    inputs.equity_sources = [{
+      id: 'e1', classification: 'planning_uplift', amount_pence: 200_000_000,
+      timing_month: 0, repayment_priority: 1, evidence_status: 'unconfirmed', notes: '',
+    }];
+    const schedule = buildSchedule(inputs);
+    const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
+    expect(model.totals.funding_gap_pence).toBeGreaterThan(0);
+    const rec = reconcile(inputs, schedule, model);
+    expect(rec.funding_complete).toBe(false);
+    expect(rec.report_safe).toBe(false);
   });
 
   it('fails report_safe when a funding gap exists', () => {

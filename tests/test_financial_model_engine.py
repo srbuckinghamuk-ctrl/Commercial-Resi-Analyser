@@ -6,8 +6,10 @@ wrong -- never adjust these numbers to make peace.
 """
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
+from app.financial_model.migrate import default_calculator_inputs_v2
 from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals
-from app.financial_model.types import EquitySource, FacilityTerms
+from app.financial_model.types import CalculatorInputsV2, EquitySource, FacilityTerms
+from app.financial_model.validation import reconcile
 
 DEFAULT_FACILITY_TERMS = FacilityTerms(**DEFAULT_FACILITY_TERMS_DICT)
 
@@ -244,3 +246,90 @@ class TestCashFunding:
         assert m.peak_debt_pence == 0
         assert all(mo.closing_balance_pence == 0 for mo in m.months)
         assert m.totals.equity_contributed_pence == 65_000_000
+
+
+class TestFixtureBVariantExitFeeVanishingBand:
+    """Fixture B variant -- exit-fee vanishing band (spec Sec 4.4, I2).
+
+    Fixture B's month-3 pre-repayment balance is 37,359,224 and its exit fee
+    is 550,000 (basis = committed_gross_facility, so the fee doesn't depend on
+    the receipt amount). agent_fee/selling_legal are zeroed here so
+    net_receipt == gross_sale_pence == sweep_available at sales_sweep_pct 100,
+    letting the receipt be tuned to land exactly in/at the edge of the
+    [balance, balance + fee) band that used to zero the balance while
+    silently dropping the fee.
+    """
+
+    BALANCE = 37_359_224
+    FEE = 550_000
+
+    def sale_of(self, gross_sale: int) -> list[MonthReceipts]:
+        return [receipts(), receipts(), receipts(), receipts(gross_sale_pence=gross_sale)]
+
+    def test_band_case_balance_carries_no_exit_fee(self):
+        schedule = mk_schedule(USES, self.sale_of(self.BALANCE + self.FEE - 1))
+        m = run_ledger(schedule, TERMS, equity(30_000_000))
+        assert m.months[3].exit_fee_pence == 0
+        assert m.months[3].closing_balance_pence == 1
+        assert m.senior_outstanding_at_maturity_pence == 1
+        assert m.totals.exit_fee_pence == 0
+        assert any(
+            f.code == "senior_outstanding_at_maturity" and f.severity == "red"
+            for f in m.flags
+        )
+
+        # senior_repaid is False (debt outstanding); this is a warning-level
+        # issue, so it does not by itself flip report_safe -- matching how
+        # retain_all's undischarged balance is treated (spec Sec 4.4).
+        inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+        rec = reconcile(inputs, schedule, m)
+        assert rec.senior_repaid is False
+        assert rec.funding_complete is True
+        assert rec.sources_equal_uses is True
+        assert rec.debt_rollforward_ok is True
+
+    def test_boundary_case_full_discharge_with_fee_charged(self):
+        schedule = mk_schedule(USES, self.sale_of(self.BALANCE + self.FEE))
+        m = run_ledger(schedule, TERMS, equity(30_000_000))
+        assert m.months[3].exit_fee_pence == self.FEE
+        assert m.months[3].closing_balance_pence == 0
+        assert m.senior_outstanding_at_maturity_pence == 0
+        assert m.totals.exit_fee_pence == self.FEE
+        assert not any(f.code == "senior_outstanding_at_maturity" for f in m.flags)
+
+        inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+        rec = reconcile(inputs, schedule, m)
+        assert rec.senior_repaid is True
+        assert rec.funding_complete is True
+
+
+class TestFixtureGNonCashEquityDoesNotFundWaterfall:
+    """Fixture G -- non-cash equity does not fund the waterfall (spec Sec 2, C1).
+
+    The review's exploit: an unconfirmed planning_uplift source large enough
+    to cover every cost must not be treated as committed equity. Only
+    classification == 'cash' counts -- evidence_status is irrelevant to a
+    non-cash source, since it was never eligible to fund in the first place.
+    """
+
+    def non_cash_equity(self) -> list[EquitySource]:
+        return [EquitySource(
+            id="e-uplift", classification="planning_uplift", amount_pence=100_000_000,
+            timing_month=0, repayment_priority=1, evidence_status="unconfirmed", notes="",
+        )]
+
+    def test_treats_committed_equity_as_zero_producing_a_funding_gap(self):
+        m = run_ledger(mk_schedule(USES, SALE), TERMS, self.non_cash_equity())
+        assert m.months[0].equity_contribution_pence == 0
+        assert m.totals.funding_gap_pence > 0
+        assert any(
+            f.code == "funding_gap" and f.severity == "red" for f in m.flags
+        )
+
+    def test_does_not_fund_costs_even_mixed_with_a_rejected_cash_source(self):
+        mixed = self.non_cash_equity() + [EquitySource(
+            id="e-cash-rejected", classification="cash", amount_pence=100_000_000,
+            timing_month=0, repayment_priority=1, evidence_status="rejected", notes="",
+        )]
+        m = run_ledger(mk_schedule(USES, SALE), TERMS, mixed)
+        assert m.totals.funding_gap_pence > 0

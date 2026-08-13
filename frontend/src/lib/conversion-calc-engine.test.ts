@@ -1,11 +1,37 @@
 import { describe, it, expect } from 'vitest';
 import {
   calculateGdv,
+  calculateBrokerFee,
   calculateTotalAcquisitionCost,
   calculateTotalConstructionCost,
   calculateTotalProfessionalFees,
 } from './conversion-calc-engine';
 import type { ProposedUnit, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
+
+// M1 (spec §11.9): calculateBrokerFee is the single source of truth for the
+// broker fee formula — AcquisitionPage's inline display and
+// calculateTotalAcquisitionCost must never compute it independently.
+describe('calculateBrokerFee', () => {
+  it('rounds half-up to the nearest penny', () => {
+    expect(calculateBrokerFee(50_000_000, 1.0)).toBe(500_000);
+    expect(calculateBrokerFee(33_333, 1.5)).toBe(500); // 499.995 -> 500
+  });
+
+  it('is exactly the figure calculateTotalAcquisitionCost derives its broker component from', () => {
+    const acq: AcquisitionInputs = {
+      purchase_price_pence: 50_000_000,
+      legal_fees_pence: 500_000,
+      survey_cost_pence: 300_000,
+      broker_fee_pct: 1.0,
+      other_acquisition_costs_pence: 0,
+    };
+    const brokerFee = calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct);
+    expect(calculateTotalAcquisitionCost(acq)).toBe(
+      acq.purchase_price_pence + 1_450_000 + acq.legal_fees_pence + acq.survey_cost_pence
+      + brokerFee + acq.other_acquisition_costs_pence,
+    );
+  });
+});
 
 describe('calculateGdv', () => {
   it('returns zero for empty units', () => {

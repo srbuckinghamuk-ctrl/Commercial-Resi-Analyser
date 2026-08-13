@@ -38,8 +38,11 @@ export function runLedger(
   const monthlyRate = finance.annual_interest_rate_pct / 100 / 12;
   const rolledUp = finance.interest_type === 'rolled_up';
   const fundAsRequired = finance.equity_draw_rule === 'fund_as_required';
+  // Spec §2: committed equity available to the funding waterfall is cash sources
+  // only — land/uplift/vendor/deferred equity is recorded but not yet modelled as
+  // funding (Release 2; see validation.ts's non-cash-equity warning).
   const committedEquity = equitySources
-    .filter((s) => s.evidence_status !== 'rejected')
+    .filter((s) => s.classification === 'cash' && s.evidence_status !== 'rejected')
     .reduce((sum, s) => sum + s.amount_pence, 0);
   const hasFacility = !isCash && netFacility > 0;
 
@@ -158,7 +161,13 @@ export function runLedger(
           totalExitFee += fee;
           balance = 0;
         } else {
+          // Spec §4.4: receipts insufficient to cover principal plus exit fee do not
+          // discharge the facility; the balance carries. Without this clamp, a sweep
+          // in [balance, balance + fee) would zero the balance via Math.min below
+          // while the fee silently vanishes (never charged, never carried) — the
+          // exit fee must not be payable from a repayment that fully clears principal.
           repayment = Math.min(sweepAvailable, balance);
+          if (repayment === balance) repayment = Math.max(0, sweepAvailable - fee);
           balance -= repayment;
         }
       }

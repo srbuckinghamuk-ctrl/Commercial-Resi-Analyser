@@ -818,7 +818,11 @@ export function generateInvestmentMemo(
       ['LTGDV (developer basis)', fmtPctSafe(metrics.ltgdv_developer_pct)],
       ['LTGDV (lender basis)', metrics.ltgdv_lender_pct === null ? 'not available (Release 2)' : fmtPct(metrics.ltgdv_lender_pct)],
       ['Facility headroom (gross)', metrics.facility_headroom_pence === null ? 'not available — no facility' : fmt(metrics.facility_headroom_pence)],
-      ['Interest reserve remaining', metrics.interest_reserve_remaining_pence === null ? 'n/a' : fmt(metrics.interest_reserve_remaining_pence)],
+      // Floored at reporting per spec §4 ("interest_reserve_remaining ... floored at
+      // reporting, exhaustion is flagged, not hidden") — AppraisalSummaryPage applies
+      // the same Math.max(0, …) floor; the underlying model.flags still carries
+      // interest_reserve_exhausted (spec §4) so exhaustion is never hidden by the floor.
+      ['Interest reserve remaining', metrics.interest_reserve_remaining_pence === null ? 'n/a' : fmt(Math.max(0, metrics.interest_reserve_remaining_pence))],
       ['Interest rate', `${fmtPct(inputs.finance.annual_interest_rate_pct)} p.a.`],
       ['Interest type', inputs.finance.interest_type === 'rolled_up' ? 'Rolled up' : 'Serviced'],
       ['Facility term', `${inputs.finance.term_months} months`],

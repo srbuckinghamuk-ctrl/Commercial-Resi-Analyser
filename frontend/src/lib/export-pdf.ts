@@ -114,6 +114,21 @@ export function buildSpiderContent(result: SpiderResult): string[] {
   return lines;
 }
 
+// Last unwatermarked path to pre-correction numbers: a record with status !==
+// 'reconciled' (including undefined/legacy, e.g. a legacy_unreconciled row)
+// must never render lender-ready. Same text/style as export-investment-memo.ts's
+// draft watermark, kept local since this file's manual text layout (no
+// autoTable) doesn't share that module's page-tracking machinery.
+const DRAFT_WATERMARK_TEXT = 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE';
+
+function drawDraftWatermark(doc: jsPDF): void {
+  doc.setTextColor(200);
+  doc.setFontSize(40);
+  doc.setFont('helvetica', 'bold');
+  doc.text(DRAFT_WATERMARK_TEXT, 105, 160, { angle: 35, align: 'center' });
+  doc.setTextColor(0, 0, 0);
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   return [
     parseInt(hex.slice(1, 3), 16),
@@ -194,6 +209,16 @@ export function generateAppraisalPdf(
   spider?: SpiderResult,
 ): Blob {
   const doc = new jsPDF();
+  // Gate: any status other than 'reconciled' — including undefined (pre-status
+  // legacy rows) and 'legacy_unreconciled' — is a draft and must never look
+  // lender-ready when printed.
+  const isDraft = appraisal.status !== 'reconciled';
+  const newPage = (): void => {
+    doc.addPage();
+    if (isDraft) drawDraftWatermark(doc);
+  };
+  if (isDraft) drawDraftWatermark(doc);
+
   const lines = buildAppraisalContent(project, appraisal);
   let y = 20;
   for (const line of lines) {
@@ -207,13 +232,13 @@ export function generateAppraisalPdf(
     doc.text(line, 15, y);
     y += isHeader ? 8 : 6;
     if (y > 270) {
-      doc.addPage();
+      newPage();
       y = 20;
     }
   }
 
   if (spider) {
-    doc.addPage();
+    newPage();
     y = 20;
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
@@ -250,7 +275,7 @@ export function generateAppraisalPdf(
       }
       y += 6;
       if (y > 270) {
-        doc.addPage();
+        newPage();
         y = 20;
       }
     }
@@ -284,7 +309,7 @@ export function generateAppraisalPdf(
           doc.text(line, 15, y);
           y += 5;
           if (y > 275) {
-            doc.addPage();
+            newPage();
             y = 20;
           }
         }

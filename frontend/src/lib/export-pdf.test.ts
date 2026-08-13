@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { buildEligibilityContent, buildAppraisalContent } from './export-pdf';
+import { buildEligibilityContent, buildAppraisalContent, generateAppraisalPdf } from './export-pdf';
 import type { Project, EligibilityAssessment, FinancialAppraisal } from '../types';
+
+async function pdfText(blob: Blob): Promise<string> {
+  const ab = await blob.arrayBuffer();
+  return Buffer.from(ab).toString('latin1');
+}
 
 const mockProject: Project = {
   id: 'test-id',
@@ -103,5 +108,39 @@ describe('buildAppraisalContent', () => {
   it('includes appraisal name', () => {
     const lines = buildAppraisalContent(mockProject, mockAppraisal);
     expect(lines.some((l) => l.includes('Base Case'))).toBe(true);
+  });
+});
+
+// I1 (round-2 review): generateAppraisalPdf is the last unwatermarked path to
+// pre-correction numbers — a stored legacy_unreconciled/draft/no-status record
+// must never print as lender-ready. The gate mirrors export-investment-memo.ts's
+// draft watermark exactly (text, angle, page coverage).
+describe('generateAppraisalPdf — draft watermark gate', () => {
+  it('prints the watermark for a legacy_unreconciled record', async () => {
+    const appraisal: FinancialAppraisal = { ...mockAppraisal, status: 'legacy_unreconciled' };
+    const blob = generateAppraisalPdf(mockProject, appraisal);
+    const text = await pdfText(blob);
+    expect(text).toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+  });
+
+  it('prints the watermark for a draft record', async () => {
+    const appraisal: FinancialAppraisal = { ...mockAppraisal, status: 'draft' };
+    const blob = generateAppraisalPdf(mockProject, appraisal);
+    const text = await pdfText(blob);
+    expect(text).toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+  });
+
+  it('prints the watermark when status is undefined (pre-status legacy row)', async () => {
+    const appraisal: FinancialAppraisal = { ...mockAppraisal, status: undefined };
+    const blob = generateAppraisalPdf(mockProject, appraisal);
+    const text = await pdfText(blob);
+    expect(text).toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+  });
+
+  it('omits the watermark for a reconciled record', async () => {
+    const appraisal: FinancialAppraisal = { ...mockAppraisal, status: 'reconciled' };
+    const blob = generateAppraisalPdf(mockProject, appraisal);
+    const text = await pdfText(blob);
+    expect(text).not.toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
   });
 });

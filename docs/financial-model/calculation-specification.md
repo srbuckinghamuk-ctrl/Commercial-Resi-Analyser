@@ -238,6 +238,7 @@ Serviced interest is a developer cash use in the month accrued. It is funded fro
 
 - Each receipt month: `net_receipt = gross_sale_price − agent_fee − allocated_legal_fee`.
 - Sweep: `min(net_receipt × sales_sweep_pct/100, redemption_amount)` repays senior debt; redemption at final discharge includes accrued interest to date and the exit fee.
+- Receipts insufficient to cover principal plus exit fee do not discharge the facility; the balance carries.
 - Residual cash after the sweep distributes to equity the same month.
 - R1 timing: `sell_all` and the sold portion of `blended` receive all receipts in the final month of the term (single-month disposal, disclosed as an assumption); phased sales rates are R2.
 - `retain_all` (and the retained portion of `blended`): **no sale receipt, ever**. The ledger ends with the senior balance outstanding at term end; the appraisal reports "senior debt outstanding at maturity: £X — repayment source (refinance) not yet modelled" as a red flag. Refinance proceeds are R2.

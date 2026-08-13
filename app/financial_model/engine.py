@@ -127,8 +127,13 @@ def run_ledger(
     monthly_rate = finance.annual_interest_rate_pct / 100 / 12
     rolled_up = finance.interest_type == "rolled_up"
     fund_as_required = finance.equity_draw_rule == "fund_as_required"
+    # Spec Sec 2: committed equity available to the funding waterfall is cash
+    # sources only -- land/uplift/vendor/deferred equity is recorded but not
+    # yet modelled as funding (Release 2; see validation.py's non-cash-equity
+    # warning).
     committed_equity = sum(
-        s.amount_pence for s in equity_sources if s.evidence_status != "rejected"
+        s.amount_pence for s in equity_sources
+        if s.classification == "cash" and s.evidence_status != "rejected"
     )
     has_facility = not is_cash and net_facility > 0
 
@@ -258,7 +263,15 @@ def run_ledger(
                     total_exit_fee += fee
                     balance = 0
                 else:
+                    # Spec Sec 4.4: receipts insufficient to cover principal plus exit
+                    # fee do not discharge the facility; the balance carries. Without
+                    # this clamp, a sweep in [balance, balance + fee) would zero the
+                    # balance via min() below while the fee silently vanishes (never
+                    # charged, never carried) -- the exit fee must not be payable from
+                    # a repayment that fully clears principal.
                     repayment = min(sweep_available, balance)
+                    if repayment == balance:
+                        repayment = max(0, sweep_available - fee)
                     balance -= repayment
             distribution = net_receipts - repayment - exit_fee
 
