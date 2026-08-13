@@ -522,6 +522,14 @@ build's own review record (`.superpowers/sdd/2026-08-12-release-1-p0-financial-c
 - **`interest_reserve_exhausted` / `interest_reserve_remaining`** — see the spec-deferred list
   above; recorded again here because they were explicit review-time rulings, not merely
   spec-silent gaps.
+- **Exit-fee band holdback distribution (final re-review note):** when sale receipts land in the
+  narrow band `[balance, balance + exit fee)`, the held-back amount (≤ the fee) is distributed to
+  equity in the sale month while the senior balance carries — consistent with the amended spec
+  §4.4 (no redemption → no fee) but in mild tension with §3.15's "no equity release before senior
+  repayment". Bounded by the fee, red-flagged, `senior_repaid` false. Refine in Release 2.
+- **Fractional construction area pence edge (pre-existing, both engines identical):** a fractional
+  `total_construction_sqm` produces an unrounded `rate × sqm` base cost (spec §1.1 integer-pence
+  edge). Both engines agree to the penny today; add an explicit rounding rule in Release 2.
 
 ## 11. Recommended next phase — Release 2 (lender-ready underwriting)
 
