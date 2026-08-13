@@ -172,8 +172,11 @@ migration 002, so it must be *stamped*, not upgraded:
    (the api image contains `alembic.ini` and `migrations/`; `DATABASE_URL`
    in compose points at the postgres service).
 3. Verify: `docker compose run --rm api alembic current` reports `002 (head)`.
-4. From now on, schema changes ship as new scripts in `migrations/versions/`
-   and are applied with `docker compose run --rm api alembic upgrade head`.
+4. Restart the api service:
+   `docker compose start api`
+
+From now on, schema changes ship as new scripts in `migrations/versions/`
+and are applied with `docker compose run --rm api alembic upgrade head`.
 
 A database that predates migration 002 (does not have the governance columns
 on `financial_appraisals`) must instead run
