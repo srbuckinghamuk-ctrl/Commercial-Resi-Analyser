@@ -42,7 +42,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadProjects();
+    let ignore = false;
+    (async () => {
+      await loadProjects();
+      if (ignore) return;
+    })();
+    return () => {
+      ignore = true;
+    };
   }, [loadProjects]);
 
   const handleProjectCreated = useCallback(() => {

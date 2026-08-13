@@ -1,0 +1,328 @@
+# Financial Model — Test Cases
+
+**Status:** Authoritative test-case register for calculation specification `2.0.0` (see
+`docs/financial-model/calculation-specification.md`). This document enumerates every
+golden fixture, ledger fixture, invariant and regression vector that pins the engine's
+behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
+explains how the two are kept in parity.
+
+---
+
+## 1. How the test suites are organised
+
+| Layer | Purpose | Language(s) |
+|---|---|---|
+| **Golden fixtures** (`fixtures/financial-model/*.json`) | Whole-pipeline (`runAppraisal`/`run_appraisal`) hand-derived expectations, shared verbatim between TS and Python | TS + Python |
+| **Ledger fixtures** (`monthly-engine.test.ts`, fixtures B–F) | Hand-derived expectations for the monthly senior-debt ledger in isolation (`runLedger`), TS-only | TS only |
+| **Invariant suite** (`invariants.test.ts` / `test_invariants` in `test_financial_model_fixtures.py`) | Structural properties that must hold for *every* fixture and several derived variants, not tied to one hand-computed number | TS + Python (subset) |
+| **IRR regression vector** (`irr.test.ts`) | A specific pathological cash-flow vector that caught a real solver defect | TS only (the Python IRR solver shares the same algorithm and is exercised indirectly through the golden fixtures' `irr_annual_pct`) |
+
+---
+
+## 2. Golden fixtures (whole-pipeline, cross-language)
+
+**Shared fixture directory:** `fixtures/financial-model/` (repo root, sibling to `frontend/` and
+`tests/`). Each file is a self-contained document: `name`, `kind: "pipeline"`, `inputs` (a full
+`CalculatorInputsV2` document) and `expected_metrics` (hand-computed key → expected pence/percent
+value). Both languages load the *same JSON bytes*, parse `inputs` into their respective typed
+model, run their respective `runAppraisal`/`run_appraisal`, and assert every key in
+`expected_metrics`. The hand-computed numbers are derived once, not independently transliterated
+per language — this is what makes the parity claim in §6 meaningful rather than two separately
+maintained approximations.
+
+**Consumers:**
+- TS: `frontend/src/lib/model/golden-fixtures.test.ts`, `frontend/src/lib/model/invariants.test.ts`
+- Python: `tests/test_financial_model_fixtures.py` (`test_golden_fixture_parity`, `test_invariants`)
+
+### Fixture A — "A — all-cash conversion, sell all" (`fixtures/financial-model/a-all-cash.json`)
+
+**Purpose:** isolates cost/GDV/profit arithmetic from the finance ledger entirely. 100%
+cash-funded (`finance.funding_source: "cash"`), so `finance_costs_pence` must be exactly zero by
+engine invariant (spec §3.9, §4.1) and the whole pipeline reduces to acquisition → conversion
+cost → sale → profit.
+
+**Inputs (hand-derivable):**
+- Acquisition: purchase price £400,000; legal fees £5,000; survey £3,000; broker fee 1.0%
+- Unit mix: 4 × one-bed, 50 m² each, £300,000 estimated value each → developer GDV £1,200,000
+- Conversion costs: prior approval £96/dwelling; architect £15,000; structural £5,000; M&E
+  £5,000; planning consultant £3,000; building control £2,000; construction £1,000/m² × 400 m²;
+  contingency 10%
+- Finance: `cash` (rate/fee fields present but inert); term 12 months
+- Equity: single `cash` source, £900,000, month 0
+- Exit: `sell_all`; agent fee 1.5%; selling legal £4,000
+
+**Hand-derivation (spec §3.3–§3.10):**
+- SDLT (commercial bands, spec §3.3): 0% to £150,000 + 2% × £100,000 (to £250,000) + 5% ×
+  £150,000 (above £250,000) = £0 + £2,000 + £7,500 = **£9,500** → `sdlt_pence = 950,000`
+- Acquisition cost = 400,000 + 9,500 + 5,000 + 3,000 + (1% × 400,000 = 4,000) = **£421,500** →
+  `acquisition_cost_pence = 42,150,000`
+- Construction: base = £1,000 × 400 = £400,000; contingency = 10% × £400,000 = £40,000; total =
+  **£440,000** → `construction_cost_pence = 44,000,000`
+- Professional fees (spec §3.5: architect + structural + M&E + planning consultant + other —
+  **excludes** building control, which is a statutory cost) = 15,000 + 5,000 + 5,000 + 3,000 =
+  **£28,000** → `professional_fees_pence = 2,800,000`
+- Statutory costs (spec §3.6: prior-approval fee × unit count + CIL/S106 + building control) =
+  (£96 × 4 dwellings = £384) + £0 + £2,000 building control = **£2,384** →
+  `statutory_costs_pence = 238,400`
+- Cost before finance = 421,500 + 440,000 + 28,000 + 2,384 + selling costs (22,000, see below) =
+  **£913,884** → `cost_before_finance_pence = 91,388,400`
+- Selling costs = agent fee 1.5% × £1,200,000 = £18,000 + selling legal £4,000 = **£22,000** →
+  `selling_costs_pence = 2,200,000`
+- Finance costs = **£0** (cash — engine invariant)
+- TDC = cost before finance (already includes selling costs, spec §3.8) = **£913,884** →
+  `total_development_cost_pence = 91,388,400`
+- Profit = GDV − TDC = 1,200,000 − 913,884 = **£286,116** → `profit_pence = 28,611,600`
+- Profit on cost = 286,116 / 913,884 = **31.31%**; profit on GDV = 286,116 / 1,200,000 = **23.84%**
+- `peak_debt_pence = 0`, `day_one_advance_pence = 0`, `gross_ltc_pct = 0` (zero-debt table, spec §9)
+- Equity contributed = cost before finance − loan = 913,884 − 22,000 (selling costs funded from
+  proceeds, not equity) ≈ **£891,884** → `equity_contributed_pence = 89,188,400`
+
+### Fixture F — "F — development finance 12 months, sell all" (`fixtures/financial-model/f-dev-finance-12mo.json`)
+
+**Purpose:** the deliberate parity companion to Fixture A. Identical acquisition, unit mix,
+conversion costs and GDV — `cost_before_finance_pence` is **exactly** £913,884 in both fixtures —
+but funded with development finance instead of cash, so the only number that should differ is
+everything downstream of `finance_costs_pence`. This is what proves the monthly debt ledger, not
+just the headline cost arithmetic, is correct: cost arithmetic parity is fixed by construction
+(same inputs), and the finance-driven metrics (peak debt, LTC, LTGDV, IRR) are new, independently
+hand-derivable numbers.
+
+**Inputs (deltas from A):**
+- Finance: `development_finance`; day-one advance £280,000; development cost advance 100%;
+  committed net facility £600,000; committed gross facility £660,000; 8.0% p.a.; `rolled_up`;
+  arrangement fee 2.0% (basis: net facility); exit fee 1.0% (basis: gross facility); term 12
+  months; `equity_first`; sweep 100%
+- Equity: single `cash` source, £350,000, month 0
+
+**Expected outputs (pence unless noted):**
+
+| Metric | Value | £ |
+|---|---:|---:|
+| `cost_before_finance_pence` | 91,388,400 | £913,884 (identical to A) |
+| `finance_costs_pence` | 5,076,553 | £50,765.53 |
+| `total_development_cost_pence` | 96,464,953 | £964,649.53 |
+| `profit_pence` | 23,535,047 | £235,350.47 |
+| `profit_on_cost_pct` | — | 24.40% |
+| `profit_on_gdv_pct` | — | 19.61% |
+| `peak_debt_pence` | 58,604,953 | £586,049.53 |
+| `day_one_advance_pence` | 28,000,000 | £280,000 |
+| `gross_ltc_pct` | — | 60.75% |
+| `net_ltc_pct` | — | 62.10% |
+| `ltgdv_developer_pct` | — | 48.84% |
+| `irr_annual_pct` | — | 91.2% |
+| `equity_contributed_pence` | 35,000,000 | £350,000 |
+
+---
+
+## 3. Ledger fixtures B–F (`frontend/src/lib/model/monthly-engine.test.ts`, TS only)
+
+These are hand-built four-month ledgers that call `runLedger` directly (not the full pipeline),
+sharing a common `TERMS` base (spec §8 rolled-up base case: day-one advance £300,000; committed
+net £500,000; committed gross £550,000; 12% p.a. → 1%/month; arrangement 2% of net; exit fee 1% of
+gross; rolled-up interest; `equity_first`; 100% sweep) and a common uses/sale schedule (month 0
+acquisition £400,000; month 1 construction £150,000; month 2 construction £100,000; month 3 sale
+£800,000 gross, agent fee £16,000).
+
+### Fixture B — rolled-up interest (spec §8 worked example, reproduced in code)
+
+Equity £300,000. Hand-computed: month 0 draw £300,000, arrangement fee £10,000 (2% × £500,000),
+interest £3,100 (1% × £310,000), closing £313,100, equity contribution £100,000. Month 1: interest
+£3,131, closing £316,231. Month 2: draw £50,000, interest £3,662.31, closing £369,893.31. Month 3:
+interest £3,698.93, exit fee £5,500 (1% × £550,000), repayment £373,592.24, closing £0,
+distribution £404,907.76. Peak debt £373,592.24 (month 3). Total interest £13,592.24; finance
+costs £29,092.24. Equity cash flows `[-100,000, -150,000, -50,000, +404,907.76]`. Roll-forward
+invariant (`closing = opening + draw + capitalised_fees + interest_capitalised − repayment`) and
+non-negativity are checked every month.
+
+### Fixture C — serviced interest differs from rolled-up
+
+Same schedule, `interest_type: 'serviced'`, equity £320,000. Month 0: interest serviced £3,100
+(paid from equity, not capitalised), closing balance £310,000 (flat — no compounding), equity
+contribution £103,100. Month 2: committed equity is exhausted (£63,800 of costs funded from a
+draw of £36,200) and serviced interest of £3,462 becomes `additional_equity_pence` — the engine's
+explicit "additional equity required to service interest" flag (spec §4.3), not a silent gap.
+Peak debt £346,200. Total interest £13,124; total additional equity £6,924. Distribution £432,300.
+This fixture is the one that demonstrates `interest_type` is an effective model switch (audit P0:
+"the selected...serviced/rolled-up interest choice do[es] not change the calculation" — corrected).
+
+### Fixture D — `retain_all` books no receipts and flags outstanding debt
+
+Same schedule and TERMS as B, but zero sale receipts in every month (`NO_SALE`). Debt builds up
+identically to Fixture B through month 3 (closing £373,592.24) but is **never repaid** —
+`senior_outstanding_at_maturity_pence = 37,359,224`, `totals.exit_fee_pence = 0`,
+`totals.distributions_pence = 0`, and a red `senior_outstanding_at_maturity` flag is raised.
+Equity cash flows `[-100,000, -150,000, -50,000, 0]` — no terminal distribution, which is what
+forces IRR to `null` by construction (spec §3.17). Directly corrects audit P0: "`retain_all` still
+books the entire GDV as sale income in the final month."
+
+### Fixture E — funding gap: overruns never create facility
+
+`committed_net_facility_pence` shrunk to £350,000; equity £250,000. **Arrangement fee recomputes
+from its basis** (spec §3.9): 2% × £350,000 = **£7,000** (`700,000`p) — this is the corrected
+value after the Task 4 brief error was caught and re-derived mid-implementation (see
+`.superpowers/sdd/2026-08-12-release-1-p0-financial-correction/progress.md`, Task 4 entry). Month
+2's required draw of £50,000 is capped at the undrawn net facility, giving a draw of £43,000 and a
+`funding_gap_pence` of £57,000, flagged red at month 2. The gap is never absorbed by an automatic
+facility increase — it accumulates and is reported (spec §4.2 step 3, and audit P0 "downside costs
+automatically produce a larger loan" — corrected). Month 3: closing £359,732.41, repayment
+£363,329.73, distribution £415,170.27.
+
+### Fixture "F-grosscap" — gross-headroom draw cap (spec §4.2(c))
+
+Fixture-B TERMS with `committed_gross_facility_pence` shrunk to £365,000 (net facility unchanged
+at £500,000, so the gross ceiling — not the net one — is the binding constraint here). This is a
+**correction made during implementation** (progress ledger, Task 4 fix round 1): the spec requires
+a monthly senior draw to be capped not only by undrawn net facility and the development-cost
+advance percentage, but also by "gross facility headroom after projected interest" — i.e. a draw
+must not push the closing balance, once that month's own interest is added, past the committed
+gross facility. Hand-derived expectations, confirmed verbatim in the test:
+
+```
+Months 0-1 identical to Fixture B (headroom does not bind while balances are low).
+m2: needed draw 5,000,000; grossHeadroomCap = floor(36,500,000 / 1.01) − 31,623,100
+                                            = 36,138,613 − 31,623,100 = 4,515,513
+```
+
+- `months[2].draw_pence = 4,515,513` (£45,155.13)
+- `months[2].funding_gap_pence = 484,487` (£4,844.87 — the £50,000 need minus the capped draw)
+- `months[2].interest_accrued_pence = 361,386`
+- `months[2].closing_balance_pence = 36,499,999` — one penny under the £36,500,000 gross cap by
+  deliberate floor-rounding of the headroom formula
+- Every month's closing balance is asserted `<= 36,500,000`, and a red `funding_gap` flag is
+  raised.
+
+This is the fixture that proves the audit P0 "no facility-exceeded warning despite peak funding
+exceeding the nominal loan" cannot recur: the ledger physically cannot draw past the committed
+gross facility, and any shortfall is a visible, flagged funding gap rather than a silent breach.
+
+A further zero-debt sanity check sits at the bottom of the same file (`funding_source: 'cash'`,
+equity £650,000): all draws, finance costs and peak debt are exactly zero, and every closing
+balance is zero — the same zero-debt invariant as Fixture A, exercised directly at the ledger
+level.
+
+---
+
+## 4. Invariant suite
+
+**Files:** `frontend/src/lib/model/invariants.test.ts` (full); `tests/test_financial_model_fixtures.py::test_invariants` (subset: #1 roll-forward and #6's sources-equal-uses check only).
+
+The TS suite runs every fixture in `fixtures/financial-model/*.json` (currently A and F) through
+four derived variants — `base`, `retain_all` (exit route forced to `retain_all`), `serviced`
+(interest type forced to `serviced`), `term=1` (term forced to one month) — giving 2 fixtures × 4
+variants = 8 independent checks of each invariant below, not just the two literal fixtures:
+
+1. **Debt roll-forward invariant** — every month, `closing = opening + draw + capitalised_fees +
+   interest_capitalised − repayment`, and `closing >= 0` always (spec §4, roll-forward invariant).
+2. **Peak debt correctness** — `peak_debt_pence` equals the maximum, across all months, of the
+   pre-repayment balance (`opening + draw + capitalised_fees + interest_accrued` when rolled up),
+   floored at 0 (spec §5.7).
+3. **Zero-debt zero finance cost** — when `funding_source === 'cash'`, `finance_costs_pence` and
+   `totals.draws_pence` are both exactly 0 (spec §3.9, §9).
+4. **Retained exits receive no sale proceeds** — when `exit_strategy.route === 'retain_all'`,
+   every month's gross receipts and `selling_costs_pence` are 0 (spec §4.4).
+5. **Monthly schedule spreads sum to cost totals** — the sum of each month's construction /
+   professional / statutory spread equals the schedule's cost totals (spec §6, rounding residue
+   absorbed in the final month of each window).
+6. **Profit = Σ equity flows, and sources = uses** — checked only when the deal is "fully
+   realised" (`senior_outstanding_at_maturity_pence === 0`, no retained value, no funding gap):
+   `profit_pence` equals the sum of `equity_cashflows_pence`, and
+   `reconciliation.sources_equal_uses` is `true` (spec §3.12 identity, §7 invariant).
+7. **TDC = sum of ledger uses plus interest, capitalised fees and exit fee** (spec §7) —
+   `total_development_cost_pence` equals `Σ months.uses_total_pence + Σ interest_capitalised +
+   Σ interest_serviced + selling_costs_pence + exit_fee_pence + capitalised_fees_pence`. A code
+   comment records why this isn't a naive sum: month-0 `uses_total_pence` includes ancillary fees
+   but not the capitalised arrangement fee, while TDC does include it, so the identity needs the
+   explicit `+ capitalised_fees_pence` term (a Task 6 correction against the first draft of the
+   spec's §7 reading).
+
+The Python-side `test_invariants` reuses the same shared fixtures and checks #1 and (implicitly,
+via `run.reconciliation.sources_equal_uses`) #6 — it does not currently port #2–#5, #7. This is
+recorded as a known coverage gap, not a silent omission: the whole-pipeline golden-fixture parity
+test (§2) still pins the Python engine's numeric output for every fixture to the penny, so a
+regression in #2–#5/#7-shaped behaviour would generally also move a golden-fixture number and be
+caught there; but a genuine gap exists for any future fixture whose invariant violation would not
+move a currently-asserted `expected_metrics` value.
+
+---
+
+## 5. IRR regression vector (Newton-failed-acceptance → bisection)
+
+**File:** `frontend/src/lib/model/irr.test.ts`, test
+`'falls through to bisection when Newton converges but fails NPV acceptance: regression'`.
+
+**The story:** the spec (§3.17) requires Newton–Raphson from 1%/month with a bisection fallback
+over [-99%, 1000%]/month on non-convergence. The first implementation of this (Task 3) had a bug:
+when Newton's *step size* converged (the guess stopped moving, `|next − guess| < 1e-9`) but the
+resulting NPV still failed the acceptance tolerance (`|npv| >= 1e-3` — i.e. Newton had stalled at
+a point that wasn't actually a root, typically on a steep curve near a bound), the pre-fix code
+treated "step converged" as "solution found" and returned that inaccurate value — or, in an
+earlier revision of the fix, returned `null` (no solution) instead of correctly falling through to
+bisection. Either failure mode is a lender-facing defect: a wrong or missing IRR on a real deal.
+
+The regression vector that exposed this and pins the fix:
+
+```
+[-1992399, -264982, 222404, 230870, -124126, 283789, 201626, 159610, -168999, -138187, 16731]
+```
+
+For this vector, Newton converges (step size below threshold) after 17 iterations at
+`guess ≈ −0.8915944581764597`, where `|npv| ≈ 0.015625` — still over the `1e-3` acceptance bound,
+because the NPV curve is steep near the lower bracket bound (−0.99) so a tiny rate error produces
+a large-looking NPV residual even though the rate itself is accurate. The fix detects this
+converged-but-not-accepted state and breaks into bisection, which returns
+`≈ −0.8915944581766244`. **Pre-fix, this exact vector returned `null`.**
+
+The test asserts `irr` is not null, `toBeCloseTo(-0.8916, 3)`, and — because the raw NPV residual
+is not itself a good precision signal here — additionally asserts a sign change of NPV within
+±1e-6 of the returned root, bracketing the true root far more tightly than the raw residual
+suggests.
+
+The Python IRR solver mirrors the same Newton-then-bisection algorithm and is exercised
+indirectly: Fixture F's `irr_annual_pct = 91.2` and every other golden fixture's IRR value are
+cross-language pinned via §2, so a divergence in the Python solver's bisection fallback would
+surface as a golden-fixture mismatch even without a Python-native copy of this specific vector.
+
+---
+
+## 6. Running the suites
+
+**Frontend (TypeScript / Vitest), from `frontend/`:**
+```bash
+npm test                    # or: npx vitest run — runs the full suite (202 tests)
+npx tsc -p tsconfig.app.json --noEmit   # type check
+npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/monthly-engine.test.ts \
+  src/lib/model/invariants.test.ts src/lib/model/irr.test.ts   # model layer only
+```
+
+**Backend (Python / pytest), from the repo root:**
+```bash
+python -m pytest -q                              # full suite (145 tests)
+python -m pytest tests/test_financial_model_fixtures.py   # golden-fixture parity + invariants only
+python -m pytest tests/test_financial_model_engine.py     # Python-native ledger/engine unit tests
+python -m pytest tests/test_appraisal_governance.py       # server-authoritative persistence, incl. the York path
+```
+`pyproject.toml` sets `testpaths = ["tests"]`, so a bare `pytest` from the repo root is equivalent
+to the explicit `tests/` form.
+
+---
+
+## 7. The cross-language parity contract
+
+- **What is shared:** the golden-fixture JSON documents in `fixtures/financial-model/` — one
+  physical file per fixture, read byte-identical by both languages. This is the actual contract:
+  a change to a fixture's `inputs` or `expected_metrics` is a single edit that both suites pick up.
+- **What is not shared (yet):** the ledger-level fixtures B–F in `monthly-engine.test.ts` are
+  TS-only hand-built `runLedger` calls; there is no Python-native equivalent of these specific
+  numbers (only the invariant-suite overlap noted in §4). Any Python-specific ledger defect that
+  doesn't move a golden-fixture metric would not be caught by fixtures B–F today — a gap to close
+  in Release 2 by porting the ledger fixtures into the shared directory or a Python-only mirror
+  file with the same hand-derivations.
+- **Rounding parity (spec §1.1):** TypeScript rounds with `Math.round` (half-up toward +∞);
+  Python must use `math.floor(x + 0.5)`, explicitly *not* `round()` (Python's banker's rounding
+  would disagree with TS on `.5` boundaries). Both are required to agree to the penny on every
+  golden fixture — this is what `test_golden_fixture_parity` actually enforces, not merely "close
+  enough" numeric agreement.
+- **The governance procedure that keeps this true going forward** (formula-change procedure) is
+  defined in `docs/financial-model/model-governance.md` §2: any calculation change edits the spec
+  first, then the fixture (with a hand derivation recorded, as above), then both engines in the
+  same change — never one language ahead of the other.

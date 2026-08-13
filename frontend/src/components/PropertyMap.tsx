@@ -66,7 +66,14 @@ export default function PropertyMap({ projects, selectedProject, onSelectProject
   }, [projects]);
 
   useEffect(() => {
-    lookupCoords();
+    let ignore = false;
+    (async () => {
+      await lookupCoords();
+      if (ignore) return;
+    })();
+    return () => {
+      ignore = true;
+    };
   }, [lookupCoords]);
 
   const mapCenter = useMemo<[number, number]>(() => {

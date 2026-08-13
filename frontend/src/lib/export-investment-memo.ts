@@ -30,6 +30,21 @@ const FOOTER_Y = 287;
 
 const DRAFT_WATERMARK_TEXT = 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE';
 
+/**
+ * jspdf-autotable augments the jsPDF instance with `lastAutoTable` at
+ * runtime (the position of the most recently drawn table); the package's
+ * own type declarations don't add this to the jsPDF type, so callers cast.
+ * This type documents the actual runtime shape instead of using `any`.
+ */
+interface JsPdfWithAutoTable extends jsPDF {
+  lastAutoTable: { finalY: number };
+}
+
+/** Y-coordinate immediately below the most recently drawn table. */
+function lastAutoTableFinalY(doc: jsPDF): number {
+  return (doc as JsPdfWithAutoTable).lastAutoTable.finalY;
+}
+
 function fmt(pence: number): string {
   return (pence / 100).toLocaleString('en-GB', {
     style: 'currency',
@@ -398,7 +413,7 @@ export function generateInvestmentMemo(
       2: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastAutoTableFinalY(doc) + 8;
 
   y = subHeading(y, 'Headline Returns');
   y = bodyText(
@@ -483,7 +498,7 @@ export function generateInvestmentMemo(
       5: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Planning Position');
   if (eligibility) {
@@ -558,7 +573,7 @@ export function generateInvestmentMemo(
     bodyStyles: { textColor: [51, 65, 85] },
     columnStyles: { 1: { halign: 'right' } },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Cost Plan');
   // Every row below is either a raw stored input (rate, area, fixed fee) or an
@@ -634,7 +649,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Appraisal Metrics');
   table({
@@ -659,7 +674,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Residual Land Value Check');
   const rlvDiff = metrics.rlv_pence - inputs.acquisition.purchase_price_pence;
@@ -721,7 +736,7 @@ export function generateInvestmentMemo(
       7: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastAutoTableFinalY(doc) + 8;
 
   // ── Section 7: Funding Request ──
   if (y > 200) {
@@ -786,7 +801,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 4;
+  y = lastAutoTableFinalY(doc) + 4;
   y = bodyText(
     y,
     `Sources and uses both total ${fmt(sourcesTotal)} (spec §7 invariant: sum of sources = sum of uses).${!run.reconciliation.sources_equal_uses ? ' WARNING: this run does not reconcile — see the draft watermark and the reconciliation panel.' : ''}`,
@@ -816,7 +831,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 4;
+  y = lastAutoTableFinalY(doc) + 4;
   y = bodyText(
     y,
     'Net LTC = cumulative net senior advances (principal draws + capitalised non-interest fees) ÷ development cost before disposal and finance (spec §5.4). Gross LTC = peak gross senior debt ÷ total development cost, TDC (spec §5.5). LTGDV = peak gross senior debt ÷ GDV; the lender-underwritten GDV basis is not yet available (Release 2).',
@@ -853,7 +868,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = infoRequired(y, 'Waterfall / promote structure (if JV)');
 
@@ -879,7 +894,7 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 4;
+  y = lastAutoTableFinalY(doc) + 4;
   y = bodyText(
     y,
     'Day-one LTV = the actual month-0 senior advance (not the committed facility) ÷ purchase price, or ÷ day-one market value where provided (spec §5.1). Dividing the total committed facility by purchase price is not a valid day-one LTV and is never reported.',
@@ -923,7 +938,7 @@ export function generateInvestmentMemo(
         }
       },
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = lastAutoTableFinalY(doc) + 6;
   } else {
     y = infoRequired(y, 'Risk register — no risks have been entered in the calculator');
   }
@@ -990,7 +1005,7 @@ export function generateInvestmentMemo(
       3: { halign: 'right' },
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastAutoTableFinalY(doc) + 8;
 
   // Shared grid: one runAppraisal per (cost, GDV) combination, feeding both matrices below.
   const gdvSteps = [-15, -10, -5, 0, 5];
@@ -1039,7 +1054,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Two-Way Sensitivity Matrix: LTGDV, developer basis (%)');
   const ltgdvRows: (string | number)[][] = costSteps.map((costAdj, ci) => [
@@ -1068,7 +1083,7 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Senior Debt Position');
   y = bodyText(
@@ -1130,7 +1145,7 @@ export function generateInvestmentMemo(
         5: { halign: 'right' },
       },
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = lastAutoTableFinalY(doc) + 6;
   }
 
   y = subHeading(y, 'Contingent Exit');
@@ -1173,7 +1188,7 @@ export function generateInvestmentMemo(
     bodyStyles: { textColor: [51, 65, 85] },
     alternateRowStyles: { fillColor: [241, 245, 249] },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastAutoTableFinalY(doc) + 8;
 
   y = subHeading(y, 'B. Information Required');
   const infoItems = [
@@ -1205,7 +1220,7 @@ export function generateInvestmentMemo(
     alternateRowStyles: { fillColor: [255, 251, 235] },
     columnStyles: { 0: { cellWidth: 10, halign: 'center' } },
   });
-  y = (doc as any).lastAutoTable.finalY + 8;
+  y = lastAutoTableFinalY(doc) + 8;
 
   y = subHeading(y, 'C. Additional Appendices Required');
   y = infoRequired(y, 'Team CVs');

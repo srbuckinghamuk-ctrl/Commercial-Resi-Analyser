@@ -59,7 +59,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
       const blob = generateEligibilityPdf(selectedProject, assessment);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `eligibility-${safeName}.pdf`);
-    } catch (err) {
+    } catch {
       setError('Could not generate eligibility PDF. Has an eligibility assessment been run for this project?');
     } finally {
       setLoading(null);
@@ -90,7 +90,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `appraisal-${safeName}.pdf`);
-    } catch (err) {
+    } catch {
       setError('Could not generate appraisal PDF. Has a financial appraisal been saved for this project?');
     } finally {
       setLoading(null);
@@ -122,7 +122,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
       const blob = generateInvestmentMemo(selectedProject, run, eligibility);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);
-    } catch (err) {
+    } catch {
       setError(
         'Could not generate Investment Memorandum. Ensure a financial appraisal has been saved with full calculator data.',
       );
@@ -138,7 +138,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
     try {
       const blob = generateProjectsExcel(projects);
       downloadBlob(blob, `projects-export-${new Date().toISOString().slice(0, 10)}.xlsx`);
-    } catch (err) {
+    } catch {
       setError('Could not generate Excel file.');
     } finally {
       setLoading(null);

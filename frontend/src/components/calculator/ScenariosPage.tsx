@@ -12,13 +12,13 @@ interface Props {
 
 type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';
 
+const scenarioKeys: ScenarioKey[] = ['base', 'upside', 'downside', 'severe'];
+
 function pctOrNa(v: number | null): string {
   return v == null ? 'n/a' : `${v.toFixed(1)}%`;
 }
 
 export default function ScenariosPage({ inputs, onChange }: Props) {
-  const scenarioKeys: ScenarioKey[] = ['base', 'upside', 'downside', 'severe'];
-
   const scenarioRuns = useMemo(
     () =>
       Object.fromEntries(
