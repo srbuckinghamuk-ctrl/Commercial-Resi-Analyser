@@ -24,12 +24,11 @@ const selectStyle: React.CSSProperties = {
 };
 
 /** Blank ⇔ null, explicit 0 ⇔ 0 — never conflate "unknown" with "known to be zero" (spec §1.5). */
-function PenceRow({ label, penceValue, onChangePence, nullable, disabled, placeholder }: {
+function PenceRow({ label, penceValue, onChangePence, nullable, placeholder }: {
   label: string;
   penceValue: number | null;
   onChangePence: (v: number | null) => void;
   nullable?: boolean;
-  disabled?: boolean;
   placeholder?: string;
 }) {
   return (
@@ -39,7 +38,6 @@ function PenceRow({ label, penceValue, onChangePence, nullable, disabled, placeh
         <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 13 }}>£</span>
         <input
           type="number"
-          disabled={disabled}
           value={penceValue === 0 ? 0 : penceValue != null ? penceValue / 100 : ''}
           placeholder={placeholder ?? (nullable ? 'unset' : undefined)}
           onChange={(e) => {
@@ -47,20 +45,19 @@ function PenceRow({ label, penceValue, onChangePence, nullable, disabled, placeh
             if (raw === '') { onChangePence(nullable ? null : 0); return; }
             onChangePence(Math.round(Number(raw) * 100));
           }}
-          style={{ ...numInput, width: '100%', padding: '6px 10px 6px 24px', opacity: disabled ? 0.5 : 1 }}
+          style={{ ...numInput, width: '100%', padding: '6px 10px 6px 24px' }}
         />
       </div>
     </div>
   );
 }
 
-function NumRow({ label, value, onChangeValue, suffix, step, disabled }: {
+function NumRow({ label, value, onChangeValue, suffix, step }: {
   label: string;
   value: number;
   onChangeValue: (v: number) => void;
   suffix?: string;
   step?: string;
-  disabled?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -68,10 +65,9 @@ function NumRow({ label, value, onChangeValue, suffix, step, disabled }: {
       <input
         type="number"
         step={step}
-        disabled={disabled}
         value={value}
         onChange={(e) => onChangeValue(Number(e.target.value))}
-        style={{ ...numInput, opacity: disabled ? 0.5 : 1 }}
+        style={numInput}
       />
       {suffix && <span style={{ color: '#64748b', fontSize: 12 }}>{suffix}</span>}
     </div>

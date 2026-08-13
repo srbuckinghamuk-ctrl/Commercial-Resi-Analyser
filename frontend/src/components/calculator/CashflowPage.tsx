@@ -20,7 +20,7 @@ export default function CashflowPage({ run }: Props) {
   const term = schedule.term_months;
   const spendWindow = term > 1 ? Math.max(1, term - 2) : 0;
   const assumptionsNote = term > 1
-    ? `Straight-line spend over months 1–${spendWindow}; disposal in month ${term}; see calculation specification §6.`
+    ? `Straight-line spend over months 1–${spendWindow}; disposal in month ${term - 1}; see calculation specification §6.`
     : `Single-month term — all costs and disposal fall in month 0; see calculation specification §6.`;
 
   const costsTotal = model.months.reduce((s, m) => s + m.uses_total_pence, 0);
