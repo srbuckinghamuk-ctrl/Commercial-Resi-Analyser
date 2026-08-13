@@ -12,6 +12,7 @@ from .breakeven import (
     solve_developer_breakeven,
     solve_senior_breakeven,
 )
+from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
@@ -90,21 +91,6 @@ def solve_irr(cashflows: list[float]) -> float | None:
 
 
 # --- metrics.ts ------------------------------------------------------------
-
-
-@dataclass
-class CostToCompleteMonth:
-    month: int
-    remaining_cost_pence: int
-    remaining_funding_pence: int
-    surplus_pence: int
-
-
-@dataclass
-class CostToCompleteSummary:
-    first_shortfall_month: int | None
-    max_shortfall_pence: int
-    months: list[CostToCompleteMonth]
 
 
 @dataclass
@@ -270,6 +256,12 @@ def derive_metrics(
                 message="agent fee ≥ 100% — break-even unsolvable",
             ))
 
+    # Cost-to-complete (spec Sec 5.10, Release 2b Task 6). Computed for every appraisal --
+    # schedule.term_months is always >= 1 (build_schedule floors it), so the series is never
+    # empty and this field is never actually None in practice (the AppraisalResultV2 type stays
+    # Optional only because it was declared that way, unwired, in Task 1).
+    cost_to_complete = compute_cost_to_complete(schedule, model, inputs)
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -326,5 +318,5 @@ def derive_metrics(
         senior_breakeven_pct_of_lender_gdv=senior_breakeven_pct_of_lender_gdv,
         senior_breakeven_fall_from_lender_gdv_pct=senior_breakeven_fall_from_lender_gdv_pct,
         developer_breakeven_pence=developer_breakeven,
-        cost_to_complete=None,  # Task 6
+        cost_to_complete=cost_to_complete,
     )

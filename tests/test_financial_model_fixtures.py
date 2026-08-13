@@ -13,13 +13,24 @@ FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-mode
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 
+# Minimal flat-key -> nested-summary mapping for the two cost-to-complete fixture keys
+# (spec Sec 5.10, Release 2b Task 6). They are not real AppraisalResultV2 attributes --
+# a fixture-authoring convenience mapped onto the nested `cost_to_complete` summary. Every
+# other expected_metrics key is a real, direct AppraisalResultV2 attribute via getattr below.
+_COST_TO_COMPLETE_FLAT_KEYS = {
+    "cost_to_complete_first_shortfall_month": lambda s: s.first_shortfall_month if s else None,
+    "cost_to_complete_max_shortfall_pence": lambda s: s.max_shortfall_pence if s else None,
+}
+
+
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_golden_fixture_parity(path: Path) -> None:
     doc = json.loads(path.read_text())
     inputs = CalculatorInputsV3.model_validate(doc["inputs"])
     run = run_appraisal(inputs)
     for key, expected in doc["expected_metrics"].items():
-        actual = getattr(run.metrics, key)
+        mapper = _COST_TO_COMPLETE_FLAT_KEYS.get(key)
+        actual = mapper(run.metrics.cost_to_complete) if mapper else getattr(run.metrics, key)
         assert actual == expected, f"{path.stem}.{key}: {actual} != {expected}"
 
 

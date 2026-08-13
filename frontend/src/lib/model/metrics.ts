@@ -8,6 +8,7 @@ import { computeLenderGdv } from './lender-valuation';
 import { exitFeeAmount } from './monthly-engine';
 import { solveDeveloperBreakeven, solveSeniorBreakeven } from './breakeven';
 import type { DeveloperBreakevenTerms, SeniorBreakevenTerms } from './breakeven';
+import { computeCostToComplete } from './cost-to-complete';
 
 /** Percentage to 2 dp; null when the denominator is zero (spec §1.5). */
 export function pct(numerator: number, denominator: number): number | null {
@@ -125,6 +126,12 @@ export function deriveMetrics(
     }
   }
 
+  // Cost-to-complete (spec §5.10, Release 2b Task 6). Computed for every appraisal —
+  // schedule.term_months is always >= 1 (buildSchedule floors it), so the series is never
+  // empty and this field is never actually null in practice (the type stays nullable only
+  // because it was declared that way, unwired, in Task 1).
+  const costToComplete = computeCostToComplete(schedule, model, inputs);
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -172,6 +179,6 @@ export function deriveMetrics(
     senior_breakeven_pct_of_lender_gdv: seniorBreakevenPctOfLenderGdv,
     senior_breakeven_fall_from_lender_gdv_pct: seniorBreakevenFallFromLenderGdvPct,
     developer_breakeven_pence: developerBreakeven,
-    cost_to_complete: null, // Task 6
+    cost_to_complete: costToComplete,
   };
 }

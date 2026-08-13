@@ -344,6 +344,124 @@ null-wired (pre-Task-5), both `test_golden_fixture_parity[g-lender-valuation]` (
    `senior_breakeven_unsolvable`, asserted exactly-once), tested through `deriveMetrics`/
    `derive_metrics` in both languages.
 
+### Fixture G worksheet, part 4 — cost-to-complete (spec §5.10, Release 2b Task 6)
+
+**Purpose:** pins `computeCostToComplete`/`compute_cost_to_complete` — a per-month series of
+remaining cost vs. remaining committed funding on the straight-line schedule, reporting the first
+month (if any) that goes into deficit and the largest deficit across the series.
+
+**Indexing convention (resolved from the brief's telescoping/boundary invariants, not assumed):**
+the series is labelled `m = 1..term` (`term = schedule.term_months`). Label `m` reports the state
+as of the **completion** of ledger month `m − 1` (ledger months are 0-based —
+`LedgerMonth.month === m − 1`): `remaining_cost(m)` sums `schedule.uses[m..term−1]` plus
+`model.months[m..term−1]`'s interest/capitalised-fees — i.e. everything **strictly after** ledger
+month `m − 1`, excluding whatever that month itself spent. `remaining_funding(m)` reads ledger
+month `m − 1`'s own `undrawn_net_facility_pence` (the undrawn amount immediately after that
+month's draw) plus committed cash equity not yet contributed through ledger month `m − 1`
+inclusive. `m = term` is a valid final label — `remaining_cost(term)` is the empty sum (0), a
+terminal "nothing left to spend" checkpoint; `remaining_funding(term)` still reads a real,
+in-bounds ledger month (`term − 1`, the last one). This is not a free choice: it is the *only*
+reading consistent with both of the brief's own invariants —
+`remaining_cost(m) = remaining_cost(m+1) + cost(month m+1)` (telescoping) and
+`remaining_cost(1) = total cost − month-0 spend` (boundary) — checked algebraically before any
+code was written, then confirmed against a scratch reproduction of the formula for Fixture B and
+Fixture G before being written here.
+
+**Step 1 — worksheet, Fixture B** (§3's rolled-up-interest ledger — the smallest fully pinned
+table among B–F, per the brief). From B's pinned columns (`monthly-engine.test.ts`/
+`test_financial_model_engine.py`): `interest_accrued_pence` = 310,000 / 313,100 / 366,231 /
+369,893; `capitalised_fees_pence` = 1,000,000 / 0 / 0 / 0; `equity_contribution_pence` =
+10,000,000 / 15,000,000 / 5,000,000 / 0; `undrawn_net_facility_pence` (net facility 50,000,000
+minus cumulative net used) = 19,000,000 / 19,000,000 / 14,000,000 / 14,000,000. Uses:
+`[40,000,000; 15,000,000; 10,000,000; 0]` (acquisition month 0, construction months 1–2, no
+lender-ancillary-fees line populated by `buildSchedule` in the current engine — always 0, summed
+defensively per the spec formula regardless). Committed cash equity = 30,000,000 (single
+confirmed source).
+
+| label `m` | remaining cost | remaining funding | surplus |
+|---:|---:|---:|---:|
+| 1 | 26,049,224 | 39,000,000 | 12,950,776 |
+| 2 | 10,736,124 | 24,000,000 | 13,263,876 |
+| 3 | 369,893 | 14,000,000 | 13,630,107 |
+| 4 | 0 | 14,000,000 | 14,000,000 |
+
+Worked example (`m = 1`): remaining cost = uses[1..3] (15,000,000 + 10,000,000 + 0) +
+interest[1..3] (313,100 + 366,231 + 369,893) + capFees[1..3] (0) = 26,049,224. Remaining funding =
+undrawn at ledger month 0 (19,000,000) + (30,000,000 committed equity − 10,000,000 contributed
+through month 0) = 39,000,000. Surplus = 12,950,776 > 0. Fully funded throughout:
+`first_shortfall_month = null`, `max_shortfall_pence = 0`.
+
+**Step 2 — worksheet, cash-deal path** (self-review requirement: the cash path must be tested,
+not just typed as `| 0`). Same USES/SALE as Fixture B, `funding_source: 'cash'`, equity
+**exactly** 65,000,000 = total cost (40M + 15M + 10M + 0), matching the existing zero-debt sanity
+check at the bottom of `monthly-engine.test.ts`/`test_financial_model_engine.py`. Cash deals have
+`undrawn_net_facility_pence = null` throughout (no facility, not merely undrawn) — this pins the
+brief's "null → 0" instruction, distinctly from the low-headroom case where the field is a real
+number:
+
+| label `m` | remaining cost | remaining funding | surplus |
+|---:|---:|---:|---:|
+| 1 | 25,000,000 | 25,000,000 | 0 |
+| 2 | 10,000,000 | 10,000,000 | 0 |
+| 3 | 0 | 0 | 0 |
+| 4 | 0 | 0 | 0 |
+
+Every surplus is **exactly** 0 (equity funds the whole cost, not a penny more) — a deliberate edge
+case pinning `surplus < 0` (strict), not `<= 0`: a fully-funded-to-the-penny deal must not be
+misreported as a shortfall.
+
+**Step 3 — Fixture G's flat golden-fixture keys.** Fixture G shares Fixture F's ledger inputs
+exactly (only `lender_valuation` differs — verified by diffing the two fixtures' `inputs` blocks
+with `lender_valuation` stripped, not assumed). Running the live engine on Fixture G:
+`model.totals.funding_gap_pence == 0` (no month ever gaps — confirmed live, not inferred from the
+absence of a pinned figure) — so both `first_shortfall_month: null` and `max_shortfall_pence: 0`
+are correct, added to `g-lender-valuation.json`'s `expected_metrics` as flat keys (per the brief,
+for fixture-authoring simplicity) and mapped onto the nested `cost_to_complete` summary by a small
+lookup table in both `golden-fixtures.test.ts` and `test_financial_model_fixtures.py`'s
+`test_golden_fixture_parity` — every other key in that test still goes through the direct
+attribute path unchanged.
+
+**Invariants added (both languages), `cost-to-complete.test.ts` / `test_financial_model_cost_to_complete.py`:**
+1. **Telescoping:** `remaining_cost(m) == remaining_cost(m+1) + cost(month m+1)`, checked across
+   Fixture B's whole series.
+2. **Boundary:** `remaining_cost(1) == total cost − month-0 spend`, checked for Fixture B.
+3. **Fully-funded ⇒ no shortfall** and **exact-zero-surplus ⇒ no shortfall**, both on Fixture B
+   and the cash-deal path respectively.
+
+**The shortfall/`funding_gap_pence` relationship — neither direction of the brief's proposed `⇔`
+is a general property of the engine (both directions independently disproved, both proofs kept as
+permanent regression tests):**
+
+- **`funding_gap` ⇏ shortfall.** `test_financial_model_engine.py`'s `TestFixtureFGrossHeadroomCap`
+  (gross-facility-headroom cap, spec §4.2(c)) has a real, pinned `funding_gap_pence = 484,487` at
+  month 2 — yet `computeCostToComplete` on the same schedule reports `first_shortfall_month: null`,
+  `max_shortfall_pence: 0`. Reason: the series is a **static snapshot** of already-realised
+  `undrawn_net_facility_pence` at each past month boundary, not a re-simulation of the ledger's own
+  future month-by-month throttling — it has no way to know that a *later* month's draw will be
+  capped below what's needed. This is now a dedicated, permanently pinned test
+  (`'Fixture F-grosscap: a real funding_gap can exist with NO cost-to-complete shortfall'` in both
+  languages), not just a one-off observation.
+- **Shortfall ⇏ `funding_gap`, in general (not exercised by any pinned fixture, but real).**
+  Constructed during verification (not committed as a fixture): serviced interest at a very high
+  rate (200% p.a., deliberately extreme) with generous facility headroom but thin committed equity
+  produces `model.totals.funding_gap_pence == 0` (the interest shortfall is absorbed by
+  uncommitted "additional equity", spec §4.3 — which never routes through the `funding_gap`-tracked
+  cash-uses waterfall at all) while `computeCostToComplete` shows a genuine, large shortfall
+  (interest forecast exceeds committed sources). This is recorded here as a known scope boundary,
+  not asserted anywhere, since no existing fixture reaches it either way.
+- **What *is* asserted, and holds across every fixture currently in the suite** (both golden A/F/G
+  and the hand-built ledger fixtures B–F, cash-variant): `first_shortfall_month != null ⇒
+  model.totals.funding_gap_pence > 0`. Fixture E (`committed_net_facility_pence` lowered to
+  35,000,000, equity to 25,000,000 — a real, pinned `funding_gap_pence = 5,700,000`) is the one
+  fixture in the corpus with a genuine positive case for this implication (shortfall **and** gap
+  both present, `first_shortfall_month = 1`); every other fixture satisfies it vacuously (no
+  shortfall). A parametrised test over every file in `fixtures/financial-model/*.json` checks this
+  too, alongside the two hand-built positive/negative cases above.
+
+Spec §5.10 has been amended with a "Known limitation" paragraph recording this scope precisely
+(`docs/financial-model/calculation-specification.md`), so a future reader of the spec — not just
+this test-cases file — sees the boundary.
+
 ---
 
 ## 3. Ledger fixtures B–F — pinned in BOTH languages

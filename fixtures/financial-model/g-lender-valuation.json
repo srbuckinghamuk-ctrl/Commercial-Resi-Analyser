@@ -186,6 +186,8 @@
     "senior_breakeven_pence": 60573556,
     "senior_breakeven_pct_of_lender_gdv": 56.09,
     "senior_breakeven_fall_from_lender_gdv_pct": 43.91,
-    "developer_breakeven_pence": 96106551
+    "developer_breakeven_pence": 96106551,
+    "cost_to_complete_first_shortfall_month": null,
+    "cost_to_complete_max_shortfall_pence": 0
   }
 }
