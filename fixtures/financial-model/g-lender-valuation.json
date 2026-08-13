@@ -182,6 +182,9 @@
     "lender_gdv_pence": 108000000,
     "lender_gdv_variance_pence": -12000000,
     "lender_gdv_variance_pct": -10.0,
-    "ltgdv_lender_pct": 54.26
+    "ltgdv_lender_pct": 54.26,
+    "senior_breakeven_pence": 60573556,
+    "senior_breakeven_pct_of_lender_gdv": 56.09,
+    "senior_breakeven_fall_from_lender_gdv_pct": 43.91
   }
 }

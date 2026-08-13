@@ -5,6 +5,9 @@ import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
 import { calculateCommercialSdlt } from '../commercial-sdlt';
 import { computeLenderGdv } from './lender-valuation';
+import { exitFeeAmount } from './monthly-engine';
+import { solveSeniorBreakeven } from './breakeven';
+import type { SeniorBreakevenTerms } from './breakeven';
 
 /** Percentage to 2 dp; null when the denominator is zero (spec §1.5). */
 export function pct(numerator: number, denominator: number): number | null {
@@ -60,6 +63,43 @@ export function deriveMetrics(
   const price = inputs.acquisition.purchase_price_pence;
   const dayOneValue = inputs.finance.day_one_market_value_pence;
 
+  // Senior repayment break-even (spec §5.11, Release 2b Task 4). The absolute value is
+  // computed whenever the ledger recorded a disposal (developer-GDV-independent — it does
+  // not need lender GDV at all); the two percentage forms are null unless a lender GDV is
+  // also present. The exit fee is recomputed via exitFeeAmount from the facility's actual
+  // basis terms (peak debt / gross facility / redemption balance) rather than read off
+  // model.totals.exit_fee_pence — that total is the fee actually *charged*, which is zero
+  // whenever the real disposal under-swept the balance (spec §4.4), but the break-even
+  // question is "what fee would be due on full redemption of this balance", independent of
+  // whether the real sale proceeds happened to cover it.
+  const redemptionBalance = model.redemption_balance_at_disposal_pence;
+  let seniorBreakeven: number | null = null;
+  let seniorBreakevenPctOfLenderGdv: number | null = null;
+  let seniorBreakevenFallFromLenderGdvPct: number | null = null;
+  if (redemptionBalance != null) {
+    const breakevenTerms: SeniorBreakevenTerms = {
+      redemption_balance_pence: redemptionBalance,
+      exit_fee_pence: exitFeeAmount(
+        inputs.finance, model.committed_gross_facility_pence, model.peak_debt_pence, redemptionBalance,
+      ),
+      selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
+      selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
+      enforcement_cost_assumption_pence: inputs.finance.enforcement_cost_assumption_pence,
+    };
+    seniorBreakeven = solveSeniorBreakeven(breakevenTerms);
+    if (seniorBreakeven == null && breakevenTerms.selling_agent_fee_pct >= 100) {
+      model.flags.push({
+        code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+        message: 'agent fee ≥ 100% — break-even unsolvable',
+      });
+    }
+    if (seniorBreakeven != null && lenderGdv != null) {
+      seniorBreakevenPctOfLenderGdv = pct(seniorBreakeven, lenderGdv.lender_gdv_pence);
+      seniorBreakevenFallFromLenderGdvPct =
+        pct(lenderGdv.lender_gdv_pence - seniorBreakeven, lenderGdv.lender_gdv_pence);
+    }
+  }
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -103,9 +143,9 @@ export function deriveMetrics(
         ? model.months[model.months.length - 1].interest_reserve_remaining_pence
         : null,
     return_on_equity_pct: equityContributed > 0 ? pct(profit, equityContributed) : null,
-    senior_breakeven_pence: null, // Task 4
-    senior_breakeven_pct_of_lender_gdv: null, // Task 4
-    senior_breakeven_fall_from_lender_gdv_pct: null, // Task 4
+    senior_breakeven_pence: seniorBreakeven,
+    senior_breakeven_pct_of_lender_gdv: seniorBreakevenPctOfLenderGdv,
+    senior_breakeven_fall_from_lender_gdv_pct: seniorBreakevenFallFromLenderGdvPct,
     developer_breakeven_pence: null, // Task 5
     cost_to_complete: null, // Task 6
   };

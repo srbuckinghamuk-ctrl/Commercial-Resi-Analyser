@@ -6,7 +6,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .engine import MonthlyModel, money_round
+from .breakeven import SeniorBreakevenTerms, solve_senior_breakeven
+from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .sdlt import calculate_commercial_sdlt
@@ -205,6 +206,42 @@ def derive_metrics(
     price = inputs.acquisition.purchase_price_pence
     day_one_value = inputs.finance.day_one_market_value_pence
 
+    # Senior repayment break-even (spec Sec 5.11, Release 2b Task 4). The absolute value is
+    # computed whenever the ledger recorded a disposal (developer-GDV-independent -- it does
+    # not need lender GDV at all); the two percentage forms are None unless a lender GDV is
+    # also present. The exit fee is recomputed via exit_fee_amount from the facility's actual
+    # basis terms (peak debt / gross facility / redemption balance) rather than read off
+    # model.totals.exit_fee_pence -- that total is the fee actually *charged*, which is zero
+    # whenever the real disposal under-swept the balance (spec Sec 4.4), but the break-even
+    # question is "what fee would be due on full redemption of this balance", independent of
+    # whether the real sale proceeds happened to cover it.
+    redemption_balance = model.redemption_balance_at_disposal_pence
+    senior_breakeven: int | None = None
+    senior_breakeven_pct_of_lender_gdv: float | None = None
+    senior_breakeven_fall_from_lender_gdv_pct: float | None = None
+    if redemption_balance is not None:
+        breakeven_terms = SeniorBreakevenTerms(
+            redemption_balance_pence=redemption_balance,
+            exit_fee_pence=exit_fee_amount(
+                inputs.finance, model.committed_gross_facility_pence, model.peak_debt_pence,
+                redemption_balance,
+            ),
+            selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
+            selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
+            enforcement_cost_assumption_pence=inputs.finance.enforcement_cost_assumption_pence,
+        )
+        senior_breakeven = solve_senior_breakeven(breakeven_terms)
+        if senior_breakeven is None and breakeven_terms.selling_agent_fee_pct >= 100:
+            model.flags.append(ModelFlag(
+                code="senior_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
+                message="agent fee ≥ 100% — break-even unsolvable",
+            ))
+        if senior_breakeven is not None and lender_gdv is not None:
+            senior_breakeven_pct_of_lender_gdv = pct(senior_breakeven, lender_gdv.lender_gdv_pence)
+            senior_breakeven_fall_from_lender_gdv_pct = pct(
+                lender_gdv.lender_gdv_pence - senior_breakeven, lender_gdv.lender_gdv_pence,
+            )
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -257,9 +294,9 @@ def derive_metrics(
             model.months[-1].interest_reserve_remaining_pence if len(model.months) > 0 else None
         ),
         return_on_equity_pct=pct(profit, equity_contributed) if equity_contributed > 0 else None,
-        senior_breakeven_pence=None,  # Task 4
-        senior_breakeven_pct_of_lender_gdv=None,  # Task 4
-        senior_breakeven_fall_from_lender_gdv_pct=None,  # Task 4
+        senior_breakeven_pence=senior_breakeven,
+        senior_breakeven_pct_of_lender_gdv=senior_breakeven_pct_of_lender_gdv,
+        senior_breakeven_fall_from_lender_gdv_pct=senior_breakeven_fall_from_lender_gdv_pct,
         developer_breakeven_pence=None,  # Task 5
         cost_to_complete=None,  # Task 6
     )

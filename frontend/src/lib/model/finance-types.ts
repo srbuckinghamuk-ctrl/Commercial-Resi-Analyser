@@ -117,7 +117,8 @@ export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
   | 'senior_outstanding_at_maturity' | 'additional_equity_required'
   | 'negative_profit' | 'requires_confirmation' | 'irr_unavailable'
-  | 'unrealised_profit_basis' | 'exit_fee_not_charged';
+  | 'unrealised_profit_basis' | 'exit_fee_not_charged'
+  | 'senior_breakeven_unsolvable';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -199,6 +200,10 @@ export interface MonthlyModel {
   committed_net_facility_pence: number;
   committed_gross_facility_pence: number;
   senior_outstanding_at_maturity_pence: number;
+  /** Spec §5.11: the disposal month's senior balance immediately before sale receipts are
+   * applied. null for cash deals (no senior facility) and for schedules with no disposal
+   * (e.g. exit_strategy.route === 'retain_all'). */
+  redemption_balance_at_disposal_pence: number | null;
   flags: ModelFlag[];
   /** Developer equity cash-flow vector, one entry per month (− out, + in). */
   equity_cashflows_pence: number[];

@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { runLedger } from './monthly-engine';
+import { buildSchedule } from './schedule';
 import { reconcile } from './validation';
 import { DEFAULT_FACILITY_TERMS, defaultCalculatorInputsV2 } from '../conversion-defaults';
-import type { EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule } from './finance-types';
+import type {
+  CalculatorInputsV3, EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule,
+} from './finance-types';
 
 function uses(partial: Partial<MonthUses>): MonthUses {
   return {
@@ -282,5 +287,44 @@ describe('Cash funding produces exactly zero debt cost', () => {
     expect(m.peak_debt_pence).toBe(0);
     expect(m.months.every((mo) => mo.closing_balance_pence === 0)).toBe(true);
     expect(m.totals.equity_contributed_pence).toBe(65_000_000);
+  });
+});
+
+describe('redemption_balance_at_disposal_pence (spec §5.11, Release 2b Task 4)', () => {
+  it('captures Fixture B\'s month-3 pre-repayment balance, matching peak debt and the repayment amount', () => {
+    // Fixture B (§8): the only month with a sale (month 3) is also the peak-debt month, so
+    // the pre-receipt balance equals both peak_debt_pence and repayment_pence — a useful
+    // cross-check that the capture point sits exactly before the repayment block mutates
+    // `balance`, not after.
+    const m = runLedger(mkSchedule(USES, SALE), TERMS, equity(30_000_000));
+    expect(m.redemption_balance_at_disposal_pence).toBe(37_359_224);
+    expect(m.redemption_balance_at_disposal_pence).toBe(m.peak_debt_pence);
+    expect(m.redemption_balance_at_disposal_pence).toBe(m.months[3].repayment_pence);
+  });
+
+  it('is null for cash funding (no senior facility to redeem)', () => {
+    const terms: FacilityTerms = { ...TERMS, funding_source: 'cash' };
+    const m = runLedger(mkSchedule(USES, SALE), terms, equity(65_000_000));
+    expect(m.redemption_balance_at_disposal_pence).toBeNull();
+  });
+
+  it('is null when nothing is sold (no disposal month)', () => {
+    const m = runLedger(mkSchedule(USES, NO_SALE), TERMS, equity(30_000_000));
+    expect(m.redemption_balance_at_disposal_pence).toBeNull();
+  });
+
+  it('golden fixture F (12-month term): matches its pinned peak_debt_pence of 58,604,953p at ' +
+    'month 11, and the pinned committed_gross_facility_pence (66,000,000, explicitly set — not ' +
+    'derived from net + reserve) drives an exit fee of 660,000p, confirmed against the ledger\'s ' +
+    'own totals.exit_fee_pence rather than assumed (Task 4 Step 1 verification)', () => {
+    const fx = JSON.parse(readFileSync(
+      resolve(__dirname, '../../../../fixtures/financial-model/f-dev-finance-12mo.json'), 'utf-8',
+    )) as { inputs: CalculatorInputsV3 };
+    const schedule = buildSchedule(fx.inputs);
+    const m = runLedger(schedule, fx.inputs.finance, fx.inputs.equity_sources);
+    expect(m.redemption_balance_at_disposal_pence).toBe(58_604_953);
+    expect(m.redemption_balance_at_disposal_pence).toBe(m.peak_debt_pence);
+    expect(m.months[11].exit_fee_pence).toBe(660_000);
+    expect(m.totals.exit_fee_pence).toBe(660_000);
   });
 });

@@ -236,6 +236,7 @@ FlagCode = Literal[
     "senior_outstanding_at_maturity", "additional_equity_required",
     "negative_profit", "requires_confirmation", "irr_unavailable",
     "unrealised_profit_basis", "exit_fee_not_charged",
+    "senior_breakeven_unsolvable",
 ]
 
 CALC_VERSION = "2.1.0"

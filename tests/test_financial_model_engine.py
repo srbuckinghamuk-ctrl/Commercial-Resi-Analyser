@@ -4,14 +4,18 @@ Both implementations must agree with the hand-computed ledger (spec Sec 8), not
 merely with each other. If Python disagrees with a fixture, the Python port is
 wrong -- never adjust these numbers to make peace.
 """
+import json
+from pathlib import Path
+
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import default_calculator_inputs_v2
-from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals
-from app.financial_model.types import CalculatorInputsV2, EquitySource, FacilityTerms
+from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals, build_schedule
+from app.financial_model.types import CalculatorInputsV2, CalculatorInputsV3, EquitySource, FacilityTerms
 from app.financial_model.validation import reconcile
 
 DEFAULT_FACILITY_TERMS = FacilityTerms(**DEFAULT_FACILITY_TERMS_DICT)
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
 
 def replace(model: FacilityTerms, **overrides) -> FacilityTerms:
@@ -333,3 +337,41 @@ class TestFixtureGNonCashEquityDoesNotFundWaterfall:
         )]
         m = run_ledger(mk_schedule(USES, SALE), TERMS, mixed)
         assert m.totals.funding_gap_pence > 0
+
+
+class TestRedemptionBalanceAtDisposal:
+    """redemption_balance_at_disposal_pence (spec Sec 5.11, Release 2b Task 4)."""
+
+    def test_captures_fixture_b_month_3_pre_repayment_balance(self):
+        # Fixture B (Sec 8): the only month with a sale (month 3) is also the peak-debt
+        # month, so the pre-receipt balance equals both peak_debt_pence and
+        # repayment_pence -- a useful cross-check that the capture point sits exactly
+        # before the repayment block mutates `balance`, not after.
+        m = run_ledger(mk_schedule(USES, SALE), TERMS, equity(30_000_000))
+        assert m.redemption_balance_at_disposal_pence == 37_359_224
+        assert m.redemption_balance_at_disposal_pence == m.peak_debt_pence
+        assert m.redemption_balance_at_disposal_pence == m.months[3].repayment_pence
+
+    def test_is_none_for_cash_funding(self):
+        terms = replace(TERMS, funding_source="cash")
+        m = run_ledger(mk_schedule(USES, SALE), terms, equity(65_000_000))
+        assert m.redemption_balance_at_disposal_pence is None
+
+    def test_is_none_when_nothing_is_sold(self):
+        m = run_ledger(mk_schedule(USES, NO_SALE), TERMS, equity(30_000_000))
+        assert m.redemption_balance_at_disposal_pence is None
+
+    def test_golden_fixture_f_matches_pinned_peak_debt_and_confirmed_exit_fee(self):
+        """12-month term: matches its pinned peak_debt_pence of 58,604,953p at month 11,
+        and the pinned committed_gross_facility_pence (66,000,000, explicitly set -- not
+        derived from net + reserve) drives an exit fee of 660,000p, confirmed against the
+        ledger's own totals.exit_fee_pence rather than assumed (Task 4 Step 1
+        verification)."""
+        doc = json.loads((FIXTURE_DIR / "f-dev-finance-12mo.json").read_text())
+        inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+        schedule = build_schedule(inputs)
+        m = run_ledger(schedule, inputs.finance, inputs.equity_sources)
+        assert m.redemption_balance_at_disposal_pence == 58_604_953
+        assert m.redemption_balance_at_disposal_pence == m.peak_debt_pence
+        assert m.months[11].exit_fee_pence == 660_000
+        assert m.totals.exit_fee_pence == 660_000

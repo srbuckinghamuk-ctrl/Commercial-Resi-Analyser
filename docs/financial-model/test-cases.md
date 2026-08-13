@@ -173,6 +173,91 @@ and the `validation.ts`/`.py` hard-error checks, left in place), both `test_gold
 new keys above (RED). Restoring the wiring turns both green (GREEN) — see `task-3-report.md` for the
 full transcript.
 
+### Fixture G worksheet, part 2 — senior repayment break-even (spec §5.11, Release 2b Task 4)
+
+**Purpose:** pins `solveSeniorBreakeven`/`solve_senior_breakeven` — the minimum gross sale price `P`
+(pence) that fully redeems the senior facility, given the disposal-month redemption balance, the exit
+fee due on redeeming it, and the exit strategy's selling-cost terms. G is F's ledger, so the
+redemption balance and exit fee are F's pinned figures; G's `lender_gdv_pence` (108,000,000, §3.2
+above) supplies the two percentage forms.
+
+**Step 1 — verified (not assumed) inputs, from the pinned ledger, not the brief's original
+assumption:** fixture F/G's `finance.committed_gross_facility_pence` is **explicitly `66,000,000`**
+in the fixture JSON — it is not `null` and is therefore never derived as `net + reserve
+(60,000,000 + 0)`. Running the live engine on fixture F (`totals.exit_fee_pence`, the pinned ledger
+total) confirms:
+- `redemption_balance_at_disposal_pence` (month 11, pre-receipt) = **58,604,953p** — equal to F's
+  pinned `peak_debt_pence`, since month 11 (the disposal month, `term_months − 1 = 11`) is also the
+  peak-debt month here.
+- `exit_fee_basis = "committed_gross_facility"`, so the exit fee is `round(1% × 66,000,000) =`
+  **660,000p** — not 600,000p as an earlier draft of this worksheet assumed before the fixture's own
+  gross-facility figure was checked. (This correction is recorded in
+  `.superpowers/sdd/2026-08-13-release-2b-lender-metrics/task-4-report.md`: the coordinator confirmed
+  the fixture is authoritative and amended the plan's worksheet to match, rather than the other way
+  round.)
+
+**Step 2 — solver worksheet.** Fixture G's exit terms: `selling_agent_fee_pct = 1.5`,
+`selling_legal_fee_pence = 400,000`, `enforcement_cost_assumption_pence = 0`. `P` must satisfy:
+```
+P ≥ 58,604,953 + 660,000 + round(0.015 × P) + 400,000 + 0
+  = 59,664,953 + round(0.015 × P)
+```
+Closed-form guess: `59,664,953 / 0.985 = 60,573,556.345…`. Hand-checked integers either side of the
+guess:
+- `P = 60,573,555`: `round(0.015 × 60,573,555) = round(908,603.325) = 908,603`; RHS =
+  `59,664,953 + 908,603 = 60,573,556`; `60,573,555 < 60,573,556` → **infeasible**.
+- `P = 60,573,556`: `round(0.015 × 60,573,556) = round(908,603.34) = 908,603`; RHS = `60,573,556`;
+  `60,573,556 ≥ 60,573,556` (equality) → **feasible**.
+
+So the minimum feasible integer, and the expected `senior_breakeven_pence`, is **60,573,556**.
+
+Percentages (`pct()`, round-half-up to 2dp, against `lender_gdv_pence = 108,000,000`):
+- `senior_breakeven_pct_of_lender_gdv = pct(60,573,556, 108,000,000)` = 60,573,556 / 108,000,000 =
+  0.56086625… × 100 = 56.086625…%, rounded = **56.09**.
+- `senior_breakeven_fall_from_lender_gdv_pct = pct(108,000,000 − 60,573,556, 108,000,000) =
+  pct(47,426,444, 108,000,000)` = 0.43913… × 100 = 43.913…%, rounded = **43.91**.
+- `56.09 + 43.91 = 100.00` ✓ (asserted directly in both invariant suites, for every fixture where the
+  percentages are non-null).
+
+**Expected outputs added on top of F/G's pinned block (pence unless noted):**
+
+| Metric | Value | £ |
+|---|---:|---:|
+| `senior_breakeven_pence` | 60,573,556 | £605,735.56 |
+| `senior_breakeven_pct_of_lender_gdv` | — | 56.09% |
+| `senior_breakeven_fall_from_lender_gdv_pct` | — | 43.91% |
+
+**TDD evidence (Task 4):** with `metrics.ts`/`metrics.py`'s three `senior_breakeven_*` fields still
+null-wired (pre-Task-4), both `test_golden_fixture_parity[g-lender-valuation]` (Python) and the TS
+`golden-fixtures.test.ts` run for fixture G fail exactly on `senior_breakeven_pence: None/null !=
+60573556` (RED). Wiring `deriveMetrics`/`derive_metrics` to call `solveSeniorBreakeven`/
+`solve_senior_breakeven` turns both green — see `task-4-report.md` for the full transcript, including
+the ledger-field (`redemption_balance_at_disposal_pence`) and solver-unit RED/GREEN cycles.
+
+**Invariants added (both languages, every fixture, not just G):**
+1. `senior_breakeven_pence` is null **iff** `redemption_balance_at_disposal_pence` is null (cash
+   deals and no-disposal schedules both null; every disposal — even an under-swept one — non-null).
+2. When non-null, `senior_breakeven_pence ≥ redemption_balance_at_disposal_pence + exit_fee_amount(...)`
+   (the exit fee recomputed independently from the facility's basis terms, not read off
+   `totals.exit_fee_pence`, since that total is the fee actually *charged* and is zero whenever the
+   real disposal under-swept the balance — spec §4.4 — while break-even asks what fee *would* be due
+   on full redemption).
+3. `senior_breakeven_pct_of_lender_gdv`/`senior_breakeven_fall_from_lender_gdv_pct` are null unless a
+   lender GDV is present, and sum to 100.00 (within rounding) when both are present.
+4. Cash fixture A: all three fields are null (asserted directly, not just via the iff invariant).
+
+**Cross-language note (not a fixture divergence, but recorded for anyone extending the solver to a
+very large deal):** `solveSeniorBreakeven`'s bisection midpoint (`(lo + hi) >> 1`, spec-mandated
+shape) uses JavaScript's 32-bit-signed-integer bitwise `>>`. For a redemption balance at or above
+`2**31` pence (~£21.47m), `hi` exceeds the safe 32-bit range and the bit-shift corrupts `mid`,
+exhausting the 200-iteration cap and returning `null` — empirically confirmed at
+`redemption_balance_pence = 5,000,000,000` (~£50m). Python's `(lo + hi) // 2` has no such limitation
+and converges correctly at the same scale (`tests/test_financial_model_breakeven.py::
+test_converges_correctly_for_realistic_large_deals_where_ts_cannot`). Both fixtures F/G's redemption
+balances (~£586k) are far below this boundary, so neither pinned value is affected — this is a
+documented behavioural limit for future large-deal fixtures, not a defect in the current pins. See
+`task-4-report.md` for the full reproduction and reasoning.
+
 ---
 
 ## 3. Ledger fixtures B–F — pinned in BOTH languages
@@ -398,7 +483,8 @@ surface as a golden-fixture mismatch even without a Python-native copy of this s
 npm test                    # or: npx vitest run — runs the full suite (202 tests)
 npx tsc -p tsconfig.app.json --noEmit   # type check
 npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/monthly-engine.test.ts \
-  src/lib/model/invariants.test.ts src/lib/model/irr.test.ts   # model layer only
+  src/lib/model/invariants.test.ts src/lib/model/irr.test.ts src/lib/model/breakeven.test.ts \
+  # model layer only
 ```
 
 **Backend (Python / pytest), from the repo root:**
@@ -406,6 +492,7 @@ npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/monthly-engin
 python -m pytest -q                              # full suite (145 tests)
 python -m pytest tests/test_financial_model_fixtures.py   # golden-fixture parity + invariants only
 python -m pytest tests/test_financial_model_engine.py     # Python-native ledger/engine unit tests
+python -m pytest tests/test_financial_model_breakeven.py  # senior break-even solver unit tests (spec §5.11)
 python -m pytest tests/test_appraisal_governance.py       # server-authoritative persistence, incl. the York path
 ```
 `pyproject.toml` sets `testpaths = ["tests"]`, so a bare `pytest` from the repo root is equivalent

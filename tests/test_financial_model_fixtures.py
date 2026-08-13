@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.financial_model import run_appraisal
+from app.financial_model.engine import exit_fee_amount
 from app.financial_model.metrics import pct
 from app.financial_model.migrate import migrate_inputs
 from app.financial_model.types import CalculatorInputsV3
@@ -52,6 +53,60 @@ def test_lender_gdv_never_defaults_to_developer_gdv(path: Path) -> None:
         assert run.metrics.ltgdv_lender_pct == pct(
             run.model.peak_debt_pence, run.metrics.lender_gdv_pence
         )
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_senior_breakeven_null_iff_no_disposal(path: Path) -> None:
+    """Release 2b Task 4 (spec Sec 5.11): senior_breakeven_pence is null exactly when
+    the ledger recorded no disposal (cash deals, or nothing sold)."""
+    doc = json.loads(path.read_text())
+    run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
+    assert (run.metrics.senior_breakeven_pence is None) == (
+        run.model.redemption_balance_at_disposal_pence is None
+    )
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_senior_breakeven_covers_redemption_plus_exit_fee(path: Path) -> None:
+    """When non-null, senior_breakeven_pence >= redemption balance + exit fee due on
+    redeeming it (spec Sec 5.11 invariant)."""
+    doc = json.loads(path.read_text())
+    inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+    run = run_appraisal(inputs)
+    redemption = run.model.redemption_balance_at_disposal_pence
+    if redemption is not None and run.metrics.senior_breakeven_pence is not None:
+        exit_fee = exit_fee_amount(
+            inputs.finance, run.model.committed_gross_facility_pence, run.model.peak_debt_pence,
+            redemption,
+        )
+        assert run.metrics.senior_breakeven_pence >= redemption + exit_fee
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_senior_breakeven_percentages_null_unless_lender_gdv_present(path: Path) -> None:
+    doc = json.loads(path.read_text())
+    run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
+    lender_gdv_present = run.metrics.lender_gdv_pence is not None
+    if run.metrics.senior_breakeven_pence is None or not lender_gdv_present:
+        assert run.metrics.senior_breakeven_pct_of_lender_gdv is None
+        assert run.metrics.senior_breakeven_fall_from_lender_gdv_pct is None
+    else:
+        assert run.metrics.senior_breakeven_pct_of_lender_gdv is not None
+        assert run.metrics.senior_breakeven_fall_from_lender_gdv_pct is not None
+        total = (
+            run.metrics.senior_breakeven_pct_of_lender_gdv
+            + run.metrics.senior_breakeven_fall_from_lender_gdv_pct
+        )
+        assert round(total, 2) == 100.0
+
+
+def test_senior_breakeven_all_null_for_cash_fixture_a() -> None:
+    doc = json.loads((FIXTURE_DIR / "a-all-cash.json").read_text())
+    run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
+    assert run.model.redemption_balance_at_disposal_pence is None
+    assert run.metrics.senior_breakeven_pence is None
+    assert run.metrics.senior_breakeven_pct_of_lender_gdv is None
+    assert run.metrics.senior_breakeven_fall_from_lender_gdv_pct is None
 
 
 def test_migration_preserves_floors_zero() -> None:

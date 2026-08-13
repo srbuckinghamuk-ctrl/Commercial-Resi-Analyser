@@ -2,7 +2,10 @@ import type {
   EquitySource, FacilityTerms, LedgerMonth, ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
 
-function exitFeeAmount(
+/** Exported for breakeven.ts's caller (metrics.ts): the exit fee due on redeeming a given
+ * balance is a pure function of the facility's basis terms — it never depends on the
+ * hypothetical sale price used by the senior break-even solver (spec §5.11). */
+export function exitFeeAmount(
   finance: FacilityTerms, grossFacility: number, peakDebt: number, redemptionBalance: number,
 ): number {
   const base =
@@ -78,6 +81,11 @@ export function runLedger(
   let totalRepayments = 0;
   let reserveExhaustedFlagged = false;
   let facilityExceededFlagged = false;
+  // Spec §5.11: the disposal month's senior balance immediately before sale receipts are
+  // applied — captured before the repayment block below mutates `balance`. Stays null for
+  // cash deals (no senior facility to redeem) and for schedules with no disposal at all
+  // (e.g. exit_strategy.route === 'retain_all', where no month ever has gross_sale_pence > 0).
+  let redemptionBalanceAtDisposal: number | null = null;
 
   for (let m = 0; m < term; m++) {
     const u = schedule.uses[m];
@@ -147,6 +155,9 @@ export function runLedger(
     if (balance > peakDebt) { peakDebt = balance; peakDebtMonth = m; }
 
     const r = schedule.receipts[m];
+    if (!isCash && r.gross_sale_pence > 0) {
+      redemptionBalanceAtDisposal = balance;
+    }
     const netReceipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence;
     let repayment = 0;
     let exitFee = 0;
@@ -281,6 +292,7 @@ export function runLedger(
     committed_net_facility_pence: netFacility,
     committed_gross_facility_pence: grossFacility,
     senior_outstanding_at_maturity_pence: opening,
+    redemption_balance_at_disposal_pence: redemptionBalanceAtDisposal,
     flags,
     equity_cashflows_pence: equityCashflows,
   };

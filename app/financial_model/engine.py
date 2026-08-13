@@ -79,12 +79,19 @@ class MonthlyModel:
     committed_net_facility_pence: int
     committed_gross_facility_pence: int
     senior_outstanding_at_maturity_pence: int
+    # Spec Sec 5.11: the disposal month's senior balance immediately before sale
+    # receipts are applied. None for cash deals (no senior facility) and for
+    # schedules with no disposal (e.g. exit_strategy.route == "retain_all").
+    redemption_balance_at_disposal_pence: int | None
     flags: list[ModelFlag]
     # Developer equity cash-flow vector, one entry per month (- out, + in).
     equity_cashflows_pence: list[int] = field(default_factory=list)
 
 
-def _exit_fee_amount(
+# Exported (no leading underscore) for breakeven.py's caller (metrics.py): the exit fee due
+# on redeeming a given balance is a pure function of the facility's basis terms -- it never
+# depends on the hypothetical sale price used by the senior break-even solver (spec Sec 5.11).
+def exit_fee_amount(
     finance: FacilityTerms, gross_facility: int, peak_debt: int, redemption_balance: int,
 ) -> int:
     if finance.exit_fee_basis == "peak_debt":
@@ -173,6 +180,11 @@ def run_ledger(
     total_repayments = 0
     reserve_exhausted_flagged = False
     facility_exceeded_flagged = False
+    # Spec Sec 5.11: the disposal month's senior balance immediately before sale receipts
+    # are applied -- captured before the repayment block below mutates `balance`. Stays
+    # None for cash deals (no senior facility to redeem) and for schedules with no
+    # disposal at all (e.g. exit_strategy.route == "retain_all").
+    redemption_balance_at_disposal: int | None = None
 
     for m in range(term):
         u = schedule.uses[m]
@@ -249,6 +261,8 @@ def run_ledger(
             peak_debt_month = m
 
         r = schedule.receipts[m]
+        if not is_cash and r.gross_sale_pence > 0:
+            redemption_balance_at_disposal = balance
         net_receipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence
         repayment = 0
         exit_fee = 0
@@ -256,7 +270,7 @@ def run_ledger(
         if net_receipts > 0:
             sweep_available = money_round((net_receipts * finance.sales_sweep_pct) / 100)
             if balance > 0 and not is_cash:
-                fee = _exit_fee_amount(finance, gross_facility, peak_debt, balance)
+                fee = exit_fee_amount(finance, gross_facility, peak_debt, balance)
                 if sweep_available >= balance + fee:
                     repayment = balance
                     exit_fee = fee
@@ -387,6 +401,7 @@ def run_ledger(
         committed_net_facility_pence=net_facility,
         committed_gross_facility_pence=gross_facility,
         senior_outstanding_at_maturity_pence=opening,
+        redemption_balance_at_disposal_pence=redemption_balance_at_disposal,
         flags=flags,
         equity_cashflows_pence=equity_cashflows,
     )

@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
+import { exitFeeAmount } from './monthly-engine';
 import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
@@ -116,4 +117,51 @@ describe('lender-underwritten GDV — never defaults to developer GDV (spec §3.
       }
     });
   }
+});
+
+// Release 2b Task 4 (spec §5.11): senior repayment break-even.
+describe('senior repayment break-even (spec §5.11)', () => {
+  for (const fx of fixtures) {
+    it(`${fx.name}: senior_breakeven_pence is null iff redemption_balance_at_disposal_pence is null`, () => {
+      const run = runAppraisal(fx.inputs);
+      expect(run.metrics.senior_breakeven_pence === null)
+        .toBe(run.model.redemption_balance_at_disposal_pence === null);
+    });
+
+    it(`${fx.name}: when non-null, senior_breakeven_pence >= redemption + exit fee`, () => {
+      const run = runAppraisal(fx.inputs);
+      const redemption = run.model.redemption_balance_at_disposal_pence;
+      if (redemption != null && run.metrics.senior_breakeven_pence != null) {
+        const exitFee = exitFeeAmount(
+          fx.inputs.finance, run.model.committed_gross_facility_pence, run.model.peak_debt_pence, redemption,
+        );
+        expect(run.metrics.senior_breakeven_pence).toBeGreaterThanOrEqual(redemption + exitFee);
+      }
+    });
+
+    it(`${fx.name}: the two percentage forms are null unless lender GDV is present, and sum to 100.00 when present`, () => {
+      const run = runAppraisal(fx.inputs);
+      const lenderGdvPresent = run.metrics.lender_gdv_pence != null;
+      if (run.metrics.senior_breakeven_pence == null || !lenderGdvPresent) {
+        expect(run.metrics.senior_breakeven_pct_of_lender_gdv).toBeNull();
+        expect(run.metrics.senior_breakeven_fall_from_lender_gdv_pct).toBeNull();
+      } else {
+        expect(run.metrics.senior_breakeven_pct_of_lender_gdv).not.toBeNull();
+        expect(run.metrics.senior_breakeven_fall_from_lender_gdv_pct).not.toBeNull();
+        const sum = (run.metrics.senior_breakeven_pct_of_lender_gdv as number)
+          + (run.metrics.senior_breakeven_fall_from_lender_gdv_pct as number);
+        expect(sum).toBeCloseTo(100, 2);
+      }
+    });
+  }
+
+  it('cash fixture A: all three senior break-even fields are null', () => {
+    const fx = fixtures.find((f) => f.name.startsWith('A —'));
+    expect(fx).toBeDefined();
+    const run = runAppraisal(fx!.inputs);
+    expect(run.model.redemption_balance_at_disposal_pence).toBeNull();
+    expect(run.metrics.senior_breakeven_pence).toBeNull();
+    expect(run.metrics.senior_breakeven_pct_of_lender_gdv).toBeNull();
+    expect(run.metrics.senior_breakeven_fall_from_lender_gdv_pct).toBeNull();
+  });
 });
