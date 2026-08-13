@@ -1422,6 +1422,8 @@ export function runLedger(
 
 Note: ancillary (non-capitalised) lender fees are month-0 cash uses funded through the same waterfall, and they count inside `finance_costs_pence`. `uses_total_pence` includes them in month 0.
 
+Amended in implementation: development draws (and day-one advance) are additionally capped by gross-facility headroom after projected interest, per spec §4.2(c).
+
 - [ ] **Step 4: Run to verify pass**
 
 Run: `cd frontend && npx vitest run src/lib/model/monthly-engine.test.ts`

@@ -12,6 +12,20 @@ function exitFeeAmount(
   return Math.round((base * finance.exit_fee_pct) / 100);
 }
 
+// Spec §4.2(c): draws are also capped by gross facility headroom after projected interest,
+// so the closing balance this month cannot exceed the committed gross facility. Rolled-up
+// interest compounds on the drawn balance, so the cap is solved backwards through the
+// month's own interest accrual; serviced interest leaves the balance flat, so no such
+// back-solve is needed.
+function grossHeadroomCap(
+  grossFacility: number, monthlyRate: number, rolledUp: boolean, opening: number, capFees: number,
+): number {
+  if (grossFacility <= 0) return Number.MAX_SAFE_INTEGER;
+  return rolledUp
+    ? Math.max(0, Math.floor(grossFacility / (1 + monthlyRate)) - opening - capFees)
+    : Math.max(0, grossFacility - opening - capFees);
+}
+
 export function runLedger(
   schedule: Schedule, finance: FacilityTerms, equitySources: EquitySource[],
 ): MonthlyModel {
@@ -83,8 +97,9 @@ export function runLedger(
         capFees = arrangementFee;
         cumNetUsed += capFees;
         if (finance.day_one_advance_pence != null) {
+          const headroomCap = grossHeadroomCap(grossFacility, monthlyRate, rolledUp, opening, capFees);
           draw = Math.max(0, Math.min(
-            finance.day_one_advance_pence, netFacility - cumNetUsed, cashUses));
+            finance.day_one_advance_pence, netFacility - cumNetUsed, cashUses, headroomCap));
           cumNetUsed += draw;
         }
       }
@@ -101,7 +116,8 @@ export function runLedger(
         const eligible = u.construction_pence + u.professional_pence + u.statutory_pence;
         const advanceCap = Math.round((eligible * finance.development_cost_advance_pct) / 100);
         const undrawnNet = Math.max(0, netFacility - cumNetUsed);
-        draw = Math.max(0, Math.min(remainder, advanceCap, undrawnNet));
+        const headroomCap = grossHeadroomCap(grossFacility, monthlyRate, rolledUp, opening, capFees);
+        draw = Math.max(0, Math.min(remainder, advanceCap, undrawnNet, headroomCap));
         cumNetUsed += draw;
         remainder -= draw;
       }

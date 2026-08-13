@@ -174,6 +174,29 @@ describe('Fixture E — funding gap: overruns never create facility', () => {
   });
 });
 
+describe('Fixture F — draws are capped by gross facility headroom after projected interest (spec §4.2c)', () => {
+  const terms: FacilityTerms = { ...TERMS, committed_gross_facility_pence: 36_500_000 };
+  const model = () => runLedger(mkSchedule(USES, SALE), terms, equity(30_000_000));
+
+  it('caps the month-2 draw so the closing balance cannot exceed committed gross facility', () => {
+    const m = model();
+    // Months 0-1 identical to Fixture B: gross headroom does not bind while balances are low.
+    expect(m.months[1].closing_balance_pence).toBe(31_623_100);
+    // m2: needed draw 5,000,000, but grossHeadroomCap = floor(36,500,000/1.01) − 31,623,100
+    // = 36,138,613 − 31,623,100 = 4,515,513.
+    expect(m.months[2].draw_pence).toBe(4_515_513);
+    expect(m.months[2].equity_contribution_pence).toBe(5_000_000);
+    expect(m.months[2].funding_gap_pence).toBe(484_487);
+    expect(m.months[2].interest_accrued_pence).toBe(361_386);
+    expect(m.months[2].closing_balance_pence).toBe(36_499_999);
+    const gap = m.flags.find((f) => f.code === 'funding_gap');
+    expect(gap).toBeDefined();
+    for (const mo of m.months) {
+      expect(mo.closing_balance_pence).toBeLessThanOrEqual(36_500_000);
+    }
+  });
+});
+
 describe('Cash funding produces exactly zero debt cost', () => {
   it('has no draws, interest, or fees under cash', () => {
     const terms: FacilityTerms = { ...TERMS, funding_source: 'cash' };
