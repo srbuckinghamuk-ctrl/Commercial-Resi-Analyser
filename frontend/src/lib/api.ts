@@ -17,11 +17,61 @@ import type {
 
 const HEADERS = { 'Content-Type': 'application/json' };
 
+/**
+ * Thrown for any non-2xx response. `detail` carries the parsed body's
+ * `detail` field when present (FastAPI's convention for 422/404 errors --
+ * either a list of Pydantic error objects or a list of validation issue
+ * dicts `{severity, field, message}`), otherwise the parsed/raw body.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(status: number, message: string, detail: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/** Renders an ApiError's `detail` (Pydantic errors, validation issues, or a
+ * plain string) as human-readable, field-prefixed lines for display. */
+export function formatApiErrorDetail(detail: unknown): string[] {
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      if (item && typeof item === 'object') {
+        const rec = item as Record<string, unknown>;
+        if (typeof rec.field === 'string' && typeof rec.message === 'string') {
+          return `${rec.field}: ${rec.message}`;
+        }
+        if (Array.isArray(rec.loc) && typeof rec.msg === 'string') {
+          return `${rec.loc.join('.')}: ${rec.msg}`;
+        }
+      }
+      return typeof item === 'string' ? item : JSON.stringify(item);
+    });
+  }
+  if (typeof detail === 'string' && detail.length > 0) return [detail];
+  if (detail == null) return [];
+  return [JSON.stringify(detail)];
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    let detail: unknown;
+    try {
+      const parsed = JSON.parse(text);
+      detail =
+        parsed && typeof parsed === 'object' && 'detail' in parsed
+          ? (parsed as { detail: unknown }).detail
+          : parsed;
+    } catch {
+      detail = text || undefined;
+    }
+    throw new ApiError(response.status, `HTTP ${response.status}: ${text}`, detail);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -128,6 +178,20 @@ export async function updateAppraisal(
     headers: HEADERS,
     body: JSON.stringify(data),
   });
+}
+
+/**
+ * Save flow entry point: creates the project's first appraisal (POST) or
+ * migrates/recalculates the existing one (PUT) when `existingId` is set.
+ * Either path returns the full server-authoritative record -- outputs,
+ * validation, status, and hashes are always recomputed server-side (Task 12).
+ */
+export async function saveAppraisal(
+  projectId: string,
+  data: FinancialAppraisalCreate,
+  existingId?: string | null,
+): Promise<FinancialAppraisal> {
+  return existingId ? updateAppraisal(projectId, data) : createAppraisal(data);
 }
 
 // --- Scrape ---

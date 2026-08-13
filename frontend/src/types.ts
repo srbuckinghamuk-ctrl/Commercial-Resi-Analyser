@@ -1,3 +1,5 @@
+import type { AppraisalResultV2, ReconciliationStatus, ValidationIssue } from './lib/model';
+
 export type UseClass =
   | 'office'
   | 'retail'
@@ -149,11 +151,40 @@ export interface EligibilityAssessmentCreate {
   notes?: string;
 }
 
+export type AppraisalStatus = 'draft' | 'reconciled' | 'legacy_unreconciled';
+
+export interface AppraisalClientMismatch {
+  field: string;
+  client: number | null;
+  server: number | null;
+}
+
+export interface AppraisalOutputs {
+  metrics: AppraisalResultV2;
+  reconciliation: ReconciliationStatus;
+}
+
+export interface AppraisalValidation {
+  issues: ValidationIssue[];
+  client_mismatches: AppraisalClientMismatch[];
+}
+
 export interface FinancialAppraisal {
   id: string;
   project_id: string;
   name: string;
   inputs_snapshot: Record<string, unknown>;
+  // authoritative server outputs (Task 12) -- null only for pre-migration
+  // records that predate server-side recalculation:
+  outputs?: AppraisalOutputs | null;
+  validation?: AppraisalValidation | null;
+  calc_version?: string | null;
+  inputs_version?: number;
+  status?: AppraisalStatus;
+  input_hash?: string | null;
+  outputs_hash?: string | null;
+  // legacy columns retained for backward-compat; server-computed even when
+  // `outputs` is present -- prefer `outputs.metrics` for display:
   gdv_pence: number | null;
   total_cost_pence: number | null;
   profit_on_cost_pct: number | null;

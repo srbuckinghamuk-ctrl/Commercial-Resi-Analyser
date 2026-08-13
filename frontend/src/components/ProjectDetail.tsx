@@ -346,38 +346,78 @@ export default function ProjectDetail({ project, onBack, onProjectUpdated }: Pro
       </div>
 
       {/* Key metrics (if appraisal exists) */}
-      {appraisal && (
-        <div
-          style={{
-            background: '#0a1628',
-            border: '1px solid #1e3a5f',
-            borderRadius: 10,
-            padding: 24,
-          }}
-        >
-          <h3 style={{ color: '#e2e8f0', fontSize: 16, margin: '0 0 16px 0' }}>Key Metrics</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16 }}>
-            {appraisal.gdv_pence != null && (
-              <MetricTile label="GDV" value={`£${(appraisal.gdv_pence / 100).toLocaleString()}`} />
-            )}
-            {appraisal.total_cost_pence != null && (
-              <MetricTile label="Total Cost" value={`£${(appraisal.total_cost_pence / 100).toLocaleString()}`} />
-            )}
-            {appraisal.profit_on_cost_pct != null && (
-              <MetricTile label="Profit on Cost" value={`${appraisal.profit_on_cost_pct.toFixed(1)}%`} />
-            )}
-            {appraisal.profit_on_gdv_pct != null && (
-              <MetricTile label="Profit on GDV" value={`${appraisal.profit_on_gdv_pct.toFixed(1)}%`} />
-            )}
-            {appraisal.return_on_equity_pct != null && (
-              <MetricTile label="Return on Equity" value={`${appraisal.return_on_equity_pct.toFixed(1)}%`} />
-            )}
-            {appraisal.irr != null && (
-              <MetricTile label="IRR" value={`${appraisal.irr.toFixed(1)}%`} />
-            )}
+      {appraisal && (() => {
+        // Server-authoritative outputs (Task 12) are the preferred source;
+        // the legacy flat columns are shown only when a record predates
+        // recalculation (outputs is null), flagged as such below.
+        const metrics = appraisal.outputs?.metrics ?? null;
+        const display = metrics
+          ? {
+              gdv: metrics.gdv_pence,
+              totalCost: metrics.total_development_cost_pence,
+              profitOnCost: metrics.profit_on_cost_pct,
+              profitOnGdv: metrics.profit_on_gdv_pct,
+              returnOnEquity: metrics.return_on_equity_pct,
+              irr: metrics.irr_annual_pct,
+            }
+          : {
+              gdv: appraisal.gdv_pence,
+              totalCost: appraisal.total_cost_pence,
+              profitOnCost: appraisal.profit_on_cost_pct,
+              profitOnGdv: appraisal.profit_on_gdv_pct,
+              returnOnEquity: appraisal.return_on_equity_pct,
+              irr: appraisal.irr,
+            };
+        const isLegacy = metrics == null;
+        return (
+          <div
+            style={{
+              background: '#0a1628',
+              border: '1px solid #1e3a5f',
+              borderRadius: 10,
+              padding: 24,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <h3 style={{ color: '#e2e8f0', fontSize: 16, margin: 0 }}>Key Metrics</h3>
+              {isLegacy && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: '#ef4444',
+                    padding: '2px 8px',
+                    borderRadius: 10,
+                    background: 'rgba(239, 68, 68, 0.12)',
+                  }}
+                >
+                  legacy — unreconciled
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16 }}>
+              {display.gdv != null && (
+                <MetricTile label="GDV" value={`£${(display.gdv / 100).toLocaleString()}`} />
+              )}
+              {display.totalCost != null && (
+                <MetricTile label="Total Cost" value={`£${(display.totalCost / 100).toLocaleString()}`} />
+              )}
+              {display.profitOnCost != null && (
+                <MetricTile label="Profit on Cost" value={`${display.profitOnCost.toFixed(1)}%`} />
+              )}
+              {display.profitOnGdv != null && (
+                <MetricTile label="Profit on GDV" value={`${display.profitOnGdv.toFixed(1)}%`} />
+              )}
+              {display.returnOnEquity != null && (
+                <MetricTile label="Return on Equity" value={`${display.returnOnEquity.toFixed(1)}%`} />
+              )}
+              {display.irr != null && (
+                <MetricTile label="IRR" value={`${display.irr.toFixed(1)}%`} />
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
