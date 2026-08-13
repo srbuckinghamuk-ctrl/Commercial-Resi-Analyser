@@ -161,16 +161,32 @@ upgrade path for existing databases.
 ### Runbook — adopting Alembic on the existing Docker database
 
 The only production database is the local docker compose Postgres volume
-(`postgres_data`). Its schema was created by `create_all` and already matches
-migration 002, so it must be *stamped*, not upgraded:
+(`postgres_data`). **Diagnose its actual state before choosing a path** — the
+2026-08-13 R2a UAT found the live database in neither of the states this
+runbook originally assumed: `create_all` had built only the *pre-002* schema
+(no governance columns — `create_all` creates missing tables but never adds
+columns to existing ones), and `alembic_version` contained a stale revision
+`003` from an earlier, unrelated migration chain.
 
-1. Back up the volume while the stack is stopped:
+0. Diagnose:
+   - `docker compose exec -T postgres psql -U postgres -d commercial_resi -c "SELECT version_num FROM alembic_version"`
+     (a revision not present in `migrations/versions/` is a stale/foreign stamp);
+   - `docker compose exec -T postgres psql -U postgres -d commercial_resi -c "\d financial_appraisals"`
+     (governance columns present = schema matches 002; absent = pre-002).
+1. Back up the database (postgres stays up; only the api is stopped):
    `docker compose stop api && docker compose exec -T postgres pg_dump -U postgres commercial_resi > backup-$(date +%F).sql`
    (or snapshot the `postgres_data` volume).
-2. Stamp the current revision without running any migration:
-   `docker compose run --rm api alembic stamp head`
-   (the api image contains `alembic.ini` and `migrations/`; `DATABASE_URL`
-   in compose points at the postgres service).
+2. Bring the Alembic stamp in line with reality
+   (`docker compose run --rm api alembic ...` — the api container carries
+   `alembic.ini` and `migrations/`; `DATABASE_URL` in compose points at the
+   postgres service):
+   - schema matches 002 → `alembic stamp head` (record only, run nothing);
+   - pre-002 schema → `alembic stamp 001` then `alembic upgrade head`
+     (applies 002's column additions);
+   - stale/foreign `alembic_version` (as found in the live DB) → add
+     `--purge` to the stamp, e.g. `alembic stamp --purge 001`, since plain
+     `stamp`/`current` fail with "Can't locate revision" on an unknown
+     revision.
 3. Verify: `docker compose run --rm api alembic current` reports `002 (head)`.
 4. Restart the api service:
    `docker compose start api`
@@ -178,6 +194,6 @@ migration 002, so it must be *stamped*, not upgraded:
 From now on, schema changes ship as new scripts in `migrations/versions/`
 and are applied with `docker compose run --rm api alembic upgrade head`.
 
-A database that predates migration 002 (does not have the governance columns
-on `financial_appraisals`) must instead run
-`alembic stamp 001` then `alembic upgrade head`.
+Executed against the live database on 2026-08-13 (path: backup →
+`stamp --purge 001` → `upgrade head` → verify → restart); see
+`docs/reviews/2026-08-13-release-2a-uat.md` for the full transcript.
