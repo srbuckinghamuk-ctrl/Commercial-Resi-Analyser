@@ -1,8 +1,10 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.0.0`.
-**Date:** 12 August 2026
+**Status:** Authoritative. Calculation version `2.1.0`.
+**Date:** 13 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
+
+**Changelog (2.1.0):** Additive only — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
 Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]**/**[R3]** defined now, implemented later. A metric marked R2/R3 must be displayed as "not available" (never a substitute formula) until implemented.
 
@@ -15,6 +17,7 @@ Implementation release markers: **[R1]** implemented in Release 1 (P0 financial 
 - All monetary values are **integer pence** (GBP) end-to-end: inputs, monthly ledger lines, aggregates, persisted values, report values.
 - Intermediate products of a single formula may be fractional; the formula's result is rounded to integer pence **at the point each ledger line is created**, never re-rounded downstream. Aggregates are sums of already-integer lines and are therefore exact.
 - Rounding mode for money: **half-up toward +∞**, i.e. JavaScript `Math.round`. The Python implementation must use `math.floor(x + 0.5)` (not Python's banker's `round()`); both implementations must agree to the penny on all golden fixtures.
+- Fractional-area products round once, at source: `base = round_half_up(construction_cost_per_sqm_pence × total_construction_sqm)` — the product is rounded to integer pence in one step, before contingency (§3.4).
 
 ### 1.2 Percentages and rates
 
@@ -55,6 +58,8 @@ Every appraisal document carries `calc_version` (semver of this specification's 
 | **Committed gross facility** | `committed_gross_facility_pence` if provided; otherwise `committed_net_facility_pence + interest_reserve_pence`. Caps the closing senior balance including rolled-up interest. |
 | **Eligible development costs** | Construction, professional and statutory costs (not acquisition, not selling costs, not finance costs) — the base against which `development_cost_advance_pct` caps monthly senior draws. |
 | **Legacy leverage** | A migrated v1 `ltv_pct`. It is stored as `legacy_leverage_pct` with `requires_confirmation: true` and is used only to propose an unconfirmed committed net facility during migration (§10). It is never presented as an approved lender metric. |
+| **Lender valuation** | Optional `lender_valuation` block (`inputs_version 3`) recording a lender-adjusted GDV (§3.2): `basis` — one of `global_pct` (% adjustment applied to every unit's developer value, e.g. `-10`), `global_per_sqft` (pence per sq ft applied to every unit's area, replacing its developer value), `unit_type` (`per_key_values` maps unit type → % adjustment), `per_unit` (`per_key_values` maps unit id → lender value pence), `fixed_amount` (`global_value` is the total lender GDV in pence, replacing the summed value). Required provenance `reason`, `author`, `date` (ISO `yyyy-mm-dd`) travel with the block and are displayed with any variance it produces. `null`/absent = no lender valuation recorded. |
+| **Enforcement cost assumption** | `finance.enforcement_cost_assumption_pence`: integer pence, `>= 0`, default `0`. A disclosed assumption for the lender's cost of enforcement, used in senior repayment break-even (§5.11) and reported as an assumption wherever that metric is shown. |
 
 ---
 
@@ -73,7 +78,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 - **Zero-debt:** unchanged. **Negative-profit:** unchanged.
 - Zero GDV with units present is a hard validation error.
 
-### 3.2 Lender-underwritten GDV [R2]
+### 3.2 Lender-underwritten GDV [R2 — implemented in calc 2.1.0]
 
 - **Formula:** Σ lender unit values, where each lender value = developer value adjusted by the recorded lender adjustment (global %, global £/sq ft, unit-type, per-unit, or fixed amount).
 - Defaults to `null` (unknown), never silently to developer GDV. All lender-basis metrics (LTGDV-lender, senior break-even % of lender GDV) return `null` until it is set.
@@ -293,15 +298,15 @@ Ledger column §4. Exhaustion (cumulative capitalised interest > reserve) is an 
 
 `committed_gross_facility − peak gross debt` (and per-month in the ledger). Negative headroom = facility exceeded = red flag; the model does not silently expand the facility.
 
-### 5.10 Cost-to-complete [R2]
+### 5.10 Cost-to-complete [R2 — implemented in calc 2.1.0]
 
-Per month: remaining development costs + remaining fees + remaining statutory + forecast finance to completion + remaining contingency, versus undrawn committed net facility + remaining committed cash equity + other committed funding. Reports remaining cost, remaining funding, surplus/shortfall, first shortfall month, maximum shortfall. Defined here; implemented with the dated programme.
+Per month: remaining development costs + remaining fees + remaining statutory + forecast finance to completion + remaining contingency, versus undrawn committed net facility + remaining committed cash equity + other committed funding. Reports remaining cost, remaining funding, surplus/shortfall, first shortfall month, maximum shortfall. Implemented on the straight-line schedule (calc 2.1.0); re-derived when the dated programme lands (R3).
 
-### 5.11 Senior repayment break-even [R2]
+### 5.11 Senior repayment break-even [R2 — implemented in calc 2.1.0]
 
 Minimum net realised proceeds `P` such that `P = redemption_balance_at_disposal + exit_fee + disposal_costs(P) + enforcement_cost_assumption`. Solved iteratively because disposal costs depend on `P`. Reported absolute, as % of lender GDV, and as the % fall from lender GDV before senior exposure. Never computed as "GDV vs TDC" — the pre-R1 "senior debt impairment" figure is removed in R1.
 
-### 5.12 Developer profit break-even [R2]
+### 5.12 Developer profit break-even [R2 — implemented in calc 2.1.0]
 
 Minimum net realised proceeds giving zero developer profit: `TDC` restated at the break-even receipts (selling costs re-solved). Distinct metric from §5.11, never conflated.
 
@@ -310,6 +315,8 @@ Minimum net realised proceeds giving zero developer profit: `TDC` restated at th
 ## 6. Spend profiles [R1 minimal]
 
 R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). `upfront`, `s_curve`, `back_loaded`, `user_defined` are enumerated in the schema and implemented with the dated programme [R2].
+
+**Note (calc 2.1.0):** §5.10 cost-to-complete is derived directly from this straight-line schedule (remaining cost per month = totals less cumulative spend to date under this profile); it is re-derived, not redefined, when the dated programme supersedes this section in R3.
 
 ---
 

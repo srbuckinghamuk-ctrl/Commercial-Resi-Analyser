@@ -68,6 +68,7 @@ function baseInputs(): CalculatorInputsV2 {
       sales_sweep_pct: 100,
       legacy_leverage_pct: null,
       requires_confirmation: false,
+      enforcement_cost_assumption_pence: 0,
     },
     equity_sources: [
       { id: 'e1', classification: 'cash', amount_pence: 35_000_000, timing_month: 0, repayment_priority: 1, evidence_status: 'confirmed', notes: '' },

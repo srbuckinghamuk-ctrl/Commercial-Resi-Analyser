@@ -103,7 +103,7 @@ async def test_negative_costs_rejected(client, project):
 async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
     response status == 'legacy_unreconciled', outputs recalculated under
-    calc_version 2.0.0, and finance.requires_confirmation True in the stored
+    calc_version 2.1.0, and finance.requires_confirmation True in the stored
     (migrated) snapshot."""
     v1_snapshot = {
         "acquisition": FIXTURE_A_INPUTS["acquisition"],
@@ -130,11 +130,11 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     body = resp.json()
 
     assert body["status"] == "legacy_unreconciled"
-    assert body["calc_version"] == "2.0.0"
+    assert body["calc_version"] == "2.1.0"
     assert body["inputs_snapshot"]["inputs_version"] == 2
     assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
     # Outputs were recalculated by the v2 engine, not just passed through.
-    assert body["outputs"]["metrics"]["calc_version"] == "2.0.0"
+    assert body["outputs"]["metrics"]["calc_version"] == "2.1.0"
 
 
 async def test_malformed_v2_snapshot_migrates_to_legacy_unreconciled(client, project):
@@ -239,4 +239,4 @@ async def test_get_returns_authoritative_outputs(client, project):
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
     assert body["gdv_pence"] == 120_000_000
-    assert body["calc_version"] == "2.0.0"
+    assert body["calc_version"] == "2.1.0"

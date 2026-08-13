@@ -11,10 +11,8 @@ from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, derive_metrics
 from .migrate import migrate_inputs
 from .schedule import Schedule, build_schedule
-from .types import CalculatorInputsV2
+from .types import CALC_VERSION, CalculatorInputsV2
 from .validation import ReconciliationStatus, ValidationIssue, reconcile, validate_inputs
-
-CALC_VERSION = "2.0.0"
 
 
 @dataclass

@@ -212,6 +212,7 @@ export const DEFAULT_FACILITY_TERMS: FacilityTerms = {
   sales_sweep_pct: 100,
   legacy_leverage_pct: null,
   requires_confirmation: false,
+  enforcement_cost_assumption_pence: 0,
 };
 
 export function defaultEquitySources(): EquitySource[] {

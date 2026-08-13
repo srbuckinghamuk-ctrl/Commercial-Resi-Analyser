@@ -42,6 +42,8 @@ export function deriveMetrics(
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
     lender_gdv_pence: null, // Release 2: lender-underwritten GDV
+    lender_gdv_variance_pence: null, // Task 3
+    lender_gdv_variance_pct: null, // Task 3
     acquisition_cost_pence: t.acquisition_pence,
     sdlt_pence: sdlt,
     construction_cost_pence: t.construction_pence,
@@ -79,5 +81,10 @@ export function deriveMetrics(
         ? model.months[model.months.length - 1].interest_reserve_remaining_pence
         : null,
     return_on_equity_pct: equityContributed > 0 ? pct(profit, equityContributed) : null,
+    senior_breakeven_pence: null, // Task 4
+    senior_breakeven_pct_of_lender_gdv: null, // Task 4
+    senior_breakeven_fall_from_lender_gdv_pct: null, // Task 4
+    developer_breakeven_pence: null, // Task 5
+    cost_to_complete: null, // Task 6
   };
 }

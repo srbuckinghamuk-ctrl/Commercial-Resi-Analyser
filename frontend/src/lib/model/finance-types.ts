@@ -39,6 +39,8 @@ export interface FacilityTerms {
   legacy_leverage_pct: number | null;
   /** True until a user confirms migrated/unevidenced facility terms. */
   requires_confirmation: boolean;
+  /** Disclosed lender cost-of-enforcement assumption (spec §2, §5.11). Default 0, >= 0. */
+  enforcement_cost_assumption_pence: number;
 }
 
 export type EquityClassification =
@@ -72,6 +74,43 @@ export interface CalculatorInputsV2 {
     downside: ScenarioOverrides; severe: ScenarioOverrides;
   };
   deal_spider: DealSpiderInputs;
+}
+
+export type LenderAdjustmentBasis =
+  | 'global_pct' | 'global_per_sqft' | 'unit_type' | 'per_unit' | 'fixed_amount';
+
+export interface LenderValuation {
+  basis: LenderAdjustmentBasis;
+  /** basis-dependent value:
+   *  global_pct: percentage adjustment applied to every unit's developer value (e.g. -10)
+   *  global_per_sqft: pence per sq ft applied to every unit's area (replaces unit value)
+   *  fixed_amount: total lender GDV in pence (single figure, replaces the sum)
+   */
+  global_value: number | null;
+  /** unit_type basis: map unit type -> pct adjustment; per_unit basis: map unit id -> lender value pence */
+  per_key_values: Record<string, number> | null;
+  /** Required provenance (spec §3.2: variance displayed with reason/author/date). */
+  reason: string;
+  author: string;
+  date: string; // ISO yyyy-mm-dd
+}
+
+export interface CalculatorInputsV3 {
+  inputs_version: 3;
+  project_id: string | null;
+  acquisition: AcquisitionInputs;
+  unit_mix: UnitMixInputs;
+  conversion_costs: ConversionCostInputs;
+  finance: FacilityTerms;
+  equity_sources: EquitySource[];
+  exit_strategy: ExitStrategyInputs;
+  risks: RiskItem[];
+  scenarios: {
+    base: ScenarioOverrides; upside: ScenarioOverrides;
+    downside: ScenarioOverrides; severe: ScenarioOverrides;
+  };
+  deal_spider: DealSpiderInputs;
+  lender_valuation: LenderValuation | null;
 }
 
 export type FlagCode =
@@ -165,10 +204,18 @@ export interface MonthlyModel {
   equity_cashflows_pence: number[];
 }
 
+export interface CostToCompleteSummary {
+  first_shortfall_month: number | null;
+  max_shortfall_pence: number;
+  months: { month: number; remaining_cost_pence: number; remaining_funding_pence: number; surplus_pence: number }[];
+}
+
 export interface AppraisalResultV2 {
   calc_version: string;
   gdv_pence: number;
   lender_gdv_pence: number | null;
+  lender_gdv_variance_pence: number | null;
+  lender_gdv_variance_pct: number | null;
   acquisition_cost_pence: number;
   sdlt_pence: number;
   construction_cost_pence: number;
@@ -201,6 +248,14 @@ export interface AppraisalResultV2 {
   facility_headroom_pence: number | null;
   interest_reserve_remaining_pence: number | null;
   return_on_equity_pct: number | null;
+  /** Wired in Task 4 (spec §5.11). */
+  senior_breakeven_pence: number | null;
+  senior_breakeven_pct_of_lender_gdv: number | null;
+  senior_breakeven_fall_from_lender_gdv_pct: number | null;
+  /** Wired in Task 5 (spec §5.12). */
+  developer_breakeven_pence: number | null;
+  /** Wired in Task 6 (spec §5.10). */
+  cost_to_complete: CostToCompleteSummary | null;
 }
 
-export const CALC_VERSION = '2.0.0';
+export const CALC_VERSION = '2.1.0';

@@ -86,10 +86,27 @@ def solve_irr(cashflows: list[float]) -> float | None:
 
 
 @dataclass
+class CostToCompleteMonth:
+    month: int
+    remaining_cost_pence: int
+    remaining_funding_pence: int
+    surplus_pence: int
+
+
+@dataclass
+class CostToCompleteSummary:
+    first_shortfall_month: int | None
+    max_shortfall_pence: int
+    months: list[CostToCompleteMonth]
+
+
+@dataclass
 class AppraisalResultV2:
     calc_version: str
     gdv_pence: int
     lender_gdv_pence: int | None
+    lender_gdv_variance_pence: int | None
+    lender_gdv_variance_pct: float | None
     acquisition_cost_pence: int
     sdlt_pence: int
     construction_cost_pence: int
@@ -122,6 +139,14 @@ class AppraisalResultV2:
     facility_headroom_pence: int | None
     interest_reserve_remaining_pence: int | None
     return_on_equity_pct: float | None
+    # Wired in Task 4 (spec Sec 5.11).
+    senior_breakeven_pence: int | None
+    senior_breakeven_pct_of_lender_gdv: float | None
+    senior_breakeven_fall_from_lender_gdv_pct: float | None
+    # Wired in Task 5 (spec Sec 5.12).
+    developer_breakeven_pence: int | None
+    # Wired in Task 6 (spec Sec 5.10).
+    cost_to_complete: CostToCompleteSummary | None
 
 
 def pct(numerator: float, denominator: float) -> float | None:
@@ -165,6 +190,8 @@ def derive_metrics(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
         lender_gdv_pence=None,  # Release 2: lender-underwritten GDV
+        lender_gdv_variance_pence=None,  # Task 3
+        lender_gdv_variance_pct=None,  # Task 3
         acquisition_cost_pence=t.acquisition_pence,
         sdlt_pence=sdlt,
         construction_cost_pence=t.construction_pence,
@@ -207,4 +234,9 @@ def derive_metrics(
             model.months[-1].interest_reserve_remaining_pence if len(model.months) > 0 else None
         ),
         return_on_equity_pct=pct(profit, equity_contributed) if equity_contributed > 0 else None,
+        senior_breakeven_pence=None,  # Task 4
+        senior_breakeven_pct_of_lender_gdv=None,  # Task 4
+        senior_breakeven_fall_from_lender_gdv_pct=None,  # Task 4
+        developer_breakeven_pence=None,  # Task 5
+        cost_to_complete=None,  # Task 6
     )

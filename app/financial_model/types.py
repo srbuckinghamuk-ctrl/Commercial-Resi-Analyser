@@ -69,6 +69,8 @@ class FacilityTerms(Model):
     legacy_leverage_pct: float | None = None
     # True until a user confirms migrated/unevidenced facility terms.
     requires_confirmation: bool
+    # Disclosed lender cost-of-enforcement assumption (spec Sec 2, Sec 5.11).
+    enforcement_cost_assumption_pence: int = Field(default=0, ge=0)
 
 
 class EquitySource(Model):
@@ -188,6 +190,47 @@ class CalculatorInputsV2(Model):
     deal_spider: DealSpiderInputs
 
 
+LenderAdjustmentBasis = Literal[
+    "global_pct", "global_per_sqft", "unit_type", "per_unit", "fixed_amount",
+]
+
+
+class LenderValuation(Model):
+    basis: LenderAdjustmentBasis
+    # basis-dependent value:
+    #  global_pct: percentage adjustment applied to every unit's developer value (e.g. -10)
+    #  global_per_sqft: pence per sq ft applied to every unit's area (replaces unit value)
+    #  fixed_amount: total lender GDV in pence (single figure, replaces the sum)
+    global_value: float | None = None
+    # unit_type basis: map unit type -> pct adjustment; per_unit basis: map unit id -> lender value pence
+    per_key_values: dict[str, float] | None = None
+    # Required provenance (spec Sec 3.2: variance displayed with reason/author/date).
+    reason: str = Field(min_length=1)
+    author: str = Field(min_length=1)
+    date: str = Field(min_length=1)  # ISO yyyy-mm-dd
+
+
+class CalculatorInputsV3(Model):
+    """Mirrors CalculatorInputsV2 plus the additive lender_valuation block
+    (calc 2.1.0). Kept as a separate model -- Task 2's migration owns v2/v3
+    acceptance at the boundary; CalculatorInputsV2 remains untouched so every
+    existing caller (schedule/engine/metrics/validation/migrate) and fixture
+    keeps validating and running exactly as before."""
+
+    inputs_version: Literal[3]
+    project_id: str | None
+    acquisition: AcquisitionInputs
+    unit_mix: UnitMixInputs
+    conversion_costs: ConversionCostInputs
+    finance: FacilityTerms
+    equity_sources: list[EquitySource]
+    exit_strategy: ExitStrategyInputs
+    risks: list[RiskItem]
+    scenarios: Scenarios
+    deal_spider: DealSpiderInputs
+    lender_valuation: LenderValuation | None = None
+
+
 FlagCode = Literal[
     "facility_exceeded", "funding_gap", "interest_reserve_exhausted",
     "senior_outstanding_at_maturity", "additional_equity_required",
@@ -195,4 +238,4 @@ FlagCode = Literal[
     "unrealised_profit_basis", "exit_fee_not_charged",
 ]
 
-CALC_VERSION = "2.0.0"
+CALC_VERSION = "2.1.0"

@@ -38,6 +38,7 @@ function migrateFinanceV1(v1: FinanceInputs, costBeforeFinance: number): {
     sales_sweep_pct: 100,
     legacy_leverage_pct: v1.ltv_pct,
     requires_confirmation: true,
+    enforcement_cost_assumption_pence: 0,
   };
   const equity: EquitySource[] = [{
     id: 'migrated-cash-equity',
