@@ -7,9 +7,10 @@ import math
 from dataclasses import dataclass
 
 from .engine import MonthlyModel, money_round
+from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .sdlt import calculate_commercial_sdlt
-from .types import CALC_VERSION, CalculatorInputsV2
+from .types import CALC_VERSION, CalculatorInputsV2, CalculatorInputsV3
 
 # --- irr.ts --------------------------------------------------------------
 
@@ -157,9 +158,14 @@ def pct(numerator: float, denominator: float) -> float | None:
 
 
 def derive_metrics(
-    inputs: CalculatorInputsV2, schedule: Schedule, model: MonthlyModel,
+    inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
 ) -> AppraisalResultV2:
     t = schedule.totals
+    # Lender-underwritten GDV (spec Sec 3.2, Release 2b Task 3). None for v2
+    # inputs (no lender_valuation field at all) or v3 inputs with the block
+    # absent -- never silently defaulted to developer GDV (spec Sec 2).
+    lender_gdv = compute_lender_gdv(inputs) if isinstance(inputs, CalculatorInputsV3) else None
+    lender_gdv_variance = None if lender_gdv is None else lender_gdv.lender_gdv_pence - t.gdv_pence
     sdlt = calculate_commercial_sdlt(inputs.acquisition.purchase_price_pence).total_pence
     cost_before_finance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence
     finance_costs = model.totals.finance_costs_pence
@@ -189,9 +195,11 @@ def derive_metrics(
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
-        lender_gdv_pence=None,  # Release 2: lender-underwritten GDV
-        lender_gdv_variance_pence=None,  # Task 3
-        lender_gdv_variance_pct=None,  # Task 3
+        lender_gdv_pence=None if lender_gdv is None else lender_gdv.lender_gdv_pence,
+        lender_gdv_variance_pence=lender_gdv_variance,
+        lender_gdv_variance_pct=(
+            None if lender_gdv_variance is None else pct(lender_gdv_variance, t.gdv_pence)
+        ),
         acquisition_cost_pence=t.acquisition_pence,
         sdlt_pence=sdlt,
         construction_cost_pence=t.construction_pence,
@@ -223,7 +231,9 @@ def derive_metrics(
         ),
         gross_ltc_pct=None if tdc == 0 else pct(model.peak_debt_pence, tdc),
         ltgdv_developer_pct=pct(model.peak_debt_pence, t.gdv_pence),
-        ltgdv_lender_pct=None,  # Release 2
+        ltgdv_lender_pct=(
+            None if lender_gdv is None else pct(model.peak_debt_pence, lender_gdv.lender_gdv_pence)
+        ),
         peak_debt_pence=model.peak_debt_pence,
         peak_debt_month=model.peak_debt_month,
         facility_headroom_pence=(

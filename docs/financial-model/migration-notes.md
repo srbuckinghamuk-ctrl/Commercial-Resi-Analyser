@@ -239,10 +239,13 @@ the existing v1→v2 step (`migrate_inputs`, unchanged) followed by `migrate_v2_
 v1-shaped (`was_v1 = not is_v2_or_later(raw)`) — a v2 document migrating to v3 on save is not treated
 as a legacy migration and reaches the normal `reconciled`/`draft` outcome exactly as before. The
 persisted `inputs_snapshot` is always the v3-validated document (`inputs_version: 3`); the engine
-itself (`run_appraisal`) still runs off a v2-shaped view internally — `lender_valuation` isn't
-consumed by the engine yet (Task 1 null-wired the seven new result fields; Task 3+ wires the block
-itself) — so the block is dropped before the engine call, which is exactly design §B1 in practice:
-"outputs unchanged while the block is absent."
+(`run_appraisal`) now runs directly off that v3 document (Release 2b Task 3 — the earlier
+downcast-to-v2 adapter that dropped `lender_valuation` before the engine call is gone from both
+`app/api/app.py::calculate_authoritative` and `tests/test_financial_model_fixtures.py`). Every
+result field Task 1 null-wired (`lender_gdv_pence` etc.) is now genuinely computed from the block
+when present, and stays `null` exactly when the block is absent — design §B1's "outputs unchanged
+while the block is absent" still holds, but it now holds because the engine itself null-wires the
+absent case, not because the block was stripped upstream of it.
 
 **Hash consequence.** `input_hash` is computed over the full validated document (`hashing.py::input_hash`
 → `inputs.model_dump(mode="json")`). Because every migrated document now carries two fields it

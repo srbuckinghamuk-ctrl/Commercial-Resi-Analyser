@@ -1,4 +1,4 @@
-import type { CalculatorInputsV2, MonthReceipts, MonthUses, Schedule } from './finance-types';
+import type { CalculatorInputsV2, CalculatorInputsV3, MonthReceipts, MonthUses, Schedule } from './finance-types';
 import {
   calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost,
 } from '../conversion-calc-engine';
@@ -23,7 +23,7 @@ function emptyReceipts(): MonthReceipts {
   return { gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0 };
 }
 
-export function buildSchedule(inputs: CalculatorInputsV2): Schedule {
+export function buildSchedule(inputs: CalculatorInputsV2 | CalculatorInputsV3): Schedule {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const cc = inputs.conversion_costs;
   const units = inputs.unit_mix.units;

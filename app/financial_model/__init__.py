@@ -11,13 +11,13 @@ from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, derive_metrics
 from .migrate import migrate_inputs
 from .schedule import Schedule, build_schedule
-from .types import CALC_VERSION, CalculatorInputsV2
+from .types import CALC_VERSION, CalculatorInputsV2, CalculatorInputsV3
 from .validation import ReconciliationStatus, ValidationIssue, reconcile, validate_inputs
 
 
 @dataclass
 class AppraisalRun:
-    inputs: CalculatorInputsV2
+    inputs: CalculatorInputsV2 | CalculatorInputsV3
     schedule: Schedule
     model: MonthlyModel
     metrics: AppraisalResultV2
@@ -25,8 +25,12 @@ class AppraisalRun:
     reconciliation: ReconciliationStatus
 
 
-def run_appraisal(inputs: CalculatorInputsV2) -> AppraisalRun:
-    """The only entry point report/backend-parity code may use."""
+def run_appraisal(inputs: CalculatorInputsV2 | CalculatorInputsV3) -> AppraisalRun:
+    """The only entry point report/backend-parity code may use. Accepts both
+    v2 (pre-Release-2b) and v3 (adds the optional lender_valuation block,
+    spec Sec 3.2) documents -- v2 callers get lender-basis metrics as None
+    (spec Sec 2: unknown lender-critical inputs are never silently
+    defaulted), exactly as they did before the block existed."""
     schedule = build_schedule(inputs)
     model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
     return AppraisalRun(

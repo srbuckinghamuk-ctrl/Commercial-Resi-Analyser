@@ -15,7 +15,7 @@ from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, run_appraisal
 from app.financial_model.hashing import canonical_hash, input_hash
 from app.financial_model.migrate import is_v2_or_later, is_v3, migrate_inputs, migrate_v2_to_v3
-from app.financial_model.types import CalculatorInputsV2, CalculatorInputsV3
+from app.financial_model.types import CalculatorInputsV3
 from app.models import (
     ApiResponse,
     EligibilityAssessment,
@@ -295,27 +295,22 @@ def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
 
     try:
         # Chain migrations to v3 before validation (v1 -> v2 -> v3; an
-        # already-v3 payload passes straight through). Task 1/2: v3 adds
-        # lender_valuation, not yet consumed by the engine -- so a v2-shaped
-        # view (lender_valuation dropped, inputs_version forced to 2) is what
-        # actually drives run_appraisal, keeping outputs unchanged while the
-        # block is absent (design Sec B1). The v3-validated document is what
-        # gets persisted as inputs_snapshot.
+        # already-v3 payload passes straight through). Release 2b Task 3: the
+        # v3 document -- lender_valuation included -- now drives run_appraisal
+        # directly; the engine null-wires every lender-basis metric when the
+        # block is absent (spec Sec 2), so this is unchanged behaviour for
+        # every existing v1/v2 appraisal. This is also what gets persisted as
+        # inputs_snapshot.
         if is_v3(raw):
             v3_dict = raw
         else:
             v2 = migrate_inputs(raw)
             v3_dict = migrate_v2_to_v3(v2.model_dump(mode="json"))
         inputs = CalculatorInputsV3.model_validate(v3_dict)
-
-        engine_dict = inputs.model_dump(mode="json")
-        engine_dict.pop("lender_valuation", None)
-        engine_dict["inputs_version"] = 2
-        engine_inputs = CalculatorInputsV2.model_validate(engine_dict)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
-    run = run_appraisal(engine_inputs)
+    run = run_appraisal(inputs)
     hard_errors = [issue for issue in run.validation if issue.severity == "error"]
     if hard_errors:
         raise HTTPException(status_code=422, detail=[issue.__dict__ for issue in hard_errors])

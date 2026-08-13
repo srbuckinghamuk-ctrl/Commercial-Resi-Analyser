@@ -1,7 +1,10 @@
-import type { AppraisalResultV2, CalculatorInputsV2, MonthlyModel, Schedule } from './finance-types';
+import type {
+  AppraisalResultV2, CalculatorInputsV2, CalculatorInputsV3, MonthlyModel, Schedule,
+} from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
 import { calculateCommercialSdlt } from '../commercial-sdlt';
+import { computeLenderGdv } from './lender-valuation';
 
 /** Percentage to 2 dp; null when the denominator is zero (spec §1.5). */
 export function pct(numerator: number, denominator: number): number | null {
@@ -10,9 +13,14 @@ export function pct(numerator: number, denominator: number): number | null {
 }
 
 export function deriveMetrics(
-  inputs: CalculatorInputsV2, schedule: Schedule, model: MonthlyModel,
+  inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
 ): AppraisalResultV2 {
   const t = schedule.totals;
+  // Lender-underwritten GDV (spec §3.2, Release 2b Task 3). null for v2 inputs
+  // (no lender_valuation field at all) or v3 inputs with the block absent —
+  // never silently defaulted to developer GDV (spec §2).
+  const lenderGdv = 'lender_valuation' in inputs ? computeLenderGdv(inputs) : null;
+  const lenderGdvVariance = lenderGdv == null ? null : lenderGdv.lender_gdv_pence - t.gdv_pence;
   const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
   const costBeforeFinance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence;
   const financeCosts = model.totals.finance_costs_pence;
@@ -41,9 +49,9 @@ export function deriveMetrics(
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
-    lender_gdv_pence: null, // Release 2: lender-underwritten GDV
-    lender_gdv_variance_pence: null, // Task 3
-    lender_gdv_variance_pct: null, // Task 3
+    lender_gdv_pence: lenderGdv == null ? null : lenderGdv.lender_gdv_pence,
+    lender_gdv_variance_pence: lenderGdvVariance,
+    lender_gdv_variance_pct: lenderGdvVariance == null ? null : pct(lenderGdvVariance, t.gdv_pence),
     acquisition_cost_pence: t.acquisition_pence,
     sdlt_pence: sdlt,
     construction_cost_pence: t.construction_pence,
@@ -71,7 +79,7 @@ export function deriveMetrics(
       ? null : pct(netAdvances, t.cost_before_finance_ex_selling_pence),
     gross_ltc_pct: tdc === 0 ? null : pct(model.peak_debt_pence, tdc),
     ltgdv_developer_pct: pct(model.peak_debt_pence, t.gdv_pence),
-    ltgdv_lender_pct: null, // Release 2
+    ltgdv_lender_pct: lenderGdv == null ? null : pct(model.peak_debt_pence, lenderGdv.lender_gdv_pence),
     peak_debt_pence: model.peak_debt_pence,
     peak_debt_month: model.peak_debt_month,
     facility_headroom_pence: model.committed_gross_facility_pence > 0

@@ -27,11 +27,12 @@ explains how the two are kept in parity.
 migration-notes.md §5) and `expected_metrics` (hand-computed key → expected pence/percent value).
 The TS suite parses `inputs` with a plain type assertion (no runtime shape check) and runs it
 straight through `runAppraisal`; the Python suite validates the full v3 shape with
-`CalculatorInputsV3.model_validate` and then adapts to the v2 shape `run_appraisal` still consumes
-(`lender_valuation` dropped — not yet wired into the engine) before running
-`run_appraisal`. Both assert every key in `expected_metrics`. The hand-computed numbers are derived
-once, not independently transliterated per language — this is what makes the parity claim in §6
-meaningful rather than two separately maintained approximations.
+`CalculatorInputsV3.model_validate` and runs it straight through `run_appraisal` too (Release 2b
+Task 3: both engines now consume v3 — including `lender_valuation` — directly; the earlier
+downcast-to-v2 adapter that both `app/api/app.py::calculate_authoritative` and this suite carried
+since Task 2 is gone). Both assert every key in `expected_metrics`. The hand-computed numbers are
+derived once, not independently transliterated per language — this is what makes the parity claim
+in §6 meaningful rather than two separately maintained approximations.
 
 **Consumers:**
 - TS: `frontend/src/lib/model/golden-fixtures.test.ts`, `frontend/src/lib/model/invariants.test.ts`
@@ -126,6 +127,51 @@ pytest -q`: 160 passed) against these unchanged pinned numbers, with only the in
 *is* the additive-only proof for the v2→v3 migration: if the migration had silently altered any
 existing field or its downstream arithmetic, one of these two fixtures' hand-derived values would
 have moved and the suite would fail.
+
+### Fixture G — "G — lender-underwritten GDV, global_pct haircut (spec §3.2)" (`fixtures/financial-model/g-lender-valuation.json`)
+
+**Purpose:** pins the lender-underwritten GDV variance bridge (spec §3.2, Release 2b Task 3) —
+the first fixture that exercises a non-null `lender_valuation` block. G is byte-for-byte fixture F
+(identical acquisition, unit mix, conversion costs, finance, equity, exit strategy) with one
+addition: a `global_pct` lender haircut of `-10`. Every `expected_metrics` key already pinned by F
+is copied verbatim into G's `expected_metrics` — this is what proves the lender block is *additive*:
+if wiring the block had disturbed any existing developer-side figure, G's copy of F's numbers would
+fail alongside the four new lender-basis keys.
+
+**Inputs (delta from F):**
+- `lender_valuation`: `{ basis: "global_pct", global_value: -10, per_key_values: null, reason: "Fixture: lender haircut for valuation-basis testing", author: "governance", date: "2026-08-13" }`
+
+**Hand-derivation (spec §3.2):**
+- Developer unit values (pinned by F): 4 × £300,000 = **£1,200,000** → `gdv_pence = 120,000,000`
+  (unchanged in G — the lender block never touches the developer-side GDV).
+- Lender unit value per unit (`global_pct` basis: `round_half_up(dev_value × (1 + global_value/100))`):
+  round(£300,000 × 0.90) = **£270,000** → 27,000,000p, for each of the 4 identical units.
+- Lender GDV = Σ lender unit values = 4 × £270,000 = **£1,080,000** → `lender_gdv_pence = 108,000,000`.
+- Variance = lender GDV − developer GDV = 1,080,000 − 1,200,000 = **−£120,000** →
+  `lender_gdv_variance_pence = -12,000,000`; variance % = pct(−12,000,000, 120,000,000) =
+  **−10.00** → `lender_gdv_variance_pct = -10.0`.
+- Peak debt is **unchanged** by the valuation block (58,604,953p, F's pinned value — the senior
+  ledger only ever draws against actual costs, never against GDV of any kind) →
+  `ltgdv_lender_pct = pct(58,604,953, 108,000,000)` = 58,604,953 / 108,000,000 = 0.5426384537... ×
+  100 = 54.263845...%, rounded to 2dp = **54.26** → `ltgdv_lender_pct = 54.26`.
+- Every other `expected_metrics` key (developer GDV, cost arithmetic, `ltgdv_developer_pct`, IRR,
+  etc.) is copied verbatim from F — the lender block must not move the pre-existing ledger.
+
+**Expected outputs added on top of F's pinned block (pence unless noted):**
+
+| Metric | Value | £ |
+|---|---:|---:|
+| `lender_gdv_pence` | 108,000,000 | £1,080,000 |
+| `lender_gdv_variance_pence` | -12,000,000 | −£120,000 |
+| `lender_gdv_variance_pct` | — | −10.00% |
+| `ltgdv_lender_pct` | — | 54.26% |
+
+**TDD evidence (Task 3):** with `metrics.ts`/`metrics.py` reverted to their pre-Task-3 null-wiring
+(`lender_gdv_pence: null`, etc. — the rest of the implementation, including `lender-valuation.ts`/`.py`
+and the `validation.ts`/`.py` hard-error checks, left in place), both `test_golden_fixture_parity[g-lender-valuation]`
+(Python) and the TS golden-fixtures/`invariants.test.ts` runs for fixture G fail exactly on the four
+new keys above (RED). Restoring the wiring turns both green (GREEN) — see `task-3-report.md` for the
+full transcript.
 
 ---
 

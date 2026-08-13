@@ -3,10 +3,23 @@ import { validateInputs, reconcile } from './validation';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
+import { migrateV2toV3 } from './migrate';
+import type { CalculatorInputsV3 } from './finance-types';
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
   const inputs = defaultCalculatorInputsV2();
   inputs.unit_mix.units = [{ id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '' }];
+  inputs.acquisition.purchase_price_pence = 10_000_000;
+  mutate(inputs);
+  return validateInputs(inputs);
+}
+
+function errorsForV3(mutate: (i: CalculatorInputsV3) => void) {
+  const inputs = migrateV2toV3(defaultCalculatorInputsV2());
+  inputs.unit_mix.units = [
+    { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '' },
+    { id: 'u2', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '' },
+  ];
   inputs.acquisition.purchase_price_pence = 10_000_000;
   mutate(inputs);
   return validateInputs(inputs);
@@ -103,6 +116,78 @@ describe('validateInputs — hard errors', () => {
       ];
     });
     expect(issues.some((x) => x.message.includes('Non-cash equity'))).toBe(false);
+  });
+});
+
+// Release 2b Task 3 (spec §3.2): lender_valuation hard errors, mirrored in
+// validation.py with the same messages.
+describe('validateInputs — lender_valuation hard errors', () => {
+  const PROVENANCE = { reason: 'Test haircut', author: 'test-author', date: '2026-08-13' };
+
+  it('accepts no issues for a well-formed global_pct block', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'global_pct', global_value: -10, per_key_values: null, ...PROVENANCE };
+    });
+    expect(issues.filter((x) => x.field.startsWith('lender_valuation'))).toEqual([]);
+  });
+
+  it('rejects an empty reason/author/date', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'global_pct', global_value: -10, per_key_values: null, reason: '', author: '', date: '' };
+    });
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation.reason')).toBe(true);
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation.author')).toBe(true);
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation.date')).toBe(true);
+  });
+
+  it('rejects a missing global_value for a basis that requires it', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'fixed_amount', global_value: null, per_key_values: null, ...PROVENANCE };
+    });
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation'
+      && x.message === 'Lender valuation basis "fixed_amount" requires a global_value.')).toBe(true);
+  });
+
+  it('rejects a missing per_unit id', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'per_unit', global_value: null, per_key_values: { u1: 25_000_000 }, ...PROVENANCE };
+    });
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation'
+      && x.message.includes('missing a value for unit "u2"'))).toBe(true);
+  });
+
+  it('rejects a non-positive computed lender unit value', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'global_pct', global_value: -100, per_key_values: null, ...PROVENANCE };
+    });
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation'
+      && x.message.includes('must be positive'))).toBe(true);
+  });
+
+  it('rejects fractional pence for global_per_sqft (Task-1-review addition)', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'global_per_sqft', global_value: 200_000.5, per_key_values: null, ...PROVENANCE };
+    });
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation.global_value'
+      && x.message.includes('whole number of pence'))).toBe(true);
+  });
+
+  it('rejects fractional pence for a per_unit value (Task-1-review addition)', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = {
+        basis: 'per_unit', global_value: null,
+        per_key_values: { u1: 25_000_000.5, u2: 25_000_000 }, ...PROVENANCE,
+      };
+    });
+    expect(issues.some((x) => x.severity === 'error' && x.field === 'lender_valuation.per_key_values[u1]'
+      && x.message.includes('whole number of pence'))).toBe(true);
+  });
+
+  it('allows a fractional global_pct percentage adjustment', () => {
+    const issues = errorsForV3((i) => {
+      i.lender_valuation = { basis: 'global_pct', global_value: -7.5, per_key_values: null, ...PROVENANCE };
+    });
+    expect(issues.filter((x) => x.field.startsWith('lender_valuation'))).toEqual([]);
   });
 });
 

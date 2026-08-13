@@ -1,4 +1,5 @@
-import type { CalculatorInputsV2, MonthlyModel, Schedule } from './finance-types';
+import type { CalculatorInputsV2, CalculatorInputsV3, MonthlyModel, Schedule } from './finance-types';
+import { computeLenderGdv } from './lender-valuation';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -17,7 +18,7 @@ export interface ReconciliationStatus {
   issues: ValidationIssue[];
 }
 
-const NON_NEGATIVE_MONEY: Array<[string, (i: CalculatorInputsV2) => number]> = [
+const NON_NEGATIVE_MONEY: Array<[string, (i: CalculatorInputsV2 | CalculatorInputsV3) => number]> = [
   ['acquisition.purchase_price_pence', (i) => i.acquisition.purchase_price_pence],
   ['acquisition.legal_fees_pence', (i) => i.acquisition.legal_fees_pence],
   ['acquisition.survey_cost_pence', (i) => i.acquisition.survey_cost_pence],
@@ -37,7 +38,7 @@ const NON_NEGATIVE_MONEY: Array<[string, (i: CalculatorInputsV2) => number]> = [
   ['exit_strategy.selling_legal_fee_pence', (i) => i.exit_strategy.selling_legal_fee_pence],
 ];
 
-export function validateInputs(inputs: CalculatorInputsV2): ValidationIssue[] {
+export function validateInputs(inputs: CalculatorInputsV2 | CalculatorInputsV3): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
   const warn = (field: string, message: string) => issues.push({ severity: 'warning', field, message });
@@ -110,6 +111,44 @@ export function validateInputs(inputs: CalculatorInputsV2): ValidationIssue[] {
     warn('finance', 'Facility terms were migrated from a legacy appraisal and require confirmation.');
   }
 
+  // Lender-underwritten GDV (spec §3.2, Release 2b Task 3). Only present on v3
+  // inputs; v2 callers (pre-migration UI/report paths) have no lender_valuation
+  // field at all and skip this block entirely.
+  if ('lender_valuation' in inputs && inputs.lender_valuation != null) {
+    const lv = inputs.lender_valuation;
+    if (lv.reason.trim().length === 0) err('lender_valuation.reason', 'Lender valuation reason is required.');
+    if (lv.author.trim().length === 0) err('lender_valuation.author', 'Lender valuation author is required.');
+    if (lv.date.trim().length === 0) err('lender_valuation.date', 'Lender valuation date is required.');
+
+    // Task-1-review addition: pence-valued bases must be whole, non-negative pence
+    // (global_pct/unit_type adjustments are percentages and may be fractional/negative).
+    if ((lv.basis === 'global_per_sqft' || lv.basis === 'fixed_amount') && lv.global_value != null) {
+      if (!Number.isInteger(lv.global_value) || lv.global_value < 0) {
+        err('lender_valuation.global_value',
+          'Lender valuation global_value must be a non-negative whole number of pence for this basis.');
+      }
+    }
+    if (lv.basis === 'per_unit' && lv.per_key_values != null) {
+      for (const [id, value] of Object.entries(lv.per_key_values)) {
+        if (!Number.isInteger(value) || value < 0) {
+          err(`lender_valuation.per_key_values[${id}]`,
+            'Lender valuation per_key_values value must be a non-negative whole number of pence for this basis.');
+        }
+      }
+    }
+
+    // Every other hard error (missing global_value, missing per_unit id, a
+    // computed/absolute unit value that isn't positive) is computeLenderGdv's own
+    // domain — catching its thrown message here keeps the wording identical to
+    // what the compute path enforces instead of a second, driftable copy of the
+    // same logic.
+    try {
+      computeLenderGdv(inputs);
+    } catch (e) {
+      err('lender_valuation', e instanceof Error ? e.message : 'Lender valuation could not be computed.');
+    }
+  }
+
   // Spec §3.18: RLV = GDV / (1 + target/100) − cost-excluding-land. A target of exactly
   // -100% divides by zero; below -100% flips the sign and produces a non-finite/nonsensical
   // RLV. Approved in Task 5 review: guard this at validation time rather than let RLV emit
@@ -122,7 +161,7 @@ export function validateInputs(inputs: CalculatorInputsV2): ValidationIssue[] {
 }
 
 export function reconcile(
-  inputs: CalculatorInputsV2, schedule: Schedule, model: MonthlyModel,
+  inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
 ): ReconciliationStatus {
   const issues: ValidationIssue[] = [];
 

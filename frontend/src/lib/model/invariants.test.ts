@@ -2,15 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import type { CalculatorInputsV2 } from './finance-types';
+import { pct } from './metrics';
+import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json'))
-  .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as { name: string; inputs: CalculatorInputsV2 });
+  .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as { name: string; inputs: CalculatorInputsV3 });
 
 // Variants derived from each fixture to widen coverage without new hand calcs.
-function variants(inputs: CalculatorInputsV2): Array<{ label: string; inputs: CalculatorInputsV2 }> {
-  const clone = () => JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV2;
+function variants(
+  inputs: CalculatorInputsV2 | CalculatorInputsV3,
+): Array<{ label: string; inputs: CalculatorInputsV2 | CalculatorInputsV3 }> {
+  const clone = () => JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV2 | CalculatorInputsV3;
   const retained = clone();
   retained.exit_strategy.route = 'retain_all';
   const serviced = clone();
@@ -92,5 +95,25 @@ describe('model invariants hold for every fixture and variant', () => {
         });
       });
     }
+  }
+});
+
+// Release 2b Task 3 (spec §3.2): lender-basis metrics must never default to
+// developer GDV — null is the only representation of "unknown", exactly when
+// the block itself is absent, on every fixture (not a variant subset).
+describe('lender-underwritten GDV — never defaults to developer GDV (spec §3.2)', () => {
+  for (const fx of fixtures) {
+    it(`${fx.name}: lender_gdv_pence is null iff lender_valuation is absent`, () => {
+      const run = runAppraisal(fx.inputs);
+      const blockPresent = fx.inputs.lender_valuation != null;
+      expect(run.metrics.lender_gdv_pence === null).toBe(!blockPresent);
+      if (blockPresent) {
+        // Recomputed here (not just re-asserted against the pinned fixture value)
+        // so this catches a regression where ltgdv_lender_pct is wired to
+        // developer GDV instead of lender GDV.
+        expect(run.metrics.ltgdv_lender_pct).toBe(
+          pct(run.model.peak_debt_pence, run.metrics.lender_gdv_pence as number));
+      }
+    });
   }
 });

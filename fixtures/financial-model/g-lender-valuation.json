@@ -1,0 +1,187 @@
+{
+  "name": "G — lender-underwritten GDV, global_pct haircut (spec §3.2)",
+  "kind": "pipeline",
+  "inputs": {
+    "inputs_version": 3,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 40000000,
+      "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000,
+      "broker_fee_pct": 1.0,
+      "other_acquisition_costs_pence": 0
+    },
+    "unit_mix": {
+      "units": [
+        {
+          "id": "u1",
+          "type": "1bed",
+          "floor_area_sqm": 50,
+          "estimated_value_pence": 30000000,
+          "comparable_notes": ""
+        },
+        {
+          "id": "u2",
+          "type": "1bed",
+          "floor_area_sqm": 50,
+          "estimated_value_pence": 30000000,
+          "comparable_notes": ""
+        },
+        {
+          "id": "u3",
+          "type": "1bed",
+          "floor_area_sqm": 50,
+          "estimated_value_pence": 30000000,
+          "comparable_notes": ""
+        },
+        {
+          "id": "u4",
+          "type": "1bed",
+          "floor_area_sqm": 50,
+          "estimated_value_pence": 30000000,
+          "comparable_notes": ""
+        }
+      ]
+    },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 9600,
+      "cil_s106_pence": 0,
+      "architect_pence": 1500000,
+      "structural_engineer_pence": 500000,
+      "mande_pence": 500000,
+      "planning_consultant_pence": 300000,
+      "building_control_pence": 200000,
+      "other_professional_fees_pence": 0,
+      "construction_cost_per_sqm_pence": 100000,
+      "total_construction_sqm": 400,
+      "contingency_pct": 10.0,
+      "fire_safety_pence": 0,
+      "sound_insulation_pence": 0,
+      "part_l_compliance_pence": 0
+    },
+    "finance": {
+      "funding_source": "development_finance",
+      "day_one_advance_pence": 28000000,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100,
+      "committed_net_facility_pence": 60000000,
+      "committed_gross_facility_pence": 66000000,
+      "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up",
+      "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility",
+      "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility",
+      "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0,
+      "valuation_fee_pence": 0,
+      "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null,
+      "term_months": 12,
+      "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100,
+      "legacy_leverage_pct": null,
+      "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [
+      {
+        "id": "e1",
+        "classification": "cash",
+        "amount_pence": 35000000,
+        "timing_month": 0,
+        "repayment_priority": 1,
+        "evidence_status": "confirmed",
+        "notes": ""
+      }
+    ],
+    "exit_strategy": {
+      "route": "sell_all",
+      "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 400000,
+      "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": {
+        "label": "Base Case",
+        "gdv_adjustment_pct": 0,
+        "construction_cost_adjustment_pct": 0,
+        "timeline_adjustment_months": 0,
+        "interest_rate_adjustment_pct": 0
+      },
+      "upside": {
+        "label": "Upside",
+        "gdv_adjustment_pct": 10,
+        "construction_cost_adjustment_pct": -5,
+        "timeline_adjustment_months": -2,
+        "interest_rate_adjustment_pct": 0
+      },
+      "downside": {
+        "label": "Downside",
+        "gdv_adjustment_pct": -10,
+        "construction_cost_adjustment_pct": 15,
+        "timeline_adjustment_months": 3,
+        "interest_rate_adjustment_pct": 1
+      },
+      "severe": {
+        "label": "Severe",
+        "gdv_adjustment_pct": -15,
+        "construction_cost_adjustment_pct": 20,
+        "timeline_adjustment_months": 6,
+        "interest_rate_adjustment_pct": 2
+      }
+    },
+    "deal_spider": {
+      "storeys": 2,
+      "building_height_m": 7,
+      "bsa_higher_risk": false,
+      "daylight_pass_pct": 100,
+      "absorption_months": 9,
+      "exit_sell": true,
+      "exit_refinance": true,
+      "exit_hold": false,
+      "exit_part_sale": false,
+      "prior_approval_window_months": 2,
+      "programme_contingency_months": 1,
+      "cil_offset_pence": 0,
+      "target_profit_on_cost_pct": 20,
+      "weights": {}
+    },
+    "lender_valuation": {
+      "basis": "global_pct",
+      "global_value": -10,
+      "per_key_values": null,
+      "reason": "Fixture: lender haircut for valuation-basis testing",
+      "author": "governance",
+      "date": "2026-08-13"
+    }
+  },
+  "expected_metrics": {
+    "gdv_pence": 120000000,
+    "acquisition_cost_pence": 42150000,
+    "sdlt_pence": 950000,
+    "construction_cost_pence": 44000000,
+    "professional_fees_pence": 2800000,
+    "statutory_costs_pence": 238400,
+    "selling_costs_pence": 2200000,
+    "cost_before_finance_pence": 91388400,
+    "finance_costs_pence": 5076553,
+    "total_development_cost_pence": 96464953,
+    "profit_pence": 23535047,
+    "profit_is_unrealised": false,
+    "profit_on_cost_pct": 24.4,
+    "profit_on_gdv_pct": 19.61,
+    "peak_debt_pence": 58604953,
+    "day_one_advance_pence": 28000000,
+    "gross_ltc_pct": 60.75,
+    "equity_contributed_pence": 35000000,
+    "net_ltc_pct": 62.1,
+    "ltgdv_developer_pct": 48.84,
+    "irr_annual_pct": 91.2,
+    "lender_gdv_pence": 108000000,
+    "lender_gdv_variance_pence": -12000000,
+    "lender_gdv_variance_pct": -10.0,
+    "ltgdv_lender_pct": 54.26
+  }
+}
