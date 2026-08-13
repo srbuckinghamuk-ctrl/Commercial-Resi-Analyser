@@ -151,38 +151,30 @@ facility — at which point the *next* save can become `reconciled`. This is del
 two-step process (migrate-and-flag, then confirm-and-reconcile), never a one-step silent adoption
 of a proposed facility as if it were underwritten.
 
-## 4. KNOWN pre-existing gap: Alembic migrations are not actually runnable
+## 4. Alembic operations (resolved in R2a)
 
-`alembic.ini` sets `script_location = migrations` and does **not** set `version_locations`. Under
-Alembic's default convention, that means revision scripts are discovered at
-`migrations/versions/*.py`. The two migration scripts for this project —
-`migrations/001_initial.py` and `migrations/002_appraisal_governance.py` — live directly under
-`migrations/`, **not** under `migrations/versions/`. `migrations/versions/` exists as an empty
-directory. Running `alembic upgrade head` against this configuration today would find **zero**
-revisions to apply.
+The migration scripts live in `migrations/versions/` and are discoverable by
+Alembic's defaults (`alembic.ini` sets `script_location = migrations`). The app
+still boots fresh databases via `Base.metadata.create_all`; Alembic is the
+upgrade path for existing databases.
 
-This has not caused a visible defect so far because the application never actually invokes
-Alembic. FastAPI startup (`app/api/app.py`, the `lifespan` context manager) instead does:
-```python
-async with engine.begin() as conn:
-    await conn.run_sync(Base.metadata.create_all)
-```
-`Base.metadata.create_all` builds the schema directly from the SQLAlchemy ORM model definitions in
-`app/persistence/database.py` — which already declare the Release-1 governance columns (e.g.
-`status: Mapped[str] = mapped_column(String(32), nullable=False,
-server_default="legacy_unreconciled")`, `database.py` around line 143) with the same server
-defaults the migration file specifies. So on a **fresh** database, `create_all` produces the
-correct end-state schema regardless of whether the migration files are ever run.
+### Runbook — adopting Alembic on the existing Docker database
 
-The gap only bites on an **existing** production database that already has data and was never
-migrated via Alembic: `create_all` does not alter existing tables (SQLAlchemy's `create_all` is a
-no-op on tables that already exist), so such a database would never receive the new governance
-columns automatically, and no automated path currently exists to apply them — an operator would
-need to either (a) fix `version_locations`/move the scripts into `migrations/versions/` and run
-`alembic upgrade head` explicitly, or (b) apply the equivalent `ALTER TABLE` statements by hand.
+The only production database is the local docker compose Postgres volume
+(`postgres_data`). Its schema was created by `create_all` and already matches
+migration 002, so it must be *stamped*, not upgraded:
 
-**Recorded as an operations follow-up, not fixed in this release** (it was out of scope for the
-Task 14 documentation/verification pass and does not affect the in-memory-SQLite test suite or a
-genuinely fresh deployment, both of which go through `create_all`). See
-`docs/reviews/2026-08-13-release-1-implementation-report.md` "Remaining limitations" for the
-formal record.
+1. Back up the volume while the stack is stopped:
+   `docker compose stop api && docker compose exec -T postgres pg_dump -U postgres commercial_resi > backup-$(date +%F).sql`
+   (or snapshot the `postgres_data` volume).
+2. Stamp the current revision without running any migration:
+   `docker compose run --rm api alembic stamp head`
+   (the api image contains `alembic.ini` and `migrations/`; `DATABASE_URL`
+   in compose points at the postgres service).
+3. Verify: `docker compose run --rm api alembic current` reports `002 (head)`.
+4. From now on, schema changes ship as new scripts in `migrations/versions/`
+   and are applied with `docker compose run --rm api alembic upgrade head`.
+
+A database that predates migration 002 (does not have the governance columns
+on `financial_appraisals`) must instead run
+`alembic stamp 001` then `alembic upgrade head`.
