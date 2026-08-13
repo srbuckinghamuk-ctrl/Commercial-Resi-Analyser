@@ -250,6 +250,53 @@ describe('generateInvestmentMemo', () => {
     expect(text).not.toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
   });
 
+  // Regression test (round-1 review, CRITICAL): jspdf-autotable paginates
+  // internally via its own doc.addPage() calls when a table (the Monthly
+  // Cashflow / Proposed Unit Mix tables here) is taller than one page — those
+  // pages bypass the memo's own newPage() wrapper unless autoTable's
+  // didDrawPage hook is also wired to the watermark. A 40-month term with 22
+  // units reliably forces autoTable's internal pagination (verified this
+  // fixture produces 13 physical pages). Every one of them must carry the
+  // watermark when the run is unreconciled — before the table() wrapper fix,
+  // this fixture produced 13 pages but only 9 watermarks (4 clean pages,
+  // including inside the debt schedule itself).
+  it('watermarks every physical page, including pages autoTable paginates internally', async () => {
+    const units = Array.from({ length: 22 }, (_, i) => ({
+      id: `u${i}`,
+      type: '1bed' as const,
+      floor_area_sqm: 50,
+      estimated_value_pence: 30_000_000,
+      comparable_notes: '',
+    }));
+    const legacyV1Snapshot = {
+      project_id: 'test-id',
+      acquisition: { purchase_price_pence: 400_000_000, legal_fees_pence: 500_000, survey_cost_pence: 300_000, broker_fee_pct: 1, other_acquisition_costs_pence: 0 },
+      unit_mix: { units },
+      conversion_costs: baseInputs().conversion_costs,
+      // 40-month term forces the Monthly Cashflow table (one row per month)
+      // past a single page on top of the 22-row Proposed Unit Mix table.
+      finance: { funding_source: 'bridging', ltv_pct: 65, interest_rate_annual_pct: 9.5, arrangement_fee_pct: 2, exit_fee_pct: 1, loan_term_months: 40, interest_type: 'rolled_up' },
+      exit_strategy: { route: 'sell_all', selling_agent_fee_pct: 1.5, selling_legal_fee_pence: 100_000, retained_units: [] },
+      risks: [],
+    };
+    const run = runAppraisal(migrateInputs(legacyV1Snapshot, mockProject));
+    expect(run.reconciliation.report_safe).toBe(false); // sanity check: must be a draft run
+    expect(run.model.months.length).toBeGreaterThanOrEqual(36);
+    expect(run.inputs.unit_mix.units.length).toBeGreaterThanOrEqual(20);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const ab = await blob.arrayBuffer();
+    const text = Buffer.from(ab).toString('latin1');
+
+    // Physical page count: each page is its own PDF object with /Type /Page
+    // (not /Type /Pages, the singular parent-collection object).
+    const pageCount = (text.match(/\/Type\s*\/Page(?!s)\b/g) ?? []).length;
+    const watermarkCount = text.split('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE').length - 1;
+
+    expect(pageCount).toBeGreaterThan(9); // confirms this fixture actually forces multi-page autoTable pagination
+    expect(watermarkCount).toBeGreaterThanOrEqual(pageCount); // every page carries at least one watermark
+  });
+
   // (d) the sources and uses columns of the funding table total identically
   // (spec §7 invariant: Σ sources = Σ uses), both numerically and as printed.
   it('prints identical sources and uses totals', async () => {

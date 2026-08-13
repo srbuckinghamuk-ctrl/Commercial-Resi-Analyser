@@ -12,11 +12,14 @@ import { applyScenario } from './apply-scenario';
 // run.schedule.totals (the shared engine's output — frontend/src/lib/model),
 // or is a raw, unmodified input value. The only local arithmetic below is
 // presentational: unit conversions (pence→£/sq ft), running totals for a
-// cashflow table, and ratios of two already-authoritative totals (e.g. a
-// category's % of an engine-computed grand total). No cost, fee, LTV, LTC,
-// IRR or profit figure is re-derived here — see docs/financial-model/
-// calculation-specification.md §11 for the prohibited-calculations list this
-// file was rewritten to comply with.
+// cashflow table, ratios of two already-authoritative totals (e.g. a
+// category's % of an engine-computed grand total), and the Retained
+// Portfolio's indicative gross yield (rent ÷ capital value — the engine does
+// not model rental income at all, so there is no authoritative figure to
+// consume; captioned "indicative — not part of the appraisal" wherever shown).
+// No cost, fee, LTV, LTC, IRR or profit figure is re-derived here — see
+// docs/financial-model/calculation-specification.md §11 for the
+// prohibited-calculations list this file was rewritten to comply with.
 
 const PAGE_W = 210;
 const MARGIN_L = 20;
@@ -148,10 +151,44 @@ export function generateInvestmentMemo(
     doc.text(DRAFT_WATERMARK_TEXT, PAGE_W / 2, 160, { angle: 35, align: 'center' });
   }
 
+  // jspdf-autotable paginates internally via its own doc.addPage() calls when
+  // a table spans multiple pages — those pages never go through newPage()
+  // below, so watermarking must also be driven by autoTable's didDrawPage
+  // hook (see the table() wrapper). lastWatermarkedPage guards against
+  // watermarking the same physical page twice (harmless — it would just
+  // redraw identical grey text in the same place — but pointless work).
+  let lastWatermarkedPage = 0;
+
+  /** Draws the watermark on the current page, at most once per physical page. */
+  function ensureWatermark(): void {
+    if (!draft) return;
+    const page = doc.getNumberOfPages();
+    if (page === lastWatermarkedPage) return;
+    lastWatermarkedPage = page;
+    watermark();
+  }
+
   /** Every new page gets the watermark when the run isn't report-safe. */
   function newPage(): void {
     doc.addPage();
-    if (draft) watermark();
+    ensureWatermark();
+  }
+
+  /**
+   * autoTable wrapper — every table call must go through this, not
+   * autoTable(doc, ...) directly, so that pages autoTable creates on its own
+   * (internal pagination for a table taller than one page) also get the
+   * watermark via didDrawPage, which fires once per physical page the table
+   * touches, including the first.
+   */
+  function table(options: Parameters<typeof autoTable>[1]): void {
+    autoTable(doc, {
+      ...options,
+      didDrawPage: (data) => {
+        ensureWatermark();
+        options.didDrawPage?.(data);
+      },
+    });
   }
 
   function addPageFooter(): void {
@@ -227,7 +264,7 @@ export function generateInvestmentMemo(
   // ── Cover Page ──
   doc.setFillColor(10, 22, 40);
   doc.rect(0, 0, PAGE_W, 297, 'F');
-  if (draft) watermark();
+  ensureWatermark();
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
@@ -313,7 +350,7 @@ export function generateInvestmentMemo(
   doc.addPage();
   doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, PAGE_W, 297, 'F');
-  if (draft) watermark();
+  ensureWatermark();
   let y = MARGIN_T;
 
   y = sectionTitle(y, 1, 'Executive Summary');
@@ -339,7 +376,7 @@ export function generateInvestmentMemo(
   y = subHeading(y, 'Use of Funds');
   const tdcForShare = metrics.total_development_cost_pence;
   const shareOfTdc = (part: number) => (tdcForShare > 0 ? fmtPct((part / tdcForShare) * 100) : fmtPct(0));
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Category', 'Amount', '% of Total']],
@@ -411,7 +448,7 @@ export function generateInvestmentMemo(
   );
 
   y = subHeading(y, 'Proposed Unit Mix');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Unit', 'Type', 'NIA (m²)', 'NIA (sq ft)', 'Est. Value', '£/sq ft', 'Notes']],
@@ -508,7 +545,7 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 5, 'Development Appraisal');
 
   y = subHeading(y, 'Revenue');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Item', 'Amount']],
@@ -527,7 +564,7 @@ export function generateInvestmentMemo(
   // Every row below is either a raw stored input (rate, area, fixed fee) or an
   // engine-computed total from run.metrics / run.model.totals — no cost or fee
   // amount is derived here (spec §11.9).
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Element', 'Amount', '£/sq ft']],
@@ -600,7 +637,7 @@ export function generateInvestmentMemo(
   y = (doc as any).lastAutoTable.finalY + 6;
 
   y = subHeading(y, 'Appraisal Metrics');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     body: [
@@ -664,7 +701,7 @@ export function generateInvestmentMemo(
       fmt(cumEquityCf),
     ];
   });
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Month', 'Draw', 'Cum. Draw', 'Interest', 'Closing Bal.', 'Receipts', 'Equity CF', 'Cum. Equity CF']],
@@ -728,7 +765,7 @@ export function generateInvestmentMemo(
   }
   suBody.push(['Total', fmt(sourcesTotal), '', 'Total', fmt(usesTotal)]);
 
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Sources', 'Amount', '', 'Uses', 'Amount']],
@@ -756,7 +793,7 @@ export function generateInvestmentMemo(
   );
 
   y = subHeading(y, 'Key Lending Metrics');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     body: [
@@ -796,7 +833,7 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 8, 'Returns');
 
   y = subHeading(y, 'Investor Returns');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     body: [
@@ -821,7 +858,7 @@ export function generateInvestmentMemo(
   y = infoRequired(y, 'Waterfall / promote structure (if JV)');
 
   y = subHeading(y, 'Lender Position — Day-one LTV');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     body: [
@@ -854,7 +891,7 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 9, 'Risk Register');
 
   if (inputs.risks.length > 0) {
-    autoTable(doc, {
+    table({
       startY: y,
       margin: { left: MARGIN_L, right: MARGIN_R },
       head: [['#', 'Risk', 'Likelihood', 'Impact', 'Mitigation']],
@@ -926,7 +963,7 @@ export function generateInvestmentMemo(
     return { label: overrides.label, overrides, run: runAppraisal(applyScenario(inputs, overrides)) };
   });
 
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Metric', ...scenarioRuns.map((s) => s.label)]],
@@ -981,7 +1018,7 @@ export function generateInvestmentMemo(
     ...grid[ci].map((cell) => `${fmtPctSafe(cell.pocPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
   ]);
 
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)]],
@@ -1010,7 +1047,7 @@ export function generateInvestmentMemo(
     ...grid[ci].map((cell) => `${fmtPctSafe(cell.ltgdvPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
   ]);
 
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)]],
@@ -1078,10 +1115,10 @@ export function generateInvestmentMemo(
       ];
     });
 
-    autoTable(doc, {
+    table({
       startY: y,
       margin: { left: MARGIN_L, right: MARGIN_R },
-      head: [['Unit', 'Size', 'Monthly Rent', 'Annual Rent', 'Capital Value', 'Gross Yield']],
+      head: [['Unit', 'Size', 'Monthly Rent', 'Annual Rent', 'Capital Value', 'Gross Yield (indicative — not part of the appraisal)']],
       body: retainedRows,
       styles: { fontSize: 9, cellPadding: 2 },
       headStyles: { fillColor: [30, 58, 95], textColor: 255 },
@@ -1109,7 +1146,7 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 12, 'Appendices');
 
   y = subHeading(y, 'A. Assumption Schedule');
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Assumption', 'Value', 'Basis']],
@@ -1157,7 +1194,7 @@ export function generateInvestmentMemo(
   if (missing.length > 0) {
     infoItems.push(`Risk register gaps: ${missing.join(', ')}`);
   }
-  autoTable(doc, {
+  table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['#', 'Item']],
