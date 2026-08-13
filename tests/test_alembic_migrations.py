@@ -62,3 +62,10 @@ def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):
         assert set(Base.metadata.tables) <= tables
     finally:
         conn.close()
+
+
+def test_alembic_ini_has_no_hardcoded_url():
+    """Without an explicit override, get_url() must fall through to settings —
+    a stock sqlalchemy.url placeholder in alembic.ini would shadow it."""
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    assert not cfg.get_main_option("sqlalchemy.url")
