@@ -6,7 +6,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .breakeven import SeniorBreakevenTerms, solve_senior_breakeven
+from .breakeven import (
+    DeveloperBreakevenTerms,
+    SeniorBreakevenTerms,
+    solve_developer_breakeven,
+    solve_senior_breakeven,
+)
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
@@ -242,6 +247,29 @@ def derive_metrics(
                 lender_gdv.lender_gdv_pence - senior_breakeven, lender_gdv.lender_gdv_pence,
             )
 
+    # Developer profit break-even (spec Sec 5.12, Release 2b Task 5). Lender-independent AND
+    # debt-independent (unlike senior_breakeven_pence above, which is None for every cash
+    # deal since there is no facility to redeem): computed whenever the ledger recorded any
+    # disposal at all -- the schedule's gross_sales_pence > 0 -- including cash-funded
+    # deals (fixture A) where redemption_balance_at_disposal_pence is None. A retain-only
+    # appraisal with zero sales gets None: there is no sale price to solve for. There is no
+    # ordering invariant between this figure and senior_breakeven_pence (design Sec B5) --
+    # they cover different cost bases and answer different questions.
+    developer_breakeven: int | None = None
+    if t.gross_sales_pence > 0:
+        tdc_ex_selling = tdc - t.selling_costs_pence
+        developer_breakeven_terms = DeveloperBreakevenTerms(
+            tdc_ex_selling_pence=tdc_ex_selling,
+            selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
+            selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
+        )
+        developer_breakeven = solve_developer_breakeven(developer_breakeven_terms)
+        if developer_breakeven is None and developer_breakeven_terms.selling_agent_fee_pct >= 100:
+            model.flags.append(ModelFlag(
+                code="developer_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
+                message="agent fee ≥ 100% — break-even unsolvable",
+            ))
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -297,6 +325,6 @@ def derive_metrics(
         senior_breakeven_pence=senior_breakeven,
         senior_breakeven_pct_of_lender_gdv=senior_breakeven_pct_of_lender_gdv,
         senior_breakeven_fall_from_lender_gdv_pct=senior_breakeven_fall_from_lender_gdv_pct,
-        developer_breakeven_pence=None,  # Task 5
+        developer_breakeven_pence=developer_breakeven,
         cost_to_complete=None,  # Task 6
     )

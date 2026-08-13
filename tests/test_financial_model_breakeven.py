@@ -5,7 +5,12 @@ docs/financial-model/test-cases.md), not merely with each other.
 """
 import math
 
-from app.financial_model.breakeven import SeniorBreakevenTerms, solve_senior_breakeven
+from app.financial_model.breakeven import (
+    DeveloperBreakevenTerms,
+    SeniorBreakevenTerms,
+    solve_developer_breakeven,
+    solve_senior_breakeven,
+)
 from app.financial_model.engine import money_round
 
 
@@ -103,3 +108,65 @@ class TestSolveSeniorBreakeven:
         assert p is not None
         disposal_cost = money_round((p * 1.5) / 100)
         assert p >= 500_000_000 + 100_000 + disposal_cost + 400_000
+
+
+def dev_terms(**partial) -> DeveloperBreakevenTerms:
+    base = dict(tdc_ex_selling_pence=0, selling_agent_fee_pct=0, selling_legal_fee_pence=0)
+    base.update(partial)
+    return DeveloperBreakevenTerms(**base)
+
+
+class TestSolveDeveloperBreakeven:
+    def test_fixture_g_worksheet(self):
+        p = solve_developer_breakeven(dev_terms(
+            tdc_ex_selling_pence=94_264_953, selling_agent_fee_pct=1.5, selling_legal_fee_pence=400_000,
+        ))
+        assert p == 96_106_551
+        # Hand-checked boundary (docs/financial-model/test-cases.md): 96,106,550 is
+        # infeasible because round(0.015 x 96,106,550) = 1,441,598 leaves the fee-sum at
+        # 96,106,551, one penny above the candidate itself.
+        fee_floor = 94_264_953 + 400_000
+        assert fee_floor + money_round((96_106_550 * 1.5) / 100) == 96_106_551
+        assert 96_106_550 < 96_106_551
+
+    def test_fixture_a_worksheet(self):
+        p = solve_developer_breakeven(dev_terms(
+            tdc_ex_selling_pence=89_188_400, selling_agent_fee_pct=1.5, selling_legal_fee_pence=400_000,
+        ))
+        assert p == 90_952_690
+        fee_floor = 89_188_400 + 400_000
+        assert fee_floor + money_round((90_952_689 * 1.5) / 100) == 90_952_690
+        assert 90_952_689 < 90_952_690
+
+    def test_zero_agent_pct_is_exact_sum(self):
+        p = solve_developer_breakeven(dev_terms(
+            tdc_ex_selling_pence=10_000_000, selling_agent_fee_pct=0, selling_legal_fee_pence=400_000,
+        ))
+        assert p == 10_000_000 + 400_000
+
+    def test_agent_fee_at_or_above_100_pct_is_unsolvable(self):
+        assert solve_developer_breakeven(
+            dev_terms(tdc_ex_selling_pence=1_000_000, selling_agent_fee_pct=100)
+        ) is None
+        assert solve_developer_breakeven(
+            dev_terms(tdc_ex_selling_pence=1_000_000, selling_agent_fee_pct=150)
+        ) is None
+
+    def test_rounds_the_agent_fee_half_up_not_down(self):
+        # fee_floor = 1, pct = 50%. At P=1: 0.5 rounds half-up to 1 -> 1 >= 1+1=2 is false
+        # (infeasible). At P=2: 1.0 rounds to 1 -> 2 >= 1+1=2 is true (feasible).
+        p = solve_developer_breakeven(dev_terms(selling_legal_fee_pence=1, selling_agent_fee_pct=50))
+        assert p == 2
+
+    def test_converges_for_realistic_large_deals(self):
+        # Shares the same bisection helper as solve_senior_breakeven, whose own suite
+        # already proves convergence at astronomic scale (10**80) and at the historical
+        # 32-bit-midpoint regression scale (5,076,649,746) -- both cases exercise the
+        # identical shared helper, so this test only needs to prove this call site wires
+        # into it correctly, not re-prove the helper itself.
+        p = solve_developer_breakeven(dev_terms(
+            tdc_ex_selling_pence=500_000_000, selling_agent_fee_pct=1.5, selling_legal_fee_pence=400_000,
+        ))
+        assert p is not None
+        disposal_cost = money_round((p * 1.5) / 100)
+        assert p >= 500_000_000 + disposal_cost + 400_000

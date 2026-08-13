@@ -139,6 +139,10 @@ describe('deriveMetrics on retain_all (Fixture D shape)', () => {
     // unrealised profit = 80,000,000 − TDC(65,000,000 + 0 selling + 2,359,224 finance)
     expect(r.finance_costs_pence).toBe(2_359_224);
     expect(r.profit_pence).toBe(80_000_000 - 67_359_224);
+    // Release 2b Task 5 (spec §5.12): zero gross sales — no sale price to solve for —
+    // must null the result, even though the facility is fully drawn.
+    expect(schedule.totals.gross_sales_pence).toBe(0);
+    expect(r.developer_breakeven_pence).toBeNull();
   });
 });
 
@@ -181,5 +185,41 @@ describe('deriveMetrics under cash funding', () => {
     expect(r.gross_ltc_pct).toBe(0);
     expect(r.day_one_ltv_on_price_pct).toBe(0);
     expect(r.facility_headroom_pence).toBeNull();
+  });
+
+  it('still computes developer_breakeven_pence — debt-independent, unlike senior_breakeven_pence ' +
+    '(spec §5.12, Release 2b Task 5)', () => {
+    const inputs = defaultCalculatorInputsV2();
+    inputs.finance = { ...DEFAULT_FACILITY_TERMS, funding_source: 'cash', term_months: 4 };
+    inputs.equity_sources = equity(65_000_000);
+    inputs.acquisition.purchase_price_pence = 40_000_000;
+    const schedule = mkSchedule(USES, SALE);
+    const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
+    const r = deriveMetrics(inputs, schedule, model);
+    expect(model.redemption_balance_at_disposal_pence).toBeNull();
+    expect(r.senior_breakeven_pence).toBeNull();
+    expect(r.developer_breakeven_pence).not.toBeNull();
+  });
+});
+
+describe('deriveMetrics — developer_breakeven_unsolvable flag (spec §5.12)', () => {
+  it('nulls developer_breakeven_pence and raises the flag exactly once when the agent fee is >= 100%', () => {
+    const inputs = defaultCalculatorInputsV2();
+    inputs.finance = { ...TERMS };
+    inputs.equity_sources = equity(30_000_000);
+    inputs.acquisition.purchase_price_pence = 40_000_000;
+    inputs.exit_strategy = { ...inputs.exit_strategy, selling_agent_fee_pct: 100 };
+    const schedule = mkSchedule(USES, SALE); // month 3 disposal — gross_sales_pence > 0
+    const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
+    const r = deriveMetrics(inputs, schedule, model);
+
+    expect(schedule.totals.gross_sales_pence).toBeGreaterThan(0);
+    expect(r.developer_breakeven_pence).toBeNull();
+    const flags = model.flags.filter((f) => f.code === 'developer_breakeven_unsolvable');
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toEqual({
+      code: 'developer_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+      message: 'agent fee ≥ 100% — break-even unsolvable',
+    });
   });
 });

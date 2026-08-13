@@ -118,7 +118,7 @@ export type FlagCode =
   | 'senior_outstanding_at_maturity' | 'additional_equity_required'
   | 'negative_profit' | 'requires_confirmation' | 'irr_unavailable'
   | 'unrealised_profit_basis' | 'exit_fee_not_charged'
-  | 'senior_breakeven_unsolvable';
+  | 'senior_breakeven_unsolvable' | 'developer_breakeven_unsolvable';
 
 export interface ModelFlag {
   code: FlagCode;

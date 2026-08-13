@@ -165,3 +165,34 @@ describe('senior repayment break-even (spec §5.11)', () => {
     expect(run.metrics.senior_breakeven_fall_from_lender_gdv_pct).toBeNull();
   });
 });
+
+// Release 2b Task 5 (spec §5.12): developer profit break-even. Lender-independent AND
+// debt-independent — computed whenever the schedule recorded any disposal at all (gross
+// sales > 0), a strictly wider condition than §5.11's redemption-balance guard.
+describe('developer profit break-even (spec §5.12)', () => {
+  for (const fx of fixtures) {
+    it(`${fx.name}: developer_breakeven_pence is null iff gross_sales_pence is 0`, () => {
+      const run = runAppraisal(fx.inputs);
+      expect(run.metrics.developer_breakeven_pence === null)
+        .toBe(run.schedule.totals.gross_sales_pence === 0);
+    });
+
+    it(`${fx.name}: when non-null, developer_breakeven_pence >= tdc_ex_selling + selling legal fee`, () => {
+      const run = runAppraisal(fx.inputs);
+      if (run.metrics.developer_breakeven_pence != null) {
+        const tdcExSelling = run.metrics.total_development_cost_pence - run.metrics.selling_costs_pence;
+        expect(run.metrics.developer_breakeven_pence)
+          .toBeGreaterThanOrEqual(tdcExSelling + fx.inputs.exit_strategy.selling_legal_fee_pence);
+      }
+    });
+  }
+
+  it('cash fixture A: developer_breakeven_pence is non-null (unlike senior_breakeven_pence)', () => {
+    const fx = fixtures.find((f) => f.name.startsWith('A —'));
+    expect(fx).toBeDefined();
+    const run = runAppraisal(fx!.inputs);
+    expect(run.model.redemption_balance_at_disposal_pence).toBeNull();
+    expect(run.metrics.senior_breakeven_pence).toBeNull();
+    expect(run.metrics.developer_breakeven_pence).not.toBeNull();
+  });
+});

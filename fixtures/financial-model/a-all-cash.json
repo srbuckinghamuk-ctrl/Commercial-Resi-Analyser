@@ -75,6 +75,7 @@
     "peak_debt_pence": 0,
     "day_one_advance_pence": 0,
     "gross_ltc_pct": 0,
-    "equity_contributed_pence": 89188400
+    "equity_contributed_pence": 89188400,
+    "developer_breakeven_pence": 90952690
   }
 }

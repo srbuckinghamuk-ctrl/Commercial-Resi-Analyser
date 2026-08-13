@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { solveSeniorBreakeven } from './breakeven';
-import type { SeniorBreakevenTerms } from './breakeven';
+import { solveSeniorBreakeven, solveDeveloperBreakeven } from './breakeven';
+import type { SeniorBreakevenTerms, DeveloperBreakevenTerms } from './breakeven';
 
 function terms(partial: Partial<SeniorBreakevenTerms>): SeniorBreakevenTerms {
   return {
@@ -117,5 +117,76 @@ describe('solveSeniorBreakeven (spec §5.11)', () => {
     // magnitude.
     const p = solveSeniorBreakeven(terms({ selling_legal_fee_pence: 1e80, selling_agent_fee_pct: 50 }));
     expect(p).toBeNull();
+  });
+});
+
+function devTerms(partial: Partial<DeveloperBreakevenTerms>): DeveloperBreakevenTerms {
+  return {
+    tdc_ex_selling_pence: 0,
+    selling_agent_fee_pct: 0,
+    selling_legal_fee_pence: 0,
+    ...partial,
+  };
+}
+
+describe('solveDeveloperBreakeven (spec §5.12)', () => {
+  it('fixture G worksheet: TDC-ex-selling 94,264,953 + 1.5% agent + £4,000 legal → 96,106,551', () => {
+    const p = solveDeveloperBreakeven(devTerms({
+      tdc_ex_selling_pence: 94_264_953,
+      selling_agent_fee_pct: 1.5,
+      selling_legal_fee_pence: 400_000,
+    }));
+    expect(p).toBe(96_106_551);
+    // Hand-checked boundary (docs/financial-model/test-cases.md): 96,106,550 is infeasible
+    // because round(0.015 × 96,106,550) = 1,441,598 leaves the fee-sum at 96,106,551, one
+    // penny above the candidate itself.
+    const feeFloor = 94_264_953 + 400_000;
+    expect(feeFloor + Math.round((96_106_550 * 1.5) / 100)).toBe(96_106_551);
+    expect(96_106_550).toBeLessThan(96_106_551);
+  });
+
+  it('fixture A worksheet: TDC-ex-selling 89,188,400 + 1.5% agent + £4,000 legal → 90,952,690', () => {
+    const p = solveDeveloperBreakeven(devTerms({
+      tdc_ex_selling_pence: 89_188_400,
+      selling_agent_fee_pct: 1.5,
+      selling_legal_fee_pence: 400_000,
+    }));
+    expect(p).toBe(90_952_690);
+    const feeFloor = 89_188_400 + 400_000;
+    expect(feeFloor + Math.round((90_952_689 * 1.5) / 100)).toBe(90_952_690);
+    expect(90_952_689).toBeLessThan(90_952_690);
+  });
+
+  it('zero agent pct → exact sum of TDC-ex-selling and legal fee', () => {
+    const p = solveDeveloperBreakeven(devTerms({
+      tdc_ex_selling_pence: 10_000_000,
+      selling_agent_fee_pct: 0,
+      selling_legal_fee_pence: 400_000,
+    }));
+    expect(p).toBe(10_000_000 + 400_000);
+  });
+
+  it('agent fee ≥ 100% is unsolvable — returns null', () => {
+    expect(solveDeveloperBreakeven(devTerms({ tdc_ex_selling_pence: 1_000_000, selling_agent_fee_pct: 100 }))).toBeNull();
+    expect(solveDeveloperBreakeven(devTerms({ tdc_ex_selling_pence: 1_000_000, selling_agent_fee_pct: 150 }))).toBeNull();
+  });
+
+  it('rounds the agent fee half-up, not down — off-by-one boundary case', () => {
+    // feeFloor = 1, pct = 50%. At P=1: 0.5 rounds half-up to 1 -> 1 >= 1+1=2 is false
+    // (infeasible). At P=2: 1.0 rounds to 1 -> 2 >= 1+1=2 is true (feasible).
+    const p = solveDeveloperBreakeven(devTerms({ selling_legal_fee_pence: 1, selling_agent_fee_pct: 50 }));
+    expect(p).toBe(2);
+  });
+
+  it('converges correctly for realistic large deals (shares the same bisection helper as ' +
+    'solveSeniorBreakeven, proven at scale by that suite)', () => {
+    const p = solveDeveloperBreakeven(devTerms({
+      tdc_ex_selling_pence: 500_000_000,
+      selling_agent_fee_pct: 1.5,
+      selling_legal_fee_pence: 400_000,
+    }));
+    expect(p).not.toBeNull();
+    const disposalCost = Math.round((p! * 1.5) / 100);
+    expect(p!).toBeGreaterThanOrEqual(500_000_000 + disposalCost + 400_000);
   });
 });

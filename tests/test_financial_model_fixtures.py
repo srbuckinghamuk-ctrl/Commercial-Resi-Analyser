@@ -100,6 +100,65 @@ def test_senior_breakeven_percentages_null_unless_lender_gdv_present(path: Path)
         assert round(total, 2) == 100.0
 
 
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_developer_breakeven_null_iff_no_disposal(path: Path) -> None:
+    """Release 2b Task 5 (spec Sec 5.12): developer_breakeven_pence is null exactly when
+    the schedule recorded no disposal at all (gross_sales_pence == 0) -- a strictly wider
+    condition than senior_breakeven_pence's redemption-balance guard, since it does not
+    depend on a facility existing."""
+    doc = json.loads(path.read_text())
+    run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
+    assert (run.metrics.developer_breakeven_pence is None) == (
+        run.schedule.totals.gross_sales_pence == 0
+    )
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_developer_breakeven_covers_tdc_ex_selling_plus_legal(path: Path) -> None:
+    """When non-null, developer_breakeven_pence >= TDC-ex-selling + the flat selling
+    legal fee (spec Sec 5.12 invariant -- the fixed-cost floor before the agent's
+    percentage fee on P itself)."""
+    doc = json.loads(path.read_text())
+    inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+    run = run_appraisal(inputs)
+    if run.metrics.developer_breakeven_pence is not None:
+        tdc_ex_selling = run.metrics.total_development_cost_pence - run.metrics.selling_costs_pence
+        assert run.metrics.developer_breakeven_pence >= (
+            tdc_ex_selling + inputs.exit_strategy.selling_legal_fee_pence
+        )
+
+
+def test_developer_breakeven_non_null_for_cash_fixture_a() -> None:
+    """Debt-independence: fixture A is a cash deal with no facility (senior_breakeven_pence
+    is null for it), but it still sold every unit, so developer_breakeven_pence must be
+    non-null."""
+    doc = json.loads((FIXTURE_DIR / "a-all-cash.json").read_text())
+    run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
+    assert run.model.redemption_balance_at_disposal_pence is None
+    assert run.metrics.senior_breakeven_pence is None
+    assert run.metrics.developer_breakeven_pence is not None
+
+
+def test_developer_breakeven_unsolvable_flag_raised_once_when_agent_fee_at_100_pct() -> None:
+    """Release 2b Task 5 (spec Sec 5.12): when the agent fee is >= 100%, the solver
+    returns None and derive_metrics raises exactly one developer_breakeven_unsolvable red
+    flag on the model, with the exact spec-mandated message -- mirroring Task 4's
+    senior_breakeven_unsolvable flag."""
+    doc = json.loads((FIXTURE_DIR / "f-dev-finance-12mo.json").read_text())
+    doc["inputs"]["exit_strategy"]["selling_agent_fee_pct"] = 100
+    inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+    run = run_appraisal(inputs)
+
+    assert run.schedule.totals.gross_sales_pence > 0
+    assert run.metrics.developer_breakeven_pence is None
+    flags = [f for f in run.model.flags if f.code == "developer_breakeven_unsolvable"]
+    assert len(flags) == 1
+    assert flags[0].severity == "red"
+    assert flags[0].month is None
+    assert flags[0].amount_pence is None
+    assert flags[0].message == "agent fee ≥ 100% — break-even unsolvable"
+
+
 def test_senior_breakeven_all_null_for_cash_fixture_a() -> None:
     doc = json.loads((FIXTURE_DIR / "a-all-cash.json").read_text())
     run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))

@@ -6,8 +6,8 @@ import { solveIrr } from './irr';
 import { calculateCommercialSdlt } from '../commercial-sdlt';
 import { computeLenderGdv } from './lender-valuation';
 import { exitFeeAmount } from './monthly-engine';
-import { solveSeniorBreakeven } from './breakeven';
-import type { SeniorBreakevenTerms } from './breakeven';
+import { solveDeveloperBreakeven, solveSeniorBreakeven } from './breakeven';
+import type { DeveloperBreakevenTerms, SeniorBreakevenTerms } from './breakeven';
 
 /** Percentage to 2 dp; null when the denominator is zero (spec §1.5). */
 export function pct(numerator: number, denominator: number): number | null {
@@ -100,6 +100,31 @@ export function deriveMetrics(
     }
   }
 
+  // Developer profit break-even (spec §5.12, Release 2b Task 5). Lender-independent AND
+  // debt-independent (unlike senior_breakeven_pence above, which is null for every cash
+  // deal since there is no facility to redeem): computed whenever the ledger recorded any
+  // disposal at all — the schedule's gross_sales_pence > 0 — including cash-funded deals
+  // (fixture A) where redemption_balance_at_disposal_pence is null. A retain-only
+  // appraisal with zero sales gets null: there is no sale price to solve for. There is no
+  // ordering invariant between this figure and senior_breakeven_pence (design §B5) — they
+  // cover different cost bases and answer different questions.
+  let developerBreakeven: number | null = null;
+  if (t.gross_sales_pence > 0) {
+    const tdcExSelling = tdc - t.selling_costs_pence;
+    const developerBreakevenTerms: DeveloperBreakevenTerms = {
+      tdc_ex_selling_pence: tdcExSelling,
+      selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
+      selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
+    };
+    developerBreakeven = solveDeveloperBreakeven(developerBreakevenTerms);
+    if (developerBreakeven == null && developerBreakevenTerms.selling_agent_fee_pct >= 100) {
+      model.flags.push({
+        code: 'developer_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+        message: 'agent fee ≥ 100% — break-even unsolvable',
+      });
+    }
+  }
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -146,7 +171,7 @@ export function deriveMetrics(
     senior_breakeven_pence: seniorBreakeven,
     senior_breakeven_pct_of_lender_gdv: seniorBreakevenPctOfLenderGdv,
     senior_breakeven_fall_from_lender_gdv_pct: seniorBreakevenFallFromLenderGdvPct,
-    developer_breakeven_pence: null, // Task 5
+    developer_breakeven_pence: developerBreakeven,
     cost_to_complete: null, // Task 6
   };
 }

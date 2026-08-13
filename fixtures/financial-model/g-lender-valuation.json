@@ -185,6 +185,7 @@
     "ltgdv_lender_pct": 54.26,
     "senior_breakeven_pence": 60573556,
     "senior_breakeven_pct_of_lender_gdv": 56.09,
-    "senior_breakeven_fall_from_lender_gdv_pct": 43.91
+    "senior_breakeven_fall_from_lender_gdv_pct": 43.91,
+    "developer_breakeven_pence": 96106551
   }
 }

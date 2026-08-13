@@ -264,6 +264,86 @@ divergence at scale) fails immediately. Both fixtures F/G's redemption balances 
 this scale, so neither pinned value was ever affected. See `task-4-report.md` for the full history
 (the bug was caught, then confirmed genuine by direct reproduction, before the fix landed).
 
+### Fixture G worksheet, part 3 — developer profit break-even (spec §5.12, Release 2b Task 5)
+
+**Purpose:** pins `solveDeveloperBreakeven`/`solve_developer_breakeven` — the minimum gross sale
+price `P` (pence) that covers the *entire* total development cost (TDC) excluding selling costs
+(selling costs are re-solved at `P` itself, per §5.12), independent of any lender/debt figures.
+`solveSeniorBreakeven` and `solveDeveloperBreakeven` now share one private bisection helper per
+language (`bisectMinimalFeasible` (TS) / `_bisect_minimal_feasible` (Python)) — extracted from
+Task 4's solver with no behavioural change (Task 4's full suite, including the 32-bit-midpoint
+regression pin at `5,076,649,746` and the `10**80` iteration-cap pin, is re-run unmodified against
+the refactored code and stays green).
+
+**Step 1 — worksheet, fixture F/G.** `tdc_ex_selling_pence = total_development_cost_pence −
+selling_costs_pence`. F/G's pinned `total_development_cost_pence = 96,464,953` and
+`selling_costs_pence = 2,200,000` (read from the fixture JSON's `expected_metrics`, not assumed —
+`acquisition_pence`/`construction_pence`/etc. sum differently and selling costs are agent fee +
+legal fee on the *realised* GDV, a separate figure from the break-even solve itself):
+```
+tdc_ex_selling = 96,464,953 − 2,200,000 = 94,264,953
+```
+Exit terms (fixture F/G): `selling_agent_fee_pct = 1.5`, `selling_legal_fee_pence = 400,000`. `P`
+must satisfy:
+```
+P ≥ 94,264,953 + 400,000 + round(0.015 × P)
+  = 94,664,953 + round(0.015 × P)
+```
+Closed-form guess: `94,664,953 / 0.985 = 96,106,551.269…`. Hand-checked integers either side:
+- `P = 96,106,550`: `round(0.015 × 96,106,550) = round(1,441,598.25) = 1,441,598`; RHS =
+  `94,664,953 + 1,441,598 = 96,106,551`; `96,106,550 < 96,106,551` → **infeasible**.
+- `P = 96,106,551`: `round(0.015 × 96,106,551) = round(1,441,598.265) = 1,441,598`; RHS =
+  `96,106,551`; `96,106,551 ≥ 96,106,551` (equality) → **feasible**.
+
+So the minimum feasible integer, and the expected `developer_breakeven_pence` for fixture G, is
+**96,106,551**. (Added to fixture G's `expected_metrics` only, per the Task 5 brief — fixture F is
+not touched, since F already carries no `senior_breakeven_*` keys either and this worksheet reuses
+F's pinned ledger figures purely to derive G's number.)
+
+**Step 2 — worksheet, fixture A (cash, sell-all).** Fixture A's own pinned figures (from its own
+`expected_metrics`, not F/G's): `total_development_cost_pence = 91,388,400`,
+`selling_costs_pence = 2,200,000`, and its `exit_strategy` (read from `a-all-cash.json`) is the
+same `selling_agent_fee_pct = 1.5`, `selling_legal_fee_pence = 400,000` as F/G:
+```
+tdc_ex_selling = 91,388,400 − 2,200,000 = 89,188,400
+P ≥ 89,188,400 + 400,000 + round(0.015 × P) = 89,588,400 + round(0.015 × P)
+```
+Closed-form guess: `89,588,400 / 0.985 = 90,952,690.355…`. Hand-checked integers either side:
+- `P = 90,952,689`: `round(0.015 × 90,952,689) = round(1,364,290.335) = 1,364,290`; RHS =
+  `89,588,400 + 1,364,290 = 90,952,690`; `90,952,689 < 90,952,690` → **infeasible**.
+- `P = 90,952,690`: `round(0.015 × 90,952,690) = round(1,364,290.35) = 1,364,290`; RHS =
+  `90,952,690`; `90,952,690 ≥ 90,952,690` (equality) → **feasible**.
+
+So fixture A's expected `developer_breakeven_pence` is **90,952,690** — non-null, unlike
+`senior_breakeven_pence` (null for A, since it is a cash deal with no facility to redeem).
+`developer_breakeven_pence` is lender-independent *and* debt-independent: it is computed whenever
+the schedule totals show any disposal at all (`gross_sales_pence > 0`), not gated on a redemption
+balance existing. A retain-only appraisal (`gross_sales_pence == 0`, e.g. `retain_all`) gets `null`
+— there is no sale price to solve for.
+
+**Deliberate non-assertion (design §B5):** no test anywhere asserts an ordering relationship
+between `senior_breakeven_pence` (§5.11) and `developer_breakeven_pence` (§5.12) — e.g. that one
+must be ≥/≤ the other. They answer different questions (redeem the facility vs. cover the whole
+TDC) over different cost bases (redemption balance + exit fee + enforcement vs. TDC-ex-selling),
+so no general inequality holds between them across all inputs; asserting one would be asserting an
+accidental property of these two fixtures, not a real invariant.
+
+**TDD evidence (Task 5):** with `metrics.ts`/`metrics.py`'s `developer_breakeven_pence` still
+null-wired (pre-Task-5), both `test_golden_fixture_parity[g-lender-valuation]` (Python) and the TS
+`golden-fixtures.test.ts` run for fixture G fail exactly on `developer_breakeven_pence: None/null !=
+96106551` (RED). Wiring `deriveMetrics`/`derive_metrics` to call `solveDeveloperBreakeven`/
+`solve_developer_breakeven` turns both green — see `task-5-report.md` for the full transcript.
+
+**Invariants added (both languages):**
+1. `developer_breakeven_pence` is null **iff** the schedule's `gross_sales_pence` is `0` (checked
+   across every fixture, not just G/A) — a strictly wider condition than the senior break-even's
+   `redemption_balance_at_disposal_pence`-null guard, since it does not depend on any facility
+   existing at all.
+2. `pct ≥ 100` nulls the result and raises a red `developer_breakeven_unsolvable` flag on the model
+   (metrics-level, `code`/`severity`/`month`/`amount_pence`/`message` identical in shape to Task 4's
+   `senior_breakeven_unsolvable`, asserted exactly-once), tested through `deriveMetrics`/
+   `derive_metrics` in both languages.
+
 ---
 
 ## 3. Ledger fixtures B–F — pinned in BOTH languages
