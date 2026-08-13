@@ -5,16 +5,31 @@ import pytest
 
 from app.financial_model import run_appraisal
 from app.financial_model.migrate import migrate_inputs
-from app.financial_model.types import CalculatorInputsV2
+from app.financial_model.types import CalculatorInputsV2, CalculatorInputsV3
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 
 
+def _v3_fixture_to_engine_v2(raw: dict) -> CalculatorInputsV2:
+    """The golden fixtures are stored as v3 documents (calc 2.1.0, Task 2).
+    Validate the full v3 shape first (proves the fixture is well-formed v3),
+    then adapt to the v2 shape the engine still consumes -- `lender_valuation`
+    isn't wired into the engine yet (Task 1: null-wired result fields only;
+    Task 3+ wires the block itself), so dropping it here changes nothing
+    about the computed metrics (design Sec B1: outputs unchanged while the
+    block is absent). Mirrors app/api/app.py::calculate_authoritative."""
+    v3 = CalculatorInputsV3.model_validate(raw)
+    engine_dict = v3.model_dump(mode="json")
+    engine_dict.pop("lender_valuation", None)
+    engine_dict["inputs_version"] = 2
+    return CalculatorInputsV2.model_validate(engine_dict)
+
+
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_golden_fixture_parity(path: Path) -> None:
     doc = json.loads(path.read_text())
-    inputs = CalculatorInputsV2.model_validate(doc["inputs"])
+    inputs = _v3_fixture_to_engine_v2(doc["inputs"])
     run = run_appraisal(inputs)
     for key, expected in doc["expected_metrics"].items():
         actual = getattr(run.metrics, key)
@@ -24,7 +39,7 @@ def test_golden_fixture_parity(path: Path) -> None:
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_invariants(path: Path) -> None:
     doc = json.loads(path.read_text())
-    run = run_appraisal(CalculatorInputsV2.model_validate(doc["inputs"]))
+    run = run_appraisal(_v3_fixture_to_engine_v2(doc["inputs"]))
     for m in run.model.months:
         assert m.closing_balance_pence == (
             m.opening_balance_pence + m.draw_pence + m.capitalised_fees_pence

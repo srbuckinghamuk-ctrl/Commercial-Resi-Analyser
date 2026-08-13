@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { migrateInputs } from './migrate';
+import { migrateInputs, migrateV2toV3, isV3 } from './migrate';
+import type { CalculatorInputsV2 } from './finance-types';
+import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 const V1_SNAPSHOT = {
   project_id: 'p1',
@@ -64,4 +66,54 @@ describe('migrateInputs', () => {
     expect(v2.equity_sources[0].amount_pence).toBe(75_309_600);
   });
 
+});
+
+describe('migrateV2toV3', () => {
+  it('migrates a minimal v2 document to v3 with lender_valuation null and enforcement default 0, all other fields byte-identical', () => {
+    const v2 = defaultCalculatorInputsV2();
+    const v3 = migrateV2toV3(v2);
+
+    expect(v3.inputs_version).toBe(3);
+    expect(v3.lender_valuation).toBeNull();
+    expect(v3.finance.enforcement_cost_assumption_pence).toBe(0);
+
+    const { inputs_version: _v2Version, ...v2Rest } = v2;
+    const { inputs_version: _v3Version, lender_valuation: _lv, ...v3Rest } = v3;
+    expect(v3Rest).toEqual(v2Rest);
+  });
+
+  it('rejects migrating an already-v3 document (idempotence guard), and isV3 recognises it', () => {
+    const v2 = defaultCalculatorInputsV2();
+    const v3 = migrateV2toV3(v2);
+
+    expect(isV3(v3 as unknown as Record<string, unknown>)).toBe(true);
+    expect(() => migrateV2toV3(v3 as unknown as CalculatorInputsV2)).toThrow();
+  });
+
+  it('chains a v1 snapshot through migrateInputs then migrateV2toV3, ending at v3 with both new fields defaulted and the v1 migration flags intact', () => {
+    const v2 = migrateInputs(V1_SNAPSHOT);
+    const v3 = migrateV2toV3(v2);
+
+    expect(v3.inputs_version).toBe(3);
+    expect(v3.lender_valuation).toBeNull();
+    expect(v3.finance.enforcement_cost_assumption_pence).toBe(0);
+    // v1 migration flags preserved:
+    expect(v3.finance.requires_confirmation).toBe(true);
+    expect(v3.finance.legacy_leverage_pct).toBe(70);
+    expect(v3.equity_sources[0].evidence_status).toBe('unconfirmed');
+  });
+
+  it('passes an already-present (illegal on a v2 doc) lender_valuation block through unchanged, then validates as v3', () => {
+    const v2 = defaultCalculatorInputsV2();
+    const illegalBlock = {
+      basis: 'fixed_amount' as const, global_value: 100_000_00, per_key_values: null,
+      reason: 'Independent RICS valuation', author: 'J. Smith', date: '2026-01-01',
+    };
+    const v2WithBlock = { ...v2, lender_valuation: illegalBlock } as unknown as CalculatorInputsV2;
+
+    const v3 = migrateV2toV3(v2WithBlock);
+
+    expect(v3.inputs_version).toBe(3);
+    expect(v3.lender_valuation).toEqual(illegalBlock);
+  });
 });

@@ -2,7 +2,7 @@
   "name": "F \u2014 development finance 12 months, sell all",
   "kind": "pipeline",
   "inputs": {
-    "inputs_version": 2,
+    "inputs_version": 3,
     "project_id": null,
     "acquisition": {
       "purchase_price_pence": 40000000,
@@ -81,7 +81,8 @@
       "equity_draw_rule": "equity_first",
       "sales_sweep_pct": 100,
       "legacy_leverage_pct": null,
-      "requires_confirmation": false
+      "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
     },
     "equity_sources": [
       {
@@ -146,7 +147,8 @@
       "cil_offset_pence": 0,
       "target_profit_on_cost_pct": 20,
       "weights": {}
-    }
+    },
+    "lender_valuation": null
   },
   "expected_metrics": {
     "gdv_pence": 120000000,

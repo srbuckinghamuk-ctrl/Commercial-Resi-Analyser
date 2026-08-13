@@ -1,5 +1,7 @@
 import type { CalculatorInputs, FinanceInputs } from '../conversion-types';
-import type { CalculatorInputsV2, EquitySource, FacilityTerms } from './finance-types';
+import type {
+  CalculatorInputsV2, CalculatorInputsV3, EquitySource, FacilityTerms, LenderValuation,
+} from './finance-types';
 import {
   calculateTotalAcquisitionCost, calculateTotalConstructionCost, calculateTotalProfessionalFees,
 } from '../conversion-calc-engine';
@@ -7,6 +9,12 @@ import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 function isV2(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV2 {
   return snapshot.inputs_version === 2 && typeof snapshot.finance === 'object' && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/** A v3 document has the same finance shape as v2, discriminated by inputs_version === 3. */
+export function isV3(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV3 {
+  return snapshot.inputs_version === 3 && typeof snapshot.finance === 'object' && snapshot.finance !== null
     && 'committed_net_facility_pence' in (snapshot.finance as object);
 }
 
@@ -123,5 +131,33 @@ export function migrateInputs(
       ...(v1.deal_spider ?? {}),
       weights: { ...defaults.deal_spider.weights, ...(v1.deal_spider?.weights ?? {}) },
     },
+  };
+}
+
+/**
+ * Upgrades a v2 document to v3 by stamping `inputs_version: 3` and adding the
+ * (nullable) `lender_valuation` block. Every other field is carried across
+ * unchanged -- this migration is purely additive (spec calc 2.1.0, design §B1:
+ * outputs are unchanged while the block is absent).
+ *
+ * Precondition: `v2` must not already be a v3 document -- this guards against
+ * double-migration (idempotence). Callers that don't know a document's version
+ * should check with `isV2`/`isV3` (or the server's `is_v2_or_later`) first.
+ *
+ * If `v2` illegally already carries a `lender_valuation` key (e.g. a
+ * hand-edited or partially-migrated row), it is passed through unchanged
+ * rather than clobbered -- the type layer (or the caller) is responsible for
+ * validating its shape.
+ */
+export function migrateV2toV3(v2: CalculatorInputsV2): CalculatorInputsV3 {
+  if (isV3(v2 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV2toV3: input is already a v3 document');
+  }
+  const { inputs_version: _v2Version, ...rest } = v2;
+  const existingLenderValuation = (v2 as unknown as { lender_valuation?: LenderValuation | null }).lender_valuation;
+  return {
+    ...rest,
+    inputs_version: 3,
+    lender_valuation: existingLenderValuation ?? null,
   };
 }

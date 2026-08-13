@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2)
+# Financial Model — Migration Notes (v1 → v2 → v3)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -207,3 +207,54 @@ and are applied with `docker compose run --rm api alembic upgrade head`.
 Executed against the live database on 2026-08-13 (path: backup →
 `stamp --purge 001` → `upgrade head` → verify → restart); see
 `docs/reviews/2026-08-13-release-2a-uat.md` for the full transcript.
+
+## 5. v2 → v3 (Release 2b Task 2, calc `2.1.0`)
+
+**What's added.** `CalculatorInputsV3` (`app/financial_model/types.py`, `frontend/src/lib/model/finance-types.ts`)
+is `CalculatorInputsV2` plus exactly two things: `inputs_version: 3` (was `2`) and
+`lender_valuation: LenderValuation | null` — the disclosed lender GDV adjustment, spec §2/§3.2,
+wired into calculations by Task 3. `FacilityTerms.enforcement_cost_assumption_pence` was already
+added to `FacilityTerms` in Task 1 (default `0`); v2 documents already carry it (it's a `FacilityTerms`
+field, not new to v3), Task 2 just makes sure every migration path — v1→v2 and v2→v3 — stamps it
+explicitly rather than relying solely on the pydantic default. No other field changes shape, name,
+or semantics. This migration is purely additive.
+
+**Defaults.** A v2 document migrated to v3 gets `lender_valuation: null` (spec §1.5: unknown lender
+valuation ≠ a valuation of zero — `null` means "not yet disclosed", exactly as `day_one_advance_pence`
+etc. use `null` for the v1→v2 step). `finance.enforcement_cost_assumption_pence` defaults to `0`
+(spec: no enforcement-cost assumption disclosed = none applied). Both defaults are additive — no
+existing field's value or the arithmetic that depends on it changes.
+
+**Implementation** (`migrateV2toV3` / `migrate_v2_to_v3`, `app/financial_model/migrate.py` and
+`frontend/src/lib/model/migrate.ts`): every field of the input v2 document is carried across
+unchanged; `inputs_version` is overwritten to `3`; `lender_valuation` is set from the input if the
+(illegal, for a true v2 doc) key is already present, else `null`. The function refuses to migrate a
+document that is already v3 (`is_v3`/`isV3` precondition) — this is an idempotence guard, not a
+merge/upsert. `is_v2_or_later` (Python; used by `app/api/app.py`) is `is_v2(doc) or is_v3(doc)`.
+
+**Server acceptance** (`app/api/app.py::calculate_authoritative`): the chain is now v1 → v2 → v3 —
+an already-v3 payload passes straight through (validated, not re-migrated); a v2 or v1 payload runs
+the existing v1→v2 step (`migrate_inputs`, unchanged) followed by `migrate_v2_to_v3`. The
+**status rule is unchanged**: `legacy_unreconciled` applies only when the *original* document was
+v1-shaped (`was_v1 = not is_v2_or_later(raw)`) — a v2 document migrating to v3 on save is not treated
+as a legacy migration and reaches the normal `reconciled`/`draft` outcome exactly as before. The
+persisted `inputs_snapshot` is always the v3-validated document (`inputs_version: 3`); the engine
+itself (`run_appraisal`) still runs off a v2-shaped view internally — `lender_valuation` isn't
+consumed by the engine yet (Task 1 null-wired the seven new result fields; Task 3+ wires the block
+itself) — so the block is dropped before the engine call, which is exactly design §B1 in practice:
+"outputs unchanged while the block is absent."
+
+**Hash consequence.** `input_hash` is computed over the full validated document (`hashing.py::input_hash`
+→ `inputs.model_dump(mode="json")`). Because every migrated document now carries two fields it
+didn't before (`lender_valuation`, and `enforcement_cost_assumption_pence` made explicit rather than
+implicit), **`input_hash` changes for every row the next time it is saved**, even if nothing the user
+edited actually changed. This is expected and benign: it is the same re-hash-on-any-change behaviour
+that already applies to every ordinary edit, `status` is preserved by the rule above (not reset by
+the version bump itself), and no `expected_metrics` value in the golden fixtures moved (see
+`docs/financial-model/test-cases.md` "additive-only proof").
+
+**Golden fixtures.** Both `fixtures/financial-model/a-all-cash.json` and `f-dev-finance-12mo.json`
+were updated to `inputs_version: 3` with `lender_valuation: null` and
+`finance.enforcement_cost_assumption_pence: 0`, and both `expected_metrics` blocks are byte-identical
+to before this change — the full TS and Python suites (`npx vitest run`, `python -m pytest -q`) stay
+green with the same pinned numbers, which is the additive-only proof for this migration.

@@ -24,7 +24,7 @@ export function runAppraisal(inputs: CalculatorInputsV2): AppraisalRun {
   return { inputs, schedule, model, metrics, validation, reconciliation };
 }
 
-export { migrateInputs } from './migrate';
+export { migrateInputs, migrateV2toV3, isV3 } from './migrate';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export * from './finance-types';

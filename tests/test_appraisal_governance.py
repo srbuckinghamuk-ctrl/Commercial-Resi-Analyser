@@ -131,7 +131,8 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
 
     assert body["status"] == "legacy_unreconciled"
     assert body["calc_version"] == "2.1.0"
-    assert body["inputs_snapshot"]["inputs_version"] == 2
+    assert body["inputs_snapshot"]["inputs_version"] == 3
+    assert body["inputs_snapshot"]["lender_valuation"] is None
     assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
     # Outputs were recalculated by the v2 engine, not just passed through.
     assert body["outputs"]["metrics"]["calc_version"] == "2.1.0"

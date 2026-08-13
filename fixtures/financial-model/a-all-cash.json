@@ -2,7 +2,7 @@
   "name": "A — all-cash conversion, sell all",
   "kind": "pipeline",
   "inputs": {
-    "inputs_version": 2,
+    "inputs_version": 3,
     "project_id": null,
     "acquisition": {
       "purchase_price_pence": 40000000, "legal_fees_pence": 500000,
@@ -31,7 +31,8 @@
       "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
       "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
       "interest_reserve_pence": null, "term_months": 12, "equity_draw_rule": "equity_first",
-      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
     },
     "equity_sources": [{
       "id": "e1", "classification": "cash", "amount_pence": 90000000, "timing_month": 0,
@@ -53,7 +54,8 @@
       "absorption_months": 9, "exit_sell": true, "exit_refinance": true, "exit_hold": false,
       "exit_part_sale": false, "prior_approval_window_months": 2, "programme_contingency_months": 1,
       "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
-    }
+    },
+    "lender_valuation": null
   },
   "expected_metrics": {
     "gdv_pence": 120000000,

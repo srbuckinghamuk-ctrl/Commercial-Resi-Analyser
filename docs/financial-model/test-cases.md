@@ -23,12 +23,15 @@ explains how the two are kept in parity.
 
 **Shared fixture directory:** `fixtures/financial-model/` (repo root, sibling to `frontend/` and
 `tests/`). Each file is a self-contained document: `name`, `kind: "pipeline"`, `inputs` (a full
-`CalculatorInputsV2` document) and `expected_metrics` (hand-computed key → expected pence/percent
-value). Both languages load the *same JSON bytes*, parse `inputs` into their respective typed
-model, run their respective `runAppraisal`/`run_appraisal`, and assert every key in
-`expected_metrics`. The hand-computed numbers are derived once, not independently transliterated
-per language — this is what makes the parity claim in §6 meaningful rather than two separately
-maintained approximations.
+`CalculatorInputsV3` document, `inputs_version: 3` — since Release 2b Task 2, calc `2.1.0`; see
+migration-notes.md §5) and `expected_metrics` (hand-computed key → expected pence/percent value).
+The TS suite parses `inputs` with a plain type assertion (no runtime shape check) and runs it
+straight through `runAppraisal`; the Python suite validates the full v3 shape with
+`CalculatorInputsV3.model_validate` and then adapts to the v2 shape `run_appraisal` still consumes
+(`lender_valuation` dropped — not yet wired into the engine) before running
+`run_appraisal`. Both assert every key in `expected_metrics`. The hand-computed numbers are derived
+once, not independently transliterated per language — this is what makes the parity claim in §6
+meaningful rather than two separately maintained approximations.
 
 **Consumers:**
 - TS: `frontend/src/lib/model/golden-fixtures.test.ts`, `frontend/src/lib/model/invariants.test.ts`
@@ -111,6 +114,18 @@ hand-derivable numbers.
 | `ltgdv_developer_pct` | — | 48.84% |
 | `irr_annual_pct` | — | 91.2% |
 | `equity_contributed_pence` | 35,000,000 | £350,000 |
+
+### Fixture A/F worksheet note — v2 → v3 additive-only proof (Release 2b Task 2)
+
+Both fixtures' `inputs` blocks were updated to `inputs_version: 3` (from `2`), with
+`lender_valuation: null` and `finance.enforcement_cost_assumption_pence: 0` added (calc `2.1.0`,
+see `docs/financial-model/migration-notes.md` §5). **No value in either fixture's `expected_metrics`
+block changed** — every pence/percent figure hand-derived above is still exactly what both engines
+produce. The full TS and Python suites passing green (`npx vitest run`: 220 passed; `python -m
+pytest -q`: 160 passed) against these unchanged pinned numbers, with only the input shape widened,
+*is* the additive-only proof for the v2→v3 migration: if the migration had silently altered any
+existing field or its downstream arithmetic, one of these two fixtures' hand-derived values would
+have moved and the suite would fail.
 
 ---
 

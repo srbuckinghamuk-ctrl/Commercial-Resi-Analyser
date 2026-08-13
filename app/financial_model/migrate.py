@@ -158,6 +158,7 @@ DEFAULT_FACILITY_TERMS: dict[str, Any] = {
     "sales_sweep_pct": 100,
     "legacy_leverage_pct": None,
     "requires_confirmation": False,
+    "enforcement_cost_assumption_pence": 0,
 }
 
 
@@ -227,6 +228,21 @@ def is_v2(snapshot: dict[str, Any]) -> bool:
     )
 
 
+def is_v3(snapshot: dict[str, Any]) -> bool:
+    """A v3 document has the same finance shape as v2, discriminated by
+    inputs_version == 3."""
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 3
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
+def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
+    return is_v2(snapshot) or is_v3(snapshot)
+
+
 def migrate_finance_v1(
     v1: dict[str, Any], cost_before_finance: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -259,6 +275,7 @@ def migrate_finance_v1(
         "sales_sweep_pct": 100,
         "legacy_leverage_pct": v1["ltv_pct"],
         "requires_confirmation": True,
+        "enforcement_cost_assumption_pence": 0,
     }
     equity: list[dict[str, Any]] = [{
         "id": "migrated-cash-equity",
@@ -382,3 +399,29 @@ def migrate_inputs(
         },
     }
     return CalculatorInputsV2.model_validate(merged)
+
+
+def migrate_v2_to_v3(doc: dict[str, Any]) -> dict[str, Any]:
+    """Upgrades a v2 document to v3 by stamping inputs_version 3 and adding
+    the (nullable) lender_valuation block. Every other field is carried
+    across unchanged -- this migration is purely additive (spec calc 2.1.0,
+    design Sec B1: outputs are unchanged while the block is absent).
+
+    Precondition: `doc` must not already be a v3 document -- this guards
+    against double-migration (idempotence). Callers that don't know a
+    document's version should check with `is_v2`/`is_v3` (or the server's
+    `is_v2_or_later`) first.
+
+    If `doc` illegally already carries a `lender_valuation` key (e.g. a
+    hand-edited or partially-migrated row), it is passed through unchanged
+    rather than clobbered -- the type layer (or the caller) is responsible
+    for validating its shape.
+    """
+    if is_v3(doc):
+        raise ValueError("migrate_v2_to_v3: input is already a v3 document")
+    rest = {k: v for k, v in doc.items() if k != "inputs_version"}
+    return {
+        **rest,
+        "inputs_version": 3,
+        "lender_valuation": doc.get("lender_valuation"),
+    }
