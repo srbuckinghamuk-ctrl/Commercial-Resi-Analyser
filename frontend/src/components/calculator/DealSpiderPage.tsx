@@ -357,6 +357,22 @@ export default function DealSpiderPage({ inputs, onChange, project }: Props) {
                           <td style={{ padding: '5px 10px', color: a.provisional ? '#f59e0b' : '#e2e8f0', textAlign: 'right' }}>
                             {a.short}
                             {a.provisional ? ' †' : ''}
+                            {def.illustrative && (
+                              <span
+                                title="Includes an unconfirmed illustrative figure — excluded from the appraisal and all lender metrics"
+                                style={{
+                                  marginLeft: 6,
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  color: '#f59e0b',
+                                  border: '1px solid #f59e0b',
+                                  borderRadius: 4,
+                                  padding: '1px 4px',
+                                }}
+                              >
+                                UNCONFIRMED
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: '5px 10px', color: '#94a3b8', textAlign: 'right' }}>
                             {a.raw.toFixed(1)} {a.unit}

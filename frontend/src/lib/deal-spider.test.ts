@@ -247,6 +247,22 @@ describe('tax advantage axis', () => {
       ((resSdlt - commSdlt + vatSaving + 1_000_000) / metrics.gdv_pence) * 100;
     expect(axisResult(inputs, 'tax_advantage').raw).toBeCloseTo(expected, 3);
   });
+
+  // Spec §11.10: the 15% construction-VAT saving folded into this axis must
+  // never be presented as anything other than an unconfirmed illustration.
+  it('is flagged illustrative with an UNCONFIRMED VAT caveat in its help text', () => {
+    const def = CLASS_MA_AXES.find((d) => d.id === 'tax_advantage')!;
+    expect(def.illustrative).toBe(true);
+    expect(def.help).toContain('UNCONFIRMED');
+    expect(def.help).toContain('excluded from the appraisal and all lender metrics');
+  });
+
+  it('no other axis is marked illustrative', () => {
+    const others = CLASS_MA_AXES.filter((d) => d.id !== 'tax_advantage');
+    for (const def of others) {
+      expect(def.illustrative).toBeFalsy();
+    }
+  });
 });
 
 describe('programme axis', () => {

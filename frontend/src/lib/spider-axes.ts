@@ -23,6 +23,8 @@ export interface SpiderAxisDef {
   direction: 'higher' | 'lower';
   unit: string;
   help: string;
+  /** True when the axis is (partly) built from an unconfirmed illustrative figure — spec §11.10. */
+  illustrative?: boolean;
 }
 
 export const CLASS_MA_AXES: SpiderAxisDef[] = [
@@ -74,7 +76,8 @@ export const CLASS_MA_AXES: SpiderAxisDef[] = [
     max: 6,
     direction: 'higher',
     unit: '% GDV',
-    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + 15% VAT saving on construction (5% conversion rate vs 20%) + CIL existing-floorspace offset. Normalised 0–6% of GDV to 0–5.',
+    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + an illustrative 15% VAT saving on construction (5% conversion rate vs 20%) + CIL existing-floorspace offset. Illustrative only: assumes 15% of construction cost as potential reduced-rate VAT saving. UNCONFIRMED — obtain specific tax advice; excluded from the appraisal and all lender metrics. Normalised 0–6% of GDV to 0–5.',
+    illustrative: true,
   },
   {
     id: 'programme',

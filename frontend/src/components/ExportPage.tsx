@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { Project } from '../types';
-import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from '../lib/conversion-types';
+import type { Project, EligibilityAssessment } from '../types';
 import { getEligibility, getAppraisal } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
 import { generateProjectsExcel } from '../lib/export-excel';
@@ -20,6 +19,31 @@ function downloadBlob(blob: Blob, filename: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Defensive normalisation for legacy saved snapshots that only recorded a
+ * unit's floor area in sq ft (no floor_area_sqm field, which the v2 engine
+ * requires). This is a unit conversion of raw stored data, not a financial
+ * calculation — migrateInputs() does not perform it.
+ */
+function normaliseUnitAreas(raw: Record<string, unknown>): Record<string, unknown> {
+  const unitMix = raw.unit_mix as { units?: Array<Record<string, unknown>> } | undefined;
+  if (!unitMix?.units) return raw;
+  return {
+    ...raw,
+    unit_mix: {
+      units: unitMix.units.map((u) => ({
+        ...u,
+        floor_area_sqm:
+          typeof u.floor_area_sqm === 'number'
+            ? u.floor_area_sqm
+            : typeof u.floor_area_sqft === 'number'
+              ? Math.round((u.floor_area_sqft as number) * 0.092903 * 100) / 100
+              : 0,
+      })),
+    },
+  };
 }
 
 export default function ExportPage({ projects, selectedProject }: ExportPageProps) {
@@ -79,97 +103,23 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
     setError(null);
     try {
       const appraisal = await getAppraisal(selectedProject.id);
-      const raw = appraisal.inputs_snapshot as unknown as CalculatorInputs & {
-        unit_mix?: { units?: Array<Record<string, unknown>> };
-      };
-      if (!raw || !raw.unit_mix || !raw.acquisition) {
+      const raw = appraisal.inputs_snapshot as Record<string, unknown> | null;
+      if (!raw || typeof raw !== 'object' || !('unit_mix' in raw) || !('acquisition' in raw)) {
         throw new Error('No calculator data found in appraisal snapshot');
       }
-      // The memo's exported signature is still v1-shaped (CalculatorInputs /
-      // AppraisalMetrics / CashflowResult) — Task 10 rewrites it against the
-      // v2 engine properly. For now: `inputs` keeps the memo's existing v1
-      // display shape (acquisition/unit_mix/conversion_costs/exit_strategy/
-      // risks/scenarios are unchanged between v1 and v2), while `metrics`
-      // and `cashflow` are adapted from a real runAppraisal(migrateInputs())
-      // result so the numbers reported are authoritative, not recomputed
-      // with the deleted flat-rate engine.
-      const inputs: CalculatorInputs = {
-        ...raw,
-        unit_mix: {
-          units: raw.unit_mix.units.map((u: Record<string, unknown>) => ({
-            ...u,
-            floor_area_sqm:
-              typeof u.floor_area_sqm === 'number'
-                ? u.floor_area_sqm
-                : typeof u.floor_area_sqft === 'number'
-                  ? Math.round(u.floor_area_sqft as number * 0.092903 * 100) / 100
-                  : 0,
-          })),
-        } as CalculatorInputs['unit_mix'],
-      };
 
-      const run = runAppraisal(migrateInputs(raw as unknown as Record<string, unknown>, selectedProject));
-      const m = run.metrics;
-      const metrics: AppraisalMetrics = {
-        total_gdv_pence: m.gdv_pence,
-        total_acquisition_cost_pence: m.acquisition_cost_pence,
-        sdlt_pence: m.sdlt_pence,
-        total_construction_cost_pence: m.construction_cost_pence,
-        // Statutory costs are broken out separately in v2; folded back into
-        // professional fees here so the memo's cost-plan totals still sum.
-        total_professional_fees_pence: m.professional_fees_pence + m.statutory_costs_pence,
-        total_finance_cost_pence: m.finance_costs_pence,
-        total_cost_pence: m.total_development_cost_pence,
-        profit_pence: m.profit_pence,
-        profit_on_cost_pct: m.profit_on_cost_pct ?? 0,
-        profit_on_gdv_pct: m.profit_on_gdv_pct ?? 0,
-        return_on_equity_pct: m.return_on_equity_pct ?? 0,
-        irr_monthly: m.irr_monthly_pct ?? 0,
-        irr_annual: m.irr_annual_pct ?? 0,
-        rlv_pence: m.rlv_pence,
-        equity_required_pence: m.equity_contributed_pence,
-        loan_amount_pence: m.peak_debt_pence,
-      };
+      // Single authoritative run — the memo consumes it directly and performs
+      // zero recalculation (spec §11.9).
+      const run = runAppraisal(migrateInputs(normaliseUnitAreas(raw), selectedProject));
 
-      let cumDraw = 0;
-      let cumInterest = 0;
-      let cumCashflow = 0;
-      const cashflow: CashflowResult = {
-        months: run.model.months.map((mm) => {
-          cumDraw += mm.draw_pence;
-          cumInterest += mm.interest_accrued_pence;
-          const net = mm.gross_receipts_pence - mm.draw_pence - mm.interest_accrued_pence;
-          cumCashflow += net;
-          return {
-            month: mm.month + 1,
-            label: `Month ${mm.month + 1}`,
-            drawdown_pence: mm.draw_pence,
-            cumulative_drawdown_pence: cumDraw,
-            interest_pence: mm.interest_accrued_pence,
-            cumulative_interest_pence: cumInterest,
-            income_pence: mm.gross_receipts_pence,
-            net_cashflow_pence: net,
-            cumulative_cashflow_pence: cumCashflow,
-          };
-        }),
-        peak_funding_pence: run.model.peak_debt_pence,
-        total_interest_pence: run.model.totals.interest_pence,
-      };
-
-      let eligibility = null;
+      let eligibility: EligibilityAssessment | null = null;
       try {
         eligibility = await getEligibility(selectedProject.id);
       } catch {
         // eligibility is optional for the memo
       }
 
-      const blob = generateInvestmentMemo(
-        selectedProject,
-        inputs,
-        metrics,
-        cashflow,
-        eligibility,
-      );
+      const blob = generateInvestmentMemo(selectedProject, run, eligibility);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);
     } catch (err) {

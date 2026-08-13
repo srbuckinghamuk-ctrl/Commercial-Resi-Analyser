@@ -1,71 +1,109 @@
 import { describe, it, expect } from 'vitest';
-import { generateInvestmentMemo } from './export-investment-memo';
+import { generateInvestmentMemo, sourcesAndUsesTotals } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
-import type { CalculatorInputs, AppraisalMetrics, CashflowResult } from './conversion-types';
-import {
-  calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost, calculateTotalProfessionalFees,
-} from './conversion-calc-engine';
-import { calculateCommercialSdlt } from './commercial-sdlt';
-import { DEFAULT_DEAL_SPIDER } from './conversion-defaults';
+import type { CalculatorInputsV2 } from './model';
+import { runAppraisal, migrateInputs } from './model';
 
-// generateInvestmentMemo's exported signature still takes v1-shaped
-// CalculatorInputs/AppraisalMetrics/CashflowResult (Task 10 rewrites this
-// properly). These are minimal, self-contained fixture builders — the
-// shared engine's v1 flat-rate formulas were deleted as prohibited
-// (spec §11), so this test builds its own throwaway metrics/cashflow
-// fixtures rather than depending on them.
-function mockMetrics(inputs: CalculatorInputs): AppraisalMetrics {
-  const gdv = calculateGdv(inputs.unit_mix.units);
-  const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
-  const totalAcquisition = calculateTotalAcquisitionCost(inputs.acquisition);
-  const totalConstruction = calculateTotalConstructionCost(inputs.conversion_costs);
-  const totalProfessional = calculateTotalProfessionalFees(inputs.conversion_costs, inputs.unit_mix.units.length);
-  const totalCostBeforeFinance = totalAcquisition + totalConstruction + totalProfessional;
-  const loanAmount = Math.round((totalCostBeforeFinance * inputs.finance.ltv_pct) / 100);
-  const equityRequired = totalCostBeforeFinance - loanAmount;
-  const arrangementFee = Math.round((loanAmount * inputs.finance.arrangement_fee_pct) / 100);
-  const exitFee = Math.round((loanAmount * inputs.finance.exit_fee_pct) / 100);
-  const monthlyRate = inputs.finance.interest_rate_annual_pct / 100 / 12;
-  const totalInterest = Math.round(loanAmount * monthlyRate * inputs.finance.loan_term_months);
-  const totalFinanceCost = arrangementFee + exitFee + totalInterest;
-  const totalCost = totalCostBeforeFinance + totalFinanceCost;
-  const profit = gdv - totalCost;
-  return {
-    total_gdv_pence: gdv,
-    total_acquisition_cost_pence: totalAcquisition,
-    sdlt_pence: sdlt,
-    total_construction_cost_pence: totalConstruction,
-    total_professional_fees_pence: totalProfessional,
-    total_finance_cost_pence: totalFinanceCost,
-    total_cost_pence: totalCost,
-    profit_pence: profit,
-    profit_on_cost_pct: totalCost > 0 ? Math.round((profit / totalCost) * 10000) / 100 : 0,
-    profit_on_gdv_pct: gdv > 0 ? Math.round((profit / gdv) * 10000) / 100 : 0,
-    return_on_equity_pct: equityRequired > 0 ? Math.round((profit / equityRequired) * 10000) / 100 : 0,
-    irr_monthly: 1.2,
-    irr_annual: 15.4,
-    rlv_pence: Math.round(gdv / 1.2 - (totalCost - inputs.acquisition.purchase_price_pence - sdlt)),
-    equity_required_pence: equityRequired,
-    loan_amount_pence: loanAmount,
-  };
-}
+// generateInvestmentMemo now takes the finished AppraisalRun directly (Task
+// 10) and performs zero recalculation — every fixture below is put through
+// the real engine (runAppraisal) before being handed to the memo, exactly as
+// ExportPage.tsx does. Numbers mirror fixtures/financial-model/
+// f-dev-finance-12mo.json (a known-good, reconciled golden fixture).
 
-function mockCashflow(inputs: CalculatorInputs): CashflowResult {
-  const months = inputs.finance.loan_term_months;
+function baseInputs(): CalculatorInputsV2 {
   return {
-    months: Array.from({ length: months }, (_, i) => ({
-      month: i + 1,
-      label: `Month ${i + 1}`,
-      drawdown_pence: 0,
-      cumulative_drawdown_pence: 0,
-      interest_pence: 0,
-      cumulative_interest_pence: 0,
-      income_pence: 0,
-      net_cashflow_pence: 0,
-      cumulative_cashflow_pence: 0,
-    })),
-    peak_funding_pence: 10_000_000,
-    total_interest_pence: 500_000,
+    inputs_version: 2,
+    project_id: 'test-id',
+    acquisition: {
+      purchase_price_pence: 40_000_000,
+      legal_fees_pence: 500_000,
+      survey_cost_pence: 300_000,
+      broker_fee_pct: 1.0,
+      other_acquisition_costs_pence: 0,
+    },
+    unit_mix: {
+      units: [
+        { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: 'Comparable at 48 High St sold Jan 2026 at £300k' },
+        { id: 'u2', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: '' },
+        { id: 'u3', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: '' },
+        { id: 'u4', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: '' },
+      ],
+    },
+    conversion_costs: {
+      prior_approval_fee_per_dwelling_pence: 9_600,
+      cil_s106_pence: 0,
+      architect_pence: 1_500_000,
+      structural_engineer_pence: 500_000,
+      mande_pence: 500_000,
+      planning_consultant_pence: 300_000,
+      building_control_pence: 200_000,
+      other_professional_fees_pence: 0,
+      construction_cost_per_sqm_pence: 100_000,
+      total_construction_sqm: 400,
+      contingency_pct: 10.0,
+      fire_safety_pence: 0,
+      sound_insulation_pence: 0,
+      part_l_compliance_pence: 0,
+    },
+    finance: {
+      funding_source: 'development_finance',
+      day_one_advance_pence: 28_000_000,
+      day_one_market_value_pence: null,
+      development_cost_advance_pct: 100,
+      committed_net_facility_pence: 60_000_000,
+      committed_gross_facility_pence: 66_000_000,
+      annual_interest_rate_pct: 8.0,
+      interest_type: 'rolled_up',
+      arrangement_fee_pct: 2.0,
+      arrangement_fee_basis: 'committed_net_facility',
+      exit_fee_pct: 1.0,
+      exit_fee_basis: 'committed_gross_facility',
+      broker_fee_pence: 0,
+      lender_legal_fee_pence: 0,
+      valuation_fee_pence: 0,
+      monitoring_surveyor_fee_pence: 0,
+      interest_reserve_pence: null,
+      term_months: 12,
+      equity_draw_rule: 'equity_first',
+      sales_sweep_pct: 100,
+      legacy_leverage_pct: null,
+      requires_confirmation: false,
+    },
+    equity_sources: [
+      { id: 'e1', classification: 'cash', amount_pence: 35_000_000, timing_month: 0, repayment_priority: 1, evidence_status: 'confirmed', notes: '' },
+    ],
+    exit_strategy: {
+      route: 'sell_all',
+      selling_agent_fee_pct: 1.5,
+      selling_legal_fee_pence: 400_000,
+      retained_units: [],
+    },
+    risks: [
+      { id: 'r1', description: 'Construction cost overrun', likelihood: 'medium', impact: 'high', mitigation: 'Fixed-price contract with contingency' },
+      { id: 'r2', description: 'Sales rate slower than expected', likelihood: 'medium', impact: 'medium', mitigation: 'Competitive pricing strategy, flexible exit' },
+    ],
+    scenarios: {
+      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0 },
+      upside: { label: 'Upside', gdv_adjustment_pct: 10, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0 },
+      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 15, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1 },
+      severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2 },
+    },
+    deal_spider: {
+      storeys: 2,
+      building_height_m: 7,
+      bsa_higher_risk: false,
+      daylight_pass_pct: 100,
+      absorption_months: 9,
+      exit_sell: true,
+      exit_refinance: true,
+      exit_hold: false,
+      exit_part_sale: false,
+      prior_approval_window_months: 2,
+      programme_contingency_months: 1,
+      cil_offset_pence: 0,
+      target_profit_on_cost_pct: 20,
+      weights: {},
+    },
   };
 }
 
@@ -78,11 +116,11 @@ const mockProject: Project = {
   address_county: 'Surrey',
   address_postcode: 'GU1 3DY',
   address_postcode_district: 'GU1',
-  price_pence: 45000000,
+  price_pence: 40_000_000,
   price_qualifier: 'Guide price',
   use_class: 'office',
-  floor_area_sqft: 3200,
-  floor_area_sqm: 297,
+  floor_area_sqft: 4306,
+  floor_area_sqm: 400,
   floors: 3,
   tenure: 'freehold',
   lease_years_remaining: null,
@@ -99,75 +137,13 @@ const mockProject: Project = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
-const mockInputs: CalculatorInputs = {
-  project_id: 'test-id',
-  acquisition: {
-    purchase_price_pence: 45000000,
-    legal_fees_pence: 500000,
-    survey_cost_pence: 250000,
-    broker_fee_pct: 1,
-    other_acquisition_costs_pence: 0,
-  },
-  unit_mix: {
-    units: [
-      { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 27500000, comparable_notes: 'Comparable at 48 High St sold Jan 2026 at £275k' },
-      { id: 'u2', type: '2bed', floor_area_sqm: 70, estimated_value_pence: 37500000, comparable_notes: '2-bed at River Court, £365k Dec 2025' },
-      { id: 'u3', type: '2bed', floor_area_sqm: 75, estimated_value_pence: 40000000, comparable_notes: '' },
-      { id: 'u4', type: '1bed', floor_area_sqm: 48, estimated_value_pence: 26000000, comparable_notes: '' },
-    ],
-  },
-  conversion_costs: {
-    prior_approval_fee_per_dwelling_pence: 10000,
-    cil_s106_pence: 800000,
-    architect_pence: 1200000,
-    structural_engineer_pence: 400000,
-    mande_pence: 300000,
-    planning_consultant_pence: 250000,
-    building_control_pence: 150000,
-    other_professional_fees_pence: 200000,
-    construction_cost_per_sqm_pence: 150000,
-    total_construction_sqm: 243,
-    contingency_pct: 10,
-    fire_safety_pence: 500000,
-    sound_insulation_pence: 300000,
-    part_l_compliance_pence: 200000,
-  },
-  finance: {
-    funding_source: 'development_finance',
-    ltv_pct: 65,
-    interest_rate_annual_pct: 9.5,
-    arrangement_fee_pct: 2,
-    exit_fee_pct: 1,
-    loan_term_months: 14,
-    interest_type: 'rolled_up',
-  },
-  exit_strategy: {
-    route: 'sell_all',
-    selling_agent_fee_pct: 1.5,
-    selling_legal_fee_pence: 100000,
-    retained_units: [],
-  },
-  risks: [
-    { id: 'r1', description: 'Construction cost overrun', likelihood: 'medium', impact: 'high', mitigation: 'Fixed-price contract with contingency' },
-    { id: 'r2', description: 'Sales rate slower than expected', likelihood: 'medium', impact: 'medium', mitigation: 'Competitive pricing strategy, flexible exit' },
-    { id: 'r3', description: 'Interest rate increase', likelihood: 'low', impact: 'medium', mitigation: 'Fixed-rate facility, short programme' },
-  ],
-  scenarios: {
-    base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0 },
-    upside: { label: 'Upside', gdv_adjustment_pct: 5, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0 },
-    downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 10, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1 },
-    severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2 },
-  },
-  deal_spider: { ...DEFAULT_DEAL_SPIDER },
-};
-
 const mockEligibility: EligibilityAssessment = {
   id: 'assess-id',
   project_id: 'test-id',
   pdr_class: 'class_ma',
   criteria: [
     { key: 'use_class', label: 'Use class E(a) office', passed: true, source: 'user', auto_checked: false, value: 'office', risk_flag: null },
-    { key: 'floor_area', label: 'Floor area ≤ 1,500 sq m', passed: true, source: 'auto', auto_checked: true, value: '297 m²', risk_flag: null },
+    { key: 'floor_area', label: 'Floor area ≤ 1,500 sq m', passed: true, source: 'auto', auto_checked: true, value: '400 m²', risk_flag: null },
     { key: 'vacant_3m', label: 'Vacant for 3+ months', passed: true, source: 'user', auto_checked: false, value: null, risk_flag: null },
   ],
   verdict: 'green',
@@ -177,46 +153,119 @@ const mockEligibility: EligibilityAssessment = {
   updated_at: '2026-02-01T00:00:00Z',
 };
 
-describe('generateInvestmentMemo', () => {
-  const metrics = mockMetrics(mockInputs);
-  const cashflow = mockCashflow(mockInputs);
+async function pdfText(blob: Blob): Promise<string> {
+  const ab = await blob.arrayBuffer();
+  return Buffer.from(ab).toString('latin1');
+}
 
-  it('returns a non-empty Blob', () => {
-    const blob = generateInvestmentMemo(mockProject, mockInputs, metrics, cashflow, mockEligibility);
+describe('generateInvestmentMemo', () => {
+  it('returns a non-empty Blob for a reconciled run', () => {
+    const run = runAppraisal(baseInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.size).toBeGreaterThan(10000);
   });
 
   it('generates a PDF without eligibility data', () => {
-    const blob = generateInvestmentMemo(mockProject, mockInputs, metrics, cashflow, null);
+    const run = runAppraisal(baseInputs());
+    const blob = generateInvestmentMemo(mockProject, run, null);
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.size).toBeGreaterThan(10000);
   });
 
-  it('generates a PDF with retained units exit strategy', () => {
-    const retainedInputs: CalculatorInputs = {
-      ...mockInputs,
-      exit_strategy: {
-        route: 'blended',
-        selling_agent_fee_pct: 1.5,
-        selling_legal_fee_pence: 100000,
-        retained_units: [
-          { unit_id: 'u1', monthly_rent_pence: 95000 },
-          { unit_id: 'u2', monthly_rent_pence: 125000 },
-        ],
-      },
+  it('generates a PDF with a retained-units exit strategy', () => {
+    const inputs = baseInputs();
+    inputs.exit_strategy = {
+      route: 'blended',
+      selling_agent_fee_pct: 1.5,
+      selling_legal_fee_pence: 400_000,
+      retained_units: [
+        { unit_id: 'u1', monthly_rent_pence: 95_000 },
+        { unit_id: 'u2', monthly_rent_pence: 95_000 },
+      ],
     };
-    const retainedMetrics = mockMetrics(retainedInputs);
-    const retainedCashflow = mockCashflow(retainedInputs);
-    const blob = generateInvestmentMemo(mockProject, retainedInputs, retainedMetrics, retainedCashflow);
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.size).toBeGreaterThan(10000);
   });
 
   it('generates a PDF with no risks', () => {
-    const noRiskInputs: CalculatorInputs = { ...mockInputs, risks: [] };
-    const blob = generateInvestmentMemo(mockProject, noRiskInputs, metrics, cashflow);
+    const inputs = baseInputs();
+    inputs.risks = [];
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, null);
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.size).toBeGreaterThan(5000);
+  });
+
+  // (a) Day-one LTV appears only alongside its spec §5.1 definition footnote —
+  // never as "total facility ÷ purchase price" (spec §11.4, the removed
+  // pre-R1 figure).
+  it('prints Day-one LTV only with its spec §5.1 definition footnote', async () => {
+    const run = runAppraisal(baseInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    expect(text).toContain('Day-one LTV');
+    expect(text).toContain(
+      'Day-one LTV = the actual month-0 senior advance',
+    );
+  });
+
+  // (b) the prohibited "senior debt impairment" concept (spec §11.5, §5.11)
+  // must vanish entirely, including the word itself.
+  it('never prints the word "impairment"', async () => {
+    const run = runAppraisal(baseInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    expect(text.toLowerCase()).not.toContain('impairment');
+  });
+
+  // (c) the draft watermark renders on every page when the run does not
+  // reconcile, and is absent when it does.
+  it('renders the draft watermark when the run is unreconciled', async () => {
+    // A v1-shaped legacy snapshot always migrates with requires_confirmation
+    // = true (spec §10), which forces reconciliation.report_safe to false.
+    const legacyV1Snapshot = {
+      project_id: 'test-id',
+      acquisition: { purchase_price_pence: 40_000_000, legal_fees_pence: 500_000, survey_cost_pence: 300_000, broker_fee_pct: 1, other_acquisition_costs_pence: 0 },
+      unit_mix: { units: [{ id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: '' }] },
+      conversion_costs: baseInputs().conversion_costs,
+      finance: { funding_source: 'bridging', ltv_pct: 65, interest_rate_annual_pct: 9.5, arrangement_fee_pct: 2, exit_fee_pct: 1, loan_term_months: 14, interest_type: 'rolled_up' },
+      exit_strategy: { route: 'sell_all', selling_agent_fee_pct: 1.5, selling_legal_fee_pence: 100_000, retained_units: [] },
+      risks: [],
+    };
+    const run = runAppraisal(migrateInputs(legacyV1Snapshot, mockProject));
+    expect(run.reconciliation.report_safe).toBe(false); // sanity check the fixture
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = await pdfText(blob);
+    expect(text).toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+  });
+
+  it('omits the draft watermark when the run reconciles cleanly', async () => {
+    const run = runAppraisal(baseInputs());
+    expect(run.reconciliation.report_safe).toBe(true); // sanity check the fixture
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    expect(text).not.toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+  });
+
+  // (d) the sources and uses columns of the funding table total identically
+  // (spec §7 invariant: Σ sources = Σ uses), both numerically and as printed.
+  it('prints identical sources and uses totals', async () => {
+    const run = runAppraisal(baseInputs());
+    expect(run.reconciliation.sources_equal_uses).toBe(true);
+    const { usesTotal, sourcesTotal } = sourcesAndUsesTotals(run);
+    expect(sourcesTotal).toBe(usesTotal);
+    expect(sourcesTotal).toBeGreaterThan(0);
+
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    const totalStr = (usesTotal / 100).toLocaleString('en-GB', {
+      style: 'currency',
+      currency: 'GBP',
+      maximumFractionDigits: 0,
+    });
+    expect(text).toContain(`Sources and uses both total ${totalStr}`);
   });
 });
