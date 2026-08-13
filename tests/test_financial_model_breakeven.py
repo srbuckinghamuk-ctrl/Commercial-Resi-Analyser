@@ -68,12 +68,16 @@ class TestSolveSeniorBreakeven:
         assert p == 2
 
     def test_iteration_cap_guard_genuinely_reachable_at_extreme_magnitude(self):
-        # Python integers are arbitrary precision, and TS's midpoint (`Math.floor((lo+hi)/2)`)
-        # has no 32-bit ceiling either -- so in both languages, reaching the 200-iteration
-        # cap requires a genuinely astronomic fee_floor: 10**80 needs ~266 bisection steps
-        # (log2(10**80) =~ 265.75), which the 200-iteration cap correctly refuses to
-        # exceed, returning None rather than a partially bisected (wrong) number. Mirrors
-        # the TS regression at the same magnitude.
+        # Python integers are arbitrary precision, so at an astronomic fee_floor (10**80)
+        # bisection keeps making real progress for the full ~266 steps needed
+        # (log2(10**80) =~ 265.75) before the 200-iteration cap correctly refuses to
+        # exceed it, returning None rather than a partially bisected (wrong) number.
+        # TS's regression at the same 10**80 magnitude hits the same cap for a *different*
+        # reason: JS numbers are IEEE-754 doubles (not arbitrary precision), so bisection
+        # only makes ~52 real halvings (the mantissa's bit-precision) before lo/hi/mid
+        # collapse onto adjacent representable doubles and the search stalls, spinning
+        # through the remaining iterations with no further progress until the same
+        # 200-iteration cap -- see breakeven.test.ts's matching regression comment.
         p = solve_senior_breakeven(terms(selling_legal_fee_pence=10**80, selling_agent_fee_pct=50))
         assert p is None
 

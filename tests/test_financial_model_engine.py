@@ -10,8 +10,21 @@ from pathlib import Path
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import default_calculator_inputs_v2
-from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals, build_schedule
-from app.financial_model.types import CalculatorInputsV2, CalculatorInputsV3, EquitySource, FacilityTerms
+from app.financial_model.schedule import (
+    MonthReceipts,
+    MonthUses,
+    Schedule,
+    ScheduleTotals,
+    build_schedule,
+    calculate_total_construction_cost,
+)
+from app.financial_model.types import (
+    CalculatorInputsV2,
+    CalculatorInputsV3,
+    ConversionCostInputs,
+    EquitySource,
+    FacilityTerms,
+)
 from app.financial_model.validation import reconcile
 
 DEFAULT_FACILITY_TERMS = FacilityTerms(**DEFAULT_FACILITY_TERMS_DICT)
@@ -94,6 +107,42 @@ SALE = [
     receipts(gross_sale_pence=80_000_000, agent_fee_pence=1_600_000),
 ]
 NO_SALE = [receipts(), receipts(), receipts(), receipts()]
+
+
+def _construction_costs(**overrides) -> ConversionCostInputs:
+    base = dict(
+        prior_approval_fee_per_dwelling_pence=0, cil_s106_pence=0, architect_pence=0,
+        structural_engineer_pence=0, mande_pence=0, planning_consultant_pence=0,
+        building_control_pence=0, other_professional_fees_pence=0,
+        construction_cost_per_sqm_pence=0, total_construction_sqm=0, contingency_pct=0,
+        fire_safety_pence=0, sound_insulation_pence=0, part_l_compliance_pence=0,
+    )
+    base.update(overrides)
+    return ConversionCostInputs(**base)
+
+
+class TestCalculateTotalConstructionCostFractionalSqmRounding:
+    """Spec Sec 1.1 (amended, Release 2b Task 7): fractional-area products round once,
+    at source, before contingency -- base = round_half_up(rate x sqm). Mirrors
+    conversion-calc-engine.test.ts's matching regressions. Both cases use zero
+    contingency/compliance so calculate_total_construction_cost's return value IS the
+    rounded base cost, isolating the rounding site."""
+
+    def test_rounds_a_fractional_base_cost_half_up_before_contingency(self):
+        costs = _construction_costs(
+            construction_cost_per_sqm_pence=50_000, total_construction_sqm=500.5,
+        )
+        # 50,000 x 500.5 = 25,025,000.0 exactly -- already an integer, but proves the
+        # rounding site handles a fractional sqm input without disturbing an exact result.
+        assert calculate_total_construction_cost(costs) == 25_025_000
+
+    def test_rounds_an_odd_half_fractional_base_cost_up_not_down(self):
+        costs = _construction_costs(
+            construction_cost_per_sqm_pence=333, total_construction_sqm=100.5,
+        )
+        # 333 x 100.5 = 33,466.5 -- round_half_up(33,466.5) = 33,467 (Python's banker's
+        # round() would wrongly give 33,466 -- must use money_round, never round()).
+        assert calculate_total_construction_cost(costs) == 33_467
 
 
 class TestFixtureBRolledUpInterest:

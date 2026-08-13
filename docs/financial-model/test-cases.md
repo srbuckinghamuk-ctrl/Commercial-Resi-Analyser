@@ -14,7 +14,7 @@ explains how the two are kept in parity.
 |---|---|---|
 | **Golden fixtures** (`fixtures/financial-model/*.json`) | Whole-pipeline (`runAppraisal`/`run_appraisal`) hand-derived expectations, shared verbatim between TS and Python | TS + Python (shared JSON) |
 | **Ledger fixtures** (fixtures B–F, `monthly-engine.test.ts` / `test_financial_model_engine.py`) | Hand-derived expectations for the monthly senior-debt ledger in isolation (`runLedger`/`run_ledger`) | TS + Python (independently transliterated, same pence values — see §3) |
-| **Invariant suite** (`invariants.test.ts` / `test_invariants` in `test_financial_model_fixtures.py`) | Structural properties that must hold for *every* fixture and several derived variants, not tied to one hand-computed number | TS + Python (Python subset — see §4) |
+| **Invariant suite** (`invariants.test.ts` / `test_invariants` + `TestInvariantMatrix` in `test_financial_model_fixtures.py`) | Structural properties that must hold for *every* fixture and several derived variants, not tied to one hand-computed number | TS + Python (full variant-matrix parity — see §4) |
 | **IRR regression vector** (`irr.test.ts`) | A specific pathological cash-flow vector that caught a real solver defect | TS only (the Python IRR solver shares the same algorithm and is exercised indirectly through the golden fixtures' `irr_annual_pct`) |
 
 ---
@@ -36,7 +36,8 @@ in §6 meaningful rather than two separately maintained approximations.
 
 **Consumers:**
 - TS: `frontend/src/lib/model/golden-fixtures.test.ts`, `frontend/src/lib/model/invariants.test.ts`
-- Python: `tests/test_financial_model_fixtures.py` (`test_golden_fixture_parity`, `test_invariants`)
+- Python: `tests/test_financial_model_fixtures.py` (`test_golden_fixture_parity`, `test_invariants`,
+  `TestInvariantMatrix`)
 
 ### Fixture A — "A — all-cash conversion, sell all" (`fixtures/financial-model/a-all-cash.json`)
 
@@ -590,12 +591,20 @@ the trailing block in `monthly-engine.test.ts`. Python: `TestCashFunding` in
 
 ## 4. Invariant suite
 
-**Files:** `frontend/src/lib/model/invariants.test.ts` (full); `tests/test_financial_model_fixtures.py::test_invariants` (subset: #1 roll-forward and #6's sources-equal-uses check only).
+**Files:** `frontend/src/lib/model/invariants.test.ts` (full); `tests/test_financial_model_fixtures.py::test_invariants` (a separate, stronger unconditional check over the base fixtures only — kept
+alongside, not superseded, by the matrix below) and `tests/test_financial_model_fixtures.py::TestInvariantMatrix` (full port, Release 2b Task 7 — closes the gap this section used to record).
 
-The TS suite runs every fixture in `fixtures/financial-model/*.json` (currently A and F) through
+The TS suite runs every fixture in `fixtures/financial-model/*.json` (currently A, F and G) through
 four derived variants — `base`, `retain_all` (exit route forced to `retain_all`), `serviced`
-(interest type forced to `serviced`), `term=1` (term forced to one month) — giving 2 fixtures × 4
-variants = 8 independent checks of each invariant below, not just the two literal fixtures:
+(interest type forced to `serviced`), `term=1` (term forced to one month) — giving 3 fixtures × 4
+variants = 12 independent checks of each invariant below, not just the three literal fixtures.
+`TestInvariantMatrix` in `test_financial_model_fixtures.py` builds the exact same 3×4 = 12-way
+matrix (`_invariant_variants`, deep-copying each fixture's `CalculatorInputsV3` and mutating
+`exit_strategy.route` / `finance.interest_type` / `finance.term_months`, mirroring TS's `variants()`
+function field-for-field) and asserts all seven invariants below, one Python test method per TS
+`it()` (same order) so a single invariant's failure doesn't mask the others — the same diagnostic
+granularity as the TS suite, parametrised (`pytest.mark.parametrize`) rather than a hand-unrolled
+loop:
 
 1. **Debt roll-forward invariant** — every month, `closing = opening + draw + capitalised_fees +
    interest_capitalised − repayment`, and `closing >= 0` always (spec §4, roll-forward invariant).
@@ -621,23 +630,24 @@ variants = 8 independent checks of each invariant below, not just the two litera
    explicit `+ capitalised_fees_pence` term (a Task 6 correction against the first draft of the
    spec's §7 reading).
 
-The Python-side `test_invariants` (`tests/test_financial_model_fixtures.py:25-34`) is a **lighter**
-counterpart, not a full port: it is parametrised only over the two raw fixture files (A, F)
-directly — it does not generate or run the four derived variants (`base`/`retain_all`/`serviced`/
-`term=1`) that give the TS suite its 8-way coverage — and per fixture it checks only #1
-(roll-forward, verbatim) and #6's `sources_equal_uses` half (via
-`run.reconciliation.sources_equal_uses`); it does not port #2 (peak debt correctness), #3
-(zero-debt zero finance cost as a standalone check — though this is separately covered by
-`TestCashFunding` in `test_financial_model_engine.py`, §3), #4 (retained exits receive no
-proceeds), #5 (schedule spreads sum to totals) or #7 (the TDC identity) as invariant checks, nor
-the profit-equals-equity-flows half of #6. This is a real, recorded coverage gap — it is **not**
-the same gap as the ledger fixtures (§3), which *are* fully pinned in both languages. The
-whole-pipeline golden-fixture parity test (§2) still pins the Python engine's numeric output for
-every fixture to the penny, so a regression in most of #2–#5/#7-shaped behaviour would generally
-also move a golden-fixture number and be caught there; but a genuine gap exists for any future
-fixture whose invariant violation would not move a currently-asserted `expected_metrics` value, and
-for the variant-matrix breadth (retain_all/serviced/term=1 shapes) that TS exercises but Python
-does not.
+The seven `TestInvariantMatrix` methods, in the same order as the numbered list above:
+`test_debt_rollforward_reconciles_and_closing_balance_never_negative`,
+`test_peak_debt_equals_the_maximum_monthly_pre_repayment_balance`,
+`test_cash_funding_produces_zero_debt_cost`, `test_retained_exits_receive_no_sale_proceeds`,
+`test_monthly_schedule_spreads_sum_exactly_to_cost_totals`,
+`test_profit_equals_equity_flows_and_sources_equal_uses_when_fully_realised`,
+`test_tdc_equals_the_sum_of_all_monthly_uses_plus_rolled_interest_capitalised_fees_and_exit_fee`.
+This gives 12 × 7 = 84 independent checks, matching the TS suite's assertion-group count exactly.
+
+**Closed (Release 2b Task 7).** This section used to record that the Python side checked only 2 of
+the 7 invariants (roll-forward, sources-equal-uses), over the base fixtures only, with no variant
+generation. That gap is closed by `TestInvariantMatrix`. The original, narrower `test_invariants`
+function is kept alongside (not deleted, not superseded): it is a strictly *unconditional* check of
+roll-forward and `sources_equal_uses` over the three base fixtures — a stronger, if narrower-scoped,
+guarantee than the matrix's conditional #1/#6 for those specific runs, so removing it would have
+been a net loss of coverage, not a cleanup. The whole-pipeline golden-fixture parity test (§2)
+continues to pin the Python engine's numeric output for every fixture to the penny as a second,
+independent line of defence.
 
 ---
 
@@ -717,28 +727,41 @@ to the explicit `tests/` form.
   corrections (Fixture E's £7,000 arrangement fee, Fixture F's gross-headroom-cap numbers). A
   divergence here would require someone to edit both files inconsistently and have neither review
   catch it — a materially different (and lower) risk than "no Python coverage exists at all".
-- **Genuine, narrower cross-language gaps that remain (corrected from an earlier, wrong statement
-  in this section — see the Task 14 correction record for how this was caught):**
-  - The **invariant suite's variant matrix** (§4) is lighter in Python: TS checks 7 invariants
-    across 2 fixtures × 4 derived variants (8 runs); Python checks 2 of those invariants
-    (roll-forward, sources-equal-uses) across the 2 base fixtures only, with no `retain_all`/
-    `serviced`/`term=1` variant generation on the Python side.
-  - **No shared migration-mapping fixture.** TS has a dedicated hand-derived unit-test file for
-    the v1→v2 migration itself, `frontend/src/lib/model/migrate.test.ts` (4 tests). Python's only
-    migration-specific tests are a narrow regression
-    (`test_financial_model_fixtures.py::test_migration_preserves_floors_zero`) and the end-to-end
-    `test_appraisal_governance.py::test_v1_snapshot_migrates_to_legacy_unreconciled`, which
-    exercises migration indirectly through the API rather than asserting `migrate_inputs()`'s
-    output directly against a set of hand-derived cases the way `migrate.test.ts` does. There is
-    no shared JSON fixture for the migration mapping (unlike golden fixtures A/F) and no
-    dedicated Python unit-test file mirroring `migrate.test.ts` case-for-case. Closing this is
-    Release 2 scope: either add a shared migration-fixture JSON or a Python-side
-    `test_migrate.py` with the same hand-derived v1→v2 cases as `migrate.test.ts`.
+- **Both cross-language gaps this section used to record are closed (Release 2b Task 7):**
+  - The **invariant suite's variant matrix** (§4) — previously lighter in Python (TS checked 7
+    invariants across 2 fixtures × 4 derived variants = 8 runs; Python checked 2 of those
+    invariants across the 2 base fixtures only, with no `retain_all`/`serviced`/`term=1` variant
+    generation) — is now fully ported: `TestInvariantMatrix` in `test_financial_model_fixtures.py`
+    checks all 7 invariants across the same 3 fixtures × 4 derived variants (12 runs) as TS, one
+    Python test method per TS `it()`. See §4 for the full method list.
+  - **No shared migration-mapping fixture** — previously TS had a dedicated hand-derived unit-test
+    file for the v1→v2 migration itself, `frontend/src/lib/model/migrate.test.ts` (4 tests), with
+    no Python-side counterpart asserting `migrate_inputs()`'s output directly against the same
+    hand-derived cases. Closed by `tests/test_migrate_v2.py`, which ports all 4 cases from
+    `migrate.test.ts` verbatim (same `V1_SNAPSHOT` input dict, same expected values):
+    `test_passes_a_v2_document_through_unchanged`,
+    `test_migrates_v1_ltv_pct_to_an_unconfirmed_proposed_facility_never_an_approved_metric`,
+    `test_creates_a_single_unconfirmed_cash_equity_source_for_v1_snapshots`, and
+    `test_forces_zero_facility_for_v1_cash_funding`. `test_migrate_v3.py` remains the sibling
+    v2→v3 port (Task 2); together the two files cover both migration steps case-for-case in both
+    languages. The narrower `test_migration_preserves_floors_zero` regression and the end-to-end
+    `test_appraisal_governance.py::test_v1_snapshot_migrates_to_legacy_unreconciled` check remain in
+    place alongside these, unchanged.
 - **Rounding parity (spec §1.1):** TypeScript rounds with `Math.round` (half-up toward +∞);
   Python must use `math.floor(x + 0.5)`, explicitly *not* `round()` (Python's banker's rounding
   would disagree with TS on `.5` boundaries). Both are required to agree to the penny on every
   golden fixture — this is what `test_golden_fixture_parity` actually enforces, not merely "close
-  enough" numeric agreement.
+  enough" numeric agreement. Fractional-area products round once, at source, before contingency:
+  `base = round_half_up(construction_cost_per_sqm_pence × total_construction_sqm)` (Release 2b
+  Task 7). This is registered by a matching regression in both languages —
+  `calculateTotalConstructionCost` in `conversion-calc-engine.test.ts` and
+  `calculate_total_construction_cost` in `TestCalculateTotalConstructionCostFractionalSqmRounding`
+  (`test_financial_model_engine.py`) — both asserting `round_half_up(50,000 × 500.5) = 25,025,000`
+  (an exact-integer product, proving the rounding site accepts a fractional sqm input without
+  disturbing an already-whole result) and the odd-half case `round_half_up(333 × 100.5) =
+  round_half_up(33,466.5) = 33,467` (which a banker's-rounding implementation would wrongly round
+  down to 33,466). Existing integer-sqm golden and ledger fixtures are unaffected: rounding an
+  already-integer product is the identity function, so no pinned value moves.
 - **The governance procedure that keeps this true going forward** (formula-change procedure) is
   defined in `docs/financial-model/model-governance.md` §2: any calculation change edits the spec
   first, then the fixture (with a hand derivation recorded, as above), then both engines in the

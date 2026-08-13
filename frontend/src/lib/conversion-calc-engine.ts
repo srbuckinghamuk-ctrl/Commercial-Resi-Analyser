@@ -29,7 +29,10 @@ export function calculateTotalAcquisitionCost(acq: AcquisitionInputs): number {
 }
 
 export function calculateTotalConstructionCost(costs: ConversionCostInputs): number {
-  const baseCost = costs.construction_cost_per_sqm_pence * costs.total_construction_sqm;
+  // Spec §1.1: fractional-area products round once, at source, in one step before
+  // contingency -- base = round_half_up(construction_cost_per_sqm_pence × total_construction_sqm).
+  // Integer-sqm inputs are unaffected (rounding an already-integer product is identity).
+  const baseCost = Math.round(costs.construction_cost_per_sqm_pence * costs.total_construction_sqm);
   const contingency = Math.round((baseCost * costs.contingency_pct) / 100);
   const compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence;
   return baseCost + contingency + compliance;

@@ -97,8 +97,11 @@ def solve_irr(cashflows: list[float]) -> float | None:
 class AppraisalResultV2:
     calc_version: str
     gdv_pence: int
-    lender_gdv_pence: int | None
-    lender_gdv_variance_pence: int | None
+    # float, not int (Task 3's fix made non-integer lender_gdv_pence possible for
+    # fixed_amount/per_unit bases -- see LenderGdvResult.lender_gdv_pence in
+    # lender_valuation.py; variance inherits the same fractional possibility).
+    lender_gdv_pence: float | None
+    lender_gdv_variance_pence: float | None
     lender_gdv_variance_pct: float | None
     acquisition_cost_pence: int
     sdlt_pence: int

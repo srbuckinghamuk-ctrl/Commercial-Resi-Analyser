@@ -27,11 +27,13 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
 
 
 def calculate_total_construction_cost(costs: ConversionCostInputs) -> int:
-    base_cost = costs.construction_cost_per_sqm_pence * costs.total_construction_sqm
+    # Spec Sec 1.1: fractional-area products round once, at source, in one step before
+    # contingency -- base = round_half_up(construction_cost_per_sqm_pence x
+    # total_construction_sqm). Integer-sqm inputs are unaffected (rounding an
+    # already-integer product is identity). Matches conversion-calc-engine.ts exactly.
+    base_cost = money_round(costs.construction_cost_per_sqm_pence * costs.total_construction_sqm)
     contingency = money_round((base_cost * costs.contingency_pct) / 100)
     compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence
-    # NB: base_cost itself is not rounded here -- matches conversion-calc-engine.ts
-    # exactly, which returns `baseCost + contingency + compliance` unrounded.
     return base_cost + contingency + compliance
 
 

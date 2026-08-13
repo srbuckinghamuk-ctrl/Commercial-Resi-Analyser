@@ -107,14 +107,21 @@ describe('solveSeniorBreakeven (spec §5.11)', () => {
 
   it('iteration-cap guard: returns null rather than a wrong number when the search genuinely ' +
     'cannot converge within 200 steps', () => {
-    // `Math.floor((lo+hi)/2)` has no 32-bit ceiling, but IEEE-754 double precision still
-    // bounds how many meaningful bisection steps are possible: at an astronomic fee floor
-    // (10^80 — far beyond any real financial figure), the ~266 steps needed
-    // (log2(10^80) ≈ 265.75) genuinely exceed the 200-iteration cap, which correctly
+    // `Math.floor((lo+hi)/2)` has no 32-bit ceiling, but unlike Python's arbitrary-precision
+    // integers, JS numbers are IEEE-754 doubles with only ~52 bits of mantissa. At an
+    // astronomic fee floor (10^80 — far beyond any real financial figure), the range
+    // [lo, hi] only supports ~52 *real* halvings before lo/hi/mid collapse onto adjacent
+    // representable doubles (the gap between neighbouring doubles near 10^80 is itself
+    // ~10^64) — `mid` then equals `lo` or `hi` every iteration and the search stalls,
+    // making no further numeric progress. The loop keeps spinning through the remaining
+    // iterations without converging until it hits the 200-iteration cap and correctly
     // returns null (never a partially-bisected, wrong number) rather than looping forever
-    // or silently returning early. Mirrors the Python regression
-    // (test_iteration_cap_guard_genuinely_reachable_at_extreme_magnitude) at the same
-    // magnitude.
+    // or silently returning early. This is a *different* mechanism from the Python
+    // regression at the same 10^80 magnitude
+    // (test_iteration_cap_guard_genuinely_reachable_at_extreme_magnitude): Python's ints
+    // are arbitrary precision, so its bisection keeps making real progress for the full
+    // ~266 steps (log2(10^80) ≈ 265.75) before hitting its own 200-iteration cap — both
+    // languages reach the same cap-triggered null result, for two distinct reasons.
     const p = solveSeniorBreakeven(terms({ selling_legal_fee_pence: 1e80, selling_agent_fee_pct: 50 }));
     expect(p).toBeNull();
   });

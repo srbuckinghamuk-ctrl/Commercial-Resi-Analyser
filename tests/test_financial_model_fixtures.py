@@ -47,6 +47,137 @@ def test_invariants(path: Path) -> None:
     assert run.reconciliation.sources_equal_uses
 
 
+def _invariant_variants(inputs: CalculatorInputsV3) -> list[tuple[str, CalculatorInputsV3]]:
+    """Mirrors invariants.test.ts's `variants()`: four derived transformations of each
+    fixture, widening coverage without new hand calcs. Each variant is deep-copied off
+    the base `inputs` so mutating one never leaks into another (or into the base)."""
+    retained = inputs.model_copy(deep=True)
+    retained.exit_strategy.route = "retain_all"
+    serviced = inputs.model_copy(deep=True)
+    serviced.finance.interest_type = "serviced"
+    short_term = inputs.model_copy(deep=True)
+    short_term.finance.term_months = 1
+    return [
+        ("base", inputs),
+        ("retain_all", retained),
+        ("serviced", serviced),
+        ("term=1", short_term),
+    ]
+
+
+def _fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV3]]:
+    out: list[tuple[str, str, CalculatorInputsV3]] = []
+    for path in FIXTURES:
+        doc = json.loads(path.read_text())
+        base_inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+        for label, variant_inputs in _invariant_variants(base_inputs):
+            out.append((path.stem, label, variant_inputs))
+    return out
+
+
+_FIXTURE_VARIANTS = _fixture_variant_matrix()
+_FIXTURE_VARIANT_IDS = [f"{stem}[{label}]" for stem, label, _ in _FIXTURE_VARIANTS]
+
+
+@pytest.mark.parametrize("stem,label,inputs", _FIXTURE_VARIANTS, ids=_FIXTURE_VARIANT_IDS)
+class TestInvariantMatrix:
+    """Python port of frontend/src/lib/model/invariants.test.ts's top `describe` block
+    (spec Sec 4/Sec 8 roll-forward invariant, Sec 5.7 peak debt, Sec 3.9/Sec 9 zero-debt
+    cost, Sec 4.4 retained exits, Sec 6 schedule spreads, Sec 3.12/Sec 7 profit identity,
+    Sec 7 TDC identity): every golden fixture run through the same 4 derived variants
+    (base/retain_all/serviced/term=1) TS exercises, giving the same widened coverage on
+    the Python side. Closes the gap recorded in docs/financial-model/test-cases.md Sec 4
+    and Sec 7. Each TS `it()` in that describe block has a one-to-one Python method
+    below (same order), rather than one flat function, so a single invariant's failure
+    doesn't mask the others -- the same diagnostic granularity as the TS suite."""
+
+    def test_debt_rollforward_reconciles_and_closing_balance_never_negative(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        run = run_appraisal(inputs)
+        for m in run.model.months:
+            assert m.closing_balance_pence == (
+                m.opening_balance_pence + m.draw_pence + m.capitalised_fees_pence
+                + m.interest_capitalised_pence - m.repayment_pence
+            )
+            assert m.closing_balance_pence >= 0
+
+    def test_peak_debt_equals_the_maximum_monthly_pre_repayment_balance(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        run = run_appraisal(inputs)
+        max_balance = max(
+            [0] + [
+                m.opening_balance_pence + m.draw_pence + m.capitalised_fees_pence
+                + m.interest_capitalised_pence
+                for m in run.model.months
+            ]
+        )
+        assert run.model.peak_debt_pence == max_balance
+
+    def test_cash_funding_produces_zero_debt_cost(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        run = run_appraisal(inputs)
+        if inputs.finance.funding_source == "cash":
+            assert run.metrics.finance_costs_pence == 0
+            assert run.model.totals.draws_pence == 0
+
+    def test_retained_exits_receive_no_sale_proceeds(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        run = run_appraisal(inputs)
+        if inputs.exit_strategy.route == "retain_all":
+            assert all(m.gross_receipts_pence == 0 for m in run.model.months)
+            assert run.metrics.selling_costs_pence == 0
+
+    def test_monthly_schedule_spreads_sum_exactly_to_cost_totals(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        run = run_appraisal(inputs)
+        assert (
+            sum(m.construction_pence for m in run.schedule.uses)
+            == run.schedule.totals.construction_pence
+        )
+        assert (
+            sum(m.professional_pence for m in run.schedule.uses)
+            == run.schedule.totals.professional_pence
+        )
+        assert (
+            sum(m.statutory_pence for m in run.schedule.uses)
+            == run.schedule.totals.statutory_pence
+        )
+
+    def test_profit_equals_equity_flows_and_sources_equal_uses_when_fully_realised(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        run = run_appraisal(inputs)
+        fully_realised = (
+            run.model.senior_outstanding_at_maturity_pence == 0
+            and run.schedule.totals.retained_value_pence == 0
+            and run.model.totals.funding_gap_pence == 0
+        )
+        if fully_realised:
+            assert run.metrics.profit_pence == sum(run.model.equity_cashflows_pence)
+            assert run.reconciliation.sources_equal_uses is True
+
+    def test_tdc_equals_the_sum_of_all_monthly_uses_plus_rolled_interest_capitalised_fees_and_exit_fee(
+        self, stem: str, label: str, inputs: CalculatorInputsV3,
+    ) -> None:
+        # Task 6 correction (spec Sec 7): monthly uses_total_pence includes month-0
+        # ancillary fees but NOT the capitalised arrangement fee, while TDC (from
+        # metrics) does include it -- so the identity needs an explicit
+        # + capitalised_fees_pence term.
+        run = run_appraisal(inputs)
+        monthly_uses = sum(m.uses_total_pence for m in run.model.months)
+        rolled = sum(m.interest_capitalised_pence for m in run.model.months)
+        serviced = sum(m.interest_serviced_pence for m in run.model.months)
+        assert run.metrics.total_development_cost_pence == (
+            monthly_uses + rolled + serviced + run.metrics.selling_costs_pence
+            + run.model.totals.exit_fee_pence + run.model.totals.capitalised_fees_pence
+        )
+
+
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_lender_gdv_never_defaults_to_developer_gdv(path: Path) -> None:
     """Spec Sec 3.2 / Release 2b Task 3: lender-basis metrics must never default

@@ -88,6 +88,54 @@ describe('calculateTotalConstructionCost', () => {
     // Total: 11,200,000
     expect(calculateTotalConstructionCost(costs)).toBe(11_200_000);
   });
+
+  // Spec §1.1 (amended, Release 2b Task 7): fractional-area products round once, at
+  // source, before contingency: base = round_half_up(rate × sqm). Both regressions use
+  // zero contingency/compliance so calculateTotalConstructionCost's return value IS the
+  // rounded base cost, isolating the rounding site itself.
+  it('rounds a fractional base cost (rate × sqm) half-up to the nearest penny before contingency', () => {
+    const costs: ConversionCostInputs = {
+      prior_approval_fee_per_dwelling_pence: 0,
+      cil_s106_pence: 0,
+      architect_pence: 0,
+      structural_engineer_pence: 0,
+      mande_pence: 0,
+      planning_consultant_pence: 0,
+      building_control_pence: 0,
+      other_professional_fees_pence: 0,
+      construction_cost_per_sqm_pence: 50_000,
+      total_construction_sqm: 500.5,
+      contingency_pct: 0,
+      fire_safety_pence: 0,
+      sound_insulation_pence: 0,
+      part_l_compliance_pence: 0,
+    };
+    // 50,000 × 500.5 = 25,025,000.0 exactly -- already an integer, but proves the
+    // rounding site handles a fractional sqm input without disturbing an exact result.
+    expect(calculateTotalConstructionCost(costs)).toBe(25_025_000);
+  });
+
+  it('rounds an odd-half fractional base cost up, not down (round_half_up, not banker\'s rounding)', () => {
+    const costs: ConversionCostInputs = {
+      prior_approval_fee_per_dwelling_pence: 0,
+      cil_s106_pence: 0,
+      architect_pence: 0,
+      structural_engineer_pence: 0,
+      mande_pence: 0,
+      planning_consultant_pence: 0,
+      building_control_pence: 0,
+      other_professional_fees_pence: 0,
+      construction_cost_per_sqm_pence: 333,
+      total_construction_sqm: 100.5,
+      contingency_pct: 0,
+      fire_safety_pence: 0,
+      sound_insulation_pence: 0,
+      part_l_compliance_pence: 0,
+    };
+    // 333 × 100.5 = 33,466.5 -- round_half_up(33,466.5) = 33,467 (banker's rounding, which
+    // rounds .5 to the nearest even integer, would wrongly give 33,466).
+    expect(calculateTotalConstructionCost(costs)).toBe(33_467);
+  });
 });
 
 describe('calculateTotalProfessionalFees', () => {
