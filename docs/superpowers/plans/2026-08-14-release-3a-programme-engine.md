@@ -511,7 +511,8 @@ describe('v4 programme validation', () => {
     expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: -1 }))).toBe(true);
   });
   it('rejects a window breaching the 2-month sale tail (start+duration−1 > term−2)', () => {
-    expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: 5, duration_months: 6 }))).toBe(true);
+    // start 6 + duration 6 − 1 = 11 > term − 2 = 10 (start 5 would be the legal boundary: 10 ≤ 10)
+    expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: 6, duration_months: 6 }))).toBe(true);
   });
   it('rejects user_defined weights of the wrong length, negative, or all-zero', () => {
     for (const weights of [[1, 2], [1, -1, 1, 1, 1, 1], [0, 0, 0, 0, 0, 0]]) {
