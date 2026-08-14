@@ -23,9 +23,38 @@ _COST_TO_COMPLETE_FLAT_KEYS = {
 }
 
 
+def _is_v4(doc: dict) -> bool:
+    """TEMPORARY (Release 3a Task 7): Python v4 parity lands in Task 8 -- remove this skip there.
+
+    The shared fixture corpus now carries `inputs_version: 4` documents (fixture H, the
+    dated-programme golden fixture -- spec Sec 6.1, calc 2.2.0). `CalculatorInputsV3`
+    cannot validate them, so every fixture-parametrised test in this module skips them
+    until Task 8 adds the v4 Pydantic shape and the Python programme engine. Fixture H is
+    fully pinned on the TypeScript side in the meantime (see
+    docs/financial-model/test-cases.md, "Fixture H"), so the hand-derived worksheet is
+    already under test -- just not yet cross-language.
+
+    Task 8 must also add a `funding_gap_pence` entry to the flat-key mapping above (it is
+    a `run.model.totals` field, not an AppraisalResultV2 attribute, so the bare `getattr`
+    below would raise); the TS harness already maps it.
+    """
+    return doc.get("inputs", {}).get("inputs_version") == 4
+
+
+def _load_fixture(path: Path) -> dict:
+    """Loads a fixture document, skipping v4 ones. See `_is_v4` for why (TEMPORARY)."""
+    doc = json.loads(path.read_text())
+    if _is_v4(doc):
+        pytest.skip(
+            "TEMPORARY (Release 3a Task 7): Python v4 parity lands in Task 8 -- "
+            "remove this skip there"
+        )
+    return doc
+
+
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_golden_fixture_parity(path: Path) -> None:
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     inputs = CalculatorInputsV3.model_validate(doc["inputs"])
     run = run_appraisal(inputs)
     for key, expected in doc["expected_metrics"].items():
@@ -36,7 +65,7 @@ def test_golden_fixture_parity(path: Path) -> None:
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_invariants(path: Path) -> None:
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
     for m in run.model.months:
         assert m.closing_balance_pence == (
@@ -69,6 +98,11 @@ def _fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV3]]:
     out: list[tuple[str, str, CalculatorInputsV3]] = []
     for path in FIXTURES:
         doc = json.loads(path.read_text())
+        # This runs at import (collection) time, where `pytest.skip` is illegal -- so v4
+        # fixtures are filtered out of the matrix rather than skipped per-test. Same
+        # TEMPORARY rationale and same removal point as `_is_v4` (Release 3a Task 8).
+        if _is_v4(doc):
+            continue
         base_inputs = CalculatorInputsV3.model_validate(doc["inputs"])
         for label, variant_inputs in _invariant_variants(base_inputs):
             out.append((path.stem, label, variant_inputs))
@@ -183,7 +217,7 @@ def test_lender_gdv_never_defaults_to_developer_gdv(path: Path) -> None:
     """Spec Sec 3.2 / Release 2b Task 3: lender-basis metrics must never default
     to developer GDV -- null is the only representation of "unknown", exactly
     when the block itself is absent, on every fixture."""
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     inputs = CalculatorInputsV3.model_validate(doc["inputs"])
     run = run_appraisal(inputs)
     block_present = inputs.lender_valuation is not None
@@ -201,7 +235,7 @@ def test_lender_gdv_never_defaults_to_developer_gdv(path: Path) -> None:
 def test_senior_breakeven_null_iff_no_disposal(path: Path) -> None:
     """Release 2b Task 4 (spec Sec 5.11): senior_breakeven_pence is null exactly when
     the ledger recorded no disposal (cash deals, or nothing sold)."""
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
     assert (run.metrics.senior_breakeven_pence is None) == (
         run.model.redemption_balance_at_disposal_pence is None
@@ -212,7 +246,7 @@ def test_senior_breakeven_null_iff_no_disposal(path: Path) -> None:
 def test_senior_breakeven_covers_redemption_plus_exit_fee(path: Path) -> None:
     """When non-null, senior_breakeven_pence >= redemption balance + exit fee due on
     redeeming it (spec Sec 5.11 invariant)."""
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     inputs = CalculatorInputsV3.model_validate(doc["inputs"])
     run = run_appraisal(inputs)
     redemption = run.model.redemption_balance_at_disposal_pence
@@ -226,7 +260,7 @@ def test_senior_breakeven_covers_redemption_plus_exit_fee(path: Path) -> None:
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_senior_breakeven_percentages_null_unless_lender_gdv_present(path: Path) -> None:
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
     lender_gdv_present = run.metrics.lender_gdv_pence is not None
     if run.metrics.senior_breakeven_pence is None or not lender_gdv_present:
@@ -248,7 +282,7 @@ def test_developer_breakeven_null_iff_no_disposal(path: Path) -> None:
     the schedule recorded no disposal at all (gross_sales_pence == 0) -- a strictly wider
     condition than senior_breakeven_pence's redemption-balance guard, since it does not
     depend on a facility existing."""
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     run = run_appraisal(CalculatorInputsV3.model_validate(doc["inputs"]))
     assert (run.metrics.developer_breakeven_pence is None) == (
         run.schedule.totals.gross_sales_pence == 0
@@ -260,7 +294,7 @@ def test_developer_breakeven_covers_tdc_ex_selling_plus_legal(path: Path) -> Non
     """When non-null, developer_breakeven_pence >= TDC-ex-selling + the flat selling
     legal fee (spec Sec 5.12 invariant -- the fixed-cost floor before the agent's
     percentage fee on P itself)."""
-    doc = json.loads(path.read_text())
+    doc = _load_fixture(path)
     inputs = CalculatorInputsV3.model_validate(doc["inputs"])
     run = run_appraisal(inputs)
     if run.metrics.developer_breakeven_pence is not None:

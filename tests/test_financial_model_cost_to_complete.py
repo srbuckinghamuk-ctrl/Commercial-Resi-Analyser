@@ -241,6 +241,15 @@ class TestShortfallDirectionAgainstFundingGap:
     def test_holds_across_every_golden_fixture(self):
         for path in sorted(FIXTURE_DIR.glob("*.json")):
             doc = json.loads(path.read_text())
+            # TEMPORARY (Release 3a Task 7): Python v4 parity lands in Task 8 -- remove
+            # this skip there. `CalculatorInputsV3` cannot validate the inputs_version 4
+            # documents now in the shared corpus (fixture H, spec Sec 6.1 / calc 2.2.0);
+            # the same clause guards every fixture-driven test in
+            # tests/test_financial_model_fixtures.py. Fixture H is a genuine positive case
+            # for this implication on the TS side (shortfall AND funding gap both present),
+            # so re-enabling it in Task 8 strengthens this test rather than just widening it.
+            if doc.get("inputs", {}).get("inputs_version") == 4:
+                continue
             inputs = CalculatorInputsV3.model_validate(doc["inputs"])
             schedule = build_schedule(inputs)
             model = run_ledger(schedule, inputs.finance, inputs.equity_sources)

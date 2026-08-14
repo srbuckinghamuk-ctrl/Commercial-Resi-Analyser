@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
+import type { AppraisalRun } from './index';
 import type { AnyCalculatorInputs, AppraisalResultV2 } from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
@@ -16,9 +17,10 @@ interface Fixture {
   // Widened from CalculatorInputsV2 in Release 3a: the corpus now mixes v3 and v4
   // documents, and `runAppraisal` takes the union directly (no downcast adapter).
   inputs: AnyCalculatorInputs;
-  // Two flat keys (cost_to_complete_first_shortfall_month, cost_to_complete_max_shortfall_pence)
-  // are not real AppraisalResultV2 keys — they're a fixture-authoring convenience mapped onto
-  // the nested `cost_to_complete` summary below (spec §5.10, Release 2b Task 6).
+  // Most keys are real AppraisalResultV2 properties. A few are not — they're a
+  // fixture-authoring convenience mapped onto other parts of the run by FLAT_KEYS below
+  // (the two cost_to_complete_* summary keys, spec §5.10; and funding_gap_pence, which
+  // lives on the ledger totals rather than on the metrics object, spec §4.2).
   expected_metrics: Partial<AppraisalResultV2> & Record<string, unknown>;
 }
 
@@ -37,12 +39,21 @@ const EXPECTED_FIXTURE_STEMS = [
   'h-programme-scurve',
 ];
 
-// Minimal flat-key -> nested-summary mapping for the two cost-to-complete fixture keys
-// (spec §5.10, Release 2b Task 6). Every other expected_metrics key is a real, direct
+// Minimal flat-key -> run-structure mapping for the fixture keys that are not direct
+// AppraisalResultV2 properties. Every other expected_metrics key is a real, direct
 // AppraisalResultV2 property, asserted below without this indirection.
-const COST_TO_COMPLETE_FLAT_KEYS: Record<string, (s: AppraisalResultV2['cost_to_complete']) => unknown> = {
-  cost_to_complete_first_shortfall_month: (s) => s?.first_shortfall_month ?? null,
-  cost_to_complete_max_shortfall_pence: (s) => s?.max_shortfall_pence ?? null,
+//
+// The mapper takes the whole AppraisalRun (widened in Release 3a from the previous
+// cost_to_complete-only signature) so a pinnable quantity living outside `metrics` —
+// like the ledger's funding gap — can be pinned without restructuring the harness.
+const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
+  // spec §5.10, Release 2b Task 6
+  cost_to_complete_first_shortfall_month: (r) => r.metrics.cost_to_complete?.first_shortfall_month ?? null,
+  cost_to_complete_max_shortfall_pence: (r) => r.metrics.cost_to_complete?.max_shortfall_pence ?? null,
+  // spec §4.2 step 3 ("cost overruns never create facility"), Release 3a: the accumulated
+  // unfunded cost. It is the headline behaviour of fixture H, so it must be pinned, but it
+  // is a ledger total rather than a summary metric.
+  funding_gap_pence: (r) => r.model.totals.funding_gap_pence,
 };
 
 describe('golden fixtures (shared with the Python engine)', () => {
@@ -54,8 +65,8 @@ describe('golden fixtures (shared with the Python engine)', () => {
     it(fx.name, () => {
       const run = runAppraisal(fx.inputs);
       for (const [key, expected] of Object.entries(fx.expected_metrics)) {
-        const mapper = COST_TO_COMPLETE_FLAT_KEYS[key];
-        const actual = mapper ? mapper(run.metrics.cost_to_complete) : run.metrics[key as keyof AppraisalResultV2];
+        const mapper = FLAT_KEYS[key];
+        const actual = mapper ? mapper(run) : run.metrics[key as keyof AppraisalResultV2];
         expect(actual, key).toEqual(expected);
       }
     });

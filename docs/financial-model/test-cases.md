@@ -37,6 +37,15 @@ since Task 2 is gone). Both assert every key in `expected_metrics`. The hand-com
 derived once, not independently transliterated per language — this is what makes the parity claim
 in §6 meaningful rather than two separately maintained approximations.
 
+**Temporary exception (Release 3a Task 7 → Task 8):** the corpus may now carry `inputs_version: 4`
+documents, which `CalculatorInputsV3.model_validate` cannot parse — so **v4 fixtures are currently
+TS-only**. Every fixture-driven Python test skips them explicitly
+(`tests/test_financial_model_fixtures.py`, `tests/test_financial_model_cost_to_complete.py`, both
+carrying a `TEMPORARY (Release 3a Task 7)` comment and showing as `SKIPPED` in the pytest run, not
+silently filtered). Python v4 parity — and with it the cross-language claim above, for fixture H —
+lands in Release 3a Task 8, which removes those skips. Until then, fixture H's worksheet is pinned
+by the TS suite alone.
+
 **Consumers:**
 - TS: `frontend/src/lib/model/golden-fixtures.test.ts`, `frontend/src/lib/model/invariants.test.ts`
 - Python: `tests/test_financial_model_fixtures.py` (`test_golden_fixture_parity`, `test_invariants`,
@@ -499,7 +508,7 @@ Construction ends at `1 + 6 − 1 = 6` ✓; professional at `2 + 3 − 1 = 4` �
 
 | Line | Derivation | Pence |
 |---|---|---:|
-| SDLT | 0% × 150,000 + 2% × 100,000 + 5% × 150,000 = £9,500 (price unchanged from A/F) | 950,000 |
+| SDLT | commercial slice bands on the 40,000,000 price: 0% × 15,000,000 + 2% × 10,000,000 + 5% × 15,000,000 = 0 + 200,000 + 750,000 (price unchanged from A/F) | 950,000 |
 | Acquisition cost | 40,000,000 + 950,000 + 500,000 + 300,000 + broker 1% × 40,000,000 = 400,000 | 42,150,000 |
 | Construction | base = round(150,000 × 400) = 60,000,000; contingency 0% = 0; compliance = 0 | 60,000,000 |
 | Professional (§3.5) | 2,400,000 + 600,000 + 0 + 600,000 + 0 | 3,600,000 |
@@ -615,6 +624,10 @@ of which 1,200,000 is consumed by the capitalised arrangement fee, leaving 58,80
 → `108,788,400 − (35,000,000 + 58,800,000) = **14,988,400**`, exactly the accumulated gap ✓. H is
 therefore also the first *golden* fixture (as opposed to the hand-built ledger fixture E) to
 exercise spec §4.2's "cost overruns never create facility" path end to end.
+Because this is the fixture's headline behaviour, `funding_gap_pence = 14,988,400` is **pinned** in
+`expected_metrics`. It is a ledger total (`model.totals`), not an `AppraisalResultV2` property, so
+the golden harness reaches it through the same flat-key indirection the two `cost_to_complete_*`
+keys use (`FLAT_KEYS` in `golden-fixtures.test.ts`, whose mapper takes the whole `AppraisalRun`).
 
 **Roll-forward check (spec §4 invariant), every month:** `closing = opening + draw + cap fees +
 interest capitalised − repayment`. E.g. m3: `29,787,902 + 11,588,400 + 0 + 275,842 − 0 =
@@ -772,6 +785,7 @@ with the ledger's own `funding_gap_pence > 0`, i.e. the one implication the suit
 | `net_ltc_pct` | — | 55.15% |
 | `ltgdv_developer_pct` | — | 53.48% |
 | `irr_annual_pct` | — | 65.92% |
+| `funding_gap_pence` | 14,988,400 | £149,884 |
 | `cost_to_complete_first_shortfall_month` | 1 | — |
 | `cost_to_complete_max_shortfall_pence` | 18,966,254 | £189,662.54 |
 
