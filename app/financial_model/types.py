@@ -250,7 +250,10 @@ class UserDefinedSpendCurve(Model):
     kind: Literal["user_defined"]
     # Length/non-negativity/sum are validated in validation.py (mirroring
     # validation.ts), NOT constrained here -- see the note on ProgrammePackage.
-    weights: list[float]
+    # `max_length` is the same resource-exhaustion backstop as ProgrammePackage's
+    # ceilings, not a spec rule: the real length rule ("one entry per window
+    # month") stays in validation.py.
+    weights: list[float] = Field(max_length=1200)
 
 
 SpendCurve = Annotated[
@@ -260,16 +263,25 @@ SpendCurve = Annotated[
 
 class ProgrammePackage(Model):
     """Port rule #7 exception, mirroring validation.ts: ``start_offset`` and
-    ``duration_months`` carry no Pydantic bounds. Spec Sec 6.1's window rules
-    (duration >= 1, start >= 0, window inside the 2-month sale tail) are hard
-    *validation* errors owned by validation.py exactly as they are in the TS
+    ``duration_months`` carry no *lower* Pydantic bounds. Spec Sec 6.1's window
+    rules (duration >= 1, start >= 0, window inside the 2-month sale tail) are
+    hard *validation* errors owned by validation.py exactly as they are in the TS
     engine -- constraining them here instead would surface them as a 422 parse
-    failure with a Pydantic message rather than the spec-worded
-    ValidationIssue, and would make the negative cases unconstructible in the
-    validation tests."""
+    failure with a Pydantic message rather than the spec-worded ValidationIssue,
+    and would make the negative cases unconstructible in the validation tests.
 
-    start_offset: int
-    duration_months: int
+    The ``le=1200`` upper ceilings (100 years of months) are NOT spec rules and
+    do not displace validation.py: they are a boundary backstop against resource
+    exhaustion (I2, final R3a review). A hostile payload with
+    ``duration_months: 10**9`` would otherwise reach ``build_schedule`` and
+    allocate gigabytes of per-month arrays before any rule could reject it. They
+    are deliberately far above any plausible real window, so no legitimate input
+    can hit them and the spec-worded message stays the UX for every realistic
+    violation.
+    """
+
+    start_offset: int = Field(le=1200)
+    duration_months: int = Field(le=1200)
     curve: SpendCurve
 
 

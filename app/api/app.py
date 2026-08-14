@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.eligibility.engine import run_eligibility
-from app.financial_model import CALC_VERSION, run_appraisal
+from app.financial_model import CALC_VERSION, run_appraisal, validate_inputs
 from app.financial_model.hashing import canonical_hash, input_hash
 from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v4
 from app.financial_model.types import CalculatorInputsV4
@@ -315,10 +315,19 @@ def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
-    run = run_appraisal(inputs)
-    hard_errors = [issue for issue in run.validation if issue.severity == "error"]
+    # I2 (final R3a review): validate BEFORE running the engine. `validate_inputs`
+    # reads the input document only -- it allocates nothing proportional to
+    # `term_months`/`duration_months` -- whereas `run_appraisal` builds the whole
+    # monthly schedule and ledger first. With the old ordering a POST carrying an
+    # absurd programme window (`duration_months: 10**9`) allocated gigabytes before
+    # earning its 422. The 422 body is unchanged: the same hard-error ValidationIssue
+    # list, in the same order. `run.validation` below still carries the full issue
+    # list (warnings included) for the persisted `validation` column.
+    hard_errors = [issue for issue in validate_inputs(inputs) if issue.severity == "error"]
     if hard_errors:
         raise HTTPException(status_code=422, detail=[issue.__dict__ for issue in hard_errors])
+
+    run = run_appraisal(inputs)
 
     mismatches = []
     for client_field, metric_field in CLIENT_METRIC_MAP.items():

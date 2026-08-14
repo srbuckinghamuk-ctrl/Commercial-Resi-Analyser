@@ -5,6 +5,7 @@ we exercise the actual server-side recalculation path, not mocks.
 """
 import copy
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -296,3 +297,76 @@ async def test_get_returns_authoritative_outputs(client, project):
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
     assert body["gdv_pence"] == 120_000_000
     assert body["calc_version"] == "2.2.0"
+
+
+def _programme(construction: dict) -> dict:
+    """A minimal, otherwise-valid programme block with one package overridden."""
+    return {
+        "anchor_month": None,
+        "packages": {
+            "construction": construction,
+            "professional": {
+                "start_offset": 0, "duration_months": 2, "curve": {"kind": "straight_line"},
+            },
+            "statutory": {
+                "start_offset": 0, "duration_months": 1, "curve": {"kind": "back_loaded"},
+            },
+        },
+    }
+
+
+async def test_absurd_programme_duration_is_rejected_before_the_engine_allocates(
+    client, project,
+):
+    """I2 (final R3a review): `run_appraisal` used to run BEFORE the hard-error
+    check, so a POST carrying `duration_months: 10**9` allocated gigabytes of
+    spread/ledger arrays before earning its 422. Two layers now stop it: the
+    generous Pydantic ceilings on ProgrammePackage (a boundary backstop) and the
+    validation-first ordering in `calculate_authoritative`. The request must come
+    back a validation error, and come back promptly -- the wall-clock bound is
+    deliberately loose (a passing run is milliseconds; the pre-fix behaviour was
+    minutes or a MemoryError)."""
+    inputs = fixture_a_inputs()
+    inputs["programme"] = _programme(
+        {"start_offset": 0, "duration_months": 10**9, "curve": {"kind": "s_curve"}},
+    )
+
+    started = time.perf_counter()
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Absurd programme",
+        "inputs_snapshot": inputs,
+    })
+    elapsed = time.perf_counter() - started
+
+    assert resp.status_code == 422, resp.text
+    assert elapsed < 15, f"422 took {elapsed:.1f}s - the engine ran before the check"
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list) and detail, resp.text
+
+
+async def test_in_range_programme_violation_still_422s_with_the_spec_worded_issue(
+    client, project,
+):
+    """The validation-first reorder must not change the 422 body for a window
+    violation that clears the Pydantic ceilings: the spec-worded ValidationIssue
+    (field/message/severity), not a Pydantic parse error."""
+    inputs = fixture_a_inputs()
+    inputs["programme"] = _programme(
+        {"start_offset": -1, "duration_months": 2, "curve": {"kind": "s_curve"}},
+    )
+
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Negative start offset",
+        "inputs_snapshot": inputs,
+    })
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert any(
+        d.get("field") == "programme.packages.construction"
+        and d.get("severity") == "error"
+        and "cannot be negative" in d.get("message", "")
+        for d in detail
+    ), detail
