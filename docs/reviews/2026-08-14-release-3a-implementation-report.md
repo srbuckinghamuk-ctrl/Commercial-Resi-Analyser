@@ -137,19 +137,49 @@ v4 snapshot to the database):**
   (`TestInvariantMatrix`) still reads "4 derived variants" — Task 7 added a 5th
   (the programme variant) but the comment wasn't updated. Cosmetic; confirmed
   still present.
-- `docs/financial-model/calculation-specification.md` — one cross-reference at
-  the original §5.10 text still says "re-derived when the dated programme lands
-  (R3)"; this is now stale (R3a implemented the programme; the CTC re-derivation
-  itself is R3b's §4.3, per design). Deferred at Task 1 review to the Task 9
-  version-reference sweep; carried forward since it references R3b work, not an
-  R3a gap.
+- Correction to an earlier draft of this report: the §5.10 stale cross-reference
+  flagged at Task 1 review ("re-derived when the dated programme lands (R3)")
+  was **closed by Task 9**, not carried forward. `calculation-specification.md:305`
+  now reads "The series is derived from the already-computed ledger, which
+  carries the dated programme when `programme` is set and the calc-2.1.0 auto
+  windows otherwise (calc 2.2.0, [R3a])." — confirmed present verbatim. Task 9
+  also reworded the twin stale sentence at §6 (`:323`, the "Note (calc 2.1.0)"
+  paragraph), which had the same future-tense "supersedes this section" framing
+  and was not explicitly named in the plan's grep instruction but was fixed as
+  a discretionary companion edit (see `task-9-report.md` §3) so the two notes
+  wouldn't read inconsistently. Both rewordings verified against the current
+  file; no open §5.10/§6 staleness remains.
+- `docs/financial-model/calculation-specification.md:11` — the legend sentence
+  ("A metric marked R2/R3 must be displayed as 'not available' ... until
+  implemented") is unchanged and now sits awkwardly next to the same line's own
+  "**[R3a]** Release 3 programme engine (calc 2.2.0, implemented)" clause — R3a
+  metrics are in fact available, so the blanket R2/R3 sentence is imprecise for
+  the R3a subset. Flagged at Task 1 review as a minor wording gap; confirmed
+  still present verbatim, still open.
+- Two of the three files the ledger listed as still typing `runAppraisal`
+  inputs narrower than the full `AnyCalculatorInputs` union are confirmed
+  still narrow: `ScenariosPage.tsx` (`inputs: CalculatorInputsV3` prop type)
+  and `deal-spider.ts` (`computeSpider(inputs: CalculatorInputsV2 |
+  CalculatorInputsV3, ...)`). Both are type-only and inert today — no v4
+  document reaches either path in practice (`ScenariosPage` only ever receives
+  the calculator's own v3 state; `deal-spider` is fed via `ExportPage.tsx`'s
+  `migrateInputsToV3` call, part of the hazard above) — but they will need
+  widening to `AnyCalculatorInputs` alongside the migration-call-site fix once
+  R3b persists v4 documents. Correction to the ledger's third item: the
+  ledger's "export-memo" reference does not hold against the current repo —
+  `export-investment-memo.ts` has zero `CalculatorInputsV2`/`V3`/`V4`-specific
+  type references; it consumes `AppraisalRun.inputs`, already typed
+  `AnyCalculatorInputs` since Task 4's signature widening, and is fully
+  polymorphic across input versions today.
 
 **Pre-existing backlog (not introduced by R3a):**
 
 - mypy: 35 pre-existing errors across 11 files (re-run for this report: confirms
-  35, 17 of them in `app/persistence/repositories.py`); none in any R3a-touched
-  file (`curves.py`, `schedule.py`, `migrate.py`, `types.py` are all clean).
-  Declared but not enforced as a gate — candidate for a dedicated future task.
+  35; 17 of them in `app/persistence/` — split 9 in `repositories.py` + 8 in
+  `database.py`, not all 17 in `repositories.py` alone); none in any
+  R3a-touched file (`curves.py`, `schedule.py`, `migrate.py`, `types.py` are
+  all clean). Declared but not enforced as a gate — candidate for a dedicated
+  future task.
 - `app/api/app.py` runs `run_appraisal` before its hard-error validation check
   completes (pre-existing ordering, noted again during Task 8 review; a
   validate-then-run reorder candidate for a future task).
