@@ -762,9 +762,14 @@ export function generateInvestmentMemo(
     y = bodyText(y, 'Cost to complete: not available.');
   } else {
     const ctc = metrics.cost_to_complete;
+    // `CostToCompleteSummary.months[].month` (and `first_shortfall_month`) is already 1-indexed
+    // (cost-to-complete.ts: labels run `m = 1..term`) — unlike `model.months` in the Monthly
+    // Cashflow table above, which is 0-indexed ledger months and genuinely needs `+ 1` for
+    // display. No `+ 1` here: the UI's CostToCompleteCard renders these raw, and the PDF must
+    // match it and the underlying data exactly.
     y = bodyText(
       y,
-      `First funding shortfall: ${ctc.first_shortfall_month !== null ? `month ${ctc.first_shortfall_month + 1}` : 'none — fully funded throughout'}. Maximum shortfall: ${fmt(ctc.max_shortfall_pence)}.`,
+      `First funding shortfall: ${ctc.first_shortfall_month !== null ? `month ${ctc.first_shortfall_month}` : 'none — fully funded throughout'}. Maximum shortfall: ${fmt(ctc.max_shortfall_pence)}.`,
     );
     if (y > 220) {
       newPage();
@@ -775,7 +780,7 @@ export function generateInvestmentMemo(
       margin: { left: MARGIN_L, right: MARGIN_R },
       head: [['Month', 'Remaining Cost', 'Remaining Funding', 'Surplus']],
       body: ctc.months.map((m) => [
-        `Month ${m.month + 1}`,
+        `Month ${m.month}`,
         fmt(m.remaining_cost_pence),
         fmt(m.remaining_funding_pence),
         fmt(m.surplus_pence),

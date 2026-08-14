@@ -380,6 +380,35 @@ describe('generateInvestmentMemo', () => {
       expect(text).toContain('First funding shortfall');
     });
 
+    // CostToCompleteSummary.months[].month (and first_shortfall_month) are already 1-indexed
+    // (cost-to-complete.ts: labels run m = 1..term) — distinct from model.months, which is
+    // 0-indexed and genuinely needs "+ 1" for display (see the Monthly Cashflow table). The PDF
+    // must print these labels raw, exactly like CostToCompleteCard.tsx does in the UI, never
+    // shifted by one. Pins a known summary directly (rather than hunting for a real fixture that
+    // happens to shortfall in month 3) so the month numbers in the assertion are unambiguous.
+    it('prints cost-to-complete month labels unshifted (1-indexed, matching the UI and the data)', async () => {
+      const run = runAppraisal(fixtureG.inputs);
+      run.metrics.cost_to_complete = {
+        first_shortfall_month: 3,
+        max_shortfall_pence: 1_500_000,
+        months: [
+          { month: 1, remaining_cost_pence: 50_000_000, remaining_funding_pence: 52_000_000, surplus_pence: 2_000_000 },
+          { month: 2, remaining_cost_pence: 40_000_000, remaining_funding_pence: 41_000_000, surplus_pence: 1_000_000 },
+          { month: 3, remaining_cost_pence: 30_000_000, remaining_funding_pence: 28_500_000, surplus_pence: -1_500_000 },
+        ],
+      };
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+      expect(text).toContain('First funding shortfall: month 3');
+      expect(text).toContain('Month 1');
+      expect(text).toContain('Month 2');
+      expect(text).toContain('Month 3');
+      // Never the shifted label a copy-paste from the 0-indexed Monthly Cashflow table would
+      // produce (that table's own genuine "Month 4" cells, from unrelated 0-indexed ledger
+      // months, are expected elsewhere in the same document, so this only pins the callout text):
+      expect(text).not.toContain('First funding shortfall: month 4');
+    });
+
     it('never substitutes a number for the lender-basis figures when no lender valuation is recorded', async () => {
       const v2Inputs = baseInputs();
       const run = runAppraisal(v2Inputs);

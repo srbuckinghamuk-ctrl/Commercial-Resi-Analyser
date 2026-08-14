@@ -122,9 +122,10 @@ export default function ConversionCalculator({ project }: Props) {
     setSaving(true);
     setSaveError(null);
     try {
-      // inputs_snapshot is always v2; the seven client metric fields are
-      // used server-side ONLY to record mismatches for audit -- the server
-      // always recalculates and persists its own values (Task 12).
+      // inputs_snapshot is always v3 (Task 8: this component's state is v3-native, adding
+      // the optional lender_valuation block); the seven client metric fields are used
+      // server-side ONLY to record mismatches for audit -- the server always recalculates
+      // and persists its own values (Task 12).
       const payload: FinancialAppraisalCreate = {
         project_id: project.id,
         name: `Appraisal — ${project.address_raw}`,
