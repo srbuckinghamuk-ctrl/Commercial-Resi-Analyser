@@ -8,7 +8,7 @@ from typing import Callable
 from .engine import MonthlyModel
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
-from .types import AnyCalculatorInputs, CalculatorInputsV3
+from .types import AnyCalculatorInputs
 
 
 @dataclass
@@ -150,10 +150,14 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         warn("finance", "Facility terms were migrated from a legacy appraisal and require confirmation.")
 
     # Lender-underwritten GDV (spec Sec 3.2, Release 2b Task 3). Only present on
-    # v3 inputs; v2 callers have no lender_valuation field at all and skip this
-    # block entirely.
-    if isinstance(inputs, CalculatorInputsV3) and inputs.lender_valuation is not None:
-        lv = inputs.lender_valuation
+    # v3/v4 inputs; v2 callers have no lender_valuation field at all and skip this
+    # block entirely. `getattr(..., None)` is this module's one version-dispatch
+    # idiom (see the programme/sales_phasing/refinance checks below) and is the
+    # closest Python analogue of validation.ts's structural `'x' in inputs` test:
+    # it keys on the field actually being there rather than on a class identity
+    # that a future input version might not inherit.
+    lv = getattr(inputs, "lender_valuation", None)
+    if lv is not None:
         if lv.reason.strip() == "":
             err("lender_valuation.reason", "Lender valuation reason is required.")
         if lv.author.strip() == "":

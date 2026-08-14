@@ -83,6 +83,73 @@ def test_migrate_inputs_to_v4_normalises_v1_v2_v3_and_v4_snapshots():
         CalculatorInputsV4.model_validate(out)
 
 
+class TestV3SnapshotsMergeOntoDefaults:
+    """migrateInputsToV4 routes a v3 snapshot through migrateInputsToV3, whose isV3
+    branch merges it onto v3 defaults field-by-field (migrate.ts:159-186) BEFORE the v4
+    stamp. A v3 row saved before a field existed must therefore be default-filled, not
+    passed through with the field missing. Same nine merge groups as the TS branch."""
+
+    @staticmethod
+    def _partial_v3() -> dict:
+        """A v3 row that predates two schema additions: no deal_spider.weights at all,
+        and a scenarios map missing `upside` entirely."""
+        v3 = _v3()
+        del v3["deal_spider"]["weights"]
+        del v3["scenarios"]["upside"]
+        return v3
+
+    def test_absent_nested_fields_are_seeded_with_the_same_defaults_ts_would_use(self):
+        defaults = _v3()
+        v4 = migrate_inputs_to_v4(self._partial_v3())
+
+        assert v4["inputs_version"] == 4
+        # deal_spider.weights: TS spreads defaults.deal_spider.weights under the saved
+        # (absent) map -- so the full nine-axis default set survives, not `{}`.
+        assert v4["deal_spider"]["weights"] == defaults["deal_spider"]["weights"]
+        assert len(v4["deal_spider"]["weights"]) == 9
+        # scenarios.upside: each of the four keys is spread over its own default.
+        assert v4["scenarios"]["upside"] == defaults["scenarios"]["upside"]
+        # and the surviving keys are untouched
+        assert v4["scenarios"]["base"] == defaults["scenarios"]["base"]
+
+    def test_the_merged_document_survives_the_strict_v4_boundary_model(self):
+        """Without the merge this raises: Scenarios requires `upside`, so the bare
+        passthrough would 422 at the API boundary instead of default-filling."""
+        v4 = CalculatorInputsV4.model_validate(migrate_inputs_to_v4(self._partial_v3()))
+        assert len(v4.deal_spider.weights) == 9
+        assert v4.scenarios.upside.label == "Upside"
+
+    def test_saved_values_still_win_over_defaults(self):
+        """The merge must not clobber what the row actually stored."""
+        v3 = _v3()
+        v3["deal_spider"]["weights"] = {"programme": 5}
+        v3["acquisition"]["purchase_price_pence"] = 12_345_600
+        v3["scenarios"]["downside"]["gdv_adjustment_pct"] = -42
+        v4 = migrate_inputs_to_v4(v3)
+
+        assert v4["deal_spider"]["weights"]["programme"] == 5
+        # ...while the other eight axes are still seeded from defaults (TS spreads, it
+        # does not replace, the weights map).
+        assert len(v4["deal_spider"]["weights"]) == 9
+        assert v4["acquisition"]["purchase_price_pence"] == 12_345_600
+        assert v4["scenarios"]["downside"]["gdv_adjustment_pct"] == -42
+
+    def test_a_complete_v3_document_is_unchanged_by_the_merge(self):
+        """Identity guard: the merge must be a no-op for a v3 document that already
+        carries every field -- which is every golden fixture."""
+        v3 = _v3()
+        v4 = migrate_inputs_to_v4(v3)
+        added = ("inputs_version", "programme", "sales_phasing", "refinance")
+        assert {k: v for k, v in v4.items() if k not in added} == {
+            k: v for k, v in v3.items() if k != "inputs_version"
+        }
+
+    def test_lender_valuation_defaults_to_none_not_absent(self):
+        v3 = _v3()
+        del v3["lender_valuation"]
+        assert migrate_inputs_to_v4(v3)["lender_valuation"] is None
+
+
 def test_preserves_a_saved_programme_block_on_a_v4_round_trip():
     v4 = migrate_inputs_to_v4({})
     v4["programme"] = PROGRAMME

@@ -465,21 +465,92 @@ def migrate_v3_to_v4(doc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_saved_onto_defaults(
+    defaults: dict[str, Any], saved: dict[str, Any],
+) -> dict[str, Any]:
+    """The nine field-by-field merge groups shared by migrateInputsToV3's isV3
+    branch (migrate.ts:159-186) and migrateInputsToV4's isV4 branch. The two are
+    byte-identical in TS apart from the version stamp and the extra v4 blocks, so
+    they are one helper here rather than two copies that could drift apart.
+
+    Semantics mirrored exactly: dict-valued groups spread saved OVER defaults (so a
+    field added to the schema after the row was saved is default-filled instead of
+    missing); list/opaque groups use `??`, i.e. `_coalesce`, so a genuinely empty
+    saved list survives instead of being replaced by the default one. Callers stamp
+    `inputs_version` themselves.
+    """
+    return {
+        **defaults,
+        **saved,
+        "acquisition": {**defaults["acquisition"], **(saved.get("acquisition") or {})},
+        "unit_mix": _coalesce(saved.get("unit_mix"), defaults["unit_mix"]),
+        "conversion_costs": {
+            **defaults["conversion_costs"], **(saved.get("conversion_costs") or {}),
+        },
+        "finance": {**defaults["finance"], **(saved.get("finance") or {})},
+        "equity_sources": _coalesce(saved.get("equity_sources"), defaults["equity_sources"]),
+        "exit_strategy": {**defaults["exit_strategy"], **(saved.get("exit_strategy") or {})},
+        "risks": _coalesce(saved.get("risks"), defaults["risks"]),
+        "scenarios": {
+            key: {
+                **defaults["scenarios"][key],
+                **((saved.get("scenarios") or {}).get(key) or {}),
+            }
+            for key in ("base", "upside", "downside", "severe")
+        },
+        "deal_spider": {
+            **defaults["deal_spider"],
+            **(saved.get("deal_spider") or {}),
+            "weights": {
+                **defaults["deal_spider"]["weights"],
+                **((saved.get("deal_spider") or {}).get("weights") or {}),
+            },
+        },
+        "lender_valuation": saved.get("lender_valuation"),
+    }
+
+
+def migrate_inputs_to_v3(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalises any stored snapshot (v1, v2 or v3) to v3. Port of
+    migrateInputsToV3.
+
+    v1/v2 snapshots route through the existing migrate_inputs() +
+    migrate_v2_to_v3() chain unchanged. A v3 snapshot is merged onto v3 defaults
+    field-by-field (mirroring migrate_inputs' own v2-merge branch) so fields added
+    to the schema after the snapshot was saved get sane defaults instead of being
+    absent, rather than being routed through the v1 fallback path (which would
+    misread a v3 `finance` object as v1-shaped and silently produce garbage
+    facility terms).
+
+    Without this merge a v3 row saved before a field existed would either fail
+    validation at the boundary (a missing `scenarios` key) or under-fill silently
+    (an absent `deal_spider.weights` collapsing to `{}`) -- neither of which the
+    TS engine does.
+    """
+    if is_v3(snapshot):
+        defaults = migrate_v2_to_v3(default_calculator_inputs_v2(project))
+        return {**_merge_saved_onto_defaults(defaults, snapshot), "inputs_version": 3}
+    return migrate_v2_to_v3(migrate_inputs(snapshot, project).model_dump(mode="json"))
+
+
 def migrate_inputs_to_v4(
     snapshot: dict[str, Any], project: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normalises any stored snapshot (v1, v2, v3 or v4) to v4 -- the shape
     every Release 3a consumer needs. Port of migrateInputsToV4.
 
-    v1/v2 snapshots route through the existing migrate_inputs() +
-    migrate_v2_to_v3() + migrate_v3_to_v4() chain unchanged; a v3 snapshot is
-    upgraded in place (it is already a normalised document -- this is the same
-    passthrough app.py performed for v3 before this function existed).
-
     A v4 snapshot is merged onto v4 defaults field-by-field (mirroring
     migrate_inputs' own v2-merge branch) so fields added to the schema after
     the snapshot was saved get sane defaults instead of being absent, rather
     than being routed through the v1 fallback path.
+
+    Every pre-v4 snapshot (v1, v2 AND v3) goes through migrate_inputs_to_v3
+    first, exactly as migrateInputsToV4 does. In particular a v3 snapshot is
+    NOT stamped straight to v4: it gets the same merge-onto-defaults treatment
+    a v4 one does, so a v3 row missing a field the schema has since gained is
+    default-filled rather than 422-ing or under-filling at the boundary.
 
     Returns a plain dict, like migrate_v2_to_v3 and unlike migrate_inputs:
     Pydantic validation of the result belongs at the boundary (app.py), which
@@ -487,41 +558,11 @@ def migrate_inputs_to_v4(
     """
     if is_v4(snapshot):
         defaults = migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project)))
-        saved = snapshot
         return {
-            **defaults,
-            **saved,
+            **_merge_saved_onto_defaults(defaults, snapshot),
             "inputs_version": 4,
-            "acquisition": {**defaults["acquisition"], **(saved.get("acquisition") or {})},
-            "unit_mix": _coalesce(saved.get("unit_mix"), defaults["unit_mix"]),
-            "conversion_costs": {
-                **defaults["conversion_costs"], **(saved.get("conversion_costs") or {}),
-            },
-            "finance": {**defaults["finance"], **(saved.get("finance") or {})},
-            "equity_sources": _coalesce(saved.get("equity_sources"), defaults["equity_sources"]),
-            "exit_strategy": {**defaults["exit_strategy"], **(saved.get("exit_strategy") or {})},
-            "risks": _coalesce(saved.get("risks"), defaults["risks"]),
-            "scenarios": {
-                key: {
-                    **defaults["scenarios"][key],
-                    **((saved.get("scenarios") or {}).get(key) or {}),
-                }
-                for key in ("base", "upside", "downside", "severe")
-            },
-            "deal_spider": {
-                **defaults["deal_spider"],
-                **(saved.get("deal_spider") or {}),
-                "weights": {
-                    **defaults["deal_spider"]["weights"],
-                    **((saved.get("deal_spider") or {}).get("weights") or {}),
-                },
-            },
-            "lender_valuation": saved.get("lender_valuation"),
-            "programme": saved.get("programme"),
-            "sales_phasing": saved.get("sales_phasing"),
-            "refinance": saved.get("refinance"),
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
         }
-    if is_v3(snapshot):
-        return migrate_v3_to_v4(snapshot)
-    v2 = migrate_inputs(snapshot, project).model_dump(mode="json")
-    return migrate_v3_to_v4(migrate_v2_to_v3(v2))
+    return migrate_v3_to_v4(migrate_inputs_to_v3(snapshot, project))

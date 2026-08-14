@@ -167,6 +167,32 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert body["outputs"]["metrics"]["calc_version"] == "2.1.0"
 
 
+async def test_partial_v3_snapshot_is_merged_onto_defaults_not_rejected(client, project):
+    """The server's normalisation chain routes v3 snapshots through
+    migrate_inputs_to_v3's merge branch (TS parity: migrateInputsToV4 ->
+    migrateInputsToV3). A stored v3 row that predates a schema addition -- here a
+    missing `scenarios.upside` -- must be default-filled and accepted, not 422'd.
+    Before the merge landed this returned 422 from the CalculatorInputsV4 boundary."""
+    partial_v3 = fixture_a_inputs()
+    del partial_v3["scenarios"]["upside"]
+    del partial_v3["deal_spider"]["weights"]
+
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Partial v3 appraisal",
+        "inputs_snapshot": partial_v3,
+    })
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    snapshot = body["inputs_snapshot"]
+    assert snapshot["inputs_version"] == 4
+    assert snapshot["scenarios"]["upside"]["label"] == "Upside"
+    assert len(snapshot["deal_spider"]["weights"]) == 9
+    # A v3 row is not a legacy v1 migration -- it must not be stamped as one.
+    assert body["status"] != "legacy_unreconciled"
+
+
 async def test_malformed_v2_snapshot_migrates_to_legacy_unreconciled(client, project):
     """M4 (round-2 review): `was_v1` must use the same `is_v2` predicate as
     migrate.py, not a bare `inputs_version == 2` check. A snapshot claiming
