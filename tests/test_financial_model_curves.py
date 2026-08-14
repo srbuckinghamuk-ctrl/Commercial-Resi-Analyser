@@ -4,13 +4,15 @@ Same-inputs/same-expected cross-language parity: every expected array below is
 byte-identical to the TS table, so a float-arithmetic divergence between the two
 engines shows up here rather than three layers down in a golden fixture.
 """
+import pytest
+
 from app.financial_model.curves import (
     spread_back_loaded,
     spread_by_curve,
     spread_s_curve,
     spread_user_defined,
 )
-from app.financial_model.types import SimpleSpendCurve, UserDefinedSpendCurve
+from app.financial_model.types import SimpleSpendCurve, SpendCurve, UserDefinedSpendCurve
 
 
 class TestSpreadSCurve:
@@ -64,3 +66,53 @@ class TestSpreadByCurve:
             40_000, 2, UserDefinedSpendCurve(kind="user_defined", weights=[1, 3]),
         ) == [10_000, 30_000]
         assert spread_by_curve(60_000_000, 6, SimpleSpendCurve(kind="s_curve"))[2] == 15_000_000
+
+
+# Release 3a Task 9 (spec Sec 6.1, calc 2.2.0): every spend-curve kind, exercised across a
+# small matrix of (total, D) pairs chosen to be awkward for integer rounding -- prime
+# month-counts, a prime total, and a total smaller than the month-count -- must still
+# satisfy the two properties every curve promises regardless of kind (exact-sum, length),
+# with the two ramp kinds (s_curve, back_loaded) additionally promising a non-decreasing
+# cumulative spend (spec Sec 6.1's "no month gives back money" invariant). Same cases,
+# same order as invariants.test.ts's mirror block, so the parity count grows symmetrically.
+def _curve_for_kind(kind: str, months: int) -> SpendCurve:
+    if kind == "user_defined":
+        return UserDefinedSpendCurve(kind="user_defined", weights=[i + 1 for i in range(months)])
+    return SimpleSpendCurve(kind=kind)
+
+
+_CURVE_KINDS = ["straight_line", "s_curve", "back_loaded", "user_defined"]
+_CURVE_MATRIX_CASES = [
+    (999_999, 7),       # prime D, non-divisible total
+    (1, 13),            # prime D, total smaller than D
+    (100_000_007, 11),  # prime total, prime D
+    (1_234_567, 17),    # prime D
+    (7, 3),             # small awkward total
+]
+
+
+_CASE_IDS = [f"total={t}-D={d}" for t, d in _CURVE_MATRIX_CASES]
+
+
+@pytest.mark.parametrize("kind", _CURVE_KINDS)
+@pytest.mark.parametrize("total,months", _CURVE_MATRIX_CASES, ids=_CASE_IDS)
+class TestCurveMatrixExactSumAndLength:
+    def test_sums_exactly_to_total_and_has_length_d(self, kind: str, total: int, months: int) -> None:
+        out = spread_by_curve(total, months, _curve_for_kind(kind, months))
+        assert len(out) == months
+        assert sum(out) == total
+
+
+# Only s_curve/back_loaded promise a non-decreasing cumulative -- straight_line and
+# user_defined are not restricted to monotone weights, so (mirroring invariants.test.ts,
+# which never generates that it() for those two kinds) no test case exists for them here.
+@pytest.mark.parametrize("kind", ["s_curve", "back_loaded"])
+@pytest.mark.parametrize("total,months", _CURVE_MATRIX_CASES, ids=_CASE_IDS)
+class TestCurveMatrixMonotonicCumulative:
+    def test_cumulative_spend_is_non_decreasing(self, kind: str, total: int, months: int) -> None:
+        out = spread_by_curve(total, months, _curve_for_kind(kind, months))
+        cumulative = 0
+        for month_pence in out:
+            next_cumulative = cumulative + month_pence
+            assert next_cumulative >= cumulative
+            cumulative = next_cumulative

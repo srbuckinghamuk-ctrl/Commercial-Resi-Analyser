@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.1.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.2.0`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -69,7 +69,7 @@ ledger) both went through spec → fixture (with hand derivation) → both engin
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.1.0"`
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.2.0"`
   (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
   `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
   Outputs are only comparable within one `calc_version` — a report or comparison spanning two
@@ -82,7 +82,7 @@ Two independent version numbers travel with every appraisal document:
   persistence, so the stored document is never left in an older shape after a save.
 
 `calc_version` and `inputs_version` are independent axes: a v3-shaped input document is always
-what calc `2.1.0` consumes; no older-shaped input reaches the engines without migration.
+what calc `2.2.0` consumes; no older-shaped input reaches the engines without migration.
 
 ## 4. Status lifecycle
 

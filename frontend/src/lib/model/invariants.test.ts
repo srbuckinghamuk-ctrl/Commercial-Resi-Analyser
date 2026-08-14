@@ -4,16 +4,36 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
+import { migrateInputsToV4 } from './migrate';
+import { spreadByCurve } from './curves';
+import type {
+  AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, ProgrammeInputs, SpendCurve,
+} from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json'))
   .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as { name: string; inputs: CalculatorInputsV3 });
 
+// Release 3a Task 9: a generic programme fitted to any term_months, sitting well
+// inside the spec §6 window bound (finish by term-2) — every package starts at
+// month 0, so it stays valid even for a short term rather than assuming term=12.
+function programmeForTerm(termMonths: number): ProgrammeInputs {
+  const term = Math.max(1, Math.floor(termMonths));
+  const cap = Math.max(1, term - 2);
+  return {
+    anchor_month: null,
+    packages: {
+      construction: { start_offset: 0, duration_months: Math.min(6, cap), curve: { kind: 's_curve' } },
+      professional: { start_offset: 0, duration_months: Math.min(3, cap), curve: { kind: 'straight_line' } },
+      statutory: { start_offset: 0, duration_months: Math.min(2, cap), curve: { kind: 'back_loaded' } },
+    },
+  };
+}
+
 // Variants derived from each fixture to widen coverage without new hand calcs.
 function variants(
   inputs: CalculatorInputsV2 | CalculatorInputsV3,
-): Array<{ label: string; inputs: CalculatorInputsV2 | CalculatorInputsV3 }> {
+): Array<{ label: string; inputs: AnyCalculatorInputs }> {
   const clone = () => JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV2 | CalculatorInputsV3;
   const retained = clone();
   retained.exit_strategy.route = 'retain_all';
@@ -21,11 +41,17 @@ function variants(
   serviced.finance.interest_type = 'serviced';
   const shortTerm = clone();
   shortTerm.finance.term_months = 1;
+  // Release 3a Task 9: a programme variant so every existing ledger invariant in this
+  // file's top describe block also exercises the dated-programme path (spec §6.1),
+  // not just fixture H's hand-authored one.
+  const programmed = migrateInputsToV4(clone() as unknown as Record<string, unknown>);
+  programmed.programme = programmeForTerm(programmed.finance.term_months);
   return [
     { label: 'base', inputs },
     { label: 'retain_all', inputs: retained },
     { label: 'serviced', inputs: serviced },
     { label: 'term=1', inputs: shortTerm },
+    { label: 'programme', inputs: programmed },
   ];
 }
 
@@ -42,6 +68,14 @@ describe('model invariants hold for every fixture and variant', () => {
               + m.interest_capitalised_pence - m.repayment_pence);
             expect(m.closing_balance_pence).toBeGreaterThanOrEqual(0);
           }
+        });
+
+        // Release 3a Task 9: sources = uses is an unconditional accounting identity
+        // (validation.ts reconcile()), not just true "when fully realised" — this closes
+        // the gap where only the fullyRealised profit-identity test below exercised it,
+        // and is exactly what surfaces a programme mis-wiring in buildSchedule.
+        it('sources equal uses unconditionally (spec §7)', () => {
+          expect(run.reconciliation.sources_equal_uses).toBe(true);
         });
 
         it('peak debt equals the maximum monthly pre-repayment balance', () => {
@@ -95,6 +129,54 @@ describe('model invariants hold for every fixture and variant', () => {
             + run.model.totals.exit_fee_pence + run.model.totals.capitalised_fees_pence);
         });
       });
+    }
+  }
+});
+
+// Release 3a Task 9 (spec §6.1, calc 2.2.0): every spend-curve kind, exercised across a
+// small matrix of (total, D) pairs chosen to be awkward for integer rounding — prime
+// month-counts, a prime total, and a total smaller than the month-count — must still
+// satisfy the two properties every curve promises regardless of kind (exact-sum, length),
+// with the two ramp kinds (s_curve, back_loaded) additionally promising a non-decreasing
+// cumulative spend (spec §6.1's "no month gives back money" invariant).
+function curveForKind(kind: SpendCurve['kind'], months: number): SpendCurve {
+  if (kind === 'user_defined') {
+    return { kind, weights: Array.from({ length: months }, (_, i) => i + 1) };
+  }
+  return { kind };
+}
+
+const CURVE_KINDS: Array<SpendCurve['kind']> = ['straight_line', 's_curve', 'back_loaded', 'user_defined'];
+const CURVE_MATRIX_CASES: Array<{ total: number; months: number }> = [
+  { total: 999_999, months: 7 },      // prime D, non-divisible total
+  { total: 1, months: 13 },           // prime D, total smaller than D
+  { total: 100_000_007, months: 11 }, // prime total, prime D
+  { total: 1_234_567, months: 17 },   // prime D
+  { total: 7, months: 3 },            // small awkward total
+];
+
+describe('spend-curve matrix — exact-sum, length, monotonic cumulative (spec §6.1, calc 2.2.0)', () => {
+  for (const kind of CURVE_KINDS) {
+    for (const { total, months } of CURVE_MATRIX_CASES) {
+      const label = `${kind} total=${total} D=${months}`;
+
+      it(`${label}: sums exactly to total and has length D`, () => {
+        const out = spreadByCurve(total, months, curveForKind(kind, months));
+        expect(out).toHaveLength(months);
+        expect(out.reduce((a, b) => a + b, 0)).toBe(total);
+      });
+
+      if (kind === 's_curve' || kind === 'back_loaded') {
+        it(`${label}: cumulative spend is non-decreasing`, () => {
+          const out = spreadByCurve(total, months, curveForKind(kind, months));
+          let cumulative = 0;
+          for (const monthPence of out) {
+            const next = cumulative + monthPence;
+            expect(next).toBeGreaterThanOrEqual(cumulative);
+            cumulative = next;
+          }
+        });
+      }
     }
   }
 });

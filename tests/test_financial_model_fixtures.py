@@ -7,7 +7,15 @@ from app.financial_model import AppraisalRun, run_appraisal
 from app.financial_model.engine import exit_fee_amount
 from app.financial_model.metrics import pct
 from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v4
-from app.financial_model.types import AnyCalculatorInputs, parse_calculator_inputs
+from app.financial_model.types import (
+    AnyCalculatorInputs,
+    CalculatorInputsV4,
+    ProgrammeInputs,
+    ProgrammePackage,
+    ProgrammePackages,
+    SimpleSpendCurve,
+    parse_calculator_inputs,
+)
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
@@ -98,21 +106,52 @@ def test_invariants(path: Path) -> None:
     assert run.reconciliation.sources_equal_uses
 
 
+def _programme_for_term(term_months: int) -> ProgrammeInputs:
+    """Port of invariants.test.ts's `programmeForTerm`: a generic programme fitted to
+    any term_months, sitting well inside the spec Sec 6 window bound (finish by
+    term-2) -- every package starts at month 0, so it stays valid even for a short
+    term rather than assuming term=12."""
+    term = max(1, int(term_months))
+    cap = max(1, term - 2)
+    return ProgrammeInputs(
+        anchor_month=None,
+        packages=ProgrammePackages(
+            construction=ProgrammePackage(
+                start_offset=0, duration_months=min(6, cap), curve=SimpleSpendCurve(kind="s_curve"),
+            ),
+            professional=ProgrammePackage(
+                start_offset=0, duration_months=min(3, cap), curve=SimpleSpendCurve(kind="straight_line"),
+            ),
+            statutory=ProgrammePackage(
+                start_offset=0, duration_months=min(2, cap), curve=SimpleSpendCurve(kind="back_loaded"),
+            ),
+        ),
+    )
+
+
 def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalculatorInputs]]:
-    """Mirrors invariants.test.ts's `variants()`: four derived transformations of each
+    """Mirrors invariants.test.ts's `variants()`: derived transformations of each
     fixture, widening coverage without new hand calcs. Each variant is deep-copied off
-    the base `inputs` so mutating one never leaks into another (or into the base)."""
+    the base `inputs` so mutating one never leaks into another (or into the base).
+
+    Release 3a Task 9 adds a fifth, "programme", variant so every ledger invariant
+    below also exercises the dated-programme path (spec Sec 6.1), not just fixture
+    H's hand-authored one -- mirroring invariants.test.ts's own addition."""
     retained = inputs.model_copy(deep=True)
     retained.exit_strategy.route = "retain_all"
     serviced = inputs.model_copy(deep=True)
     serviced.finance.interest_type = "serviced"
     short_term = inputs.model_copy(deep=True)
     short_term.finance.term_months = 1
+    programmed = parse_calculator_inputs(migrate_inputs_to_v4(inputs.model_dump(mode="json")))
+    assert isinstance(programmed, CalculatorInputsV4)
+    programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
         ("retain_all", retained),
         ("serviced", serviced),
         ("term=1", short_term),
+        ("programme", programmed),
     ]
 
 
@@ -152,6 +191,17 @@ class TestInvariantMatrix:
                 + m.interest_capitalised_pence - m.repayment_pence
             )
             assert m.closing_balance_pence >= 0
+
+    def test_sources_equal_uses_unconditionally(
+        self, stem: str, label: str, inputs: AnyCalculatorInputs,
+    ) -> None:
+        """Release 3a Task 9 (spec Sec 7): sources = uses is an unconditional accounting
+        identity (validation.reconcile()), not just true "when fully realised" -- this
+        closes the gap where only the fully-realised profit-identity test below
+        exercised it, and is exactly what surfaces a programme mis-wiring in
+        build_schedule."""
+        run = run_appraisal(inputs)
+        assert run.reconciliation.sources_equal_uses is True
 
     def test_peak_debt_equals_the_maximum_monthly_pre_repayment_balance(
         self, stem: str, label: str, inputs: AnyCalculatorInputs,
