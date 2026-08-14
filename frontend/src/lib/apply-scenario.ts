@@ -1,17 +1,19 @@
 import type { ScenarioOverrides } from './conversion-types';
-import type { CalculatorInputsV2, CalculatorInputsV3 } from './model/finance-types';
+import type { AnyCalculatorInputs } from './model/finance-types';
 
 /**
- * Applies a scenario's GDV / cost / timeline / rate adjustments to a v2 or v3
- * inputs document, returning the same version it was given (Task 8: callers
- * now hold v3 state and still need `lender_valuation`/`inputs_version`
+ * Applies a scenario's GDV / cost / timeline / rate adjustments to a v2, v3
+ * or v4 inputs document, returning the same version it was given (Task 8:
+ * callers now hold v3 state and still need `lender_valuation`/`inputs_version`
  * carried through unchanged, exactly like every other field this function
- * doesn't touch). The committed facility (`committed_net_facility_pence`,
+ * doesn't touch; Release 3a Task 4 widened this further to v4, whose extra
+ * `programme`/`sales_phasing`/`refinance` fields likewise pass through
+ * untouched). The committed facility (`committed_net_facility_pence`,
  * `committed_gross_facility_pence`, `day_one_advance_pence`) and
  * `equity_sources` are held fixed — a scenario stresses the deal's
  * assumptions, not the lender's commitment or the capital already raised.
  */
-export function applyScenario<T extends CalculatorInputsV2 | CalculatorInputsV3>(
+export function applyScenario<T extends AnyCalculatorInputs>(
   inputs: T,
   overrides: ScenarioOverrides,
 ): T {

@@ -1,5 +1,5 @@
 import type {
-  AppraisalResultV2, CalculatorInputsV2, CalculatorInputsV3, MonthlyModel, Schedule,
+  AnyCalculatorInputs, AppraisalResultV2, MonthlyModel, Schedule,
 } from './finance-types';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
@@ -15,7 +15,7 @@ export interface AppraisalRun {
   // check (present on v3 only) or, more simply, deriveMetrics()' own
   // lender_gdv_pence/ltgdv_lender_pct/etc. outputs on `run.metrics`, which are
   // already null for v2 callers and never need that check at the read site.
-  inputs: CalculatorInputsV2 | CalculatorInputsV3;
+  inputs: AnyCalculatorInputs;
   schedule: Schedule;
   model: MonthlyModel;
   metrics: AppraisalResultV2;
@@ -28,7 +28,7 @@ export interface AppraisalRun {
  * §3.2) documents — v2 callers get lender-basis metrics as null (spec §2:
  * unknown lender-critical inputs are never silently defaulted), exactly as
  * they did before the block existed. */
-export function runAppraisal(inputs: CalculatorInputsV2 | CalculatorInputsV3): AppraisalRun {
+export function runAppraisal(inputs: AnyCalculatorInputs): AppraisalRun {
   const schedule = buildSchedule(inputs);
   const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
   const metrics = deriveMetrics(inputs, schedule, model);

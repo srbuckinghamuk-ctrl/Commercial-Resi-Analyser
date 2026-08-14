@@ -1,4 +1,4 @@
-import type { CalculatorInputsV3 } from './finance-types';
+import type { CalculatorInputsV3, CalculatorInputsV4 } from './finance-types';
 
 /** Sq ft per sq m (spec §3.2 `global_per_sqft` basis). No shared constant existed
  * for this anywhere the financial model could import from without creating a new
@@ -31,7 +31,7 @@ export interface LenderGdvResult {
  * `runAppraisal` outright (metrics runs before validation in the pipeline, so
  * validation hasn't had a chance to report anything yet at that point).
  */
-export function computeLenderGdv(inputs: CalculatorInputsV3): LenderGdvResult | null {
+export function computeLenderGdv(inputs: CalculatorInputsV3 | CalculatorInputsV4): LenderGdvResult | null {
   const lv = inputs.lender_valuation;
   if (lv == null) return null;
 

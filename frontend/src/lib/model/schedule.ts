@@ -1,7 +1,8 @@
-import type { CalculatorInputsV2, CalculatorInputsV3, MonthReceipts, MonthUses, Schedule } from './finance-types';
+import type { AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, Schedule } from './finance-types';
 import {
   calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost,
 } from '../conversion-calc-engine';
+import { spreadByCurve } from './curves';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -23,7 +24,7 @@ function emptyReceipts(): MonthReceipts {
   return { gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0 };
 }
 
-export function buildSchedule(inputs: CalculatorInputsV2 | CalculatorInputsV3): Schedule {
+export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const cc = inputs.conversion_costs;
   const units = inputs.unit_mix.units;
@@ -44,19 +45,34 @@ export function buildSchedule(inputs: CalculatorInputsV2 | CalculatorInputsV3): 
   uses[0].acquisition_pence = acquisitionTotal;
   uses[0].statutory_pence += priorApproval;
 
-  if (term === 1) {
-    uses[0].construction_pence = constructionTotal;
-    uses[0].professional_pence = professionalTotal;
-    uses[0].statutory_pence += statutorySpreadTotal;
+  const programme = 'programme' in inputs ? inputs.programme : null;
+
+  if (programme == null) {
+    // auto windows — calc 2.1.0 behaviour, byte-identical (spec §6)
+    if (term === 1) {
+      uses[0].construction_pence = constructionTotal;
+      uses[0].professional_pence = professionalTotal;
+      uses[0].statutory_pence += statutorySpreadTotal;
+    } else {
+      const constructionWindow = Math.max(1, term - 2); // months 1..constructionWindow
+      const professionalWindow = Math.max(1, Math.ceil(constructionWindow / 2));
+      const constructionSpread = spreadStraightLine(constructionTotal, constructionWindow);
+      const professionalSpread = spreadStraightLine(professionalTotal, professionalWindow);
+      const statutorySpread = spreadStraightLine(statutorySpreadTotal, professionalWindow);
+      constructionSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].construction_pence += v; });
+      professionalSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].professional_pence += v; });
+      statutorySpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].statutory_pence += v; });
+    }
   } else {
-    const constructionWindow = Math.max(1, term - 2); // months 1..constructionWindow
-    const professionalWindow = Math.max(1, Math.ceil(constructionWindow / 2));
-    const constructionSpread = spreadStraightLine(constructionTotal, constructionWindow);
-    const professionalSpread = spreadStraightLine(professionalTotal, professionalWindow);
-    const statutorySpread = spreadStraightLine(statutorySpreadTotal, professionalWindow);
-    constructionSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].construction_pence += v; });
-    professionalSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].professional_pence += v; });
-    statutorySpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].statutory_pence += v; });
+    // explicit programme (spec §6.1); windows validated in validation.ts —
+    // the Math.min clamp is belt-and-braces, mirroring the auto path.
+    const place = (pkg: ProgrammePackage, total: number, add: (m: number, v: number) => void) => {
+      spreadByCurve(total, pkg.duration_months, pkg.curve)
+        .forEach((v, i) => add(Math.min(pkg.start_offset + i, term - 1), v));
+    };
+    place(programme.packages.construction, constructionTotal, (m, v) => { uses[m].construction_pence += v; });
+    place(programme.packages.professional, professionalTotal, (m, v) => { uses[m].professional_pence += v; });
+    place(programme.packages.statutory, statutorySpreadTotal, (m, v) => { uses[m].statutory_pence += v; });
   }
 
   // Exit: which units sell?

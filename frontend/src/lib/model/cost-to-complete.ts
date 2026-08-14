@@ -1,5 +1,5 @@
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, CostToCompleteSummary, MonthlyModel, Schedule,
+  AnyCalculatorInputs, CostToCompleteSummary, MonthlyModel, Schedule,
 } from './finance-types';
 
 /** Cost-to-complete (spec §5.10), on the straight-line schedule.
@@ -13,13 +13,13 @@ import type {
  * `remaining_cost(m) === remaining_cost(m + 1) + cost(month m + 1)` and the boundary identity
  * `remaining_cost(1) === total cost − month-0 spend`, both pinned by worksheet tests.
  *
- * `inputs` is typed as the `CalculatorInputsV2 | CalculatorInputsV3` union (not the narrower
+ * `inputs` is typed as the `AnyCalculatorInputs` union (not the narrower
  * `CalculatorInputsV3` the task brief's interface sketch used) because only `equity_sources` is
- * read here — a field common to both input versions — and `deriveMetrics` (the sole caller)
+ * read here — a field common to all input versions — and `deriveMetrics` (the sole caller)
  * itself carries that same union; narrowing to V3 would not type-check at the real call site.
  */
 export function computeCostToComplete(
-  schedule: Schedule, model: MonthlyModel, inputs: CalculatorInputsV2 | CalculatorInputsV3,
+  schedule: Schedule, model: MonthlyModel, inputs: AnyCalculatorInputs,
 ): CostToCompleteSummary {
   const term = schedule.term_months;
   // Spec §2: only cash-classified, non-rejected equity sources are committed funding —

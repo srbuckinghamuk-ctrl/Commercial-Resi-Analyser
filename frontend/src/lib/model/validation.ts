@@ -1,4 +1,4 @@
-import type { CalculatorInputsV2, CalculatorInputsV3, MonthlyModel, Schedule } from './finance-types';
+import type { AnyCalculatorInputs, MonthlyModel, Schedule } from './finance-types';
 import { computeLenderGdv } from './lender-valuation';
 
 export interface ValidationIssue {
@@ -18,7 +18,7 @@ export interface ReconciliationStatus {
   issues: ValidationIssue[];
 }
 
-const NON_NEGATIVE_MONEY: Array<[string, (i: CalculatorInputsV2 | CalculatorInputsV3) => number]> = [
+const NON_NEGATIVE_MONEY: Array<[string, (i: AnyCalculatorInputs) => number]> = [
   ['acquisition.purchase_price_pence', (i) => i.acquisition.purchase_price_pence],
   ['acquisition.legal_fees_pence', (i) => i.acquisition.legal_fees_pence],
   ['acquisition.survey_cost_pence', (i) => i.acquisition.survey_cost_pence],
@@ -38,7 +38,7 @@ const NON_NEGATIVE_MONEY: Array<[string, (i: CalculatorInputsV2 | CalculatorInpu
   ['exit_strategy.selling_legal_fee_pence', (i) => i.exit_strategy.selling_legal_fee_pence],
 ];
 
-export function validateInputs(inputs: CalculatorInputsV2 | CalculatorInputsV3): ValidationIssue[] {
+export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
   const warn = (field: string, message: string) => issues.push({ severity: 'warning', field, message });
@@ -161,7 +161,7 @@ export function validateInputs(inputs: CalculatorInputsV2 | CalculatorInputsV3):
 }
 
 export function reconcile(
-  inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
+  inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ): ReconciliationStatus {
   const issues: ValidationIssue[] = [];
 

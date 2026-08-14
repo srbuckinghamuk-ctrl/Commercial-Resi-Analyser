@@ -1,5 +1,5 @@
 import type {
-  AppraisalResultV2, CalculatorInputsV2, CalculatorInputsV3, MonthlyModel, Schedule,
+  AnyCalculatorInputs, AppraisalResultV2, MonthlyModel, Schedule,
 } from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
@@ -17,7 +17,7 @@ export function pct(numerator: number, denominator: number): number | null {
 }
 
 export function deriveMetrics(
-  inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
+  inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ): AppraisalResultV2 {
   const t = schedule.totals;
   // Lender-underwritten GDV (spec §3.2, Release 2b Task 3). null for v2 inputs

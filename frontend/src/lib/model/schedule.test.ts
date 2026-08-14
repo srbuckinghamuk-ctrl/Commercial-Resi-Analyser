@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildSchedule, spreadStraightLine } from './schedule';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import type { CalculatorInputsV2 } from './finance-types';
+import { migrateInputsToV3, migrateInputsToV4, migrateV3toV4 } from './migrate';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -97,5 +98,48 @@ describe('buildSchedule', () => {
       + s.uses[0].professional_pence + s.uses[0].statutory_pence;
     expect(totalUses).toBe(s.totals.acquisition_pence + s.totals.construction_pence
       + s.totals.professional_pence + s.totals.statutory_pence);
+  });
+});
+
+describe('buildSchedule with a v4 programme', () => {
+  const base = () => migrateInputsToV4({});          // import from './migrate'
+
+  it('v4 with programme:null is bit-identical to the migrated v3 schedule', () => {
+    const v3 = migrateInputsToV3({});
+    const v4 = migrateV3toV4(v3);
+    expect(buildSchedule(v4)).toEqual(buildSchedule(v3));
+  });
+
+  it('an explicit programme places each package window with its curve', () => {
+    const v4 = base();
+    v4.finance.term_months = 12;
+    // construction total must be 60,000,000p for the table below:
+    v4.conversion_costs.construction_cost_per_sqm_pence = 150_000;
+    v4.conversion_costs.total_construction_sqm = 400;
+    v4.conversion_costs.contingency_pct = 0;
+    v4.conversion_costs.fire_safety_pence = 0;
+    v4.conversion_costs.sound_insulation_pence = 0;
+    v4.conversion_costs.part_l_compliance_pence = 0;
+    v4.programme = {
+      anchor_month: null,
+      packages: {
+        construction: { start_offset: 1, duration_months: 6, curve: { kind: 's_curve' } },
+        professional: { start_offset: 2, duration_months: 3, curve: { kind: 'straight_line' } },
+        statutory: { start_offset: 4, duration_months: 2, curve: { kind: 'back_loaded' } },
+      },
+    };
+    const s = buildSchedule(v4);
+    expect(s.uses.map((u) => u.construction_pence)).toEqual([
+      0, 4_019_238, 10_980_762, 15_000_000, 15_000_000, 10_980_762, 4_019_238, 0, 0, 0, 0, 0,
+    ]);
+    // professional window shifted to months 2..4; statutory back-loaded months 4..5
+    expect(s.uses[1].professional_pence).toBe(0);
+    expect(s.uses[2].professional_pence).toBeGreaterThan(0);
+    const statTotal = v4.conversion_costs.cil_s106_pence + v4.conversion_costs.building_control_pence;
+    expect(s.uses[4].statutory_pence + s.uses[5].statutory_pence
+      - Math.round(statTotal / 3) - (statTotal - Math.round(statTotal / 3))).toBe(0);
+    // prior-approval fee still at month 0 regardless of the statutory package
+    expect(s.uses[0].statutory_pence).toBe(
+      v4.conversion_costs.prior_approval_fee_per_dwelling_pence * Math.max(1, v4.unit_mix.units.length));
   });
 });
