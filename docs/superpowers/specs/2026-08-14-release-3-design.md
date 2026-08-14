@@ -39,13 +39,20 @@ programme: {
     professional:  { start_offset: number, duration_months: number, curve: Curve },
     statutory:     { start_offset: number, duration_months: number, curve: Curve },
   }
-}
+} | null
 Curve = { kind: 'straight_line' | 's_curve' | 'back_loaded' }
       | { kind: 'user_defined', weights: number[] }   // length = duration_months
 ```
 
-Acquisition remains at month 0 (not a package). The engine stays month-indexed and
-date-free; `anchor_month` affects display and reports only.
+The block is **nullable**: `null` (the migration default) means "auto windows" — the
+engine derives exactly the calc-2.1.0 §6 straight-line windows from `term_months` at
+build time, so legacy documents keep tracking term changes precisely as today and the
+v3-identity invariant holds by construction. An explicit block freezes the windows.
+
+Acquisition remains at month 0 (not a package). The `statutory` package spreads the
+CIL/S106 + building-control total only; the prior-approval fee stays at month 0
+(existing behaviour). The engine stays month-indexed and date-free; `anchor_month`
+affects display and reports only.
 
 ### 2.2 `sales_phasing`
 
@@ -76,10 +83,14 @@ rejects a non-null block on `sell_all`.
 
 ### 2.4 Migration
 
-Chain extends v1→v2→v3→**v4**. v4 defaults must reproduce the calc-2.1.0 §6
-straight-line windows exactly: construction = `straight_line` over months
-1..N−2, professional and statutory = `straight_line` over the first half of that
-window, `sales_phasing = null`, `refinance = null`. Migration fixtures pin this.
+Chain extends v1→v2→v3→**v4**. Migration defaults: `programme = null` (auto §6
+windows, identical outputs by construction), `sales_phasing = null`,
+`refinance = null`. Migration fixtures pin this.
+
+R3a sequencing rule: while calc is 2.2.0 (R3a merged, R3b not), a non-null
+`sales_phasing` or `refinance` block is a **hard validation error** ("not yet
+implemented"), never silently ignored (spec §2 principle). R3b removes the error when
+it implements the behaviour.
 
 ## 3. R3a engine
 
