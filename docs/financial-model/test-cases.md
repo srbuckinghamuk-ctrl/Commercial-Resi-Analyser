@@ -1,6 +1,6 @@
 # Financial Model — Test Cases
 
-**Status:** Authoritative test-case register for calculation specification `2.0.0` (see
+**Status:** Authoritative test-case register for calculation specification `2.1.0` (see
 `docs/financial-model/calculation-specification.md`). This document enumerates every
 golden fixture, ledger fixture, invariant and regression vector that pins the engine's
 behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
@@ -694,7 +694,7 @@ surface as a golden-fixture mismatch even without a Python-native copy of this s
 
 **Frontend (TypeScript / Vitest), from `frontend/`:**
 ```bash
-npm test                    # or: npx vitest run — runs the full suite (202 tests)
+npm test                    # or: npx vitest run — runs the full suite (358 tests at Release 2b)
 npx tsc -p tsconfig.app.json --noEmit   # type check
 npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/monthly-engine.test.ts \
   src/lib/model/invariants.test.ts src/lib/model/irr.test.ts src/lib/model/breakeven.test.ts \
@@ -703,7 +703,7 @@ npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/monthly-engin
 
 **Backend (Python / pytest), from the repo root:**
 ```bash
-python -m pytest -q                              # full suite (145 tests)
+python -m pytest -q                              # full suite (333 tests at Release 2b)
 python -m pytest tests/test_financial_model_fixtures.py   # golden-fixture parity + invariants only
 python -m pytest tests/test_financial_model_engine.py     # Python-native ledger/engine unit tests
 python -m pytest tests/test_financial_model_breakeven.py  # senior break-even solver unit tests (spec §5.11)

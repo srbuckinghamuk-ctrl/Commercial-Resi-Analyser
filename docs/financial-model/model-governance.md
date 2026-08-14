@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.0.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.1.0`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -69,19 +69,20 @@ ledger) both went through spec → fixture (with hand derivation) → both engin
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.0.0"`
-  (`app/financial_model/types.py:198`, re-exported `app/financial_model/__init__.py:17`;
-  TS mirror `frontend/src/lib/model/finance-types.ts:206`). Outputs are only comparable within one
-  `calc_version` — a report or comparison spanning two calc versions must say so, never silently
-  blend them (spec §1.6).
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.1.0"`
+  (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
+  `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
+  Outputs are only comparable within one `calc_version` — a report or comparison spanning two
+  calc versions must say so, never silently blend them (spec §1.6).
 - **`inputs_version`** — schema version of the *input document*: `1` = legacy pre-spec snapshot
-  (the shape the product used before this release); `2` = this specification's `CalculatorInputsV2`
-  shape. Every new save always persists `inputs_version: 2` (`app/api/app.py:330`) — migration is
-  applied in-place before persistence, so the stored document is never left in the v1 shape after
-  a save, only before the first post-migration save.
+  (the shape the product used before Release 1); `2` = Release 1's `CalculatorInputsV2` shape;
+  `3` = Release 2b's `CalculatorInputsV3` shape (adds the optional `lender_valuation` block and
+  `finance.enforcement_cost_assumption_pence`, see `migration-notes.md` §5). Every new save
+  persists `inputs_version: 3` — the migration chain v1→v2→v3 is applied in-place before
+  persistence, so the stored document is never left in an older shape after a save.
 
-`calc_version` and `inputs_version` are independent axes: a v2-shaped input document is always
-what calc `2.0.0` consumes; there is no v1-input/calc-2.0.0 combination that skips migration.
+`calc_version` and `inputs_version` are independent axes: a v3-shaped input document is always
+what calc `2.1.0` consumes; no older-shaped input reaches the engines without migration.
 
 ## 4. Status lifecycle
 
