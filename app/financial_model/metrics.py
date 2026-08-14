@@ -17,7 +17,7 @@ from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .sdlt import calculate_commercial_sdlt
-from .types import CALC_VERSION, CalculatorInputsV2, CalculatorInputsV3
+from .types import CALC_VERSION, AnyCalculatorInputs, CalculatorInputsV3
 
 # --- irr.ts --------------------------------------------------------------
 
@@ -143,6 +143,11 @@ class AppraisalResultV2:
     developer_breakeven_pence: int | None
     # Wired in Task 6 (spec Sec 5.10).
     cost_to_complete: CostToCompleteSummary | None
+    # Ledger flags (model.flags, unmutated) followed by metric flags computed by
+    # derive_metrics itself (senior/developer breakeven unsolvable, cap-exhausted).
+    # Wired in Release 3a Task 6 -- derive_metrics is pure and no longer mutates
+    # model.flags; this is now the single read site for the full flag set.
+    flags: list[ModelFlag]
 
 
 def pct(numerator: float, denominator: float) -> float | None:
@@ -152,9 +157,39 @@ def pct(numerator: float, denominator: float) -> float | None:
     return money_round((numerator / denominator) * 10000) / 100
 
 
+def breakeven_flags(
+    senior_null: bool, developer_null: bool, agent_fee_pct: float,
+) -> list[ModelFlag]:
+    """Pure flag construction for the two break-even solvers (spec Sec 5.11/Sec 5.12).
+    A None solve with fee < 100% means the integer bisection exhausted its
+    2^200-pence range -- unreachable with real inputs, flagged defensively."""
+    out: list[ModelFlag] = []
+    unsolvable = agent_fee_pct >= 100
+    if senior_null and unsolvable:
+        out.append(ModelFlag(
+            code="senior_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
+            message="agent fee ≥ 100% — break-even unsolvable",
+        ))
+    if developer_null and unsolvable:
+        out.append(ModelFlag(
+            code="developer_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
+            message="agent fee ≥ 100% — break-even unsolvable",
+        ))
+    if (senior_null or developer_null) and not unsolvable:
+        out.append(ModelFlag(
+            code="breakeven_cap_exhausted", severity="red", month=None, amount_pence=None,
+            message=(
+                "break-even solver range exhausted — inputs are implausible; treat all "
+                "break-even figures as unavailable"
+            ),
+        ))
+    return out
+
+
 def derive_metrics(
-    inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
+    inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ) -> AppraisalResultV2:
+    flags: list[ModelFlag] = list(model.flags)
     t = schedule.totals
     # Lender-underwritten GDV (spec Sec 3.2, Release 2b Task 3). None for v2
     # inputs (no lender_valuation field at all), v3 inputs with the block
@@ -213,6 +248,7 @@ def derive_metrics(
     senior_breakeven: int | None = None
     senior_breakeven_pct_of_lender_gdv: float | None = None
     senior_breakeven_fall_from_lender_gdv_pct: float | None = None
+    senior_attempted_null = False
     if redemption_balance is not None:
         breakeven_terms = SeniorBreakevenTerms(
             redemption_balance_pence=redemption_balance,
@@ -225,11 +261,7 @@ def derive_metrics(
             enforcement_cost_assumption_pence=inputs.finance.enforcement_cost_assumption_pence,
         )
         senior_breakeven = solve_senior_breakeven(breakeven_terms)
-        if senior_breakeven is None and breakeven_terms.selling_agent_fee_pct >= 100:
-            model.flags.append(ModelFlag(
-                code="senior_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
-                message="agent fee ≥ 100% — break-even unsolvable",
-            ))
+        senior_attempted_null = senior_breakeven is None
         if senior_breakeven is not None and lender_gdv is not None:
             senior_breakeven_pct_of_lender_gdv = pct(senior_breakeven, lender_gdv.lender_gdv_pence)
             senior_breakeven_fall_from_lender_gdv_pct = pct(
@@ -245,6 +277,7 @@ def derive_metrics(
     # ordering invariant between this figure and senior_breakeven_pence (design Sec B5) --
     # they cover different cost bases and answer different questions.
     developer_breakeven: int | None = None
+    developer_attempted_null = False
     if t.gross_sales_pence > 0:
         tdc_ex_selling = tdc - t.selling_costs_pence
         developer_breakeven_terms = DeveloperBreakevenTerms(
@@ -253,11 +286,11 @@ def derive_metrics(
             selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
         )
         developer_breakeven = solve_developer_breakeven(developer_breakeven_terms)
-        if developer_breakeven is None and developer_breakeven_terms.selling_agent_fee_pct >= 100:
-            model.flags.append(ModelFlag(
-                code="developer_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
-                message="agent fee ≥ 100% — break-even unsolvable",
-            ))
+        developer_attempted_null = developer_breakeven is None
+    flags.extend(breakeven_flags(
+        senior_attempted_null, developer_attempted_null,
+        inputs.exit_strategy.selling_agent_fee_pct,
+    ))
 
     # Cost-to-complete (spec Sec 5.10, Release 2b Task 6). Computed for every appraisal --
     # schedule.term_months is always >= 1 (build_schedule floors it), so the series is never
@@ -322,4 +355,5 @@ def derive_metrics(
         senior_breakeven_fall_from_lender_gdv_pct=senior_breakeven_fall_from_lender_gdv_pct,
         developer_breakeven_pence=developer_breakeven,
         cost_to_complete=cost_to_complete,
+        flags=flags,
     )

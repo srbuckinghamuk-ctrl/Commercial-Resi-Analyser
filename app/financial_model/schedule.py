@@ -8,9 +8,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .curves import spread_by_curve
 from .engine import money_round
 from .sdlt import calculate_commercial_sdlt
-from .types import AcquisitionInputs, CalculatorInputsV2, ConversionCostInputs, ProposedUnit
+from .types import (
+    AcquisitionInputs,
+    AnyCalculatorInputs,
+    ConversionCostInputs,
+    ProgrammePackage,
+    ProposedUnit,
+)
 
 
 def calculate_gdv(units: list[ProposedUnit]) -> int:
@@ -105,7 +112,7 @@ def _empty_receipts() -> MonthReceipts:
     return MonthReceipts(gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0)
 
 
-def build_schedule(inputs: CalculatorInputsV2) -> Schedule:
+def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     term = max(1, math.floor(inputs.finance.term_months))
     cc = inputs.conversion_costs
     units = inputs.unit_mix.units
@@ -127,22 +134,47 @@ def build_schedule(inputs: CalculatorInputsV2) -> Schedule:
     uses[0].acquisition_pence = acquisition_total
     uses[0].statutory_pence += prior_approval
 
-    if term == 1:
-        uses[0].construction_pence = construction_total
-        uses[0].professional_pence = professional_total
-        uses[0].statutory_pence += statutory_spread_total
+    programme = getattr(inputs, "programme", None)
+
+    if programme is None:
+        # auto windows -- calc 2.1.0 behaviour, byte-identical (spec Sec 6)
+        if term == 1:
+            uses[0].construction_pence = construction_total
+            uses[0].professional_pence = professional_total
+            uses[0].statutory_pence += statutory_spread_total
+        else:
+            construction_window = max(1, term - 2)  # months 1..construction_window
+            professional_window = max(1, math.ceil(construction_window / 2))
+            construction_spread = spread_straight_line(construction_total, construction_window)
+            professional_spread = spread_straight_line(professional_total, professional_window)
+            statutory_spread = spread_straight_line(statutory_spread_total, professional_window)
+            for i, v in enumerate(construction_spread):
+                uses[min(i + 1, term - 1)].construction_pence += v
+            for i, v in enumerate(professional_spread):
+                uses[min(i + 1, term - 1)].professional_pence += v
+            for i, v in enumerate(statutory_spread):
+                uses[min(i + 1, term - 1)].statutory_pence += v
     else:
-        construction_window = max(1, term - 2)  # months 1..construction_window
-        professional_window = max(1, math.ceil(construction_window / 2))
-        construction_spread = spread_straight_line(construction_total, construction_window)
-        professional_spread = spread_straight_line(professional_total, professional_window)
-        statutory_spread = spread_straight_line(statutory_spread_total, professional_window)
-        for i, v in enumerate(construction_spread):
-            uses[min(i + 1, term - 1)].construction_pence += v
-        for i, v in enumerate(professional_spread):
-            uses[min(i + 1, term - 1)].professional_pence += v
-        for i, v in enumerate(statutory_spread):
-            uses[min(i + 1, term - 1)].statutory_pence += v
+        # explicit programme (spec Sec 6.1); windows validated in validation.py --
+        # the upper clamp is belt-and-braces, mirroring the auto path.
+        #
+        # The lower `max(..., 0)` has no counterpart in schedule.ts, and is a
+        # deliberate language difference rather than a rule difference: JS
+        # `uses[-1]` is `undefined` and throws loudly on the very next property
+        # access, whereas Python's negative indexing would silently wrap to the
+        # END of the list and book the spend in the wrong month. validation.py
+        # hard-rejects `start_offset < 0`, so this is unreachable for any
+        # document that passes validation; it exists so the unvalidated path
+        # degrades to a defined, in-range placement (totals still reconcile)
+        # instead of a silently wrong one.
+        def place(pkg: ProgrammePackage, total: int, field_name: str) -> None:
+            for i, v in enumerate(spread_by_curve(total, pkg.duration_months, pkg.curve)):
+                target = uses[min(max(pkg.start_offset + i, 0), term - 1)]
+                setattr(target, field_name, getattr(target, field_name) + v)
+
+        place(programme.packages.construction, construction_total, "construction_pence")
+        place(programme.packages.professional, professional_total, "professional_pence")
+        place(programme.packages.statutory, statutory_spread_total, "statutory_pence")
 
     # Exit: which units sell?
     route = inputs.exit_strategy.route

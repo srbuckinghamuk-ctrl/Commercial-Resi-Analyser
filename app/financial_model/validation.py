@@ -1,13 +1,14 @@
 """Port of frontend/src/lib/model/validation.ts."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable
 
 from .engine import MonthlyModel
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
-from .types import CalculatorInputsV2, CalculatorInputsV3
+from .types import AnyCalculatorInputs, CalculatorInputsV3
 
 
 @dataclass
@@ -29,7 +30,7 @@ class ReconciliationStatus:
     issues: list[ValidationIssue] = field(default_factory=list)
 
 
-NON_NEGATIVE_MONEY: list[tuple[str, Callable[[CalculatorInputsV2 | CalculatorInputsV3], float]]] = [
+NON_NEGATIVE_MONEY: list[tuple[str, Callable[[AnyCalculatorInputs], float]]] = [
     ("acquisition.purchase_price_pence", lambda i: i.acquisition.purchase_price_pence),
     ("acquisition.legal_fees_pence", lambda i: i.acquisition.legal_fees_pence),
     ("acquisition.survey_cost_pence", lambda i: i.acquisition.survey_cost_pence),
@@ -53,7 +54,7 @@ NON_NEGATIVE_MONEY: list[tuple[str, Callable[[CalculatorInputsV2 | CalculatorInp
 ]
 
 
-def validate_inputs(inputs: CalculatorInputsV2 | CalculatorInputsV3) -> list[ValidationIssue]:
+def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
     def err(field_: str, message: str) -> None:
@@ -200,11 +201,54 @@ def validate_inputs(inputs: CalculatorInputsV2 | CalculatorInputsV3) -> list[Val
             "land value calculation non-finite.",
         )
 
+    # Spec Sec 6 (Release 3a): explicit programme windows must sit inside
+    # [0, term-2] -- the schedule's programme arm only clamps the upper bound,
+    # so a negative start_offset or an oversized window must be caught here as
+    # a hard error.
+    programme = getattr(inputs, "programme", None)
+    if programme is not None:
+        term = max(1, math.floor(inputs.finance.term_months))
+        # validation.ts walks `Object.entries(inputs.programme.packages)`;
+        # ProgrammePackages is a Pydantic model rather than a plain map, so the
+        # same three names are walked explicitly, in declaration order.
+        packages = [
+            ("construction", programme.packages.construction),
+            ("professional", programme.packages.professional),
+            ("statutory", programme.packages.statutory),
+        ]
+        for name, pkg in packages:
+            field_ = f"programme.packages.{name}"
+            if pkg.duration_months < 1:
+                err(field_, "Package duration must be at least 1 month.")
+            if pkg.start_offset < 0:
+                err(field_, "Package start month cannot be negative.")
+            if pkg.start_offset + pkg.duration_months - 1 > term - 2:
+                err(
+                    field_,
+                    f"Package must finish by month {term - 2} - the final two months are the "
+                    "sale tail (spec Sec 6).",
+                )
+            if pkg.curve.kind == "user_defined":
+                w = pkg.curve.weights
+                if len(w) != pkg.duration_months:
+                    err(field_, "user_defined weights must have one entry per window month.")
+                if any(x < 0 for x in w):
+                    err(field_, "user_defined weights cannot be negative.")
+                if sum(w) <= 0:
+                    err(field_, "user_defined weights must sum to more than zero.")
+
+    # Non-null sales_phasing/refinance blocks exist in the v4 schema but are
+    # unimplemented until Release 3b -- never silently ignore an input.
+    if getattr(inputs, "sales_phasing", None) is not None:
+        err("sales_phasing", "Phased sales are not yet implemented (Release 3b) - remove the block.")
+    if getattr(inputs, "refinance", None) is not None:
+        err("refinance", "Refinance modelling is not yet implemented (Release 3b) - remove the block.")
+
     return issues
 
 
 def reconcile(
-    inputs: CalculatorInputsV2 | CalculatorInputsV3, schedule: Schedule, model: MonthlyModel,
+    inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ) -> ReconciliationStatus:
     issues: list[ValidationIssue] = []
 

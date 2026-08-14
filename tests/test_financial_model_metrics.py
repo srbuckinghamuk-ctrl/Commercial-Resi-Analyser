@@ -4,12 +4,18 @@ existing Python home). Helpers duplicated verbatim from
 tests/test_financial_model_engine.py, matching the "tests must be self-contained"
 convention already used across both languages' test suites.
 """
+from app.financial_model import run_appraisal
 from app.financial_model.engine import run_ledger
-from app.financial_model.metrics import derive_metrics
+from app.financial_model.metrics import breakeven_flags, derive_metrics
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
-from app.financial_model.migrate import default_calculator_inputs_v2
+from app.financial_model.migrate import default_calculator_inputs_v2, migrate_inputs_to_v4
 from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals
-from app.financial_model.types import CalculatorInputsV2, EquitySource, FacilityTerms
+from app.financial_model.types import (
+    CalculatorInputsV2,
+    CalculatorInputsV4,
+    EquitySource,
+    FacilityTerms,
+)
 
 # --- helpers copied verbatim from test_financial_model_engine.py ---
 
@@ -144,9 +150,50 @@ class TestDeriveMetricsDeveloperBreakeven:
 
         assert schedule.totals.gross_sales_pence > 0
         assert r.developer_breakeven_pence is None
-        flags = [f for f in model.flags if f.code == "developer_breakeven_unsolvable"]
+        # Deviation from brief (R3a Task 6): derive_metrics no longer mutates model.flags --
+        # the flag now lands on the result's own `flags` list (r.flags), not model.flags.
+        # Updated to match the new contract; the assertion content is unchanged.
+        flags = [f for f in r.flags if f.code == "developer_breakeven_unsolvable"]
         assert len(flags) == 1
         assert flags[0].severity == "red"
         assert flags[0].month is None
         assert flags[0].amount_pence is None
         assert flags[0].message == "agent fee ≥ 100% — break-even unsolvable"
+
+
+class TestFlagsOnResult:
+    """Transliteration of metrics.test.ts's `flags on result (R3a refactor)`
+    describe block (Release 3a Task 6)."""
+
+    def test_derive_metrics_does_not_mutate_model_flags_and_returns_ledger_plus_metric_flags(self):
+        run = run_appraisal(CalculatorInputsV4.model_validate(migrate_inputs_to_v4({})))
+        before = len(run.model.flags)
+        metrics = derive_metrics(run.inputs, run.schedule, run.model)
+        assert len(run.model.flags) == before  # purity
+        assert metrics.flags[:before] == run.model.flags
+
+    def test_agent_fee_at_100_pct_raises_the_unsolvable_flags_on_the_result_not_the_model(self):
+        doc = migrate_inputs_to_v4({})
+        # migrate_inputs_to_v4({}) defaults to an empty unit_mix, so no disposal is ever
+        # booked and the developer break-even branch (guarded on gross_sales_pence > 0)
+        # never runs regardless of fee. Give the fixture one sellable unit --
+        # exit_strategy.route defaults to 'sell_all' -- so a solve is actually attempted
+        # and can be observed as None.
+        doc["unit_mix"] = {"units": [{
+            "id": "u1", "type": "1bed", "floor_area_sqm": 50,
+            "estimated_value_pence": 30_000_000, "comparable_notes": "",
+        }]}
+        doc["exit_strategy"]["selling_agent_fee_pct"] = 100
+        run = run_appraisal(CalculatorInputsV4.model_validate(doc))
+        assert not any(f.code == "developer_breakeven_unsolvable" for f in run.model.flags)
+        assert any(f.code == "developer_breakeven_unsolvable" for f in run.metrics.flags)
+
+
+class TestBreakevenFlags:
+    """Transliteration of metrics.test.ts's `breakevenFlags` describe block."""
+
+    def test_fee_at_100_gives_unsolvable_flags_below_100_with_a_null_solve_gives_cap_exhausted(self):
+        assert [f.code for f in breakeven_flags(True, False, 100)] == ["senior_breakeven_unsolvable"]
+        assert [f.code for f in breakeven_flags(True, False, 2)] == ["breakeven_cap_exhausted"]
+        assert [f.code for f in breakeven_flags(False, True, 2)] == ["breakeven_cap_exhausted"]
+        assert breakeven_flags(False, False, 2) == []

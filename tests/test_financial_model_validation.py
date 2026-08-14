@@ -5,11 +5,16 @@ Both implementations must agree with the spec, not merely with each other. If
 Python disagrees, the Python port is wrong -- never adjust these to make peace.
 """
 from app.financial_model.engine import run_ledger
-from app.financial_model.migrate import default_calculator_inputs_v2, migrate_v2_to_v3
+from app.financial_model.migrate import (
+    default_calculator_inputs_v2,
+    migrate_inputs_to_v4,
+    migrate_v2_to_v3,
+)
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
     CalculatorInputsV2,
     CalculatorInputsV3,
+    CalculatorInputsV4,
     EquitySource,
     LenderValuation,
     ProposedUnit,
@@ -207,3 +212,93 @@ class TestValidateInputsLenderValuationHardErrors:
         )
         issues = validate_inputs(inputs)
         assert [i for i in issues if i.field.startswith("lender_valuation")] == []
+
+
+class TestV4ProgrammeValidation:
+    """Transliteration of validation.test.ts's `v4 programme validation`
+    describe block (Release 3a Task 5, spec Sec 6.1 / calc 2.2.0)."""
+
+    OK = {"start_offset": 1, "duration_months": 6, "curve": {"kind": "straight_line"}}
+
+    def with_programme(self, pkg: dict) -> CalculatorInputsV4:
+        doc = migrate_inputs_to_v4({})
+        doc["finance"]["term_months"] = 12
+        doc["programme"] = {
+            "anchor_month": None,
+            "packages": {
+                "construction": {**self.OK, **pkg},
+                "professional": {**self.OK},
+                "statutory": {**self.OK},
+            },
+        }
+        return CalculatorInputsV4.model_validate(doc)
+
+    @staticmethod
+    def errors_on(field_: str, v4: CalculatorInputsV4) -> bool:
+        return any(
+            i.severity == "error" and i.field.startswith(field_) for i in validate_inputs(v4)
+        )
+
+    def test_accepts_a_well_formed_programme(self):
+        issues = validate_inputs(self.with_programme({}))
+        assert [i for i in issues if i.field.startswith("programme")] == []
+
+    def test_rejects_duration_below_1(self):
+        assert self.errors_on(
+            "programme.packages.construction", self.with_programme({"duration_months": 0}),
+        )
+
+    def test_rejects_negative_start_offset(self):
+        assert self.errors_on(
+            "programme.packages.construction", self.with_programme({"start_offset": -1}),
+        )
+
+    def test_rejects_a_window_breaching_the_two_month_sale_tail(self):
+        # start 6 + duration 6 - 1 = 11 > term - 2 = 10 (start 5 is the legal
+        # boundary: 10 <= 10)
+        assert self.errors_on(
+            "programme.packages.construction",
+            self.with_programme({"start_offset": 6, "duration_months": 6}),
+        )
+        assert not self.errors_on(
+            "programme.packages.construction",
+            self.with_programme({"start_offset": 5, "duration_months": 6}),
+        )
+
+    def test_rejects_user_defined_weights_wrong_length_negative_or_all_zero(self):
+        for weights in ([1, 2], [1, -1, 1, 1, 1, 1], [0, 0, 0, 0, 0, 0]):
+            assert self.errors_on(
+                "programme.packages.construction",
+                self.with_programme({"curve": {"kind": "user_defined", "weights": weights}}),
+            ), weights
+
+    def test_hard_rejects_non_null_sales_phasing_and_refinance_while_calc_is_2_2_0(self):
+        doc = migrate_inputs_to_v4({})
+        doc["sales_phasing"] = {"tranches": [{"month_offset": 11, "pct_of_gross_receipts": 100}]}
+        assert self.errors_on("sales_phasing", CalculatorInputsV4.model_validate(doc))
+
+        doc_b = migrate_inputs_to_v4({})
+        doc_b["refinance"] = {
+            "month_offset": 6, "investment_value_pence": 1, "ltv_pct": 60,
+            "arrangement_fee_pence": 0, "legal_costs_pence": 0,
+        }
+        assert self.errors_on("refinance", CalculatorInputsV4.model_validate(doc_b))
+
+    def test_every_package_is_checked_not_just_the_first(self):
+        """Deviation-guard (no TS counterpart): Python iterates a fixed tuple
+        rather than `Object.entries`, so this pins that all three packages are
+        actually visited and reported under their own field path."""
+        doc = migrate_inputs_to_v4({})
+        doc["finance"]["term_months"] = 12
+        doc["programme"] = {
+            "anchor_month": None,
+            "packages": {
+                "construction": {**self.OK},
+                "professional": {**self.OK, "start_offset": -1},
+                "statutory": {**self.OK, "duration_months": 0},
+            },
+        }
+        v4 = CalculatorInputsV4.model_validate(doc)
+        assert not self.errors_on("programme.packages.construction", v4)
+        assert self.errors_on("programme.packages.professional", v4)
+        assert self.errors_on("programme.packages.statutory", v4)

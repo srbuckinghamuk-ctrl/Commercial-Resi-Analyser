@@ -156,8 +156,12 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
 
     assert body["status"] == "legacy_unreconciled"
     assert body["calc_version"] == "2.1.0"
-    assert body["inputs_snapshot"]["inputs_version"] == 3
+    # Release 3a: the server normalisation chain now runs v1 -> v2 -> v3 -> v4.
+    assert body["inputs_snapshot"]["inputs_version"] == 4
     assert body["inputs_snapshot"]["lender_valuation"] is None
+    assert body["inputs_snapshot"]["programme"] is None
+    assert body["inputs_snapshot"]["sales_phasing"] is None
+    assert body["inputs_snapshot"]["refinance"] is None
     assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
     # Outputs were recalculated by the v2 engine, not just passed through.
     assert body["outputs"]["metrics"]["calc_version"] == "2.1.0"

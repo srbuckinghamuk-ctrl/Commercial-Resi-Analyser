@@ -11,7 +11,7 @@ rejected at the boundary); every share percentage is ``ge=0, le=100``;
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -231,12 +231,128 @@ class CalculatorInputsV3(Model):
     lender_valuation: LenderValuation | None = None
 
 
+# --- Release 3a (calc 2.2.0): spend curves and the v4 programme blocks --------
+#
+# Port deviation (documented, deliberate): in TypeScript the ``SpendCurve``
+# discriminated union is declared in curves.ts and *re-exported* by
+# finance-types.ts. In Python that layout is a genuine import cycle --
+# curves.py needs money_round from engine.py, engine.py needs FacilityTerms
+# from types.py -- so the union is declared here (the types module) and
+# curves.py imports it, which is the same dependency direction the rest of
+# this package already uses. The shapes are identical to curves.ts's.
+
+
+class SimpleSpendCurve(Model):
+    kind: Literal["straight_line", "s_curve", "back_loaded"]
+
+
+class UserDefinedSpendCurve(Model):
+    kind: Literal["user_defined"]
+    # Length/non-negativity/sum are validated in validation.py (mirroring
+    # validation.ts), NOT constrained here -- see the note on ProgrammePackage.
+    weights: list[float]
+
+
+SpendCurve = Annotated[
+    SimpleSpendCurve | UserDefinedSpendCurve, Field(discriminator="kind"),
+]
+
+
+class ProgrammePackage(Model):
+    """Port rule #7 exception, mirroring validation.ts: ``start_offset`` and
+    ``duration_months`` carry no Pydantic bounds. Spec Sec 6.1's window rules
+    (duration >= 1, start >= 0, window inside the 2-month sale tail) are hard
+    *validation* errors owned by validation.py exactly as they are in the TS
+    engine -- constraining them here instead would surface them as a 422 parse
+    failure with a Pydantic message rather than the spec-worded
+    ValidationIssue, and would make the negative cases unconstructible in the
+    validation tests."""
+
+    start_offset: int
+    duration_months: int
+    curve: SpendCurve
+
+
+class ProgrammePackages(Model):
+    construction: ProgrammePackage
+    professional: ProgrammePackage
+    statutory: ProgrammePackage
+
+
+class ProgrammeInputs(Model):
+    # Display-only calendar anchor, "YYYY-MM". None = month indices only.
+    anchor_month: str | None = None
+    packages: ProgrammePackages
+
+
+class SalesPhasingTranche(Model):
+    month_offset: int
+    pct_of_gross_receipts: float
+
+
+class SalesPhasingInputs(Model):
+    tranches: list[SalesPhasingTranche] = Field(default_factory=list)
+
+
+class RefinanceInputs(Model):
+    month_offset: int
+    investment_value_pence: int
+    ltv_pct: float
+    arrangement_fee_pence: int
+    legal_costs_pence: int
+
+
+class CalculatorInputsV4(CalculatorInputsV3):
+    """Mirrors CalculatorInputsV3 plus the three additive (nullable)
+    Release 3a blocks (spec Sec 6.1, calc 2.2.0).
+
+    Port deviation from the V2/V3 pattern, and the reason for it: V3 is a flat
+    re-declaration of V2 because nothing dispatches on their relationship. V4
+    *subclasses* V3 because the engine does dispatch on it -- metrics.py and
+    validation.py gate the lender_valuation block on
+    ``isinstance(inputs, CalculatorInputsV3)``, which is Python's stand-in for
+    the TS engine's structural ``'lender_valuation' in inputs`` check. A flat
+    re-declaration would make those checks silently False for v4 documents and
+    null every lender metric on them -- a parity break against the TS engine.
+    Subclassing keeps the structural semantics exact. The Literal override
+    still makes the two mutually exclusive at parse time: a v4 dict fails
+    ``CalculatorInputsV3.model_validate`` and vice versa.
+
+    ``sales_phasing`` / ``refinance`` are schema-only until Release 3b;
+    validation.py hard-rejects them when non-null (never silently ignored).
+    """
+
+    inputs_version: Literal[4]  # type: ignore[assignment]
+    programme: ProgrammeInputs | None = None
+    sales_phasing: SalesPhasingInputs | None = None
+    refinance: RefinanceInputs | None = None
+
+
+AnyCalculatorInputs = CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
+
+
+def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
+    """Version-dispatching parse for a stored/fixture inputs document.
+
+    The TS engine takes ``AnyCalculatorInputs`` structurally and needs no such
+    helper; Python has to pick a concrete Pydantic model, and every call site
+    that reads a mixed-version corpus (the golden fixtures, the API boundary)
+    would otherwise re-implement the same ``inputs_version`` switch."""
+    version = doc.get("inputs_version")
+    if version == 4:
+        return CalculatorInputsV4.model_validate(doc)
+    if version == 3:
+        return CalculatorInputsV3.model_validate(doc)
+    return CalculatorInputsV2.model_validate(doc)
+
+
 FlagCode = Literal[
     "facility_exceeded", "funding_gap", "interest_reserve_exhausted",
     "senior_outstanding_at_maturity", "additional_equity_required",
     "negative_profit", "requires_confirmation", "irr_unavailable",
     "unrealised_profit_basis", "exit_fee_not_charged",
-    "senior_breakeven_unsolvable",
+    "senior_breakeven_unsolvable", "developer_breakeven_unsolvable",
+    "breakeven_cap_exhausted",
 ]
 
 CALC_VERSION = "2.1.0"

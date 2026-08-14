@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from .engine import MonthlyModel
 from .schedule import Schedule
-from .types import CalculatorInputsV2, CalculatorInputsV3
+from .types import AnyCalculatorInputs
 
 
 @dataclass
@@ -32,7 +32,7 @@ class CostToCompleteSummary:
 
 
 def compute_cost_to_complete(
-    schedule: Schedule, model: MonthlyModel, inputs: CalculatorInputsV2 | CalculatorInputsV3,
+    schedule: Schedule, model: MonthlyModel, inputs: AnyCalculatorInputs,
 ) -> CostToCompleteSummary:
     """Indexing convention: entries are labelled ``m = 1..term`` (``term =
     schedule.term_months``), where label ``m`` reports the state as of the
@@ -45,11 +45,10 @@ def compute_cost_to_complete(
     the boundary identity ``remaining_cost(1) == total cost - month-0 spend``, both
     pinned by worksheet tests.
 
-    ``inputs`` is typed as the ``CalculatorInputsV2 | CalculatorInputsV3`` union
-    (not the narrower ``CalculatorInputsV3`` the task brief's interface sketch
-    used) because only ``equity_sources`` is read here -- a field common to both
-    input versions -- and ``derive_metrics`` (the sole caller) itself carries that
-    same union.
+    ``inputs`` is typed as the ``AnyCalculatorInputs`` union (not the narrower
+    ``CalculatorInputsV3`` the task brief's interface sketch used) because only
+    ``equity_sources`` is read here -- a field common to every input version --
+    and ``derive_metrics`` (the sole caller) itself carries that same union.
     """
     term = schedule.term_months
     # Spec Sec 2: only cash-classified, non-rejected equity sources are committed

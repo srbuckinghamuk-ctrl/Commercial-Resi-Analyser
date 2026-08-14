@@ -14,7 +14,12 @@ from app.financial_model.migrate import default_calculator_inputs_v2
 from app.financial_model.schedule import (
     MonthReceipts, MonthUses, Schedule, ScheduleTotals, build_schedule,
 )
-from app.financial_model.types import CalculatorInputsV2, CalculatorInputsV3, EquitySource, FacilityTerms
+from app.financial_model.types import (
+    CalculatorInputsV2,
+    EquitySource,
+    FacilityTerms,
+    parse_calculator_inputs,
+)
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -239,20 +244,20 @@ class TestShortfallDirectionAgainstFundingGap:
         assert ctc.max_shortfall_pence == 0
 
     def test_holds_across_every_golden_fixture(self):
+        # Release 3a Task 8: the whole corpus is in scope again -- `parse_calculator_inputs`
+        # dispatches on inputs_version, so the inputs_version 4 documents (fixture H, spec
+        # Sec 6.1 / calc 2.2.0) are covered here too. Fixture H is a genuine positive case
+        # for this implication (shortfall AND funding gap both present), so it strengthens
+        # this test rather than just widening it.
+        saw_positive_case = False
         for path in sorted(FIXTURE_DIR.glob("*.json")):
             doc = json.loads(path.read_text())
-            # TEMPORARY (Release 3a Task 7): Python v4 parity lands in Task 8 -- remove
-            # this skip there. `CalculatorInputsV3` cannot validate the inputs_version 4
-            # documents now in the shared corpus (fixture H, spec Sec 6.1 / calc 2.2.0);
-            # the same clause guards every fixture-driven test in
-            # tests/test_financial_model_fixtures.py. Fixture H is a genuine positive case
-            # for this implication on the TS side (shortfall AND funding gap both present),
-            # so re-enabling it in Task 8 strengthens this test rather than just widening it.
-            if doc.get("inputs", {}).get("inputs_version") == 4:
-                continue
-            inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+            inputs = parse_calculator_inputs(doc["inputs"])
             schedule = build_schedule(inputs)
             model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
             ctc = compute_cost_to_complete(schedule, model, inputs)
             if ctc.first_shortfall_month is not None:
                 assert model.totals.funding_gap_pence > 0, path.stem
+                saw_positive_case = True
+        # Guards against the implication holding only vacuously across the corpus.
+        assert saw_positive_case

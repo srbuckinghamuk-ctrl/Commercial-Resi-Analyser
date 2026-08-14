@@ -7,17 +7,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
-from .metrics import AppraisalResultV2, derive_metrics
-from .migrate import migrate_inputs
+from .metrics import AppraisalResultV2, breakeven_flags, derive_metrics
+from .migrate import is_v4, migrate_inputs, migrate_inputs_to_v4, migrate_v3_to_v4
 from .schedule import Schedule, build_schedule
-from .types import CALC_VERSION, CalculatorInputsV2, CalculatorInputsV3
+from .types import (
+    CALC_VERSION,
+    AnyCalculatorInputs,
+    CalculatorInputsV2,
+    CalculatorInputsV3,
+    CalculatorInputsV4,
+    parse_calculator_inputs,
+)
 from .validation import ReconciliationStatus, ValidationIssue, reconcile, validate_inputs
 
 
 @dataclass
 class AppraisalRun:
-    inputs: CalculatorInputsV2 | CalculatorInputsV3
+    # Widened in Release 3a: consumers read the actual document run_appraisal()
+    # was given -- v2, v3 or v4 -- with no downcast to a narrower shape.
+    inputs: AnyCalculatorInputs
     schedule: Schedule
     model: MonthlyModel
     metrics: AppraisalResultV2
@@ -25,12 +35,14 @@ class AppraisalRun:
     reconciliation: ReconciliationStatus
 
 
-def run_appraisal(inputs: CalculatorInputsV2 | CalculatorInputsV3) -> AppraisalRun:
-    """The only entry point report/backend-parity code may use. Accepts both
-    v2 (pre-Release-2b) and v3 (adds the optional lender_valuation block,
-    spec Sec 3.2) documents -- v2 callers get lender-basis metrics as None
-    (spec Sec 2: unknown lender-critical inputs are never silently
-    defaulted), exactly as they did before the block existed."""
+def run_appraisal(inputs: AnyCalculatorInputs) -> AppraisalRun:
+    """The only entry point report/backend-parity code may use. Accepts v2
+    (pre-Release-2b), v3 (adds the optional lender_valuation block, spec
+    Sec 3.2) and v4 (adds the optional programme block, spec Sec 6.1)
+    documents -- v2 callers get lender-basis metrics as None (spec Sec 2:
+    unknown lender-critical inputs are never silently defaulted), exactly as
+    they did before the block existed, and a v4 document with
+    `programme: None` produces a byte-identical schedule to its v3 source."""
     schedule = build_schedule(inputs)
     model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
     return AppraisalRun(
@@ -44,13 +56,31 @@ def run_appraisal(inputs: CalculatorInputsV2 | CalculatorInputsV3) -> AppraisalR
 
 
 __all__ = [
+    "AnyCalculatorInputs",
+    "AppraisalResultV2",
     "AppraisalRun",
     "CALC_VERSION",
+    "CalculatorInputsV2",
+    "CalculatorInputsV3",
+    "CalculatorInputsV4",
+    "MonthlyModel",
+    "ReconciliationStatus",
+    "Schedule",
+    "ValidationIssue",
+    "breakeven_flags",
+    "build_schedule",
+    "derive_metrics",
+    "is_v4",
+    "migrate_inputs",
+    "migrate_inputs_to_v4",
+    "migrate_v3_to_v4",
+    "parse_calculator_inputs",
+    "reconcile",
     "run_appraisal",
     "run_ledger",
-    "derive_metrics",
-    "migrate_inputs",
-    "build_schedule",
-    "reconcile",
+    "spread_back_loaded",
+    "spread_by_curve",
+    "spread_s_curve",
+    "spread_user_defined",
     "validate_inputs",
 ]

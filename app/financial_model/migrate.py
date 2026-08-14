@@ -239,8 +239,19 @@ def is_v3(snapshot: dict[str, Any]) -> bool:
     )
 
 
+def is_v4(snapshot: dict[str, Any]) -> bool:
+    """A v4 document has the same finance shape as v2/v3, discriminated by
+    inputs_version == 4."""
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 4
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
-    return is_v2(snapshot) or is_v3(snapshot)
+    return is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
 
 
 def migrate_finance_v1(
@@ -425,3 +436,92 @@ def migrate_v2_to_v3(doc: dict[str, Any]) -> dict[str, Any]:
         "inputs_version": 3,
         "lender_valuation": doc.get("lender_valuation"),
     }
+
+
+def migrate_v3_to_v4(doc: dict[str, Any]) -> dict[str, Any]:
+    """Upgrades a v3 document to v4 by stamping inputs_version 4 and adding the
+    three (nullable) programme / sales_phasing / refinance blocks. Every other
+    field is carried across unchanged -- this migration is purely additive
+    (spec Sec 6.1 / design Sec 2.4: outputs are unchanged while all three are
+    None).
+
+    Precondition: `doc` must not already be a v4 document -- this guards
+    against double-migration (idempotence), same as migrate_v2_to_v3.
+
+    If `doc` illegally already carries `programme` / `sales_phasing` /
+    `refinance` keys (e.g. a hand-edited or partially-migrated row), they are
+    passed through unchanged rather than clobbered -- the type layer (or the
+    caller) is responsible for validating their shape.
+    """
+    if is_v4(doc):
+        raise ValueError("migrate_v3_to_v4: input is already a v4 document")
+    rest = {k: v for k, v in doc.items() if k != "inputs_version"}
+    return {
+        **rest,
+        "inputs_version": 4,
+        "programme": doc.get("programme"),
+        "sales_phasing": doc.get("sales_phasing"),
+        "refinance": doc.get("refinance"),
+    }
+
+
+def migrate_inputs_to_v4(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalises any stored snapshot (v1, v2, v3 or v4) to v4 -- the shape
+    every Release 3a consumer needs. Port of migrateInputsToV4.
+
+    v1/v2 snapshots route through the existing migrate_inputs() +
+    migrate_v2_to_v3() + migrate_v3_to_v4() chain unchanged; a v3 snapshot is
+    upgraded in place (it is already a normalised document -- this is the same
+    passthrough app.py performed for v3 before this function existed).
+
+    A v4 snapshot is merged onto v4 defaults field-by-field (mirroring
+    migrate_inputs' own v2-merge branch) so fields added to the schema after
+    the snapshot was saved get sane defaults instead of being absent, rather
+    than being routed through the v1 fallback path.
+
+    Returns a plain dict, like migrate_v2_to_v3 and unlike migrate_inputs:
+    Pydantic validation of the result belongs at the boundary (app.py), which
+    is where the 422 is raised.
+    """
+    if is_v4(snapshot):
+        defaults = migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project)))
+        saved = snapshot
+        return {
+            **defaults,
+            **saved,
+            "inputs_version": 4,
+            "acquisition": {**defaults["acquisition"], **(saved.get("acquisition") or {})},
+            "unit_mix": _coalesce(saved.get("unit_mix"), defaults["unit_mix"]),
+            "conversion_costs": {
+                **defaults["conversion_costs"], **(saved.get("conversion_costs") or {}),
+            },
+            "finance": {**defaults["finance"], **(saved.get("finance") or {})},
+            "equity_sources": _coalesce(saved.get("equity_sources"), defaults["equity_sources"]),
+            "exit_strategy": {**defaults["exit_strategy"], **(saved.get("exit_strategy") or {})},
+            "risks": _coalesce(saved.get("risks"), defaults["risks"]),
+            "scenarios": {
+                key: {
+                    **defaults["scenarios"][key],
+                    **((saved.get("scenarios") or {}).get(key) or {}),
+                }
+                for key in ("base", "upside", "downside", "severe")
+            },
+            "deal_spider": {
+                **defaults["deal_spider"],
+                **(saved.get("deal_spider") or {}),
+                "weights": {
+                    **defaults["deal_spider"]["weights"],
+                    **((saved.get("deal_spider") or {}).get("weights") or {}),
+                },
+            },
+            "lender_valuation": saved.get("lender_valuation"),
+            "programme": saved.get("programme"),
+            "sales_phasing": saved.get("sales_phasing"),
+            "refinance": saved.get("refinance"),
+        }
+    if is_v3(snapshot):
+        return migrate_v3_to_v4(snapshot)
+    v2 = migrate_inputs(snapshot, project).model_dump(mode="json")
+    return migrate_v3_to_v4(migrate_v2_to_v3(v2))
