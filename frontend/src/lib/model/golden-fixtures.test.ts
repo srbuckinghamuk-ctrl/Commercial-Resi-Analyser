@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
+import { migrateInputsToV4 } from './migrate';
 import type { AppraisalRun } from './index';
 import type { AnyCalculatorInputs, AppraisalResultV2 } from './finance-types';
 
@@ -61,14 +62,32 @@ describe('golden fixtures (shared with the Python engine)', () => {
     expect(fixtureFiles).toEqual(EXPECTED_FIXTURE_STEMS.map((s) => `${s}.json`));
   });
 
+  function assertExpectedMetrics(run: AppraisalRun, fx: Fixture, label: string) {
+    for (const [key, expected] of Object.entries(fx.expected_metrics)) {
+      const mapper = FLAT_KEYS[key];
+      const actual = mapper ? mapper(run) : run.metrics[key as keyof AppraisalResultV2];
+      expect(actual, `${label}: ${key}`).toEqual(expected);
+    }
+  }
+
   for (const fx of fixtures) {
     it(fx.name, () => {
-      const run = runAppraisal(fx.inputs);
-      for (const [key, expected] of Object.entries(fx.expected_metrics)) {
-        const mapper = FLAT_KEYS[key];
-        const actual = mapper ? mapper(run) : run.metrics[key as keyof AppraisalResultV2];
-        expect(actual, key).toEqual(expected);
-      }
+      assertExpectedMetrics(runAppraisal(fx.inputs), fx, fx.name);
+    });
+  }
+
+  for (const fx of fixtures) {
+    // Mirrors Python's test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4.
+    it(`${fx.name} — reproduces its metrics after migration to v4`, () => {
+      // Release 3a identity guarantee (spec §6.1 / design §2.4): the v3 → v4 migration
+      // is purely additive, so running a fixture's inputs through the full normalisation
+      // chain — exactly what app.py now does on every request — must reproduce that
+      // fixture's pinned expected_metrics unchanged, not merely "close". Fixture H is
+      // already v4; migrating it is a no-op merge onto v4 defaults, which is itself worth
+      // asserting (the merge must not drop its programme block).
+      const v4 = migrateInputsToV4(fx.inputs as unknown as Record<string, unknown>);
+      expect(v4.inputs_version).toBe(4);
+      assertExpectedMetrics(runAppraisal(v4), fx, `${fx.name}[migrated-to-v4]`);
     });
   }
 });
