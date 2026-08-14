@@ -914,7 +914,7 @@ export function generateInvestmentMemo(
     'Net LTC = cumulative net senior advances (principal draws + capitalised non-interest fees) ÷ development cost before disposal and finance (spec §5.4). Gross LTC = peak gross senior debt ÷ total development cost, TDC (spec §5.5). LTGDV = peak gross senior debt ÷ GDV [developer basis], or ÷ lender-underwritten GDV [lender basis, not available until a lender valuation is recorded]. Senior repayment break-even (spec §5.11) = minimum gross sale price fully redeeming the senior facility, including the disclosed enforcement-cost assumption of ' + fmt(inputs.finance.enforcement_cost_assumption_pence) + '.',
   );
   if (metrics.senior_breakeven_pence !== null && lenderValuation != null) {
-    y = bodyText(y, `Senior break-even is based on the lender valuation: ${lenderValuation.reason} — ${lenderValuation.author}, ${fmtDate(lenderValuation.date)}.`);
+    y = bodyText(y, `Senior break-even percentages are measured against the lender valuation: ${lenderValuation.reason} — ${lenderValuation.author}, ${fmtDate(lenderValuation.date)}.`);
   }
 
   y = infoRequired(y, 'Security package — first charge, debenture, personal guarantees');
