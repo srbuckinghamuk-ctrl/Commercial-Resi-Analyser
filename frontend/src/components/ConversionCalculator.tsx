@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { runAppraisal, migrateInputsToV3 } from '../lib/model';
+import { runAppraisal, migrateInputsToV3, migrateV3toV4 } from '../lib/model';
 import type { AppraisalRun, CalculatorInputsV3 } from '../lib/model';
 import { defaultCalculatorInputsV3 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
@@ -111,7 +111,14 @@ export default function ConversionCalculator({ project }: Props) {
     }
   }, [project]);
 
-  const run: AppraisalRun = useMemo(() => runAppraisal(inputs), [inputs]);
+  // R3a: the engine is fed a v4 document. The editable state stays v3-native —
+  // every calculator page below takes `CalculatorInputsV3` props and R3a ships no
+  // UI for the new `programme`/`sales_phasing`/`refinance` blocks — so the v3→v4
+  // widening happens here, at the single call site that reaches the engine.
+  // `migrateV3toV4` is additive-only (the three new blocks default to null), so
+  // this is a no-op numerically: a null programme reproduces the calc-2.1.0 auto
+  // windows bit-for-bit (spec §6.1).
+  const run: AppraisalRun = useMemo(() => runAppraisal(migrateV3toV4(inputs)), [inputs]);
 
   const updateInputs = useCallback((partial: Partial<CalculatorInputsV3>) => {
     setInputs((prev) => ({ ...prev, ...partial }));

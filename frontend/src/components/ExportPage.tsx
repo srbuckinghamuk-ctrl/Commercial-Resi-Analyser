@@ -5,7 +5,7 @@ import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf'
 import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { computeSpider } from '../lib/deal-spider';
-import { runAppraisal, migrateInputsToV3 } from '../lib/model';
+import { runAppraisal, migrateInputsToV3, migrateInputsToV4 } from '../lib/model';
 
 interface ExportPageProps {
   projects: Project[];
@@ -84,6 +84,12 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
         } catch {
           // eligibility optional — spider marks the axis provisional
         }
+        // Deal spider stays on v3 (R3a): `computeSpider` takes
+        // `CalculatorInputsV2 | CalculatorInputsV3` and reads only `deal_spider`
+        // plus fields common to every version — widening its signature is a
+        // deal-spider change, not a programme-engine one, and R3a makes no other
+        // component change. The authoritative appraisal path below is the one
+        // that now feeds v4 to `runAppraisal`.
         spider = computeSpider(migrateInputsToV3(raw, selectedProject), eligibility);
       }
 
@@ -110,7 +116,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
 
       // Single authoritative run — the memo consumes it directly and performs
       // zero recalculation (spec §11.9).
-      const run = runAppraisal(migrateInputsToV3(normaliseUnitAreas(raw), selectedProject));
+      const run = runAppraisal(migrateInputsToV4(normaliseUnitAreas(raw), selectedProject));
 
       let eligibility: EligibilityAssessment | null = null;
       try {
