@@ -1,10 +1,12 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.1.0`.
-**Date:** 13 August 2026
+**Status:** Authoritative. Calculation version `2.2.0`.
+**Date:** 14 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
-**Changelog (2.1.0):** Additive only — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
+**Changelog:** 
+- **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
+- **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
 Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]**/**[R3]** defined now, implemented later. A metric marked R2/R3 must be displayed as "not available" (never a substitute formula) until implemented.
 
@@ -45,7 +47,7 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document: `1` = legacy pre-spec snapshot, `2` = this specification). Outputs are only comparable within a `calc_version`.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks). Outputs are only comparable within a `calc_version`.
 
 ---
 
@@ -318,7 +320,36 @@ Minimum gross sale price giving zero developer profit: `TDC` restated at the bre
 
 R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). `upfront`, `s_curve`, `back_loaded`, `user_defined` are enumerated in the schema and implemented with the dated programme [R2].
 
-**Note (calc 2.1.0):** §5.10 cost-to-complete is derived directly from this straight-line schedule (remaining cost per month = totals less cumulative spend to date under this profile); it is re-derived, not redefined, when the dated programme supersedes this section in R3.
+**Note (calc 2.1.0):** §5.10 cost-to-complete is derived directly from this straight-line schedule (remaining cost per month = totals less cumulative spend to date under this profile); it is re-derived, not redefined, when the dated programme (§6.1, calc 2.2.0) supersedes this section.
+
+### 6.1 Dated programme [R3a — calc 2.2.0]
+
+Inputs v4 adds a nullable `programme` block. `programme = null` (the migration
+default) = auto windows: construction straight-line over months 1..N−2,
+professional and statutory over the first half of that window (§6 above),
+derived from `term_months` at build time — bit-identical to calc 2.1.0.
+
+An explicit programme gives each package (construction, professional,
+statutory) a window `[start_offset, start_offset + duration_months)` and a
+curve. The statutory package spreads CIL/S106 + building control only; the
+prior-approval fee stays at month 0. Acquisition stays at month 0.
+
+Curves, for a window of D months, k = 1..D (1-indexed within the window),
+ideal fraction w_k of the package total; month k pence = round_half_up(total ×
+w_k); the final month absorbs the cumulative residue (invariant: Σ = total):
+
+- straight_line: w_k = 1/D (computed as round(total / D) per month, final
+  absorbs — the calc-2.0.0 function, unchanged).
+- s_curve: cumulative W(k) = (1 − cos(π·k/D)) / 2; w_k = W(k) − W(k−1).
+- back_loaded: w_k = 2k / (D(D+1)).
+- user_defined: weights u_1..u_D (each ≥ 0, Σu > 0, length exactly D);
+  w_k = u_k / Σu.
+
+Validation (input errors, not flags), applying only when `programme` is
+non-null: duration_months ≥ 1; start_offset ≥ 0; start_offset +
+duration_months − 1 ≤ term − 2 (the ≥-2-month sale tail, §6); user_defined
+weight rules above. While calc is 2.2.0, non-null `sales_phasing` or
+`refinance` is a hard validation error ("not yet implemented — R3b").
 
 ---
 
