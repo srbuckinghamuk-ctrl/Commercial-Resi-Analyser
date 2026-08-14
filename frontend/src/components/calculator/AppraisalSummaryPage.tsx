@@ -1,10 +1,11 @@
-import type { AppraisalRun, CalculatorInputsV2 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV3 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import ReconciliationStrip from './ReconciliationStrip';
+import CostToCompleteCard from './CostToCompleteCard';
 
 interface Props {
-  inputs: CalculatorInputsV2;
-  onChange: (partial: Partial<CalculatorInputsV2>) => void;
+  inputs: CalculatorInputsV3;
+  onChange: (partial: Partial<CalculatorInputsV3>) => void;
   run: AppraisalRun;
 }
 
@@ -38,6 +39,62 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
+/** §3.2: developer GDV vs lender-underwritten GDV, the variance between them, and the
+ * provenance (reason — author, date) that produced the lender figure. Renders the existing
+ * "not available" treatment — never a substituted number — whenever `lender_gdv_pence` is
+ * null, whether because no lender valuation was recorded or because a recorded one could not
+ * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
+ * surfaces the distinction via its own validation messages). */
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV3; run: AppraisalRun }) {
+  const { metrics } = run;
+  const lv = inputs.lender_valuation;
+
+  if (metrics.lender_gdv_pence == null || lv == null) {
+    return (
+      <div style={{ marginBottom: 28, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px dashed #1e3a5f' }}>
+        <h4 style={{ color: '#94a3b8', fontSize: 13, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+          Lender GDV variance bridge
+        </h4>
+        <div style={{ color: '#94a3b8', fontSize: 13 }}>
+          n/a — no lender valuation recorded. Add one on the Finance page to see the variance
+          against developer GDV.
+        </div>
+      </div>
+    );
+  }
+
+  const variancePence = metrics.lender_gdv_variance_pence;
+  const variancePct = metrics.lender_gdv_variance_pct;
+  const varianceNegative = variancePence != null && variancePence < 0;
+
+  return (
+    <div style={{ marginBottom: 28, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
+      <h4 style={{ color: '#94a3b8', fontSize: 13, marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1 }}>
+        Lender GDV variance bridge
+      </h4>
+      <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div>
+          <div style={{ color: '#64748b', fontSize: 11, marginBottom: 2 }}>Developer GDV</div>
+          <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 17 }}>{penceToPounds(metrics.gdv_pence)}</div>
+        </div>
+        <div>
+          <div style={{ color: '#64748b', fontSize: 11, marginBottom: 2 }}>Lender GDV</div>
+          <div style={{ color: '#60a5fa', fontWeight: 700, fontSize: 17 }}>{penceToPounds(metrics.lender_gdv_pence)}</div>
+        </div>
+        <div>
+          <div style={{ color: '#64748b', fontSize: 11, marginBottom: 2 }}>Variance</div>
+          <div style={{ color: varianceNegative ? '#ef4444' : '#22c55e', fontWeight: 700, fontSize: 17 }}>
+            {variancePence != null ? penceToPounds(variancePence) : 'n/a'} ({pctOrNa(variancePct)})
+          </div>
+        </div>
+      </div>
+      <div style={{ color: '#94a3b8', fontSize: 13 }}>
+        {lv.reason || '(no reason recorded)'} — {lv.author || '(no author recorded)'}, {lv.date || '(no date recorded)'}
+      </div>
+    </div>
+  );
+}
+
 export default function AppraisalSummaryPage({ inputs, run }: Props) {
   const { metrics } = run;
   const target = inputs.deal_spider.target_profit_on_cost_pct;
@@ -64,10 +121,12 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
         />
         <MetricCard
           label="Lender GDV"
-          value="n/a — Release 2"
-          tooltip="§3.2: lender-underwritten GDV. Defaults to null (unknown), never silently to developer GDV — implemented in Release 2."
+          value={metrics.lender_gdv_pence == null ? 'n/a — no lender valuation recorded' : penceToPounds(metrics.lender_gdv_pence)}
+          tooltip="§3.2: lender-underwritten GDV — Σ lender unit values under the recorded adjustment basis. Defaults to null (unknown), never silently to developer GDV."
         />
       </Group>
+
+      <LenderVarianceBridge inputs={inputs} run={run} />
 
       <Group title="Cost">
         <MetricCard
@@ -171,8 +230,8 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
         />
         <MetricCard
           label="LTGDV"
-          value={`Developer: ${pctOrNa(metrics.ltgdv_developer_pct)} · Lender: n/a — Release 2`}
-          tooltip="§5.6: numerator (both bases) = peak gross senior debt. Denominator = developer GDV [R1] or lender-underwritten GDV [R2, null until set]."
+          value={`Developer: ${pctOrNa(metrics.ltgdv_developer_pct)} · Lender: ${pctOrNa(metrics.ltgdv_lender_pct)}`}
+          tooltip="§5.6: numerator (both bases) = peak gross senior debt. Denominator = developer GDV [R1] or lender-underwritten GDV [R2, null until a lender valuation is recorded]."
         />
         <MetricCard
           label="Peak debt"
@@ -189,6 +248,27 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
           value={reserveRemaining == null ? 'n/a' : penceToPounds(Math.max(0, reserveRemaining))}
           tooltip="§5.8/§4: interest reserve − cumulative capitalised interest, floored at 0 for display. Exhaustion is never hidden — see the reconciliation panel and flags above for the exhaustion month."
         />
+        <MetricCard
+          label="Senior break-even (price)"
+          value={metrics.senior_breakeven_pence == null ? 'n/a' : penceToPounds(metrics.senior_breakeven_pence)}
+          tooltip="§5.11: minimum gross sale price that fully redeems the senior facility — covers the redemption balance, exit fee, disposal costs at that price, and the disclosed enforcement-cost assumption. Null for cash deals (no facility) or when unsolvable."
+        />
+        <MetricCard
+          label="Senior break-even (% of lender GDV)"
+          value={pctOrNa(metrics.senior_breakeven_pct_of_lender_gdv)}
+          tooltip="§5.11: senior break-even price ÷ lender GDV. Null until both the break-even price and a lender valuation are available."
+        />
+        <MetricCard
+          label="Senior break-even (fall from lender GDV)"
+          value={pctOrNa(metrics.senior_breakeven_fall_from_lender_gdv_pct)}
+          tooltip="§5.11: (lender GDV − senior break-even price) ÷ lender GDV — the headroom for values to fall before the senior facility is at risk. Null until both figures are available."
+        />
+        <MetricCard
+          label="Developer break-even"
+          value={metrics.developer_breakeven_pence == null ? 'n/a' : penceToPounds(metrics.developer_breakeven_pence)}
+          tooltip="§5.12: minimum gross sale price covering total development cost (excluding selling costs, which are re-solved at that price) — lender- and debt-independent. Null when there is no disposal to solve for."
+        />
+        <CostToCompleteCard summary={metrics.cost_to_complete} />
       </Group>
     </div>
   );

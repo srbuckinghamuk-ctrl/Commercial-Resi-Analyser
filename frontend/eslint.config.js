@@ -19,5 +19,15 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // Restores the codebase's existing `_name` convention for a destructured
+      // property discarded only to drop it from a rest spread (e.g.
+      // `const { inputs_version: _v2Version, ...rest } = v2`, used across the
+      // v2/v3 migration helpers) — `no-unused-vars` was flagging that pattern
+      // even though the underscore prefix already signals "intentionally
+      // unused" and `ignoreRestSiblings` is the rule's own option for exactly
+      // this destructure-then-spread shape.
+      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^_', argsIgnorePattern: '^_', ignoreRestSiblings: true }],
+    },
   },
 ])

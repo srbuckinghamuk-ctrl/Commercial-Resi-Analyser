@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
-import type { CalculatorInputsV2 } from './model';
+import type { CalculatorInputsV2, CalculatorInputsV3 } from './model';
 import { runAppraisal, migrateInputs } from './model';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
@@ -340,5 +342,57 @@ describe('generateInvestmentMemo', () => {
     });
     expect(text).not.toContain(rawNegativeStr);
     expect(text).toContain(flooredStr);
+  });
+
+  // Release 2b (Task 8): lender GDV, variance bridge + provenance, senior/developer
+  // break-even and cost-to-complete, all read straight off run.metrics — no recalculation.
+  describe('Release 2b lender metrics', () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureG = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV3 };
+
+    it('prints lender GDV, the variance bridge and the lender valuation provenance line', async () => {
+      const run = runAppraisal(fixtureG.inputs);
+      expect(run.metrics.lender_gdv_pence).toBe(108_000_000);
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+      expect(text).toContain('Lender-Underwritten GDV');
+      expect(text).toContain('Variance vs Developer GDV');
+      expect(text).toContain('Fixture: lender haircut for valuation-basis testing');
+      expect(text).toContain('governance');
+    });
+
+    it('prints senior and developer break-even figures with the enforcement-cost assumption', async () => {
+      const run = runAppraisal(fixtureG.inputs);
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+      expect(text).toContain('Senior repayment break-even');
+      expect(text).toContain('Developer profit break-even');
+      expect(text).toContain('enforcement-cost');
+    });
+
+    it('prints the cost-to-complete section', async () => {
+      const run = runAppraisal(fixtureG.inputs);
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+      expect(text).toContain('Cost to Complete');
+      expect(text).toContain('First funding shortfall');
+    });
+
+    it('never substitutes a number for the lender-basis figures when no lender valuation is recorded', async () => {
+      const v2Inputs = baseInputs();
+      const run = runAppraisal(v2Inputs);
+      expect(run.metrics.lender_gdv_pence).toBeNull();
+      expect(run.metrics.ltgdv_lender_pct).toBeNull();
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+      // pdfText decodes the PDF's raw byte stream as latin1, which does not round-trip
+      // WinAnsi-encoded non-ASCII glyphs like the em dash (—) back to their source
+      // character — check the ASCII-safe fragments either side of it instead.
+      expect(text).toContain('not available');
+      expect(text).toContain('no lender valuation recorded');
+      expect(text).not.toContain('Release 2)');
+    });
   });
 });

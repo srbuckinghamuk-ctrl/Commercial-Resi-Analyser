@@ -5,7 +5,7 @@ import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf'
 import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { computeSpider } from '../lib/deal-spider';
-import { runAppraisal, migrateInputs } from '../lib/model';
+import { runAppraisal, migrateInputsToV3 } from '../lib/model';
 
 interface ExportPageProps {
   projects: Project[];
@@ -84,7 +84,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
         } catch {
           // eligibility optional — spider marks the axis provisional
         }
-        spider = computeSpider(migrateInputs(raw, selectedProject), eligibility);
+        spider = computeSpider(migrateInputsToV3(raw, selectedProject), eligibility);
       }
 
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
@@ -110,7 +110,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
 
       // Single authoritative run — the memo consumes it directly and performs
       // zero recalculation (spec §11.9).
-      const run = runAppraisal(migrateInputs(normaliseUnitAreas(raw), selectedProject));
+      const run = runAppraisal(migrateInputsToV3(normaliseUnitAreas(raw), selectedProject));
 
       let eligibility: EligibilityAssessment | null = null;
       try {

@@ -153,6 +153,9 @@ export function generateInvestmentMemo(
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const { inputs, metrics, model, schedule } = run;
   const draft = !run.reconciliation.report_safe;
+  // `inputs` may be a pre-Release-2b v2 document with no `lender_valuation` field at all —
+  // this mirrors the null it would carry on a v3 document with no block recorded.
+  const lenderValuation = 'lender_valuation' in inputs ? inputs.lender_valuation : null;
 
   const totalSqm = inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0);
   const totalSqft = sqmToSqft(totalSqm);
@@ -567,13 +570,29 @@ export function generateInvestmentMemo(
     body: [
       ['Gross Development Value (GDV)', fmt(metrics.gdv_pence)],
       ['Blended £/sq ft', perSqftPence(metrics.gdv_pence, totalSqm)],
+      [
+        'Lender-Underwritten GDV',
+        metrics.lender_gdv_pence === null ? 'not available — no lender valuation recorded' : fmt(metrics.lender_gdv_pence),
+      ],
+      [
+        'Variance vs Developer GDV',
+        metrics.lender_gdv_variance_pence === null
+          ? 'not available — no lender valuation recorded'
+          : `${fmt(metrics.lender_gdv_variance_pence)} (${fmtPctSafe(metrics.lender_gdv_variance_pct)})`,
+      ],
     ],
     styles: { fontSize: 9, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255 },
     bodyStyles: { textColor: [51, 65, 85] },
     columnStyles: { 1: { halign: 'right' } },
   });
-  y = lastAutoTableFinalY(doc) + 6;
+  y = lastAutoTableFinalY(doc) + 4;
+  // Provenance line (spec §3.2: the lender GDV variance is displayed with reason/author/date)
+  // — only ever shown alongside a lender valuation that actually produced a computable GDV.
+  if (metrics.lender_gdv_pence !== null && lenderValuation != null) {
+    y = bodyText(y, `Lender valuation basis: ${lenderValuation.reason} — ${lenderValuation.author}, ${fmtDate(lenderValuation.date)}.`);
+  }
+  y += 2;
 
   y = subHeading(y, 'Cost Plan');
   // Every row below is either a raw stored input (rate, area, fixed fee) or an
@@ -738,6 +757,49 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
+  y = subHeading(y, 'Cost to Complete');
+  if (metrics.cost_to_complete === null) {
+    y = bodyText(y, 'Cost to complete: not available.');
+  } else {
+    const ctc = metrics.cost_to_complete;
+    y = bodyText(
+      y,
+      `First funding shortfall: ${ctc.first_shortfall_month !== null ? `month ${ctc.first_shortfall_month + 1}` : 'none — fully funded throughout'}. Maximum shortfall: ${fmt(ctc.max_shortfall_pence)}.`,
+    );
+    if (y > 220) {
+      newPage();
+      y = MARGIN_T;
+    }
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Month', 'Remaining Cost', 'Remaining Funding', 'Surplus']],
+      body: ctc.months.map((m) => [
+        `Month ${m.month + 1}`,
+        fmt(m.remaining_cost_pence),
+        fmt(m.remaining_funding_pence),
+        fmt(m.surplus_pence),
+      ]),
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255, fontSize: 7 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: {
+        0: { cellWidth: 18 },
+        1: { halign: 'right' },
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+      },
+      didParseCell(data) {
+        if (data.column.index === 3 && data.section === 'body') {
+          const raw = ctc.months[data.row.index]?.surplus_pence;
+          if (raw != null && raw < 0) data.cell.styles.textColor = [220, 38, 38];
+        }
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 8;
+  }
+
   // ── Section 7: Funding Request ──
   if (y > 200) {
     newPage();
@@ -816,7 +878,10 @@ export function generateInvestmentMemo(
       ['Net LTC (excl. finance)', fmtPctSafe(metrics.net_ltc_pct)],
       ['Gross LTC (incl. finance)', fmtPctSafe(metrics.gross_ltc_pct)],
       ['LTGDV (developer basis)', fmtPctSafe(metrics.ltgdv_developer_pct)],
-      ['LTGDV (lender basis)', metrics.ltgdv_lender_pct === null ? 'not available (Release 2)' : fmtPct(metrics.ltgdv_lender_pct)],
+      [
+        'LTGDV (lender basis)',
+        metrics.ltgdv_lender_pct === null ? 'not available — no lender valuation recorded' : fmtPct(metrics.ltgdv_lender_pct),
+      ],
       ['Facility headroom (gross)', metrics.facility_headroom_pence === null ? 'not available — no facility' : fmt(metrics.facility_headroom_pence)],
       // Floored at reporting per spec §4 ("interest_reserve_remaining ... floored at
       // reporting, exhaustion is flagged, not hidden") — AppraisalSummaryPage applies
@@ -826,6 +891,9 @@ export function generateInvestmentMemo(
       ['Interest rate', `${fmtPct(inputs.finance.annual_interest_rate_pct)} p.a.`],
       ['Interest type', inputs.finance.interest_type === 'rolled_up' ? 'Rolled up' : 'Serviced'],
       ['Facility term', `${inputs.finance.term_months} months`],
+      ['Senior repayment break-even (price)', metrics.senior_breakeven_pence === null ? 'not available' : fmt(metrics.senior_breakeven_pence)],
+      ['Senior break-even, % of lender GDV', fmtPctSafe(metrics.senior_breakeven_pct_of_lender_gdv)],
+      ['Senior break-even, fall from lender GDV', fmtPctSafe(metrics.senior_breakeven_fall_from_lender_gdv_pct)],
     ],
     styles: { fontSize: 9, cellPadding: 2 },
     bodyStyles: { textColor: [51, 65, 85] },
@@ -838,8 +906,11 @@ export function generateInvestmentMemo(
   y = lastAutoTableFinalY(doc) + 4;
   y = bodyText(
     y,
-    'Net LTC = cumulative net senior advances (principal draws + capitalised non-interest fees) ÷ development cost before disposal and finance (spec §5.4). Gross LTC = peak gross senior debt ÷ total development cost, TDC (spec §5.5). LTGDV = peak gross senior debt ÷ GDV; the lender-underwritten GDV basis is not yet available (Release 2).',
+    'Net LTC = cumulative net senior advances (principal draws + capitalised non-interest fees) ÷ development cost before disposal and finance (spec §5.4). Gross LTC = peak gross senior debt ÷ total development cost, TDC (spec §5.5). LTGDV = peak gross senior debt ÷ GDV [developer basis], or ÷ lender-underwritten GDV [lender basis, not available until a lender valuation is recorded]. Senior repayment break-even (spec §5.11) = minimum gross sale price fully redeeming the senior facility, including the disclosed enforcement-cost assumption of ' + fmt(inputs.finance.enforcement_cost_assumption_pence) + '.',
   );
+  if (metrics.senior_breakeven_pence !== null && lenderValuation != null) {
+    y = bodyText(y, `Senior break-even is based on the lender valuation: ${lenderValuation.reason} — ${lenderValuation.author}, ${fmtDate(lenderValuation.date)}.`);
+  }
 
   y = infoRequired(y, 'Security package — first charge, debenture, personal guarantees');
   y = infoRequired(y, 'Drawdown profile, priority of repayment');
@@ -863,6 +934,10 @@ export function generateInvestmentMemo(
       ['Profit on GDV', fmtPctSafe(metrics.profit_on_gdv_pct)],
       ['Hold Period', `${inputs.finance.term_months} months`],
       [`Total Profit${metrics.profit_is_unrealised ? ' (unrealised)' : ''}`, fmt(metrics.profit_pence)],
+      [
+        'Developer profit break-even (price)',
+        metrics.developer_breakeven_pence === null ? 'not available — no disposal to solve for' : fmt(metrics.developer_breakeven_pence),
+      ],
     ],
     styles: { fontSize: 9, cellPadding: 2 },
     bodyStyles: { textColor: [51, 65, 85] },
@@ -872,7 +947,11 @@ export function generateInvestmentMemo(
       1: { halign: 'right' },
     },
   });
-  y = lastAutoTableFinalY(doc) + 6;
+  y = lastAutoTableFinalY(doc) + 4;
+  y = bodyText(
+    y,
+    'Developer profit break-even (spec §5.12) = minimum gross sale price covering total development cost excluding selling costs (re-solved at that price) — lender- and debt-independent; distinct from the senior repayment break-even above.',
+  );
 
   y = infoRequired(y, 'Waterfall / promote structure (if JV)');
 

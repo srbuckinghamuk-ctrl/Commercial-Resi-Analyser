@@ -135,6 +135,52 @@ export function migrateInputs(
 }
 
 /**
+ * Normalises any stored snapshot (v1, v2 or v3) to v3 — the shape every Task 8
+ * UI/report consumer needs from Release 2b onward, so a component never has to
+ * branch on the snapshot's saved version. v1/v2 snapshots route through the
+ * existing migrateInputs() + migrateV2toV3() chain unchanged. A v3 snapshot is
+ * merged onto v3 defaults field-by-field (mirroring migrateInputs' own v2-merge
+ * branch above) so fields added to the schema after the snapshot was saved get
+ * sane defaults instead of `undefined`, rather than being routed through the v1
+ * fallback path (which would misread a v3 `finance` object as v1-shaped and
+ * silently produce garbage facility terms).
+ */
+export function migrateInputsToV3(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV3 {
+  if (isV3(snapshot)) {
+    const defaults = migrateV2toV3(defaultCalculatorInputsV2(project));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV3>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 3,
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: saved.unit_mix ?? defaults.unit_mix,
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV2toV3(migrateInputs(snapshot, project));
+}
+
+/**
  * Upgrades a v2 document to v3 by stamping `inputs_version: 3` and adding the
  * (nullable) `lender_valuation` block. Every other field is carried across
  * unchanged -- this migration is purely additive (spec calc 2.1.0, design §B1:

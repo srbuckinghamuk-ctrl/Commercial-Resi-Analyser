@@ -1,8 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { runAppraisal, migrateInputs } from '../lib/model';
-import type { AppraisalRun, CalculatorInputsV2 } from '../lib/model';
-import { defaultCalculatorInputsV2 } from '../lib/conversion-defaults';
+import { runAppraisal, migrateInputsToV3 } from '../lib/model';
+import type { AppraisalRun, CalculatorInputsV3 } from '../lib/model';
+import { defaultCalculatorInputsV3 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
@@ -73,8 +73,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV2>(() =>
-    defaultCalculatorInputsV2(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV3>(() =>
+    defaultCalculatorInputsV3(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -84,7 +84,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV2(project));
+      setInputs(defaultCalculatorInputsV3(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -92,13 +92,13 @@ export default function ConversionCalculator({ project }: Props) {
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            // Migrate onto v2 defaults so snapshots saved before newer
-            // sections (or v1 snapshots) existed still load cleanly. The
+            // Migrate onto v3 defaults so snapshots saved before newer
+            // sections (or v1/v2 snapshots) existed still load cleanly. The
             // live runAppraisal(inputs) result below is always the display
             // source -- stored legacy columns are never shown as current,
             // even when status is 'legacy_unreconciled'; the next save
             // migrates the stored record.
-            setInputs(migrateInputs(appraisal.inputs_snapshot as Record<string, unknown>, project));
+            setInputs(migrateInputsToV3(appraisal.inputs_snapshot as Record<string, unknown>, project));
             setSavedId(appraisal.id);
           }
           setAppraisalRecord(appraisal);
@@ -113,7 +113,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   const run: AppraisalRun = useMemo(() => runAppraisal(inputs), [inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV2>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV3>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 

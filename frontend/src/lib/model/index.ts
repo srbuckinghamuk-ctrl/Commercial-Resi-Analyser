@@ -8,13 +8,14 @@ import { reconcile, validateInputs } from './validation';
 import type { ReconciliationStatus, ValidationIssue } from './validation';
 
 export interface AppraisalRun {
-  // Kept as v2 (unwidened) — every existing UI/report consumer (ScenariosPage,
-  // export-investment-memo.ts, deal-spider.ts, ...) still narrows on the v2
-  // shape and is out of scope for this task (Task 8 wires the UI to v3). The
-  // v3 caller path (golden fixtures, the API server) already has the
-  // *original* v3 document it passed in to read lender_valuation from — it
-  // does not need it echoed back through this field.
-  inputs: CalculatorInputsV2;
+  // Widened in Task 8 (Release 2b): UI/report consumers now read the actual
+  // document runAppraisal() was given, v2 or v3 — no cast to a narrower shape.
+  // Fields common to both versions (acquisition, unit_mix, finance, ...) are
+  // accessed identically either way; only `lender_valuation` needs an `in`
+  // check (present on v3 only) or, more simply, deriveMetrics()' own
+  // lender_gdv_pence/ltgdv_lender_pct/etc. outputs on `run.metrics`, which are
+  // already null for v2 callers and never need that check at the read site.
+  inputs: CalculatorInputsV2 | CalculatorInputsV3;
   schedule: Schedule;
   model: MonthlyModel;
   metrics: AppraisalResultV2;
@@ -33,10 +34,10 @@ export function runAppraisal(inputs: CalculatorInputsV2 | CalculatorInputsV3): A
   const metrics = deriveMetrics(inputs, schedule, model);
   const validation = validateInputs(inputs);
   const reconciliation = reconcile(inputs, schedule, model);
-  return { inputs: inputs as CalculatorInputsV2, schedule, model, metrics, validation, reconciliation };
+  return { inputs, schedule, model, metrics, validation, reconciliation };
 }
 
-export { migrateInputs, migrateV2toV3, isV3 } from './migrate';
+export { migrateInputs, migrateV2toV3, migrateInputsToV3, isV3 } from './migrate';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export * from './finance-types';

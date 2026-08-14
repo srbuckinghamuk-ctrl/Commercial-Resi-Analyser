@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { migrateInputs, migrateV2toV3, isV3 } from './migrate';
-import type { CalculatorInputsV2 } from './finance-types';
+import { migrateInputs, migrateV2toV3, migrateInputsToV3, isV3 } from './migrate';
+import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 const V1_SNAPSHOT = {
@@ -115,5 +115,55 @@ describe('migrateV2toV3', () => {
 
     expect(v3.inputs_version).toBe(3);
     expect(v3.lender_valuation).toEqual(illegalBlock);
+  });
+});
+
+describe('migrateInputsToV3', () => {
+  it('chains a v1 snapshot through migrateInputs then migrateV2toV3', () => {
+    const v3 = migrateInputsToV3(V1_SNAPSHOT);
+    expect(v3.inputs_version).toBe(3);
+    expect(v3.lender_valuation).toBeNull();
+    expect(v3.finance.legacy_leverage_pct).toBe(70);
+    expect(v3.finance.requires_confirmation).toBe(true);
+  });
+
+  it('chains a v2 snapshot through migrateV2toV3', () => {
+    const v2 = migrateInputs(V1_SNAPSHOT);
+    const v3 = migrateInputsToV3(v2 as unknown as Record<string, unknown>);
+    expect(v3.inputs_version).toBe(3);
+    expect(v3.finance.legacy_leverage_pct).toBe(70);
+  });
+
+  it('round-trips a v3 snapshot unchanged, including a populated lender_valuation block', () => {
+    const v3In: CalculatorInputsV3 = {
+      ...migrateV2toV3(defaultCalculatorInputsV2()),
+      lender_valuation: {
+        basis: 'fixed_amount', global_value: 100_000_00, per_key_values: null,
+        reason: 'Independent RICS valuation', author: 'J. Smith', date: '2026-01-01',
+      },
+    };
+    const v3Out = migrateInputsToV3(v3In as unknown as Record<string, unknown>);
+    expect(v3Out.lender_valuation).toEqual(v3In.lender_valuation);
+    expect(v3Out.finance).toEqual(v3In.finance);
+    expect(v3Out.unit_mix).toEqual(v3In.unit_mix);
+  });
+
+  it('a v3 snapshot missing fields (schema drift) is merged onto v3 defaults, not misread as v1', () => {
+    // A v3-tagged snapshot with only a subset of fields — never routed through the v1
+    // fallback path, which would otherwise misread `finance` as v1-shaped and silently
+    // produce garbage facility terms (ltv_pct-derived committed facility, etc.).
+    const partial = {
+      inputs_version: 3,
+      finance: { committed_net_facility_pence: 5_000_000, annual_interest_rate_pct: 9 },
+      lender_valuation: null,
+    };
+    const v3 = migrateInputsToV3(partial);
+    expect(v3.inputs_version).toBe(3);
+    expect(v3.finance.committed_net_facility_pence).toBe(5_000_000);
+    expect(v3.finance.annual_interest_rate_pct).toBe(9);
+    // Fields absent from the partial snapshot fall back to v3 defaults, not v1-migration garbage:
+    expect(v3.finance.legacy_leverage_pct).toBeNull();
+    expect(v3.finance.requires_confirmation).toBe(false);
+    expect(v3.lender_valuation).toBeNull();
   });
 });

@@ -1,15 +1,16 @@
 import { useCallback } from 'react';
 import type {
-  CalculatorInputsV2, AppraisalRun, FacilityTerms, EquitySource,
+  CalculatorInputsV3, AppraisalRun, FacilityTerms, EquitySource, LenderValuation,
   FundingSource, InterestType, ArrangementFeeBasis, ExitFeeBasis, EquityDrawRule,
   EquityClassification, EvidenceStatus,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import ReconciliationStrip from './ReconciliationStrip';
+import LenderValuationCard from './LenderValuationCard';
 
 interface Props {
-  inputs: CalculatorInputsV2;
-  onChange: (partial: Partial<CalculatorInputsV2>) => void;
+  inputs: CalculatorInputsV3;
+  onChange: (partial: Partial<CalculatorInputsV3>) => void;
   run: AppraisalRun;
 }
 
@@ -147,6 +148,11 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
     (id: string, partial: Partial<EquitySource>) =>
       updateEquity(equity.map((e) => (e.id === id ? { ...e, ...partial } : e))),
     [equity, updateEquity],
+  );
+
+  const updateLenderValuation = useCallback(
+    (lv: LenderValuation | null) => onChange({ lender_valuation: lv }),
+    [onChange],
   );
 
   const isCash = fin.funding_source === 'cash';
@@ -348,8 +354,21 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
                 penceValue={fin.monitoring_surveyor_fee_pence}
                 onChangePence={(v) => updateFinance({ monitoring_surveyor_fee_pence: v ?? 0 })}
               />
+              <PenceRow
+                label="Enforcement cost assumption (£)"
+                penceValue={fin.enforcement_cost_assumption_pence}
+                onChangePence={(v) => updateFinance({ enforcement_cost_assumption_pence: v ?? 0 })}
+              />
             </>
           )}
+
+          <h4 style={{ color: '#94a3b8', fontSize: 13, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Lender GDV valuation</h4>
+          <LenderValuationCard
+            lenderValuation={inputs.lender_valuation}
+            units={inputs.unit_mix.units}
+            validationIssues={run.validation}
+            onChange={updateLenderValuation}
+          />
 
           <h4 style={{ color: '#94a3b8', fontSize: 13, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Equity sources</h4>
           {equity.map((e, i) => (
