@@ -9,6 +9,7 @@ from app.financial_model.migrate import (
     is_v2_or_later,
     is_v4,
     migrate_inputs,
+    migrate_inputs_to_v3,
     migrate_inputs_to_v4,
     migrate_v2_to_v3,
     migrate_v3_to_v4,
@@ -155,6 +156,59 @@ def test_preserves_a_saved_programme_block_on_a_v4_round_trip():
     v4["programme"] = PROGRAMME
     again = migrate_inputs_to_v4(v4)
     assert again["programme"] == PROGRAMME
+
+
+class TestV4DowngradeToV3:
+    """Mirrors migrate.test.ts's `migrateInputsToV3` v4-downgrade cases. Since
+    Release 3a the server persists every inputs_snapshot as v4, while the v3
+    consumers still hydrate through migrate_inputs_to_v3 / migrateInputsToV3 --
+    so a v4 document must be downgraded here rather than falling through to the
+    v1 fallback, which misreads a v4 `finance` object as v1-shaped and fabricates
+    facility terms."""
+
+    def test_downgrades_a_server_shaped_v4_snapshot_with_finance_intact(self):
+        server_snapshot = migrate_inputs_to_v4(_v3())
+        server_snapshot["finance"]["committed_net_facility_pence"] = 60_000_000
+
+        v3 = migrate_inputs_to_v3(server_snapshot)
+
+        assert v3["inputs_version"] == 3
+        assert v3["finance"]["committed_net_facility_pence"] == 60_000_000
+        # Not the v1-fallback fabrication:
+        assert v3["finance"]["legacy_leverage_pct"] is None
+        assert v3["finance"]["requires_confirmation"] is False
+        assert all(e["id"] != "migrated-cash-equity" for e in v3["equity_sources"])
+        assert all(
+            "Migrated from v1 snapshot" not in (e.get("notes") or "")
+            for e in v3["equity_sources"]
+        )
+
+    def test_drops_the_three_v4_only_blocks(self):
+        """R3a policy: the UI cannot author a non-null programme/sales_phasing/
+        refinance block, so dropping them on the downgrade is information-
+        preserving. R3b lifts hydration to v4 and this branch goes."""
+        v4 = migrate_inputs_to_v4({})
+        v4["programme"] = PROGRAMME
+
+        v3 = migrate_inputs_to_v3(v4)
+
+        assert v3["inputs_version"] == 3
+        assert "programme" not in v3
+        assert "sales_phasing" not in v3
+        assert "refinance" not in v3
+
+    def test_a_partial_v4_snapshot_is_merged_onto_v3_defaults_not_misread_as_v1(self):
+        partial = {
+            "inputs_version": 4,
+            "finance": {"committed_net_facility_pence": 5_000_000, "annual_interest_rate_pct": 9},
+        }
+        v3 = migrate_inputs_to_v3(partial)
+
+        assert v3["inputs_version"] == 3
+        assert v3["finance"]["committed_net_facility_pence"] == 5_000_000
+        assert v3["finance"]["requires_confirmation"] is False
+        assert v3["lender_valuation"] is None
+        assert v3["scenarios"]["upside"]["label"] == "Upside"
 
 
 def test_is_v4_discriminates_on_version_and_facility_shape():

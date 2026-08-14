@@ -142,20 +142,49 @@ export function migrateInputs(
 }
 
 /**
- * Normalises any stored snapshot (v1, v2 or v3) to v3 — the shape every Task 8
- * UI/report consumer needs from Release 2b onward, so a component never has to
- * branch on the snapshot's saved version. v1/v2 snapshots route through the
- * existing migrateInputs() + migrateV2toV3() chain unchanged. A v3 snapshot is
- * merged onto v3 defaults field-by-field (mirroring migrateInputs' own v2-merge
- * branch above) so fields added to the schema after the snapshot was saved get
- * sane defaults instead of `undefined`, rather than being routed through the v1
- * fallback path (which would misread a v3 `finance` object as v1-shaped and
- * silently produce garbage facility terms).
+ * Normalises any stored snapshot (v1, v2, v3 or v4) to v3 — the shape every
+ * Task 8 UI/report consumer needs from Release 2b onward, so a component never
+ * has to branch on the snapshot's saved version. v1/v2 snapshots route through
+ * the existing migrateInputs() + migrateV2toV3() chain unchanged. A v3 snapshot
+ * is merged onto v3 defaults field-by-field (mirroring migrateInputs' own
+ * v2-merge branch above) so fields added to the schema after the snapshot was
+ * saved get sane defaults instead of `undefined`, rather than being routed
+ * through the v1 fallback path (which would misread a v3 `finance` object as
+ * v1-shaped and silently produce garbage facility terms).
+ *
+ * v4 downgrade policy (Release 3a). Since R3a the server persists every saved
+ * `inputs_snapshot` as v4 (`app/api/app.py` `calculate_authoritative`), while
+ * the v3 consumers (ConversionCalculator, ExportPage) still hydrate through
+ * this function. A v4 document therefore MUST be handled here: without an
+ * explicit branch it fails the `isV3` check and falls through to the v1
+ * fallback, which misreads its v4-shaped `finance` object as v1-shaped and
+ * fabricates facility terms (committed facility recomputed from `ltv_pct`,
+ * equity replaced by a synthetic 'migrated-cash-equity' source) — garbage that
+ * the next save then persists. The branch below downgrades a v4 document to v3
+ * by merging it onto v3 defaults and DROPPING the three v4-only blocks
+ * (`programme`, `sales_phasing`, `refinance`).
+ *
+ * Dropping is safe in R3a specifically because no UI can author a non-null
+ * value for any of the three yet: `programme` is engine-/fixture-only, and
+ * non-null `sales_phasing`/`refinance` are hard validation errors until R3b.
+ * So the blocks are always null on a round-trip through the UI, and dropping
+ * them is information-preserving.
+ *
+ * R3b lifts this properly: when the Programme UI lands, the hydration path in
+ * ConversionCalculator/ExportPage must move to `migrateInputsToV4` and the
+ * downgrade below must go — at that point dropping the blocks WOULD lose user
+ * data.
  */
 export function migrateInputsToV3(
   snapshot: Record<string, unknown>,
   project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
 ): CalculatorInputsV3 {
+  if (isV4(snapshot)) {
+    // Drop the v4-only blocks, restamp as v3 and reuse the v3-merge branch below
+    // (one merge implementation, so the two paths cannot drift apart).
+    const { programme: _programme, sales_phasing: _salesPhasing, refinance: _refinance, ...v3Shaped } = snapshot;
+    return migrateInputsToV3({ ...v3Shaped, inputs_version: 3 }, project);
+  }
   if (isV3(snapshot)) {
     const defaults = migrateV2toV3(defaultCalculatorInputsV2(project));
     const saved = snapshot as unknown as Partial<CalculatorInputsV3>;

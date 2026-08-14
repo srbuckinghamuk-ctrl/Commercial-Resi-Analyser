@@ -513,7 +513,7 @@ def _merge_saved_onto_defaults(
 def migrate_inputs_to_v3(
     snapshot: dict[str, Any], project: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalises any stored snapshot (v1, v2 or v3) to v3. Port of
+    """Normalises any stored snapshot (v1, v2, v3 or v4) to v3. Port of
     migrateInputsToV3.
 
     v1/v2 snapshots route through the existing migrate_inputs() +
@@ -528,7 +528,32 @@ def migrate_inputs_to_v3(
     validation at the boundary (a missing `scenarios` key) or under-fill silently
     (an absent `deal_spider.weights` collapsing to `{}`) -- neither of which the
     TS engine does.
+
+    v4 downgrade policy (Release 3a), mirroring migrateInputsToV3's own isV4
+    branch: since R3a the server persists every saved inputs_snapshot as v4
+    (app/api/app.py calculate_authoritative) while the v3 consumers still hydrate
+    through this function, so a v4 document must be handled explicitly -- without
+    the branch it fails the is_v3 check and falls into the v1 fallback, which
+    fabricates facility terms from `ltv_pct` and replaces equity with a synthetic
+    'migrated-cash-equity' source. The branch downgrades v4 -> v3 by merging onto
+    v3 defaults and DROPPING the three v4-only blocks (programme, sales_phasing,
+    refinance).
+
+    Dropping is safe in R3a specifically because no UI can author a non-null value
+    for any of the three yet (programme is engine-/fixture-only; non-null
+    sales_phasing/refinance are hard validation errors until R3b), so the blocks
+    are always None on a round-trip through the UI. R3b lifts hydration to v4
+    properly and this branch must then go -- at that point dropping the blocks
+    WOULD lose user data.
     """
+    if is_v4(snapshot):
+        # Drop the v4-only blocks, restamp as v3 and reuse the v3-merge branch
+        # below (one merge implementation, so the two paths cannot drift apart).
+        v3_shaped = {
+            k: v for k, v in snapshot.items()
+            if k not in ("programme", "sales_phasing", "refinance")
+        }
+        return migrate_inputs_to_v3({**v3_shaped, "inputs_version": 3}, project)
     if is_v3(snapshot):
         defaults = migrate_v2_to_v3(default_calculator_inputs_v2(project))
         return {**_merge_saved_onto_defaults(defaults, snapshot), "inputs_version": 3}
