@@ -77,12 +77,18 @@ Two independent version numbers travel with every appraisal document:
 - **`inputs_version`** — schema version of the *input document*: `1` = legacy pre-spec snapshot
   (the shape the product used before Release 1); `2` = Release 1's `CalculatorInputsV2` shape;
   `3` = Release 2b's `CalculatorInputsV3` shape (adds the optional `lender_valuation` block and
-  `finance.enforcement_cost_assumption_pence`, see `migration-notes.md` §5). Every new save
-  persists `inputs_version: 3` — the migration chain v1→v2→v3 is applied in-place before
-  persistence, so the stored document is never left in an older shape after a save.
+  `finance.enforcement_cost_assumption_pence`, see `migration-notes.md` §5); `4` = Release 3a's
+  `CalculatorInputsV4` shape (adds the optional `programme`, `sales_phasing` and `refinance`
+  blocks, spec §6.1). Every new save persists `inputs_version: 4` — the migration chain
+  v1→v2→v3→v4 is applied in-place before persistence, so the stored document is never left in
+  an older shape after a save.
 
-`calc_version` and `inputs_version` are independent axes: a v3-shaped input document is always
-what calc `2.2.0` consumes; no older-shaped input reaches the engines without migration.
+`calc_version` and `inputs_version` are independent axes. Calc `2.2.0` consumes v2, v3 and v4
+input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis metrics
+are null, and a document with `programme: null` produces a byte-identical schedule to its v3
+source), but **v4 is canonical server-side**: `calculate_authoritative` migrates whatever arrives
+to v4 before validating, calculating and persisting it, so no older-shaped input reaches the
+engines without migration and no older-shaped document is ever stored.
 
 ## 4. Status lifecycle
 

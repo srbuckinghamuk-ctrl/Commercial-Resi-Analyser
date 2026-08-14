@@ -174,9 +174,10 @@ class TestInvariantMatrix:
     """Python port of frontend/src/lib/model/invariants.test.ts's top `describe` block
     (spec Sec 4/Sec 8 roll-forward invariant, Sec 5.7 peak debt, Sec 3.9/Sec 9 zero-debt
     cost, Sec 4.4 retained exits, Sec 6 schedule spreads, Sec 3.12/Sec 7 profit identity,
-    Sec 7 TDC identity): every golden fixture run through the same 4 derived variants
-    (base/retain_all/serviced/term=1) TS exercises, giving the same widened coverage on
-    the Python side. Closes the gap recorded in docs/financial-model/test-cases.md Sec 4
+    Sec 7 TDC identity): every golden fixture run through the same 5 derived variants
+    (base/retain_all/serviced/term=1/programme -- the last fitting a generic dated
+    programme to the variant's term, spec Sec 6.1) TS exercises, giving the same widened
+    coverage on the Python side. Closes the gap recorded in docs/financial-model/test-cases.md Sec 4
     and Sec 7. Each TS `it()` in that describe block has a one-to-one Python method
     below (same order), rather than one flat function, so a single invariant's failure
     doesn't mask the others -- the same diagnostic granularity as the TS suite."""

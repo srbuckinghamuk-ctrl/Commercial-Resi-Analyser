@@ -1,10 +1,21 @@
 """Port of frontend/src/lib/model/curves.ts (spec Sec 6.1, calc 2.2.0).
 
-Float parity rule: the weight arithmetic must match the TS engine
-float-for-float, so every expression below keeps curves.ts's exact operation
-order (both languages evaluate IEEE-754 doubles, so identical order gives
-identical bits) and uses ``money_round`` -- the package's Math.round equivalent
--- wherever curves.ts calls ``Math.round``.
+Float parity rule: the weight arithmetic must match the TS engine as closely as
+two runtimes allow, so every expression below keeps curves.ts's exact operation
+order and uses ``money_round`` -- the package's Math.round equivalent -- wherever
+curves.ts calls ``Math.round``. Both languages evaluate IEEE-754 doubles, and the
+basic operations (+ - * /) are correctly rounded, so identical order gives
+identical bits for those. ``cos()`` is the exception: it is not required to be
+correctly rounded by IEEE-754, so Python's libm and V8's implementation may
+differ by roughly 1 ulp on the same argument. That is a real, if unlikely, source
+of a one-pence divergence after ``money_round``.
+
+This is not left to chance: the golden fixtures and the parity matrix are the
+tripwire -- any such divergence fails them rather than reaching a user. If it
+ever does fire, the remedy is a spec amendment (tabulate the curve weights so
+both engines read the same fixed numbers instead of each computing ``cos()``),
+not a tolerance -- see docs/financial-model/model-governance.md on spec-first
+changes.
 
 Port deviation: ``SpendCurve`` itself lives in types.py rather than here (its
 TS home), because declaring it here would create an import cycle -- see the

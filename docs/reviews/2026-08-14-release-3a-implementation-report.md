@@ -119,24 +119,32 @@ flags-on-result refactor, and the version bump all landed as specified).
 
 ## Deferred / known items
 
-**Carried into the R3b entry checklist (must be resolved before R3b writes any
-v4 snapshot to the database):**
+**Carried into the R3b entry checklist:**
 
-- **Data-loss hazard, unresolved**: `ConversionCalculator.tsx:101` (state
-  hydration on load) and `ExportPage.tsx:93` (`computeSpider` input) still call
-  `migrateInputsToV3`, not `migrateInputsToV4`. Task 7 switched the two call
-  sites the plan named (the `runAppraisal` feed paths) to v4, but these two
-  additional sites were identified in review as also needing the switch. They
-  are inert today only because persisted state is still schema v3 (nothing yet
-  writes a v4 snapshot); the moment R3b's Programme UI persists a `programme`
-  block, a saved v4 document loaded through either of these paths would fall
-  through `isV3`'s check to the v1 fallback path and silently garble finance
-  terms. Flagged as an IMPORTANT R3b-entry blocker in the execution ledger;
-  confirmed still present in the codebase as of this report.
-- Stale docstring: `tests/test_financial_model_fixtures.py:177`
-  (`TestInvariantMatrix`) still reads "4 derived variants" — Task 7 added a 5th
-  (the programme variant) but the comment wasn't updated. Cosmetic; confirmed
-  still present.
+- **Data-loss hazard — was LIVE at merge, now FIXED.** `ConversionCalculator.tsx:101`
+  (state hydration on load) and `ExportPage.tsx:93` (`computeSpider` input) call
+  `migrateInputsToV3`, not `migrateInputsToV4`. An earlier draft of this report
+  scoped this as an R3b-entry item ("inert until R3b persists a programme block").
+  That scoping was **wrong**: this release itself makes the server persist every
+  `inputs_snapshot` as v4 (`app/api/app.py` `calculate_authoritative`,
+  `inputs_version: 4`), so from the moment R3a merges, *every* saved appraisal
+  reloaded through either path is a v4 document. It failed `isV3`'s check, fell
+  through to the v1 fallback, and silently garbled finance terms — reproduced:
+  `committed_net_facility` 60,000,000 → 2,666,720, equity replaced by a fabricated
+  "Migrated from v1 snapshot" source, with the garbage persisted on the next save.
+  Fixed in the final-review fix wave by adding an **`isV4` downgrade branch to
+  `migrateInputsToV3` in both engines** (`frontend/src/lib/model/migrate.ts`,
+  `app/financial_model/migrate.py`): a v4 document is merged onto v3 defaults and
+  the three v4-only blocks (`programme`, `sales_phasing`, `refinance`) are dropped
+  — safe in R3a only because no UI can author a non-null value for any of them.
+  Regression tests cover both engines.
+  **Still carried into R3b:** when the Programme UI lands, hydration in these two
+  components must be lifted to `migrateInputsToV4` and the downgrade branch
+  removed — at that point dropping the blocks *would* lose user data.
+- ~~Stale docstring: `tests/test_financial_model_fixtures.py:177`
+  (`TestInvariantMatrix`) reads "4 derived variants" — Task 7 added a 5th (the
+  programme variant) but the comment wasn't updated.~~ **Fixed** in the
+  final-review fix wave (now names all five, programme included).
 - Correction to an earlier draft of this report: the §5.10 stale cross-reference
   flagged at Task 1 review ("re-derived when the dated programme lands (R3)")
   was **closed by Task 9**, not carried forward. `calculation-specification.md:305`
@@ -149,13 +157,13 @@ v4 snapshot to the database):**
   a discretionary companion edit (see `task-9-report.md` §3) so the two notes
   wouldn't read inconsistently. Both rewordings verified against the current
   file; no open §5.10/§6 staleness remains.
-- `docs/financial-model/calculation-specification.md:11` — the legend sentence
+- ~~`docs/financial-model/calculation-specification.md:11` — the legend sentence
   ("A metric marked R2/R3 must be displayed as 'not available' ... until
-  implemented") is unchanged and now sits awkwardly next to the same line's own
-  "**[R3a]** Release 3 programme engine (calc 2.2.0, implemented)" clause — R3a
-  metrics are in fact available, so the blanket R2/R3 sentence is imprecise for
-  the R3a subset. Flagged at Task 1 review as a minor wording gap; confirmed
-  still present verbatim, still open.
+  implemented") sits awkwardly next to the same line's own "**[R3a]** Release 3
+  programme engine (calc 2.2.0, implemented)" clause.~~ **Fixed** in the
+  final-review fix wave: the not-available rule is now scoped to markers meaning
+  "defined now, implemented later" (R2, R3b, bare R3), explicitly excluding the
+  implemented ones (R1, R3a).
 - Two of the three files the ledger listed as still typing `runAppraisal`
   inputs narrower than the full `AnyCalculatorInputs` union are confirmed
   still narrow: `ScenariosPage.tsx` (`inputs: CalculatorInputsV3` prop type)
@@ -211,7 +219,14 @@ R3a (programme engine, calc 2.2.0) is complete on the
 this report. All five gates green with counts re-verified independently for
 this report (frontend vitest 497, tsc clean, eslint clean, build clean; backend
 pytest 489). The identity invariant holds across the full pre-existing fixture
-corpus and the new fixture H. The one carried-forward blocker for R3b is the
-`migrateInputsToV3` call sites in `ConversionCalculator.tsx` and
-`ExportPage.tsx`, which must be switched to v4 before R3b's Programme UI can
-safely persist a `programme` block.
+corpus and the new fixture H.
+
+A final whole-branch review then found the `migrateInputsToV3` hydration hazard
+above to be **live at merge, not deferred** (this release is what makes the
+server persist v4), plus a pre-validation resource-exhaustion path and a
+NaN-weights 500. All were fixed in a single fix wave before merge — see the
+commit series and `.superpowers/sdd/2026-08-14-release-3a-programme-engine/final-fix-report.md`.
+The carried-forward R3b item is now narrower: lift `ConversionCalculator.tsx` and
+`ExportPage.tsx` hydration from `migrateInputsToV3` to `migrateInputsToV4` and
+remove the v4→v3 downgrade branch, before R3b's Programme UI persists a
+`programme` block.
