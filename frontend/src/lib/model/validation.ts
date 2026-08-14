@@ -157,6 +157,35 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     err('deal_spider.target_profit_on_cost_pct', 'Target profit on cost must be greater than -100% — this value makes the residual land value calculation non-finite.');
   }
 
+  // Spec §6 (Release 3a): explicit programme windows must sit inside [0, term-2] —
+  // the schedule's programme arm only clamps the upper bound, so a negative
+  // start_offset or an oversized window must be caught here as a hard error.
+  if ('programme' in inputs && inputs.programme != null) {
+    const term = Math.max(1, Math.floor(inputs.finance.term_months));
+    for (const [name, pkg] of Object.entries(inputs.programme.packages)) {
+      const field = `programme.packages.${name}`;
+      if (pkg.duration_months < 1) err(field, 'Package duration must be at least 1 month.');
+      if (pkg.start_offset < 0) err(field, 'Package start month cannot be negative.');
+      if (pkg.start_offset + pkg.duration_months - 1 > term - 2) {
+        err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
+      }
+      if (pkg.curve.kind === 'user_defined') {
+        const w = pkg.curve.weights;
+        if (w.length !== pkg.duration_months) err(field, 'user_defined weights must have one entry per window month.');
+        if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
+        if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
+      }
+    }
+  }
+  // Non-null sales_phasing/refinance blocks exist in the v4 schema but are
+  // unimplemented until Release 3b — never silently ignore an input.
+  if ('sales_phasing' in inputs && inputs.sales_phasing != null) {
+    err('sales_phasing', 'Phased sales are not yet implemented (Release 3b) — remove the block.');
+  }
+  if ('refinance' in inputs && inputs.refinance != null) {
+    err('refinance', 'Refinance modelling is not yet implemented (Release 3b) — remove the block.');
+  }
+
   return issues;
 }
 

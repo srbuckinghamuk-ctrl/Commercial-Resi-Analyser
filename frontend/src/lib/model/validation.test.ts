@@ -3,8 +3,8 @@ import { validateInputs, reconcile } from './validation';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
-import { migrateV2toV3 } from './migrate';
-import type { CalculatorInputsV3 } from './finance-types';
+import { migrateV2toV3, migrateInputsToV4 } from './migrate';
+import type { CalculatorInputsV3, CalculatorInputsV4, ProgrammePackage } from './finance-types';
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
   const inputs = defaultCalculatorInputsV2();
@@ -254,5 +254,48 @@ describe('reconcile', () => {
     const rec = reconcile(inputs, schedule, model);
     expect(rec.funding_complete).toBe(false);
     expect(rec.report_safe).toBe(false);
+  });
+});
+
+describe('v4 programme validation', () => {
+  const withProgramme = (pkg: Partial<ProgrammePackage>) => {
+    const v4 = migrateInputsToV4({});
+    v4.finance.term_months = 12;
+    const ok: ProgrammePackage = { start_offset: 1, duration_months: 6, curve: { kind: 'straight_line' } };
+    v4.programme = { anchor_month: null, packages: {
+      construction: { ...ok, ...pkg }, professional: ok, statutory: ok,
+    } };
+    return v4;
+  };
+  const errorsOn = (field: string, v4: CalculatorInputsV4) =>
+    validateInputs(v4).some((i) => i.severity === 'error' && i.field.startsWith(field));
+
+  it('accepts a well-formed programme', () => {
+    expect(validateInputs(withProgramme({})).filter((i) => i.field.startsWith('programme'))).toEqual([]);
+  });
+  it('rejects duration < 1', () => {
+    expect(errorsOn('programme.packages.construction', withProgramme({ duration_months: 0 }))).toBe(true);
+  });
+  it('rejects negative start_offset', () => {
+    expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: -1 }))).toBe(true);
+  });
+  it('rejects a window breaching the 2-month sale tail (start+duration−1 > term−2)', () => {
+    // start 6 + duration 6 − 1 = 11 > term − 2 = 10 (start 5 would be the legal boundary: 10 ≤ 10)
+    expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: 6, duration_months: 6 }))).toBe(true);
+    expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: 5, duration_months: 6 }))).toBe(false);
+  });
+  it('rejects user_defined weights of the wrong length, negative, or all-zero', () => {
+    for (const weights of [[1, 2], [1, -1, 1, 1, 1, 1], [0, 0, 0, 0, 0, 0]]) {
+      expect(errorsOn('programme.packages.construction',
+        withProgramme({ curve: { kind: 'user_defined', weights } }))).toBe(true);
+    }
+  });
+  it('hard-rejects non-null sales_phasing and refinance while calc is 2.2.0', () => {
+    const v4 = migrateInputsToV4({});
+    v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };
+    expect(errorsOn('sales_phasing', v4)).toBe(true);
+    const v4b = migrateInputsToV4({});
+    v4b.refinance = { month_offset: 6, investment_value_pence: 1, ltv_pct: 60, arrangement_fee_pence: 0, legal_costs_pence: 0 };
+    expect(errorsOn('refinance', v4b)).toBe(true);
   });
 });
