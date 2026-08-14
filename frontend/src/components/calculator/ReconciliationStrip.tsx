@@ -69,7 +69,7 @@ export default function ReconciliationStrip({ run }: Props) {
     rank: v.severity === 'error' ? 0 : 1,
   }));
 
-  const flagEntries: Entry[] = run.model.flags.map((f, i) => ({
+  const flagEntries: Entry[] = run.metrics.flags.map((f, i) => ({
     key: `flag-${i}`,
     message: f.message,
     color: f.severity === 'red' ? RED : f.severity === 'amber' ? AMBER : '#94a3b8',

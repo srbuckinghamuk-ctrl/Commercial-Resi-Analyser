@@ -102,7 +102,7 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Flags by Scenario</h4>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
         {scenarioKeys.map((key) => {
-          const flags = scenarioRuns[key].model.flags;
+          const flags = scenarioRuns[key].metrics.flags;
           return (
             <div key={key} style={{ padding: 12, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', minHeight: 40 }}>
               {flags.length === 0 ? (

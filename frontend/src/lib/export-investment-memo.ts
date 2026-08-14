@@ -1080,7 +1080,7 @@ export function generateInvestmentMemo(
       ['Profit on GDV', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.profit_on_gdv_pct))],
       ['IRR (Annual)', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.irr_annual_pct))],
       ['Return on Equity', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.return_on_equity_pct))],
-      ['Flags', ...scenarioRuns.map((s) => flagSummary(s.run.model.flags))],
+      ['Flags', ...scenarioRuns.map((s) => flagSummary(s.run.metrics.flags))],
     ],
     styles: { fontSize: 9, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255 },
@@ -1110,7 +1110,7 @@ export function generateInvestmentMemo(
       return {
         pocPct: scenRun.metrics.profit_on_cost_pct,
         ltgdvPct: scenRun.metrics.ltgdv_developer_pct,
-        flags: flagShortCodes(scenRun.model.flags),
+        flags: flagShortCodes(scenRun.metrics.flags),
       };
     }),
   );

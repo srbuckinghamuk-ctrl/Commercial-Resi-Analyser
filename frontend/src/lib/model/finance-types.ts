@@ -171,7 +171,8 @@ export type FlagCode =
   | 'senior_outstanding_at_maturity' | 'additional_equity_required'
   | 'negative_profit' | 'requires_confirmation' | 'irr_unavailable'
   | 'unrealised_profit_basis' | 'exit_fee_not_charged'
-  | 'senior_breakeven_unsolvable' | 'developer_breakeven_unsolvable';
+  | 'senior_breakeven_unsolvable' | 'developer_breakeven_unsolvable'
+  | 'breakeven_cap_exhausted';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -314,6 +315,11 @@ export interface AppraisalResultV2 {
   developer_breakeven_pence: number | null;
   /** Wired in Task 6 (spec §5.10). */
   cost_to_complete: CostToCompleteSummary | null;
+  /** Ledger flags (model.flags, unmutated) followed by metric flags computed by
+   * deriveMetrics itself (senior/developer breakeven unsolvable, cap-exhausted).
+   * Wired in Release 3a Task 6 — deriveMetrics is pure and no longer mutates
+   * model.flags; this is now the single read site for the full flag set. */
+  flags: ModelFlag[];
 }
 
 export const CALC_VERSION = '2.1.0';

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { deriveMetrics, pct } from './metrics';
+import { deriveMetrics, pct, breakevenFlags } from './metrics';
 import { runLedger } from './monthly-engine';
+import { runAppraisal, migrateInputsToV4 } from './index';
 import { defaultCalculatorInputsV2, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
 import type { EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule } from './finance-types';
 
@@ -159,7 +160,10 @@ describe('deriveMetrics — senior_breakeven_unsolvable flag (spec §5.11)', () 
 
     expect(model.redemption_balance_at_disposal_pence).not.toBeNull();
     expect(r.senior_breakeven_pence).toBeNull();
-    const flags = model.flags.filter((f) => f.code === 'senior_breakeven_unsolvable');
+    // Deviation from brief (R3a Task 6): deriveMetrics no longer mutates model.flags — the
+    // flag now lands on the result's own `flags` array (r.flags), not model.flags. Updated
+    // to match the new contract this task establishes; the assertion content is unchanged.
+    const flags = r.flags.filter((f) => f.code === 'senior_breakeven_unsolvable');
     expect(flags).toHaveLength(1);
     expect(flags[0]).toEqual({
       code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
@@ -215,11 +219,44 @@ describe('deriveMetrics — developer_breakeven_unsolvable flag (spec §5.12)', 
 
     expect(schedule.totals.gross_sales_pence).toBeGreaterThan(0);
     expect(r.developer_breakeven_pence).toBeNull();
-    const flags = model.flags.filter((f) => f.code === 'developer_breakeven_unsolvable');
+    // Deviation from brief (R3a Task 6): same rationale as the senior_breakeven_unsolvable
+    // test above — the flag now lands on r.flags, not model.flags.
+    const flags = r.flags.filter((f) => f.code === 'developer_breakeven_unsolvable');
     expect(flags).toHaveLength(1);
     expect(flags[0]).toEqual({
       code: 'developer_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
       message: 'agent fee ≥ 100% — break-even unsolvable',
     });
+  });
+});
+
+describe('flags on result (R3a refactor)', () => {
+  it('deriveMetrics does not mutate model.flags and returns ledger+metric flags', () => {
+    const run = runAppraisal(migrateInputsToV4({}));          // any valid inputs
+    const before = run.model.flags.length;
+    const metrics = deriveMetrics(run.inputs, run.schedule, run.model);
+    expect(run.model.flags.length).toBe(before);              // purity
+    expect(metrics.flags.slice(0, before)).toEqual(run.model.flags);
+  });
+  it('agent fee >= 100% raises the unsolvable flags on the result, not the model', () => {
+    const v4 = migrateInputsToV4({});
+    // Fix (post-review): migrateInputsToV4({}) defaults to an empty unit_mix, so no disposal
+    // is ever booked and the developer break-even branch (guarded on gross_sales_pence > 0)
+    // never runs regardless of fee. Give the fixture one sellable unit — exit_strategy.route
+    // defaults to 'sell_all' — so a solve is actually attempted and can be observed as null.
+    v4.unit_mix = { units: [{ id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: '' }] };
+    v4.exit_strategy.selling_agent_fee_pct = 100;
+    const run = runAppraisal(v4);
+    expect(run.model.flags.some((f) => f.code === 'developer_breakeven_unsolvable')).toBe(false);
+    expect(run.metrics.flags.some((f) => f.code === 'developer_breakeven_unsolvable')).toBe(true);
+  });
+});
+
+describe('breakevenFlags', () => {
+  it('fee >= 100 → unsolvable flags; fee < 100 with a null solve → cap_exhausted', () => {
+    expect(breakevenFlags(true, false, 100).map((f) => f.code)).toEqual(['senior_breakeven_unsolvable']);
+    expect(breakevenFlags(true, false, 2).map((f) => f.code)).toEqual(['breakeven_cap_exhausted']);
+    expect(breakevenFlags(false, true, 2).map((f) => f.code)).toEqual(['breakeven_cap_exhausted']);
+    expect(breakevenFlags(false, false, 2)).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import type {
-  AnyCalculatorInputs, AppraisalResultV2, MonthlyModel, Schedule,
+  AnyCalculatorInputs, AppraisalResultV2, ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
@@ -16,9 +16,31 @@ export function pct(numerator: number, denominator: number): number | null {
   return Math.round((numerator / denominator) * 10000) / 100;
 }
 
+/** Pure flag construction for the two break-even solvers (spec §5.11/§5.12).
+ * A null solve with fee < 100% means the integer bisection exhausted its
+ * 2^200-pence range — unreachable with real inputs, flagged defensively. */
+export function breakevenFlags(seniorNull: boolean, developerNull: boolean, agentFeePct: number): ModelFlag[] {
+  const out: ModelFlag[] = [];
+  const unsolvable = agentFeePct >= 100;
+  if (seniorNull && unsolvable) out.push({
+    code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+    message: 'agent fee ≥ 100% — break-even unsolvable',
+  });
+  if (developerNull && unsolvable) out.push({
+    code: 'developer_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+    message: 'agent fee ≥ 100% — break-even unsolvable',
+  });
+  if ((seniorNull || developerNull) && !unsolvable) out.push({
+    code: 'breakeven_cap_exhausted', severity: 'red', month: null, amount_pence: null,
+    message: 'break-even solver range exhausted — inputs are implausible; treat all break-even figures as unavailable',
+  });
+  return out;
+}
+
 export function deriveMetrics(
   inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ): AppraisalResultV2 {
+  const flags: ModelFlag[] = [...model.flags];
   const t = schedule.totals;
   // Lender-underwritten GDV (spec §3.2, Release 2b Task 3). null for v2 inputs
   // (no lender_valuation field at all), v3 inputs with the block absent, or a
@@ -77,6 +99,7 @@ export function deriveMetrics(
   let seniorBreakeven: number | null = null;
   let seniorBreakevenPctOfLenderGdv: number | null = null;
   let seniorBreakevenFallFromLenderGdvPct: number | null = null;
+  let seniorAttemptedNull = false;
   if (redemptionBalance != null) {
     const breakevenTerms: SeniorBreakevenTerms = {
       redemption_balance_pence: redemptionBalance,
@@ -88,12 +111,7 @@ export function deriveMetrics(
       enforcement_cost_assumption_pence: inputs.finance.enforcement_cost_assumption_pence,
     };
     seniorBreakeven = solveSeniorBreakeven(breakevenTerms);
-    if (seniorBreakeven == null && breakevenTerms.selling_agent_fee_pct >= 100) {
-      model.flags.push({
-        code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
-        message: 'agent fee ≥ 100% — break-even unsolvable',
-      });
-    }
+    seniorAttemptedNull = seniorBreakeven == null;
     if (seniorBreakeven != null && lenderGdv != null) {
       seniorBreakevenPctOfLenderGdv = pct(seniorBreakeven, lenderGdv.lender_gdv_pence);
       seniorBreakevenFallFromLenderGdvPct =
@@ -110,6 +128,7 @@ export function deriveMetrics(
   // ordering invariant between this figure and senior_breakeven_pence (design §B5) — they
   // cover different cost bases and answer different questions.
   let developerBreakeven: number | null = null;
+  let developerAttemptedNull = false;
   if (t.gross_sales_pence > 0) {
     const tdcExSelling = tdc - t.selling_costs_pence;
     const developerBreakevenTerms: DeveloperBreakevenTerms = {
@@ -118,13 +137,9 @@ export function deriveMetrics(
       selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
     };
     developerBreakeven = solveDeveloperBreakeven(developerBreakevenTerms);
-    if (developerBreakeven == null && developerBreakevenTerms.selling_agent_fee_pct >= 100) {
-      model.flags.push({
-        code: 'developer_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
-        message: 'agent fee ≥ 100% — break-even unsolvable',
-      });
-    }
+    developerAttemptedNull = developerBreakeven == null;
   }
+  flags.push(...breakevenFlags(seniorAttemptedNull, developerAttemptedNull, inputs.exit_strategy.selling_agent_fee_pct));
 
   // Cost-to-complete (spec §5.10, Release 2b Task 6). Computed for every appraisal —
   // schedule.term_months is always >= 1 (buildSchedule floors it), so the series is never
@@ -180,5 +195,6 @@ export function deriveMetrics(
     senior_breakeven_fall_from_lender_gdv_pct: seniorBreakevenFallFromLenderGdvPct,
     developer_breakeven_pence: developerBreakeven,
     cost_to_complete: costToComplete,
+    flags,
   };
 }
