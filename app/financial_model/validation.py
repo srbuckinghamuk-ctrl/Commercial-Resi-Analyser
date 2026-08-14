@@ -236,6 +236,13 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 w = pkg.curve.weights
                 if len(w) != pkg.duration_months:
                     err(field_, "user_defined weights must have one entry per window month.")
+                # Finiteness must be checked explicitly: NaN passes every other rule
+                # here (NaN < 0 is False, and a sum containing NaN is never <= 0) and
+                # then reaches build_schedule, which raises `ValueError: cannot convert
+                # float NaN to integer` -- a 500. json.loads accepts literal
+                # NaN/Infinity, so this is reachable straight off the wire.
+                if any(not math.isfinite(x) for x in w):
+                    err(field_, "user_defined weights must be finite numbers.")
                 if any(x < 0 for x in w):
                     err(field_, "user_defined weights cannot be negative.")
                 if sum(w) <= 0:

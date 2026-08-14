@@ -172,6 +172,12 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       if (pkg.curve.kind === 'user_defined') {
         const w = pkg.curve.weights;
         if (w.length !== pkg.duration_months) err(field, 'user_defined weights must have one entry per window month.');
+        // Finiteness must be checked explicitly: NaN passes every other rule here
+        // (NaN < 0 is false, and a sum containing NaN is never <= 0) and then
+        // poisons the spread. Python's json.loads accepts literal NaN/Infinity, so
+        // the mirrored rule in validation.py is what keeps a hostile payload from
+        // reaching build_schedule and 500-ing there.
+        if (w.some((x) => !Number.isFinite(x))) err(field, 'user_defined weights must be finite numbers.');
         if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
         if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
       }

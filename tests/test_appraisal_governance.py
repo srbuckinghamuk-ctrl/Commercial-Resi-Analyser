@@ -370,3 +370,37 @@ async def test_in_range_programme_violation_still_422s_with_the_spec_worded_issu
         and "cannot be negative" in d.get("message", "")
         for d in detail
     ), detail
+
+
+async def test_nan_user_defined_weights_are_a_422_not_a_500(client, project):
+    """I3 (final R3a review): Python's json.loads accepts literal NaN/Infinity, so
+    a NaN weight arrives off the wire intact. It passed every other weight rule
+    (NaN < 0 is False; a sum containing NaN is never <= 0) and reached
+    build_schedule, which raised `ValueError: cannot convert float NaN to integer`
+    -- a 500. With the finiteness rule plus I2's validation-first ordering it is a
+    422 carrying the spec-worded message."""
+    inputs = fixture_a_inputs()
+    inputs["programme"] = _programme({
+        "start_offset": 0, "duration_months": 2,
+        "curve": {"kind": "user_defined", "weights": [1.0, 1.0]},
+    })
+    # Hand-built body so the NaN literal survives to the server (json.dumps would
+    # otherwise be the only producer of it, and it is exactly what a hostile or
+    # buggy client sends).
+    body = json.dumps({
+        "project_id": project["id"],
+        "name": "NaN weights",
+        "inputs_snapshot": inputs,
+    }).replace('"weights": [1.0, 1.0]', '"weights": [NaN, 1.0]')
+
+    resp = await client.post(
+        "/api/v1/appraisals", content=body, headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert any(
+        d.get("field") == "programme.packages.construction"
+        and "finite numbers" in d.get("message", "")
+        for d in detail
+    ), detail

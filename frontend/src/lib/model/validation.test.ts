@@ -290,6 +290,23 @@ describe('v4 programme validation', () => {
         withProgramme({ curve: { kind: 'user_defined', weights } }))).toBe(true);
     }
   });
+  it('rejects non-finite user_defined weights (NaN, ±Infinity)', () => {
+    // I3 (final R3a review): NaN slips past every other weight rule — NaN < 0 is
+    // false, and a sum containing NaN is never <= 0 — and then poisons the spread,
+    // which the Python side surfaces as a 500 ("cannot convert float NaN to
+    // integer"). Python's json.loads accepts literal NaN/Infinity, so this is
+    // reachable from the wire, not just from code.
+    for (const weights of [
+      [1, NaN, 1, 1, 1, 1],
+      [1, Infinity, 1, 1, 1, 1],
+      [1, -Infinity, 1, 1, 1, 1],
+    ]) {
+      const issues = validateInputs(withProgramme({ curve: { kind: 'user_defined', weights } }));
+      expect(issues.some((i) => i.field === 'programme.packages.construction'
+        && i.severity === 'error'
+        && i.message === 'user_defined weights must be finite numbers.'), String(weights)).toBe(true);
+    }
+  });
   it('hard-rejects non-null sales_phasing and refinance while calc is 2.2.0', () => {
     const v4 = migrateInputsToV4({});
     v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };

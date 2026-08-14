@@ -272,6 +272,27 @@ class TestV4ProgrammeValidation:
                 self.with_programme({"curve": {"kind": "user_defined", "weights": weights}}),
             ), weights
 
+    def test_rejects_non_finite_user_defined_weights(self):
+        """I3 (final R3a review): NaN slips past every other weight rule -- NaN < 0
+        is False, and a sum containing NaN is never <= 0 -- and then reaches
+        build_schedule, which raises `ValueError: cannot convert float NaN to
+        integer` (a 500 at the API boundary). json.loads accepts literal
+        NaN/Infinity, so this is reachable straight off the wire."""
+        for weights in (
+            [1, float("nan"), 1, 1, 1, 1],
+            [1, float("inf"), 1, 1, 1, 1],
+            [1, float("-inf"), 1, 1, 1, 1],
+        ):
+            issues = validate_inputs(
+                self.with_programme({"curve": {"kind": "user_defined", "weights": weights}}),
+            )
+            assert any(
+                i.field == "programme.packages.construction"
+                and i.severity == "error"
+                and i.message == "user_defined weights must be finite numbers."
+                for i in issues
+            ), weights
+
     def test_hard_rejects_non_null_sales_phasing_and_refinance_while_calc_is_2_2_0(self):
         doc = migrate_inputs_to_v4({})
         doc["sales_phasing"] = {"tranches": [{"month_offset": 11, "pct_of_gross_receipts": 100}]}
