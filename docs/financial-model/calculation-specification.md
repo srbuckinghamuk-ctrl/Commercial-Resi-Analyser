@@ -4,11 +4,11 @@
 **Date:** 14 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
-**Changelog:** 
+**Changelog:**
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]**/**[R3]** defined now, implemented later. A metric marked R2/R3 must be displayed as "not available" (never a substitute formula) until implemented.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, defined now, implemented later). A metric marked R2/R3 must be displayed as "not available" (never a substitute formula) until implemented.
 
 ---
 
@@ -318,7 +318,7 @@ Minimum gross sale price giving zero developer profit: `TDC` restated at the bre
 
 ## 6. Spend profiles [R1 minimal]
 
-R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). `upfront`, `s_curve`, `back_loaded`, `user_defined` are enumerated in the schema and implemented with the dated programme [R2].
+R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). The complete set of spend curves is defined in §6.1 (calc 2.2.0, [R3a]): `straight_line`, `s_curve`, `back_loaded`, and `user_defined`. An `upfront` curve was planned but removed before implementation — it is expressible via a 1-month window or user_defined weights concentrated in month 1.
 
 **Note (calc 2.1.0):** §5.10 cost-to-complete is derived directly from this straight-line schedule (remaining cost per month = totals less cumulative spend to date under this profile); it is re-derived, not redefined, when the dated programme (§6.1, calc 2.2.0) supersedes this section.
 
