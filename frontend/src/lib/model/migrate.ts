@@ -1,6 +1,7 @@
 import type { CalculatorInputs, FinanceInputs } from '../conversion-types';
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, EquitySource, FacilityTerms, LenderValuation,
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, EquitySource, FacilityTerms, LenderValuation,
+  ProgrammeInputs, SalesPhasingInputs, RefinanceInputs,
 } from './finance-types';
 import {
   calculateTotalAcquisitionCost, calculateTotalConstructionCost, calculateTotalProfessionalFees,
@@ -15,6 +16,12 @@ function isV2(snapshot: Record<string, unknown>): snapshot is Record<string, unk
 /** A v3 document has the same finance shape as v2, discriminated by inputs_version === 3. */
 export function isV3(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV3 {
   return snapshot.inputs_version === 3 && typeof snapshot.finance === 'object' && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/** A v4 document has the same finance shape as v2/v3, discriminated by inputs_version === 4. */
+export function isV4(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV4 {
+  return snapshot.inputs_version === 4 && typeof snapshot.finance === 'object' && snapshot.finance !== null
     && 'committed_net_facility_pence' in (snapshot.finance as object);
 }
 
@@ -205,5 +212,86 @@ export function migrateV2toV3(v2: CalculatorInputsV2): CalculatorInputsV3 {
     ...rest,
     inputs_version: 3,
     lender_valuation: existingLenderValuation ?? null,
+  };
+}
+
+/**
+ * Normalises any stored snapshot (v1, v2, v3 or v4) to v4 -- the shape every
+ * Task 4+ consumer needs from Release 3a onward. v1/v2/v3 snapshots route
+ * through the existing migrateInputsToV3() + migrateV3toV4() chain unchanged.
+ * A v4 snapshot is merged onto v4 defaults field-by-field (mirroring
+ * migrateInputsToV3's own v3-merge branch above) so fields added to the
+ * schema after the snapshot was saved get sane defaults instead of
+ * `undefined`, rather than being routed through the v1 fallback path.
+ */
+export function migrateInputsToV4(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV4 {
+  if (isV4(snapshot)) {
+    const defaults = migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV4>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 4,
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: saved.unit_mix ?? defaults.unit_mix,
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+    };
+  }
+  return migrateV3toV4(migrateInputsToV3(snapshot, project));
+}
+
+/**
+ * Upgrades a v3 document to v4 by stamping `inputs_version: 4` and adding the
+ * three (nullable) `programme` / `sales_phasing` / `refinance` blocks. Every
+ * other field is carried across unchanged -- this migration is purely
+ * additive (spec §6.1 / design §2.4: outputs are unchanged while all three
+ * are null).
+ *
+ * Precondition: `v3` must not already be a v4 document -- this guards against
+ * double-migration (idempotence), same as migrateV2toV3.
+ *
+ * If `v3` illegally already carries `programme` / `sales_phasing` /
+ * `refinance` keys (e.g. a hand-edited or partially-migrated row), they are
+ * passed through unchanged rather than clobbered -- the type layer (or the
+ * caller) is responsible for validating their shape.
+ */
+export function migrateV3toV4(v3: CalculatorInputsV3): CalculatorInputsV4 {
+  if (isV4(v3 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV3toV4: input is already a v4 document');
+  }
+  const { inputs_version: _v3Version, ...rest } = v3;
+  const extra = v3 as unknown as {
+    programme?: ProgrammeInputs | null;
+    sales_phasing?: SalesPhasingInputs | null;
+    refinance?: RefinanceInputs | null;
+  };
+  return {
+    ...rest,
+    inputs_version: 4,
+    programme: extra.programme ?? null,
+    sales_phasing: extra.sales_phasing ?? null,
+    refinance: extra.refinance ?? null,
   };
 }

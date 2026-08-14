@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { migrateInputs, migrateV2toV3, migrateInputsToV3, isV3 } from './migrate';
+import {
+  migrateInputs, migrateV2toV3, migrateInputsToV3, isV3,
+  migrateV3toV4, migrateInputsToV4,
+} from './migrate';
 import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
@@ -165,5 +168,42 @@ describe('migrateInputsToV3', () => {
     expect(v3.finance.legacy_leverage_pct).toBeNull();
     expect(v3.finance.requires_confirmation).toBe(false);
     expect(v3.lender_valuation).toBeNull();
+  });
+});
+
+describe('migrateV3toV4 / migrateInputsToV4', () => {
+  it('stamps version 4 and nulls the three new blocks', () => {
+    const v3 = migrateInputsToV3({});
+    const v4 = migrateV3toV4(v3);
+    expect(v4.inputs_version).toBe(4);
+    expect(v4.programme).toBeNull();
+    expect(v4.sales_phasing).toBeNull();
+    expect(v4.refinance).toBeNull();
+    expect(v4.finance).toEqual(v3.finance);
+    expect(v4.lender_valuation).toEqual(v3.lender_valuation);
+  });
+  it('throws on double-migration', () => {
+    const v4 = migrateInputsToV4({});
+    expect(() => migrateV3toV4(v4 as never)).toThrow(/already a v4/);
+  });
+  it('migrateInputsToV4 normalises v1, v2, v3 and v4 snapshots', () => {
+    for (const snap of [{}, migrateInputs({}), migrateInputsToV3({}), migrateInputsToV4({})]) {
+      const out = migrateInputsToV4(snap as Record<string, unknown>);
+      expect(out.inputs_version).toBe(4);
+      expect(out.programme).toBeNull();
+    }
+  });
+  it('preserves a saved programme block on a v4 round-trip', () => {
+    const v4 = migrateInputsToV4({});
+    v4.programme = {
+      anchor_month: '2026-09',
+      packages: {
+        construction: { start_offset: 1, duration_months: 6, curve: { kind: 's_curve' } },
+        professional: { start_offset: 2, duration_months: 3, curve: { kind: 'straight_line' } },
+        statutory: { start_offset: 4, duration_months: 2, curve: { kind: 'back_loaded' } },
+      },
+    };
+    const again = migrateInputsToV4(v4 as unknown as Record<string, unknown>);
+    expect(again.programme).toEqual(v4.programme);
   });
 });

@@ -2,6 +2,9 @@ import type {
   AcquisitionInputs, UnitMixInputs, ConversionCostInputs, ExitStrategyInputs,
   RiskItem, ScenarioOverrides, DealSpiderInputs,
 } from '../conversion-types';
+import type { SpendCurve } from './curves';
+
+export type { SpendCurve };
 
 export type FundingSource = 'cash' | 'bridging' | 'development_finance';
 export type InterestType = 'rolled_up' | 'serviced';
@@ -112,6 +115,56 @@ export interface CalculatorInputsV3 {
   deal_spider: DealSpiderInputs;
   lender_valuation: LenderValuation | null;
 }
+
+export interface ProgrammePackage {
+  start_offset: number;
+  duration_months: number;
+  curve: SpendCurve;
+}
+
+export interface ProgrammeInputs {
+  anchor_month: string | null;
+  packages: {
+    construction: ProgrammePackage;
+    professional: ProgrammePackage;
+    statutory: ProgrammePackage;
+  };
+}
+
+export interface SalesPhasingInputs {
+  tranches: Array<{ month_offset: number; pct_of_gross_receipts: number }>;
+}
+
+export interface RefinanceInputs {
+  month_offset: number;
+  investment_value_pence: number;
+  ltv_pct: number;
+  arrangement_fee_pence: number;
+  legal_costs_pence: number;
+}
+
+export interface CalculatorInputsV4 {
+  inputs_version: 4;
+  project_id: string | null;
+  acquisition: AcquisitionInputs;
+  unit_mix: UnitMixInputs;
+  conversion_costs: ConversionCostInputs;
+  finance: FacilityTerms;
+  equity_sources: EquitySource[];
+  exit_strategy: ExitStrategyInputs;
+  risks: RiskItem[];
+  scenarios: {
+    base: ScenarioOverrides; upside: ScenarioOverrides;
+    downside: ScenarioOverrides; severe: ScenarioOverrides;
+  };
+  deal_spider: DealSpiderInputs;
+  lender_valuation: LenderValuation | null;
+  programme: ProgrammeInputs | null;
+  sales_phasing: SalesPhasingInputs | null;
+  refinance: RefinanceInputs | null;
+}
+
+export type AnyCalculatorInputs = CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'

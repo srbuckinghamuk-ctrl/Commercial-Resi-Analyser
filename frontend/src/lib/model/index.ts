@@ -37,7 +37,9 @@ export function runAppraisal(inputs: CalculatorInputsV2 | CalculatorInputsV3): A
   return { inputs, schedule, model, metrics, validation, reconciliation };
 }
 
-export { migrateInputs, migrateV2toV3, migrateInputsToV3, isV3 } from './migrate';
+export {
+  migrateInputs, migrateV2toV3, migrateInputsToV3, isV3, isV4, migrateV3toV4, migrateInputsToV4,
+} from './migrate';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export * from './finance-types';
