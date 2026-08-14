@@ -208,6 +208,12 @@ Executed against the live database on 2026-08-13 (path: backup →
 `stamp --purge 001` → `upgrade head` → verify → restart); see
 `docs/reviews/2026-08-13-release-2a-uat.md` for the full transcript.
 
+**Staleness is now surfaced, not just diagnosable (Release 2b Task 9).** Because the compose boot
+command tolerates `alembic upgrade` failing (availability is preserved even on a broken migration
+run), `GET /health` now reports a `migrations_current: bool` field — comparing the DB's stamped
+`alembic_version` against the repo's Alembic head — and logs at `ERROR` when they disagree, so
+operators no longer have to run the diagnose step above blind: check `/health` first.
+
 ## 5. v2 → v3 (Release 2b Task 2, calc `2.1.0`)
 
 **What's added.** `CalculatorInputsV3` (`app/financial_model/types.py`, `frontend/src/lib/model/finance-types.ts`)

@@ -1,14 +1,19 @@
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.eligibility.engine import run_eligibility
@@ -47,6 +52,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 DbDep = Annotated[AsyncSession, Depends(get_db)]
+
+# app/api/app.py -> app/api -> app -> repo root
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 @asynccontextmanager
@@ -531,11 +539,56 @@ async def article4_lookup(lpa_code: str):
 system_router = APIRouter()
 
 
+@lru_cache(maxsize=1)
+def _repo_head_revision() -> str | None:
+    """The repo's Alembic head revision, per `migrations/`.
+
+    Walking the migration scripts on disk is immutable for the life of the
+    process, so this is cached (lru_cache) rather than re-walked on every
+    /health call — only the DB-side `alembic_version` lookup below runs per
+    request.
+    """
+    cfg = AlembicConfig(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "migrations"))
+    script = ScriptDirectory.from_config(cfg)
+    return script.get_current_head()
+
+
+async def _db_alembic_version(db: AsyncSession) -> str | None:
+    """The DB's stamped alembic revision, or None if `alembic_version` is
+    absent/unreadable (e.g. a fresh `create_all`-only database)."""
+    try:
+        result = await db.execute(text("SELECT version_num FROM alembic_version"))
+        row = result.first()
+        return row[0] if row else None
+    except SQLAlchemyError:
+        await db.rollback()
+        return None
+
+
+async def _migrations_current(db: AsyncSession) -> bool:
+    db_revision = await _db_alembic_version(db)
+    head_revision = _repo_head_revision()
+    current = db_revision is not None and db_revision == head_revision
+    if not current:
+        logger.error(
+            "Migration staleness detected: DB alembic_version=%s does not match "
+            "repo head=%s. Schema may be stale — run `alembic upgrade head`.",
+            db_revision,
+            head_revision,
+        )
+    return current
+
+
 @system_router.get("/health")
-async def system_health():
+async def system_health(db: DbDep):
     from datetime import datetime, timezone
 
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "migrations_current": await _migrations_current(db),
+    }
 
 
 @system_router.get("/metrics")
