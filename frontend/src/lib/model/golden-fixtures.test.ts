@@ -13,9 +13,12 @@ interface Fixture {
   // 'programme' marks a fixture whose `inputs` carry a non-null `programme` block
   // (spec §6.1, calc 2.2.0) — h-programme-scurve.json, Release 3a; 'phased-sales'
   // one whose `inputs` carry a non-null `sales_phasing` block (spec §4.4.1, calc
-  // 2.3.0) — i-phased-sales.json, Release 3b. Both are labels only: every fixture,
-  // whatever its kind, runs through the same `runAppraisal` assertion loop below.
-  kind: 'pipeline' | 'programme' | 'phased-sales';
+  // 2.3.0) — i-phased-sales.json, Release 3b; 'refinance' one carrying a non-null
+  // `refinance` block (spec §4.5, calc 2.3.0) — j-blended-refinance.json, which
+  // carries both blocks and a `blended` exit route. All are labels only: every
+  // fixture, whatever its kind, runs through the same `runAppraisal` assertion
+  // loop below.
+  kind: 'pipeline' | 'programme' | 'phased-sales' | 'refinance';
   // Widened from CalculatorInputsV2 in Release 3a: the corpus now mixes v3 and v4
   // documents, and `runAppraisal` takes the union directly (no downcast adapter).
   inputs: AnyCalculatorInputs;
@@ -40,6 +43,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'g-lender-valuation',
   'h-programme-scurve',
   'i-phased-sales',
+  'j-blended-refinance',
 ];
 
 // Minimal flat-key -> run-structure mapping for the fixture keys that are not direct
@@ -107,30 +111,53 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // added in Release 3b reach the run through FLAT_KEYS rather than through
   // AppraisalResultV2, so a typo in a mapper (or a key silently absent from the mapper
   // table) would compare `undefined` against `undefined` for a fixture that happened not to
-  // pin it, and pass. This flips each mapped key to a deliberately wrong value on fixture I
-  // — the one fixture that pins all of them — and asserts the loop FAILS. If any of these
-  // stops throwing, the corresponding pin above has gone inert.
-  it('negative control: a deliberately-wrong value for each mapped key fails', () => {
-    const fx = fixtures.find((f) => f.name.startsWith('I — phased sell_all'));
-    expect(fx, 'fixture I must be in the corpus').toBeDefined();
-    const run = runAppraisal(fx!.inputs);
+  // pin it, and pass. This flips each mapped key to a deliberately wrong value and asserts
+  // the loop FAILS. If any of these stops throwing, the corresponding pin has gone inert.
+  //
+  // Run over BOTH fixtures that pin all three redemption keys, because they exercise
+  // opposite sides of the same mappers (Release 3b Task 8): fixture I's redemption balance
+  // is 0 and its three-entry schedule ends at 0, while fixture J's is non-zero and its
+  // two-entry schedule ends non-zero. A mapper that returned a constant, or dropped the
+  // final entry, could satisfy one fixture's control while failing the other's.
+  const negativeControls: Array<{ namePrefix: string; wrongValues: Record<string, unknown> }> = [
+    {
+      namePrefix: 'I — phased sell_all',
+      wrongValues: {
+        redemption_balance_at_disposal_pence: 1,                    // truly 0
+        redemption_schedule_months: [9, 10],                        // truly [9, 10, 11]
+        redemption_schedule_balances_pence: [53431299, 10782708, 1], // truly [..., 0]
+        funding_gap_pence: 1,                                       // truly 0
+        peak_debt_pence: 53431300,                                  // truly 53431299 (direct key)
+      },
+    },
+    {
+      namePrefix: 'J — blended exit',
+      wrongValues: {
+        redemption_balance_at_disposal_pence: 4946601,              // truly 4946600
+        redemption_schedule_months: [9, 10],                        // truly [9, 11]
+        redemption_schedule_balances_pence: [53431299, 4946601],    // truly [..., 4946600]
+        funding_gap_pence: 1,                                       // truly 0
+        peak_debt_pence: 53431300,                                  // truly 53431299 (direct key)
+      },
+    },
+  ];
 
-    const wrongValues: Record<string, unknown> = {
-      redemption_balance_at_disposal_pence: 1,                    // truly 0
-      redemption_schedule_months: [9, 10],                        // truly [9, 10, 11]
-      redemption_schedule_balances_pence: [53431299, 10782708, 1], // truly [..., 0]
-      funding_gap_pence: 1,                                       // truly 0
-      peak_debt_pence: 53431300,                                  // truly 53431299 (direct key)
-    };
-    for (const [key, wrong] of Object.entries(wrongValues)) {
-      const poisoned: Fixture = {
-        ...fx!,
-        expected_metrics: { ...fx!.expected_metrics, [key]: wrong },
-      };
-      expect(
-        () => assertExpectedMetrics(run, poisoned, 'negative-control'),
-        `wrong ${key} must fail`,
-      ).toThrow();
-    }
-  });
+  for (const { namePrefix, wrongValues } of negativeControls) {
+    it(`negative control (${namePrefix}): a deliberately-wrong value for each mapped key fails`, () => {
+      const fx = fixtures.find((f) => f.name.startsWith(namePrefix));
+      expect(fx, `fixture "${namePrefix}" must be in the corpus`).toBeDefined();
+      const run = runAppraisal(fx!.inputs);
+
+      for (const [key, wrong] of Object.entries(wrongValues)) {
+        const poisoned: Fixture = {
+          ...fx!,
+          expected_metrics: { ...fx!.expected_metrics, [key]: wrong },
+        };
+        expect(
+          () => assertExpectedMetrics(run, poisoned, 'negative-control'),
+          `wrong ${key} must fail`,
+        ).toThrow();
+      }
+    });
+  }
 });
