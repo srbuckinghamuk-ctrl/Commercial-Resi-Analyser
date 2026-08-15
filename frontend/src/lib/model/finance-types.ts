@@ -200,7 +200,7 @@ export interface Schedule {
   term_months: number;
   uses: MonthUses[];
   receipts: MonthReceipts[];
-  /** Spec §4.5 net refinance proceeds — wired into the ledger by the refinance task (Task 5).
+  /** Spec §4.5 net refinance proceeds, wired into the ledger.
    * null when `refinance` inputs are null (the migration default; byte-identical to calc 2.2.0). */
   refinance: { month: number; net_proceeds_pence: number } | null;
   totals: {
@@ -232,7 +232,7 @@ export interface LedgerMonth {
   funding_gap_pence: number;
   gross_receipts_pence: number;
   net_receipts_pence: number;
-  /** Spec §4.5 — always 0 until the refinance task (Task 5) wires the real value. */
+  /** Spec §4.5 — 0 when no refinance event occurs this month. */
   refinance_proceeds_pence: number;
   distribution_pence: number;
 }

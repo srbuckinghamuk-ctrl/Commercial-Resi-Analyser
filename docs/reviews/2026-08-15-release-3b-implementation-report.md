@@ -1,6 +1,6 @@
 # Release 3b implementation report — exits + UI (calc 2.3.0)
 
-Date: 2026-08-15. Branch `worktree-release-3b-exits-ui` (17 task commits,
+Date: 2026-08-15. Branch `worktree-release-3b-exits-ui` (19 task commits,
 `c0e498e..d81165e`), built on local `main` (R3a head `33eba7b`, which carries
 R1/R2a/R2b/R3a, unpushed to origin) plus the plan commit `612e0d2` and a
 pre-execution plan-errata fix `c0e498e` (Task 6's worksheet tightness-test
@@ -138,7 +138,7 @@ All five gates green, re-verified independently for this report.
 ## Fixtures I and J
 
 **Fixture I** (`fixtures/financial-model/i-phased-sales.json`, kind
-`"phased_sales"`): `f-dev-finance-12mo.json` with `sales_phasing` — three
+`"phased-sales"`): `f-dev-finance-12mo.json` with `sales_phasing` — three
 tranches (`sell_all`) splitting the gross receipts across months 9–11 — and
 no refinance. Months 0–8 are cited from fixture F's ledger (same uses
 schedule, facility terms, equity). Headline pinned values: senior break-even
