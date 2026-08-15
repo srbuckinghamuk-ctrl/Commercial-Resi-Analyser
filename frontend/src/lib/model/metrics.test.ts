@@ -260,3 +260,75 @@ describe('breakevenFlags', () => {
     expect(breakevenFlags(false, false, 2)).toEqual([]);
   });
 });
+
+// Dev-finance deal with a real committed facility, valued units and a sell_all exit —
+// mirrors schedule.test.ts's baseInputs() but on a v4 document (via migrateInputsToV4) and
+// with a committed facility set (unlike the migrateInputsToV4({}) default, whose finance
+// has committed_net_facility_pence: null — no draws, no balance, redemption_balance_at_
+// disposal_pence stays null). Zero committed equity (defaultEquitySources()' amount_pence
+// is 0) forces essentially the whole cost stack through the facility, guaranteeing a large
+// non-null redemption balance at disposal for the §5.11 phased-regime tests below.
+function devFinanceV4() {
+  const v4 = migrateInputsToV4({});
+  v4.acquisition = {
+    purchase_price_pence: 40_000_000, legal_fees_pence: 500_000, survey_cost_pence: 300_000,
+    broker_fee_pct: 1.0, other_acquisition_costs_pence: 0,
+  };
+  v4.unit_mix = {
+    units: [1, 2, 3, 4].map((n) => ({
+      id: `u${n}`, type: '1bed' as const, floor_area_sqm: 50,
+      estimated_value_pence: 30_000_000, comparable_notes: '',
+    })),
+  };
+  v4.conversion_costs = {
+    ...v4.conversion_costs,
+    construction_cost_per_sqm_pence: 100_000, total_construction_sqm: 400, contingency_pct: 10,
+  };
+  v4.finance = {
+    ...DEFAULT_FACILITY_TERMS,
+    funding_source: 'development_finance',
+    committed_net_facility_pence: 150_000_000,
+    committed_gross_facility_pence: 165_000_000,
+    annual_interest_rate_pct: 8,
+    interest_type: 'rolled_up',
+    sales_sweep_pct: 100,
+    term_months: 12,
+  };
+  v4.exit_strategy = {
+    route: 'sell_all', selling_agent_fee_pct: 1.5, selling_legal_fee_pence: 400_000, retained_units: [],
+  };
+  return v4;
+}
+
+describe('§5.11 under phasing', () => {
+  it('phased inputs produce a senior break-even from the replay solver', () => {
+    const v4 = devFinanceV4();
+    v4.sales_phasing = { tranches: [
+      { month_offset: 10, pct_of_gross_receipts: 60 },
+      { month_offset: 11, pct_of_gross_receipts: 40 },
+    ] };
+    const run = runAppraisal(v4);
+    expect(run.model.redemption_balance_at_disposal_pence).not.toBeNull();
+    expect(run.metrics.senior_breakeven_pence).not.toBeNull();
+    expect(run.metrics.flags.some((f) => f.code === 'breakeven_cap_exhausted')).toBe(false);
+  });
+  it('structural unsolvability flags senior_breakeven_unsolvable with a reason, not cap-exhausted', () => {
+    // sweep 0% with phasing: no price redeems
+    const v4 = devFinanceV4();
+    v4.finance.sales_sweep_pct = 0;
+    v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };
+    const run = runAppraisal(v4);
+    expect(run.metrics.senior_breakeven_pence).toBeNull();
+    const f = run.metrics.flags.find((x) => x.code === 'senior_breakeven_unsolvable');
+    expect(f?.message).toMatch(/sales sweep/);
+    expect(run.metrics.flags.some((x) => x.code === 'breakeven_cap_exhausted')).toBe(false);
+  });
+});
+
+describe('breakevenFlags with a structural reason', () => {
+  it('emits senior_breakeven_unsolvable with the reason; no cap flag for that solver', () => {
+    const out = breakevenFlags(false, false, 2, 'no sale price redeems — test reason');
+    expect(out.map((f) => f.code)).toEqual(['senior_breakeven_unsolvable']);
+    expect(out[0].message).toBe('no sale price redeems — test reason');
+  });
+});

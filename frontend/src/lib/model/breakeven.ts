@@ -1,3 +1,6 @@
+import type { FacilityTerms } from './finance-types';
+import { exitFeeAmount } from './monthly-engine';
+
 /** Senior repayment break-even (spec §5.11). Given the senior facility's redemption balance
  * and fees at disposal, plus the exit strategy's selling-cost terms, finds the minimum gross
  * sale price P (pence) that fully redeems the senior facility — i.e. the price at which
@@ -81,4 +84,96 @@ export function solveDeveloperBreakeven(t: DeveloperBreakevenTerms): number | nu
   const lo = feeFloor;
   const hi = Math.ceil(feeFloor / (1 - pct / 100)) + 100;
   return bisectMinimalFeasible(lo, hi, feasible);
+}
+
+/** Phased senior break-even (spec §5.11 phased regime). Freezes the actual run's
+ * draw+capitalised-fee schedule, scales tranche receipts by a uniform factor, and
+ * replays §4.4's sweep (fee-once, sales_sweep_pct, both arms) with §4's interest
+ * recurrence. Excludes any planned refinance (§5.11 is the enforcement question). */
+export interface PhasedSeniorBreakevenTerms {
+  draws_and_fees_pence: number[];   // per month: draw_pence + capitalised_fees_pence, frozen
+  monthly_rate: number;             // annual_interest_rate_pct / 100 / 12
+  rolled_up: boolean;
+  sales_sweep_pct: number;
+  tranches: Array<{ month_offset: number; pct_of_gross_receipts: number }>;
+  selling_agent_fee_pct: number;
+  selling_legal_fee_pence: number;
+  enforcement_cost_assumption_pence: number;
+  finance: FacilityTerms;           // exit-fee basis terms
+  committed_gross_facility_pence: number;
+}
+
+/** Net tranche proceeds at total gross G, split per §4.4.1 (residue absorption,
+ * pro-rata costs); enforcement deducted from the first tranche. Keyed by month. */
+function phasedNetByMonth(t: PhasedSeniorBreakevenTerms, totalGross: number): Map<number, number> {
+  const out = new Map<number, number>();
+  if (totalGross <= 0) return out;
+  const agentFeeTotal = Math.round((totalGross * t.selling_agent_fee_pct) / 100);
+  let grossAllocated = 0, agentAllocated = 0, legalAllocated = 0;
+  t.tranches.forEach((tr, i) => {
+    const last = i === t.tranches.length - 1;
+    const gross = last ? totalGross - grossAllocated
+      : Math.round((totalGross * tr.pct_of_gross_receipts) / 100);
+    const agent = last ? agentFeeTotal - agentAllocated
+      : Math.round((agentFeeTotal * gross) / totalGross);
+    const legal = last ? t.selling_legal_fee_pence - legalAllocated
+      : Math.round((t.selling_legal_fee_pence * gross) / totalGross);
+    grossAllocated += gross; agentAllocated += agent; legalAllocated += legal;
+    const enforcement = i === 0 ? t.enforcement_cost_assumption_pence : 0;
+    out.set(tr.month_offset, (out.get(tr.month_offset) ?? 0) + gross - agent - legal - enforcement);
+  });
+  return out;
+}
+
+/** Replays the ledger recurrence at total gross G; true iff fully redeemed by term end.
+ * Exported for the tightness test only — production callers use the solver. */
+export function phasedReplayRedeems(t: PhasedSeniorBreakevenTerms, totalGross: number): boolean {
+  const netByMonth = phasedNetByMonth(t, totalGross);
+  let balance = 0, peak = 0, redeemed = false;
+  for (let m = 0; m < t.draws_and_fees_pence.length; m++) {
+    const dc = t.draws_and_fees_pence[m];
+    const interest = t.rolled_up ? Math.round((balance + dc) * t.monthly_rate) : 0;
+    balance = balance + dc + interest;
+    if (balance > peak) peak = balance;
+    const net = netByMonth.get(m) ?? 0;
+    if (net > 0 && balance > 0) {
+      const sweepAvailable = Math.round((net * t.sales_sweep_pct) / 100);
+      const fee = redeemed ? 0
+        : exitFeeAmount(t.finance, t.committed_gross_facility_pence, peak, balance);
+      if (sweepAvailable >= balance + fee) {
+        balance = 0;
+        redeemed = true;
+      } else {
+        let repayment = Math.min(sweepAvailable, balance);
+        if (repayment === balance) repayment = Math.max(0, sweepAvailable - fee);
+        balance -= repayment;
+      }
+    }
+  }
+  return redeemed && balance === 0;
+}
+
+export function solveSeniorBreakevenPhased(t: PhasedSeniorBreakevenTerms): number | null {
+  if (t.selling_agent_fee_pct >= 100) return null;
+  if (t.tranches.length === 0) return null;
+  if (t.sales_sweep_pct <= 0) return null;
+  const lastTranche = Math.max(...t.tranches.map((x) => x.month_offset));
+  for (let m = lastTranche + 1; m < t.draws_and_fees_pence.length; m++) {
+    if (t.draws_and_fees_pence[m] > 0) return null;   // structurally unsolvable
+  }
+  // Generous upper bound: the zero-receipts trajectory's terminal balance + fee is the
+  // most that ever needs redeeming (receipts only shrink balances); inflate for costs
+  // and the sweep fraction. Bisection is O(log hi) so looseness is cheap.
+  let b0 = 0, peak0 = 0;
+  for (const dc of t.draws_and_fees_pence) {
+    const interest = t.rolled_up ? Math.round((b0 + dc) * t.monthly_rate) : 0;
+    b0 = b0 + dc + interest;
+    if (b0 > peak0) peak0 = b0;
+  }
+  if (b0 <= 0) return 0;
+  const fee0 = exitFeeAmount(t.finance, t.committed_gross_facility_pence, peak0, b0);
+  const needed = b0 + fee0 + t.selling_legal_fee_pence + t.enforcement_cost_assumption_pence;
+  const sweepFrac = t.sales_sweep_pct / 100;
+  const hi = Math.ceil(needed / (sweepFrac * (1 - t.selling_agent_fee_pct / 100))) + 1000;
+  return bisectMinimalFeasible(0, hi, (g) => phasedReplayRedeems(t, g));
 }

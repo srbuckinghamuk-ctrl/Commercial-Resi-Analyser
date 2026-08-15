@@ -42,4 +42,6 @@ export {
 } from './migrate';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
+export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';
+export type { PhasedSeniorBreakevenTerms } from './breakeven';
 export * from './finance-types';

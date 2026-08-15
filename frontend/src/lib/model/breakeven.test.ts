@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { solveSeniorBreakeven, solveDeveloperBreakeven } from './breakeven';
-import type { SeniorBreakevenTerms, DeveloperBreakevenTerms } from './breakeven';
+import {
+  solveSeniorBreakeven, solveDeveloperBreakeven, solveSeniorBreakevenPhased, phasedReplayRedeems,
+} from './breakeven';
+import type { SeniorBreakevenTerms, DeveloperBreakevenTerms, PhasedSeniorBreakevenTerms } from './breakeven';
+import { DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
+import type { FacilityTerms } from './finance-types';
+
+// Fee-free facility terms (exit_fee_pct 0) — the phased solver's `finance` basis, kept
+// zeroed in every phased test below so it isolates the replay recurrence itself.
+const TERMS_FEE_FREE: FacilityTerms = { ...DEFAULT_FACILITY_TERMS, exit_fee_pct: 0 };
 
 function terms(partial: Partial<SeniorBreakevenTerms>): SeniorBreakevenTerms {
   return {
@@ -195,5 +203,69 @@ describe('solveDeveloperBreakeven (spec §5.12)', () => {
     expect(p).not.toBeNull();
     const disposalCost = Math.round((p! * 1.5) / 100);
     expect(p!).toBeGreaterThanOrEqual(500_000_000 + disposalCost + 400_000);
+  });
+});
+
+describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
+  // 4 months; 10,000,000 drawn month 0; 2%/mo rolled up; fee 0 (isolates the recurrence);
+  // two tranches 50/50 in months 2 and 3; no agent fee/legal/enforcement; 100% sweep.
+  const base = (): PhasedSeniorBreakevenTerms => ({
+    draws_and_fees_pence: [10_000_000, 0, 0, 0],
+    monthly_rate: 0.02,
+    rolled_up: true,
+    sales_sweep_pct: 100,
+    tranches: [
+      { month_offset: 2, pct_of_gross_receipts: 50 },
+      { month_offset: 3, pct_of_gross_receipts: 50 },
+    ],
+    selling_agent_fee_pct: 0,
+    selling_legal_fee_pence: 0,
+    enforcement_cost_assumption_pence: 0,
+    finance: { ...TERMS_FEE_FREE },            // reuse/extend the file's terms helper; exit_fee_pct 0
+    committed_gross_facility_pence: 0,
+  });
+
+  it('matches the hand-derived minimum and is tight (G−1 infeasible)', () => {
+    // Hand derivation: balance m0 = 10,000,000×1.02 = 10,200,000 (fee cap round: 10,000,000
+    // + round(10,000,000×.02)); m1 ×1.02 → 10,404,000; m2 accrue → 10,612,080, sweep G/2 (round
+    // half-up, first tranche); remaining balance carries as 10,612,080 − G/2; m3 accrues that at
+    // ×1.02, and the second (residual) tranche G − G/2 = G/2 must clear it fully:
+    //   G/2 ≥ (10,612,080 − G/2)×1.02
+    //   (G/2)×(1 + 1.02) ≥ 10,612,080×1.02
+    //   (G/2)×2.02 ≥ 10,824,321.6  →  G/2 ≥ 5,358,575.05…  →  G ≥ 10,717,150.1…
+    // Deviation from brief: the brief's own worksheet comment stated G ≥ 10,715,163.5 and an
+    // expected value of 10,715,164, but that arithmetic doesn't satisfy its own stated
+    // inequality (10,715,164/2 × 2.02 = 10,822,315.7 ≠ 10,824,321.6 — a genuine slip, not a
+    // rounding-tolerance question). Root-caused by: (a) re-deriving the closed form above
+    // independently and confirming it needs the /2.02 divisor, not /2; (b) exhaustively
+    // replaying phasedReplayRedeems for every integer G in [10,715,160, 10,717,200] — the
+    // first feasible G is 10,717,150, exactly matching the corrected closed form; (c)
+    // cross-checking against the *next* test's independently-derivable expected value
+    // (10,612,080 + round(10,612,080×0.02) = 10,824,322), which the code reproduces exactly —
+    // proving phasedReplayRedeems/solveSeniorBreakevenPhased themselves are correct and the
+    // fault was isolated to the first worksheet's constant. Corrected here to the
+    // engine-verified value; the code in breakeven.ts is unchanged from the brief.
+    const g = solveSeniorBreakevenPhased(base());
+    expect(g).not.toBeNull();
+    const exact = g as number;
+    expect(Math.abs(exact - 10_717_150)).toBeLessThanOrEqual(2);  // rounding-step tolerance on the derivation
+    // Tightness: the replay predicate itself flips exactly at g (export it for this test).
+    expect(phasedReplayRedeems(base(), exact)).toBe(true);
+    expect(phasedReplayRedeems(base(), exact - 1)).toBe(false);
+  });
+
+  it('single tranche at the final month degenerates towards the static solver world', () => {
+    const t = { ...base(), tranches: [{ month_offset: 3, pct_of_gross_receipts: 100 }] };
+    const g = solveSeniorBreakevenPhased(t);
+    // balance at m3 = 10,000,000×1.02³ (rounded per month); fee 0 → G = that balance.
+    expect(g).toBe(10_612_080 + Math.round(10_612_080 * 0.02));
+  });
+
+  it('returns null when draws continue after the final tranche or sweep is 0%', () => {
+    expect(solveSeniorBreakevenPhased({
+      ...base(), draws_and_fees_pence: [10_000_000, 0, 0, 5_000_000],
+      tranches: [{ month_offset: 2, pct_of_gross_receipts: 100 }],
+    })).toBeNull();
+    expect(solveSeniorBreakevenPhased({ ...base(), sales_sweep_pct: 0 })).toBeNull();
   });
 });

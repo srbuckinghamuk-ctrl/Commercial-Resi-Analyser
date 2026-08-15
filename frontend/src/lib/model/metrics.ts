@@ -6,8 +6,8 @@ import { solveIrr } from './irr';
 import { calculateCommercialSdlt } from '../commercial-sdlt';
 import { computeLenderGdv } from './lender-valuation';
 import { exitFeeAmount } from './monthly-engine';
-import { solveDeveloperBreakeven, solveSeniorBreakeven } from './breakeven';
-import type { DeveloperBreakevenTerms, SeniorBreakevenTerms } from './breakeven';
+import { solveDeveloperBreakeven, solveSeniorBreakeven, solveSeniorBreakevenPhased } from './breakeven';
+import type { DeveloperBreakevenTerms, SeniorBreakevenTerms, PhasedSeniorBreakevenTerms } from './breakeven';
 import { computeCostToComplete } from './cost-to-complete';
 
 /** Percentage to 2 dp; null when the denominator is zero (spec §1.5). */
@@ -18,10 +18,24 @@ export function pct(numerator: number, denominator: number): number | null {
 
 /** Pure flag construction for the two break-even solvers (spec §5.11/§5.12).
  * A null solve with fee < 100% means the integer bisection exhausted its
- * 2^200-pence range — unreachable with real inputs, flagged defensively. */
-export function breakevenFlags(seniorNull: boolean, developerNull: boolean, agentFeePct: number): ModelFlag[] {
+ * 2^200-pence range — unreachable with real inputs, flagged defensively.
+ * `seniorUnsolvableReason` (R3b Task 6): when non-null, the phased solver
+ * (spec §5.11 phased regime) determined the senior break-even is
+ * structurally unsolvable for a reason other than the agent-fee case above
+ * (facility draws continue past the final tranche, or sales_sweep_pct is
+ * 0%) — reported as its own red flag with the caller-supplied message, never
+ * the cap-exhausted flag (that flag means "the search space was exhausted",
+ * not "no search was possible"). */
+export function breakevenFlags(
+  seniorNull: boolean, developerNull: boolean, agentFeePct: number,
+  seniorUnsolvableReason: string | null = null,
+): ModelFlag[] {
   const out: ModelFlag[] = [];
   const unsolvable = agentFeePct >= 100;
+  if (seniorUnsolvableReason != null) out.push({
+    code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
+    message: seniorUnsolvableReason,
+  });
   if (seniorNull && unsolvable) out.push({
     code: 'senior_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
     message: 'agent fee ≥ 100% — break-even unsolvable',
@@ -30,7 +44,7 @@ export function breakevenFlags(seniorNull: boolean, developerNull: boolean, agen
     code: 'developer_breakeven_unsolvable', severity: 'red', month: null, amount_pence: null,
     message: 'agent fee ≥ 100% — break-even unsolvable',
   });
-  if ((seniorNull || developerNull) && !unsolvable) out.push({
+  if ((seniorNull || developerNull) && !unsolvable && seniorUnsolvableReason == null) out.push({
     code: 'breakeven_cap_exhausted', severity: 'red', month: null, amount_pence: null,
     message: 'break-even solver range exhausted — inputs are implausible; treat all break-even figures as unavailable',
   });
@@ -95,27 +109,74 @@ export function deriveMetrics(
   // whenever the real disposal under-swept the balance (spec §4.4), but the break-even
   // question is "what fee would be due on full redemption of this balance", independent of
   // whether the real sale proceeds happened to cover it.
+  // Phased regime (spec §5.11 phased regime, R3b Task 6): when sales_phasing is non-null,
+  // the static single-shot solver above no longer models the disposal (receipts split
+  // across tranche months, spec §4.4.1) — the break-even instead replays the actual run's
+  // draw/fee schedule under a scaled total gross via solveSeniorBreakevenPhased. Two cases
+  // are structurally unsolvable (no bisection attempted, no cap-exhausted flag — a distinct
+  // reasoned flag instead): facility draws continue after the final tranche month (no sale
+  // price can ever redeem what keeps growing), or sales_sweep_pct is 0% (proceeds never
+  // reach the facility at all). `sales_phasing` only exists on v4 inputs; the `'sales_phasing'
+  // in inputs` guard keeps this branch inert for v2/v3 callers exactly as before.
+  const phasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
   const redemptionBalance = model.redemption_balance_at_disposal_pence;
   let seniorBreakeven: number | null = null;
   let seniorBreakevenPctOfLenderGdv: number | null = null;
   let seniorBreakevenFallFromLenderGdvPct: number | null = null;
   let seniorAttemptedNull = false;
+  let seniorUnsolvableReason: string | null = null;
   if (redemptionBalance != null) {
-    const breakevenTerms: SeniorBreakevenTerms = {
-      redemption_balance_pence: redemptionBalance,
-      exit_fee_pence: exitFeeAmount(
-        inputs.finance, model.committed_gross_facility_pence, model.peak_debt_pence, redemptionBalance,
-      ),
-      selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
-      selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
-      enforcement_cost_assumption_pence: inputs.finance.enforcement_cost_assumption_pence,
-    };
-    seniorBreakeven = solveSeniorBreakeven(breakevenTerms);
-    seniorAttemptedNull = seniorBreakeven == null;
-    if (seniorBreakeven != null && lenderGdv != null) {
-      seniorBreakevenPctOfLenderGdv = pct(seniorBreakeven, lenderGdv.lender_gdv_pence);
-      seniorBreakevenFallFromLenderGdvPct =
-        pct(lenderGdv.lender_gdv_pence - seniorBreakeven, lenderGdv.lender_gdv_pence);
+    if (phasing == null) {
+      const breakevenTerms: SeniorBreakevenTerms = {
+        redemption_balance_pence: redemptionBalance,
+        exit_fee_pence: exitFeeAmount(
+          inputs.finance, model.committed_gross_facility_pence, model.peak_debt_pence, redemptionBalance,
+        ),
+        selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
+        selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
+        enforcement_cost_assumption_pence: inputs.finance.enforcement_cost_assumption_pence,
+      };
+      seniorBreakeven = solveSeniorBreakeven(breakevenTerms);
+      seniorAttemptedNull = seniorBreakeven == null;
+      if (seniorBreakeven != null && lenderGdv != null) {
+        seniorBreakevenPctOfLenderGdv = pct(seniorBreakeven, lenderGdv.lender_gdv_pence);
+        seniorBreakevenFallFromLenderGdvPct =
+          pct(lenderGdv.lender_gdv_pence - seniorBreakeven, lenderGdv.lender_gdv_pence);
+      }
+    } else {
+      const lastTranche = Math.max(...phasing.tranches.map((x) => x.month_offset));
+      // Mirrors solveSeniorBreakevenPhased's own internal guard exactly (draws_and_fees_
+      // pence[m] > 0 for m past the last tranche) — capitalised_fees_pence is 0 for every
+      // month past 0 in the current engine (arrangement fee capitalises once, at month 0
+      // only, in runLedger), so this is currently equivalent to draw_pence alone; summing
+      // both here keeps the two checks provably identical rather than coincidentally so.
+      if (model.months.some((mm) => mm.month > lastTranche && mm.draw_pence + mm.capitalised_fees_pence > 0)) {
+        seniorUnsolvableReason =
+          'senior break-even unavailable — facility draws continue after the final sales tranche, so no sale price redeems the facility';
+      } else if (inputs.finance.sales_sweep_pct <= 0) {
+        seniorUnsolvableReason =
+          'senior break-even unavailable — sales sweep is 0%, so sale proceeds never repay the facility';
+      } else {
+        const phasedTerms: PhasedSeniorBreakevenTerms = {
+          draws_and_fees_pence: model.months.map((mm) => mm.draw_pence + mm.capitalised_fees_pence),
+          monthly_rate: inputs.finance.annual_interest_rate_pct / 100 / 12,
+          rolled_up: inputs.finance.interest_type === 'rolled_up',
+          sales_sweep_pct: inputs.finance.sales_sweep_pct,
+          tranches: phasing.tranches,
+          selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
+          selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
+          enforcement_cost_assumption_pence: inputs.finance.enforcement_cost_assumption_pence,
+          finance: inputs.finance,
+          committed_gross_facility_pence: model.committed_gross_facility_pence,
+        };
+        seniorBreakeven = solveSeniorBreakevenPhased(phasedTerms);
+        seniorAttemptedNull = seniorBreakeven == null;
+        if (seniorBreakeven != null && lenderGdv != null) {
+          seniorBreakevenPctOfLenderGdv = pct(seniorBreakeven, lenderGdv.lender_gdv_pence);
+          seniorBreakevenFallFromLenderGdvPct =
+            pct(lenderGdv.lender_gdv_pence - seniorBreakeven, lenderGdv.lender_gdv_pence);
+        }
+      }
     }
   }
 
@@ -139,7 +200,10 @@ export function deriveMetrics(
     developerBreakeven = solveDeveloperBreakeven(developerBreakevenTerms);
     developerAttemptedNull = developerBreakeven == null;
   }
-  flags.push(...breakevenFlags(seniorAttemptedNull, developerAttemptedNull, inputs.exit_strategy.selling_agent_fee_pct));
+  flags.push(...breakevenFlags(
+    seniorAttemptedNull, developerAttemptedNull, inputs.exit_strategy.selling_agent_fee_pct,
+    seniorUnsolvableReason,
+  ));
 
   // Cost-to-complete (spec §5.10, Release 2b Task 6). Computed for every appraisal —
   // schedule.term_months is always >= 1 (buildSchedule floors it), so the series is never
