@@ -248,12 +248,54 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 if sum(w) <= 0:
                     err(field_, "user_defined weights must sum to more than zero.")
 
-    # Non-null sales_phasing/refinance blocks exist in the v4 schema but are
-    # unimplemented until Release 3b -- never silently ignore an input.
-    if getattr(inputs, "sales_phasing", None) is not None:
-        err("sales_phasing", "Phased sales are not yet implemented (Release 3b) - remove the block.")
-    if getattr(inputs, "refinance", None) is not None:
-        err("refinance", "Refinance modelling is not yet implemented (Release 3b) - remove the block.")
+    # Spec Sec 4.4.1 (calc 2.3.0, Release 3b): phased sales tranches. `sales_phasing`
+    # only exists on v4 inputs; the `getattr(..., None)` guard keeps this block inert
+    # for v2/v3 callers exactly as before.
+    sales_phasing = getattr(inputs, "sales_phasing", None)
+    if sales_phasing is not None:
+        term = max(1, math.floor(inputs.finance.term_months))
+        trs = sales_phasing.tranches
+        if inputs.exit_strategy.route == "retain_all":
+            err(
+                "sales_phasing",
+                "Phased sales apply to the sold portion - a retain-all exit has none. "
+                "Remove the block or change the exit route.",
+            )
+        if len(trs) == 0:
+            err("sales_phasing", "Phased sales need at least one tranche.")
+        for i, tr in enumerate(trs):
+            field_ = f"sales_phasing.tranches[{i}]"
+            if not isinstance(tr.month_offset, int) or tr.month_offset < 0 or tr.month_offset > term - 1:
+                err(field_, f"Tranche month must be a whole month between 0 and {term - 1}.")
+            if not math.isfinite(tr.pct_of_gross_receipts) or tr.pct_of_gross_receipts <= 0:
+                err(field_, "Tranche percentage must be a finite number greater than zero.")
+            if i > 0 and not (tr.month_offset > trs[i - 1].month_offset):
+                err(field_, "Tranche months must be strictly increasing.")
+        pct_sum = sum(tr.pct_of_gross_receipts for tr in trs)
+        if len(trs) > 0 and not (abs(pct_sum - 100) <= 1e-9):
+            err("sales_phasing", f"Tranche percentages must sum to 100 (currently {pct_sum}).")
+
+    # Spec Sec 4.5 (calc 2.3.0, Release 3b): the refinance event.
+    refinance = getattr(inputs, "refinance", None)
+    if refinance is not None:
+        term = max(1, math.floor(inputs.finance.term_months))
+        rf = refinance
+        if inputs.exit_strategy.route == "sell_all":
+            err(
+                "refinance",
+                "Refinance applies to the retained portion - a sell-all exit retains "
+                "nothing. Remove the block or change the exit route.",
+            )
+        if not isinstance(rf.month_offset, int) or rf.month_offset < 0 or rf.month_offset > term - 1:
+            err("refinance", f"Refinance month must be a whole month between 0 and {term - 1}.")
+        if not math.isfinite(rf.investment_value_pence) or rf.investment_value_pence < 0:
+            err("refinance", "Refinance investment value must be zero or more.")
+        if not math.isfinite(rf.ltv_pct) or rf.ltv_pct <= 0 or rf.ltv_pct > 100:
+            err("refinance", "Refinance LTV must be greater than 0 and at most 100.")
+        if not math.isfinite(rf.arrangement_fee_pence) or rf.arrangement_fee_pence < 0:
+            err("refinance", "Refinance arrangement fee must be zero or more.")
+        if not math.isfinite(rf.legal_costs_pence) or rf.legal_costs_pence < 0:
+            err("refinance", "Refinance legal costs must be zero or more.")
 
     return issues
 
@@ -295,8 +337,15 @@ def reconcile(
         + serviced_interest + rolled_interest + capitalised_fees
         + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence
     )
+    # Spec Sec 4.5/Sec 7: additional equity absorbed by the refinance event's shortfall or
+    # negative-net-proceeds branches funds a facility redemption -- a financing-side flow,
+    # not a project cost -- so it is excluded here exactly like sale-proceeds repayments
+    # (net_receipts/repayment_pence never appear on either side of this identity either).
+    # It still counts in full toward additional_equity_pence itself, the
+    # additional_equity_required flag, equity contributed, and the equity cash-flow vector.
     sources_total = (
-        model.totals.equity_contributed_pence + model.totals.additional_equity_pence
+        model.totals.equity_contributed_pence
+        + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence)
         + model.totals.funding_gap_pence  # shown explicitly, never hidden
         + model.totals.draws_pence + capitalised_fees + rolled_interest
         + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence  # proceeds applied at source

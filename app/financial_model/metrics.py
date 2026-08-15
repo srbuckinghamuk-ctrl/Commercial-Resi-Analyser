@@ -8,9 +8,11 @@ from dataclasses import dataclass
 
 from .breakeven import (
     DeveloperBreakevenTerms,
+    PhasedSeniorBreakevenTerms,
     SeniorBreakevenTerms,
     solve_developer_breakeven,
     solve_senior_breakeven,
+    solve_senior_breakeven_phased,
 )
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
@@ -159,12 +161,25 @@ def pct(numerator: float, denominator: float) -> float | None:
 
 def breakeven_flags(
     senior_null: bool, developer_null: bool, agent_fee_pct: float,
+    senior_unsolvable_reason: str | None = None,
 ) -> list[ModelFlag]:
     """Pure flag construction for the two break-even solvers (spec Sec 5.11/Sec 5.12).
     A None solve with fee < 100% means the integer bisection exhausted its
-    2^200-pence range -- unreachable with real inputs, flagged defensively."""
+    2^200-pence range -- unreachable with real inputs, flagged defensively.
+    `senior_unsolvable_reason` (R3b Task 6): when non-None, the phased solver
+    (spec Sec 5.11 phased regime) determined the senior break-even is
+    structurally unsolvable for a reason other than the agent-fee case above
+    (facility draws continue past the final tranche, or sales_sweep_pct is 0%)
+    -- reported as its own red flag with the caller-supplied message, never the
+    cap-exhausted flag (that flag means "the search space was exhausted", not
+    "no search was possible")."""
     out: list[ModelFlag] = []
     unsolvable = agent_fee_pct >= 100
+    if senior_unsolvable_reason is not None:
+        out.append(ModelFlag(
+            code="senior_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
+            message=senior_unsolvable_reason,
+        ))
     if senior_null and unsolvable:
         out.append(ModelFlag(
             code="senior_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
@@ -175,7 +190,7 @@ def breakeven_flags(
             code="developer_breakeven_unsolvable", severity="red", month=None, amount_pence=None,
             message="agent fee ≥ 100% — break-even unsolvable",
         ))
-    if (senior_null or developer_null) and not unsolvable:
+    if (senior_null or developer_null) and not unsolvable and senior_unsolvable_reason is None:
         out.append(ModelFlag(
             code="breakeven_cap_exhausted", severity="red", month=None, amount_pence=None,
             message=(
@@ -244,29 +259,85 @@ def derive_metrics(
     # whenever the real disposal under-swept the balance (spec Sec 4.4), but the break-even
     # question is "what fee would be due on full redemption of this balance", independent of
     # whether the real sale proceeds happened to cover it.
+    # Phased regime (spec Sec 5.11 phased regime, R3b Task 6): when sales_phasing is
+    # non-None, the static single-shot solver above no longer models the disposal
+    # (receipts split across tranche months, spec Sec 4.4.1) -- the break-even instead
+    # replays the actual run's draw/fee schedule under a scaled total gross via
+    # solve_senior_breakeven_phased. Two cases are structurally unsolvable (no bisection
+    # attempted, no cap-exhausted flag -- a distinct reasoned flag instead): facility
+    # draws continue after the final tranche month (no sale price can ever redeem what
+    # keeps growing), or sales_sweep_pct is 0% (proceeds never reach the facility at
+    # all). `sales_phasing` only exists on v4 inputs; the `getattr(..., None)` guard
+    # keeps this branch inert for v2/v3 callers exactly as before.
+    phasing = getattr(inputs, "sales_phasing", None)
     redemption_balance = model.redemption_balance_at_disposal_pence
     senior_breakeven: int | None = None
     senior_breakeven_pct_of_lender_gdv: float | None = None
     senior_breakeven_fall_from_lender_gdv_pct: float | None = None
     senior_attempted_null = False
+    senior_unsolvable_reason: str | None = None
     if redemption_balance is not None:
-        breakeven_terms = SeniorBreakevenTerms(
-            redemption_balance_pence=redemption_balance,
-            exit_fee_pence=exit_fee_amount(
-                inputs.finance, model.committed_gross_facility_pence, model.peak_debt_pence,
-                redemption_balance,
-            ),
-            selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
-            selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
-            enforcement_cost_assumption_pence=inputs.finance.enforcement_cost_assumption_pence,
-        )
-        senior_breakeven = solve_senior_breakeven(breakeven_terms)
-        senior_attempted_null = senior_breakeven is None
-        if senior_breakeven is not None and lender_gdv is not None:
-            senior_breakeven_pct_of_lender_gdv = pct(senior_breakeven, lender_gdv.lender_gdv_pence)
-            senior_breakeven_fall_from_lender_gdv_pct = pct(
-                lender_gdv.lender_gdv_pence - senior_breakeven, lender_gdv.lender_gdv_pence,
+        if phasing is None:
+            breakeven_terms = SeniorBreakevenTerms(
+                redemption_balance_pence=redemption_balance,
+                exit_fee_pence=exit_fee_amount(
+                    inputs.finance, model.committed_gross_facility_pence, model.peak_debt_pence,
+                    redemption_balance,
+                ),
+                selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
+                selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
+                enforcement_cost_assumption_pence=inputs.finance.enforcement_cost_assumption_pence,
             )
+            senior_breakeven = solve_senior_breakeven(breakeven_terms)
+            senior_attempted_null = senior_breakeven is None
+            if senior_breakeven is not None and lender_gdv is not None:
+                senior_breakeven_pct_of_lender_gdv = pct(senior_breakeven, lender_gdv.lender_gdv_pence)
+                senior_breakeven_fall_from_lender_gdv_pct = pct(
+                    lender_gdv.lender_gdv_pence - senior_breakeven, lender_gdv.lender_gdv_pence,
+                )
+        else:
+            last_tranche = max(tr.month_offset for tr in phasing.tranches)
+            # Mirrors solve_senior_breakeven_phased's own internal guard exactly
+            # (draws_and_fees_pence[m] > 0 for m past the last tranche) --
+            # capitalised_fees_pence is 0 for every month past 0 in the current engine
+            # (arrangement fee capitalises once, at month 0 only, in run_ledger), so
+            # this is currently equivalent to draw_pence alone; summing both here keeps
+            # the two checks provably identical rather than coincidentally so.
+            if any(
+                mm.month > last_tranche and mm.draw_pence + mm.capitalised_fees_pence > 0
+                for mm in model.months
+            ):
+                senior_unsolvable_reason = (
+                    "senior break-even unavailable — facility draws continue after the "
+                    "final sales tranche, so no sale price redeems the facility"
+                )
+            elif inputs.finance.sales_sweep_pct <= 0:
+                senior_unsolvable_reason = (
+                    "senior break-even unavailable — sales sweep is 0%, so sale "
+                    "proceeds never repay the facility"
+                )
+            else:
+                phased_terms = PhasedSeniorBreakevenTerms(
+                    draws_and_fees_pence=[
+                        mm.draw_pence + mm.capitalised_fees_pence for mm in model.months
+                    ],
+                    monthly_rate=inputs.finance.annual_interest_rate_pct / 100 / 12,
+                    rolled_up=inputs.finance.interest_type == "rolled_up",
+                    sales_sweep_pct=inputs.finance.sales_sweep_pct,
+                    tranches=phasing.tranches,
+                    selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
+                    selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
+                    enforcement_cost_assumption_pence=inputs.finance.enforcement_cost_assumption_pence,
+                    finance=inputs.finance,
+                    committed_gross_facility_pence=model.committed_gross_facility_pence,
+                )
+                senior_breakeven = solve_senior_breakeven_phased(phased_terms)
+                senior_attempted_null = senior_breakeven is None
+                if senior_breakeven is not None and lender_gdv is not None:
+                    senior_breakeven_pct_of_lender_gdv = pct(senior_breakeven, lender_gdv.lender_gdv_pence)
+                    senior_breakeven_fall_from_lender_gdv_pct = pct(
+                        lender_gdv.lender_gdv_pence - senior_breakeven, lender_gdv.lender_gdv_pence,
+                    )
 
     # Developer profit break-even (spec Sec 5.12, Release 2b Task 5). Lender-independent AND
     # debt-independent (unlike senior_breakeven_pence above, which is None for every cash
@@ -289,7 +360,7 @@ def derive_metrics(
         developer_attempted_null = developer_breakeven is None
     flags.extend(breakeven_flags(
         senior_attempted_null, developer_attempted_null,
-        inputs.exit_strategy.selling_agent_fee_pct,
+        inputs.exit_strategy.selling_agent_fee_pct, senior_unsolvable_reason,
     ))
 
     # Cost-to-complete (spec Sec 5.10, Release 2b Task 6). Computed for every appraisal --

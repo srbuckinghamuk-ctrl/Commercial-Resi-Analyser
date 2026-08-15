@@ -14,6 +14,7 @@ from app.financial_model.schedule import (
     MonthReceipts,
     MonthUses,
     Schedule,
+    ScheduleRefinance,
     ScheduleTotals,
     build_schedule,
     calculate_total_construction_cost,
@@ -57,7 +58,7 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
     gross_sales = sum(x.gross_sale_pence for x in r)
     selling = sum(x.agent_fee_pence + x.selling_legal_pence for x in r)
     return Schedule(
-        term_months=len(u), uses=u, receipts=r,
+        term_months=len(u), uses=u, receipts=r, refinance=None,
         totals=ScheduleTotals(
             acquisition_pence=sum_(lambda x: x.acquisition_pence),
             construction_pence=sum_(lambda x: x.construction_pence),
@@ -424,3 +425,117 @@ class TestRedemptionBalanceAtDisposal:
         assert m.redemption_balance_at_disposal_pence == m.peak_debt_pence
         assert m.months[11].exit_fee_pence == 660_000
         assert m.totals.exit_fee_pence == 660_000
+
+
+class TestPhasedSweepMechanics:
+    """Transliteration of monthly-engine.test.ts's `phased sweep mechanics
+    (spec Sec 4.4.1)` describe block (Release 3b Task 4)."""
+
+    # Facility comfortably covers the toy's month-0 construction draw with headroom to
+    # spare, so behaviour below is driven purely by the sweep/redemption mechanics under
+    # test, not by facility caps.
+    TERMS_ROLLED_UP_NO_CAPS = replace(
+        DEFAULT_FACILITY_TERMS,
+        funding_source="development_finance",
+        day_one_advance_pence=15_000_000,
+        committed_net_facility_pence=20_000_000,
+        committed_gross_facility_pence=25_000_000,
+        annual_interest_rate_pct=12,
+        interest_type="rolled_up",
+        arrangement_fee_pct=2, arrangement_fee_basis="committed_net_facility",
+        exit_fee_pct=1, exit_fee_basis="committed_gross_facility",
+        term_months=4, equity_draw_rule="equity_first", sales_sweep_pct=100,
+    )
+
+    # 4-month toy: uses only in month 0, receipts in months 2 and 3.
+    def schedule(self, r2: MonthReceipts, r3: MonthReceipts) -> Schedule:
+        return mk_schedule(
+            [uses(construction_pence=10_000_000), uses(), uses(), uses()],
+            [receipts(), receipts(), r2, r3],
+        )
+
+    def test_captures_a_declining_redemption_schedule_one_entry_per_disposal_month(self):
+        m = run_ledger(
+            self.schedule(
+                receipts(gross_sale_pence=6_000_000), receipts(gross_sale_pence=6_000_000),
+            ),
+            self.TERMS_ROLLED_UP_NO_CAPS, [],
+        )
+        assert [e.month for e in m.redemption_schedule] == [2, 3]
+        assert m.redemption_schedule[0].balance_pence > m.redemption_schedule[1].balance_pence
+        assert m.redemption_balance_at_disposal_pence == m.redemption_schedule[1].balance_pence
+
+    def test_charges_the_exit_fee_once_at_first_full_redemption_and_never_again(self):
+        m = run_ledger(
+            self.schedule(
+                receipts(gross_sale_pence=50_000_000),  # clears everything
+                receipts(gross_sale_pence=1_000_000),
+            ),
+            self.TERMS_ROLLED_UP_NO_CAPS, [],
+        )
+        assert m.months[2].exit_fee_pence > 0
+        assert m.months[3].exit_fee_pence == 0
+        assert m.totals.exit_fee_pence == m.months[2].exit_fee_pence
+        assert m.months[3].distribution_pence == 1_000_000  # post-redemption tranche distributes whole
+
+    def test_flags_a_facility_re_drawn_after_full_redemption_amber_once(self):
+        s = self.schedule(receipts(gross_sale_pence=50_000_000), receipts())
+        s.uses[3] = uses(construction_pence=2_000_000)  # spend after redemption
+        m = run_ledger(s, self.TERMS_ROLLED_UP_NO_CAPS, [])
+        f = [x for x in m.flags if x.code == "facility_redrawn_after_redemption"]
+        assert len(f) == 1
+        assert f[0].severity == "amber"
+        assert f[0].month == 3
+
+
+class TestRefinanceEvent:
+    """Transliteration of monthly-engine.test.ts's `refinance event (spec Sec
+    4.5)` describe block, nested under `phased sweep mechanics` (Release 3b
+    Task 5)."""
+
+    TERMS_ROLLED_UP_NO_CAPS = TestPhasedSweepMechanics.TERMS_ROLLED_UP_NO_CAPS
+
+    def with_refi(
+        self, net: int, month: int, receipts2: MonthReceipts | None = None,
+    ) -> Schedule:
+        s = mk_schedule(
+            [uses(construction_pence=10_000_000), uses(), uses(), uses()],
+            [receipts(), receipts(), receipts2 or receipts(), receipts()],
+        )
+        s.refinance = ScheduleRefinance(month=month, net_proceeds_pence=net)
+        return s
+
+    def test_surplus_refinance_redeems_the_facility_and_distributes_the_excess(self):
+        m = run_ledger(self.with_refi(50_000_000, 3), self.TERMS_ROLLED_UP_NO_CAPS, [])
+        last = m.months[3]
+        assert last.closing_balance_pence == 0
+        assert last.exit_fee_pence > 0  # fee charged at refinance redemption
+        assert last.refinance_proceeds_pence == 50_000_000
+        assert last.distribution_pence == 50_000_000 - last.repayment_pence - last.exit_fee_pence
+        assert not any(f.code == "senior_outstanding_at_maturity" for f in m.flags)
+        assert m.equity_cashflows_pence[3] == last.distribution_pence  # IRR terminal flow
+
+    def test_shortfall_is_absorbed_by_additional_equity_and_red_flagged(self):
+        m = run_ledger(self.with_refi(1_000_000, 3), self.TERMS_ROLLED_UP_NO_CAPS, [])
+        last = m.months[3]
+        assert last.closing_balance_pence == 0  # still fully redeemed
+        assert last.additional_equity_pence == last.repayment_pence + last.exit_fee_pence - 1_000_000
+        assert last.distribution_pence == 0
+        assert any(f.code == "additional_equity_required" for f in m.flags)
+
+    def test_same_month_ordering_the_sales_sweep_runs_first_then_the_refinance(self):
+        sale = receipts(gross_sale_pence=4_000_000)
+        m = run_ledger(self.with_refi(50_000_000, 2, sale), self.TERMS_ROLLED_UP_NO_CAPS, [])
+        mm = m.months[2]
+        # sweep repaid 4,000,000 first (partial), refinance repaid the rest -- total
+        # repayment exceeds the sweep alone and the redemption_schedule entry is the
+        # PRE-receipts balance.
+        assert mm.repayment_pence > 4_000_000
+        assert m.redemption_schedule[0].balance_pence > mm.repayment_pence - 4_000_000
+        assert mm.closing_balance_pence == 0
+
+    def test_negative_net_proceeds_are_funded_by_additional_equity_nothing_distributes(self):
+        m = run_ledger(self.with_refi(-500_000, 3), self.TERMS_ROLLED_UP_NO_CAPS, [])
+        last = m.months[3]
+        assert last.refinance_proceeds_pence == 0
+        assert last.additional_equity_pence == 500_000 + last.repayment_pence + last.exit_fee_pence

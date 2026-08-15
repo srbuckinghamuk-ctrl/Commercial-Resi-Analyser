@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .breakeven import PhasedSeniorBreakevenTerms, phased_replay_redeems, solve_senior_breakeven_phased
 from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, breakeven_flags, derive_metrics
@@ -64,6 +65,7 @@ __all__ = [
     "CalculatorInputsV3",
     "CalculatorInputsV4",
     "MonthlyModel",
+    "PhasedSeniorBreakevenTerms",
     "ReconciliationStatus",
     "Schedule",
     "ValidationIssue",
@@ -75,9 +77,11 @@ __all__ = [
     "migrate_inputs_to_v4",
     "migrate_v3_to_v4",
     "parse_calculator_inputs",
+    "phased_replay_redeems",
     "reconcile",
     "run_appraisal",
     "run_ledger",
+    "solve_senior_breakeven_phased",
     "spread_back_loaded",
     "spread_by_curve",
     "spread_s_curve",

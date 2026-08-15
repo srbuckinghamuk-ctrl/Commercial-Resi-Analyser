@@ -83,11 +83,22 @@ class ScheduleTotals:
 
 
 @dataclass
+class ScheduleRefinance:
+    month: int
+    net_proceeds_pence: int
+
+
+@dataclass
 class Schedule:
     term_months: int
     uses: list[MonthUses]
     receipts: list[MonthReceipts]
     totals: ScheduleTotals
+    # Spec Sec 4.5 net refinance proceeds -- wired into the ledger in engine.py.
+    # None when `refinance` inputs are None (the migration default; byte-identical
+    # to calc 2.2.0). Defaulted so pre-existing direct-construction call sites
+    # (tests) do not need to change.
+    refinance: ScheduleRefinance | None = None
 
 
 def spread_straight_line(total: int, months: int) -> list[int]:
@@ -189,12 +200,58 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     gdv = calculate_gdv(units)
     retained_value = gdv - gross_sales
 
-    sale_month = term - 1
     agent_fee = money_round((gross_sales * inputs.exit_strategy.selling_agent_fee_pct) / 100)
     selling_legal = inputs.exit_strategy.selling_legal_fee_pence if len(sold_units) > 0 else 0
+    sales_phasing = getattr(inputs, "sales_phasing", None)
     if gross_sales > 0:
-        receipts[sale_month] = MonthReceipts(
-            gross_sale_pence=gross_sales, agent_fee_pence=agent_fee, selling_legal_pence=selling_legal,
+        if sales_phasing is None:
+            # calc 2.2.0 behaviour, byte-identical: single disposal in the final
+            # month (spec Sec 4.4).
+            receipts[term - 1] = MonthReceipts(
+                gross_sale_pence=gross_sales, agent_fee_pence=agent_fee,
+                selling_legal_pence=selling_legal,
+            )
+        else:
+            # Spec Sec 4.4.1: tranche split with final-tranche residue absorption;
+            # selling costs apportioned pro-rata by tranche gross, final tranche
+            # absorbs. Month clamps are belt-and-braces -- validation.py owns the
+            # real rules.
+            trs = sales_phasing.tranches
+            gross_allocated = 0
+            agent_allocated = 0
+            legal_allocated = 0
+            for i, tr in enumerate(trs):
+                last = i == len(trs) - 1
+                gross = (
+                    gross_sales - gross_allocated if last
+                    else money_round((gross_sales * tr.pct_of_gross_receipts) / 100)
+                )
+                agent = (
+                    agent_fee - agent_allocated if last
+                    else money_round((agent_fee * gross) / gross_sales)
+                )
+                legal = (
+                    selling_legal - legal_allocated if last
+                    else money_round((selling_legal * gross) / gross_sales)
+                )
+                gross_allocated += gross
+                agent_allocated += agent
+                legal_allocated += legal
+                m = min(max(0, math.floor(tr.month_offset)), term - 1)
+                receipts[m].gross_sale_pence += gross
+                receipts[m].agent_fee_pence += agent
+                receipts[m].selling_legal_pence += legal
+
+    # Spec Sec 4.5 net refinance proceeds -- wired into the ledger by engine.py.
+    refinance_input = getattr(inputs, "refinance", None)
+    refinance = None
+    if refinance_input is not None:
+        refinance = ScheduleRefinance(
+            month=min(max(0, math.floor(refinance_input.month_offset)), term - 1),
+            net_proceeds_pence=(
+                money_round((refinance_input.investment_value_pence * refinance_input.ltv_pct) / 100)
+                - refinance_input.arrangement_fee_pence - refinance_input.legal_costs_pence
+            ),
         )
 
     selling_costs = agent_fee + selling_legal if gross_sales > 0 else 0
@@ -202,6 +259,7 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         term_months=term,
         uses=uses,
         receipts=receipts,
+        refinance=refinance,
         totals=ScheduleTotals(
             acquisition_pence=acquisition_total,
             construction_pence=construction_total,

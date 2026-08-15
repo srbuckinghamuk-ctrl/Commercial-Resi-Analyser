@@ -1,6 +1,8 @@
 """Transliteration of frontend/src/lib/model/schedule.test.ts's
-`buildSchedule with a v4 programme` describe block (Release 3a Task 4, spec
-Sec 6.1 / calc 2.2.0). Same scenarios, same expected arrays as the TS side.
+`buildSchedule with a v4 programme` and `buildSchedule with sales_phasing`
+describe blocks (Release 3a Task 4 / Release 3b Task 4, spec Sec 6.1 / Sec
+4.4.1, calc 2.2.0 / calc 2.3.0). Same scenarios, same expected arrays as the
+TS side.
 """
 from app.financial_model.engine import money_round
 from app.financial_model.migrate import (
@@ -10,7 +12,12 @@ from app.financial_model.migrate import (
     migrate_v3_to_v4,
 )
 from app.financial_model.schedule import build_schedule
-from app.financial_model.types import CalculatorInputsV3, CalculatorInputsV4
+from app.financial_model.types import (
+    CalculatorInputsV3,
+    CalculatorInputsV4,
+    SalesPhasingInputs,
+    SalesPhasingTranche,
+)
 
 PROGRAMME = {
     "anchor_month": None,
@@ -92,3 +99,58 @@ def test_a_negative_start_offset_never_wraps_to_the_end_of_the_term():
     assert s.uses[0].construction_pence == s.totals.construction_pence
     assert s.uses[-1].construction_pence == 0
     assert sum(u.construction_pence for u in s.uses) == s.totals.construction_pence
+
+
+def _phased_v4() -> CalculatorInputsV4:
+    doc = migrate_inputs_to_v4({})
+    doc["finance"]["term_months"] = 12
+    doc["unit_mix"] = {"units": [
+        {
+            "id": "u1", "type": "1bed", "floor_area_sqm": 50,
+            "estimated_value_pence": 30_000_000, "comparable_notes": "",
+        },
+        {
+            "id": "u2", "type": "1bed", "floor_area_sqm": 50,
+            "estimated_value_pence": 30_000_001, "comparable_notes": "",
+        },
+    ]}
+    doc["exit_strategy"]["selling_agent_fee_pct"] = 1.5
+    doc["exit_strategy"]["selling_legal_fee_pence"] = 400_000
+    return CalculatorInputsV4.model_validate(doc)
+
+
+class TestBuildScheduleWithSalesPhasing:
+    """Transliteration of schedule.test.ts's `buildSchedule with sales_phasing
+    (spec Sec 4.4.1)` describe block (Release 3b Task 4)."""
+
+    def test_null_phasing_is_byte_identical_to_the_single_final_month_disposal(self):
+        v4 = _phased_v4()
+        single = build_schedule(v4)
+        v4.sales_phasing = SalesPhasingInputs(
+            tranches=[SalesPhasingTranche(month_offset=11, pct_of_gross_receipts=100)],
+        )
+        assert build_schedule(v4) == single  # single 100% tranche == None (identity)
+
+    def test_splits_gross_and_costs_pro_rata_with_final_tranche_residue_absorption(self):
+        v4 = _phased_v4()
+        v4.sales_phasing = SalesPhasingInputs(tranches=[
+            SalesPhasingTranche(month_offset=9, pct_of_gross_receipts=40),
+            SalesPhasingTranche(month_offset=10, pct_of_gross_receipts=35),
+            SalesPhasingTranche(month_offset=11, pct_of_gross_receipts=25),
+        ])
+        s = build_schedule(v4)
+        gross = 60_000_001
+        agent = money_round((gross * 1.5) / 100)
+        g9 = money_round((gross * 40) / 100)
+        g10 = money_round((gross * 35) / 100)
+        assert s.receipts[9].gross_sale_pence == g9
+        assert s.receipts[10].gross_sale_pence == g10
+        assert s.receipts[11].gross_sale_pence == gross - g9 - g10  # residue
+        a9 = money_round((agent * g9) / gross)
+        a10 = money_round((agent * g10) / gross)
+        assert s.receipts[9].agent_fee_pence == a9
+        assert s.receipts[11].agent_fee_pence == agent - a9 - a10  # residue
+        legal_sum = sum(r.selling_legal_pence for r in s.receipts)
+        assert legal_sum == 400_000  # conservation
+        assert s.totals.selling_costs_pence == agent + 400_000  # totals unchanged
+        assert s.refinance is None

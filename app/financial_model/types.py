@@ -298,16 +298,29 @@ class ProgrammeInputs(Model):
 
 
 class SalesPhasingTranche(Model):
-    month_offset: int
+    """Port rule #7 exception, mirroring ProgrammePackage above: ``month_offset``
+    carries no lower Pydantic bound -- spec Sec 4.4.1's window rule (0 <= month <=
+    term-1, strictly increasing) is a hard *validation* error owned by
+    validation.py exactly as it is in the TS engine. The ``le=1200`` upper
+    ceiling is the same resource-exhaustion backstop as ProgrammePackage's,
+    not a spec rule (Task 9 review)."""
+
+    month_offset: int = Field(le=1200)
     pct_of_gross_receipts: float
 
 
 class SalesPhasingInputs(Model):
-    tranches: list[SalesPhasingTranche] = Field(default_factory=list)
+    # `max_length` is the same resource-exhaustion backstop as
+    # UserDefinedSpendCurve.weights's -- the real "one tranche per sale, sum to
+    # 100%" rules live in validation.py.
+    tranches: list[SalesPhasingTranche] = Field(default_factory=list, max_length=1200)
 
 
 class RefinanceInputs(Model):
-    month_offset: int
+    """``month_offset`` carries no lower Pydantic bound for the same reason as
+    SalesPhasingTranche's above; validation.py owns the [0, term-1] window."""
+
+    month_offset: int = Field(le=1200)
     investment_value_pence: int
     ltv_pct: float
     arrangement_fee_pence: int
@@ -364,7 +377,7 @@ FlagCode = Literal[
     "negative_profit", "requires_confirmation", "irr_unavailable",
     "unrealised_profit_basis", "exit_fee_not_charged",
     "senior_breakeven_unsolvable", "developer_breakeven_unsolvable",
-    "breakeven_cap_exhausted",
+    "breakeven_cap_exhausted", "facility_redrawn_after_redemption",
 ]
 
 CALC_VERSION = "2.2.0"

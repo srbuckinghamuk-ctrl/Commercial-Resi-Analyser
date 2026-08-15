@@ -11,10 +11,16 @@ from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILI
 from app.financial_model.migrate import default_calculator_inputs_v2, migrate_inputs_to_v4
 from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals
 from app.financial_model.types import (
+    AcquisitionInputs,
     CalculatorInputsV2,
     CalculatorInputsV4,
     EquitySource,
+    ExitStrategyInputs,
     FacilityTerms,
+    ProposedUnit,
+    SalesPhasingInputs,
+    SalesPhasingTranche,
+    UnitMixInputs,
 )
 
 # --- helpers copied verbatim from test_financial_model_engine.py ---
@@ -197,3 +203,83 @@ class TestBreakevenFlags:
         assert [f.code for f in breakeven_flags(True, False, 2)] == ["breakeven_cap_exhausted"]
         assert [f.code for f in breakeven_flags(False, True, 2)] == ["breakeven_cap_exhausted"]
         assert breakeven_flags(False, False, 2) == []
+
+
+def _dev_finance_v4() -> CalculatorInputsV4:
+    """Mirrors metrics.test.ts's `devFinanceV4` helper: a dev-finance deal with a real
+    committed facility, valued units and a sell_all exit -- on a v4 document with a
+    committed facility set (unlike the migrate_inputs_to_v4({}) default, whose finance
+    has committed_net_facility_pence None -- no draws, no balance,
+    redemption_balance_at_disposal_pence stays None). Zero committed equity
+    (default_equity_sources()'s amount_pence is 0) forces essentially the whole cost
+    stack through the facility, guaranteeing a large non-null redemption balance at
+    disposal for the spec Sec 5.11 phased-regime tests below."""
+    v4 = CalculatorInputsV4.model_validate(migrate_inputs_to_v4({}))
+    v4.acquisition = AcquisitionInputs(
+        purchase_price_pence=40_000_000, legal_fees_pence=500_000, survey_cost_pence=300_000,
+        broker_fee_pct=1.0, other_acquisition_costs_pence=0,
+    )
+    v4.unit_mix = UnitMixInputs(units=[
+        ProposedUnit(
+            id=f"u{n}", type="1bed", floor_area_sqm=50,
+            estimated_value_pence=30_000_000, comparable_notes="",
+        )
+        for n in (1, 2, 3, 4)
+    ])
+    v4.conversion_costs.construction_cost_per_sqm_pence = 100_000
+    v4.conversion_costs.total_construction_sqm = 400
+    v4.conversion_costs.contingency_pct = 10
+    v4.finance = FacilityTerms(**{
+        **DEFAULT_FACILITY_TERMS_DICT,
+        "funding_source": "development_finance",
+        "committed_net_facility_pence": 150_000_000,
+        "committed_gross_facility_pence": 165_000_000,
+        "annual_interest_rate_pct": 8,
+        "interest_type": "rolled_up",
+        "sales_sweep_pct": 100,
+        "term_months": 12,
+    })
+    v4.exit_strategy = ExitStrategyInputs(
+        route="sell_all", selling_agent_fee_pct=1.5, selling_legal_fee_pence=400_000,
+        retained_units=[],
+    )
+    return v4
+
+
+class TestSec511UnderPhasing:
+    """Transliteration of metrics.test.ts's `Sec 5.11 under phasing` describe
+    block (Release 3b Task 6)."""
+
+    def test_phased_inputs_produce_a_senior_breakeven_from_the_replay_solver(self):
+        v4 = _dev_finance_v4()
+        v4.sales_phasing = SalesPhasingInputs(tranches=[
+            SalesPhasingTranche(month_offset=10, pct_of_gross_receipts=60),
+            SalesPhasingTranche(month_offset=11, pct_of_gross_receipts=40),
+        ])
+        run = run_appraisal(v4)
+        assert run.model.redemption_balance_at_disposal_pence is not None
+        assert run.metrics.senior_breakeven_pence is not None
+        assert not any(f.code == "breakeven_cap_exhausted" for f in run.metrics.flags)
+
+    def test_structural_unsolvability_flags_senior_breakeven_unsolvable_with_a_reason_not_cap_exhausted(self):
+        # sweep 0% with phasing: no price redeems
+        v4 = _dev_finance_v4()
+        v4.finance.sales_sweep_pct = 0
+        v4.sales_phasing = SalesPhasingInputs(
+            tranches=[SalesPhasingTranche(month_offset=11, pct_of_gross_receipts=100)],
+        )
+        run = run_appraisal(v4)
+        assert run.metrics.senior_breakeven_pence is None
+        f = next(x for x in run.metrics.flags if x.code == "senior_breakeven_unsolvable")
+        assert "sales sweep" in f.message
+        assert not any(x.code == "breakeven_cap_exhausted" for x in run.metrics.flags)
+
+
+class TestBreakevenFlagsWithAStructuralReason:
+    """Transliteration of metrics.test.ts's `breakevenFlags with a structural
+    reason` describe block (Release 3b Task 6)."""
+
+    def test_emits_senior_breakeven_unsolvable_with_the_reason_no_cap_flag_for_that_solver(self):
+        out = breakeven_flags(False, False, 2, "no sale price redeems — test reason")
+        assert [f.code for f in out] == ["senior_breakeven_unsolvable"]
+        assert out[0].message == "no sale price redeems — test reason"

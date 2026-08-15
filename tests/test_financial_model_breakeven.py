@@ -4,14 +4,24 @@ Both implementations must agree with the hand-computed worksheet (spec Sec 5.11,
 docs/financial-model/test-cases.md), not merely with each other.
 """
 import math
+from dataclasses import replace as dc_replace
 
 from app.financial_model.breakeven import (
     DeveloperBreakevenTerms,
+    PhasedSeniorBreakevenTerms,
     SeniorBreakevenTerms,
+    phased_replay_redeems,
     solve_developer_breakeven,
     solve_senior_breakeven,
+    solve_senior_breakeven_phased,
 )
 from app.financial_model.engine import money_round
+from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
+from app.financial_model.types import FacilityTerms, SalesPhasingTranche
+
+# Fee-free facility terms (exit_fee_pct 0) -- the phased solver's `finance` basis,
+# kept zeroed in every phased test below so it isolates the replay recurrence itself.
+TERMS_FEE_FREE = FacilityTerms(**{**DEFAULT_FACILITY_TERMS_DICT, "exit_fee_pct": 0})
 
 
 def terms(**partial) -> SeniorBreakevenTerms:
@@ -174,3 +184,119 @@ class TestSolveDeveloperBreakeven:
         assert p is not None
         disposal_cost = money_round((p * 1.5) / 100)
         assert p >= 500_000_000 + disposal_cost + 400_000
+
+
+def _phased_base() -> PhasedSeniorBreakevenTerms:
+    # 4 months; 10,000,000 drawn month 0; 2%/mo rolled up; fee 0 (isolates the recurrence);
+    # two tranches 50/50 in months 2 and 3; no agent fee/legal/enforcement; 100% sweep.
+    return PhasedSeniorBreakevenTerms(
+        draws_and_fees_pence=[10_000_000, 0, 0, 0],
+        monthly_rate=0.02,
+        rolled_up=True,
+        sales_sweep_pct=100,
+        tranches=[
+            SalesPhasingTranche(month_offset=2, pct_of_gross_receipts=50),
+            SalesPhasingTranche(month_offset=3, pct_of_gross_receipts=50),
+        ],
+        selling_agent_fee_pct=0,
+        selling_legal_fee_pence=0,
+        enforcement_cost_assumption_pence=0,
+        finance=TERMS_FEE_FREE,  # exit_fee_pct 0
+        committed_gross_facility_pence=0,
+    )
+
+
+class TestSolveSeniorBreakevenPhased:
+    """Transliteration of breakeven.test.ts's `solveSeniorBreakevenPhased (spec
+    Sec 5.11 phased regime)` describe block (Release 3b Task 6)."""
+
+    def test_matches_the_hand_derived_minimum_and_is_tight_g_minus_1_infeasible(self):
+        # Hand derivation: balance m0 = 10,000,000x1.02 = 10,200,000 (fee cap round:
+        # 10,000,000 + round(10,000,000x.02)); m1 x1.02 -> 10,404,000; m2 accrue ->
+        # 10,612,080, sweep G/2 (round half-up, first tranche); remaining balance carries
+        # as 10,612,080 - G/2; m3 accrues that at x1.02, and the second (residual) tranche
+        # G - G/2 = G/2 must clear it fully:
+        #   G/2 >= (10,612,080 - G/2)x1.02
+        #   (G/2)x(1 + 1.02) >= 10,612,080x1.02
+        #   (G/2)x2.02 >= 10,824,321.6  ->  G/2 >= 5,358,575.05...  ->  G >= 10,717,150.1...
+        # Engine-verified value 10,717,150 (see breakeven.test.ts's matching comment for the
+        # brief-vs-engine reconciliation history); the code here is a direct port.
+        g = solve_senior_breakeven_phased(_phased_base())
+        assert g is not None
+        exact = g
+        assert abs(exact - 10_717_150) <= 2  # rounding-step tolerance on the derivation
+        # Tightness: the replay predicate itself flips exactly at g.
+        assert phased_replay_redeems(_phased_base(), exact) is True
+        assert phased_replay_redeems(_phased_base(), exact - 1) is False
+
+    def test_single_tranche_at_the_final_month_degenerates_towards_the_static_solver_world(self):
+        t = dc_replace(
+            _phased_base(),
+            tranches=[SalesPhasingTranche(month_offset=3, pct_of_gross_receipts=100)],
+        )
+        g = solve_senior_breakeven_phased(t)
+        # balance at m3 = 10,000,000x1.02^3 (rounded per month); fee 0 -> G = that balance.
+        assert g == 10_612_080 + money_round(10_612_080 * 0.02)
+
+    def test_returns_none_when_draws_continue_after_the_final_tranche_or_sweep_is_0_pct(self):
+        t1 = dc_replace(
+            _phased_base(),
+            draws_and_fees_pence=[10_000_000, 0, 0, 5_000_000],
+            tranches=[SalesPhasingTranche(month_offset=2, pct_of_gross_receipts=100)],
+        )
+        assert solve_senior_breakeven_phased(t1) is None
+        t2 = dc_replace(_phased_base(), sales_sweep_pct=0)
+        assert solve_senior_breakeven_phased(t2) is None
+
+    # Fix (post-review): the review found feasibility is not monotone in G when the
+    # ledger's own partial-arm clamp is mirrored literally -- right where an intermediate
+    # tranche's sweep first reaches the balance, the residual jumps UP by the (non-zero)
+    # exit fee (below the crossing: residual = balance - sweep -> 0+; at/after it:
+    # repayment becomes sweep - fee, residual = fee), so feasible(G) can go
+    # true -> false -> true and the shared bisection can wrongly return None even though
+    # larger G values are feasible. Spec Sec 5.11's fee-reserve modelling assumption
+    # (phased_replay_redeems's doc comment) fixes this by reserving the fee out of every
+    # tranche's sweep before repaying principal, making the residual continuous and
+    # monotone in G. This shape -- two tranches skewed 90-95%/rest, with a non-zero FIXED
+    # exit fee (the codebase's default exit_fee_basis shape) -- is exactly the one the
+    # reviewer found broken.
+    @staticmethod
+    def _non_zero_fee_base(exit_fee_basis: str) -> PhasedSeniorBreakevenTerms:
+        return PhasedSeniorBreakevenTerms(
+            draws_and_fees_pence=[1_000_000, 0, 0, 0],
+            monthly_rate=0.01,
+            rolled_up=True,
+            sales_sweep_pct=100,
+            tranches=[
+                SalesPhasingTranche(month_offset=2, pct_of_gross_receipts=95),
+                SalesPhasingTranche(month_offset=3, pct_of_gross_receipts=5),
+            ],
+            selling_agent_fee_pct=0,
+            selling_legal_fee_pence=0,
+            enforcement_cost_assumption_pence=0,
+            finance=TERMS_FEE_FREE.model_copy(
+                update={"exit_fee_pct": 5, "exit_fee_basis": exit_fee_basis},
+            ),
+            committed_gross_facility_pence=1_000_000,  # fixed basis -> fee = 50,000 regardless of balance
+        )
+
+    def test_monotonicity_fixed_exit_fee_stays_feasible_well_past_the_solved_boundary(self):
+        t = self._non_zero_fee_base("committed_gross_facility")
+        g = solve_senior_breakeven_phased(t)
+        assert g is not None
+        exact = g
+        assert phased_replay_redeems(t, exact) is True
+        assert phased_replay_redeems(t, exact - 1) is False
+        # The old (unreserved) implementation could flip back to infeasible above the
+        # boundary -- this is exactly the spot-check that would have caught it.
+        assert phased_replay_redeems(t, exact + 1) is True
+        assert phased_replay_redeems(t, exact + 50_000) is True
+        assert phased_replay_redeems(t, exact + 500_000) is True
+
+    def test_monotonicity_same_shape_holds_for_the_peak_debt_exit_fee_basis(self):
+        t = self._non_zero_fee_base("peak_debt")
+        g = solve_senior_breakeven_phased(t)
+        assert g is not None
+        exact = g
+        assert phased_replay_redeems(t, exact) is True
+        assert phased_replay_redeems(t, exact - 1) is False

@@ -18,6 +18,7 @@ from app.financial_model.types import (
     EquitySource,
     LenderValuation,
     ProposedUnit,
+    RefinanceInputs,
 )
 from app.financial_model.validation import reconcile, validate_inputs
 
@@ -293,18 +294,6 @@ class TestV4ProgrammeValidation:
                 for i in issues
             ), weights
 
-    def test_hard_rejects_non_null_sales_phasing_and_refinance_while_calc_is_2_2_0(self):
-        doc = migrate_inputs_to_v4({})
-        doc["sales_phasing"] = {"tranches": [{"month_offset": 11, "pct_of_gross_receipts": 100}]}
-        assert self.errors_on("sales_phasing", CalculatorInputsV4.model_validate(doc))
-
-        doc_b = migrate_inputs_to_v4({})
-        doc_b["refinance"] = {
-            "month_offset": 6, "investment_value_pence": 1, "ltv_pct": 60,
-            "arrangement_fee_pence": 0, "legal_costs_pence": 0,
-        }
-        assert self.errors_on("refinance", CalculatorInputsV4.model_validate(doc_b))
-
     def test_every_package_is_checked_not_just_the_first(self):
         """Deviation-guard (no TS counterpart): Python iterates a fixed tuple
         rather than `Object.entries`, so this pins that all three packages are
@@ -323,3 +312,139 @@ class TestV4ProgrammeValidation:
         assert not self.errors_on("programme.packages.construction", v4)
         assert self.errors_on("programme.packages.professional", v4)
         assert self.errors_on("programme.packages.statutory", v4)
+
+
+class TestV4SalesPhasingValidation:
+    """Transliteration of validation.test.ts's `v4 sales_phasing validation
+    (calc 2.3.0)` describe block (Release 3b Task 3, spec Sec 4.4.1)."""
+
+    @staticmethod
+    def with_tranches(tranches: list[dict], route: str = "sell_all") -> CalculatorInputsV4:
+        doc = migrate_inputs_to_v4({})
+        doc["finance"]["term_months"] = 12
+        doc["exit_strategy"]["route"] = route
+        doc["sales_phasing"] = {"tranches": tranches}
+        return CalculatorInputsV4.model_validate(doc)
+
+    @staticmethod
+    def errors_on(field_: str, inputs: CalculatorInputsV4) -> bool:
+        return any(
+            i.severity == "error" and i.field.startswith(field_) for i in validate_inputs(inputs)
+        )
+
+    def test_accepts_a_well_formed_tranche_set(self):
+        assert not self.errors_on("sales_phasing", self.with_tranches([
+            {"month_offset": 9, "pct_of_gross_receipts": 40},
+            {"month_offset": 10, "pct_of_gross_receipts": 35},
+            {"month_offset": 11, "pct_of_gross_receipts": 25},
+        ]))
+
+    def test_rejects_the_block_on_retain_all(self):
+        assert self.errors_on(
+            "sales_phasing",
+            self.with_tranches([{"month_offset": 11, "pct_of_gross_receipts": 100}], "retain_all"),
+        )
+
+    def test_rejects_an_empty_tranche_list(self):
+        assert self.errors_on("sales_phasing", self.with_tranches([]))
+
+    def test_rejects_out_of_range_non_increasing_months_and_non_positive_or_non_finite_pcts(self):
+        for tranches in (
+            [{"month_offset": 12, "pct_of_gross_receipts": 100}],
+            [{"month_offset": -1, "pct_of_gross_receipts": 100}],
+            [
+                {"month_offset": 10, "pct_of_gross_receipts": 50},
+                {"month_offset": 10, "pct_of_gross_receipts": 50},
+            ],
+            [
+                {"month_offset": 10, "pct_of_gross_receipts": 50},
+                {"month_offset": 9, "pct_of_gross_receipts": 50},
+            ],
+            [{"month_offset": 11, "pct_of_gross_receipts": 0}],
+            [{"month_offset": 11, "pct_of_gross_receipts": float("nan")}],
+        ):
+            assert self.errors_on("sales_phasing", self.with_tranches(tranches)), tranches
+
+    def test_rejects_percentages_not_summing_to_100_beyond_1e_9(self):
+        assert self.errors_on("sales_phasing", self.with_tranches([
+            {"month_offset": 10, "pct_of_gross_receipts": 60},
+            {"month_offset": 11, "pct_of_gross_receipts": 39.9},
+        ]))
+
+
+class TestV4RefinanceValidation:
+    """Transliteration of validation.test.ts's `v4 refinance validation
+    (calc 2.3.0)` describe block (Release 3b Task 3, spec Sec 4.5)."""
+
+    @staticmethod
+    def with_refi(refi: dict, route: str = "retain_all") -> CalculatorInputsV4:
+        doc = migrate_inputs_to_v4({})
+        doc["finance"]["term_months"] = 12
+        doc["exit_strategy"]["route"] = route
+        doc["refinance"] = {
+            "month_offset": 11, "investment_value_pence": 30_000_000, "ltv_pct": 65,
+            "arrangement_fee_pence": 0, "legal_costs_pence": 0, **refi,
+        }
+        return CalculatorInputsV4.model_validate(doc)
+
+    @staticmethod
+    def errors_on(inputs: CalculatorInputsV4) -> bool:
+        return any(
+            i.severity == "error" and i.field.startswith("refinance") for i in validate_inputs(inputs)
+        )
+
+    def test_accepts_a_well_formed_block_on_retain_all_and_blended(self):
+        assert not self.errors_on(self.with_refi({}))
+        assert not self.errors_on(self.with_refi({}, "blended"))
+
+    def test_rejects_the_block_on_sell_all(self):
+        assert self.errors_on(self.with_refi({}, "sell_all"))
+
+    def test_rejects_bad_months_values_fees_and_ltv(self):
+        for bad in (
+            {"month_offset": 12}, {"month_offset": -1},
+            {"investment_value_pence": -1},
+            {"ltv_pct": 0}, {"ltv_pct": 101}, {"ltv_pct": float("nan")},
+            {"arrangement_fee_pence": -1}, {"legal_costs_pence": -1},
+        ):
+            assert self.errors_on(self.with_refi(bad)), bad
+
+
+class TestReconcileRefinanceShortfall:
+    """Coordinator fix (spec Sec 4.5/Sec 7, fixture J invariant-matrix defect): a
+    refinance whose net proceeds fall short of the outstanding balance + exit fee
+    injects additional equity to fund the facility's full redemption -- a
+    financing-side flow, like sale-proceeds repayments, that spec Sec 7's
+    sources-and-uses identity deliberately excludes."""
+
+    def test_a_refinance_shortfall_does_not_break_sources_equal_uses_reconciliation(self):
+        doc = migrate_inputs_to_v4({})
+        inputs = CalculatorInputsV4.model_validate(doc)
+        inputs.acquisition.purchase_price_pence = 40_000_000
+        inputs.unit_mix.units = [
+            ProposedUnit(
+                id=f"u{n}", type="1bed", floor_area_sqm=50,
+                estimated_value_pence=30_000_000, comparable_notes="",
+            )
+            for n in (1, 2, 3, 4)
+        ]
+        inputs.conversion_costs.total_construction_sqm = 200
+        inputs.conversion_costs.construction_cost_per_sqm_pence = 100_000
+        inputs.finance.committed_net_facility_pence = 50_000_000
+        inputs.finance.committed_gross_facility_pence = 55_000_000
+        inputs.finance.day_one_advance_pence = 30_000_000
+        inputs.finance.term_months = 12
+        inputs.equity_sources[0].amount_pence = 40_000_000
+        inputs.exit_strategy.route = "retain_all"
+        # Net proceeds = round(1,000,000 x 50 / 100) - 0 - 0 = 500,000 -- a small fraction
+        # of the outstanding senior balance, guaranteeing the shortfall branch fires.
+        inputs.refinance = RefinanceInputs(
+            month_offset=11, investment_value_pence=1_000_000, ltv_pct=50,
+            arrangement_fee_pence=0, legal_costs_pence=0,
+        )
+        schedule = build_schedule(inputs)
+        model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
+        assert model.totals.refinance_shortfall_equity_pence > 0
+        rec = reconcile(inputs, schedule, model)
+        assert rec.sources_equal_uses is True
+        assert any(f.code == "additional_equity_required" for f in model.flags)

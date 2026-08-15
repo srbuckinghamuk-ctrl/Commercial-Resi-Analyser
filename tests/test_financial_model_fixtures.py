@@ -33,27 +33,6 @@ EXPECTED_FIXTURE_STEMS = [
     "j-blended-refinance",
 ]
 
-# TEMPORARY (Release 3b Task 8): phased-sales/refinance not yet ported -- removed by
-# Task 9. Fixtures I and J pin expected_metrics computed with phased sales (spec Sec
-# 4.4.1) and the refinance event (spec Sec 4.5) applied; both are TS-only until Task 9
-# ports them to the Python engine. Until then the Python engine treats their
-# `sales_phasing`/`refinance` input blocks as unimplemented (a validateInputs error) and
-# ignores them when running the appraisal, so its numbers diverge from the pinned
-# fixture values -- only the two parametrisations below that assert those pinned values
-# are skipped for these two stems. Every other fixture-parametrised test in this module
-# (roll-forward invariants, sources=uses, peak debt, etc.) already passes for I/J
-# unmodified, since those hold regardless of whether phasing/refinance is wired.
-_UNPORTED_STEMS = {"i-phased-sales", "j-blended-refinance"}
-_UNPORTED_SKIP_REASON = (
-    "TEMPORARY (Release 3b Task 8): phased-sales/refinance not yet ported -- "
-    "removed by Task 9"
-)
-
-
-def _skip_if_unported(path: Path) -> None:
-    if path.stem in _UNPORTED_STEMS:
-        pytest.skip(_UNPORTED_SKIP_REASON)
-
 # Minimal flat-key -> run-structure mapping for the fixture keys that are not direct
 # AppraisalResultV2 attributes. Every other expected_metrics key is a real, direct
 # AppraisalResultV2 attribute, asserted via getattr below without this indirection.
@@ -76,6 +55,16 @@ _FLAT_KEYS = {
     # accumulated unfunded cost. It is the headline behaviour of fixture H, so it must be
     # pinned, but it is a ledger total rather than a summary metric.
     "funding_gap_pence": lambda r: r.model.totals.funding_gap_pence,
+    # spec Sec 4.4.1 (calc 2.3.0), Release 3b: the phased-disposal redemption fields.
+    # Like funding_gap_pence above, these are `model` properties rather than summary
+    # metrics, so they reach the harness through the same AppraisalRun-wide mapper. The
+    # declining schedule is pinned as two parallel flat arrays (months / balances)
+    # rather than an array of objects, mirroring golden-fixtures.test.ts's FLAT_KEYS.
+    "redemption_balance_at_disposal_pence": lambda r: r.model.redemption_balance_at_disposal_pence,
+    "redemption_schedule_months": lambda r: [e.month for e in r.model.redemption_schedule],
+    "redemption_schedule_balances_pence": (
+        lambda r: [e.balance_pence for e in r.model.redemption_schedule]
+    ),
 }
 
 
@@ -96,7 +85,6 @@ def test_every_expected_fixture_file_is_present_in_the_shared_corpus() -> None:
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_golden_fixture_parity(path: Path) -> None:
-    _skip_if_unported(path)
     doc = _load_fixture(path)
     inputs = parse_calculator_inputs(doc["inputs"])
     run = run_appraisal(inputs)
@@ -111,7 +99,6 @@ def test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4(path: Pat
     that fixture's pinned expected_metrics unchanged -- not merely "close", byte-for-byte.
     Fixture H is already v4; migrating it is a no-op merge onto v4 defaults, which is
     itself worth asserting (the merge must not drop its programme block)."""
-    _skip_if_unported(path)
     doc = _load_fixture(path)
     v4 = parse_calculator_inputs(migrate_inputs_to_v4(doc["inputs"]))
     assert v4.inputs_version == 4

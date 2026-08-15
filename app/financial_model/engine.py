@@ -50,6 +50,8 @@ class LedgerMonth:
     funding_gap_pence: int
     gross_receipts_pence: int
     net_receipts_pence: int
+    # Spec Sec 4.5 -- 0 for every month unless the refinance event fires in it.
+    refinance_proceeds_pence: int
     distribution_pence: int
 
 
@@ -64,9 +66,22 @@ class MonthlyModelTotals:
     capitalised_fees_pence: int
     equity_contributed_pence: int
     additional_equity_pence: int
+    # Spec Sec 4.5/Sec 7: the slice of additional_equity_pence injected by the
+    # refinance event's shortfall or negative-net-proceeds branches. It funds a
+    # facility redemption (financing-side), not a project cost, so reconcile()
+    # excludes it from Sec 7's sources-and-uses identity while it still counts
+    # toward additional_equity_pence, the additional_equity_required flag, equity
+    # contributed, and the equity cash-flow vector. Always 0 when refinance is None.
+    refinance_shortfall_equity_pence: int
     funding_gap_pence: int
     distributions_pence: int
     repayments_pence: int
+
+
+@dataclass
+class RedemptionEntry:
+    month: int
+    balance_pence: int
 
 
 @dataclass
@@ -83,6 +98,10 @@ class MonthlyModel:
     # receipts are applied. None for cash deals (no senior facility) and for
     # schedules with no disposal (e.g. exit_strategy.route == "retain_all").
     redemption_balance_at_disposal_pence: int | None
+    # Spec Sec 4.4.1 declining redemption schedule: one entry per disposal month,
+    # balance captured immediately before that month's receipts. Empty for cash
+    # deals and no-disposal schedules. The scalar above equals the last entry.
+    redemption_schedule: list[RedemptionEntry]
     flags: list[ModelFlag]
     # Developer equity cash-flow vector, one entry per month (- out, + in).
     equity_cashflows_pence: list[int] = field(default_factory=list)
@@ -175,6 +194,12 @@ def run_ledger(
     total_cap_fees = 0
     total_equity = 0
     total_additional_equity = 0
+    # Spec Sec 4.5/Sec 7: additional equity injected specifically by the refinance
+    # event's shortfall or negative-net-proceeds branches -- a subset of
+    # total_additional_equity that reconcile() (validation.py) must exclude from
+    # sources, because it funds a facility redemption (financing-side), not a
+    # project cost (see the field's own doc comment on MonthlyModelTotals above).
+    total_refinance_shortfall_equity = 0
     total_gap = 0
     total_distributions = 0
     total_repayments = 0
@@ -185,6 +210,12 @@ def run_ledger(
     # None for cash deals (no senior facility to redeem) and for schedules with no
     # disposal at all (e.g. exit_strategy.route == "retain_all").
     redemption_balance_at_disposal: int | None = None
+    # Spec Sec 4.4.1: the exit fee is charged once, at the first full redemption; a later
+    # draw that re-opens a balance does not re-trigger it.
+    facility_redeemed = False
+    facility_redrawn_flagged = False
+    # Spec Sec 4.4.1 declining redemption schedule: one entry per disposal month.
+    redemption_schedule: list[RedemptionEntry] = []
 
     for m in range(term):
         u = schedule.uses[m]
@@ -240,6 +271,17 @@ def run_ledger(
                 remainder -= draw
             funding_gap += remainder
 
+        if draw > 0 and facility_redeemed and not facility_redrawn_flagged:
+            facility_redrawn_flagged = True
+            flags.append(ModelFlag(
+                code="facility_redrawn_after_redemption", severity="amber", month=m,
+                amount_pence=draw,
+                message=(
+                    f"Facility drawn again in month {m} after full redemption - the exit "
+                    "fee was charged at first redemption and is not re-charged."
+                ),
+            ))
+
         interest_accrued = 0 if is_cash else money_round((opening + draw + cap_fees) * monthly_rate)
         total_interest += interest_accrued
         interest_capitalised = 0
@@ -263,18 +305,21 @@ def run_ledger(
         r = schedule.receipts[m]
         if not is_cash and r.gross_sale_pence > 0:
             redemption_balance_at_disposal = balance
+            redemption_schedule.append(RedemptionEntry(month=m, balance_pence=balance))
         net_receipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence
         repayment = 0
         exit_fee = 0
         distribution = 0
+        refinance_proceeds = 0
         if net_receipts > 0:
             sweep_available = money_round((net_receipts * finance.sales_sweep_pct) / 100)
             if balance > 0 and not is_cash:
-                fee = exit_fee_amount(finance, gross_facility, peak_debt, balance)
+                fee = 0 if facility_redeemed else exit_fee_amount(finance, gross_facility, peak_debt, balance)
                 if sweep_available >= balance + fee:
                     repayment = balance
                     exit_fee = fee
                     total_exit_fee += fee
+                    facility_redeemed = True
                     balance = 0
                 else:
                     # Spec Sec 4.4: receipts insufficient to cover principal plus exit
@@ -288,6 +333,31 @@ def run_ledger(
                         repayment = max(0, sweep_available - fee)
                     balance -= repayment
             distribution = net_receipts - repayment - exit_fee
+
+        # Spec Sec 4.5 refinance event -- fixed order: the sales sweep above ran first.
+        refi = schedule.refinance
+        if refi is not None and refi.month == m:
+            refi_net = refi.net_proceeds_pence
+            if refi_net < 0:
+                additional_equity += -refi_net  # fees exceed the advance -- equity funds the difference
+                total_refinance_shortfall_equity += -refi_net
+                refi_net = 0
+            refinance_proceeds = refi_net
+            if not is_cash and balance > 0:
+                fee = 0 if facility_redeemed else exit_fee_amount(finance, gross_facility, peak_debt, balance)
+                required = balance + fee
+                repayment += balance
+                exit_fee += fee
+                total_exit_fee += fee
+                facility_redeemed = True
+                if refi_net >= required:
+                    distribution += refi_net - required
+                else:
+                    additional_equity += required - refi_net  # Sec 4.3 mechanics; flag fires below
+                    total_refinance_shortfall_equity += required - refi_net
+                balance = 0
+            else:
+                distribution += refi_net  # already redeemed, or a cash deal: proceeds distribute whole
 
         equity_used += equity_contribution
         total_draws += draw
@@ -346,6 +416,7 @@ def run_ledger(
             funding_gap_pence=funding_gap,
             gross_receipts_pence=r.gross_sale_pence,
             net_receipts_pence=net_receipts,
+            refinance_proceeds_pence=refinance_proceeds,
             distribution_pence=distribution,
         ))
         equity_cashflows.append(-(equity_contribution + additional_equity) + distribution)
@@ -391,6 +462,7 @@ def run_ledger(
             capitalised_fees_pence=total_cap_fees,
             equity_contributed_pence=total_equity,
             additional_equity_pence=total_additional_equity,
+            refinance_shortfall_equity_pence=total_refinance_shortfall_equity,
             funding_gap_pence=total_gap,
             distributions_pence=total_distributions,
             repayments_pence=total_repayments,
@@ -402,6 +474,7 @@ def run_ledger(
         committed_gross_facility_pence=gross_facility,
         senior_outstanding_at_maturity_pence=opening,
         redemption_balance_at_disposal_pence=redemption_balance_at_disposal,
+        redemption_schedule=redemption_schedule,
         flags=flags,
         equity_cashflows_pence=equity_cashflows,
     )
