@@ -86,6 +86,12 @@ export function runLedger(
   // cash deals (no senior facility to redeem) and for schedules with no disposal at all
   // (e.g. exit_strategy.route === 'retain_all', where no month ever has gross_sale_pence > 0).
   let redemptionBalanceAtDisposal: number | null = null;
+  // Spec §4.4.1: the exit fee is charged once, at the first full redemption; a later draw
+  // that re-opens a balance does not re-trigger it.
+  let facilityRedeemed = false;
+  let facilityRedrawnFlagged = false;
+  // Spec §4.4.1 declining redemption schedule: one entry per disposal month.
+  const redemptionSchedule: Array<{ month: number; balance_pence: number }> = [];
 
   for (let m = 0; m < term; m++) {
     const u = schedule.uses[m];
@@ -135,6 +141,14 @@ export function runLedger(
       fundingGap += remainder;
     }
 
+    if (draw > 0 && facilityRedeemed && !facilityRedrawnFlagged) {
+      facilityRedrawnFlagged = true;
+      flags.push({
+        code: 'facility_redrawn_after_redemption', severity: 'amber', month: m, amount_pence: draw,
+        message: `Facility drawn again in month ${m} after full redemption — the exit fee was charged at first redemption and is not re-charged.`,
+      });
+    }
+
     const interestAccrued = isCash ? 0
       : Math.round((opening + draw + capFees) * monthlyRate);
     totalInterest += interestAccrued;
@@ -157,6 +171,7 @@ export function runLedger(
     const r = schedule.receipts[m];
     if (!isCash && r.gross_sale_pence > 0) {
       redemptionBalanceAtDisposal = balance;
+      redemptionSchedule.push({ month: m, balance_pence: balance });
     }
     const netReceipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence;
     let repayment = 0;
@@ -165,11 +180,12 @@ export function runLedger(
     if (netReceipts > 0) {
       const sweepAvailable = Math.round((netReceipts * finance.sales_sweep_pct) / 100);
       if (balance > 0 && !isCash) {
-        const fee = exitFeeAmount(finance, grossFacility, peakDebt, balance);
+        const fee = facilityRedeemed ? 0 : exitFeeAmount(finance, grossFacility, peakDebt, balance);
         if (sweepAvailable >= balance + fee) {
           repayment = balance;
           exitFee = fee;
           totalExitFee += fee;
+          facilityRedeemed = true;
           balance = 0;
         } else {
           // Spec §4.4: receipts insufficient to cover principal plus exit fee do not
@@ -239,6 +255,7 @@ export function runLedger(
       funding_gap_pence: fundingGap,
       gross_receipts_pence: r.gross_sale_pence,
       net_receipts_pence: netReceipts,
+      refinance_proceeds_pence: 0,
       distribution_pence: distribution,
     });
     equityCashflows.push(-(equityContribution + additionalEquity) + distribution);
@@ -293,6 +310,7 @@ export function runLedger(
     committed_gross_facility_pence: grossFacility,
     senior_outstanding_at_maturity_pence: opening,
     redemption_balance_at_disposal_pence: redemptionBalanceAtDisposal,
+    redemption_schedule: redemptionSchedule,
     flags,
     equity_cashflows_pence: equityCashflows,
   };

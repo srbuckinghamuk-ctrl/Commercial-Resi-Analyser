@@ -172,7 +172,7 @@ export type FlagCode =
   | 'negative_profit' | 'requires_confirmation' | 'irr_unavailable'
   | 'unrealised_profit_basis' | 'exit_fee_not_charged'
   | 'senior_breakeven_unsolvable' | 'developer_breakeven_unsolvable'
-  | 'breakeven_cap_exhausted';
+  | 'breakeven_cap_exhausted' | 'facility_redrawn_after_redemption';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -200,6 +200,9 @@ export interface Schedule {
   term_months: number;
   uses: MonthUses[];
   receipts: MonthReceipts[];
+  /** Spec §4.5 net refinance proceeds — wired into the ledger by the refinance task (Task 5).
+   * null when `refinance` inputs are null (the migration default; byte-identical to calc 2.2.0). */
+  refinance: { month: number; net_proceeds_pence: number } | null;
   totals: {
     acquisition_pence: number; construction_pence: number;
     professional_pence: number; statutory_pence: number;
@@ -229,6 +232,8 @@ export interface LedgerMonth {
   funding_gap_pence: number;
   gross_receipts_pence: number;
   net_receipts_pence: number;
+  /** Spec §4.5 — always 0 until the refinance task (Task 5) wires the real value. */
+  refinance_proceeds_pence: number;
   distribution_pence: number;
 }
 
@@ -258,6 +263,10 @@ export interface MonthlyModel {
    * applied. null for cash deals (no senior facility) and for schedules with no disposal
    * (e.g. exit_strategy.route === 'retain_all'). */
   redemption_balance_at_disposal_pence: number | null;
+  /** Spec §4.4.1 declining redemption schedule: one entry per disposal month,
+   * balance captured immediately before that month's receipts. Empty for cash
+   * deals and no-disposal schedules. The scalar above equals the last entry. */
+  redemption_schedule: Array<{ month: number; balance_pence: number }>;
   flags: ModelFlag[];
   /** Developer equity cash-flow vector, one entry per month (− out, + in). */
   equity_cashflows_pence: number[];

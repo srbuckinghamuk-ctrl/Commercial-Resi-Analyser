@@ -23,7 +23,7 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
   const grossSales = r.reduce((a, x) => a + x.gross_sale_pence, 0);
   const selling = r.reduce((a, x) => a + x.agent_fee_pence + x.selling_legal_pence, 0);
   return {
-    term_months: u.length, uses: u, receipts: r,
+    term_months: u.length, uses: u, receipts: r, refinance: null,
     totals: {
       acquisition_pence: sum((x) => x.acquisition_pence),
       construction_pence: sum((x) => x.construction_pence),
@@ -326,5 +326,54 @@ describe('redemption_balance_at_disposal_pence (spec §5.11, Release 2b Task 4)'
     expect(m.redemption_balance_at_disposal_pence).toBe(m.peak_debt_pence);
     expect(m.months[11].exit_fee_pence).toBe(660_000);
     expect(m.totals.exit_fee_pence).toBe(660_000);
+  });
+});
+
+describe('phased sweep mechanics (spec §4.4.1)', () => {
+  // Facility comfortably covers the toy's month-0 construction draw with headroom to
+  // spare, so behaviour below is driven purely by the sweep/redemption mechanics under
+  // test, not by facility caps.
+  const TERMS_ROLLED_UP_NO_CAPS: FacilityTerms = {
+    ...TERMS,
+    day_one_advance_pence: 15_000_000,
+    committed_net_facility_pence: 20_000_000,
+    committed_gross_facility_pence: 25_000_000,
+  };
+
+  // 4-month toy: uses only in month 0, receipts in months 2 and 3.
+  const schedule = (r2: MonthReceipts, r3: MonthReceipts): Schedule => mkSchedule(
+    [uses({ construction_pence: 10_000_000 }), uses({}), uses({}), uses({})],
+    [receipts({}), receipts({}), r2, r3],
+  );
+
+  it('captures a declining redemption schedule, one entry per disposal month', () => {
+    const m = runLedger(schedule(
+      receipts({ gross_sale_pence: 6_000_000 }),
+      receipts({ gross_sale_pence: 6_000_000 }),
+    ), TERMS_ROLLED_UP_NO_CAPS, []);
+    expect(m.redemption_schedule.map((e) => e.month)).toEqual([2, 3]);
+    expect(m.redemption_schedule[0].balance_pence).toBeGreaterThan(m.redemption_schedule[1].balance_pence);
+    expect(m.redemption_balance_at_disposal_pence).toBe(m.redemption_schedule[1].balance_pence);
+  });
+
+  it('charges the exit fee once, at first full redemption, and never again', () => {
+    const m = runLedger(schedule(
+      receipts({ gross_sale_pence: 50_000_000 }), // clears everything
+      receipts({ gross_sale_pence: 1_000_000 }),
+    ), TERMS_ROLLED_UP_NO_CAPS, []);
+    expect(m.months[2].exit_fee_pence).toBeGreaterThan(0);
+    expect(m.months[3].exit_fee_pence).toBe(0);
+    expect(m.totals.exit_fee_pence).toBe(m.months[2].exit_fee_pence);
+    expect(m.months[3].distribution_pence).toBe(1_000_000);   // post-redemption tranche distributes whole
+  });
+
+  it('flags a facility re-drawn after full redemption (amber, once)', () => {
+    const s = schedule(receipts({ gross_sale_pence: 50_000_000 }), receipts({}));
+    s.uses[3] = uses({ construction_pence: 2_000_000 });  // spend after redemption
+    const m = runLedger(s, TERMS_ROLLED_UP_NO_CAPS, []);
+    const f = m.flags.filter((x) => x.code === 'facility_redrawn_after_redemption');
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('amber');
+    expect(f[0].month).toBe(3);
   });
 });

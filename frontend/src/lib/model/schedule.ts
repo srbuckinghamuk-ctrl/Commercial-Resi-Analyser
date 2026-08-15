@@ -86,22 +86,55 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const gdv = calculateGdv(units);
   const retainedValue = gdv - grossSales;
 
-  const saleMonth = term - 1;
   const agentFee = Math.round((grossSales * inputs.exit_strategy.selling_agent_fee_pct) / 100);
   const sellingLegal = soldUnits.length > 0 ? inputs.exit_strategy.selling_legal_fee_pence : 0;
+  const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
   if (grossSales > 0) {
-    receipts[saleMonth] = {
-      gross_sale_pence: grossSales,
-      agent_fee_pence: agentFee,
-      selling_legal_pence: sellingLegal,
-    };
+    if (salesPhasing == null) {
+      // calc 2.2.0 behaviour, byte-identical: single disposal in the final month (spec §4.4)
+      receipts[term - 1] = {
+        gross_sale_pence: grossSales,
+        agent_fee_pence: agentFee,
+        selling_legal_pence: sellingLegal,
+      };
+    } else {
+      // spec §4.4.1: tranche split with final-tranche residue absorption; selling
+      // costs apportioned pro-rata by tranche gross, final tranche absorbs.
+      // Month clamps are belt-and-braces — validation.ts owns the real rules.
+      const trs = salesPhasing.tranches;
+      let grossAllocated = 0, agentAllocated = 0, legalAllocated = 0;
+      trs.forEach((tr, i) => {
+        const last = i === trs.length - 1;
+        const gross = last ? grossSales - grossAllocated
+          : Math.round((grossSales * tr.pct_of_gross_receipts) / 100);
+        const agent = last ? agentFee - agentAllocated
+          : Math.round((agentFee * gross) / grossSales);
+        const legal = last ? sellingLegal - legalAllocated
+          : Math.round((sellingLegal * gross) / grossSales);
+        grossAllocated += gross; agentAllocated += agent; legalAllocated += legal;
+        const m = Math.min(Math.max(0, Math.floor(tr.month_offset)), term - 1);
+        receipts[m].gross_sale_pence += gross;
+        receipts[m].agent_fee_pence += agent;
+        receipts[m].selling_legal_pence += legal;
+      });
+    }
   }
+
+  // spec §4.5 net refinance proceeds — wired into the ledger by the refinance task.
+  const refinanceInput = 'refinance' in inputs ? inputs.refinance : null;
+  const refinance = refinanceInput == null ? null : {
+    month: Math.min(Math.max(0, Math.floor(refinanceInput.month_offset)), term - 1),
+    net_proceeds_pence:
+      Math.round((refinanceInput.investment_value_pence * refinanceInput.ltv_pct) / 100)
+      - refinanceInput.arrangement_fee_pence - refinanceInput.legal_costs_pence,
+  };
 
   const sellingCosts = grossSales > 0 ? agentFee + sellingLegal : 0;
   return {
     term_months: term,
     uses,
     receipts,
+    refinance,
     totals: {
       acquisition_pence: acquisitionTotal,
       construction_pence: constructionTotal,

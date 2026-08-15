@@ -143,3 +143,47 @@ describe('buildSchedule with a v4 programme', () => {
       v4.conversion_costs.prior_approval_fee_per_dwelling_pence * Math.max(1, v4.unit_mix.units.length));
   });
 });
+
+describe('buildSchedule with sales_phasing (spec §4.4.1)', () => {
+  const phased = () => {
+    const v4 = migrateInputsToV4({});
+    v4.finance.term_months = 12;
+    v4.unit_mix.units = [
+      { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_000, comparable_notes: '' },
+      { id: 'u2', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 30_000_001, comparable_notes: '' },
+    ];
+    v4.exit_strategy.selling_agent_fee_pct = 1.5;
+    v4.exit_strategy.selling_legal_fee_pence = 400_000;
+    return v4;
+  };
+
+  it('null phasing is byte-identical to the single final-month disposal', () => {
+    const v4 = phased();
+    const single = buildSchedule(v4);
+    v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };
+    expect(buildSchedule(v4)).toEqual(single);   // single 100% tranche == null (identity)
+  });
+
+  it('splits gross and costs pro-rata with final-tranche residue absorption', () => {
+    const v4 = phased();
+    v4.sales_phasing = { tranches: [
+      { month_offset: 9, pct_of_gross_receipts: 40 },
+      { month_offset: 10, pct_of_gross_receipts: 35 },
+      { month_offset: 11, pct_of_gross_receipts: 25 },
+    ] };
+    const s = buildSchedule(v4);
+    const gross = 60_000_001;
+    const agent = Math.round((gross * 1.5) / 100);
+    const g9 = Math.round((gross * 40) / 100), g10 = Math.round((gross * 35) / 100);
+    expect(s.receipts[9].gross_sale_pence).toBe(g9);
+    expect(s.receipts[10].gross_sale_pence).toBe(g10);
+    expect(s.receipts[11].gross_sale_pence).toBe(gross - g9 - g10);          // residue
+    const a9 = Math.round((agent * g9) / gross), a10 = Math.round((agent * g10) / gross);
+    expect(s.receipts[9].agent_fee_pence).toBe(a9);
+    expect(s.receipts[11].agent_fee_pence).toBe(agent - a9 - a10);           // residue
+    const legalSum = s.receipts.reduce((x, r) => x + r.selling_legal_pence, 0);
+    expect(legalSum).toBe(400_000);                                          // conservation
+    expect(s.totals.selling_costs_pence).toBe(agent + 400_000);              // totals unchanged
+    expect(s.refinance).toBeNull();
+  });
+});

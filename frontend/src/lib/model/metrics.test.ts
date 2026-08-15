@@ -21,7 +21,7 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
   const grossSales = r.reduce((a, x) => a + x.gross_sale_pence, 0);
   const selling = r.reduce((a, x) => a + x.agent_fee_pence + x.selling_legal_pence, 0);
   return {
-    term_months: u.length, uses: u, receipts: r,
+    term_months: u.length, uses: u, receipts: r, refinance: null,
     totals: {
       acquisition_pence: sum((x) => x.acquisition_pence),
       construction_pence: sum((x) => x.construction_pence),
