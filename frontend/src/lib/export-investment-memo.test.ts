@@ -466,6 +466,25 @@ describe('generateInvestmentMemo', () => {
       expect(text).toContain(zeroStr);
     });
 
+    // IMPORTANT 4: §10's "Senior Debt Position" text was stale from Release 2 —
+    // both break-evens have printed elsewhere in this same memo since calc
+    // 2.1.0. Fixture I carries sales_phasing, so this also pins the
+    // phased-regime pointer sentence.
+    it('points §10 at the printed break-even figures instead of the stale "not yet available" text (fixture I — phased)', async () => {
+      const run = runAppraisal(fixtureI.inputs);
+      expect(run.inputs).toHaveProperty('sales_phasing');
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+
+      expect(text).not.toContain('not yet available (Release 2)');
+      // doc.splitTextToSize wraps this sentence onto three lines with no inserted
+      // space at the join (see the refinance-narrative test's comment above) —
+      // fragments below each live wholly within one wrapped line.
+      expect(text).toContain('Senior repayment break-even prints under Key Lending Metrics');
+      expect(text).toContain('developer profit break-even under');
+      expect(text).toContain('Both figures are computed on this appraisal\'s phased-disposal basis');
+    });
+
     it('prints refinance provenance and the refinance narrative line (fixture J — blended + refinance)', async () => {
       const run = runAppraisal(fixtureJ.inputs);
       expect(run.schedule.refinance).not.toBeNull();
@@ -502,6 +521,10 @@ describe('generateInvestmentMemo', () => {
       expect(text).toContain('spec §6');
       expect(text).toContain('Sales phasing: single disposal in final month.');
       expect(text).toContain('Refinance: not modelled.');
+      // IMPORTANT 4: the stale §10 text is gone even for a plain (non-phased) run,
+      // and the phased-regime pointer sentence only appears when sales_phasing is set.
+      expect(text).not.toContain('not yet available (Release 2)');
+      expect(text).not.toContain('phased-disposal basis');
     });
 
     // Carried-forward fix: sourcesAndUsesTotals() is a hand-maintained mirror of
@@ -511,7 +534,7 @@ describe('generateInvestmentMemo', () => {
     // memo helper wasn't updated: for a retain_all deal with a refinance
     // shortfall the memo's sources/uses table wouldn't balance even though
     // reconciliation.sources_equal_uses correctly reports true.
-    it('balances sources and uses for a retain_all deal with a refinance shortfall', () => {
+    it('balances sources and uses for a retain_all deal with a refinance shortfall', async () => {
       const base = baseInputs();
       const inputs: CalculatorInputsV4 = {
         ...base,
@@ -547,6 +570,43 @@ describe('generateInvestmentMemo', () => {
 
       const { sourcesTotal, usesTotal } = sourcesAndUsesTotals(run);
       expect(sourcesTotal).toBe(usesTotal);
+
+      // IMPORTANT 2: the "Additional equity" row must print the *netted* figure
+      // (matching what sourcesAndUsesTotals already nets into sourcesTotal above),
+      // not the raw model total — before the fix, this row printed the raw
+      // figure, so the printed rows would not sum to the printed "Total" row
+      // whenever a refinance shortfall was present.
+      const nettedAdditionalEquity =
+        run.model.totals.additional_equity_pence - run.model.totals.refinance_shortfall_equity_pence;
+      const nettedStr = (nettedAdditionalEquity / 100).toLocaleString('en-GB', {
+        style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+      });
+      const rawStr = (run.model.totals.additional_equity_pence / 100).toLocaleString('en-GB', {
+        style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+      });
+      expect(nettedStr).not.toBe(rawStr); // sanity: netting changes the printed figure for this fixture
+
+      const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+      const text = await pdfText(blob);
+      expect(text).toContain(nettedStr);
+      // The financing-side-exclusion note (spec §7) prints under the table when
+      // a shortfall is present.
+      expect(text).toContain('absorbed by the refinance event is a financing-side flow, excluded from this');
+
+      // Reconstruct the printed sources rows (mirroring generateInvestmentMemo's
+      // sourcesRows exactly) and confirm they sum, to the penny, to the printed
+      // sources total — the direct check for the bug this finding describes.
+      const rolledInterestPence = inputs.finance.interest_type === 'rolled_up' ? run.model.totals.interest_pence : 0;
+      const printedSourcesRowsSum =
+        run.model.totals.equity_contributed_pence +
+        nettedAdditionalEquity +
+        run.model.totals.funding_gap_pence +
+        run.model.totals.draws_pence +
+        run.model.totals.capitalised_fees_pence +
+        rolledInterestPence +
+        run.schedule.totals.selling_costs_pence +
+        run.model.totals.exit_fee_pence;
+      expect(printedSourcesRowsSum).toBe(sourcesTotal);
     });
   });
 });

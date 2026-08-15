@@ -55,6 +55,54 @@ describe('ExitStrategyPage — section visibility by route', () => {
   });
 });
 
+describe('ExitStrategyPage — route switch clears now-invalid blocks (IMPORTANT 3)', () => {
+  // Switching to retain_all leaves an invalid sales_phasing (retain_all has no
+  // sold portion); switching to sell_all leaves an invalid refinance
+  // (sell_all retains nothing) — both blocks must clear in the SAME payload
+  // as the route change, or the editor hides an orphaned block that still
+  // moves money on screen.
+  it('switching to retain_all clears sales_phasing but leaves refinance untouched', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV4().exit_strategy, route: 'blended' },
+      sales_phasing: SEEDED_PHASING,
+      refinance: SEEDED_REFINANCE,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.click(screen.getByRole('button', { name: /retain all/i }));
+    expect(onChange).toHaveBeenCalledWith({
+      exit_strategy: { ...inputs.exit_strategy, route: 'retain_all' },
+      sales_phasing: null,
+    });
+  });
+
+  it('switching to sell_all clears refinance but leaves sales_phasing untouched', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV4().exit_strategy, route: 'blended' },
+      sales_phasing: SEEDED_PHASING,
+      refinance: SEEDED_REFINANCE,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.click(screen.getByRole('button', { name: /^sell all$/i }));
+    expect(onChange).toHaveBeenCalledWith({
+      exit_strategy: { ...inputs.exit_strategy, route: 'sell_all' },
+      refinance: null,
+    });
+  });
+
+  it('switching to blended clears neither block (both remain valid)', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV4().exit_strategy, route: 'sell_all' },
+      sales_phasing: SEEDED_PHASING,
+      refinance: null,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.click(screen.getByRole('button', { name: /blended/i }));
+    expect(onChange).toHaveBeenCalledWith({
+      exit_strategy: { ...inputs.exit_strategy, route: 'blended' },
+    });
+  });
+});
+
 describe('ExitStrategyPage — sales phasing toggle', () => {
   it('toggling phasing on seeds a single final-month tranche at 100%', () => {
     const inputs = buildInputs({

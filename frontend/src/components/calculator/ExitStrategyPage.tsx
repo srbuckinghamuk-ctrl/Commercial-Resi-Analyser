@@ -72,6 +72,19 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
     tranches: phasing.tranches.filter((_, j) => j !== i),
   } });
 
+  // IMPORTANT 3: switching route must clear whichever block the new route makes
+  // invalid, in the SAME payload — otherwise the editor hides an orphaned
+  // sales_phasing/refinance block (its own validation rule rejects it) while it
+  // still moves money on screen via schedule/monthly-engine. A route that keeps
+  // a block valid (e.g. blended for both, or retain_all for refinance) leaves
+  // it untouched.
+  const selectRoute = (route: ExitRoute) => {
+    const partial: Partial<CalculatorInputsV4> = { exit_strategy: { ...exit, route } };
+    if (route === 'retain_all') partial.sales_phasing = null;
+    if (route === 'sell_all') partial.refinance = null;
+    onChange(partial);
+  };
+
   const toggleRefinance = () => onChange({
     refinance: refinance ? null : {
       month_offset: term - 1, investment_value_pence: retainedCapitalValue,
@@ -101,7 +114,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
         {(['sell_all', 'retain_all', 'blended'] as ExitRoute[]).map((route) => (
           <button
             key={route}
-            onClick={() => updateExit({ route })}
+            onClick={() => selectRoute(route)}
             style={{
               padding: '10px 24px',
               background: exit.route === route ? '#1e3a5f' : '#0f172a',

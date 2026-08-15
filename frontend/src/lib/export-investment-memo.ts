@@ -883,7 +883,12 @@ export function generateInvestmentMemo(
   ];
   const sourcesRows: Array<[string, number]> = [
     ['Equity contributed', model.totals.equity_contributed_pence],
-    ['Additional equity required', model.totals.additional_equity_pence],
+    // IMPORTANT 2: netted against refinance_shortfall_equity_pence, exactly as
+    // sourcesAndUsesTotals() nets it out of sourcesTotal above (spec §7) — the
+    // full, un-netted additional_equity_pence would make this row's printed
+    // value disagree with the printed "Total" row whenever a refinance
+    // shortfall is present.
+    ['Additional equity required', model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence],
     ['Funding gap (unfunded)', model.totals.funding_gap_pence],
     ['Senior debt draws', model.totals.draws_pence],
     ['Capitalised lender fees', model.totals.capitalised_fees_pence],
@@ -932,6 +937,12 @@ export function generateInvestmentMemo(
     y,
     `Sources and uses both total ${fmt(sourcesTotal)} (spec §7 invariant: sum of sources = sum of uses).${!run.reconciliation.sources_equal_uses ? ' WARNING: this run does not reconcile — see the draft watermark and the reconciliation panel.' : ''}`,
   );
+  if (model.totals.refinance_shortfall_equity_pence > 0) {
+    y = bodyText(
+      y,
+      `Additional equity of ${fmt(model.totals.refinance_shortfall_equity_pence)} absorbed by the refinance event is a financing-side flow, excluded from this reconciliation (spec §7).`,
+    );
+  }
 
   y = subHeading(y, 'Key Lending Metrics');
   table({
@@ -1235,7 +1246,7 @@ export function generateInvestmentMemo(
   y = subHeading(y, 'Senior Debt Position');
   y = bodyText(
     y,
-    "Senior repayment and developer break-even analysis: not yet available (Release 2). Do not rely on any previously reported figures for this metric.",
+    `Senior repayment break-even prints under Key Lending Metrics (§7) and developer profit break-even under Investor Returns (§8).${salesPhasing != null ? ' Both figures are computed on this appraisal\'s phased-disposal basis (calc 2.3.0, spec §5.11/§5.12).' : ''}`,
   );
 
   // ── Section 11: Exit Strategy ──
