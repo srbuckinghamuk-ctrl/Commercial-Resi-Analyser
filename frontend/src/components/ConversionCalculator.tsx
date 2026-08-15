@@ -1,8 +1,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { runAppraisal, migrateInputsToV3, migrateV3toV4 } from '../lib/model';
-import type { AppraisalRun, CalculatorInputsV3 } from '../lib/model';
-import { defaultCalculatorInputsV3 } from '../lib/conversion-defaults';
+import { runAppraisal, migrateInputsToV4 } from '../lib/model';
+import type { AppraisalRun, CalculatorInputsV4 } from '../lib/model';
+import { defaultCalculatorInputsV4 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
@@ -73,8 +73,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV3>(() =>
-    defaultCalculatorInputsV3(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV4>(() =>
+    defaultCalculatorInputsV4(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -84,7 +84,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV3(project));
+      setInputs(defaultCalculatorInputsV4(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -92,13 +92,13 @@ export default function ConversionCalculator({ project }: Props) {
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            // Migrate onto v3 defaults so snapshots saved before newer
-            // sections (or v1/v2 snapshots) existed still load cleanly. The
+            // Migrate onto v4 defaults so snapshots saved before newer
+            // sections (or v1/v2/v3 snapshots) existed still load cleanly. The
             // live runAppraisal(inputs) result below is always the display
             // source -- stored legacy columns are never shown as current,
             // even when status is 'legacy_unreconciled'; the next save
             // migrates the stored record.
-            setInputs(migrateInputsToV3(appraisal.inputs_snapshot as Record<string, unknown>, project));
+            setInputs(migrateInputsToV4(appraisal.inputs_snapshot as Record<string, unknown>, project));
             setSavedId(appraisal.id);
           }
           setAppraisalRecord(appraisal);
@@ -111,16 +111,11 @@ export default function ConversionCalculator({ project }: Props) {
     }
   }, [project]);
 
-  // R3a: the engine is fed a v4 document. The editable state stays v3-native —
-  // every calculator page below takes `CalculatorInputsV3` props and R3a ships no
-  // UI for the new `programme`/`sales_phasing`/`refinance` blocks — so the v3→v4
-  // widening happens here, at the single call site that reaches the engine.
-  // `migrateV3toV4` is additive-only (the three new blocks default to null), so
-  // this is a no-op numerically: a null programme reproduces the calc-2.1.0 auto
-  // windows bit-for-bit (spec §6.1).
-  const run: AppraisalRun = useMemo(() => runAppraisal(migrateV3toV4(inputs)), [inputs]);
+  // R3b: state is v4-native, so the engine is fed `inputs` directly -- no
+  // widening call site needed any more.
+  const run: AppraisalRun = useMemo(() => runAppraisal(inputs), [inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV3>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV4>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -129,10 +124,9 @@ export default function ConversionCalculator({ project }: Props) {
     setSaving(true);
     setSaveError(null);
     try {
-      // inputs_snapshot is always v3 (Task 8: this component's state is v3-native, adding
-      // the optional lender_valuation block); the seven client metric fields are used
-      // server-side ONLY to record mismatches for audit -- the server always recalculates
-      // and persists its own values (Task 12).
+      // inputs_snapshot is always v4 (R3b: this component's state is v4-native); the
+      // seven client metric fields are used server-side ONLY to record mismatches for
+      // audit -- the server always recalculates and persists its own values (Task 12).
       const payload: FinancialAppraisalCreate = {
         project_id: project.id,
         name: `Appraisal — ${project.address_raw}`,

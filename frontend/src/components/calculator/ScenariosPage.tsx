@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import type { ScenarioOverrides } from '../../lib/conversion-types';
-import type { AppraisalRun, CalculatorInputsV3 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV4 } from '../../lib/model';
 import { runAppraisal } from '../../lib/model';
 import { applyScenario } from '../../lib/apply-scenario';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV3;
-  onChange: (partial: Partial<CalculatorInputsV3>) => void;
+  inputs: CalculatorInputsV4;
+  onChange: (partial: Partial<CalculatorInputsV4>) => void;
 }
 
 type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';

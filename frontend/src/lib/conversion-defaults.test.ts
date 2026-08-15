@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { defaultCalculatorInputs, DEFAULT_SCENARIOS } from './conversion-defaults';
+import { defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4, DEFAULT_SCENARIOS } from './conversion-defaults';
 import { migrateInputs } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
 
@@ -56,5 +56,16 @@ describe('migrateInputs (legacy v1 snapshot merge)', () => {
     expect(merged.deal_spider.absorption_months).toBe(14);
     expect(merged.deal_spider.weights.margin_resilience).toBe(2);
     expect(merged.deal_spider.weights.tax_advantage).toBe(1);
+  });
+});
+
+describe('defaultCalculatorInputsV4', () => {
+  it('is v3 defaults plus the three null blocks', () => {
+    const v4 = defaultCalculatorInputsV4();
+    expect(v4.inputs_version).toBe(4);
+    expect(v4.programme).toBeNull();
+    expect(v4.sales_phasing).toBeNull();
+    expect(v4.refinance).toBeNull();
+    expect(v4.finance).toEqual(defaultCalculatorInputsV3().finance);
   });
 });

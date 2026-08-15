@@ -5,7 +5,7 @@ import { calculateCommercialSdlt } from './commercial-sdlt';
 import { calculateResidentialSdlt } from './residential-sdlt';
 import { applyScenario } from './apply-scenario';
 import { runAppraisal } from './model';
-import type { CalculatorInputsV2, CalculatorInputsV3 } from './model';
+import type { AnyCalculatorInputs } from './model';
 import { CLASS_MA_AXES } from './spider-axes';
 import type { SpiderAxisId, SpiderAxisDef } from './spider-axes';
 
@@ -172,7 +172,7 @@ function buildingSafetyBand(spider: DealSpiderInputs): number {
 }
 
 export function computeSpider(
-  inputs: CalculatorInputsV2 | CalculatorInputsV3,
+  inputs: AnyCalculatorInputs,
   eligibility: EligibilityAssessment | null,
 ): SpiderResult {
   const spider = inputs.deal_spider;

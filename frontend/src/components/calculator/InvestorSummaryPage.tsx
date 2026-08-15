@@ -1,9 +1,9 @@
 import type { Project } from '../../types';
-import type { CalculatorInputsV3, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV4, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV3;
+  inputs: CalculatorInputsV4;
   run: AppraisalRun;
   project: Project;
 }

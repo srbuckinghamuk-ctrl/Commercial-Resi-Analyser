@@ -1,9 +1,9 @@
-import type { CalculatorInputsV3, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV4, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV3;
-  onChange: (partial: Partial<CalculatorInputsV3>) => void;
+  inputs: CalculatorInputsV4;
+  onChange: (partial: Partial<CalculatorInputsV4>) => void;
   run: AppraisalRun;
 }
 

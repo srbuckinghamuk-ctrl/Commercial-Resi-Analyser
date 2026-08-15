@@ -1,10 +1,10 @@
-import type { AppraisalRun, CalculatorInputsV3 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV4 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import ReconciliationStrip from './ReconciliationStrip';
 
 interface Props {
-  inputs: CalculatorInputsV3;
-  onChange: (partial: Partial<CalculatorInputsV3>) => void;
+  inputs: CalculatorInputsV4;
+  onChange: (partial: Partial<CalculatorInputsV4>) => void;
   run: AppraisalRun;
 }
 

@@ -10,7 +10,7 @@ import type {
   CalculatorInputs,
 } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
-import type { CalculatorInputsV2, CalculatorInputsV3, EquitySource, FacilityTerms } from './model/finance-types';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, EquitySource, FacilityTerms } from './model/finance-types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -253,4 +253,14 @@ export function defaultCalculatorInputsV3(project?: {
 }): CalculatorInputsV3 {
   const v2 = defaultCalculatorInputsV2(project);
   return { ...v2, inputs_version: 3, lender_valuation: null };
+}
+
+/** v4 defaults (Release 3b): v3 plus the three nullable blocks. null programme =
+ * auto §6 windows; null sales_phasing = single final-month tranche; null
+ * refinance = no event (spec §6.1, §4.4.1, §4.5). */
+export function defaultCalculatorInputsV4(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV4 {
+  const v3 = defaultCalculatorInputsV3(project);
+  return { ...v3, inputs_version: 4, programme: null, sales_phasing: null, refinance: null };
 }

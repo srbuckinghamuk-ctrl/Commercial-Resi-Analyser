@@ -170,59 +170,24 @@ describe('migrateInputsToV3', () => {
     expect(v3.lender_valuation).toBeNull();
   });
 
-  it('downgrades a server-shaped v4 snapshot to v3 with its finance block intact', () => {
-    // Since Release 3a the server persists inputs_snapshot as v4 on every save
-    // (app/api/app.py calculate_authoritative). The v3 consumers (ConversionCalculator,
-    // ExportPage) still hydrate through migrateInputsToV3, so a v4 document MUST NOT
-    // fall through to the v1 fallback — that misreads a v4 `finance` object as v1-shaped
-    // and fabricates facility terms (committed_net_facility recomputed from ltv_pct,
-    // equity replaced by a synthetic 'migrated-cash-equity' source).
-    const serverSnapshot = migrateInputsToV4(
-      migrateV2toV3(defaultCalculatorInputsV2()) as unknown as Record<string, unknown>,
-    ) as unknown as Record<string, unknown>;
-    (serverSnapshot.finance as Record<string, unknown>).committed_net_facility_pence = 60_000_000;
+});
 
-    const v3 = migrateInputsToV3(serverSnapshot);
-
-    expect(v3.inputs_version).toBe(3);
-    expect(v3.finance.committed_net_facility_pence).toBe(60_000_000);
-    // Not the v1-fallback fabrication:
-    expect(v3.finance.legacy_leverage_pct).toBeNull();
-    expect(v3.finance.requires_confirmation).toBe(false);
-    expect(v3.equity_sources.some((e) => e.id === 'migrated-cash-equity')).toBe(false);
-    expect(v3.equity_sources.some((e) => (e.notes ?? '').includes('Migrated from v1 snapshot'))).toBe(false);
+describe('migrateInputsToV3 refuses v4 documents (R3b — shim removed)', () => {
+  it('throws instead of downgrading — dropping the v4 blocks would lose user data', () => {
+    const v4 = migrateInputsToV4({});
+    expect(() => migrateInputsToV3(v4 as unknown as Record<string, unknown>))
+      .toThrow(/v4 document/);
   });
-
-  it('drops the three v4-only blocks when downgrading (R3a policy: the UI cannot author them)', () => {
-    const v4 = migrateInputsToV4({}) as unknown as Record<string, unknown>;
-    v4.programme = {
-      anchor_month: '2026-09',
-      packages: {
-        construction: { start_offset: 1, duration_months: 6, curve: { kind: 's_curve' } },
-        professional: { start_offset: 2, duration_months: 3, curve: { kind: 'straight_line' } },
-        statutory: { start_offset: 4, duration_months: 2, curve: { kind: 'back_loaded' } },
-      },
+  it('migrateInputsToV4 remains the hydration path and preserves all three blocks', () => {
+    const v4 = migrateInputsToV4({});
+    v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };
+    v4.refinance = {
+      month_offset: 11, investment_value_pence: 30_000_000, ltv_pct: 65,
+      arrangement_fee_pence: 0, legal_costs_pence: 0,
     };
-
-    const v3 = migrateInputsToV3(v4) as unknown as Record<string, unknown>;
-
-    expect(v3.inputs_version).toBe(3);
-    expect(v3.programme).toBeUndefined();
-    expect(v3.sales_phasing).toBeUndefined();
-    expect(v3.refinance).toBeUndefined();
-  });
-
-  it('a v4 snapshot missing fields (schema drift) is merged onto v3 defaults, not misread as v1', () => {
-    const partial = {
-      inputs_version: 4,
-      finance: { committed_net_facility_pence: 5_000_000, annual_interest_rate_pct: 9 },
-    };
-    const v3 = migrateInputsToV3(partial);
-    expect(v3.inputs_version).toBe(3);
-    expect(v3.finance.committed_net_facility_pence).toBe(5_000_000);
-    expect(v3.finance.requires_confirmation).toBe(false);
-    expect(v3.lender_valuation).toBeNull();
-    expect(v3.scenarios.upside.label).toBe('Upside');
+    const again = migrateInputsToV4(v4 as unknown as Record<string, unknown>);
+    expect(again.sales_phasing).toEqual(v4.sales_phasing);
+    expect(again.refinance).toEqual(v4.refinance);
   });
 });
 
