@@ -400,8 +400,16 @@ enforcement-cost assumption from the FIRST tranche's net proceeds, applies
 basis evaluated inside the replay: redemption_balance = the replayed balance
 at redemption; peak_debt = the replayed peak), and EXCLUDES any planned
 refinance event (§5.11 answers the enforcement question: can sales alone
-redeem the facility). Feasibility is monotone in G; the solver is the shared
-integer bisection.
+redeem the facility). The replay reserves the exit fee out of every tranche's
+sweep before repaying principal: with fee f due on redemption (0 once
+charged), a tranche's principal repayment is `max(0, sweep − f)`, and full
+redemption occurs when `sweep >= balance + f`. This reservation is a §5.11
+modelling assumption only — the ledger itself (§4.4) does not reserve; it
+makes the replay's residual balance continuous and decreasing in G, so
+feasibility is monotone and the shared integer bisection is exact. The
+reserve delays principal repayment by at most f per tranche, so the phased
+break-even is conservatively (slightly) overstated relative to the ledger's
+own clamp behaviour.
 
 Structurally unsolvable cases return null with the red flag
 `senior_breakeven_unsolvable` (message stating the reason), not the

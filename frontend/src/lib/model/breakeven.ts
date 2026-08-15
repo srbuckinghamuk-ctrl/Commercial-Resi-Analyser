@@ -126,7 +126,20 @@ function phasedNetByMonth(t: PhasedSeniorBreakevenTerms, totalGross: number): Ma
 }
 
 /** Replays the ledger recurrence at total gross G; true iff fully redeemed by term end.
- * Exported for the tightness test only — production callers use the solver. */
+ * Mirrors §4.4's sweep arms EXCEPT for one documented §5.11 modelling assumption (spec
+ * §5.11 phased regime): the partial arm reserves the exit fee out of the tranche's sweep
+ * before repaying principal (`repayment = max(0, sweep - fee)`), rather than the ledger's
+ * own clamp (repay up to the full balance, and only fall back to `sweep - fee` when that
+ * repayment would exactly equal the balance). Without the reservation, the residual balance
+ * is discontinuous in G — right at the point where a tranche's sweep first reaches the
+ * balance, the ledger's clamp jumps the residual from ~0 up to `fee`, so feasibility is not
+ * monotone in G (it can go true → false → true as G grows) and the shared bisection can miss
+ * a genuinely feasible G above the discontinuity. Reserving the fee up front makes the
+ * residual continuous and (weakly) decreasing in G at every step, restoring monotonicity;
+ * the cost is that principal repayment is delayed by at most `fee` per tranche relative to
+ * the real ledger, so the phased break-even this produces is conservatively (slightly)
+ * overstated relative to §4.4's actual clamp behaviour. Exported for the tightness test
+ * only — production callers use the solver. */
 export function phasedReplayRedeems(t: PhasedSeniorBreakevenTerms, totalGross: number): boolean {
   const netByMonth = phasedNetByMonth(t, totalGross);
   let balance = 0, peak = 0, redeemed = false;
@@ -144,9 +157,7 @@ export function phasedReplayRedeems(t: PhasedSeniorBreakevenTerms, totalGross: n
         balance = 0;
         redeemed = true;
       } else {
-        let repayment = Math.min(sweepAvailable, balance);
-        if (repayment === balance) repayment = Math.max(0, sweepAvailable - fee);
-        balance -= repayment;
+        balance -= Math.max(0, Math.min(sweepAvailable - fee, balance));
       }
     }
   }
@@ -161,9 +172,15 @@ export function solveSeniorBreakevenPhased(t: PhasedSeniorBreakevenTerms): numbe
   for (let m = lastTranche + 1; m < t.draws_and_fees_pence.length; m++) {
     if (t.draws_and_fees_pence[m] > 0) return null;   // structurally unsolvable
   }
-  // Generous upper bound: the zero-receipts trajectory's terminal balance + fee is the
-  // most that ever needs redeeming (receipts only shrink balances); inflate for costs
-  // and the sweep fraction. Bisection is O(log hi) so looseness is cheap.
+  // Upper-bound seed: the zero-receipts trajectory's terminal balance + fee is a lower
+  // bound on what a SINGLE full-sweep tranche would need to clear (receipts only shrink
+  // balances); inflate for costs and the sweep fraction. This is only a starting seed, not
+  // a proven sufficient bound — with multiple tranches, the §5.11 fee reserve (see
+  // phasedReplayRedeems's doc comment) is paid out of EVERY tranche's sweep, not just the
+  // last, so an early tranche with a small pct_of_gross_receipts share can need materially
+  // more total G to clear the same balance than the single-tranche closed form accounts
+  // for. Grown by doubling below until genuinely feasible, so correctness never depends on
+  // the seed's tightness — only its cost (bisection is O(log hi), so a loose seed is cheap).
   let b0 = 0, peak0 = 0;
   for (const dc of t.draws_and_fees_pence) {
     const interest = t.rolled_up ? Math.round((b0 + dc) * t.monthly_rate) : 0;
@@ -174,6 +191,11 @@ export function solveSeniorBreakevenPhased(t: PhasedSeniorBreakevenTerms): numbe
   const fee0 = exitFeeAmount(t.finance, t.committed_gross_facility_pence, peak0, b0);
   const needed = b0 + fee0 + t.selling_legal_fee_pence + t.enforcement_cost_assumption_pence;
   const sweepFrac = t.sales_sweep_pct / 100;
-  const hi = Math.ceil(needed / (sweepFrac * (1 - t.selling_agent_fee_pct / 100))) + 1000;
+  let hi = Math.ceil(needed / (sweepFrac * (1 - t.selling_agent_fee_pct / 100))) + 1000;
+  let growthIterations = 0;
+  while (!phasedReplayRedeems(t, hi) && growthIterations < 64) {
+    hi *= 2;
+    growthIterations++;
+  }
   return bisectMinimalFeasible(0, hi, (g) => phasedReplayRedeems(t, g));
 }

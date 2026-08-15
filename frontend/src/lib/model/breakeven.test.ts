@@ -268,4 +268,60 @@ describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
     })).toBeNull();
     expect(solveSeniorBreakevenPhased({ ...base(), sales_sweep_pct: 0 })).toBeNull();
   });
+
+  // Fix (post-review): the review found feasibility is not monotone in G when the ledger's
+  // own partial-arm clamp is mirrored literally — right where an intermediate tranche's
+  // sweep first reaches the balance, the residual jumps UP by the (non-zero) exit fee
+  // (below the crossing: residual = balance − sweep → 0⁺; at/after it: repayment becomes
+  // sweep − fee, residual = fee), so feasible(G) can go true → false → true and the shared
+  // bisection can wrongly return null even though larger G values are feasible. §5.11's
+  // fee-reserve modelling assumption (spec §5.11 phased regime, breakeven.ts's
+  // phasedReplayRedeems doc comment) fixes this by reserving the fee out of every tranche's
+  // sweep before repaying principal, making the residual continuous and monotone in G. This
+  // shape — two tranches skewed 90–95%/rest, with a non-zero FIXED exit fee (the codebase's
+  // default exit_fee_basis shape) — is exactly the one the reviewer found broken; it is a
+  // monotonicity spot-check the old (unreserved) implementation would have failed at the
+  // g+50,000 / g+500,000 assertions below (those G values sit past the point where the
+  // ledger-mirroring clamp would have reintroduced a fee-sized residual).
+  function nonZeroFeeBase(exitFeeBasis: FacilityTerms['exit_fee_basis']): PhasedSeniorBreakevenTerms {
+    return {
+      draws_and_fees_pence: [1_000_000, 0, 0, 0],
+      monthly_rate: 0.01,
+      rolled_up: true,
+      sales_sweep_pct: 100,
+      tranches: [
+        { month_offset: 2, pct_of_gross_receipts: 95 },
+        { month_offset: 3, pct_of_gross_receipts: 5 },
+      ],
+      selling_agent_fee_pct: 0,
+      selling_legal_fee_pence: 0,
+      enforcement_cost_assumption_pence: 0,
+      finance: { ...TERMS_FEE_FREE, exit_fee_pct: 5, exit_fee_basis: exitFeeBasis },
+      committed_gross_facility_pence: 1_000_000,   // fixed basis → fee = 50,000 regardless of balance
+    };
+  }
+
+  it('monotonicity: a non-zero fixed exit fee stays feasible well past the solved boundary ' +
+    '(committed_gross_facility basis)', () => {
+    const t = nonZeroFeeBase('committed_gross_facility');
+    const g = solveSeniorBreakevenPhased(t);
+    expect(g).not.toBeNull();
+    const exact = g as number;
+    expect(phasedReplayRedeems(t, exact)).toBe(true);
+    expect(phasedReplayRedeems(t, exact - 1)).toBe(false);
+    // The old (unreserved) implementation could flip back to infeasible above the boundary —
+    // this is exactly the spot-check that would have caught it.
+    expect(phasedReplayRedeems(t, exact + 1)).toBe(true);
+    expect(phasedReplayRedeems(t, exact + 50_000)).toBe(true);
+    expect(phasedReplayRedeems(t, exact + 500_000)).toBe(true);
+  });
+
+  it('monotonicity: same shape holds for the peak_debt exit-fee basis', () => {
+    const t = nonZeroFeeBase('peak_debt');
+    const g = solveSeniorBreakevenPhased(t);
+    expect(g).not.toBeNull();
+    const exact = g as number;
+    expect(phasedReplayRedeems(t, exact)).toBe(true);
+    expect(phasedReplayRedeems(t, exact - 1)).toBe(false);
+  });
 });
