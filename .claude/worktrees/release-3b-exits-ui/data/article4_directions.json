@@ -1,0 +1,172 @@
+{
+  "_meta": {
+    "description": "Known Article 4 directions restricting PDR (office-to-residential and related). Not exhaustive — always verify with the local planning authority.",
+    "last_updated": "2026-08-09",
+    "sources": ["GOV.UK planning portal", "Individual LPA websites"]
+  },
+  "E09000001": {
+    "lpa_name": "City of London",
+    "directions": [
+      {
+        "name": "City of London Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000007": {
+    "lpa_name": "Camden",
+    "directions": [
+      {
+        "name": "Camden Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000012": {
+    "lpa_name": "Hackney",
+    "directions": [
+      {
+        "name": "Hackney Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000014": {
+    "lpa_name": "Haringey",
+    "directions": [
+      {
+        "name": "Haringey Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Selected industrial areas"
+      }
+    ]
+  },
+  "E09000019": {
+    "lpa_name": "Islington",
+    "directions": [
+      {
+        "name": "Islington Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000020": {
+    "lpa_name": "Kensington and Chelsea",
+    "directions": [
+      {
+        "name": "RBKC Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000022": {
+    "lpa_name": "Lambeth",
+    "directions": [
+      {
+        "name": "Lambeth Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Selected employment areas"
+      }
+    ]
+  },
+  "E09000028": {
+    "lpa_name": "Southwark",
+    "directions": [
+      {
+        "name": "Southwark Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000030": {
+    "lpa_name": "Tower Hamlets",
+    "directions": [
+      {
+        "name": "Tower Hamlets Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E09000032": {
+    "lpa_name": "Wandsworth",
+    "directions": [
+      {
+        "name": "Wandsworth Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Selected employment areas"
+      }
+    ]
+  },
+  "E09000033": {
+    "lpa_name": "Westminster",
+    "directions": [
+      {
+        "name": "Westminster Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Whole borough"
+      }
+    ]
+  },
+  "E08000003": {
+    "lpa_name": "Manchester",
+    "directions": [
+      {
+        "name": "Manchester Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "City centre and selected areas"
+      }
+    ]
+  },
+  "E08000025": {
+    "lpa_name": "Birmingham",
+    "directions": [
+      {
+        "name": "Birmingham Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "City centre core"
+      }
+    ]
+  },
+  "E06000023": {
+    "lpa_name": "Bristol",
+    "directions": [
+      {
+        "name": "Bristol Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "Central area and Temple Quarter"
+      }
+    ]
+  },
+  "E08000035": {
+    "lpa_name": "Leeds",
+    "directions": [
+      {
+        "name": "Leeds Article 4 Direction — Office to Residential",
+        "pdr_classes_restricted": ["class_ma"],
+        "date_made": "2021-08-01",
+        "coverage": "City centre"
+      }
+    ]
+  }
+}
