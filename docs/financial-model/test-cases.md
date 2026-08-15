@@ -22,9 +22,11 @@ explains how the two are kept in parity.
 ## 2. Golden fixtures (whole-pipeline, cross-language)
 
 **Shared fixture directory:** `fixtures/financial-model/` (repo root, sibling to `frontend/` and
-`tests/`). Each file is a self-contained document: `name`, `kind` (`"pipeline"`, or `"programme"`
-for a fixture carrying a non-null `programme` block — a label only, both kinds run through the same
-assertion loop), `inputs` (a full `CalculatorInputsV3` document, `inputs_version: 3` — since Release
+`tests/`). Each file is a self-contained document: `name`, `kind` (`"pipeline"`; `"programme"` for a
+fixture carrying a non-null `programme` block, Release 3a; `"phased-sales"` for a non-null
+`sales_phasing` block and `"refinance"` for a non-null `refinance` block, both Release 3b — labels
+only, every kind runs through the same assertion loop), `inputs` (a full `CalculatorInputsV3`
+document, `inputs_version: 3` — since Release
 2b Task 2, calc `2.1.0`; or a `CalculatorInputsV4` document, `inputs_version: 4` — since Release 3a,
 calc `2.2.0`; see migration-notes.md §5) and `expected_metrics` (hand-computed key → expected
 pence/percent value).
