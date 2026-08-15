@@ -76,6 +76,12 @@ export function runLedger(
   let totalCapFees = 0;
   let totalEquity = 0;
   let totalAdditionalEquity = 0;
+  // Spec §4.5/§7: additional equity injected specifically by the refinance event's
+  // shortfall or negative-net-proceeds branches — a subset of totalAdditionalEquity that
+  // reconcile() (validation.ts) must exclude from sources, because it funds a facility
+  // redemption (financing-side), not a project cost (see the field's own doc comment on
+  // MonthlyModel.totals in finance-types.ts).
+  let totalRefinanceShortfallEquity = 0;
   let totalGap = 0;
   let totalDistributions = 0;
   let totalRepayments = 0;
@@ -208,6 +214,7 @@ export function runLedger(
       let refiNet = refi.net_proceeds_pence;
       if (refiNet < 0) {
         additionalEquity += -refiNet;   // fees exceed the advance — equity funds the difference
+        totalRefinanceShortfallEquity += -refiNet;
         refiNet = 0;
       }
       refinanceProceeds = refiNet;
@@ -222,6 +229,7 @@ export function runLedger(
           distribution += refiNet - required;
         } else {
           additionalEquity += required - refiNet;   // §4.3 mechanics; additional_equity_required fires below
+          totalRefinanceShortfallEquity += required - refiNet;
         }
         balance = 0;
       } else {
@@ -327,6 +335,7 @@ export function runLedger(
       capitalised_fees_pence: totalCapFees,
       equity_contributed_pence: totalEquity,
       additional_equity_pence: totalAdditionalEquity,
+      refinance_shortfall_equity_pence: totalRefinanceShortfallEquity,
       funding_gap_pence: totalGap,
       distributions_pence: totalDistributions,
       repayments_pence: totalRepayments,

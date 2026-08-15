@@ -255,6 +255,42 @@ describe('reconcile', () => {
     expect(rec.funding_complete).toBe(false);
     expect(rec.report_safe).toBe(false);
   });
+
+  // Coordinator fix (spec §4.5/§7, fixture J invariant-matrix defect): a refinance whose
+  // net proceeds fall short of the outstanding balance + exit fee injects additional
+  // equity to fund the facility's full redemption — a financing-side flow, like
+  // sale-proceeds repayments, that spec §7's sources-and-uses identity deliberately
+  // excludes. Before the fix, reconcile() counted that equity as an uncategorised source
+  // with no matching use, breaking sources_equal_uses even though nothing is actually
+  // unfunded.
+  it('a refinance shortfall does not break sources=uses reconciliation (spec §4.5/§7)', () => {
+    const inputs = migrateInputsToV4({});
+    inputs.acquisition.purchase_price_pence = 40_000_000;
+    inputs.unit_mix.units = [1, 2, 3, 4].map((n) => ({
+      id: `u${n}`, type: '1bed' as const, floor_area_sqm: 50,
+      estimated_value_pence: 30_000_000, comparable_notes: '',
+    }));
+    inputs.conversion_costs.total_construction_sqm = 200;
+    inputs.conversion_costs.construction_cost_per_sqm_pence = 100_000;
+    inputs.finance.committed_net_facility_pence = 50_000_000;
+    inputs.finance.committed_gross_facility_pence = 55_000_000;
+    inputs.finance.day_one_advance_pence = 30_000_000;
+    inputs.finance.term_months = 12;
+    inputs.equity_sources[0].amount_pence = 40_000_000;
+    inputs.exit_strategy.route = 'retain_all';
+    // Net proceeds = round(1,000,000 × 50 / 100) - 0 - 0 = 500,000 — a small fraction of
+    // the outstanding senior balance, guaranteeing the shortfall branch fires.
+    inputs.refinance = {
+      month_offset: 11, investment_value_pence: 1_000_000, ltv_pct: 50,
+      arrangement_fee_pence: 0, legal_costs_pence: 0,
+    };
+    const schedule = buildSchedule(inputs);
+    const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
+    expect(model.totals.refinance_shortfall_equity_pence).toBeGreaterThan(0);
+    const rec = reconcile(inputs, schedule, model);
+    expect(rec.sources_equal_uses).toBe(true);
+    expect(model.flags.some((f) => f.code === 'additional_equity_required')).toBe(true);
+  });
 });
 
 describe('v4 programme validation', () => {

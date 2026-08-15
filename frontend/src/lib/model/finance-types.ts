@@ -249,6 +249,13 @@ export interface MonthlyModel {
     capitalised_fees_pence: number;
     equity_contributed_pence: number;
     additional_equity_pence: number;
+    /** Spec §4.5/§7: the slice of `additional_equity_pence` injected by the refinance
+     * event's shortfall or negative-net-proceeds branches. It funds a facility
+     * redemption (financing-side), not a project cost, so reconcile() excludes it from
+     * §7's sources-and-uses identity while it still counts toward
+     * `additional_equity_pence`, the `additional_equity_required` flag, equity
+     * contributed, and the equity cash-flow vector. Always 0 when `refinance` is null. */
+    refinance_shortfall_equity_pence: number;
     funding_gap_pence: number;
     distributions_pence: number;
     repayments_pence: number;

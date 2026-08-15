@@ -326,6 +326,12 @@ The distribution/equity effects flow into §3.15's equity cash-flow vector, so
 §3.17 IRR gains a real terminal flow for retained exits. Valuation-based
 components keep their "unrealised" labelling (§3.11).
 
+Equity absorbed by the refinance event (shortfall or negative net proceeds)
+funds a facility redemption — a financing-side flow. Like sale-proceeds
+repayments, it is excluded from §7's sources-and-uses reconciliation (which
+balances project funding against project costs); it still counts toward
+additional-equity flags, equity contributed, and the equity cash-flow vector.
+
 ---
 
 ## 5. Lender metrics
@@ -464,6 +470,7 @@ weight rules above. `sales_phasing` and `refinance` are implemented from calc
 - **Uses:** every cost line in the monthly ledger (acquisition, construction, professional, statutory, selling costs, lender fees, interest whether capitalised or serviced).
 - **Sources:** equity contributions, senior principal draws, capitalised fees & rolled-up interest (self-funding within the gross facility), receipts applied directly to same-month uses (selling costs and exit fee netted from proceeds), and other committed funding.
 - **Invariant (tested to the penny, monthly and cumulative):** Σ sources = Σ uses. Finance costs are explicitly funded (rolled-up: by the gross facility; serviced: by equity). An unfundable residual appears as `funding_gap` — visible, never plugged.
+- **Refinance-shortfall equity excluded [R3b — calc 2.3.0]:** additional equity injected by the §4.5 refinance event's shortfall or negative-net-proceeds branches funds a facility redemption, not a project cost, so it is excluded from both sides of this identity — like sale-proceeds repayments, which are similarly omitted rather than appearing as a matched source/use pair.
 
 ## 8. Worked reconciliation example (normative golden case)
 

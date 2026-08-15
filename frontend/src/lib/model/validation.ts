@@ -264,8 +264,15 @@ export function reconcile(
   const usesTotal = model.months.reduce((s, m) => s + m.uses_total_pence, 0)
     + servicedInterest + rolledInterest + capitalisedFees
     + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence;
+  // Spec §4.5/§7: additional equity absorbed by the refinance event's shortfall or
+  // negative-net-proceeds branches funds a facility redemption — a financing-side flow,
+  // not a project cost — so it is excluded here exactly like sale-proceeds repayments
+  // (netReceipts/repayment_pence never appear on either side of this identity either).
+  // It still counts in full toward additional_equity_pence itself, the
+  // additional_equity_required flag, equity contributed, and the equity cash-flow vector.
   const sourcesTotal =
-    model.totals.equity_contributed_pence + model.totals.additional_equity_pence
+    model.totals.equity_contributed_pence
+    + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence)
     + model.totals.funding_gap_pence // shown explicitly, never hidden
     + model.totals.draws_pence + capitalisedFees + rolledInterest
     + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence; // proceeds applied at source
