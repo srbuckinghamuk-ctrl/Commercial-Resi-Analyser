@@ -1,5 +1,6 @@
 import type { AppraisalRun, CalculatorInputsV4 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
+import { formatProgrammeMonth } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 
 interface Props {
@@ -19,13 +20,38 @@ export default function CashflowPage({ run }: Props) {
   const { model, schedule } = run;
   const term = schedule.term_months;
   const spendWindow = term > 1 ? Math.max(1, term - 2) : 0;
-  const assumptionsNote = term > 1
-    ? `Straight-line spend over months 1–${spendWindow}; disposal in month ${term - 1}; see calculation specification §6.`
-    : `Single-month term — all costs and disposal fall in month 0; see calculation specification §6.`;
+
+  // v4-aware, polymorphic over run.inputs (v2/v3 documents carry none of these
+  // blocks at all) — see programme-months.ts and calculation spec §2.1: the
+  // anchor month is display-only and never enters calculation.
+  const programme = 'programme' in run.inputs ? run.inputs.programme : null;
+  const salesPhasing = 'sales_phasing' in run.inputs ? run.inputs.sales_phasing : null;
+  const refinance = 'refinance' in run.inputs ? run.inputs.refinance : null;
+  const anchor = programme?.anchor_month ?? null;
+
+  const assumptionsNote = (() => {
+    if (programme == null && salesPhasing == null) {
+      // Verbatim wording from before Release 3b — unchanged for every deal
+      // that uses neither an explicit programme nor phased sales.
+      return term > 1
+        ? `Straight-line spend over months 1–${spendWindow}; disposal in month ${term - 1}; see calculation specification §6.`
+        : `Single-month term — all costs and disposal fall in month 0; see calculation specification §6.`;
+    }
+    const spendClause = programme != null
+      ? 'Explicit dated programme (spec §6.1)'
+      : `Straight-line spend over months 1–${spendWindow}`;
+    const disposalClause = salesPhasing != null
+      ? `; sales tranches in months ${salesPhasing.tranches.map((t) => t.month_offset).join(', ')}`
+      : `; disposal in month ${term - 1}`;
+    const refinanceClause = refinance != null ? `; refinance in month ${refinance.month_offset}` : '';
+    return `${spendClause}${disposalClause}${refinanceClause}; see calculation specification §4.4–§6.1.`;
+  })();
 
   const costsTotal = model.months.reduce((s, m) => s + m.uses_total_pence, 0);
   const netReceiptsTotal = model.months.reduce((s, m) => s + m.net_receipts_pence, 0);
   const equityInTotal = model.totals.equity_contributed_pence + model.totals.additional_equity_pence;
+  const hasRefi = model.months.some((m) => m.refinance_proceeds_pence > 0);
+  const refiTotal = model.months.reduce((s, m) => s + m.refinance_proceeds_pence, 0);
 
   return (
     <div>
@@ -39,7 +65,7 @@ export default function CashflowPage({ run }: Props) {
         <div style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', flex: 1, minWidth: 160 }}>
           <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 4 }}>Peak Debt</div>
           <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 17 }}>
-            {penceToPounds(model.peak_debt_pence)}{model.peak_debt_month != null ? ` (Month ${model.peak_debt_month})` : ''}
+            {penceToPounds(model.peak_debt_pence)}{model.peak_debt_month != null ? ` (${formatProgrammeMonth(anchor, model.peak_debt_month)})` : ''}
           </div>
         </div>
         <div style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', flex: 1, minWidth: 160 }}>
@@ -57,7 +83,8 @@ export default function CashflowPage({ run }: Props) {
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
               {['Month', 'Costs', 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
-                'Undrawn net', 'Headroom', 'Receipts (net)', 'Repayment', 'Distribution', 'Gap'].map((h) => (
+                'Undrawn net', 'Headroom', 'Receipts (net)', ...(hasRefi ? ['Refi proceeds'] : []),
+                'Repayment', 'Distribution', 'Gap'].map((h) => (
                 <th key={h} style={th}>{h}</th>
               ))}
             </tr>
@@ -65,7 +92,7 @@ export default function CashflowPage({ run }: Props) {
           <tbody>
             {model.months.map((m) => (
               <tr key={m.month} style={{ borderBottom: '1px solid #0f172a' }}>
-                <td style={{ ...td, color: '#94a3b8' }}>Month {m.month}</td>
+                <td style={{ ...td, color: '#94a3b8' }}>{formatProgrammeMonth(anchor, m.month)}</td>
                 <td style={td}>{penceToPounds(m.uses_total_pence)}</td>
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.equity_contribution_pence + m.additional_equity_pence)}</td>
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.draw_pence)}</td>
@@ -78,6 +105,7 @@ export default function CashflowPage({ run }: Props) {
                   {pence(m.facility_headroom_pence)}
                 </td>
                 <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(m.net_receipts_pence)}</td>
+                {hasRefi && <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(m.refinance_proceeds_pence)}</td>}
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.repayment_pence)}</td>
                 <td style={{ ...td, color: m.distribution_pence >= 0 ? '#22c55e' : '#ef4444' }}>{penceToPounds(m.distribution_pence)}</td>
                 <td style={{ ...td, color: m.funding_gap_pence > 0 ? '#ef4444' : '#94a3b8', fontWeight: m.funding_gap_pence > 0 ? 600 : 400 }}>
@@ -99,6 +127,7 @@ export default function CashflowPage({ run }: Props) {
               <td style={td}>—</td>
               <td style={td}>—</td>
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(netReceiptsTotal)}</td>
+              {hasRefi && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(refiTotal)}</td>}
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.repayments_pence)}</td>
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.distributions_pence)}</td>
               <td style={{ ...td, fontWeight: 700, color: model.totals.funding_gap_pence > 0 ? '#ef4444' : '#e2e8f0' }}>

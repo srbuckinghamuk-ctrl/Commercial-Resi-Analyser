@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
-import type { CalculatorInputsV2, CalculatorInputsV3 } from './model';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './model';
 import { runAppraisal, migrateInputs } from './model';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
@@ -422,6 +422,131 @@ describe('generateInvestmentMemo', () => {
       expect(text).toContain('not available');
       expect(text).toContain('no lender valuation recorded');
       expect(text).not.toContain('Release 2)');
+    });
+  });
+
+  // Release 3b (Task 13): programme-dated cashflow labels/columns + exit-strategy
+  // extensions (tranche table, redemption schedule, refinance narrative/provenance).
+  // Zero recalculation: every figure below is read straight from run.schedule /
+  // run.model, exactly like the rest of this file.
+  describe('Release 3b programme/exit extensions', () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureI = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'i-phased-sales.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+    const fixtureJ = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+
+    it('prints a redemption-schedule table and the sale-tranche months (fixture I — phased sell_all)', async () => {
+      const run = runAppraisal(fixtureI.inputs);
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+
+      expect(text).toContain('Redemption Schedule');
+      expect(text).toContain('Senior balance before receipts');
+      expect(text).toContain('Sale Tranches');
+
+      // Tranche months come straight from schedule.receipts (spec §4.4.1) — derive
+      // the expected months from the run itself rather than hardcoding, so this
+      // pins the *behaviour* (a label for every receipt month), not a hand-computed
+      // number.
+      const trancheMonths = run.schedule.receipts
+        .map((r, m) => ({ r, m }))
+        .filter(({ r }) => r.gross_sale_pence > 0)
+        .map(({ m }) => m);
+      expect(trancheMonths).toEqual([9, 10, 11]);
+      for (const m of trancheMonths) {
+        expect(text).toContain(`Month ${m}`); // no programme -> plain "Month N" label
+      }
+
+      // Redemption schedule balances (declining, final entry redeems to zero).
+      expect(run.model.redemption_schedule.map((r) => r.balance_pence)).toEqual([53431299, 10782708, 0]);
+      const zeroStr = (0).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
+      expect(text).toContain(zeroStr);
+    });
+
+    it('prints refinance provenance and the refinance narrative line (fixture J — blended + refinance)', async () => {
+      const run = runAppraisal(fixtureJ.inputs);
+      expect(run.schedule.refinance).not.toBeNull();
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const text = await pdfText(blob);
+
+      // jsPDF escapes literal parentheses inside its PDF string objects (`\(`/`\)`),
+      // so pdfText's raw byte scan never sees an unescaped "(...)" — check the
+      // ASCII-safe fragments either side of the parens instead (same approach the
+      // Release 2b lender-basis test above uses for the em dash).
+      expect(text).toContain('Refinance: modelled');
+      expect(text).toContain(`Month ${run.schedule.refinance!.month}`);
+      expect(text).not.toContain('Refinance: not modelled');
+      // doc.splitTextToSize wraps the narrative onto two lines (each its own PDF
+      // text-show operation with no inserted space at the join) — check fragments
+      // that live wholly within one wrapped line rather than a substring that
+      // straddles the wrap boundary.
+      expect(text).toContain('applied to');
+      expect(text).toContain('surplus distributes to equity');
+
+      const netProceedsStr = (run.schedule.refinance!.net_proceeds_pence / 100).toLocaleString('en-GB', {
+        style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+      });
+      expect(text).toContain(netProceedsStr);
+    });
+
+    it('still generates a memo for pre-v4 (legacy v2) inputs, with the auto/default provenance lines', async () => {
+      const v2Inputs = baseInputs();
+      const run = runAppraisal(v2Inputs);
+      const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+      expect(blob).toBeInstanceOf(Blob);
+      const text = await pdfText(blob);
+      expect(text).toContain('Programme: auto-derived from term');
+      expect(text).toContain('spec §6');
+      expect(text).toContain('Sales phasing: single disposal in final month.');
+      expect(text).toContain('Refinance: not modelled.');
+    });
+
+    // Carried-forward fix: sourcesAndUsesTotals() is a hand-maintained mirror of
+    // reconcile()'s §7 aggregation. Commit f2246f2 excluded
+    // refinance_shortfall_equity_pence from reconcile()'s sources (it funds a
+    // facility redemption — a financing-side flow, not a project cost) but the
+    // memo helper wasn't updated: for a retain_all deal with a refinance
+    // shortfall the memo's sources/uses table wouldn't balance even though
+    // reconciliation.sources_equal_uses correctly reports true.
+    it('balances sources and uses for a retain_all deal with a refinance shortfall', () => {
+      const base = baseInputs();
+      const inputs: CalculatorInputsV4 = {
+        ...base,
+        inputs_version: 4,
+        lender_valuation: null,
+        programme: null,
+        sales_phasing: null,
+        exit_strategy: {
+          route: 'retain_all',
+          selling_agent_fee_pct: 1.5,
+          selling_legal_fee_pence: 400_000,
+          retained_units: [
+            { unit_id: 'u1', monthly_rent_pence: 95_000 },
+            { unit_id: 'u2', monthly_rent_pence: 95_000 },
+            { unit_id: 'u3', monthly_rent_pence: 95_000 },
+            { unit_id: 'u4', monthly_rent_pence: 95_000 },
+          ],
+        },
+        // Investment value/LTV deliberately far too small to cover the
+        // outstanding senior balance + exit fee at month 11 — forces the
+        // shortfall branch (monthly-engine.ts: refiNet < required).
+        refinance: {
+          month_offset: 11,
+          investment_value_pence: 5_000_000,
+          ltv_pct: 50,
+          arrangement_fee_pence: 300_000,
+          legal_costs_pence: 100_000,
+        },
+      };
+      const run = runAppraisal(inputs);
+      expect(run.model.totals.refinance_shortfall_equity_pence).toBeGreaterThan(0);
+      expect(run.reconciliation.sources_equal_uses).toBe(true); // sanity check the fixture
+
+      const { sourcesTotal, usesTotal } = sourcesAndUsesTotals(run);
+      expect(sourcesTotal).toBe(usesTotal);
     });
   });
 });

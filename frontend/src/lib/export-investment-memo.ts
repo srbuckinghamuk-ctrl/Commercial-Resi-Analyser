@@ -4,6 +4,7 @@ import type { Project, EligibilityAssessment } from '../types';
 import type { AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './apply-scenario';
+import { formatProgrammeMonth } from './programme-months';
 
 // ── This memo consumes the finished AppraisalRun only ─────
 //
@@ -135,7 +136,11 @@ export function sourcesAndUsesTotals(run: AppraisalRun): {
   const usesTotal = metrics.total_development_cost_pence;
   const sourcesTotal =
     model.totals.equity_contributed_pence +
-    model.totals.additional_equity_pence +
+    // Spec §4.5/§7 (mirrors validation.ts reconcile() exactly): additional equity
+    // absorbed by the refinance event's shortfall/negative-net-proceeds branches
+    // funds a facility redemption — a financing-side flow, not a project cost —
+    // so it is excluded here just like it is from reconcile()'s identity.
+    (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence) +
     model.totals.funding_gap_pence +
     model.totals.draws_pence +
     model.totals.capitalised_fees_pence +
@@ -156,6 +161,15 @@ export function generateInvestmentMemo(
   // `inputs` may be a pre-Release-2b v2 document with no `lender_valuation` field at all —
   // this mirrors the null it would carry on a v3 document with no block recorded.
   const lenderValuation = 'lender_valuation' in inputs ? inputs.lender_valuation : null;
+  // Release 3b (Task 13): v4-aware, polymorphic over AnyCalculatorInputs — v2/v3
+  // documents carry none of these blocks at all, so every read is `in`-guarded
+  // exactly like lenderValuation above. anchor_month is display-only (spec §2.1)
+  // and never enters calculation; monthLabel is the memo's single conversion point.
+  const programme = 'programme' in inputs ? inputs.programme : null;
+  const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
+  const refinance = 'refinance' in inputs ? inputs.refinance : null;
+  const anchor = programme?.anchor_month ?? null;
+  const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
 
   const totalSqm = inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0);
   const totalSqft = sqmToSqft(totalSqm);
@@ -592,6 +606,30 @@ export function generateInvestmentMemo(
   if (metrics.lender_gdv_pence !== null && lenderValuation != null) {
     y = bodyText(y, `Lender valuation basis: ${lenderValuation.reason} — ${lenderValuation.author}, ${fmtDate(lenderValuation.date)}.`);
   }
+
+  // Release 3b (Task 13) provenance lines — one each for the three v4-only
+  // blocks, printed unconditionally (unlike the lender-valuation line above,
+  // which only appears when a lender valuation actually produced a GDV).
+  y = bodyText(
+    y,
+    programme != null
+      ? `Programme: explicit${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
+      : 'Programme: auto-derived from term (spec §6).',
+  );
+  y = bodyText(
+    y,
+    salesPhasing != null
+      ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${salesPhasing.tranches.map((t) => monthLabel(t.month_offset)).join(', ')}).`
+      : schedule.totals.gross_sales_pence > 0
+        ? 'Sales phasing: single disposal in final month.'
+        : 'Sales phasing: not applicable — no units sold.',
+  );
+  y = bodyText(
+    y,
+    refinance != null && schedule.refinance != null
+      ? `Refinance: modelled (${monthLabel(schedule.refinance.month)}).`
+      : 'Refinance: not modelled.',
+  );
   y += 2;
 
   y = subHeading(y, 'Cost Plan');
@@ -711,26 +749,53 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 6, 'Programme');
 
   y = subHeading(y, 'Timeline');
+  if (programme != null) {
+    // Explicit dated programme (spec §6.1) — one row per package, straight from
+    // the recorded input windows; Start/Finish are display-only calendar labels.
+    const pkgRows: string[][] = (['construction', 'professional', 'statutory'] as const).map((key) => {
+      const p = programme.packages[key];
+      const label = key.charAt(0).toUpperCase() + key.slice(1);
+      return [label, monthLabel(p.start_offset), monthLabel(p.start_offset + p.duration_months - 1), p.curve.kind];
+    });
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Package', 'Start', 'Finish', 'Curve']],
+      body: pkgRows,
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+  }
   y = bodyText(
     y,
     `Total programme: ${inputs.finance.term_months} months. Peak senior debt of ${fmt(metrics.peak_debt_pence)} is reached in month ${metrics.peak_debt_month !== null ? metrics.peak_debt_month + 1 : '—'} of the programme. Total interest cost: ${fmt(model.totals.interest_pence)}.`,
   );
-  y = infoRequired(y, 'Key dates — start on site, practical completion, sales/letting period');
-  y = infoRequired(y, 'Critical path, long-lead items');
+  if (programme == null) {
+    y = infoRequired(y, 'Key dates — start on site, practical completion, sales/letting period');
+    y = infoRequired(y, 'Critical path, long-lead items');
+  } else if (anchor == null) {
+    // An explicit programme IS the dated programme (the package table above
+    // replaces the two gap markers) — only the calendar anchor is still missing.
+    y = infoRequired(y, 'Programme anchor month (calendar dates)');
+  }
 
   y = subHeading(y, 'Monthly Cashflow');
+  const cfHasRefi = model.months.some((m) => m.refinance_proceeds_pence > 0);
   let cumDraw = 0;
   let cumEquityCf = 0;
   const cfRows = model.months.map((m, i) => {
     cumDraw += m.draw_pence;
     cumEquityCf += model.equity_cashflows_pence[i] ?? 0;
     return [
-      `Month ${m.month + 1}`,
+      monthLabel(m.month),
       fmt(m.draw_pence),
       fmt(cumDraw),
       fmt(m.interest_accrued_pence),
       fmt(m.closing_balance_pence),
       fmt(m.gross_receipts_pence),
+      ...(cfHasRefi ? [fmt(m.refinance_proceeds_pence)] : []),
       fmt(model.equity_cashflows_pence[i] ?? 0),
       fmt(cumEquityCf),
     ];
@@ -738,21 +803,15 @@ export function generateInvestmentMemo(
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['Month', 'Draw', 'Cum. Draw', 'Interest', 'Closing Bal.', 'Receipts', 'Equity CF', 'Cum. Equity CF']],
+    head: [['Month', 'Draw', 'Cum. Draw', 'Interest', 'Closing Bal.', 'Receipts',
+      ...(cfHasRefi ? ['Refi'] : []), 'Equity CF', 'Cum. Equity CF']],
     body: cfRows,
-    styles: { fontSize: 7, cellPadding: 1.5 },
+    styles: { fontSize: 7, cellPadding: 1.5, halign: 'right' },
     headStyles: { fillColor: [30, 58, 95], textColor: 255, fontSize: 7 },
     bodyStyles: { textColor: [51, 65, 85] },
     alternateRowStyles: { fillColor: [241, 245, 249] },
     columnStyles: {
-      0: { cellWidth: 18 },
-      1: { halign: 'right' },
-      2: { halign: 'right' },
-      3: { halign: 'right' },
-      4: { halign: 'right' },
-      5: { halign: 'right' },
-      6: { halign: 'right' },
-      7: { halign: 'right' },
+      0: { cellWidth: 18, halign: 'left' },
     },
   });
   y = lastAutoTableFinalY(doc) + 8;
@@ -1236,8 +1295,67 @@ export function generateInvestmentMemo(
     y = lastAutoTableFinalY(doc) + 6;
   }
 
+  if (salesPhasing != null) {
+    // Sale Tranches (spec §4.4.1) — one row per month with recorded sale receipts,
+    // straight from schedule.receipts; Net comes from model.months (already the
+    // engine's own gross − agent − legal for that month), zero recalculation.
+    y = subHeading(y, 'Sale Tranches');
+    const trancheRows = schedule.receipts
+      .map((r, m) => ({ r, m }))
+      .filter(({ r }) => r.gross_sale_pence > 0)
+      .map(({ r, m }, i) => [
+        `${i + 1}`,
+        monthLabel(m),
+        fmt(r.gross_sale_pence),
+        fmt(r.agent_fee_pence + r.selling_legal_pence),
+        fmt(model.months[m].net_receipts_pence),
+      ]);
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Tranche', 'Month', 'Gross', 'Costs', 'Net']],
+      body: trancheRows,
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      columnStyles: {
+        0: { halign: 'center' },
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+        4: { halign: 'right' },
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+  }
+
+  if (model.redemption_schedule.length > 0) {
+    // Declining redemption schedule (spec §4.4.1) — senior balance immediately
+    // before each disposal month's receipts are applied, straight off the engine.
+    y = subHeading(y, 'Redemption Schedule');
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Month', 'Senior balance before receipts']],
+      body: model.redemption_schedule.map((r) => [monthLabel(r.month), fmt(r.balance_pence)]),
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+  }
+
+  if (refinance != null && schedule.refinance != null) {
+    y = bodyText(
+      y,
+      `Refinance (${monthLabel(schedule.refinance.month)}): investment value ${fmt(refinance.investment_value_pence)}, LTV ${fmtPct(refinance.ltv_pct)}, net proceeds ${fmt(schedule.refinance.net_proceeds_pence)} — applied to senior redemption; surplus distributes to equity (spec §4.5).`,
+    );
+  }
+
   y = subHeading(y, 'Contingent Exit');
-  y = infoRequired(y, 'At least one contingent exit strategy with supporting evidence');
+  if (refinance == null) {
+    y = infoRequired(y, 'At least one contingent exit strategy with supporting evidence');
+  }
   y = bodyText(
     y,
     'Contingent exits may include: sale of individual units to owner-occupiers at revised pricing, bulk sale to a registered provider or institutional PRS investor, or refinance onto long-term BTL debt.',
