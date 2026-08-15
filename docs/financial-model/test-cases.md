@@ -24,12 +24,17 @@ explains how the two are kept in parity.
 **Shared fixture directory:** `fixtures/financial-model/` (repo root, sibling to `frontend/` and
 `tests/`). Each file is a self-contained document: `name`, `kind` (`"pipeline"`; `"programme"` for a
 fixture carrying a non-null `programme` block, Release 3a; `"phased-sales"` for a non-null
-`sales_phasing` block and `"refinance"` for a non-null `refinance` block, both Release 3b — labels
-only, every kind runs through the same assertion loop), `inputs` (a full `CalculatorInputsV3`
-document, `inputs_version: 3` — since Release
+`sales_phasing` block and `"refinance"` for a non-null `refinance` block, both Release 3b), `inputs`
+(a full `CalculatorInputsV3` document, `inputs_version: 3` — since Release
 2b Task 2, calc `2.1.0`; or a `CalculatorInputsV4` document, `inputs_version: 4` — since Release 3a,
 calc `2.2.0`; see migration-notes.md §5) and `expected_metrics` (hand-computed key → expected
 pence/percent value).
+`kind` is a **label only** — every fixture, whatever its kind, runs through the same `runAppraisal`
+assertion loop — and it names the *newest* feature the fixture carries, not an exclusive category: a
+fixture may carry several of these blocks at once. Fixture J is labelled `"refinance"` but carries
+**both** a non-null `sales_phasing` and a non-null `refinance` block (and a `blended` exit route).
+This matches the `Fixture['kind']` comment in `golden-fixtures.test.ts`, which is the definition of
+record.
 The TS suite parses `inputs` with a plain type assertion (no runtime shape check) and runs it
 straight through `runAppraisal`; the Python suite validates the full v3 shape with
 `CalculatorInputsV3.model_validate` and runs it straight through `run_appraisal` too (Release 2b
@@ -1653,6 +1658,46 @@ carries 10,900,000 of value that no cash event in the model has realised, and th
 different number — is how the spec requires that to be disclosed. Fixture J is the fixture that pins
 the labelled case together with a *real* IRR; fixtures A/F/G/H/I all pin `false`.
 
+**Adjudication — does the refinance enter profit? (spec §3.12, resolved against this fixture).**
+This worksheet was derived against a §3.12 that then read, in two places:
+
+> **Formula:** total net receipts (sale receipts net of selling costs; *refinance proceeds when
+> modelled*) − TDC excluding selling costs…
+>
+> **Retained exits:** … the headline "profit" … is always labelled "unrealised — subject to
+> refinance/valuation" *unless a refinance event is modelled, in which case its realised proceeds
+> enter profit directly (§4.5)*.
+
+Taken literally that would make J's profit `90,000,000 + 19,100,000 − 95,306,600 = 13,793,400` with
+`profit_is_unrealised: false`. This worksheet pins the **opposite** — 24,693,400 on the valuation
+basis, labelled unrealised — and the valuation-basis reading governs, for three reasons:
+
+1. **Double-counting.** The retained portion is already in the numerator at its §3.11 valuation of
+   30,000,000. A refinance does not sell it; it **borrows against it**, converting senior development
+   debt into investment debt secured on the same asset. Adding the 19,100,000 of borrowed cash *on
+   top of* the 30,000,000 valuation would count the retained unit's value one and a half times over,
+   and would make profit rise simply by increasing the LTV on an unchanged asset — which is not a
+   profit at all. The literal reading also cannot be repaired by substitution: replacing the
+   valuation with the proceeds would report the asset at 65% LTV less fees, understating a retained
+   holding the developer still owns outright.
+2. **Scope.** The clause predates the modelled event. It is R1-era text about *labelling* — written
+   when no refinance was computed and "refinance proceeds" meant a hypothetical future exit — that a
+   Task-1-era stale-reference repair carried forward and overshot into an arithmetic claim. §3.11
+   (retained units enter "at their **valuation** clearly labelled unrealised") and §4.5's own closing
+   sentence ("Valuation-based components keep their 'unrealised' labelling (§3.11)") were never
+   changed and both already said what this fixture pins.
+3. **The cash is not lost — it is reported where it belongs.** The 19,100,000 is fully disclosed
+   through month 11's distribution row, and flows into §3.15's equity vector, hence into
+   `equity_multiple` (1.39) and `irr_annual_pct` (52.16). It changes the **timing and composition of
+   equity cash flows**, not the profit numerator. The realised-basis identity above is exactly where
+   it shows up as a profit-like quantity, and it balances to the penny.
+
+§3.12 has been amended accordingly (calc `2.3.0` changelog: a specification correction, no computed
+value changed — the engine always computed
+`profit = Σ gross receipts + retained value − TDC`). The pinned `profit_pence` of **24,693,400** and
+`profit_is_unrealised: true` are therefore a *derivation from the corrected spec*, not an engine
+read-back, and the amended §3.12 now cites this fixture as the case that pins it.
+
 #### Step 7 — IRR (spec §3.17), hand-solved
 
 Developer equity cash-flow vector (contributions negative, distributions positive), read off Steps
@@ -1769,7 +1814,8 @@ legal 400,000 pro-rata:
 `0.985G − 400,000` ✓.
 
 Could the minimal `G` redeem at tranche 1 instead? Only if `n₉ ≥ B₉ + f`, i.e.
-`0.591G ≥ 54,331,299`, i.e. `G ≥ 91,930,286` — *above* the fixture's actual 90,000,000, and far above
+`0.591G ≥ 54,331,299`, i.e. `G ≥ 54,331,299/0.591 = 91,931,131.98`, so `G ≥ **91,931,132**` — *above*
+the fixture's actual 90,000,000, and far above
 the tranche-3 answer below. (The same inequality re-derives Step 5's "partial arm at month 9" from
 the other direction: at the modelled `G = 90,000,000`, `n₉ = 52,950,000 < 54,091,299` ✓.) So the
 cheapest feasible `G` is the one that just redeems at tranche 2, in month 11. Tracing the replay
@@ -1787,10 +1833,15 @@ Substituting, with `k² = 22801/22500 = 1.0133777778`:
 0.394G − 160,000  ≥  59,516,993.267 − 0.598906267G + 660,000
 (0.394 + 0.598906267)G  ≥  59,516,993.267 + 660,000 + 160,000
 0.992906267G  ≥  60,336,993.267
-G  ≥  60,768,065.71
+G  ≥  60,768,065.72
 ```
 
-The continuous threshold is **60,768,065.71**, so the integer answer is 60,768,066 unless the
+Solved exactly (clearing `k² = 22801/22500` rather than carrying its decimal expansion, so no
+precision is lost in the final division):
+`G ≥ (22801 × 58,731,299 + 22500 × 820,000) / (22500 × 0.394 + 22801 × 0.591)
+= 1,357,582,348,499 / 22,340.391 = **60,768,065.72002**`.
+
+The continuous threshold is **60,768,065.72**, so the integer answer is 60,768,066 unless the
 rounding in the tranche split and the two `round(x/150)` interest lines happens to work in the sale's
 favour. The closed form cannot decide that; it is settled by evaluating the replay **exactly** at
 60,768,066 (feasible) and 60,768,065 (infeasible). Those two evaluations are jointly sufficient

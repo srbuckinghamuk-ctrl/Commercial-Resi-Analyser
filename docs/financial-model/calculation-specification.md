@@ -5,7 +5,7 @@
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
-- **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`.
+- **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`. Also corrects §3.12's refinance-profit wording to match §3.11 and the engine (a refinance is a financing event and does not enter profit) — a **specification** correction only, no computed value changed.
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
@@ -156,9 +156,9 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 ### 3.12 Profit after finance ("profit") [R1]
 
-- **Formula:** total net receipts (sale receipts net of selling costs; refinance proceeds when modelled) − TDC excluding selling costs… stated precisely: `profit = Σ gross receipts − TDC` where TDC already contains selling and finance costs.
-- **Identity (invariant):** when senior debt is fully repaid, `profit = Σ developer equity cash flows` (contributions negative, distributions positive).
-- **Retained exits:** realised (cash) profit and unrealised (valuation-based) profit are reported separately; the headline "profit" for a `retain_all` case is the **unrealised** figure and is always labelled "unrealised — subject to refinance/valuation" unless a refinance event is modelled, in which case its realised proceeds enter profit directly (§4.5). [R1 labels; R3b models refinance proceeds, §4.5.]
+- **Formula:** `profit = Σ gross sale receipts + retained value − TDC`, where TDC already contains selling and finance costs, and `retained value` is the retained portion's §3.11 **valuation** basis. A modelled refinance (§4.5) does **not** enter this numerator — see the retained-exits clause below.
+- **Identity (invariant):** when senior debt is fully repaid **and nothing is retained**, `profit = Σ developer equity cash flows` (contributions negative, distributions positive). With a retained portion the identity holds on a *realised* basis — `Σ gross sale receipts + refinance proceeds − TDC = Σ equity cash flows` — and the headline profit exceeds that by the part of the retained valuation no cash event has monetised.
+- **Retained exits:** realised (cash) profit and unrealised (valuation-based) profit are reported separately; the headline "profit" for a `retain_all` or `blended` case carries the retained portion at its §3.11 **valuation** basis, and is always labelled "unrealised — subject to refinance/valuation" while retained value > 0. A modelled refinance (§4.5) does **not** change that. The refinance is a **financing event**: it converts senior development debt into investment debt secured on the retained asset, so adding its proceeds to profit would double-count the retained value already in the numerator. What the event does change is the **timing and composition of equity cash flows** — its realised cash is disclosed through the ledger's distribution rows and flows into §3.15's vector, and hence into §3.16 equity multiple and §3.17 IRR. [R1 labels; R3b models the refinance event's cash flows, §4.5. **Corrected in Release 3b Task 8:** an earlier clause here said the proceeds "enter profit directly" and that the unrealised label drops when a refinance is modelled — wording that predates the modelled event, and that contradicts both §3.11's valuation basis and the engine. Golden fixture J pins the corrected reading.]
 - **Negative profit:** reported as a negative number, never clamped; triggers a red flag.
 
 ### 3.13 Profit on cost [R1]
