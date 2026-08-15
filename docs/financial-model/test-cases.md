@@ -1,6 +1,6 @@
 # Financial Model — Test Cases
 
-**Status:** Authoritative test-case register for calculation specification `2.2.0` (see
+**Status:** Authoritative test-case register for calculation specification `2.3.0` (see
 `docs/financial-model/calculation-specification.md`). This document enumerates every
 golden fixture, ledger fixture, invariant and regression vector that pins the engine's
 behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
@@ -44,14 +44,16 @@ since Task 2 is gone). Both assert every key in `expected_metrics`. The hand-com
 derived once, not independently transliterated per language — this is what makes the parity claim
 in §6 meaningful rather than two separately maintained approximations.
 
-**Temporary exception (Release 3a Task 7 → Task 8):** the corpus may now carry `inputs_version: 4`
-documents, which `CalculatorInputsV3.model_validate` cannot parse — so **v4 fixtures are currently
-TS-only**. Every fixture-driven Python test skips them explicitly
-(`tests/test_financial_model_fixtures.py`, `tests/test_financial_model_cost_to_complete.py`, both
-carrying a `TEMPORARY (Release 3a Task 7)` comment and showing as `SKIPPED` in the pytest run, not
-silently filtered). Python v4 parity — and with it the cross-language claim above, for fixture H —
-lands in Release 3a Task 8, which removes those skips. Until then, fixture H's worksheet is pinned
-by the TS suite alone.
+**Closed (Release 3a Task 7 → Task 8):** the corpus carries `inputs_version: 4` documents since
+Task 7 (fixture H; fixtures I and J followed in Release 3b). Task 7 briefly left a gap — v4
+documents could not parse through `CalculatorInputsV3.model_validate`, so every fixture-driven
+Python test skipped them explicitly (`tests/test_financial_model_fixtures.py`,
+`tests/test_financial_model_cost_to_complete.py`, both carrying a `TEMPORARY (Release 3a Task 7)`
+comment and showing as `SKIPPED` in the pytest run) and fixture H's worksheet was pinned by the TS
+suite alone. Task 8 introduced `CalculatorInputsV4` (`parse_calculator_inputs` dispatching on
+`inputs_version`) and removed those skips — v4 fixtures I, J and H now run through the same
+Python assertion loop as every other fixture, with no skip markers anywhere in the corpus-driven
+suites, and the cross-language parity claim above holds for the full corpus, not just v2/v3.
 
 **Consumers:**
 - TS: `frontend/src/lib/model/golden-fixtures.test.ts`, `frontend/src/lib/model/invariants.test.ts`
@@ -2105,37 +2107,47 @@ the trailing block in `monthly-engine.test.ts`. Python: `TestCashFunding` in
 ## 4. Invariant suite
 
 **Files:** `frontend/src/lib/model/invariants.test.ts` (full); `tests/test_financial_model_fixtures.py::test_invariants` (a separate, stronger unconditional check over the base fixtures only — kept
-alongside, not superseded, by the matrix below) and `tests/test_financial_model_fixtures.py::TestInvariantMatrix` (full port, Release 2b Task 7 — closes the gap this section used to record).
+alongside, not superseded, by the matrix below); `tests/test_financial_model_fixtures.py::TestInvariantMatrix` (full port, Release 2b Task 7 — closes the gap this section used to record; widened
+to the full 6-fixture, 5-variant matrix by Release 3a Task 9); and
+`tests/test_financial_model_fixtures.py::TestPhasedSaleRefinanceSweepInvariants` (Release 3b Task
+10 — the phased-sale/refinance sweep matrix, §4.2 below).
 
-The TS suite runs every fixture in `fixtures/financial-model/*.json` (currently A, F and G) through
-four derived variants — `base`, `retain_all` (exit route forced to `retain_all`), `serviced`
-(interest type forced to `serviced`), `term=1` (term forced to one month) — giving 3 fixtures × 4
-variants = 12 independent checks of each invariant below, not just the three literal fixtures.
-`TestInvariantMatrix` in `test_financial_model_fixtures.py` builds the exact same 3×4 = 12-way
-matrix (`_invariant_variants`, deep-copying each fixture's `CalculatorInputsV3` and mutating
-`exit_strategy.route` / `finance.interest_type` / `finance.term_months`, mirroring TS's `variants()`
-function field-for-field) and asserts all seven invariants below, one Python test method per TS
-`it()` (same order) so a single invariant's failure doesn't mask the others — the same diagnostic
-granularity as the TS suite, parametrised (`pytest.mark.parametrize`) rather than a hand-unrolled
-loop:
+### 4.1 The general ledger-invariant matrix
+
+The TS suite runs every fixture in `fixtures/financial-model/*.json` (A, F, G, H, I and J — six as
+of Release 3b) through five derived variants — `base`, `retain_all` (exit route forced to
+`retain_all`), `serviced` (interest type forced to `serviced`), `term=1` (term forced to one
+month), and `programme` (a generic dated programme fitted to the variant's term, Release 3a Task 9,
+spec §6.1) — giving 6 fixtures × 5 variants = 30 independent runs of each invariant below, not just
+the six literal fixtures.
+`TestInvariantMatrix` in `test_financial_model_fixtures.py` builds the exact same 6×5 = 30-way
+matrix (`_invariant_variants`, deep-copying each fixture's parsed inputs and mutating
+`exit_strategy.route` / `finance.interest_type` / `finance.term_months` / the programme block,
+mirroring TS's `variants()` function field-for-field) and asserts all eight invariants below, one
+Python test method per TS `it()` (same order) so a single invariant's failure doesn't mask the
+others — the same diagnostic granularity as the TS suite, parametrised
+(`pytest.mark.parametrize`) rather than a hand-unrolled loop:
 
 1. **Debt roll-forward invariant** — every month, `closing = opening + draw + capitalised_fees +
    interest_capitalised − repayment`, and `closing >= 0` always (spec §4, roll-forward invariant).
-2. **Peak debt correctness** — `peak_debt_pence` equals the maximum, across all months, of the
+2. **Sources equal uses unconditionally** (spec §7) — `reconciliation.sources_equal_uses` is
+   `true` on every run, not just fully-realised ones (Release 3a Task 9; closes the gap where only
+   the fully-realised profit-identity check below, #7, exercised this identity).
+3. **Peak debt correctness** — `peak_debt_pence` equals the maximum, across all months, of the
    pre-repayment balance (`opening + draw + capitalised_fees + interest_accrued` when rolled up),
    floored at 0 (spec §5.7).
-3. **Zero-debt zero finance cost** — when `funding_source === 'cash'`, `finance_costs_pence` and
+4. **Zero-debt zero finance cost** — when `funding_source === 'cash'`, `finance_costs_pence` and
    `totals.draws_pence` are both exactly 0 (spec §3.9, §9).
-4. **Retained exits receive no sale proceeds** — when `exit_strategy.route === 'retain_all'`,
+5. **Retained exits receive no sale proceeds** — when `exit_strategy.route === 'retain_all'`,
    every month's gross receipts and `selling_costs_pence` are 0 (spec §4.4).
-5. **Monthly schedule spreads sum to cost totals** — the sum of each month's construction /
+6. **Monthly schedule spreads sum to cost totals** — the sum of each month's construction /
    professional / statutory spread equals the schedule's cost totals (spec §6, rounding residue
    absorbed in the final month of each window).
-6. **Profit = Σ equity flows, and sources = uses** — checked only when the deal is "fully
+7. **Profit = Σ equity flows, and sources = uses** — checked only when the deal is "fully
    realised" (`senior_outstanding_at_maturity_pence === 0`, no retained value, no funding gap):
    `profit_pence` equals the sum of `equity_cashflows_pence`, and
    `reconciliation.sources_equal_uses` is `true` (spec §3.12 identity, §7 invariant).
-7. **TDC = sum of ledger uses plus interest, capitalised fees and exit fee** (spec §7) —
+8. **TDC = sum of ledger uses plus interest, capitalised fees and exit fee** (spec §7) —
    `total_development_cost_pence` equals `Σ months.uses_total_pence + Σ interest_capitalised +
    Σ interest_serviced + selling_costs_pence + exit_fee_pence + capitalised_fees_pence`. A code
    comment records why this isn't a naive sum: month-0 `uses_total_pence` includes ancillary fees
@@ -2143,24 +2155,68 @@ loop:
    explicit `+ capitalised_fees_pence` term (a Task 6 correction against the first draft of the
    spec's §7 reading).
 
-The seven `TestInvariantMatrix` methods, in the same order as the numbered list above:
+The eight `TestInvariantMatrix` methods, in the same order as the numbered list above:
 `test_debt_rollforward_reconciles_and_closing_balance_never_negative`,
+`test_sources_equal_uses_unconditionally`,
 `test_peak_debt_equals_the_maximum_monthly_pre_repayment_balance`,
 `test_cash_funding_produces_zero_debt_cost`, `test_retained_exits_receive_no_sale_proceeds`,
 `test_monthly_schedule_spreads_sum_exactly_to_cost_totals`,
 `test_profit_equals_equity_flows_and_sources_equal_uses_when_fully_realised`,
 `test_tdc_equals_the_sum_of_all_monthly_uses_plus_rolled_interest_capitalised_fees_and_exit_fee`.
-This gives 12 × 7 = 84 independent checks, matching the TS suite's assertion-group count exactly.
+This gives 30 × 8 = 240 independent checks, matching the TS suite's assertion-group count exactly
+(6 fixtures × 5 variants × 8 `it()`s in `invariants.test.ts`'s top `describe` block).
 
 **Closed (Release 2b Task 7).** This section used to record that the Python side checked only 2 of
-the 7 invariants (roll-forward, sources-equal-uses), over the base fixtures only, with no variant
+the invariants (roll-forward, sources-equal-uses), over the base fixtures only, with no variant
 generation. That gap is closed by `TestInvariantMatrix`. The original, narrower `test_invariants`
 function is kept alongside (not deleted, not superseded): it is a strictly *unconditional* check of
-roll-forward and `sources_equal_uses` over the three base fixtures — a stronger, if narrower-scoped,
-guarantee than the matrix's conditional #1/#6 for those specific runs, so removing it would have
+roll-forward and `sources_equal_uses` over the six base fixtures — a stronger, if narrower-scoped,
+guarantee than the matrix's conditional #7 for those specific runs, so removing it would have
 been a net loss of coverage, not a cleanup. The whole-pipeline golden-fixture parity test (§2)
 continues to pin the Python engine's numeric output for every fixture to the penny as a second,
 independent line of defence.
+
+### 4.2 The phased-sale / refinance sweep matrix (Release 3b Task 10, calc 2.3.0)
+
+A second, narrower matrix targets the phased-disposal and refinance mechanics fixtures I and J
+introduced (spec §4.4.1/§4.5) — properties that don't apply to the general fixture set (A/F/G/H
+carry no `sales_phasing` or `refinance` block) so they are not folded into §4.1's matrix. TS:
+`invariants.test.ts`'s `'phased-sale / refinance sweep invariants'` describe block; Python:
+`TestPhasedSaleRefinanceSweepInvariants` in `test_financial_model_fixtures.py`. Both run fixtures I
+and J through three derived variants — `base`, `odd-gross` (every unit's value nudged by a
+distinct odd pence amount, so gross sale totals and tranche/agent-fee rounding land on awkward
+pence) and `three-tranche` (`sales_phasing` replaced with a 3-tranche 33.4/33.3/33.3 split) — 2
+fixtures × 3 variants = 6 runs, each asserting four invariants:
+
+1. **Tranche conservation** — Σ receipts' `gross_sale_pence` = `schedule.totals.gross_sales_pence`;
+   Σ `agent_fee_pence` = `round(gross_sales_pence × selling_agent_fee_pct / 100)`; Σ
+   `selling_legal_pence` = the flat `selling_legal_fee_pence` (0 when nothing sold) — exact, by the
+   final tranche's residue absorption (spec §4.4.1).
+2. **Sweep conservation** — for every month, `distribution_pence + repayment_pence +
+   exit_fee_pence == net_receipts_pence + refinance_proceeds_pence + additional_equity_pence`.
+   This is an *exact* pinned identity (not a bound), derived directly from
+   `monthly-engine.ts`/`engine.py`'s sweep block (`distribution = net_receipts − repayment −
+   exit_fee`) composed with the refinance block's three arms — the identity's scope (rolled-up
+   interest, non-negative refinance net proceeds — both true of every run in this matrix, so
+   `additional_equity_pence` carries no serviced-interest component) is recorded in the TS test's
+   comment.
+3. **Interest never accrues on repaid principal** — for every consecutive month pair,
+   `interest_accrued[m+1] == round((closing_balance[m] + draw[m+1] + capitalised_fees[m+1]) ×
+   monthly_rate)`, since `opening[m+1] == closing_balance[m]` unconditionally in the ledger
+   roll-forward.
+4. **Redemption schedule declines** — `redemption_schedule` balances are non-increasing and months
+   strictly increasing, and `redemption_balance_at_disposal_pence` equals the schedule's last entry
+   (spec §4.4.1).
+
+This gives 6 × 4 = 24 independent checks per language, symmetric with the TS suite
+(`test_tranche_conservation_gross_agent_legal`, `test_sweep_conservation_every_month`,
+`test_interest_never_accrues_on_repaid_principal`, `test_redemption_schedule_declines` — one
+Python method per TS `it()`, same order).
+
+### 4.3 Combined total
+
+§4.1 + §4.2: **240 + 24 = 264** independent invariant checks per language — TS and Python parity
+exact at every level (same fixtures, same variants, same invariants, same counts).
 
 ---
 

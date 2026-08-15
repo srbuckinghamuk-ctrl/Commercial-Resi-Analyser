@@ -7,7 +7,8 @@ import { exitFeeAmount } from './monthly-engine';
 import { migrateInputsToV4 } from './migrate';
 import { spreadByCurve } from './curves';
 import type {
-  AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, ProgrammeInputs, SpendCurve,
+  AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4,
+  ProgrammeInputs, SpendCurve,
 } from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
@@ -127,6 +128,115 @@ describe('model invariants hold for every fixture and variant', () => {
           expect(run.metrics.total_development_cost_pence).toBe(
             monthlyUses + rolled + serviced2 + run.metrics.selling_costs_pence
             + run.model.totals.exit_fee_pence + run.model.totals.capitalised_fees_pence);
+        });
+      });
+    }
+  }
+});
+
+// Release 3b Task 10 (spec §4.4.1/§4.5, calc 2.3.0): phased-sale / refinance sweep
+// invariants over fixture I (phased sell_all) and J (phased + blended refinance) —shaped
+// inputs, plus two "awkward pence" derivatives per fixture (odd gross totals; a 3-tranche
+// 33.4/33.3/33.3 split) — 2 fixtures × 3 variants = 6 runs. Both fixtures, and every
+// derivative built here, keep finance.interest_type = 'rolled_up' and a non-negative
+// refinance net proceeds figure (never touched by these variants) — that is what makes
+// invariant 2 below an *exact* equality rather than a bound: with rolled_up interest,
+// monthly-engine.ts's interest-serviced branch (the other source that can add to
+// additional_equity_pence, lines ~166-172) never fires, so every pence of
+// additional_equity_pence(m) in these runs is attributable to the refinance-shortfall
+// branches alone (lines ~211-238) — see the identity derivation in the test body.
+function toV4Clone(inputs: AnyCalculatorInputs): CalculatorInputsV4 {
+  if (inputs.inputs_version !== 4) throw new Error('sweep-invariant fixture must be inputs_version 4');
+  return JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV4;
+}
+
+function oddGrossSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputsV4 {
+  const v = toV4Clone(inputs);
+  // Nudge each unit's value by a distinct odd pence amount so gross sale totals,
+  // tranche splits and agent-fee rounding all land on awkward (non-round) pence.
+  v.unit_mix.units.forEach((u, i) => { u.estimated_value_pence += 2 * i + 1; });
+  return v;
+}
+
+function threeTrancheSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputsV4 {
+  const v = toV4Clone(inputs);
+  const last = Math.max(0, Math.floor(v.finance.term_months) - 1);
+  v.sales_phasing = {
+    tranches: [
+      { month_offset: Math.max(0, last - 2), pct_of_gross_receipts: 33.4 },
+      { month_offset: Math.max(0, last - 1), pct_of_gross_receipts: 33.3 },
+      { month_offset: last, pct_of_gross_receipts: 33.3 },
+    ],
+  };
+  return v;
+}
+
+function sweepVariants(
+  inputs: AnyCalculatorInputs,
+): Array<{ label: string; inputs: CalculatorInputsV4 }> {
+  return [
+    { label: 'base', inputs: toV4Clone(inputs) },
+    { label: 'odd-gross', inputs: oddGrossSweepVariant(inputs) },
+    { label: 'three-tranche', inputs: threeTrancheSweepVariant(inputs) },
+  ];
+}
+
+const sweepFixtures = fixtures.filter((f) => f.name.startsWith('I —') || f.name.startsWith('J —'));
+if (sweepFixtures.length !== 2) {
+  throw new Error('expected exactly fixtures I and J in the shared corpus for the sweep-invariant matrix');
+}
+
+describe('phased-sale / refinance sweep invariants (spec §4.4.1/§4.5, calc 2.3.0)', () => {
+  for (const fx of sweepFixtures) {
+    for (const v of sweepVariants(fx.inputs)) {
+      describe(`${fx.name} [${v.label}]`, () => {
+        const run = runAppraisal(v.inputs);
+        const monthlyRate = v.inputs.finance.annual_interest_rate_pct / 100 / 12;
+
+        it('tranche conservation: Σ gross/agent/legal receipts reconcile exactly to totals', () => {
+          const sumGross = run.schedule.receipts.reduce((a, r) => a + r.gross_sale_pence, 0);
+          const sumAgent = run.schedule.receipts.reduce((a, r) => a + r.agent_fee_pence, 0);
+          const sumLegal = run.schedule.receipts.reduce((a, r) => a + r.selling_legal_pence, 0);
+          expect(sumGross).toBe(run.schedule.totals.gross_sales_pence);
+          expect(sumAgent).toBe(Math.round(
+            (run.schedule.totals.gross_sales_pence * v.inputs.exit_strategy.selling_agent_fee_pct) / 100));
+          expect(sumLegal).toBe(
+            run.schedule.totals.gross_sales_pence > 0 ? v.inputs.exit_strategy.selling_legal_fee_pence : 0);
+        });
+
+        // Pinned identity, derived from monthly-engine.ts's sweep block (repayment/exit_fee/
+        // distribution split netReceipts exactly: `distribution = netReceipts - repayment -
+        // exitFee`) composed with its refinance block (which either (a) tops up distribution
+        // by `refiNet - required` when refiNet >= balance+fee, or (b) adds `required - refiNet`
+        // to additional_equity when it doesn't, or (c) — balance already 0 — adds the whole
+        // refiNet to distribution): in every case the four fields below net to exactly zero.
+        // Holds every month, not just disposal/refinance months (both sides are 0 otherwise).
+        it('sweep conservation: distribution + repayment + exit fee == net receipts + refinance proceeds + additional equity, every month', () => {
+          for (const m of run.model.months) {
+            expect(m.distribution_pence + m.repayment_pence + m.exit_fee_pence).toBe(
+              m.net_receipts_pence + m.refinance_proceeds_pence + m.additional_equity_pence);
+          }
+        });
+
+        it('interest never accrues on repaid principal: interest_accrued[m+1] == round((closing[m] + draw[m+1] + capFees[m+1]) × monthlyRate)', () => {
+          const months = run.model.months;
+          for (let i = 0; i < months.length - 1; i++) {
+            const expected = Math.round(
+              (months[i].closing_balance_pence + months[i + 1].draw_pence
+                + months[i + 1].capitalised_fees_pence) * monthlyRate);
+            expect(months[i + 1].interest_accrued_pence).toBe(expected);
+          }
+        });
+
+        it('redemption schedule: balances non-increasing, months strictly increasing, scalar equals last entry', () => {
+          const sched = run.model.redemption_schedule;
+          for (let i = 1; i < sched.length; i++) {
+            expect(sched[i].month).toBeGreaterThan(sched[i - 1].month);
+            expect(sched[i].balance_pence).toBeLessThanOrEqual(sched[i - 1].balance_pence);
+          }
+          if (sched.length > 0) {
+            expect(run.model.redemption_balance_at_disposal_pence).toBe(sched[sched.length - 1].balance_pence);
+          }
         });
       });
     }

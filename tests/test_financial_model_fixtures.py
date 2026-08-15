@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.financial_model import AppraisalRun, run_appraisal
-from app.financial_model.engine import exit_fee_amount
+from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v4
 from app.financial_model.types import (
@@ -13,6 +13,8 @@ from app.financial_model.types import (
     ProgrammeInputs,
     ProgrammePackage,
     ProgrammePackages,
+    SalesPhasingInputs,
+    SalesPhasingTranche,
     SimpleSpendCurve,
     parse_calculator_inputs,
 )
@@ -290,6 +292,138 @@ class TestInvariantMatrix:
             monthly_uses + rolled + serviced + run.metrics.selling_costs_pence
             + run.model.totals.exit_fee_pence + run.model.totals.capitalised_fees_pence
         )
+
+
+# Release 3b Task 10 (spec Sec 4.4.1/Sec 4.5, calc 2.3.0): phased-sale / refinance sweep
+# invariants over fixture I (phased sell_all) and J (phased + blended refinance) -shaped
+# inputs, plus two "awkward pence" derivatives per fixture (odd gross totals; a 3-tranche
+# 33.4/33.3/33.3 split) -- 2 fixtures x 3 variants = 6 runs. Both fixtures, and every
+# derivative built here, keep finance.interest_type == "rolled_up" and a non-negative
+# refinance net proceeds figure (never touched by these variants) -- that is what makes
+# the sweep-conservation identity below an *exact* equality rather than a bound: with
+# rolled_up interest, engine.py's interest-serviced branch (the other source that can add
+# to additional_equity_pence) never fires, so every pence of additional_equity_pence(m) in
+# these runs is attributable to the refinance-shortfall branches alone. Mirrors
+# invariants.test.ts's "phased-sale / refinance sweep invariants" describe block
+# field-for-field (same variant labels, same 4 checks, same order).
+def _to_v4_clone(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
+    if not isinstance(inputs, CalculatorInputsV4):
+        raise TypeError("sweep-invariant fixture must be inputs_version 4")
+    return inputs.model_copy(deep=True)
+
+
+def _odd_gross_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
+    """Nudge each unit's value by a distinct odd pence amount so gross sale totals,
+    tranche splits and agent-fee rounding all land on awkward (non-round) pence."""
+    v = _to_v4_clone(inputs)
+    for i, u in enumerate(v.unit_mix.units):
+        u.estimated_value_pence += 2 * i + 1
+    return v
+
+
+def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
+    v = _to_v4_clone(inputs)
+    last = max(0, int(v.finance.term_months) - 1)
+    v.sales_phasing = SalesPhasingInputs(
+        tranches=[
+            SalesPhasingTranche(month_offset=max(0, last - 2), pct_of_gross_receipts=33.4),
+            SalesPhasingTranche(month_offset=max(0, last - 1), pct_of_gross_receipts=33.3),
+            SalesPhasingTranche(month_offset=last, pct_of_gross_receipts=33.3),
+        ],
+    )
+    return v
+
+
+def _sweep_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, CalculatorInputsV4]]:
+    return [
+        ("base", _to_v4_clone(inputs)),
+        ("odd-gross", _odd_gross_sweep_variant(inputs)),
+        ("three-tranche", _three_tranche_sweep_variant(inputs)),
+    ]
+
+
+def _sweep_fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV4]]:
+    out: list[tuple[str, str, CalculatorInputsV4]] = []
+    for path in FIXTURES:
+        if path.stem not in ("i-phased-sales", "j-blended-refinance"):
+            continue
+        doc = _load_fixture(path)
+        base_inputs = parse_calculator_inputs(doc["inputs"])
+        for label, variant_inputs in _sweep_variants(base_inputs):
+            out.append((path.stem, label, variant_inputs))
+    return out
+
+
+_SWEEP_FIXTURE_VARIANTS = _sweep_fixture_variant_matrix()
+assert len(_SWEEP_FIXTURE_VARIANTS) == 6, "expected fixtures I and J x 3 variants = 6 sweep-invariant runs"
+_SWEEP_FIXTURE_VARIANT_IDS = [f"{stem}[{label}]" for stem, label, _ in _SWEEP_FIXTURE_VARIANTS]
+
+
+@pytest.mark.parametrize("stem,label,inputs", _SWEEP_FIXTURE_VARIANTS, ids=_SWEEP_FIXTURE_VARIANT_IDS)
+class TestPhasedSaleRefinanceSweepInvariants:
+    """Python port of invariants.test.ts's 'phased-sale / refinance sweep invariants'
+    describe block (Release 3b Task 10, spec Sec 4.4.1/Sec 4.5, calc 2.3.0): fixtures I and
+    J, each run through 3 derived variants (base / odd-gross / three-tranche), giving the
+    same 2 x 3 = 6-way matrix TS exercises. One Python test method per TS `it()` (same
+    order), so a single invariant's failure doesn't mask the others."""
+
+    def test_tranche_conservation_gross_agent_legal(
+        self, stem: str, label: str, inputs: CalculatorInputsV4,
+    ) -> None:
+        run = run_appraisal(inputs)
+        sum_gross = sum(r.gross_sale_pence for r in run.schedule.receipts)
+        sum_agent = sum(r.agent_fee_pence for r in run.schedule.receipts)
+        sum_legal = sum(r.selling_legal_pence for r in run.schedule.receipts)
+        assert sum_gross == run.schedule.totals.gross_sales_pence
+        assert sum_agent == money_round(
+            (run.schedule.totals.gross_sales_pence * inputs.exit_strategy.selling_agent_fee_pct) / 100
+        )
+        assert sum_legal == (
+            inputs.exit_strategy.selling_legal_fee_pence
+            if run.schedule.totals.gross_sales_pence > 0 else 0
+        )
+
+    def test_sweep_conservation_every_month(
+        self, stem: str, label: str, inputs: CalculatorInputsV4,
+    ) -> None:
+        """Pinned identity, derived from engine.py's sweep block (repayment/exit_fee/
+        distribution split net_receipts exactly: `distribution = net_receipts - repayment -
+        exit_fee`) composed with its refinance block (which either (a) tops up distribution
+        by `refi_net - required` when refi_net >= balance+fee, or (b) adds `required -
+        refi_net` to additional_equity when it doesn't, or (c) -- balance already 0 -- adds
+        the whole refi_net to distribution): in every case the four fields below net to
+        exactly zero. Holds every month, not just disposal/refinance months (both sides are
+        0 otherwise)."""
+        run = run_appraisal(inputs)
+        for m in run.model.months:
+            assert (
+                m.distribution_pence + m.repayment_pence + m.exit_fee_pence
+                == m.net_receipts_pence + m.refinance_proceeds_pence + m.additional_equity_pence
+            )
+
+    def test_interest_never_accrues_on_repaid_principal(
+        self, stem: str, label: str, inputs: CalculatorInputsV4,
+    ) -> None:
+        run = run_appraisal(inputs)
+        monthly_rate = inputs.finance.annual_interest_rate_pct / 100 / 12
+        months = run.model.months
+        for i in range(len(months) - 1):
+            expected = money_round(
+                (months[i].closing_balance_pence + months[i + 1].draw_pence
+                 + months[i + 1].capitalised_fees_pence) * monthly_rate
+            )
+            assert months[i + 1].interest_accrued_pence == expected
+
+    def test_redemption_schedule_declines(
+        self, stem: str, label: str, inputs: CalculatorInputsV4,
+    ) -> None:
+        run = run_appraisal(inputs)
+        sched = run.model.redemption_schedule
+        for i in range(1, len(sched)):
+            assert sched[i].month > sched[i - 1].month
+            assert sched[i].balance_pence <= sched[i - 1].balance_pence
+        if sched:
+            assert run.model.redemption_balance_at_disposal_pence == sched[-1].balance_pence
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
