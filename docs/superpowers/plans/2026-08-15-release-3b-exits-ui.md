@@ -827,8 +827,9 @@ describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
     expect(g).not.toBeNull();
     const exact = g as number;
     expect(Math.abs(exact - 10_715_164)).toBeLessThanOrEqual(2);  // rounding-step tolerance on the derivation
-    // Tightness is exact regardless: the solver's own predicate flips at g.
-    expect(solveSeniorBreakevenPhased({ ...base(), draws_and_fees_pence: [10_000_000, 0, 0, 0] })).toBe(exact);
+    // Tightness: the replay predicate itself flips exactly at g (export it for this test).
+    expect(phasedReplayRedeems(base(), exact)).toBe(true);
+    expect(phasedReplayRedeems(base(), exact - 1)).toBe(false);
   });
 
   it('single tranche at the final month degenerates towards the static solver world', () => {
@@ -937,8 +938,9 @@ function phasedNetByMonth(t: PhasedSeniorBreakevenTerms, totalGross: number): Ma
   return out;
 }
 
-/** Replays the ledger recurrence at total gross G; true iff fully redeemed by term end. */
-function phasedReplayRedeems(t: PhasedSeniorBreakevenTerms, totalGross: number): boolean {
+/** Replays the ledger recurrence at total gross G; true iff fully redeemed by term end.
+ * Exported for the tightness test only — production callers use the solver. */
+export function phasedReplayRedeems(t: PhasedSeniorBreakevenTerms, totalGross: number): boolean {
   const netByMonth = phasedNetByMonth(t, totalGross);
   let balance = 0, peak = 0, redeemed = false;
   for (let m = 0; m < t.draws_and_fees_pence.length; m++) {
