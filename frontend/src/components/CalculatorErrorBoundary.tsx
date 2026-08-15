@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
+import CalculatorFailurePanel from './CalculatorFailurePanel';
 
 interface Props {
   children: ReactNode;
@@ -59,39 +60,14 @@ export default class CalculatorErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div
-          style={{
-            padding: 24,
-            margin: 24,
-            background: '#1e1b2e',
-            border: '1px solid #ef4444',
-            borderRadius: 8,
-            color: '#e2e8f0',
-          }}
+        <CalculatorFailurePanel
+          title="Something went wrong rendering the calculator"
+          actionLabel="Try again"
+          onAction={this.retry}
         >
-          <h3 style={{ color: '#f87171', fontSize: 16, marginBottom: 8 }}>
-            Something went wrong rendering the calculator
-          </h3>
-          <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12 }}>
-            Your last saved appraisal is unaffected, and nothing has been sent to the server.
-            Switch to another page to carry on, or try again below. If it keeps failing, reload.
-          </p>
-          <button
-            type="button"
-            onClick={this.retry}
-            style={{
-              padding: '8px 16px',
-              background: '#1e3a5f',
-              border: '1px solid #2563eb',
-              borderRadius: 6,
-              color: '#e2e8f0',
-              cursor: 'pointer',
-              fontSize: 14,
-            }}
-          >
-            Try again
-          </button>
-        </div>
+          Your last saved appraisal is unaffected, and nothing has been sent to the server.
+          Switch to another page to carry on, or try again below. If it keeps failing, reload.
+        </CalculatorFailurePanel>
       );
     }
     return this.props.children;

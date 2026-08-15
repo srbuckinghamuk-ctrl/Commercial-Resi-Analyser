@@ -1,10 +1,12 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { runAppraisal, migrateInputsToV4 } from '../lib/model';
+import { migrateInputsToV4 } from '../lib/model';
+import { safeRunAppraisal } from '../lib/safe-run';
 import type { AppraisalRun, CalculatorInputsV4 } from '../lib/model';
 import { defaultCalculatorInputsV4 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
+import CalculatorFailurePanel from './CalculatorFailurePanel';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
 import UnitMixPage from './calculator/UnitMixPage';
@@ -117,14 +119,33 @@ export default function ConversionCalculator({ project }: Props) {
 
   // R3b: state is v4-native, so the engine is fed `inputs` directly -- no
   // widening call site needed any more.
-  const run: AppraisalRun = useMemo(() => runAppraisal(inputs), [inputs]);
+  //
+  // This call sits in THIS component's render body, above CalculatorErrorBoundary
+  // in the tree. A React boundary only catches throws from its descendants, so an
+  // engine throw here escapes it entirely and unmounts the calculator along with
+  // every unsaved edit. safeRunAppraisal turns that throw into a value so this
+  // component survives and can offer a way back (spec §2 forbids substituting a
+  // stale or default run for a failed one, so nothing is displayed from the last
+  // successful calculation).
+  const runResult = useMemo(() => safeRunAppraisal(inputs), [inputs]);
+  const run: AppraisalRun | null = runResult.ok ? runResult.run : null;
+
+  // The most recent inputs the engine could compute, so the failure panel can
+  // offer a genuine undo. Recorded after commit -- never mutated during render.
+  const lastComputableInputs = useRef<CalculatorInputsV4 | null>(null);
+  useEffect(() => {
+    if (runResult.ok) lastComputableInputs.current = inputs;
+  }, [runResult, inputs]);
 
   const updateInputs = useCallback((partial: Partial<CalculatorInputsV4>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!project) return;
+    // No run means the engine could not compute this document, so the advisory
+    // client metrics below cannot be derived. The save button is disabled in
+    // that state; this guard keeps the invariant if it is ever called directly.
+    if (!project || run == null) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -212,6 +233,25 @@ export default function ConversionCalculator({ project }: Props) {
           fallback when the user navigates to another page, so one page throwing
           does not leave every tab blank until a full reload. */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        {run == null ? (
+          // The engine threw for these inputs. Every page reads the run, so no
+          // page can be shown -- and showing the previous run would present a
+          // number that is not the current calculation (spec §2). The undo below
+          // is the recovery that actually works: this component survived, so it
+          // still holds the last inputs that computed.
+          <CalculatorFailurePanel
+            title="The appraisal could not be calculated"
+            actionLabel={lastComputableInputs.current ? 'Undo last change' : undefined}
+            onAction={() => {
+              const restore = lastComputableInputs.current;
+              if (restore) setInputs(restore);
+            }}
+          >
+            The last change produced inputs this engine cannot compute, so no figures are shown
+            rather than stale ones. Your saved appraisal is unaffected and nothing has been sent
+            to the server. Undo the change to carry on{lastComputableInputs.current ? '' : ', or reload'}.
+          </CalculatorFailurePanel>
+        ) : (
         <CalculatorErrorBoundary resetKeys={[activePage]}>
         {activePage === 'acquisition' && (
           <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} />
@@ -250,6 +290,7 @@ export default function ConversionCalculator({ project }: Props) {
           <InvestorSummaryPage inputs={inputs} run={run} project={project} />
         )}
         </CalculatorErrorBoundary>
+        )}
       </div>
 
       {/* Status / error banners */}
@@ -352,14 +393,17 @@ export default function ConversionCalculator({ project }: Props) {
         </button>
         <button
           onClick={handleSave}
-          disabled={saving}
+          // A document the engine cannot compute has no client metrics to send
+          // and should not be persisted as if it were a valid appraisal.
+          disabled={saving || run == null}
+          title={run == null ? 'The appraisal must calculate before it can be saved.' : undefined}
           style={{
             padding: '8px 24px',
-            background: '#2563eb',
-            color: '#fff',
+            background: saving || run == null ? '#1e293b' : '#2563eb',
+            color: saving || run == null ? '#475569' : '#fff',
             border: 'none',
             borderRadius: 6,
-            cursor: 'pointer',
+            cursor: saving || run == null ? 'default' : 'pointer',
             fontSize: 14,
             fontWeight: 600,
           }}
