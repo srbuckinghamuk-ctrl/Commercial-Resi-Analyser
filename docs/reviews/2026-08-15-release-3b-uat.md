@@ -84,3 +84,28 @@ restored byte-exactly and `/health` reports `migrations_current: true` after the
 pass.
 
 Screenshots: `docs/reviews/assets/2026-08-15-release-3b/`.
+
+## Addendum — 15 Aug 2026: error-boundary follow-ups verified live
+
+Two fixes landed after the main pass, both re-verified in the browser against
+the same York row (which was **not** mutated — no save was performed; the row's
+snapshot and hashes still match the pre-UAT capture).
+
+| # | Check | Expected | Observed | Verdict |
+|---|---|---|---|---|
+| 32 | Boundary resets on navigation (`7f45379`) | Fallback clears when the active page changes; no throw/reset loop | `resetKeys={[activePage]}`, value-compared; pinned by a test asserting it *stays* in the fallback when keys are unchanged | PASS |
+| 33 | Boundary copy is honest (`7f45379`) | No instruction to edit a field the fallback has replaced | Copy now offers switch-page / try again / reload only | PASS |
+| 34 | **Engine throw no longer unmounts the calculator** (`0b03d06`) | Chrome survives; recovery panel replaces the page body | Facility term set to 1e21 → real `RangeError` in `buildSchedule`; nav 1–12, status banner and footer all still rendered; panel "The appraisal could not be calculated" shown. Previously this blanked the whole calculator | PASS |
+| 35 | No stale figures on failure (spec §2) | Previous run must not remain on screen | Page body shows only the panel; no metrics rendered | PASS |
+| 36 | Save disabled while uncomputable | Cannot persist a document with no client metrics | "Update Appraisal" greyed out and disabled | PASS |
+| 37 | Undo restores the last computable inputs | Calculator returns to a working state | "Undo last change" → Finance page renders again, term back to 12, all values intact, Save re-enabled | PASS |
+
+Screenshots: `11-engine-failure-recovery-panel.jpg`, `12-recovered-after-undo.jpg`.
+
+Note on the placement defect (#34): `runAppraisal` is called in
+`ConversionCalculator`'s own render body, which sits *above* the boundary in the
+tree. A React error boundary only catches throws from its descendants, so the
+boundary added earlier could never have caught an engine throw — the calculator
+unmounted regardless. `safeRunAppraisal` (in `lib/`, deliberately outside the
+Python-mirrored `lib/model/`) converts the throw to a value so the component
+survives.
