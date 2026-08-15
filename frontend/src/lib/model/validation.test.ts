@@ -4,7 +4,7 @@ import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
 import { migrateV2toV3, migrateInputsToV4 } from './migrate';
-import type { CalculatorInputsV3, CalculatorInputsV4, ProgrammePackage } from './finance-types';
+import type { CalculatorInputsV3, CalculatorInputsV4, ProgrammePackage, RefinanceInputs } from './finance-types';
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
   const inputs = defaultCalculatorInputsV2();
@@ -307,12 +307,80 @@ describe('v4 programme validation', () => {
         && i.message === 'user_defined weights must be finite numbers.'), String(weights)).toBe(true);
     }
   });
-  it('hard-rejects non-null sales_phasing and refinance while calc is 2.2.0', () => {
-    const v4 = migrateInputsToV4({});
-    v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };
-    expect(errorsOn('sales_phasing', v4)).toBe(true);
-    const v4b = migrateInputsToV4({});
-    v4b.refinance = { month_offset: 6, investment_value_pence: 1, ltv_pct: 60, arrangement_fee_pence: 0, legal_costs_pence: 0 };
-    expect(errorsOn('refinance', v4b)).toBe(true);
+  describe('v4 sales_phasing validation (calc 2.3.0)', () => {
+    const withTranches = (tranches: Array<{ month_offset: number; pct_of_gross_receipts: number }>,
+      route: 'sell_all' | 'retain_all' | 'blended' = 'sell_all') => {
+      const v4 = migrateInputsToV4({});
+      v4.finance.term_months = 12;
+      v4.exit_strategy.route = route;
+      v4.sales_phasing = { tranches };
+      return v4;
+    };
+    const errorsOn = (field: string, inputs: CalculatorInputsV4) =>
+      validateInputs(inputs).some((i) => i.severity === 'error' && i.field.startsWith(field));
+
+    it('accepts a well-formed tranche set', () => {
+      expect(errorsOn('sales_phasing', withTranches([
+        { month_offset: 9, pct_of_gross_receipts: 40 },
+        { month_offset: 10, pct_of_gross_receipts: 35 },
+        { month_offset: 11, pct_of_gross_receipts: 25 },
+      ]))).toBe(false);
+    });
+    it('rejects the block on retain_all', () => {
+      expect(errorsOn('sales_phasing',
+        withTranches([{ month_offset: 11, pct_of_gross_receipts: 100 }], 'retain_all'))).toBe(true);
+    });
+    it('rejects an empty tranche list', () => {
+      expect(errorsOn('sales_phasing', withTranches([]))).toBe(true);
+    });
+    it('rejects out-of-range, fractional, non-increasing months and non-positive or non-finite pcts', () => {
+      for (const tranches of [
+        [{ month_offset: 12, pct_of_gross_receipts: 100 }],
+        [{ month_offset: -1, pct_of_gross_receipts: 100 }],
+        [{ month_offset: 5.5, pct_of_gross_receipts: 100 }],
+        [{ month_offset: 10, pct_of_gross_receipts: 50 }, { month_offset: 10, pct_of_gross_receipts: 50 }],
+        [{ month_offset: 10, pct_of_gross_receipts: 50 }, { month_offset: 9, pct_of_gross_receipts: 50 }],
+        [{ month_offset: 11, pct_of_gross_receipts: 0 }],
+        [{ month_offset: 11, pct_of_gross_receipts: Number.NaN }],
+      ]) expect(errorsOn('sales_phasing', withTranches(tranches))).toBe(true);
+    });
+    it('rejects percentages not summing to 100 (beyond 1e-9)', () => {
+      expect(errorsOn('sales_phasing', withTranches([
+        { month_offset: 10, pct_of_gross_receipts: 60 },
+        { month_offset: 11, pct_of_gross_receipts: 39.9 },
+      ]))).toBe(true);
+    });
+  });
+
+  describe('v4 refinance validation (calc 2.3.0)', () => {
+    const withRefi = (refi: Partial<RefinanceInputs>,
+      route: 'sell_all' | 'retain_all' | 'blended' = 'retain_all') => {
+      const v4 = migrateInputsToV4({});
+      v4.finance.term_months = 12;
+      v4.exit_strategy.route = route;
+      v4.refinance = {
+        month_offset: 11, investment_value_pence: 30_000_000, ltv_pct: 65,
+        arrangement_fee_pence: 0, legal_costs_pence: 0, ...refi,
+      };
+      return v4;
+    };
+    const errorsOn = (inputs: CalculatorInputsV4) =>
+      validateInputs(inputs).some((i) => i.severity === 'error' && i.field.startsWith('refinance'));
+
+    it('accepts a well-formed block on retain_all and blended', () => {
+      expect(errorsOn(withRefi({}))).toBe(false);
+      expect(errorsOn(withRefi({}, 'blended'))).toBe(false);
+    });
+    it('rejects the block on sell_all', () => {
+      expect(errorsOn(withRefi({}, 'sell_all'))).toBe(true);
+    });
+    it('rejects bad months, values, fees, and LTV', () => {
+      for (const bad of [
+        { month_offset: 12 }, { month_offset: -1 }, { month_offset: 3.5 },
+        { investment_value_pence: -1 }, { investment_value_pence: Number.NaN },
+        { ltv_pct: 0 }, { ltv_pct: 101 }, { ltv_pct: Number.NaN },
+        { arrangement_fee_pence: -1 }, { legal_costs_pence: -1 },
+      ]) expect(errorsOn(withRefi(bad))).toBe(true);
+    });
   });
 });

@@ -183,13 +183,51 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       }
     }
   }
-  // Non-null sales_phasing/refinance blocks exist in the v4 schema but are
-  // unimplemented until Release 3b — never silently ignore an input.
   if ('sales_phasing' in inputs && inputs.sales_phasing != null) {
-    err('sales_phasing', 'Phased sales are not yet implemented (Release 3b) — remove the block.');
+    const term = Math.max(1, Math.floor(inputs.finance.term_months));
+    const trs = inputs.sales_phasing.tranches;
+    if (inputs.exit_strategy.route === 'retain_all') {
+      err('sales_phasing', 'Phased sales apply to the sold portion — a retain-all exit has none. Remove the block or change the exit route.');
+    }
+    if (trs.length === 0) err('sales_phasing', 'Phased sales need at least one tranche.');
+    trs.forEach((tr, i) => {
+      const field = `sales_phasing.tranches[${i}]`;
+      if (!Number.isInteger(tr.month_offset) || tr.month_offset < 0 || tr.month_offset > term - 1) {
+        err(field, `Tranche month must be a whole month between 0 and ${term - 1}.`);
+      }
+      if (!Number.isFinite(tr.pct_of_gross_receipts) || tr.pct_of_gross_receipts <= 0) {
+        err(field, 'Tranche percentage must be a finite number greater than zero.');
+      }
+      if (i > 0 && !(tr.month_offset > trs[i - 1].month_offset)) {
+        err(field, 'Tranche months must be strictly increasing.');
+      }
+    });
+    const pctSum = trs.reduce((a, b) => a + b.pct_of_gross_receipts, 0);
+    if (trs.length > 0 && !(Math.abs(pctSum - 100) <= 1e-9)) {
+      err('sales_phasing', `Tranche percentages must sum to 100 (currently ${pctSum}).`);
+    }
   }
   if ('refinance' in inputs && inputs.refinance != null) {
-    err('refinance', 'Refinance modelling is not yet implemented (Release 3b) — remove the block.');
+    const term = Math.max(1, Math.floor(inputs.finance.term_months));
+    const rf = inputs.refinance;
+    if (inputs.exit_strategy.route === 'sell_all') {
+      err('refinance', 'Refinance applies to the retained portion — a sell-all exit retains nothing. Remove the block or change the exit route.');
+    }
+    if (!Number.isInteger(rf.month_offset) || rf.month_offset < 0 || rf.month_offset > term - 1) {
+      err('refinance', `Refinance month must be a whole month between 0 and ${term - 1}.`);
+    }
+    if (!Number.isFinite(rf.investment_value_pence) || rf.investment_value_pence < 0) {
+      err('refinance', 'Refinance investment value must be zero or more.');
+    }
+    if (!Number.isFinite(rf.ltv_pct) || rf.ltv_pct <= 0 || rf.ltv_pct > 100) {
+      err('refinance', 'Refinance LTV must be greater than 0 and at most 100.');
+    }
+    if (!Number.isFinite(rf.arrangement_fee_pence) || rf.arrangement_fee_pence < 0) {
+      err('refinance', 'Refinance arrangement fee must be zero or more.');
+    }
+    if (!Number.isFinite(rf.legal_costs_pence) || rf.legal_costs_pence < 0) {
+      err('refinance', 'Refinance legal costs must be zero or more.');
+    }
   }
 
   return issues;
