@@ -977,8 +977,10 @@ Tranche 1 net = 47,120,000 (Step 3); sweep available = `round(47,120,000 × 100/
 Exit fee if redeeming = 660,000, so full redemption needs `53,431,299 + 660,000 = 54,091,299`.
 `47,120,000 < 54,091,299` → **partial arm** (§4.4: "receipts insufficient to cover principal plus
 exit fee do not discharge the facility; the balance carries"). Repayment =
-`min(47,120,000, 53,431,299)` = **47,120,000** (it is not equal to the balance, so §4.4's
-fee clamp does not engage — the clamp only fires when the sweep would exactly clear principal).
+`min(47,120,000, 53,431,299)` = **47,120,000** — not equal to the balance, so §4.4's fee clamp does
+not engage (that clamp only fires in the narrow band `balance ≤ sweep < balance + fee`, where a
+naive `min` would clear principal in full while the fee silently vanished; here the sweep is far
+below the balance and the ordinary partial repayment applies).
 Exit fee charged this month = **0**. Closing balance = `53,431,299 − 47,120,000` = **6,311,299**.
 Distribution = `47,120,000 − 47,120,000 − 0` = **0**.
 
@@ -987,8 +989,9 @@ Distribution = `47,120,000 − 47,120,000 − 0` = **0**.
 **4,400,000** (`cum_net_used = 55,388,400`). The facility has not yet been redeemed at the moment of
 this draw, so §4.4.1's `facility_redrawn_after_redemption` flag does **not** fire.
 Interest = `round((6,311,299 + 4,400,000)/150) = round(10,711,299/150) = round(71,408.66)` =
-**71,409** — a tenth of month 9's, which is the whole point of the fixture: §4's roll-forward accrues
-on the *post-sweep* balance automatically (§4.4.1).
+**71,409** — roughly a fifth of month 9's 353,850, which is the whole point of the fixture: §4's
+roll-forward accrues on the *post-sweep* balance automatically (§4.4.1), so the first tranche stops
+four fifths of the interest that fixture F goes on paying.
 Balance before receipts = `6,311,299 + 4,400,000 + 71,409` = **10,782,708** = `redemption_schedule[1]`.
 Tranche 2 net = 41,230,000; sweep = 41,230,000. Full redemption needs
 `10,782,708 + 660,000 = 11,442,708`; `41,230,000 ≥ 11,442,708` → **full redemption arm**.
@@ -1187,11 +1190,14 @@ Substituting (2)–(4) into (5):
 G  ≥  61,457,939.44
 ```
 
-So the closed form brackets the answer between the integers **61,457,939** and 61,457,940 — and
-because the continuous model ignores the integer rounding in the tranche split and in the two
-`round(x/150)` interest lines, which integer is actually minimal must be settled by evaluating the
-replay exactly. Per §5.11's monotonicity guarantee (the fee reserve makes the residual balance
-continuous and weakly decreasing in `G`), checking the candidate and its predecessor is sufficient.
+The continuous threshold is therefore **61,457,939.44**, so the integer answer is 61,457,940 if the
+integer rounding is neutral and 61,457,939 if it happens to work in the sale's favour by the missing
+fraction of a penny. The closed form cannot decide between them: it ignores the rounding in the
+tranche split and in the two `round(x/150)` interest lines. Which integer is minimal is settled below
+by evaluating the replay **exactly** at 61,457,939 (feasible) and at 61,457,938 (infeasible). Those
+two evaluations are jointly sufficient, because §5.11's fee reserve makes the replay's residual
+balance continuous and weakly decreasing in `G` — feasibility is monotone, so a feasible `G` whose
+predecessor is infeasible is *the* minimum.
 
 **Exact evaluation at `G = 61,457,939`.** Split per §4.4.1 (`agent total = round(1.5% × G) =
 round(921,869.085) = 921,869`):
