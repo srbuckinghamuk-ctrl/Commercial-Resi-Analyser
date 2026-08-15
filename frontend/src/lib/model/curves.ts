@@ -49,10 +49,17 @@ export function spreadUserDefined(total: number, weights: number[]): number[] {
 }
 
 export function spreadByCurve(total: number, durationMonths: number, curve: SpendCurve): number[] {
+  // CRITICAL 1c: durationMonths comes from a ProgrammePackage; validation.ts
+  // rejects a fractional value, but this is the single dispatch point every
+  // curve kind funnels through, so floor it here defensively — spreadStraightLine's
+  // `new Array(months)` throws RangeError for a non-integer length (e.g. 2.5),
+  // which would otherwise crash a render-time useMemo. Integer durations are
+  // unaffected (Math.floor is a no-op on them).
+  const months = Math.floor(durationMonths);
   switch (curve.kind) {
-    case 'straight_line': return spreadStraightLine(total, durationMonths);
-    case 's_curve': return spreadSCurve(total, durationMonths);
-    case 'back_loaded': return spreadBackLoaded(total, durationMonths);
+    case 'straight_line': return spreadStraightLine(total, months);
+    case 's_curve': return spreadSCurve(total, months);
+    case 'back_loaded': return spreadBackLoaded(total, months);
     case 'user_defined': return spreadUserDefined(total, curve.weights);
   }
 }

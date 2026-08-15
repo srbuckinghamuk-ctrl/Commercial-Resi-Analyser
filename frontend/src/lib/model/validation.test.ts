@@ -315,6 +315,21 @@ describe('v4 programme validation', () => {
   it('rejects negative start_offset', () => {
     expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: -1 }))).toBe(true);
   });
+  // CRITICAL 1b: the schedule's programme arm floors both fields but never
+  // rejects a fractional value itself — a typed "2.5" duration or start_offset
+  // must be caught here, not left to reach buildSchedule un-floored.
+  it('rejects a fractional duration_months', () => {
+    const issues = validateInputs(withProgramme({ duration_months: 2.5 }));
+    expect(issues.some((i) => i.field === 'programme.packages.construction'
+      && i.severity === 'error'
+      && i.message === 'Package duration must be a whole number of months.')).toBe(true);
+  });
+  it('rejects a fractional start_offset', () => {
+    const issues = validateInputs(withProgramme({ start_offset: 1.5 }));
+    expect(issues.some((i) => i.field === 'programme.packages.construction'
+      && i.severity === 'error'
+      && i.message === 'Package start month must be a whole month.')).toBe(true);
+  });
   it('rejects a window breaching the 2-month sale tail (start+duration−1 > term−2)', () => {
     // start 6 + duration 6 − 1 = 11 > term − 2 = 10 (start 5 would be the legal boundary: 10 ≤ 10)
     expect(errorsOn('programme.packages.construction', withProgramme({ start_offset: 6, duration_months: 6 }))).toBe(true);

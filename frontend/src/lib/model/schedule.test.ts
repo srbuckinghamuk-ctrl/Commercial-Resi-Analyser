@@ -142,6 +142,39 @@ describe('buildSchedule with a v4 programme', () => {
     expect(s.uses[0].statutory_pence).toBe(
       v4.conversion_costs.prior_approval_fee_per_dwelling_pence * Math.max(1, v4.unit_mix.units.length));
   });
+
+  // CRITICAL 1c: validation.ts is the real gate on these fields, but buildSchedule
+  // must not throw when called directly on an unvalidated document (a negative
+  // start_offset previously reached `uses[-1]` — undefined, TypeError on the next
+  // property access — and a fractional duration reached `new Array(2.5)` —
+  // RangeError). Both are now floored/clamped defensively at the schedule/curve
+  // boundary; totals still conserve (nothing is dropped, just relocated in-range).
+  it('a fractional/negative start_offset no longer throws and lands clamped', () => {
+    const v4 = base();
+    v4.finance.term_months = 12;
+    v4.conversion_costs.construction_cost_per_sqm_pence = 150_000;
+    v4.conversion_costs.total_construction_sqm = 400;
+    v4.conversion_costs.contingency_pct = 0;
+    v4.conversion_costs.fire_safety_pence = 0;
+    v4.conversion_costs.sound_insulation_pence = 0;
+    v4.conversion_costs.part_l_compliance_pence = 0;
+    v4.programme = {
+      anchor_month: null,
+      packages: {
+        construction: { start_offset: -1.5, duration_months: 2.5, curve: { kind: 'straight_line' } },
+        professional: { start_offset: 1, duration_months: 2, curve: { kind: 'straight_line' } },
+        statutory: { start_offset: 1, duration_months: 2, curve: { kind: 'straight_line' } },
+      },
+    };
+    expect(() => buildSchedule(v4)).not.toThrow();
+    const s = buildSchedule(v4);
+    const constructionByMonth = s.uses.map((u) => u.construction_pence);
+    expect(constructionByMonth.length).toBe(12);
+    expect(constructionByMonth.every((v) => v >= 0)).toBe(true);
+    // conservation: total construction spend (400 sqm × 150,000p, 0% contingency)
+    // is unaffected by the clamp — relocated in-range, never dropped.
+    expect(constructionByMonth.reduce((a, b) => a + b, 0)).toBe(60_000_000);
+  });
 });
 
 describe('buildSchedule with sales_phasing (spec §4.4.1)', () => {

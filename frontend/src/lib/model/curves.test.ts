@@ -51,4 +51,16 @@ describe('spreadByCurve', () => {
     expect(spreadByCurve(40_000, 2, { kind: 'user_defined', weights: [1, 3] })).toEqual([10_000, 30_000]);
     expect(spreadByCurve(60_000_000, 6, { kind: 's_curve' })[2]).toBe(15_000_000);
   });
+
+  // CRITICAL 1c: durationMonths comes straight from a ProgrammePackage; a
+  // fractional value must not reach spreadStraightLine's `new Array(months)`,
+  // which throws RangeError for a non-integer length.
+  it('floors a fractional duration instead of throwing (straight_line)', () => {
+    expect(() => spreadByCurve(100, 2.9, { kind: 'straight_line' })).not.toThrow();
+    expect(spreadByCurve(100, 2.9, { kind: 'straight_line' })).toEqual(spreadByCurve(100, 2, { kind: 'straight_line' }));
+  });
+
+  it('identity: an already-integer duration is unaffected by the floor', () => {
+    expect(spreadByCurve(100, 3, { kind: 'straight_line' })).toEqual([33, 33, 34]);
+  });
 });

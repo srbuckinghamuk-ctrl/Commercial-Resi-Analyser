@@ -38,6 +38,21 @@ const selectStyle: React.CSSProperties = {
 
 const cellStyle: React.CSSProperties = { padding: '4px 10px', fontSize: 13, textAlign: 'right', color: '#e2e8f0' };
 
+// CRITICAL 1: a typed negative or fractional value reaches buildSchedule's
+// programme arm untouched — `uses[-1]`/`uses[2.5]` throws (TypeError) or
+// `new Array(2.5)` throws (RangeError) inside a render-time useMemo, which
+// unmounts the whole calculator. Clamp on write so the input can never carry
+// an invalid value into state. Number.isFinite guards NaN (an emptied field)
+// before Math.floor, since Math.floor(NaN) is NaN, not 0/1.
+function clampStartOffset(raw: string): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+function clampDurationMonths(raw: string): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+}
+
 export default function ProgrammePage({ inputs, onChange, run }: Props) {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const programme = inputs.programme;
@@ -166,7 +181,7 @@ export default function ProgrammePage({ inputs, onChange, run }: Props) {
                       type="number"
                       min={0}
                       value={pkg.start_offset}
-                      onChange={(e) => updatePackage(name, { start_offset: Number(e.target.value) })}
+                      onChange={(e) => updatePackage(name, { start_offset: clampStartOffset(e.target.value) })}
                       style={numberInputStyle}
                     />
                   </div>
@@ -176,7 +191,7 @@ export default function ProgrammePage({ inputs, onChange, run }: Props) {
                       type="number"
                       min={1}
                       value={pkg.duration_months}
-                      onChange={(e) => updatePackage(name, { duration_months: Number(e.target.value) })}
+                      onChange={(e) => updatePackage(name, { duration_months: clampDurationMonths(e.target.value) })}
                       style={numberInputStyle}
                     />
                   </div>

@@ -166,6 +166,13 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       const field = `programme.packages.${name}`;
       if (pkg.duration_months < 1) err(field, 'Package duration must be at least 1 month.');
       if (pkg.start_offset < 0) err(field, 'Package start month cannot be negative.');
+      // CRITICAL 1b: the schedule's programme arm floors both fields (spec §6.1
+      // window rules assume whole months) but never rejects a fractional value
+      // itself — a typed "2.5" duration reaches buildSchedule un-floored and can
+      // throw. Caught here as its own rule, alongside (not replacing) the
+      // range checks above.
+      if (!Number.isInteger(pkg.duration_months)) err(field, 'Package duration must be a whole number of months.');
+      if (!Number.isInteger(pkg.start_offset)) err(field, 'Package start month must be a whole month.');
       if (pkg.start_offset + pkg.duration_months - 1 > term - 2) {
         err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
       }

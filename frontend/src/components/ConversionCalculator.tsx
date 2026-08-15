@@ -4,6 +4,7 @@ import { runAppraisal, migrateInputsToV4 } from '../lib/model';
 import type { AppraisalRun, CalculatorInputsV4 } from '../lib/model';
 import { defaultCalculatorInputsV4 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
+import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
 import UnitMixPage from './calculator/UnitMixPage';
@@ -205,8 +206,11 @@ export default function ConversionCalculator({ project }: Props) {
         ))}
       </div>
 
-      {/* Page content */}
+      {/* Page content — CRITICAL 1d: scoped to the page body + run-derived UI
+          only, not the whole component, so nav/save/status chrome and this
+          component's own state survive a thrown render. */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <CalculatorErrorBoundary>
         {activePage === 'acquisition' && (
           <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
@@ -243,6 +247,7 @@ export default function ConversionCalculator({ project }: Props) {
         {activePage === 'investor_summary' && (
           <InvestorSummaryPage inputs={inputs} run={run} project={project} />
         )}
+        </CalculatorErrorBoundary>
       </div>
 
       {/* Status / error banners */}

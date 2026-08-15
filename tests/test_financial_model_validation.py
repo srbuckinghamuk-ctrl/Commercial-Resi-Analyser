@@ -4,6 +4,9 @@ frontend/src/lib/model/validation.test.ts (spec Sec 2, C1 -- round-2 review).
 Both implementations must agree with the spec, not merely with each other. If
 Python disagrees, the Python port is wrong -- never adjust these to make peace.
 """
+import pydantic
+import pytest
+
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
@@ -293,6 +296,20 @@ class TestV4ProgrammeValidation:
                 and i.message == "user_defined weights must be finite numbers."
                 for i in issues
             ), weights
+
+    def test_fractional_duration_months_is_rejected_by_pydantic_at_parse(self):
+        """CRITICAL 1b: validation.py gained a Number.isInteger-equivalent check
+        for textual parity with validation.ts, but it is unreachable in practice
+        here -- ProgrammePackage.duration_months/start_offset are typed `int`,
+        so Pydantic already rejects a fractional value at parse (a 422), before
+        validate_inputs ever runs. This pins that parse-time rejection, which is
+        why the rule is comment-only, not test-reachable, on the Python side."""
+        with pytest.raises(pydantic.ValidationError):
+            self.with_programme({"duration_months": 2.5})
+
+    def test_fractional_start_offset_is_rejected_by_pydantic_at_parse(self):
+        with pytest.raises(pydantic.ValidationError):
+            self.with_programme({"start_offset": 1.5})
 
     def test_every_package_is_checked_not_just_the_first(self):
         """Deviation-guard (no TS counterpart): Python iterates a fixed tuple

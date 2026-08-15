@@ -87,6 +87,75 @@ describe('ProgrammePage — explicit programme editing', () => {
   });
 });
 
+describe('ProgrammePage — invalid-input clamping (CRITICAL 1a)', () => {
+  // buildSchedule's programme arm floors the upper bound only; a raw negative
+  // or fractional start_offset/duration_months reaching state can throw
+  // (`uses[-1]` / `new Array(2.5)`) inside the render-time useMemo. The
+  // editor must clamp on write so an invalid value never reaches state.
+  it('typing "-1" into the start-offset input clamps to 0', () => {
+    const inputs = buildInputs({ programme: EDIT_PROGRAMME });
+    const { onChange } = setup(inputs);
+    // All three packages share start_offset: 1 (only durations are distinct,
+    // per the EDIT_PROGRAMME comment above) — the first '1' in DOM order is
+    // construction's, since PACKAGES renders construction first.
+    fireEvent.change(screen.getAllByDisplayValue('1')[0], { target: { value: '-1' } });
+    expect(onChange).toHaveBeenCalledWith({
+      programme: {
+        ...EDIT_PROGRAMME,
+        packages: {
+          ...EDIT_PROGRAMME.packages,
+          construction: { ...EDIT_PROGRAMME.packages.construction, start_offset: 0 },
+        },
+      },
+    });
+  });
+
+  it('typing "2.5" into the duration input clamps to 2 (floored)', () => {
+    const inputs = buildInputs({ programme: EDIT_PROGRAMME });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getByDisplayValue('5'), { target: { value: '2.5' } });
+    expect(onChange).toHaveBeenCalledWith({
+      programme: {
+        ...EDIT_PROGRAMME,
+        packages: {
+          ...EDIT_PROGRAMME.packages,
+          construction: { ...EDIT_PROGRAMME.packages.construction, duration_months: 2 },
+        },
+      },
+    });
+  });
+
+  it('clearing the duration field (NaN) clamps to 1, not NaN', () => {
+    const inputs = buildInputs({ programme: EDIT_PROGRAMME });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getByDisplayValue('5'), { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({
+      programme: {
+        ...EDIT_PROGRAMME,
+        packages: {
+          ...EDIT_PROGRAMME.packages,
+          construction: { ...EDIT_PROGRAMME.packages.construction, duration_months: 1 },
+        },
+      },
+    });
+  });
+
+  it('clearing the start-offset field (NaN) clamps to 0, not NaN', () => {
+    const inputs = buildInputs({ programme: EDIT_PROGRAMME });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getAllByDisplayValue('1')[0], { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({
+      programme: {
+        ...EDIT_PROGRAMME,
+        packages: {
+          ...EDIT_PROGRAMME.packages,
+          construction: { ...EDIT_PROGRAMME.packages.construction, start_offset: 0 },
+        },
+      },
+    });
+  });
+});
+
 describe('ProgrammePage — spend preview', () => {
   // Distinctive, non-colliding totals: all three packages placed in month 1 only
   // (duration 1), so each package's full total lands in a single, uniquely

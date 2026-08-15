@@ -65,10 +65,18 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     }
   } else {
     // explicit programme (spec §6.1); windows validated in validation.ts —
-    // the Math.min clamp is belt-and-braces, mirroring the auto path.
+    // the clamp is belt-and-braces, mirroring the auto path. The lower
+    // Math.max(0, …) mirrors schedule.py's documented lower clamp (CRITICAL 1c):
+    // an unvalidated negative start_offset must not reach `uses[-1]`, which in
+    // JS is `undefined` and throws on the very next property access (unlike
+    // Python's negative indexing, which would silently wrap to the end of the
+    // list). validation.ts hard-rejects start_offset < 0, so this is
+    // unreachable for any document that passes validation; it exists so the
+    // unvalidated path degrades to a defined, in-range placement instead of a
+    // crash.
     const place = (pkg: ProgrammePackage, total: number, add: (m: number, v: number) => void) => {
       spreadByCurve(total, pkg.duration_months, pkg.curve)
-        .forEach((v, i) => add(Math.min(pkg.start_offset + i, term - 1), v));
+        .forEach((v, i) => add(Math.min(Math.max(0, Math.floor(pkg.start_offset + i)), term - 1), v));
     };
     place(programme.packages.construction, constructionTotal, (m, v) => { uses[m].construction_pence += v; });
     place(programme.packages.professional, professionalTotal, (m, v) => { uses[m].professional_pence += v; });

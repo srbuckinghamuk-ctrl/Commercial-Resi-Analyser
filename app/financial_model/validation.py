@@ -226,6 +226,15 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 err(field_, "Package duration must be at least 1 month.")
             if pkg.start_offset < 0:
                 err(field_, "Package start month cannot be negative.")
+            # CRITICAL 1b (textual parity with validation.ts): Pydantic's `int`
+            # typing on ProgrammePackage.start_offset/duration_months already
+            # rejects a fractional value at parse (a 422, before validate_inputs
+            # ever runs) -- these checks are unreachable in practice but kept so
+            # the two engines carry the same rule set and messages.
+            if not isinstance(pkg.duration_months, int):
+                err(field_, "Package duration must be a whole number of months.")
+            if not isinstance(pkg.start_offset, int):
+                err(field_, "Package start month must be a whole month.")
             if pkg.start_offset + pkg.duration_months - 1 > term - 2:
                 err(
                     field_,
