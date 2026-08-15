@@ -102,7 +102,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>6. Appraisal Summary</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>7. Appraisal Summary</h3>
 
       <ReconciliationStrip run={run} />
 

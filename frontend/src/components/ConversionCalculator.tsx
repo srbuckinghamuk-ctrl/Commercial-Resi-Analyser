@@ -9,6 +9,7 @@ import AcquisitionPage from './calculator/AcquisitionPage';
 import UnitMixPage from './calculator/UnitMixPage';
 import ConversionCostsPage from './calculator/ConversionCostsPage';
 import FinancePage from './calculator/FinancePage';
+import ProgrammePage from './calculator/ProgrammePage';
 import CashflowPage from './calculator/CashflowPage';
 import AppraisalSummaryPage from './calculator/AppraisalSummaryPage';
 import ScenariosPage from './calculator/ScenariosPage';
@@ -22,6 +23,7 @@ type CalcPage =
   | 'unit_mix'
   | 'conversion_costs'
   | 'finance'
+  | 'programme'
   | 'cashflow'
   | 'appraisal'
   | 'scenarios'
@@ -35,13 +37,14 @@ const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'unit_mix', label: 'Unit Mix', num: 2 },
   { key: 'conversion_costs', label: 'Costs', num: 3 },
   { key: 'finance', label: 'Finance', num: 4 },
-  { key: 'cashflow', label: 'Cashflow', num: 5 },
-  { key: 'appraisal', label: 'Appraisal', num: 6 },
-  { key: 'scenarios', label: 'Scenarios', num: 7 },
-  { key: 'exit_strategy', label: 'Exit', num: 8 },
-  { key: 'risk_register', label: 'Risk', num: 9 },
-  { key: 'deal_spider', label: 'Deal Spider', num: 10 },
-  { key: 'investor_summary', label: 'Investor', num: 11 },
+  { key: 'programme', label: 'Programme', num: 5 },
+  { key: 'cashflow', label: 'Cashflow', num: 6 },
+  { key: 'appraisal', label: 'Appraisal', num: 7 },
+  { key: 'scenarios', label: 'Scenarios', num: 8 },
+  { key: 'exit_strategy', label: 'Exit', num: 9 },
+  { key: 'risk_register', label: 'Risk', num: 10 },
+  { key: 'deal_spider', label: 'Deal Spider', num: 11 },
+  { key: 'investor_summary', label: 'Investor', num: 12 },
 ];
 
 interface Props {
@@ -215,6 +218,9 @@ export default function ConversionCalculator({ project }: Props) {
         )}
         {activePage === 'finance' && (
           <FinancePage inputs={inputs} onChange={updateInputs} run={run} />
+        )}
+        {activePage === 'programme' && (
+          <ProgrammePage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'cashflow' && (
           <CashflowPage inputs={inputs} onChange={updateInputs} run={run} />
