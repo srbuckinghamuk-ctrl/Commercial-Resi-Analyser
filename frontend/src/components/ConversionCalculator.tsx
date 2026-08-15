@@ -208,9 +208,11 @@ export default function ConversionCalculator({ project }: Props) {
 
       {/* Page content — CRITICAL 1d: scoped to the page body + run-derived UI
           only, not the whole component, so nav/save/status chrome and this
-          component's own state survive a thrown render. */}
+          component's own state survive a thrown render. `resetKeys` clears the
+          fallback when the user navigates to another page, so one page throwing
+          does not leave every tab blank until a full reload. */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
-        <CalculatorErrorBoundary>
+        <CalculatorErrorBoundary resetKeys={[activePage]}>
         {activePage === 'acquisition' && (
           <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
