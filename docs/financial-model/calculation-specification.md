@@ -1,14 +1,15 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.2.0`.
-**Date:** 14 August 2026
+**Status:** Authoritative. Calculation version `2.3.0`.
+**Date:** 15 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`.
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, defined now, implemented later). A metric whose marker means "defined now, implemented later" — R2, R3b, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented). A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b) carry no such restriction.
 
 ---
 
@@ -62,6 +63,8 @@ Every appraisal document carries `calc_version` (semver of this specification's 
 | **Legacy leverage** | A migrated v1 `ltv_pct`. It is stored as `legacy_leverage_pct` with `requires_confirmation: true` and is used only to propose an unconfirmed committed net facility during migration (§10). It is never presented as an approved lender metric. |
 | **Lender valuation** | Optional `lender_valuation` block (`inputs_version 3`) recording a lender-adjusted GDV (§3.2): `basis` — one of `global_pct` (% adjustment applied to every unit's developer value, e.g. `-10`), `global_per_sqft` (pence per sq ft applied to every unit's area, replacing its developer value), `unit_type` (`per_key_values` maps unit type → % adjustment), `per_unit` (`per_key_values` maps unit id → lender value pence), `fixed_amount` (`global_value` is the total lender GDV in pence, replacing the summed value). Required provenance `reason`, `author`, `date` (ISO `yyyy-mm-dd`) travel with the block and are displayed with any variance it produces. `null`/absent = no lender valuation recorded. |
 | **Enforcement cost assumption** | `finance.enforcement_cost_assumption_pence`: integer pence, `>= 0`, default `0`. A disclosed assumption for the lender's cost of enforcement, used in senior repayment break-even (§5.11) and reported as an assumption wherever that metric is shown. |
+| **Tranche gross-receipts share** | `sales_phasing.tranches[].pct_of_gross_receipts`: percentage of the sold portion's gross receipts allocated to that tranche (§4.4.1). `null` `sales_phasing` = a single 100% tranche in the final month. |
+| **Refinance investment value** | `refinance.investment_value_pence`: explicit lender/valuer investment value of the retained portion at the refinance date (§4.5). Never derived from rents or yields — an unsupported figure is a validation error, not a computed one. |
 
 ---
 
@@ -155,7 +158,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 - **Formula:** total net receipts (sale receipts net of selling costs; refinance proceeds when modelled) − TDC excluding selling costs… stated precisely: `profit = Σ gross receipts − TDC` where TDC already contains selling and finance costs.
 - **Identity (invariant):** when senior debt is fully repaid, `profit = Σ developer equity cash flows` (contributions negative, distributions positive).
-- **Retained exits:** realised (cash) profit and unrealised (valuation-based) profit are reported separately; the headline "profit" for a `retain_all` case is the **unrealised** figure and is always labelled "unrealised — subject to refinance/valuation". [R1 labels; R2 models refinance proceeds.]
+- **Retained exits:** realised (cash) profit and unrealised (valuation-based) profit are reported separately; the headline "profit" for a `retain_all` case is the **unrealised** figure and is always labelled "unrealised — subject to refinance/valuation" unless a refinance event is modelled, in which case its realised proceeds enter profit directly (§4.5). [R1 labels; R3b models refinance proceeds, §4.5.]
 - **Negative profit:** reported as a negative number, never clamped; triggers a red flag.
 
 ### 3.13 Profit on cost [R1]
@@ -187,6 +190,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 - **No solution:** if all flows are one-signed, or no sign change of NPV exists in the bracket, IRR = `null` and the UI/report shows "IRR not available (no sign change in equity flows)". Multiple-IRR cases report the root nearest zero and are flagged.
 - **Annualisation:** `(1 + irr_monthly)^12 − 1`.
 - **Retain-all without modelled refinance:** no positive terminal flow exists → IRR is `null` by construction (correct behaviour, replacing the previous synthetic IRR).
+- **Retain-all with a modelled refinance [R3b — calc 2.3.0]:** the refinance event (§4.5) produces a real, realised terminal equity flow, so IRR is computed from it like any other equity cash flow. Without a modelled refinance, IRR remains `null` and unlabelled substitutes remain prohibited.
 
 ### 3.18 Residual land value (RLV) [R1]
 
@@ -247,9 +251,80 @@ Serviced interest is a developer cash use in the month accrued. It is funded fro
 - Sweep: `min(net_receipt × sales_sweep_pct/100, redemption_amount)` repays senior debt; redemption at final discharge includes accrued interest to date and the exit fee.
 - Receipts insufficient to cover principal plus exit fee do not discharge the facility; the balance carries.
 - Residual cash after the sweep distributes to equity the same month.
-- R1 timing: `sell_all` and the sold portion of `blended` receive all receipts in the final month of the term (single-month disposal, disclosed as an assumption); phased sales rates are R2.
-- `retain_all` (and the retained portion of `blended`): **no sale receipt, ever**. The ledger ends with the senior balance outstanding at term end; the appraisal reports "senior debt outstanding at maturity: £X — repayment source (refinance) not yet modelled" as a red flag. Refinance proceeds are R2.
+- R1 timing: `sell_all` and the sold portion of `blended` receive all receipts in the final month of the term (single-month disposal, disclosed as an assumption) when `sales_phasing` is null — see §4.4.1 for the phased regime.
+- `retain_all` (and the retained portion of `blended`): **no sale receipt, ever**. The ledger ends with the senior balance outstanding at term end; the appraisal reports "senior debt outstanding at maturity: £X — repayment source (refinance) not yet modelled" as a red flag when `refinance` is null — see §4.5 for the refinance regime.
 - Practical completion never implies disposal or repayment.
+
+#### 4.4.1 Phased sales [R3b — calc 2.3.0]
+
+Inputs v4's `sales_phasing` block phases the sold portion's receipts.
+`sales_phasing = null` (the migration default) = a single 100% tranche in the
+final month — byte-identical to calc 2.2.0. A non-null block gives K tranches
+`{ month_offset, pct_of_gross_receipts }`, month offsets strictly increasing.
+
+Tranche gross (integer pence): for k < K, g_k = round_half_up(G × pct_k / 100)
+where G is the sold portion's gross receipts; the final tranche absorbs the
+residue (Σ g_k = G exactly). Selling costs are apportioned pro-rata by tranche
+gross with the same final-tranche residue absorption: the total agent fee
+(round_half_up(G × agent_pct / 100)) and the flat selling legal fee are each
+split as cost_k = round_half_up(total × g_k / G), final tranche absorbs.
+
+Each tranche's net proceeds enter the ledger in its month and sweep the senior
+facility under the existing §4.4 arms (sales_sweep_pct, full-redemption vs
+partial with the fee clamp), unchanged. Interest thereafter accrues only on the
+post-sweep balance (this is automatic: §4's roll-forward reads the closing
+balance).
+
+The exit fee is charged once, at the FIRST full redemption, on its §-defined
+basis evaluated at that instant (`redemption_balance` = the balance being
+redeemed then; `peak_debt` / `committed_gross_facility` unchanged). If cost
+draws after that month re-open a balance, the ledger continues under §4's
+rules, the fee is not charged again, and the engine raises the amber flag
+`facility_redrawn_after_redemption`.
+
+`redemption_balance_at_disposal_pence` remains the balance immediately before
+receipts in the FINAL disposal month. The model additionally exposes the
+declining redemption schedule: one `{ month, balance_pence }` entry per
+disposal month, balance captured immediately before that month's receipts.
+
+Validation (input errors, not flags), applying only when `sales_phasing` is
+non-null: at least one tranche; every `month_offset` a whole month in
+[0, term − 1], strictly increasing; every percentage finite and > 0; the
+percentages sum to 100.0 (tolerance 1e-9 — thirds like 33.4/33.3/33.3 are not
+exactly representable in IEEE doubles; pence-level exactness is guaranteed by
+the residue absorption above regardless). A non-null block with
+`route = 'retain_all'` is an error — tranches apply to the sold portion and a
+retain-all exit has none (§2: never silently ignored).
+
+#### 4.5 Refinance event [R3b — calc 2.3.0]
+
+Inputs v4's `refinance` block models a refinance of the retained portion at
+`month_offset`. `null` (the migration default) = no event — byte-identical to
+calc 2.2.0, and the §4 "repayment source (sale/refinance) not modelled" red
+flag remains for retained exits. Validation rejects a non-null block on
+`route = 'sell_all'` (nothing is retained).
+
+Net refinance proceeds = round_half_up(investment_value_pence × ltv_pct / 100)
+− arrangement_fee_pence − legal_costs_pence. `investment_value_pence` is an
+explicit input, never yield-derived. Negative net proceeds are funded by
+uncommitted additional equity (the proceeds applied become 0).
+
+Order within the month (fixed, spec-stated): the sales sweep (§4.4) runs
+first, then the refinance event.
+
+If the facility has an outstanding balance B at the event (after any same-
+month sweep): the facility is fully redeemed — repayment B plus the exit fee
+on its basis (charged only if not already charged; the once-only rule of
+§4.4.1 applies across sweep and refinance alike). Proceeds ≥ B + fee: the
+surplus distributes to equity that month. Proceeds < B + fee: the shortfall is
+absorbed by uncommitted additional equity (existing §4.3 mechanics), which
+raises the existing `additional_equity_required` red flag. If the facility has
+no balance (already redeemed, or a cash deal), the whole net proceeds
+distribute to equity.
+
+The distribution/equity effects flow into §3.15's equity cash-flow vector, so
+§3.17 IRR gains a real terminal flow for retained exits. Valuation-based
+components keep their "unrealised" labelling (§3.11).
 
 ---
 
@@ -310,6 +385,29 @@ For each month `m` in `1..term` (`m` labels the state as of completion of ledger
 
 Minimum gross sale price `P` such that `P = redemption_balance_at_disposal + exit_fee + disposal_costs(P) + enforcement_cost_assumption`. Solved iteratively because disposal costs depend on `P`. Reported absolute, as % of lender GDV, and as the % fall from lender GDV before senior exposure. Never computed as "GDV vs TDC" — the pre-R1 "senior debt impairment" figure is removed in R1.
 
+This is the `sales_phasing = null` regime, unchanged. See below for the phased regime.
+
+Phased regime [R3b — calc 2.3.0]: when `sales_phasing` is non-null, the
+break-even is the minimum total gross sales G (integer pence, uniform
+price-fall assumption: every tranche scales by the same factor, so tranche
+shares stay pct_k) such that a REPLAY of the sweep fully redeems the facility
+by term end. The replay freezes the actual run's monthly draws and capitalised
+fees (modelling assumption: a price fall changes receipts, not the cost
+schedule), re-accrues rolled-up interest on the replayed balances with §4's
+formula, splits G into tranches and costs exactly per §4.4.1, deducts the
+enforcement-cost assumption from the FIRST tranche's net proceeds, applies
+`sales_sweep_pct` and the §4.4 sweep arms including the fee-once rule (fee
+basis evaluated inside the replay: redemption_balance = the replayed balance
+at redemption; peak_debt = the replayed peak), and EXCLUDES any planned
+refinance event (§5.11 answers the enforcement question: can sales alone
+redeem the facility). Feasibility is monotone in G; the solver is the shared
+integer bisection.
+
+Structurally unsolvable cases return null with the red flag
+`senior_breakeven_unsolvable` (message stating the reason), not the
+cap-exhausted flag: facility draws after the final tranche month (no sale
+price can redeem), or `sales_sweep_pct = 0`.
+
 ### 5.12 Developer profit break-even [R2 — implemented in calc 2.1.0]
 
 Minimum gross sale price giving zero developer profit: `TDC` restated at the break-even receipts (selling costs re-solved). Distinct metric from §5.11, never conflated.
@@ -348,8 +446,8 @@ w_k); the final month absorbs the cumulative residue (invariant: Σ = total):
 Validation (input errors, not flags), applying only when `programme` is
 non-null: duration_months ≥ 1; start_offset ≥ 0; start_offset +
 duration_months − 1 ≤ term − 2 (the ≥-2-month sale tail, §6); user_defined
-weight rules above. While calc is 2.2.0, non-null `sales_phasing` or
-`refinance` is a hard validation error ("not yet implemented — R3b").
+weight rules above. `sales_phasing` and `refinance` are implemented from calc
+2.3.0 (§4.4.1, §4.5).
 
 ---
 
