@@ -177,6 +177,7 @@ export function runLedger(
     let repayment = 0;
     let exitFee = 0;
     let distribution = 0;
+    let refinanceProceeds = 0;
     if (netReceipts > 0) {
       const sweepAvailable = Math.round((netReceipts * finance.sales_sweep_pct) / 100);
       if (balance > 0 && !isCash) {
@@ -199,6 +200,33 @@ export function runLedger(
         }
       }
       distribution = netReceipts - repayment - exitFee;
+    }
+
+    // spec §4.5 refinance event — fixed order: the sales sweep above ran first.
+    const refi = schedule.refinance;
+    if (refi != null && refi.month === m) {
+      let refiNet = refi.net_proceeds_pence;
+      if (refiNet < 0) {
+        additionalEquity += -refiNet;   // fees exceed the advance — equity funds the difference
+        refiNet = 0;
+      }
+      refinanceProceeds = refiNet;
+      if (!isCash && balance > 0) {
+        const fee = facilityRedeemed ? 0 : exitFeeAmount(finance, grossFacility, peakDebt, balance);
+        const required = balance + fee;
+        repayment += balance;
+        exitFee += fee;
+        totalExitFee += fee;
+        facilityRedeemed = true;
+        if (refiNet >= required) {
+          distribution += refiNet - required;
+        } else {
+          additionalEquity += required - refiNet;   // §4.3 mechanics; additional_equity_required fires below
+        }
+        balance = 0;
+      } else {
+        distribution += refiNet;   // already redeemed, or a cash deal: proceeds distribute whole
+      }
     }
 
     equityUsed += equityContribution;
@@ -255,7 +283,7 @@ export function runLedger(
       funding_gap_pence: fundingGap,
       gross_receipts_pence: r.gross_sale_pence,
       net_receipts_pence: netReceipts,
-      refinance_proceeds_pence: 0,
+      refinance_proceeds_pence: refinanceProceeds,
       distribution_pence: distribution,
     });
     equityCashflows.push(-(equityContribution + additionalEquity) + distribution);

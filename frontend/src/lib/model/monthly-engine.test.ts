@@ -376,4 +376,57 @@ describe('phased sweep mechanics (spec §4.4.1)', () => {
     expect(f[0].severity).toBe('amber');
     expect(f[0].month).toBe(3);
   });
+
+  describe('refinance event (spec §4.5)', () => {
+    const withRefi = (
+      net: number, month: number, receipts2: MonthReceipts = receipts({}),
+    ): Schedule => ({
+      ...mkSchedule(
+        [uses({ construction_pence: 10_000_000 }), uses({}), uses({}), uses({})],
+        [receipts({}), receipts({}), receipts2, receipts({})],
+      ),
+      refinance: { month, net_proceeds_pence: net },
+    });
+
+    it('surplus refinance redeems the facility and distributes the excess', () => {
+      const m = runLedger(withRefi(50_000_000, 3), TERMS_ROLLED_UP_NO_CAPS, []);
+      const last = m.months[3];
+      expect(last.closing_balance_pence).toBe(0);
+      expect(last.exit_fee_pence).toBeGreaterThan(0);                    // fee charged at refinance redemption
+      expect(last.refinance_proceeds_pence).toBe(50_000_000);
+      expect(last.distribution_pence)
+        .toBe(50_000_000 - last.repayment_pence - last.exit_fee_pence);
+      expect(m.flags.some((f) => f.code === 'senior_outstanding_at_maturity')).toBe(false);
+      expect(m.equity_cashflows_pence[3]).toBe(last.distribution_pence); // IRR terminal flow
+    });
+
+    it('shortfall is absorbed by additional equity and red-flagged', () => {
+      const m = runLedger(withRefi(1_000_000, 3), TERMS_ROLLED_UP_NO_CAPS, []);
+      const last = m.months[3];
+      expect(last.closing_balance_pence).toBe(0);                        // still fully redeemed
+      expect(last.additional_equity_pence)
+        .toBe(last.repayment_pence + last.exit_fee_pence - 1_000_000);
+      expect(last.distribution_pence).toBe(0);
+      expect(m.flags.some((f) => f.code === 'additional_equity_required')).toBe(true);
+    });
+
+    it('same-month ordering: the sales sweep runs first, then the refinance', () => {
+      const sale: MonthReceipts = receipts({ gross_sale_pence: 4_000_000 });
+      const m = runLedger(withRefi(50_000_000, 2, sale), TERMS_ROLLED_UP_NO_CAPS, []);
+      const mm = m.months[2];
+      // sweep repaid 4,000,000 first (partial), refinance repaid the rest — total repayment
+      // exceeds the sweep alone and the redemption_schedule entry is the PRE-receipts balance.
+      expect(mm.repayment_pence).toBeGreaterThan(4_000_000);
+      expect(m.redemption_schedule[0].balance_pence).toBeGreaterThan(mm.repayment_pence - 4_000_000);
+      expect(mm.closing_balance_pence).toBe(0);
+    });
+
+    it('negative net proceeds are funded by additional equity; nothing distributes', () => {
+      const m = runLedger(withRefi(-500_000, 3), TERMS_ROLLED_UP_NO_CAPS, []);
+      const last = m.months[3];
+      expect(last.refinance_proceeds_pence).toBe(0);
+      expect(last.additional_equity_pence)
+        .toBe(500_000 + last.repayment_pence + last.exit_fee_pence);
+    });
+  });
 });
