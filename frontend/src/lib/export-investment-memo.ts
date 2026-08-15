@@ -770,7 +770,17 @@ export function generateInvestmentMemo(
   }
   y = bodyText(
     y,
-    `Total programme: ${inputs.finance.term_months} months. Peak senior debt of ${fmt(metrics.peak_debt_pence)} is reached in month ${metrics.peak_debt_month !== null ? metrics.peak_debt_month + 1 : '—'} of the programme. Total interest cost: ${fmt(model.totals.interest_pence)}.`,
+    // With a calendar anchor the peak-debt month reads as a date, matching the
+    // dated tables in this section and the calculator's own tiles. Without one
+    // the original 1-based prose is kept: re-basing the number under a labelling
+    // change would alter what this document states the peak-debt month is.
+    `Total programme: ${inputs.finance.term_months} months. Peak senior debt of ${fmt(metrics.peak_debt_pence)} is reached in ${
+      metrics.peak_debt_month === null
+        ? 'month —'
+        : anchor != null
+          ? monthLabel(metrics.peak_debt_month)
+          : `month ${metrics.peak_debt_month + 1}`
+    } of the programme. Total interest cost: ${fmt(model.totals.interest_pence)}.`,
   );
   if (programme == null) {
     y = infoRequired(y, 'Key dates — start on site, practical completion, sales/letting period');

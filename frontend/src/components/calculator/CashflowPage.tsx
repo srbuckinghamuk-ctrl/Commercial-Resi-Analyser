@@ -40,10 +40,13 @@ export default function CashflowPage({ run }: Props) {
     const spendClause = programme != null
       ? 'Explicit dated programme (spec §6.1)'
       : `Straight-line spend over months 1–${spendWindow}`;
+    // With a calendar anchor these read as dates, matching the table below;
+    // without one formatProgrammeMonth returns the same "Month N" wording as before.
+    const label = (m: number) => (anchor != null ? formatProgrammeMonth(anchor, m) : `month ${m}`);
     const disposalClause = salesPhasing != null
-      ? `; sales tranches in months ${salesPhasing.tranches.map((t) => t.month_offset).join(', ')}`
-      : `; disposal in month ${term - 1}`;
-    const refinanceClause = refinance != null ? `; refinance in month ${refinance.month_offset}` : '';
+      ? `; sales tranches in ${salesPhasing.tranches.map((t) => label(t.month_offset)).join(', ')}`
+      : `; disposal in ${label(term - 1)}`;
+    const refinanceClause = refinance != null ? `; refinance in ${label(refinance.month_offset)}` : '';
     return `${spendClause}${disposalClause}${refinanceClause}; see calculation specification §4.4–§6.1.`;
   })();
 

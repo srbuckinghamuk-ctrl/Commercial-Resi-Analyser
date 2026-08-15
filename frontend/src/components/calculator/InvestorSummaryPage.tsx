@@ -1,6 +1,7 @@
 import type { Project } from '../../types';
 import type { CalculatorInputsV4, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
+import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 
 interface Props {
   inputs: CalculatorInputsV4;
@@ -85,7 +86,7 @@ export default function InvestorSummaryPage({ inputs, run, project }: Props) {
                 <span>Timeline</span><span>{inputs.finance.term_months} months</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                <span>Peak debt month</span><span>{model.peak_debt_month != null ? `Month ${model.peak_debt_month}` : '—'}</span>
+                <span>Peak debt month</span><span>{model.peak_debt_month != null ? formatProgrammeMonth(programmeAnchor(inputs), model.peak_debt_month) : '—'}</span>
               </div>
             </div>
           </div>

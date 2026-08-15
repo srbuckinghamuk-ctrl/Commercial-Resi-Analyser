@@ -5,6 +5,7 @@ import type {
   EquityClassification, EvidenceStatus,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
+import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import LenderValuationCard from './LenderValuationCard';
 
@@ -491,7 +492,7 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
           />
           <MetricCard
             label="Peak debt"
-            value={`${penceToPounds(metrics.peak_debt_pence)}${metrics.peak_debt_month != null ? ` (Month ${metrics.peak_debt_month})` : ''}`}
+            value={`${penceToPounds(metrics.peak_debt_pence)}${metrics.peak_debt_month != null ? ` (${formatProgrammeMonth(programmeAnchor(inputs), metrics.peak_debt_month)})` : ''}`}
             tooltip="§5.7: max over months of the intra-month maximum balance (opening + draw + capitalised fees + interest accrued if rolled up) before that month's repayment."
           />
           <MetricCard
