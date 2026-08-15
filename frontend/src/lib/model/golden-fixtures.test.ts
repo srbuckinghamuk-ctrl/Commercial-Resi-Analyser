@@ -11,10 +11,11 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 interface Fixture {
   name: string;
   // 'programme' marks a fixture whose `inputs` carry a non-null `programme` block
-  // (spec §6.1, calc 2.2.0) — h-programme-scurve.json, Release 3a. It is a label
-  // only: every fixture, whatever its kind, runs through the same `runAppraisal`
-  // assertion loop below.
-  kind: 'pipeline' | 'programme';
+  // (spec §6.1, calc 2.2.0) — h-programme-scurve.json, Release 3a; 'phased-sales'
+  // one whose `inputs` carry a non-null `sales_phasing` block (spec §4.4.1, calc
+  // 2.3.0) — i-phased-sales.json, Release 3b. Both are labels only: every fixture,
+  // whatever its kind, runs through the same `runAppraisal` assertion loop below.
+  kind: 'pipeline' | 'programme' | 'phased-sales';
   // Widened from CalculatorInputsV2 in Release 3a: the corpus now mixes v3 and v4
   // documents, and `runAppraisal` takes the union directly (no downcast adapter).
   inputs: AnyCalculatorInputs;
@@ -38,6 +39,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'f-dev-finance-12mo',
   'g-lender-valuation',
   'h-programme-scurve',
+  'i-phased-sales',
 ];
 
 // Minimal flat-key -> run-structure mapping for the fixture keys that are not direct
@@ -55,6 +57,15 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // unfunded cost. It is the headline behaviour of fixture H, so it must be pinned, but it
   // is a ledger total rather than a summary metric.
   funding_gap_pence: (r) => r.model.totals.funding_gap_pence,
+  // spec §4.4.1 (calc 2.3.0), Release 3b: the phased-disposal redemption fields. Like
+  // funding_gap_pence above, these are `model` properties rather than summary metrics, so
+  // they reach the harness through the same AppraisalRun-wide mapper. The declining
+  // schedule is pinned as two parallel flat arrays (months / balances) rather than an array
+  // of objects, so the fixture JSON stays language-neutral for the Python mirror — the
+  // model's own shape is Array<{ month, balance_pence }> and is projected here.
+  redemption_balance_at_disposal_pence: (r) => r.model.redemption_balance_at_disposal_pence,
+  redemption_schedule_months: (r) => r.model.redemption_schedule.map((e) => e.month),
+  redemption_schedule_balances_pence: (r) => r.model.redemption_schedule.map((e) => e.balance_pence),
 };
 
 describe('golden fixtures (shared with the Python engine)', () => {
@@ -90,4 +101,36 @@ describe('golden fixtures (shared with the Python engine)', () => {
       assertExpectedMetrics(runAppraisal(v4), fx, `${fx.name}[migrated-to-v4]`);
     });
   }
+
+  // Negative control (fixture H's precedent, Release 3a — a pinned key that no assertion
+  // actually reaches is a copy-paste false pass, not coverage). The three redemption keys
+  // added in Release 3b reach the run through FLAT_KEYS rather than through
+  // AppraisalResultV2, so a typo in a mapper (or a key silently absent from the mapper
+  // table) would compare `undefined` against `undefined` for a fixture that happened not to
+  // pin it, and pass. This flips each mapped key to a deliberately wrong value on fixture I
+  // — the one fixture that pins all of them — and asserts the loop FAILS. If any of these
+  // stops throwing, the corresponding pin above has gone inert.
+  it('negative control: a deliberately-wrong value for each mapped key fails', () => {
+    const fx = fixtures.find((f) => f.name.startsWith('I — phased sell_all'));
+    expect(fx, 'fixture I must be in the corpus').toBeDefined();
+    const run = runAppraisal(fx!.inputs);
+
+    const wrongValues: Record<string, unknown> = {
+      redemption_balance_at_disposal_pence: 1,                    // truly 0
+      redemption_schedule_months: [9, 10],                        // truly [9, 10, 11]
+      redemption_schedule_balances_pence: [53431299, 10782708, 1], // truly [..., 0]
+      funding_gap_pence: 1,                                       // truly 0
+      peak_debt_pence: 53431300,                                  // truly 53431299 (direct key)
+    };
+    for (const [key, wrong] of Object.entries(wrongValues)) {
+      const poisoned: Fixture = {
+        ...fx!,
+        expected_metrics: { ...fx!.expected_metrics, [key]: wrong },
+      };
+      expect(
+        () => assertExpectedMetrics(run, poisoned, 'negative-control'),
+        `wrong ${key} must fail`,
+      ).toThrow();
+    }
+  });
 });

@@ -795,6 +795,537 @@ against either engine (`docs/financial-model/model-governance.md`): the spread t
 with an independent log/derivative cross-check on the annualisation. The engine was run only to
 confirm agreement.
 
+### Fixture I — "I — phased sell_all, three-tranche sweep" (`fixtures/financial-model/i-phased-sales.json`)
+
+**Purpose:** the first golden fixture with a non-null `sales_phasing` block (spec §4.4.1, calc
+`2.3.0`, Release 3b). It is fixture F with its single month-11 disposal replaced by three tranches —
+40% at month 9, 35% at month 10, 25% at month 11 — and *nothing else changed*. That makes it F's
+controlled twin for the phased regime: every cost line, every draw and every month-0-to-8 ledger row
+is F's, so the only figures that move are the ones the phasing is supposed to move — the sweep, the
+post-sweep interest, peak debt, the exit-fee month, and everything downstream. It is also the first
+fixture to pin the declining `redemption_schedule`, the first where the facility is redeemed
+**before** the final disposal month (so `redemption_balance_at_disposal_pence` is legitimately `0`),
+and the first to exercise §5.11's *phased* break-even replay including its fee-reserve regime.
+
+`inputs_version: 4`, `programme: null`, `refinance: null`, `lender_valuation: null` (so every
+lender-basis metric stays `null`, as in F).
+
+**Inputs (deltas from Fixture F):** exactly two —
+- `inputs_version` 3 → 4, with the v4 additive blocks written explicitly (`programme: null`,
+  `refinance: null`; `lender_valuation: null` was already present in F).
+- `sales_phasing`: `{ tranches: [ {month_offset 9, pct 40.0}, {month_offset 10, pct 35.0},
+  {month_offset 11, pct 25.0} ] }`.
+
+Everything else — acquisition, unit mix, conversion costs, facility terms, equity, exit strategy,
+scenarios, deal spider — is byte-for-byte fixture F.
+
+**Phasing validity (spec §4.4.1):** three tranches (≥ 1 ✓); offsets 9 < 10 < 11, all whole months in
+`[0, term − 1] = [0, 11]` ✓; percentages all finite and > 0 ✓; `40.0 + 35.0 + 25.0 = 100.0` exactly
+✓; `route = 'sell_all'`, not `retain_all` ✓.
+
+#### Step 1 — cost totals (spec §3.3–§3.8) — identical to fixtures A/F
+
+Fixture I changes no cost input, so this table is fixture A/F's cost arithmetic reproduced, not
+re-decided. It is restated in full here so this worksheet stands alone.
+
+| Line | Derivation | Pence |
+|---|---|---:|
+| SDLT (§3.3) | commercial slice bands on 40,000,000: 0% × 15,000,000 + 2% × 10,000,000 + 5% × 15,000,000 = 0 + 200,000 + 750,000 | 950,000 |
+| Acquisition cost (§3.3) | 40,000,000 + 950,000 + legal 500,000 + survey 300,000 + broker `round(1% × 40,000,000)` = 400,000 | 42,150,000 |
+| Construction (§3.4) | base = `round(100,000 × 400)` = 40,000,000; contingency `round(10% × 40,000,000)` = 4,000,000; compliance 0 | 44,000,000 |
+| Professional (§3.5) | 1,500,000 + 500,000 + 500,000 + 300,000 + 0 | 2,800,000 |
+| Statutory (§3.6) | prior approval 9,600 × 4 = 38,400 **+** CIL/S106 0 + building control 200,000 | 238,400 |
+| GDV (§3.1) | 4 × 30,000,000 | 120,000,000 |
+| Selling costs (§3.7) | agent `round(1.5% × 120,000,000)` = 1,800,000 + legal 400,000 | 2,200,000 |
+| Cost before finance **ex** selling (§5.4 denominator) | 42,150,000 + 44,000,000 + 2,800,000 + 238,400 | 89,188,400 |
+| Cost before finance (§3.8) | 89,188,400 + 2,200,000 | **91,388,400** |
+
+91,388,400 is fixture A's and fixture F's pinned `cost_before_finance_pence` — the parity that
+fixture A/F was built to fix is preserved by I unchanged.
+
+#### Step 2 — spend spread, auto windows (spec §6, `programme: null`)
+
+Term 12 → construction window = `max(1, 12 − 2)` = **10 months (1–10)**; professional and statutory
+window = `ceil(10 / 2)` = **5 months (1–5)**.
+
+- Construction 44,000,000 over 10: `per = round(44,000,000 / 10) = 4,400,000`; final month =
+  `44,000,000 − 4,400,000 × 9 = 4,400,000`. Months 1–10 = **4,400,000** each. Σ = 44,000,000 ✓
+- Professional 2,800,000 over 5: `per = round(2,800,000 / 5) = 560,000`; final =
+  `2,800,000 − 560,000 × 4 = 560,000`. Months 1–5 = **560,000** each. Σ = 2,800,000 ✓
+- Statutory *spread* portion (CIL/S106 0 + building control 200,000) over 5:
+  `per = round(200,000 / 5) = 40,000`; final = `200,000 − 40,000 × 4 = 40,000`. Months 1–5 =
+  **40,000** each. Σ = 200,000 ✓. The prior-approval fee 38,400 stays at month 0 (§6/§3.6), as does
+  acquisition (§3.3).
+
+| m | Acquisition | Construction | Professional | Statutory | **Uses total** |
+|--:|--:|--:|--:|--:|--:|
+| 0 | 42,150,000 | 0 | 0 | 38,400 | **42,188,400** |
+| 1–5 | 0 | 4,400,000 | 560,000 | 40,000 | **5,000,000** each |
+| 6–10 | 0 | 4,400,000 | 0 | 0 | **4,400,000** each |
+| 11 | 0 | 0 | 0 | 0 | **0** |
+| **Σ** | 42,150,000 | 44,000,000 | 2,800,000 | 238,400 | **89,188,400** |
+
+Residue check: `42,188,400 + 5 × 5,000,000 + 5 × 4,400,000 = 42,188,400 + 25,000,000 + 22,000,000 =
+89,188,400` = the Step 1 ex-selling sub-total ✓.
+
+#### Step 3 — tranche split (spec §4.4.1)
+
+Sold portion's gross receipts `G = 120,000,000` (`sell_all`, nothing retained). For k < K the gross
+is `round_half_up(G × pct_k / 100)`; the final tranche absorbs the residue. Selling costs are
+apportioned pro-rata by tranche gross with the same final-tranche absorption, the agent-fee total
+being `round_half_up(G × 1.5 / 100) = 1,800,000` and the legal fee the flat 400,000.
+
+| k | month | pct | gross `g_k` | derivation | agent `a_k` | derivation | legal `l_k` | derivation | **net** |
+|--:|--:|--:|--:|---|--:|---|--:|---|--:|
+| 1 | 9 | 40.0 | 48,000,000 | `round(120,000,000 × 40/100)` | 720,000 | `round(1,800,000 × 48,000,000/120,000,000)` | 160,000 | `round(400,000 × 0.4)` | **47,120,000** |
+| 2 | 10 | 35.0 | 42,000,000 | `round(120,000,000 × 35/100)` | 630,000 | `round(1,800,000 × 42,000,000/120,000,000)` | 140,000 | `round(400,000 × 0.35)` | **41,230,000** |
+| 3 | 11 | 25.0 | 30,000,000 | residue | 450,000 | residue | 100,000 | residue | **29,450,000** |
+
+Residue checks (all three, per §4.4.1's "Σ = total exactly" invariant):
+- gross: `120,000,000 − 48,000,000 − 42,000,000 = 30,000,000`, equal to the ideal
+  `round(120,000,000 × 25/100)` — exact here, so the residue absorbs nothing ✓ (Σ = 120,000,000)
+- agent: `1,800,000 − 720,000 − 630,000 = 450,000`, equal to the ideal `round(1,800,000 × 0.25)` ✓
+- legal: `400,000 − 160,000 − 140,000 = 100,000`, equal to the ideal `round(400,000 × 0.25)` ✓
+- nets: `47,120,000 + 41,230,000 + 29,450,000 = 117,800,000 = 120,000,000 − 2,200,000` ✓ (the
+  selling-cost total of Step 1, so no penny is created or lost by the phasing)
+
+#### Step 4 — senior ledger, months 0–8 (spec §4) — identical to fixture F
+
+Facility (unchanged from F): committed net **60,000,000**, committed gross **66,000,000**, day-one
+advance **28,000,000**, 8.0% p.a. → `monthly_rate = 8/100/12 = 1/150`, rolled up, arrangement fee
+`round(2% × 60,000,000) = 1,200,000` (capitalised month 0), exit fee
+`round(1% × 66,000,000) = 660,000` (basis `committed_gross_facility` — a **static** 660,000
+regardless of when or against what balance it is charged), ancillary lender fees 0,
+`development_cost_advance_pct = 100`, `equity_first`, sweep 100%. Committed cash equity
+**35,000,000**.
+
+Gross-headroom cap (spec §4.2(c), rolled-up form):
+`floor(66,000,000 / (1 + 1/150)) = floor(9,900,000,000 / 151) = floor(65,562,913.907…) =
+**65,562,913**`, less opening balance and capitalised fees. It is checked below and **never binds**
+in this fixture (the undrawn-net cap always bites first).
+
+**Fixture I's uses, draws, equity and interest for months 0–8 are identical to fixture F's**, because
+the two fixtures share every cost input and every facility term, and the first receipt of either
+fixture lands no earlier than month 9 — receipts are an end-of-month event (§1.3), so nothing before
+month 9 can differ. (Fixture F's published worksheet above pins F's headline outputs rather than
+tabulating its ledger, so the table below is derived here from §4's monthly loop and then
+**cross-checked against F's pinned numbers** — see the reconciliation at the end of this step, which
+reproduces F's `peak_debt_pence = 58,604,953` and `finance_costs_pence = 5,076,553` exactly. That
+cross-check is what licenses the "identical to F" claim rather than an assertion of it.)
+
+| m | Opening | Uses | Equity | Draw | Cap fees | Interest = round((open+draw+fees)/150) | Gap | Closing |
+|--:|--:|--:|--:|--:|--:|---|--:|--:|
+| 0 | 0 | 42,188,400 | 14,188,400 | 28,000,000 | 1,200,000 | 29,200,000/150 = 194,666.67 → **194,667** | 0 | 29,394,667 |
+| 1 | 29,394,667 | 5,000,000 | 5,000,000 | 0 | 0 | 29,394,667/150 = 195,964.45 → **195,964** | 0 | 29,590,631 |
+| 2 | 29,590,631 | 5,000,000 | 5,000,000 | 0 | 0 | 29,590,631/150 = 197,270.87 → **197,271** | 0 | 29,787,902 |
+| 3 | 29,787,902 | 5,000,000 | 5,000,000 | 0 | 0 | 29,787,902/150 = 198,586.01 → **198,586** | 0 | 29,986,488 |
+| 4 | 29,986,488 | 5,000,000 | 5,000,000 | 0 | 0 | 29,986,488/150 = 199,909.92 → **199,910** | 0 | 30,186,398 |
+| 5 | 30,186,398 | 5,000,000 | 811,600 | 4,188,400 | 0 | 34,374,798/150 = 229,165.32 → **229,165** | 0 | 34,603,963 |
+| 6 | 34,603,963 | 4,400,000 | 0 | 4,400,000 | 0 | 39,003,963/150 = 260,026.42 → **260,026** | 0 | 39,263,989 |
+| 7 | 39,263,989 | 4,400,000 | 0 | 4,400,000 | 0 | 43,663,989/150 = 291,093.26 → **291,093** | 0 | 43,955,082 |
+| 8 | 43,955,082 | 4,400,000 | 0 | 4,400,000 | 0 | 48,355,082/150 = 322,367.21 → **322,367** | 0 | 48,677,449 |
+
+Month-by-month draw derivation (spec §4.2):
+
+- **m0.** Arrangement fee 1,200,000 capitalised first (`cum_net_used = 1,200,000`). Day-one advance =
+  `min(28,000,000, net 60,000,000 − 1,200,000 = 58,800,000, uses 42,188,400, headroom
+  65,562,913 − 0 − 1,200,000 = 64,362,913)` = **28,000,000** (`cum_net_used = 29,200,000`). Remaining
+  month-0 uses `42,188,400 − 28,000,000 = 14,188,400` from equity (35,000,000 available) →
+  equity used 14,188,400.
+- **m1–m4.** Equity remaining at the start of each month is 20,811,600 / 15,811,600 / 10,811,600 /
+  5,811,600 — each ≥ that month's 5,000,000 of uses, so equity funds them entirely and no draw is
+  made. Equity used after m4 = `14,188,400 + 4 × 5,000,000 = 34,188,400`.
+- **m5.** Equity remaining `35,000,000 − 34,188,400 = **811,600**` < uses 5,000,000 → equity 811,600,
+  remainder 4,188,400. Caps: advance-% `round(100% × eligible 5,000,000) = 5,000,000`; undrawn net
+  `60,000,000 − 29,200,000 = 30,800,000`; headroom `65,562,913 − 30,186,398 = 35,376,515`.
+  Draw = `min(4,188,400, 5,000,000, 30,800,000, 35,376,515)` = **4,188,400**
+  (`cum_net_used = 33,388,400`). Committed equity is now exhausted at exactly 35,000,000.
+- **m6.** Equity 0. Caps: advance-% 4,400,000; undrawn net `60,000,000 − 33,388,400 = 26,611,600`;
+  headroom `65,562,913 − 34,603,963 = 30,958,950`. Draw = **4,400,000** (`cum_net_used = 37,788,400`).
+- **m7.** Caps: advance-% 4,400,000; undrawn net 22,211,600; headroom
+  `65,562,913 − 39,263,989 = 26,298,924`. Draw = **4,400,000** (`cum_net_used = 42,188,400`).
+- **m8.** Caps: advance-% 4,400,000; undrawn net 17,811,600; headroom
+  `65,562,913 − 43,955,082 = 21,607,831`. Draw = **4,400,000** (`cum_net_used = 46,588,400`).
+
+No month gaps: every month's uses are met in full → `funding_gap_pence = **0**` (contrast fixture H,
+whose headline behaviour is the opposite).
+
+**Cross-check against fixture F's pinned outputs (the licence for "identical to F").** Continue this
+same table under F's receipts schedule — i.e. no receipts until month 11 — for m9, m10 and m11:
+m9 draw 4,400,000, interest `round(53,077,449/150) = 353,850`, closing 53,431,299; m10 draw
+4,400,000, interest `round(57,831,299/150) = 385,542`, closing 58,216,841; m11 no uses, interest
+`round(58,216,841/150) = 388,112`, closing **58,604,953** — exactly fixture F's pinned
+`peak_debt_pence`. Summing that trajectory's twelve interest lines:
+`194,667 + 195,964 + 197,271 + 198,586 + 199,910 + 229,165 + 260,026 + 291,093 + 322,367 + 353,850 +
+385,542 + 388,112 = 3,216,553`, and `3,216,553 + 1,200,000 + 660,000 = **5,076,553**` — exactly
+fixture F's pinned `finance_costs_pence`. Both of F's pinned finance figures are therefore
+reproduced by the table above, which is what establishes that months 0–8 are shared ground and not
+merely assumed to be.
+
+#### Step 5 — months 9–11: the phased sweep (spec §4.4, §4.4.1)
+
+Ordering within each month is §1.3's: costs and draws first, then interest on
+`opening + draw + capitalised_fees`, then receipts, selling costs, sweep, distribution.
+
+**Month 9.** Uses 4,400,000; equity 0; caps: advance-% 4,400,000, undrawn net
+`60,000,000 − 46,588,400 = 13,411,600`, headroom `65,562,913 − 48,677,449 = 16,885,464` → draw
+**4,400,000** (`cum_net_used = 50,988,400`). Interest = `round((48,677,449 + 4,400,000)/150) =
+round(53,077,449/150) = round(353,849.66)` = **353,850**.
+Balance before receipts = `48,677,449 + 4,400,000 + 353,850` = **53,431,299** — this is
+`redemption_schedule[0]`, captured immediately before the month's receipts (§4.4.1).
+Tranche 1 net = 47,120,000 (Step 3); sweep available = `round(47,120,000 × 100/100)` = 47,120,000.
+Exit fee if redeeming = 660,000, so full redemption needs `53,431,299 + 660,000 = 54,091,299`.
+`47,120,000 < 54,091,299` → **partial arm** (§4.4: "receipts insufficient to cover principal plus
+exit fee do not discharge the facility; the balance carries"). Repayment =
+`min(47,120,000, 53,431,299)` = **47,120,000** (it is not equal to the balance, so §4.4's
+fee clamp does not engage — the clamp only fires when the sweep would exactly clear principal).
+Exit fee charged this month = **0**. Closing balance = `53,431,299 − 47,120,000` = **6,311,299**.
+Distribution = `47,120,000 − 47,120,000 − 0` = **0**.
+
+**Month 10.** Uses 4,400,000; equity 0; caps: advance-% 4,400,000, undrawn net
+`60,000,000 − 50,988,400 = 9,011,600`, headroom `65,562,913 − 6,311,299 = 59,251,614` → draw
+**4,400,000** (`cum_net_used = 55,388,400`). The facility has not yet been redeemed at the moment of
+this draw, so §4.4.1's `facility_redrawn_after_redemption` flag does **not** fire.
+Interest = `round((6,311,299 + 4,400,000)/150) = round(10,711,299/150) = round(71,408.66)` =
+**71,409** — a tenth of month 9's, which is the whole point of the fixture: §4's roll-forward accrues
+on the *post-sweep* balance automatically (§4.4.1).
+Balance before receipts = `6,311,299 + 4,400,000 + 71,409` = **10,782,708** = `redemption_schedule[1]`.
+Tranche 2 net = 41,230,000; sweep = 41,230,000. Full redemption needs
+`10,782,708 + 660,000 = 11,442,708`; `41,230,000 ≥ 11,442,708` → **full redemption arm**.
+Repayment = **10,782,708**, exit fee = **660,000** (charged once, here, at the FIRST full
+redemption — §4.4.1), closing balance **0**.
+Distribution = `41,230,000 − 10,782,708 − 660,000` = **29,787,292**.
+
+**Month 11.** No uses, no draw (so no `facility_redrawn_after_redemption` flag), opening balance 0 →
+interest = `round(0 × 1/150)` = **0**. Balance before receipts = **0** = `redemption_schedule[2]`
+(month 11 *is* a disposal month, so it takes a schedule entry; §4.4.1 defines the entry as the
+pre-receipt balance, which is legitimately zero here). Tranche 3 net = 29,450,000; the balance is 0,
+so no sweep arm runs, no second exit fee is charged, and the whole net proceeds distribute:
+Distribution = **29,450,000**.
+
+Therefore, per §4.4.1's definition ("the balance immediately before receipts in the FINAL disposal
+month"), `redemption_balance_at_disposal_pence = **0**`, and the declining schedule is
+
+| entry | month | balance before receipts |
+|--:|--:|--:|
+| 0 | 9 | **53,431,299** |
+| 1 | 10 | **10,782,708** |
+| 2 | 11 | **0** |
+
+strictly declining, as §4.4.1 requires of the phased regime.
+
+**Roll-forward check (spec §4 invariant), the three phased months:**
+m9 `48,677,449 + 4,400,000 + 0 + 353,850 − 47,120,000 = 6,311,299` ✓;
+m10 `6,311,299 + 4,400,000 + 0 + 71,409 − 10,782,708 = 0` ✓ (the exit fee is its own line, not part
+of the roll-forward, §4); m11 `0 + 0 + 0 + 0 − 0 = 0` ✓.
+
+**Peak debt (spec §5.7)** = max over months of the intra-month pre-repayment balance. The balance
+rises monotonically to month 9 and then falls, so peak = month 9's **53,431,299**, at
+`peak_debt_month = 9`. It sits inside the committed gross facility
+(`66,000,000 − 53,431,299 = 12,568,701` headroom) → no `facility_exceeded` flag. This is
+**5,173,654 lower** than fixture F's 58,604,953: F's balance keeps compounding to month 11, while I's
+first tranche cuts it at month 9. The brief's "unchanged from F if peak precedes month 9" test is
+answered in the negative *by derivation* — the peak is at month 9 itself, and it is I's own number.
+
+#### Step 6 — summary metrics (spec §3, §5)
+
+Interest total = the nine months 0–8 (Step 4) plus month 9's 353,850, month 10's 71,409 and month
+11's 0:
+`194,667 + 195,964 + 197,271 + 198,586 + 199,910 + 229,165 + 260,026 + 291,093 + 322,367 = 2,089,049`;
+`2,089,049 + 353,850 + 71,409 + 0 = **2,514,308**`.
+Independent cross-check (§4's identity, applied at month 9 — the last month before any repayment):
+the month-9 pre-receipt balance must equal cumulative draws + capitalised fees + rolled interest to
+that point. Cumulative draws through m9 = `28,000,000 (m0) + 4,188,400 (m5) + 4 × 4,400,000
+(m6–m9) = 49,788,400`; capitalised fees = 1,200,000; interest m0–m9 = `2,089,049 + 353,850 =
+2,442,899`. Total `49,788,400 + 1,200,000 + 2,442,899 = **53,431,299**` ✓ — the same figure the
+ledger column reaches in Step 5.
+
+| Metric | Derivation | Value |
+|---|---|---:|
+| `finance_costs_pence` (§3.9) | interest 2,514,308 + arrangement 1,200,000 + exit 660,000 + ancillary 0 | **4,374,308** |
+| `total_development_cost_pence` (§3.10) | 91,388,400 + 4,374,308 | **95,762,708** |
+| `profit_pence` (§3.12) | Σ gross receipts 120,000,000 − TDC 95,762,708 | **24,237,292** |
+| `profit_is_unrealised` (§3.12) | nothing retained | **false** |
+| `profit_on_cost_pct` (§3.13) | 24,237,292 / 95,762,708 = 0.253097418 → 2530.97418 → round 2531 | **25.31** |
+| `profit_on_gdv_pct` (§3.14) | 24,237,292 / 120,000,000 = 0.201977433 → 2019.77433 → round 2020 | **20.2** |
+| `peak_debt_pence` / `peak_debt_month` (§5.7) | month 9 pre-receipt balance | **53,431,299 / 9** |
+| `day_one_advance_pence` (§5.1) | actual month-0 draw | **28,000,000** |
+| `gross_ltc_pct` (§5.5) | 53,431,299 / 95,762,708 = 0.557955179 → 5579.55179 → round 5580 | **55.8** |
+| `net_ltc_pct` (§5.4) | net advances (draws 54,188,400 + cap fees 1,200,000 = 55,388,400) / 89,188,400 = 0.621026912 → 6210.26912 → round 6210 | **62.1** |
+| `ltgdv_developer_pct` (§5.6) | 53,431,299 / 120,000,000 = 0.445260825 → 4452.60825 → round 4453 | **44.53** |
+| `equity_contributed_pence` (§3.15) | 14,188,400 + 4 × 5,000,000 + 811,600, no additional equity | **35,000,000** |
+| `equity_multiple` (§3.16) | distributions (0 + 29,787,292 + 29,450,000 = 59,237,292) / 35,000,000 = 1.692494057 → round(169.2494)/100 | **1.69** |
+| `funding_gap_pence` (§4.2) | no month unfunded (Step 4) | **0** |
+
+Draws total for `net_ltc`: `28,000,000 (m0) + 4,188,400 (m5) + 5 × 4,400,000 (m6–m10) =
+54,188,400` — **identical to fixture F's**, since the phasing changes receipts, not the cost
+schedule, and the sweeps never free up facility that gets redrawn. That is why `net_ltc_pct` comes
+out at F's pinned **62.1** unchanged, while `gross_ltc_pct` (peak-debt-based) and
+`ltgdv_developer_pct` both move — a deliberate, derived contrast, not a coincidence.
+
+**Identity check (spec §3.12).** Σ developer equity flows =
+`−35,000,000 + 59,237,292 = 24,237,292` = `profit_pence` ✓. Unlike fixture H, this identity holds
+unconditionally here because `funding_gap_pence = 0` — I is the phased fixture that keeps the
+identity's *positive* case honest.
+
+#### Step 7 — IRR (spec §3.17), hand-solved
+
+Developer equity cash-flow vector (contributions negative, distributions positive), read off Steps
+4–5's equity and distribution columns:
+
+| t | 0 | 1 | 2 | 3 | 4 | 5 | 6–9 | 10 | 11 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| flow | −14,188,400 | −5,000,000 | −5,000,000 | −5,000,000 | −5,000,000 | −811,600 | 0 | +29,787,292 | +29,450,000 |
+
+(Month 9's distribution is 0 — the whole first tranche was swept — so the vector has a genuine
+zero at t = 9 between the contributions and the distributions.)
+
+Solve `NPV(r) = 0` with `d = 1 + r`.
+
+*Starting estimate.* Contribution-weighted mean month =
+`(0 × 14,188,400 + 1 × 5,000,000 + 2 × 5,000,000 + 3 × 5,000,000 + 4 × 5,000,000 + 5 × 811,600) /
+35,000,000 = 54,058,000 / 35,000,000 = 1.5445`; distribution-weighted mean month =
+`(10 × 29,787,292 + 11 × 29,450,000) / 59,237,292 = 621,822,920 / 59,237,292 = 10.4964`; money
+multiple `59,237,292 / 35,000,000 = 1.692494`; effective hold `10.4964 − 1.5445 = 8.9519` months →
+`r ≈ 1.692494^(1/8.9519) − 1 ≈ 0.0605`. Round the trial point to **r = 0.0601** (the estimate is
+crude by design; one Newton step from anywhere nearby lands on the root).
+
+*Evaluation at `r = 0.0601`.* Powers of `d = 1.0601` (decimal expansion, 12 dp):
+`d² = 1.123812010000`, `d³ = 1.191353111801`, `d⁴ = 1.262953433820`, `d⁵ = 1.338856935193`,
+`d⁶ = 1.419322236998`, `d¹⁰ = 1.792537892914`, `d¹¹ = 1.900269420278`, `d¹² = 2.014475612437`.
+
+| term | value |
+|---|---:|
+| −14,188,400 | −14,188,400.000 |
+| −5,000,000 / 1.060100000000 | −4,716,536.176 |
+| −5,000,000 / 1.123812010000 | −4,449,142.700 |
+| −5,000,000 / 1.191353111801 | −4,196,908.499 |
+| −5,000,000 / 1.262953433820 | −3,958,974.152 |
+| −811,600 / 1.338856935193 | −606,188.741 |
+| +29,787,292 / 1.792537892914 | +16,617,384.836 |
+| +29,450,000 / 1.900269420278 | +15,497,802.409 |
+| **NPV(0.0601)** | **−963.022** |
+
+*Slope.* `NPV′(r) = Σ −t·CF_t / d^(t+1)`
+= `5,000,000/d² + 2×5,000,000/d³ + 3×5,000,000/d⁴ + 4×5,000,000/d⁵ + 5×811,600/d⁶
+− 10×29,787,292/d¹¹ − 11×29,450,000/d¹²`
+= `4,449,142.700 + 8,393,816.998 + 11,876,922.457 + 14,938,115.847 + 2,859,111.127
+− 156,752,993.455 − 160,811,080.561` = **−275,046,964.889**.
+
+*Newton step.* `r = 0.0601 − (−963.022)/(−275,046,964.889) = 0.0601 − 0.0000035013` =
+**0.0600964987** (≈ 6.01%/month). The next Newton correction is of order 1e−10 and cannot move any
+reported digit (the exactly-converged root is 0.060096498773).
+
+*Annualisation (§3.17).* `ln(1.0600964987) = 0.058359940559`; `× 12 = 0.700319286703`;
+`e^0.700319286703 = 2.0143957746` → annual rate `1.0143957746`.
+Cross-check without logs: `d¹²` at `d = 1.0601` is 2.0144756124 and `d(d¹²)/dd = 12·d¹¹ =
+22.803233043`, so at `d = 1.0601 − 0.0000035013` →
+`2.0144756124 − 22.803233043 × 0.0000035013 = 2.0144756124 − 0.0000798411 = 2.0143957713` — the two
+routes agree to 3.3×10⁻⁹.
+
+`irr_annual_pct = round(1.0143957746 × 10000)/100 = round(10143.957746)/100` = **101.44**
+(the nearest rounding boundary, 10143.5, is 0.458 away — `r` would have to be wrong by more than
+2.7×10⁻⁷ per month to move this figure; the derivation above is good to ~10⁻⁹).
+`irr_monthly_pct = round(0.0600964987 × 10000)/100 = round(600.964987)/100` = **6.01**.
+
+Fixture F's IRR on the same costs is 91.2%; I's is higher because 40% of the receipts arrive two
+months earlier, which both shortens the hold and cuts the interest bill.
+
+#### Step 8 — senior repayment break-even, phased regime (spec §5.11)
+
+`sales_phasing` is non-null, so §5.11's phased regime applies: the minimum **total** gross sales `G`
+(integer pence) such that a REPLAY of the sweep fully redeems the facility by term end, under a
+uniform price-fall assumption (every tranche scales by the same factor, shares stay 40/35/25).
+
+**The replay's frozen inputs** (§5.11: "freezes the actual run's monthly draws and capitalised
+fees"), read off Step 4/5's Draw and Cap-fees columns:
+
+| m | 0 | 1–4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| draw + cap fees | 29,200,000 | 0 | 4,188,400 | 4,400,000 | 4,400,000 | 4,400,000 | 4,400,000 | 4,400,000 | 0 |
+
+No facility draw occurs after the final tranche month (m11's entry is 0), and `sales_sweep_pct = 100
+> 0`, so neither of §5.11's two structurally-unsolvable cases applies — the break-even is solvable
+and no `senior_breakeven_unsolvable` flag is raised.
+
+Because the frozen schedule is the ledger's own and no receipt lands before month 9, the replay's
+balance trajectory through month 9 is Step 4/5's exactly: pre-receipt `B₉ = **53,431,299**`.
+Enforcement cost assumption is 0, so it deducts nothing from the first tranche.
+
+**The fee-reserve regime (§5.11, current text — this is what makes the condition closed-form).** The
+replay, unlike the ledger, *reserves* the exit fee out of **every** tranche's sweep before repaying
+principal: with fee `f` due on redemption (0 once charged), a tranche's principal repayment is
+`max(0, sweep − f)`, and full redemption occurs when `sweep ≥ balance + f`. Fixture I's fee basis is
+`committed_gross_facility`, so `f = round(1% × 66,000,000) = **660,000**` at every tranche, a
+constant — which is exactly why the condition below is *linear* in `G`.
+
+**Closed form.** Write `k = 151/150` for one month's rolled-up accrual (`x → x + round(x/150)`,
+treated continuously here), and let `n₉, n₁₀, n₁₁` be the tranche net proceeds at total gross `G`.
+With shares 40/35/25, agent 1.5% pro-rata and legal 400,000 pro-rata:
+`n₉ = 0.394G − 160,000`, `n₁₀ = 0.34475G − 140,000`, `n₁₁ = 0.24625G − 100,000`
+(e.g. `0.394 = 0.40 − 0.015 × 0.40`).
+
+Redemption cannot happen at tranche 1 or 2 for a minimal `G` — the later the redemption, the more
+sweeps have already cut the balance, so the cheapest feasible `G` is the one that just redeems at
+tranche 3. Tracing the replay under the partial (fee-reserving) arm at months 9 and 10:
+
+1. after m9: `b₉′ = B₉ − (n₉ − f) = 53,431,299 + 660,000 − n₉ = 54,091,299 − n₉`
+2. m10 draw + interest: `b₁₀ = (b₉′ + 4,400,000)·k`, with `b₉′ + 4,400,000 = 58,491,299 − n₉ =
+   58,651,299 − 0.394G`
+3. after m10: `b₁₀′ = b₁₀ − (n₁₀ − f)`
+4. m11 (no draw) interest: `b₁₁ = b₁₀′·k`
+5. redemption at m11 iff `n₁₁ ≥ b₁₁ + f`
+
+Substituting (2)–(4) into (5):
+`n₁₁ − f ≥ (58,651,299 − 0.394G)·k² − (n₁₀ − f)·k`, with `k = 1.0066666667` and
+`k² = 22801/22500 = 1.0133777778`:
+
+```
+0.24625G − 760,000  ≥  59,435,923.044 − 0.399270844G  −  0.347048333G + 805,333.333
+(0.24625 + 0.399270844 + 0.347048333)G  ≥  59,435,923.044 + 805,333.333 + 760,000
+0.992569177G  ≥  61,001,256.377
+G  ≥  61,457,939.44
+```
+
+So the closed form brackets the answer between the integers **61,457,939** and 61,457,940 — and
+because the continuous model ignores the integer rounding in the tranche split and in the two
+`round(x/150)` interest lines, which integer is actually minimal must be settled by evaluating the
+replay exactly. Per §5.11's monotonicity guarantee (the fee reserve makes the residual balance
+continuous and weakly decreasing in `G`), checking the candidate and its predecessor is sufficient.
+
+**Exact evaluation at `G = 61,457,939`.** Split per §4.4.1 (`agent total = round(1.5% × G) =
+round(921,869.085) = 921,869`):
+
+| k | gross | derivation | agent | derivation | legal | **net** |
+|--:|--:|---|--:|---|--:|--:|
+| 1 | 24,583,176 | `round(0.40 × 61,457,939) = round(24,583,175.6)` | 368,748 | `round(921,869 × 24,583,176/61,457,939) = round(368,747.61)` | 160,000 | **24,054,428** |
+| 2 | 21,510,279 | `round(0.35 × 61,457,939) = round(21,510,278.65)` | 322,654 | `round(921,869 × 21,510,279/61,457,939) = round(322,654.15)` | 140,000 | **21,047,625** |
+| 3 | 15,364,484 | residue `G − 24,583,176 − 21,510,279` | 230,467 | residue `921,869 − 368,748 − 322,654` | 100,000 | **15,034,017** |
+
+(Residue checks: gross Σ = 61,457,939 ✓; agent Σ = 921,869 ✓; legal `400,000 − 160,000 − 140,000 =
+100,000` ✓.)
+
+| m | balance before sweep | sweep | fee `f` | arm | balance after |
+|--:|--:|--:|--:|---|--:|
+| 9 | 53,431,299 | 24,054,428 | 660,000 | `24,054,428 < 53,431,299 + 660,000` → partial; repay `24,054,428 − 660,000 = 23,394,428` | **30,036,871** |
+| 10 | `(30,036,871 + 4,400,000) + round(34,436,871/150 = 229,579.14) = 34,436,871 + 229,579` = **34,666,450** | 21,047,625 | 660,000 | `21,047,625 < 34,666,450 + 660,000` → partial; repay `21,047,625 − 660,000 = 20,387,625` | **14,278,825** |
+| 11 | `14,278,825 + round(14,278,825/150 = 95,192.17) = 14,278,825 + 95,192` = **14,374,017** | 15,034,017 | 660,000 | `15,034,017 ≥ 14,374,017 + 660,000 = 15,034,017` — **equality** → full redemption | **0** |
+
+Redeemed, terminal balance 0 → **feasible**, at exact equality to the penny.
+
+**Exact evaluation at `G − 1 = 61,457,938`.** `agent total = round(1.5% × 61,457,938) =
+round(921,869.07) = 921,869` (unchanged):
+
+| k | gross | derivation | agent | legal | **net** |
+|--:|--:|---|--:|--:|--:|
+| 1 | 24,583,175 | `round(24,583,175.2)` | 368,748 | 160,000 | **24,054,427** |
+| 2 | 21,510,278 | `round(21,510,278.3)` | 322,654 | 140,000 | **21,047,624** |
+| 3 | 15,364,485 | residue | 230,467 | 100,000 | **15,034,018** |
+
+| m | balance before sweep | sweep | fee `f` | arm | balance after |
+|--:|--:|--:|--:|---|--:|
+| 9 | 53,431,299 | 24,054,427 | 660,000 | partial; repay `24,054,427 − 660,000 = 23,394,427` | **30,036,872** |
+| 10 | `34,436,872 + round(34,436,872/150 = 229,579.15) = 34,436,872 + 229,579` = **34,666,451** | 21,047,624 | 660,000 | partial; repay `20,387,624` | **14,278,827** |
+| 11 | `14,278,827 + round(14,278,827/150 = 95,192.18) = 14,278,827 + 95,192` = **14,374,019** | 15,034,018 | 660,000 | `15,034,018 < 14,374,019 + 660,000 = 15,034,019` → partial; repay `15,034,018 − 660,000 = 14,374,018` | **1** |
+
+Not redeemed; terminal balance **1 penny** outstanding → **infeasible**. Note that tranche 3's gross
+is one penny *larger* at `G − 1` (the residue absorbs the two downward roundings of tranches 1 and 2)
+and yet the case still fails, because tranches 1 and 2 each swept a penny less and those pennies
+compounded forward — a nice demonstration that the replay is genuinely path-dependent, not a
+one-line inequality.
+
+Minimum feasible integer, and the expected `senior_breakeven_pence`, is therefore **61,457,939**
+(£614,579.39). Against the modelled GDV that is a tolerable price fall of
+`(120,000,000 − 61,457,939)/120,000,000 = 48.79%` before the senior facility is exposed.
+
+`senior_breakeven_pct_of_lender_gdv` and `senior_breakeven_fall_from_lender_gdv_pct` are **null** —
+fixture I has `lender_valuation: null`, exactly as fixture F does (§3.2: never silently defaulted to
+developer GDV) — so neither is pinned.
+
+**Why `redemption_balance_at_disposal_pence = 0` does not make this metric degenerate.** In the
+single-shot regime that field *is* the break-even's whole input, and a zero would be meaningless.
+The phased regime does not read it at all: it replays the frozen draw schedule. The field remains 0
+because §4.4.1 defines it as the final disposal month's pre-receipt balance and month 11's balance
+genuinely is 0 — I is the fixture that pins that distinction.
+
+#### Step 9 — developer profit break-even (spec §5.12)
+
+Unchanged in form from fixture G's worksheet (§5.12 is debt- and phasing-independent — it asks only
+what total gross sales cover TDC), but with I's own TDC:
+```
+tdc_ex_selling = 95,762,708 − 2,200,000 = 93,562,708
+P ≥ 93,562,708 + 400,000 + round(0.015 × P) = 93,962,708 + round(0.015 × P)
+```
+Closed-form guess: `93,962,708 / 0.985 = 95,393,612.183…`. Hand-checked integers either side:
+- `P = 95,393,611`: `round(0.015 × 95,393,611) = round(1,430,904.165) = 1,430,904`; RHS =
+  `93,962,708 + 1,430,904 = 95,393,612`; `95,393,611 < 95,393,612` → **infeasible**.
+- `P = 95,393,612`: `round(0.015 × 95,393,612) = round(1,430,904.18) = 1,430,904`; RHS =
+  `95,393,612`; `95,393,612 ≥ 95,393,612` (equality) → **feasible**.
+
+So `developer_breakeven_pence` = **95,393,612**. (It is *above* the senior break-even of 61,457,939
+here — but see fixture G's "deliberate non-assertion": no ordering between the two is asserted
+anywhere, and none is claimed by this observation.)
+
+#### Pinned `expected_metrics`
+
+| Metric | Value | £ |
+|---|---:|---:|
+| `gdv_pence` | 120,000,000 | £1,200,000 |
+| `acquisition_cost_pence` | 42,150,000 | £421,500 |
+| `sdlt_pence` | 950,000 | £9,500 |
+| `construction_cost_pence` | 44,000,000 | £440,000 |
+| `professional_fees_pence` | 2,800,000 | £28,000 |
+| `statutory_costs_pence` | 238,400 | £2,384 |
+| `selling_costs_pence` | 2,200,000 | £22,000 |
+| `cost_before_finance_pence` | 91,388,400 | £913,884 |
+| `finance_costs_pence` | 4,374,308 | £43,743.08 |
+| `total_development_cost_pence` | 95,762,708 | £957,627.08 |
+| `profit_pence` | 24,237,292 | £242,372.92 |
+| `profit_is_unrealised` | false | — |
+| `profit_on_cost_pct` | — | 25.31% |
+| `profit_on_gdv_pct` | — | 20.20% |
+| `peak_debt_pence` | 53,431,299 | £534,312.99 |
+| `peak_debt_month` | 9 | — |
+| `day_one_advance_pence` | 28,000,000 | £280,000 |
+| `gross_ltc_pct` | — | 55.80% |
+| `equity_contributed_pence` | 35,000,000 | £350,000 |
+| `equity_multiple` | 1.69 | — |
+| `net_ltc_pct` | — | 62.10% |
+| `ltgdv_developer_pct` | — | 44.53% |
+| `irr_annual_pct` | — | 101.44% |
+| `senior_breakeven_pence` | 61,457,939 | £614,579.39 |
+| `developer_breakeven_pence` | 95,393,612 | £953,936.12 |
+| `redemption_balance_at_disposal_pence` | 0 | £0 |
+| `redemption_schedule_months` | [9, 10, 11] | — |
+| `redemption_schedule_balances_pence` | [53,431,299, 10,782,708, 0] | — |
+| `funding_gap_pence` | 0 | £0 |
+
+The last three redemption keys are `MonthlyModel` fields rather than `AppraisalResultV2` properties,
+so — like `funding_gap_pence` (fixture H) and the two `cost_to_complete_*` keys (fixture G) — they
+reach the golden harness through the `FLAT_KEYS` mapper in `golden-fixtures.test.ts`, whose mapper
+takes the whole `AppraisalRun`. The declining schedule is pinned as two parallel flat arrays rather
+than an array of objects so the fixture JSON stays language-neutral for the Python mirror.
+
+**Negative control (fixture H's precedent).** A pinned key that no assertion actually reaches is a
+copy-paste false pass, not coverage — and the mapper indirection is exactly where that can happen
+silently (a mapper typo would compare `undefined` against `undefined` for any fixture that did not
+pin the key). `golden-fixtures.test.ts`'s `'negative control: a deliberately-wrong value for each
+mapped key fails'` therefore flips each of `redemption_balance_at_disposal_pence` (1 instead of 0),
+`redemption_schedule_months` (`[9, 10]`), `redemption_schedule_balances_pence` (terminal 1 instead
+of 0), `funding_gap_pence` (1 instead of 0) and — as a control on the control — the direct key
+`peak_debt_pence` (53,431,300 instead of 53,431,299) on fixture I, and asserts the assertion loop
+**throws** for every one of them.
+
+**Governance note.** Every figure above was derived on this worksheet *before* the fixture was pinned
+or run against either engine (`docs/financial-model/model-governance.md`): the spend spread from §6's
+straight-line rule, the tranche split from §4.4.1's closed form with all four residue checks, the
+ledger from §4's monthly loop (independently validated by reproducing fixture F's two pinned finance
+figures from the same table), the IRR from a hand Newton iteration with a log/derivative cross-check
+on the annualisation, and the §5.11 break-even from the closed form under the current fee-reserve
+text plus exact integer evaluations at `G` and `G − 1`. The engine was run only to confirm
+agreement, and it agreed on every pinned value at the first run — no adjudication was required and
+no engine code was touched.
+
 ---
 
 ## 3. Ledger fixtures B–F — pinned in BOTH languages
