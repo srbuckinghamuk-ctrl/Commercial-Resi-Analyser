@@ -4,6 +4,9 @@ import type { Project, EligibilityAssessment } from '../types';
 import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
+import { runSensitivity } from './model/sensitivity';
+import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
+import { LEVER_SHORT, formatStepLabel, flagShortCodes } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
 // ── This memo consumes the finished AppraisalRun only ─────
@@ -102,15 +105,6 @@ function flagPresent(flags: ModelFlag[], code: ModelFlag['code']): boolean {
   return flags.some((f) => f.code === code);
 }
 
-/** Short codes for the sensitivity-grid flag column (spec §11.8 — debt is never re-sized in scenarios). */
-function flagShortCodes(flags: ModelFlag[]): string {
-  const codes: string[] = [];
-  if (flagPresent(flags, 'facility_exceeded')) codes.push('FE');
-  if (flagPresent(flags, 'funding_gap')) codes.push('FG');
-  if (flagPresent(flags, 'senior_outstanding_at_maturity')) codes.push('NR');
-  return codes.join(',');
-}
-
 /** Full-word flag summary for the Scenario Comparison table's Flags row. */
 function flagSummary(flags: ModelFlag[]): string {
   const labels: string[] = [];
@@ -166,38 +160,32 @@ export interface MemoSensitivityTables {
 }
 
 export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
-  // Shared grid: one runAppraisal per (cost, GDV) combination, feeding both matrices.
-  const gdvSteps = [-15, -10, -5, 0, 5];
-  const costSteps = [-5, 0, 5, 10, 15];
-  const grid = costSteps.map((costAdj) =>
-    gdvSteps.map((gdvAdj) => {
-      const scenRun = runAppraisal(applyScenario(inputs, {
-        label: '',
-        gdv_adjustment_pct: gdvAdj,
-        construction_cost_adjustment_pct: costAdj,
-        timeline_adjustment_months: 0,
-        interest_rate_adjustment_pct: 0,
-      }));
-      return {
-        pocPct: scenRun.metrics.profit_on_cost_pct,
-        ltgdvPct: scenRun.metrics.ltgdv_developer_pct,
-        flags: flagShortCodes(scenRun.metrics.flags),
-      };
-    }),
-  );
+  // R4b: the grid steps, the lever rule and the base-case identity are now the
+  // engine's (spec §12.3–§12.5) rather than constants living in this file. The
+  // default config *is* the grid this memo has always printed — R4a promoted
+  // these very steps into the specification — so the output is unchanged, and
+  // export-investment-memo.test.ts pins that string for string.
+  const result = runSensitivity(inputs);
+  const { rows, cols } = result.config;
 
-  const rowLabel = (costAdj: number) => `Cost ${costAdj >= 0 ? '+' : ''}${costAdj}%`;
+  const axisCaption = (lever: SensitivityLever, step: number) =>
+    `${LEVER_SHORT[lever]} ${formatStepLabel(lever, step)}`;
+
+  const cellText = (cell: SensitivityCell, key: 'profit_on_cost_pct' | 'ltgdv_developer_pct') => {
+    const codes = flagShortCodes(cell.flags);
+    return `${fmtPctSafe(cell[key])}${codes ? ` [${codes}]` : ''}`;
+  };
+
+  const bodyFor = (key: 'profit_on_cost_pct' | 'ltgdv_developer_pct') =>
+    result.matrix.map((row) => [
+      axisCaption(rows.lever, row[0].row_step),
+      ...row.map((cell) => cellText(cell, key)),
+    ]);
 
   return {
-    head: ['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)],
-    pocRows: costSteps.map((costAdj, ci) => [
-      rowLabel(costAdj),
-      ...grid[ci].map((cell) => `${fmtPctSafe(cell.pocPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
-    ]),
-    ltgdvRows: costSteps.map((costAdj, ci) => [
-      rowLabel(costAdj),
-      ...grid[ci].map((cell) => `${fmtPctSafe(cell.ltgdvPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
-    ]),
+    head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
+    pocRows: bodyFor('profit_on_cost_pct'),
+    ltgdvRows: bodyFor('ltgdv_developer_pct'),
   };
 }
 
