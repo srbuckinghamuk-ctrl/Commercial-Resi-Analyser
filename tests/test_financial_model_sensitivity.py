@@ -14,6 +14,8 @@ from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     LEVER_ORDER,
     MAX_AXIS_STEPS,
+    InvalidBaseDocumentError,
+    InvalidSensitivityConfigError,
     SensitivityAxis,
     SensitivityConfig,
     TornadoRange,
@@ -376,6 +378,43 @@ def test_invalid_base_document_raises():
     bad.finance.term_months = 0
     with pytest.raises(ValueError, match="base document"):
         run_sensitivity(bad)
+
+
+def test_config_failure_is_typed():
+    """Spec Sec 12.6 -- mirror of the TS suite."""
+    cfg = SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[],
+    )
+    with pytest.raises(InvalidSensitivityConfigError) as exc:
+        run_sensitivity(_inputs(), cfg)
+    assert str(exc.value).startswith("Invalid sensitivity config: ")
+
+
+def test_base_document_failure_is_typed():
+    """Spec Sec 12.7 -- mirror of the TS suite."""
+    inputs = _inputs()
+    inputs.finance.equity_draw_rule = "pari_passu"
+    with pytest.raises(InvalidBaseDocumentError) as exc:
+        run_sensitivity(inputs)
+    assert str(exc.value).startswith("Invalid base document: ")
+
+
+def test_the_two_failures_are_distinguishable():
+    """A consumer catching one and re-raising the rest depends on this."""
+    inputs = _inputs()
+    inputs.finance.equity_draw_rule = "pari_passu"
+    with pytest.raises(InvalidBaseDocumentError):
+        run_sensitivity(inputs)
+    assert not issubclass(InvalidBaseDocumentError, InvalidSensitivityConfigError)
+    assert not issubclass(InvalidSensitivityConfigError, InvalidBaseDocumentError)
+
+
+def test_both_failures_remain_value_errors():
+    """Existing `except ValueError` sites and pytest.raises(ValueError) keep working."""
+    assert issubclass(InvalidSensitivityConfigError, ValueError)
+    assert issubclass(InvalidBaseDocumentError, ValueError)
 
 
 def test_does_not_measure_default_tornado_low_endpoint_of_phased_sales_deal():

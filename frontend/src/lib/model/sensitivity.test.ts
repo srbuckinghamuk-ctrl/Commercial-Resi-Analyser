@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   DEFAULT_SENSITIVITY_CONFIG, LEVER_ORDER, MAX_AXIS_STEPS, validateSensitivityConfig,
+  InvalidSensitivityConfigError, InvalidBaseDocumentError,
 } from './sensitivity';
 import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
@@ -129,6 +130,44 @@ const FIXTURE_F = resolve(__dirname, '../../../../fixtures/financial-model/f-dev
 function fixtureFInputs(): AnyCalculatorInputs {
   return JSON.parse(readFileSync(FIXTURE_F, 'utf-8')).inputs as AnyCalculatorInputs;
 }
+
+// R6: the suite has exactly two documented failures (§12.6 config, §12.7 base
+// document). Consumers must be able to tell them apart — and tell both apart from a
+// genuine defect — without matching on message text, which is the coupling that let
+// an explanation drift away from its condition three times in R4b/R5.
+describe('runSensitivity — the two documented failures are typed (§12.6, §12.7)', () => {
+  it('raises InvalidSensitivityConfigError for a config that is not a grid', () => {
+    const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
+    expect(() => runSensitivity(fixtureFInputs(), cfg)).toThrow(InvalidSensitivityConfigError);
+    // The message is unchanged — the memo prints it and safe-sensitivity's tests pin it.
+    expect(() => runSensitivity(fixtureFInputs(), cfg)).toThrow(/^Invalid sensitivity config: /);
+  });
+
+  it('raises InvalidBaseDocumentError when the base document fails validation', () => {
+    const inputs = fixtureFInputs();
+    inputs.finance.equity_draw_rule = 'pari_passu';
+    expect(() => runSensitivity(inputs)).toThrow(InvalidBaseDocumentError);
+    expect(() => runSensitivity(inputs)).toThrow(/^Invalid base document: /);
+  });
+
+  // The two must not be mistakable for each other: a consumer catching one and
+  // rethrowing the rest depends on this.
+  it('keeps the two failures distinguishable', () => {
+    const inputs = fixtureFInputs();
+    inputs.finance.equity_draw_rule = 'pari_passu';
+    expect(() => runSensitivity(inputs)).not.toThrow(InvalidSensitivityConfigError);
+
+    const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
+    expect(() => runSensitivity(fixtureFInputs(), cfg)).not.toThrow(InvalidBaseDocumentError);
+  });
+
+  // Both remain plain Errors, so existing `catch (err)` sites and
+  // `err instanceof Error` narrowing keep working.
+  it('keeps both errors instances of Error', () => {
+    const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
+    expect(() => runSensitivity(fixtureFInputs(), cfg)).toThrow(Error);
+  });
+});
 
 describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
   it('produces a matrix shaped by the config axes', () => {
