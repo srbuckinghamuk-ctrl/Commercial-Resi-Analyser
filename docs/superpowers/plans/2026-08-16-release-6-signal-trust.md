@@ -1102,7 +1102,7 @@ git commit -m "test(ui): pin the two predicates R5 moved into sensitivity-format
 
 **Why the existing assertions cannot be extended.** `sensitivity.test.ts:176` re-sorts with `(b as number) - (a as number)`, which yields `NaN` for a null and silently accepts any ordering. `test_financial_model_sensitivity.py:152` uses `sorted(spans, reverse=True)`, which raises `TypeError: '<' not supported between instances of 'int' and 'NoneType'` the moment a `None` enters. Both are unsound in the presence of a null span, one silently and one loudly.
 
-**The fixture.** `a-all-cash` has `committed_net_facility_pence: 0` and `interest_rate_annual_pct: null`, so the `interest_rate` lever cannot move profit — a genuine 0-pence span. Its term is 12 months, so a `timeline` low of −12 empties the term and gives a null span. Verified against the Python engine before this plan was written, with a tornado of `interest_rate ±1`, `gdv ±10`, `timeline −12/+3`:
+**The fixture.** `a-all-cash` has `funding_source: "cash"` with `committed_net_facility_pence` and `committed_gross_facility_pence` both `0`, so there is no balance for a rate to accrue against and the `interest_rate` lever cannot move profit — a genuine 0-pence span. (The rate field itself is `annual_interest_rate_pct: 8.0`, not null; an earlier draft of this plan named a non-existent field and attributed the 0 span to the wrong cause. The span is real either way — it comes from the absent facility, not an absent rate.) Its term is 12 months, so a `timeline` low of −12 empties the term and gives a null span. Verified against the Python engine before this plan was written, with a tornado of `interest_rate ±1`, `gdv ±10`, `timeline −12/+3`:
 
 ```
 gdv            23640000
