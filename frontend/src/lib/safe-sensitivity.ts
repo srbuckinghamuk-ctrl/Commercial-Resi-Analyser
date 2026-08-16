@@ -16,10 +16,14 @@ export type SafeSensitivityResult =
  *
  * `runSensitivity` throws on an invalid config (spec §12.6) and on a base document
  * that fails validation (spec §12.7). The investment memo only ever handles the
- * latter — it always passes the fixed default config, so §12.6 never reaches it —
- * but the Sensitivity page puts the axes in the user's hands, so both become
- * reachable here. This wrapper catches exactly those two documented failures and
- * returns each as a value, so the page keeps its axis editor and states the
+ * latter — it always passes the fixed default config, so §12.6 never reaches it.
+ * The Sensitivity page puts the axes in the user's hands, but it also runs
+ * `validateSensitivityConfig` on the same config itself and early-returns to its
+ * own panel before ever calling this wrapper (SensitivityPage.tsx), so in normal
+ * operation §12.6 does not reach here either — the `InvalidSensitivityConfigError`
+ * branch below is defence-in-depth against that duplicated check drifting, not a
+ * path either caller exercises live. This wrapper catches both documented failures
+ * and returns each as a value, so the page keeps its axis editor and states the
  * reason instead of unmounting. Anything else thrown is a defect, not a
  * documented outcome, and is rethrown rather than absorbed: rendering it in a
  * panel that asserts "the suite could not be calculated" would assert a cause
