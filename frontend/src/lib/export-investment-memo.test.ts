@@ -5,7 +5,7 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './model';
 import { runAppraisal, migrateInputs } from './model';
-import { runSensitivity } from './model/sensitivity';
+import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity';
 import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
 import { LEVER_LABEL } from './sensitivity-format';
@@ -891,6 +891,39 @@ describe('sensitivityTables — unmeasured tornado endpoint omission', () => {
     // …and the false "term too short" framing this note used to carry is gone.
     expect(note).not.toMatch(/too short/i);
     expect(note).not.toMatch(/12-month term/i);
+  });
+});
+
+describe('sensitivityTables — unmeasured matrix cells name their reason', () => {
+  // Fixture I is a 12-month phased-sales deal, so a timeline row of -12 empties the
+  // term and every cell in that row comes back unmeasured (spec §12.7).
+  function fixtureIInputs(): CalculatorInputsV4 {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const parsed = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'i-phased-sales.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+    return structuredClone(parsed.inputs);
+  }
+
+  it('carries no notes for a grid whose positions are all measured', () => {
+    expect(sensitivityTables(fixtureIInputs()).unmeasuredCellNotes).toEqual([]);
+  });
+
+  it('carries the engine\'s own reason, once, for a row invalidated by one cause', () => {
+    const tables = sensitivityTables(fixtureIInputs(), {
+      ...DEFAULT_SENSITIVITY_CONFIG,
+      rows: { lever: 'timeline', steps: [-12, 0] },
+      cols: { lever: 'gdv', steps: [-10, 0, 10] },
+    });
+    expect(tables.unmeasuredCellNotes).toHaveLength(1);
+    expect(tables.unmeasuredCellNotes[0]).toMatch(/whole number of months, at least 1/i);
+  });
+
+  it('no longer carries the caption that only described the ambiguity', async () => {
+    const text = await pdfText(
+      generateInvestmentMemo(mockProject, runAppraisal(fixtureIInputs()), mockEligibility),
+    );
+    expect(text).not.toContain('may mean the metric is undefined');
   });
 });
 

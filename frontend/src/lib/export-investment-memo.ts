@@ -5,10 +5,10 @@ import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
-import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
+import type { SensitivityCell, SensitivityConfig, SensitivityLever } from './model/sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
-  isMeasuredBar, omittedTornadoNotes,
+  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
@@ -172,20 +172,29 @@ export interface MemoSensitivityTables {
    *  shrinking the table. Built by the shared `omittedTornadoNotes` (sensitivity-format.ts),
    *  the same function SensitivityPage.tsx uses, so the two surfaces cannot disagree. */
   omittedTornadoNotes: string[];
-  /** True when at least one `pocRows`/`ltgdvRows` cell is a position the engine could
-   *  not measure (spec §12.7) rather than a metric that is merely null (e.g. a
-   *  zero-denominator ratio) — both print as "n/a", so the caller uses this to decide
-   *  whether the distinguishing footnote is needed. */
-  hasUnmeasuredMatrixCells: boolean;
+  /** The reasons this grid's unmeasured positions exist (spec §12.7), deduplicated and
+   *  in first-appearance order, empty when every position was measured. A cell the
+   *  engine could not measure prints the same "n/a" as a metric that is merely null
+   *  (e.g. a zero-denominator ratio), so §10 prints these beneath the matrices to say
+   *  which positions are which — and why, in the engine's own words rather than a
+   *  rationale reconstructed here. Built by the shared module the Sensitivity page
+   *  reads too. */
+  unmeasuredCellNotes: readonly string[];
 }
 
-export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
+export function sensitivityTables(
+  inputs: AnyCalculatorInputs,
+  config?: SensitivityConfig,
+): MemoSensitivityTables {
   // R4b: the grid steps, the lever rule and the base-case identity are now the
   // engine's (spec §12.3–§12.5) rather than constants living in this file. The
   // default config *is* the grid this memo has always printed — R4a promoted
   // these very steps into the specification — so the output is unchanged, and
-  // export-investment-memo.test.ts pins that string for string.
-  const result = runSensitivity(inputs);
+  // export-investment-memo.test.ts pins that string for string. generateInvestmentMemo
+  // always calls this with one argument; `config` exists so tests can drive a grid
+  // that actually produces unmeasured cells (spec §12.7), exactly as safeRunSensitivity
+  // does for the Sensitivity page.
+  const result = config ? runSensitivity(inputs, config) : runSensitivity(inputs);
   const { rows, cols } = result.config;
 
   const axisCaption = (lever: SensitivityLever, step: number) =>
@@ -223,11 +232,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     fmt(bar.span_pence),
   ]);
 
-  // §12.7: a matrix cell can be unmeasured too (validation_errors non-empty), and
-  // cellText() prints that identically to a metric that is merely null for an
-  // unrelated reason (fmtPctSafe's default "n/a") — this tells the caller whether
-  // the distinguishing footnote under the matrices is needed.
-  const hasUnmeasuredMatrixCells = result.matrix.some((row) => row.some((cell) => cell.validation_errors.length > 0));
+  const cellNotes = unmeasuredCellNotes(result.matrix);
 
   return {
     head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
@@ -235,7 +240,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     ltgdvRows: bodyFor('ltgdv_developer_pct'),
     tornadoRows,
     omittedTornadoNotes: tornadoNotes,
-    hasUnmeasuredMatrixCells,
+    unmeasuredCellNotes: cellNotes.notes,
   };
 }
 
@@ -1376,14 +1381,17 @@ export function generateInvestmentMemo(
     y = lastAutoTableFinalY(doc) + 4;
 
     // A matrix cell reads "n/a" for two different reasons that print identically: a
-    // metric that is genuinely undefined (e.g. a zero-denominator ratio), or a
-    // position the engine could not measure at all because its levered document
-    // failed validation (spec §12.7). Printed only when the latter actually occurs
-    // in this grid, so an ordinary deal's matrices carry no extra caption.
-    if (sens.hasUnmeasuredMatrixCells) {
+    // metric that is genuinely undefined (e.g. a zero-denominator ratio), or a position
+    // the engine could not measure at all because its levered document failed
+    // validation (spec §12.7). Printed only when the latter actually occurs in this
+    // grid, so an ordinary deal's matrices carry no extra caption.
+    //
+    // R6: this used to say only that the ambiguity existed. The engine had already
+    // handed over the exact reason for every unmeasured cell, so it now says which.
+    for (const [i, note] of sens.unmeasuredCellNotes.entries()) {
       y = bodyText(
         y,
-        '"n/a" above may mean the metric is undefined for that position, or that the position itself could not be measured — its levered document failed validation and no appraisal was run for it (spec §12.7).',
+        `${i + 1}. Not measured — the levered document fails validation: ${note} (spec §12.7).`,
       );
     }
   } else {
