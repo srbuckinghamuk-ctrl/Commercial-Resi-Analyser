@@ -8,7 +8,9 @@ from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v4
+from app.financial_model.schedule import build_schedule
 from app.financial_model.sensitivity import (
+    DEFAULT_SENSITIVITY_CONFIG,
     SensitivityAxis,
     SensitivityConfig,
     TornadoRange,
@@ -728,3 +730,136 @@ def test_fixture_k_defines_every_remaining_cell_as_the_levered_appraisal() -> No
             assert cell.ltgdv_developer_pct == expected.ltgdv_developer_pct
             assert cell.peak_debt_pence == expected.peak_debt_pence
             assert cell.flags == [f.code for f in expected.flags]
+
+
+# ---------------------------------------------------------------------------
+# Release 4a Task 8 (spec Sec 12, calc 2.4.0): sensitivity suite invariants,
+# asserted across the whole fixture corpus rather than pinned to one document.
+#
+# Fixture K (above) pins exact numbers for a single document (Fixture F levered).
+# These assert Sec 12's *properties* hold for every document in the corpus -- the
+# base-case identity (Sec 12.5), facility-and-equity invariance in every cell
+# (Sec 12.2), total tornado ordering (Sec 12.4), and reproducibility (Sec 1.4) --
+# which is what would catch a regression on a deal shaped unlike Fixture F, that
+# Fixture K alone cannot. Mirrors invariants.test.ts's "sensitivity suite
+# invariants" describe block field-for-field (same four checks, same order).
+# ---------------------------------------------------------------------------
+
+def _sensitivity_corpus() -> list[AnyCalculatorInputs]:
+    """Every pipeline-shaped fixture in the corpus, not just Fixture F. Includes
+    fixture A (all-cash, no debt at all) -- every invariant below must therefore hold
+    for a zero-facility document too, not only for financed deals."""
+    return [parse_calculator_inputs(_load_fixture(p)["inputs"]) for p in APPRAISAL_FIXTURES]
+
+
+_SENSITIVITY_CORPUS = _sensitivity_corpus()
+_SENSITIVITY_CORPUS_IDS = [p.stem for p in APPRAISAL_FIXTURES]
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_base_case_identical_to_unadjusted_appraisal(inputs: AnyCalculatorInputs) -> None:
+    """Spec Sec 12.5: the measurement taken with every lever at zero must equal the
+    unadjusted appraisal of the base document exactly, in every reported quantity."""
+    plain = run_appraisal(inputs).metrics
+    base = run_sensitivity(inputs).base
+    assert base.profit_pence == plain.profit_pence
+    assert base.peak_debt_pence == plain.peak_debt_pence
+    assert base.flags == [f.code for f in plain.flags]
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_holds_committed_facility_and_equity_invariant_in_every_cell(
+    inputs: AnyCalculatorInputs,
+) -> None:
+    """Spec Sec 12.2: the committed facility and equity sources are held at their
+    base-document values in every cell of the default grid -- no lever may write to
+    them, directly or indirectly."""
+    config = DEFAULT_SENSITIVITY_CONFIG
+    for row_step in config.rows.steps:
+        for col_step in config.cols.steps:
+            levered = apply_scenario(inputs, ScenarioOverrides(
+                label="",
+                gdv_adjustment_pct=col_step,
+                construction_cost_adjustment_pct=row_step,
+                timeline_adjustment_months=0,
+                interest_rate_adjustment_pct=0,
+            ))
+            assert (
+                levered.finance.committed_net_facility_pence
+                == inputs.finance.committed_net_facility_pence
+            )
+            assert (
+                levered.finance.committed_gross_facility_pence
+                == inputs.finance.committed_gross_facility_pence
+            )
+            assert levered.finance.day_one_advance_pence == inputs.finance.day_one_advance_pence
+            assert (
+                [e.amount_pence for e in levered.equity_sources]
+                == [e.amount_pence for e in inputs.equity_sources]
+            )
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_sorts_the_tornado_totally_and_deterministically(inputs: AnyCalculatorInputs) -> None:
+    """Spec Sec 12.4: bars are ordered by span descending, ties broken by the fixed
+    lever order -- total, and therefore independent of the order ranges were supplied
+    in (Sec 1.4)."""
+    forward = run_sensitivity(inputs)
+    shuffled_config = SensitivityConfig(
+        rows=DEFAULT_SENSITIVITY_CONFIG.rows,
+        cols=DEFAULT_SENSITIVITY_CONFIG.cols,
+        tornado=list(reversed(DEFAULT_SENSITIVITY_CONFIG.tornado)),
+    )
+    shuffled = run_sensitivity(inputs, shuffled_config)
+    assert [b.lever for b in shuffled.tornado] == [b.lever for b in forward.tornado]
+    spans = [b.span_pence for b in forward.tornado]
+    assert sorted(spans, reverse=True) == spans
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_is_reproducible(inputs: AnyCalculatorInputs) -> None:
+    """Spec Sec 1.4: two runs of one document agree exactly."""
+    assert run_sensitivity(inputs) == run_sensitivity(inputs)
+
+
+def test_odd_construction_window_derives_a_4_month_professional_statutory_window() -> None:
+    """Not in the original Task 8 brief -- a confirmed coverage gap found during
+    Task 7. Every pre-existing fixture in the corpus runs term_months: 12, an even
+    (10-month) construction window, so ceil and floor agree there and nothing in the
+    whole corpus can ever exercise Sec 6's "odd windows round up" rule (professional /
+    statutory window = ceil(construction_window / 2), not floor). A -3 month timeline
+    lever on Fixture F (a plain v3 document with no explicit `programme`, so
+    build_schedule takes the auto-window branch at schedule.py:158) turns its 12-month
+    term into 9 months, so construction_window = max(1, 9 - 2) = 7 (odd) and, per
+    Sec 6, professional_window = ceil(7 / 2) = 4 -- derived here from the rule itself,
+    not read off the engine and copied back in. Guarded inside this sensitivity-suite
+    module, rather than the general schedule tests, because the timeline lever is what
+    the corpus needed to reach an odd window in the first place."""
+    f_doc = _load_fixture(FIXTURE_DIR / "f-dev-finance-12mo.json")
+    f_inputs = parse_calculator_inputs(f_doc["inputs"])
+    assert getattr(f_inputs, "programme", None) is None  # must take the auto-window branch
+
+    levered = apply_scenario(f_inputs, ScenarioOverrides(
+        label="",
+        gdv_adjustment_pct=0,
+        construction_cost_adjustment_pct=0,
+        timeline_adjustment_months=-3,
+        interest_rate_adjustment_pct=0,
+    ))
+    assert levered.finance.term_months == 9
+
+    schedule = build_schedule(levered)
+    assert schedule.term_months == 9
+
+    # construction_window = max(1, term - 2) = 7 (odd); professional_window =
+    # ceil(7 / 2) = 4, per Sec 6's "odd windows round up" rule. Both spreads are
+    # placed starting at month index 1, so the professional window occupies exactly
+    # indices 1..4 of a 9-month schedule.
+    professional_presence = [m.professional_pence > 0 for m in schedule.uses]
+    assert professional_presence == [False, True, True, True, True, False, False, False, False]
+
+    # Statutory month 0 also always carries the flat prior-approval fee
+    # (unconditional, schedule.py), so the window check excludes it and looks only
+    # at the spread that starts at month 1 -- the same 4-month window as professional.
+    statutory_window_months = sum(1 for m in schedule.uses[1:] if m.statutory_pence > 0)
+    assert statutory_window_months == 4
