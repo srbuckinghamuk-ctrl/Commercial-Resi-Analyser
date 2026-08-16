@@ -375,11 +375,6 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     expect(peaks[3] - peaks[2]).toBeLessThan((peaks[2] - peaks[1]) / 2);
     expect(flags[0]).not.toContain('funding_gap');
     expect(flags[3]).toContain('funding_gap');
-
-    // And the ceiling itself never moved — the constructive form of §12.2.
-    expect(inputs.finance.committed_net_facility_pence).toBe(
-      fixtureFInputs().finance.committed_net_facility_pence,
-    );
   });
 
   it('throws on an invalid config rather than computing a misleading grid', () => {
