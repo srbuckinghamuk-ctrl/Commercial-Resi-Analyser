@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { generateInvestmentMemo, sourcesAndUsesTotals } from './export-investment-memo';
+import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
 import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './model';
 import { runAppraisal, migrateInputs } from './model';
@@ -611,5 +611,54 @@ describe('generateInvestmentMemo', () => {
         run.model.totals.exit_fee_pence;
       expect(printedSourcesRowsSum).toBe(sourcesTotal);
     });
+  });
+});
+
+// ── Release 4b: the §10 sensitivity matrices are pinned, string for string ──
+//
+// Design §5.2's hard regression invariant. These literals were captured from
+// the pre-refactor (calc 2.4.0, R4a) build. Task 2 reimplements
+// sensitivityTables() on top of runSensitivity and this test does not move —
+// that is the whole point of it. If a later change makes this fail, the memo's
+// printed output has drifted and the change is wrong, not the test.
+describe('sensitivityTables — memo §10 regression pin', () => {
+  const EXPECTED_HEAD = ['', 'GDV -15%', 'GDV -10%', 'GDV -5%', 'GDV +0%', 'GDV +5%'];
+
+  const EXPECTED_POC_ROWS = [
+    ['Cost -5%', '8.6%', '14.9%', '21.2%', '27.4%', '33.6%'],
+    ['Cost +0%', '6.0%', '12.2%', '18.3%', '24.4%', '30.5%'],
+    ['Cost +5%', '3.6%', '9.6%', '15.6%', '21.5%', '27.5%'],
+    ['Cost +10%', '1.2%', '7.1%', '12.9%', '18.8%', '24.6%'],
+    ['Cost +15%', '-1.0% [FG]', '4.7% [FG]', '10.5% [FG]', '16.2% [FG]', '21.9% [FG]'],
+  ];
+
+  const EXPECTED_LTGDV_ROWS = [
+    ['Cost -5%', '55.2%', '52.1%', '49.4%', '46.9%', '44.7%'],
+    ['Cost +0%', '57.5%', '54.3%', '51.4%', '48.8%', '46.5%'],
+    ['Cost +5%', '59.7%', '56.4%', '53.4%', '50.7%', '48.3%'],
+    ['Cost +10%', '61.9%', '58.5%', '55.4%', '52.6%', '50.1%'],
+    ['Cost +15%', '62.2% [FG]', '58.8% [FG]', '55.7% [FG]', '52.9% [FG]', '50.4% [FG]'],
+  ];
+
+  it('prints the column headers unchanged', () => {
+    expect(sensitivityTables(baseInputs()).head).toEqual(EXPECTED_HEAD);
+  });
+
+  it('prints the profit-on-cost matrix unchanged', () => {
+    expect(sensitivityTables(baseInputs()).pocRows).toEqual(EXPECTED_POC_ROWS);
+  });
+
+  it('prints the LTGDV matrix unchanged', () => {
+    expect(sensitivityTables(baseInputs()).ltgdvRows).toEqual(EXPECTED_LTGDV_ROWS);
+  });
+
+  // Spec §12.5: the all-levers-zero cell is the unadjusted appraisal. In the
+  // default grid that is (Cost +0%, GDV +0%) — row index 1, column index 4
+  // (the label occupies column 0, so the GDV +0% column is body index 4).
+  it('agrees with the unadjusted appraisal in the base cell (spec §12.5)', () => {
+    const run = runAppraisal(baseInputs());
+    const tables = sensitivityTables(baseInputs());
+    expect(tables.pocRows[1][4]).toBe(`${run.metrics.profit_on_cost_pct!.toFixed(1)}%`);
+    expect(tables.ltgdvRows[1][4]).toBe(`${run.metrics.ltgdv_developer_pct!.toFixed(1)}%`);
   });
 });

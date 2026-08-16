@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, EligibilityAssessment } from '../types';
-import type { AppraisalRun, ModelFlag } from './model';
+import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { formatProgrammeMonth } from './programme-months';
@@ -148,6 +148,57 @@ export function sourcesAndUsesTotals(run: AppraisalRun): {
     schedule.totals.selling_costs_pence +
     model.totals.exit_fee_pence;
   return { usesTotal, sourcesTotal, rolledInterestPence };
+}
+
+/**
+ * The §10 two-way sensitivity matrices, as the exact string rows the PDF prints.
+ *
+ * Extracted from generateInvestmentMemo's body (R4b Task 1) so its output can be
+ * pinned by a test before Task 2 reimplements it on the R4a engine
+ * (frontend/src/lib/model/sensitivity.ts). Presentation only — every number in
+ * here comes from run.metrics of an ordinary appraisal, per the file header's
+ * no-recalculation rule.
+ */
+export interface MemoSensitivityTables {
+  head: string[];
+  pocRows: string[][];
+  ltgdvRows: string[][];
+}
+
+export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
+  // Shared grid: one runAppraisal per (cost, GDV) combination, feeding both matrices.
+  const gdvSteps = [-15, -10, -5, 0, 5];
+  const costSteps = [-5, 0, 5, 10, 15];
+  const grid = costSteps.map((costAdj) =>
+    gdvSteps.map((gdvAdj) => {
+      const scenRun = runAppraisal(applyScenario(inputs, {
+        label: '',
+        gdv_adjustment_pct: gdvAdj,
+        construction_cost_adjustment_pct: costAdj,
+        timeline_adjustment_months: 0,
+        interest_rate_adjustment_pct: 0,
+      }));
+      return {
+        pocPct: scenRun.metrics.profit_on_cost_pct,
+        ltgdvPct: scenRun.metrics.ltgdv_developer_pct,
+        flags: flagShortCodes(scenRun.metrics.flags),
+      };
+    }),
+  );
+
+  const rowLabel = (costAdj: number) => `Cost ${costAdj >= 0 ? '+' : ''}${costAdj}%`;
+
+  return {
+    head: ['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)],
+    pocRows: costSteps.map((costAdj, ci) => [
+      rowLabel(costAdj),
+      ...grid[ci].map((cell) => `${fmtPctSafe(cell.pocPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
+    ]),
+    ltgdvRows: costSteps.map((costAdj, ci) => [
+      rowLabel(costAdj),
+      ...grid[ci].map((cell) => `${fmtPctSafe(cell.ltgdvPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
+    ]),
+  };
 }
 
 export function generateInvestmentMemo(
@@ -1175,37 +1226,15 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
-  // Shared grid: one runAppraisal per (cost, GDV) combination, feeding both matrices below.
-  const gdvSteps = [-15, -10, -5, 0, 5];
-  const costSteps = [-5, 0, 5, 10, 15];
-  const grid = costSteps.map((costAdj) =>
-    gdvSteps.map((gdvAdj) => {
-      const scenRun = runAppraisal(applyScenario(inputs, {
-        label: '',
-        gdv_adjustment_pct: gdvAdj,
-        construction_cost_adjustment_pct: costAdj,
-        timeline_adjustment_months: 0,
-        interest_rate_adjustment_pct: 0,
-      }));
-      return {
-        pocPct: scenRun.metrics.profit_on_cost_pct,
-        ltgdvPct: scenRun.metrics.ltgdv_developer_pct,
-        flags: flagShortCodes(scenRun.metrics.flags),
-      };
-    }),
-  );
+  const sens = sensitivityTables(inputs);
 
   y = subHeading(y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
-  const pocRows: (string | number)[][] = costSteps.map((costAdj, ci) => [
-    `Cost ${costAdj >= 0 ? '+' : ''}${costAdj}%`,
-    ...grid[ci].map((cell) => `${fmtPctSafe(cell.pocPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
-  ]);
 
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)]],
-    body: pocRows,
+    head: [sens.head],
+    body: sens.pocRows,
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
     bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
@@ -1225,16 +1254,12 @@ export function generateInvestmentMemo(
   y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Two-Way Sensitivity Matrix: LTGDV, developer basis (%)');
-  const ltgdvRows: (string | number)[][] = costSteps.map((costAdj, ci) => [
-    `Cost ${costAdj >= 0 ? '+' : ''}${costAdj}%`,
-    ...grid[ci].map((cell) => `${fmtPctSafe(cell.ltgdvPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
-  ]);
 
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)]],
-    body: ltgdvRows,
+    head: [sens.head],
+    body: sens.ltgdvRows,
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
     bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
