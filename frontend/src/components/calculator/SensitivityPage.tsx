@@ -10,7 +10,7 @@ import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
   formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
-  unmeasuredCellNotes,
+  unmeasuredCellNotes, unmeasuredCellNote,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct } from '../../lib/format';
@@ -414,9 +414,7 @@ export default function SensitivityPage({ inputs }: Props) {
       {cellNotes.notes.length > 0 && (
         <ol style={{ color: MUTED, fontSize: 13, marginBottom: 24, paddingLeft: 20 }}>
           {cellNotes.notes.map((note, i) => (
-            <li key={note} id={`sens-note-${i}`}>
-              Not measured — the levered document fails validation: {note} (spec §12.7).
-            </li>
+            <li key={note} id={`sens-note-${i}`}>{unmeasuredCellNote(note)}</li>
           ))}
         </ol>
       )}

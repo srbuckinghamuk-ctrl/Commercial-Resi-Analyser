@@ -151,6 +151,20 @@ export function omittedTornadoNotes(tornado: readonly TornadoBar[]): string[] {
     });
 }
 
+/**
+ * The one sentence a cell's §12.7 reason becomes, shared by the memo
+ * (export-investment-memo.ts) and the calculator's Sensitivity page
+ * (SensitivityPage.tsx) — before R6 each surface hand-wrote this sentence
+ * separately, and nothing enforced that they stayed in step.
+ *
+ * Returned WITHOUT a list ordinal: the page's `<ol>` numbers itself and the
+ * memo prepends its own `${i + 1}. ` — an ordinal belongs to the list the
+ * sentence sits in, not to the sentence.
+ */
+export function unmeasuredCellNote(reason: string): string {
+  return `Not measured — the levered document fails validation: ${reason} (spec §12.7).`;
+}
+
 /** The result of scanning a matrix for positions the engine could not measure. */
 export interface UnmeasuredCellNotes {
   /** Distinct reasons, in first-appearance order scanning the matrix row-major. */

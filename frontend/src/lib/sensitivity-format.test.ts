@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   LEVER_LABEL, LEVER_SHORT, formatStepLabel, formatRangeLabel, flagShortCodes, unmeasuredCellNotes,
-  isMeasuredBar, omittedTornadoNotes,
+  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import type { SensitivityCell, TornadoBar } from './model/sensitivity';
 
@@ -70,6 +70,17 @@ function cell(row: number, col: number, ...messages: string[]): SensitivityCell 
     })),
   };
 }
+
+// F3: the one sentence SensitivityPage.tsx and export-investment-memo.ts both print for
+// an unmeasured cell — each surface used to hand-write it separately. No ordinal: the
+// page's <ol> numbers itself and the memo prepends its own "{n}. ".
+describe('unmeasuredCellNote', () => {
+  it('builds the full sentence from a bare reason, with no ordinal', () => {
+    expect(unmeasuredCellNote('Term must be a whole number of months, at least 1.')).toBe(
+      'Not measured — the levered document fails validation: Term must be a whole number of months, at least 1. (spec §12.7).',
+    );
+  });
+});
 
 describe('unmeasuredCellNotes', () => {
   const TERM = 'Term must be a whole number of months, at least 1.';

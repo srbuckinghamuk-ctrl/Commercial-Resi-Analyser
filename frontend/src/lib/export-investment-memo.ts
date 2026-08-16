@@ -8,7 +8,7 @@ import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
 import type { SensitivityCell, SensitivityConfig, SensitivityLever } from './model/sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
-  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes,
+  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
@@ -1388,11 +1388,15 @@ export function generateInvestmentMemo(
     //
     // R6: this used to say only that the ambiguity existed. The engine had already
     // handed over the exact reason for every unmeasured cell, so it now says which.
+    //
+    // This loop is unreachable through generateInvestmentMemo below: that function
+    // always calls sensitivityTables() with no config argument, so the memo only ever
+    // prints the fixed default grid, and no fixture's default grid produces an
+    // unmeasured matrix cell. `config` exists solely so tests can drive a grid that
+    // does (see the sensitivityTables doc comment above), which is how this loop and
+    // `unmeasuredCellNote` are exercised at all.
     for (const [i, note] of sens.unmeasuredCellNotes.entries()) {
-      y = bodyText(
-        y,
-        `${i + 1}. Not measured — the levered document fails validation: ${note} (spec §12.7).`,
-      );
+      y = bodyText(y, `${i + 1}. ${unmeasuredCellNote(note)}`);
     }
   } else {
     // In place of the tornado and the two matrices: the engine refused to run the
