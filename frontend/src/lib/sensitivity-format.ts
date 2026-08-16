@@ -1,5 +1,5 @@
 import type { FlagCode } from './model';
-import type { MeasuredMetrics, SensitivityLever, TornadoBar } from './model/sensitivity';
+import type { MeasuredMetrics, SensitivityCell, SensitivityLever, TornadoBar } from './model/sensitivity';
 
 /**
  * Presentation for the spec §12 sensitivity suite, shared by the investment
@@ -146,4 +146,56 @@ export function omittedTornadoNotes(tornado: readonly TornadoBar[]): string[] {
         .join(' ');
       return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
     });
+}
+
+/** The result of scanning a matrix for positions the engine could not measure. */
+export interface UnmeasuredCellNotes {
+  /** Distinct reasons, in first-appearance order scanning the matrix row-major. */
+  notes: readonly string[];
+  /** Zero-based index into `notes`, or null when the cell is measured. */
+  noteIndexFor(cell: SensitivityCell): number | null;
+}
+
+/**
+ * The reasons a grid's unmeasured positions exist (spec §12.7), deduplicated, for a
+ * caller to print beneath the matrix.
+ *
+ * Single source shared by the memo (export-investment-memo.ts) and the calculator's
+ * Sensitivity page (SensitivityPage.tsx). Sharing it is the point: before R6 the page
+ * put each cell's reason in a `<td title>` — invisible to assistive tech, print and
+ * touch — while the memo printed a caption saying only that the ambiguity existed,
+ * without ever naming which reason applied. Two surfaces, two different failures to
+ * carry information the engine had already handed over.
+ *
+ * A cell's reason is its `validation_errors` messages joined, exactly as
+ * `omittedTornadoNotes` joins a bar's. Deduplicating matters because the ordinary case
+ * is one lever position invalidating an entire row for one reason.
+ *
+ * Keyed on the reason string rather than on cell identity: the page rebuilds its cell
+ * objects on every render and the memo holds different objects again, so identity is
+ * not stable across the callers that need this.
+ */
+export function unmeasuredCellNotes(
+  matrix: readonly (readonly SensitivityCell[])[],
+): UnmeasuredCellNotes {
+  const reasonOf = (cell: SensitivityCell): string | null =>
+    cell.validation_errors.length === 0
+      ? null
+      : cell.validation_errors.map((e) => e.message).join(' ');
+
+  const index = new Map<string, number>();
+  for (const row of matrix) {
+    for (const cell of row) {
+      const reason = reasonOf(cell);
+      if (reason !== null && !index.has(reason)) index.set(reason, index.size);
+    }
+  }
+
+  return {
+    notes: [...index.keys()],
+    noteIndexFor(cell) {
+      const reason = reasonOf(cell);
+      return reason === null ? null : index.get(reason) ?? null;
+    },
+  };
 }
