@@ -5,7 +5,7 @@ import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { runSensitivity } from './model/sensitivity';
-import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
+import type { MeasuredMetrics, SensitivityCell, SensitivityLever, TornadoBar } from './model/sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
 } from './sensitivity-format';
@@ -154,6 +154,19 @@ export function sourcesAndUsesTotals(run: AppraisalRun): {
  * appraisal (or the sensitivity engine's equivalent), per the file header's
  * no-recalculation rule.
  */
+/**
+ * A tornado bar has a span (spec §12.4/§12.7) exactly when both endpoints were
+ * measured, so `span_pence !== null` is sound evidence that `low` and `high` are
+ * both `MeasuredMetrics` — narrowing both here (mirrors SensitivityPage.tsx's
+ * `isMeasuredBar`) is what makes `bar.low.profit_pence` etc. a plain, always-present
+ * number below, with no unreachable null branch to maintain.
+ */
+function isMeasuredBar(
+  bar: TornadoBar,
+): bar is TornadoBar & { span_pence: number; low: MeasuredMetrics; high: MeasuredMetrics } {
+  return bar.span_pence !== null;
+}
+
 export interface MemoSensitivityTables {
   head: string[];
   pocRows: string[][];
@@ -161,11 +174,20 @@ export interface MemoSensitivityTables {
   /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar.
    *  Excludes any bar with an unmeasured endpoint — see `omittedTornadoLevers`. */
   tornadoRows: string[][];
-  /** Labels of the levers dropped from `tornadoRows` because the engine could not
-   *  measure one of their endpoints — the levered document failed validation
-   *  (spec §12.7) — empty when every bar is measured. The caller must print why
-   *  these are missing rather than silently shrinking the table. */
+  /** One fully-formed sentence per lever dropped from `tornadoRows` because the engine
+   *  could not measure one of its endpoints — the levered document failed validation
+   *  (spec §12.7) — empty when every bar is measured. Each sentence carries the
+   *  engine's own `validation_errors` message for that endpoint, not a rationale
+   *  reconstructed here: different levers fail for different reasons (an emptied
+   *  term, a negative rate, a sales tranche past the programme end, …), and only the
+   *  engine knows which applies. The caller must print these rather than silently
+   *  shrinking the table. */
   omittedTornadoLevers: string[];
+  /** True when at least one `pocRows`/`ltgdvRows` cell is a position the engine could
+   *  not measure (spec §12.7) rather than a metric that is merely null (e.g. a
+   *  zero-denominator ratio) — both print as "n/a", so the caller uses this to decide
+   *  whether the distinguishing footnote is needed. */
+  hasUnmeasuredMatrixCells: boolean;
 }
 
 export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
@@ -192,26 +214,38 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     ]);
 
   // §12.7: the engine reports a bar with an unmeasured endpoint as having no span. The
-  // memo omits those rather than printing a partial bar, and says so beneath the table.
-  const soundBars = result.tornado.filter((bar) => bar.span_pence !== null);
+  // memo omits those rather than printing a partial bar, and says so beneath the table
+  // — using the engine's own `validation_errors` message for that endpoint, not a
+  // rationale reconstructed here (the earlier term-only wording was wrong for any bar
+  // whose endpoint failed validation for a reason other than an emptied term, e.g. an
+  // interest-rate endpoint gone negative, or a sales tranche landing past the
+  // programme end).
+  const soundBars = result.tornado.filter(isMeasuredBar);
   const omittedTornadoLevers = result.tornado
     .filter((bar) => bar.span_pence === null)
-    .map((bar) => LEVER_LABEL[bar.lever]);
-
-  // §12.7: a tornado endpoint can now be unmeasured (validation_errors non-empty), so
-  // profit_pence and span_pence are nullable — this local tolerates that null without
-  // building richer presentation for it (that's a later task).
-  const money = (p: number | null) => (p === null ? '—' : fmt(p));
+    .map((bar) => {
+      const reasons = bar.low.validation_errors
+        .concat(bar.high.validation_errors)
+        .map((e) => e.message)
+        .join(' ');
+      return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
+    });
 
   const tornadoRows = soundBars.map((bar) => [
     LEVER_LABEL[bar.lever],
     formatRangeLabel(bar.lever, bar.low_step, bar.high_step),
-    money(bar.low.profit_pence),
-    money(bar.high.profit_pence),
+    fmt(bar.low.profit_pence),
+    fmt(bar.high.profit_pence),
     // |profit(high) - profit(low)| (spec §12.4) — a magnitude, so it stays
     // unsigned even where the high endpoint is the adverse one (cost, rate).
-    money(bar.span_pence),
+    fmt(bar.span_pence),
   ]);
+
+  // §12.7: a matrix cell can be unmeasured too (validation_errors non-empty), and
+  // cellText() prints that identically to a metric that is merely null for an
+  // unrelated reason (fmtPctSafe's default "n/a") — this tells the caller whether
+  // the distinguishing footnote under the matrices is needed.
+  const hasUnmeasuredMatrixCells = result.matrix.some((row) => row.some((cell) => cell.validation_errors.length > 0));
 
   return {
     head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
@@ -219,6 +253,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     ltgdvRows: bodyFor('ltgdv_developer_pct'),
     tornadoRows,
     omittedTornadoLevers,
+    hasUnmeasuredMatrixCells,
   };
 }
 
@@ -1274,16 +1309,15 @@ export function generateInvestmentMemo(
     });
     y = lastAutoTableFinalY(doc) + 4;
   }
-  // A bar is omitted rather than printed when the engine could not measure one of
-  // its endpoints — the levered document failed validation (spec §12.7) — and the
-  // omission itself is stated so the gap is never silent. If every bar were omitted,
-  // this line prints alone with no table above it (see sens.tornadoRows.length
-  // guard above) rather than an empty or misleadingly-partial table.
+  // A bar is omitted rather than printed when the engine could not measure one of its
+  // endpoints — the levered document failed validation (spec §12.7). Each sentence in
+  // `omittedTornadoLevers` already carries the engine's own reason for that specific
+  // endpoint (built in sensitivityTables()); this only joins them so the omission is
+  // stated rather than silent. If every bar were omitted, this line prints alone with
+  // no table above it (see sens.tornadoRows.length guard above) rather than an empty
+  // or misleadingly-partial table.
   if (sens.omittedTornadoLevers.length > 0) {
-    y = bodyText(
-      y,
-      `${sens.omittedTornadoLevers.join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would leave a term of zero or less, which fails input validation rather than producing a measurement. See spec §12.7.`,
-    );
+    y = bodyText(y, sens.omittedTornadoLevers.join(' '));
   }
   y += 4;
 
@@ -1335,7 +1369,20 @@ export function generateInvestmentMemo(
       }
     },
   });
-  y = lastAutoTableFinalY(doc) + 6;
+  y = lastAutoTableFinalY(doc) + 4;
+
+  // A matrix cell reads "n/a" for two different reasons that print identically: a
+  // metric that is genuinely undefined (e.g. a zero-denominator ratio), or a position
+  // the engine could not measure at all because its levered document failed
+  // validation (spec §12.7). Printed only when the latter actually occurs in this
+  // grid, so an ordinary deal's matrices carry no extra caption.
+  if (sens.hasUnmeasuredMatrixCells) {
+    y = bodyText(
+      y,
+      '"n/a" above may mean the metric is undefined for that position, or that the position itself could not be measured — its levered document failed validation and no appraisal was run for it (spec §12.7).',
+    );
+  }
+  y += 2;
 
   y = subHeading(y, 'Senior Debt Position');
   y = bodyText(

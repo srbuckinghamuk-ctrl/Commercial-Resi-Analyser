@@ -217,7 +217,6 @@ export default function SensitivityPage({ inputs }: Props) {
   }
 
   const { base, matrix, tornado, config: resolved } = outcome.result;
-  const term = inputs.finance.term_months;
 
   // §12.7: a bar with an unmeasured endpoint has no span at all. `isMeasuredBar`
   // narrows both endpoints to `MeasuredMetrics`, so every render site below can
@@ -249,7 +248,7 @@ export default function SensitivityPage({ inputs }: Props) {
         ordered widest swing first (spec §12.4).
       </p>
 
-      {tornado.length > 0 && (
+      {measuredBars.length > 0 && (
         <table
           aria-label="Single-lever sensitivity (tornado)"
           style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: omittedTornado.length > 0 ? 8 : 28 }}
@@ -314,14 +313,24 @@ export default function SensitivityPage({ inputs }: Props) {
       )}
 
       {/* A bar is dropped rather than rendered when the engine could not measure one
-          of its endpoints — the levered document failed validation (spec §12.7) —
-          and the omission is stated so the gap is never silent. If every bar were
-          omitted this note prints alone, with no tornado table above it. */}
+          of its endpoints — the levered document failed validation (spec §12.7). The
+          reason printed is the engine's own `validation_errors` message for that
+          endpoint, not a guess reconstructed here: an unmeasured timeline endpoint
+          and an unmeasured interest-rate endpoint fail for entirely different
+          reasons (an emptied term vs. a negative rate), and only the engine knows
+          which. If every bar were omitted this note prints alone, with no tornado
+          table above it. */}
       {omittedTornado.length > 0 && (
         <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
-          {omittedTornado.map((bar) => LEVER_LABEL[bar.lever]).join(', ')} omitted from the tornado: this
-          deal&rsquo;s {term}-month term is too short for the fixed range shown — one endpoint&rsquo;s levered
-          document fails validation rather than producing a measurement (spec §12.7).
+          {omittedTornado
+            .map((bar) => {
+              const reasons = bar.low.validation_errors
+                .concat(bar.high.validation_errors)
+                .map((e) => e.message)
+                .join(' ');
+              return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
+            })
+            .join(' ')}
         </p>
       )}
 

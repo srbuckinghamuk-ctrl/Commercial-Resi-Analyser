@@ -808,9 +808,14 @@ describe('sensitivityTables — unmeasured tornado endpoint omission', () => {
     return inputs;
   }
 
-  it('drops the timeline bar and reports it as omitted', () => {
+  it('drops the timeline bar and reports it with the engine\'s own reason', () => {
     const tables = sensitivityTables(shortTermInputs());
-    expect(tables.omittedTornadoLevers).toEqual(['Timeline']);
+    expect(tables.omittedTornadoLevers).toHaveLength(1);
+    // The sentence carries the lever name and the engine's actual validation
+    // message (validation.ts's finance.term_months check) — not a rationale
+    // reconstructed in the memo.
+    expect(tables.omittedTornadoLevers[0]).toContain('Timeline omitted');
+    expect(tables.omittedTornadoLevers[0]).toContain('Term must be a whole number of months, at least 1.');
     expect(tables.tornadoRows.map((r) => r[0])).not.toContain('Timeline');
     // GDV, construction cost and interest rate remain measured.
     expect(tables.tornadoRows).toHaveLength(3);
@@ -834,16 +839,49 @@ describe('sensitivityTables — unmeasured tornado endpoint omission', () => {
     expect(pocHeadingIdx).toBeGreaterThan(tornadoHeadingIdx);
     const tornadoSection = text.slice(tornadoHeadingIdx, pocHeadingIdx);
 
-    // The omission is stated, not silent, names the lever and the term.
+    // The omission is stated, not silent, names the lever and the engine's own
+    // reason for that endpoint (spec §12.7) — not a term-shaped rationale
+    // reconstructed in this file. This deal's omission does happen to be
+    // term-caused, but the assertion is on the actual validation message (pinned
+    // precisely at the sensitivityTables() level above, not here — jsPDF's own
+    // line-wrapping of the body text can split a long sentence across two `Tj`
+    // operators in the raw content stream, so a substring straddling that wrap
+    // point is not a stable thing to assert on). The old hard-coded, term-shaped
+    // caption is gone (see the fixture-I test below, where the omission is caused
+    // by something else entirely and that caption would have been false).
     expect(tornadoSection).toContain('Timeline omitted');
-    expect(tornadoSection).toContain('3-month term');
-    // No Timeline *row* prints: the row's distinguishing unit ("months", plural
-    // — see formatRangeLabel) never appears anywhere in the tornado section,
-    // including the omission note's own prose.
-    expect(tornadoSection).not.toContain('months');
+    expect(tornadoSection).toContain('fails validation');
+    expect(tornadoSection).not.toContain('leave a term of zero or less');
+    expect(tornadoSection).not.toContain('too short for the fixed range shown');
 
     // The two-way matrices are unaffected by the tornado omission.
     expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
     expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: LTGDV, developer basis (%)'));
+  });
+
+  // Regression for a second-pass review finding: the omission note used to be
+  // hard-coded to a term-too-short rationale, which was simply false whenever a
+  // bar's endpoint failed validation for a different reason. Fixture I is a
+  // 12-month deal — the default tornado's timeline -3 endpoint leaves a valid
+  // 9-month term — but its sales-phasing tranches (months 9–11) land past the
+  // programme end once the term is shortened, so that endpoint's *levered
+  // document* still fails validation, for a reason that has nothing to do with
+  // the term being "too short".
+  it('states the engine\'s actual reason, not a term-shaped guess, when the omission is not term-caused', () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureI = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'i-phased-sales.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+    expect(fixtureI.inputs.finance.term_months).toBe(12);
+
+    const tables = sensitivityTables(fixtureI.inputs);
+    expect(tables.omittedTornadoLevers).toHaveLength(1);
+    const note = tables.omittedTornadoLevers[0];
+    expect(note).toContain('Timeline omitted');
+    // The real reason (a sales tranche past the shortened term) is printed…
+    expect(note).toMatch(/tranche/i);
+    // …and the false "term too short" framing this note used to carry is gone.
+    expect(note).not.toMatch(/too short/i);
+    expect(note).not.toMatch(/12-month term/i);
   });
 });
