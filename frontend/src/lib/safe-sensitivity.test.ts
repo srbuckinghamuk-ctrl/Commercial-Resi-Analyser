@@ -45,33 +45,33 @@ describe('safeRunSensitivity', () => {
     }
   });
 
-  // ── Documented engine behaviour, verified 16 Aug 2026 against fixture F ──
+  // ── Superseded by spec §12.7 (R5) ──
   //
-  // A timeline step that drives finance.term_months to zero or below does NOT
-  // throw and does NOT raise a validation issue: the appraisal engine clamps to
-  // a one-month term and returns a plausible-looking result. Steps of -11, -12
-  // and -13 on this 12-month deal all yield profit 26,556,933p with a
-  // funding_gap flag — three distinct assumptions, one answer.
-  //
-  // This is pinned as the *current* behaviour, not as desirable behaviour. It is
-  // why SensitivityPage carries its own term guard (Task 6) and why a §12.6 rule
-  // bounding the resulting term is on the R5 list.
-  it('does not fail on a term-emptying timeline step — the engine clamps instead', () => {
+  // Before R5, a timeline step that drove finance.term_months to zero or below did
+  // not throw and did not raise a validation issue: the appraisal engine clamped to
+  // a one-month term and returned a plausible-looking result — steps of -11, -12 and
+  // -13 on this 12-month deal all yielded the identical profit 26,556,933p with a
+  // funding_gap flag, three distinct assumptions collapsed to one answer. That was
+  // pinned as *current*, not desirable, behaviour, and is exactly what §12.7 fixes:
+  // the levered document is now validated before it is appraised, so a step that
+  // empties or inverts the term is unmeasured rather than silently clamped.
+  it('does not throw on a term-emptying timeline step — the position is unmeasured instead (§12.7)', () => {
     const config = defaultSensitivityConfig();
     config.rows = { lever: 'timeline', steps: [-11, -12, -13] };
     config.cols = { lever: 'gdv', steps: [0] };
     const outcome = safeRunSensitivity(baseInputs(), config);
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
-      const [atOne, atZero, atMinusOne] = outcome.result.matrix.map((row) => row[0].profit_pence);
-      expect(atZero).toBe(atOne);
-      expect(atMinusOne).toBe(atOne);
-      // All three steps that empty the term clamp to one-month and raise funding_gap.
-      // This pins the *mechanism* of the duplicate values: they come from clamping,
-      // not from coincidence or a shared-reference bug.
-      expect(outcome.result.matrix[0][0].flags).toContain('funding_gap');
-      expect(outcome.result.matrix[1][0].flags).toContain('funding_gap');
-      expect(outcome.result.matrix[2][0].flags).toContain('funding_gap');
+      const [atOne, atZero, atMinusOne] = outcome.result.matrix.map((row) => row[0]);
+      // -11 leaves exactly one legal month of term: a real measurement.
+      expect(atOne.validation_errors).toEqual([]);
+      expect(atOne.profit_pence).not.toBeNull();
+      // -12 empties the term and -13 inverts it: both fail validation and are
+      // unmeasured, not two more clamped guesses identical to the one above.
+      expect(atZero.validation_errors.length).toBeGreaterThan(0);
+      expect(atZero.profit_pence).toBeNull();
+      expect(atMinusOne.validation_errors.length).toBeGreaterThan(0);
+      expect(atMinusOne.profit_pence).toBeNull();
     }
   });
 });

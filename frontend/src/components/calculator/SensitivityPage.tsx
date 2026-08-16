@@ -4,7 +4,7 @@ import {
   defaultSensitivityConfig, validateSensitivityConfig, LEVER_ORDER, MAX_AXIS_STEPS,
 } from '../../lib/model/sensitivity';
 import type {
-  SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics,
+  SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics, TornadoBar,
 } from '../../lib/model/sensitivity';
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
@@ -29,7 +29,8 @@ const AMBER = '#fbbf24';
 function metricText(cell: SensitivityMetrics, key: SensitivityMetricKey): string {
   const metric = SENSITIVITY_METRICS.find((m) => m.key === key)!;
   const value = cell[key];
-  return metric.kind === 'money' ? penceToPounds(value as number) : formatPct(value as number | null);
+  if (value === null) return '—';
+  return metric.kind === 'money' ? penceToPounds(value) : formatPct(value);
 }
 
 /**
@@ -230,11 +231,21 @@ export default function SensitivityPage({ inputs }: Props) {
   const tornado = allTornado.filter((bar) => !isUnsoundTornadoBar(term, bar));
   const omittedTornado = allTornado.filter((bar) => isUnsoundTornadoBar(term, bar));
 
+  // §12.7: a bar with an unmeasured endpoint has no span at all — skip it before the
+  // geometry runs rather than trying to render a null profit. Richer presentation of
+  // these (e.g. stating why) is a later task.
+  const measuredBars = tornado.filter(
+    (b): b is TornadoBar & { span_pence: number } => b.span_pence !== null,
+  );
+
   // One shared scale across every tornado endpoint and the base, so bar lengths
-  // are comparable between levers rather than each bar filling its own row.
-  const profits = tornado
+  // are comparable between levers rather than each bar filling its own row. Both
+  // endpoints of a `measuredBars` entry are real measurements whenever span_pence is
+  // non-null — the type predicate above narrows only span_pence, not low/high, so this
+  // cast carries that invariant across (§12.7).
+  const profits = measuredBars
     .flatMap((bar) => [bar.low.profit_pence, bar.high.profit_pence])
-    .concat(base.profit_pence);
+    .concat(base.profit_pence) as number[];
   const minProfit = Math.min(...profits);
   const maxProfit = Math.max(...profits);
   const span = maxProfit - minProfit;
@@ -268,9 +279,13 @@ export default function SensitivityPage({ inputs }: Props) {
             </tr>
           </thead>
           <tbody>
-            {tornado.map((bar) => {
-              const lowPos = pos(Math.min(bar.low.profit_pence, bar.high.profit_pence));
-              const highPos = pos(Math.max(bar.low.profit_pence, bar.high.profit_pence));
+            {measuredBars.map((bar) => {
+              // Both endpoints are real measurements whenever span_pence is non-null —
+              // see the `profits` comment above (§12.7).
+              const lowProfit = bar.low.profit_pence as number;
+              const highProfit = bar.high.profit_pence as number;
+              const lowPos = pos(Math.min(lowProfit, highProfit));
+              const highPos = pos(Math.max(lowProfit, highProfit));
               return (
                 <tr key={bar.lever} style={{ borderBottom: `1px solid ${PANEL}` }}>
                   <td style={{ padding: '8px 12px', color: TEXT }}>{LEVER_LABEL[bar.lever]}</td>
@@ -302,8 +317,8 @@ export default function SensitivityPage({ inputs }: Props) {
                       />
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', color: MUTED, fontSize: 12, marginTop: 3 }}>
-                      <span>{penceToPounds(bar.low.profit_pence)}</span>
-                      <span>{penceToPounds(bar.high.profit_pence)}</span>
+                      <span>{penceToPounds(lowProfit)}</span>
+                      <span>{penceToPounds(highProfit)}</span>
                     </div>
                   </td>
                   <td style={{ padding: '8px 12px', color: TEXT, textAlign: 'right', fontWeight: 600 }}>

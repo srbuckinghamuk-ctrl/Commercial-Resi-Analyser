@@ -1,6 +1,7 @@
 import type { AnyCalculatorInputs, FlagCode } from './finance-types';
 import type { ScenarioOverrides } from '../conversion-types';
 import type { ValidationIssue } from './validation';
+import { validateInputs } from './validation';
 import { applyScenario } from './apply-scenario';
 import { runAppraisal } from './index';
 
@@ -69,20 +70,37 @@ export function defaultSensitivityConfig(): SensitivityConfig {
 export const DEFAULT_SENSITIVITY_CONFIG: SensitivityConfig = defaultSensitivityConfig();
 
 /**
- * The metric reduction of one appraisal. Percentage fields stay nullable to match
- * `AppraisalResultV2` — a zero-cost or unrealised-profit run already yields null
- * there, and the suite must not invent a number the engine declined to produce.
- * `flags` carries raw codes; the memo's FE/FG/NR shorthand is presentation, not model.
+ * The metric reduction of one appraisal (§12.3), or the record of why no appraisal was
+ * run (§12.7). `validation_errors` is empty exactly when the position was measured; it
+ * carries error-severity issues only, so a measured document that merely raises warnings
+ * still reports an empty array.
+ *
+ * Every metric field is nullable. The four percentages already were — a zero-cost or
+ * unrealised-profit run yields null there — and R5 widened the two money fields so that
+ * an unmeasured position cannot present a number at all. That widening is the point: a
+ * consumer reading `profit_pence` must handle the null, which is what stops a clamped or
+ * absent figure being printed as though it were a measurement.
  */
 export interface SensitivityMetrics {
-  profit_pence: number;
+  profit_pence: number | null;
   profit_on_cost_pct: number | null;
   profit_on_gdv_pct: number | null;
   irr_annual_pct: number | null;
   ltgdv_developer_pct: number | null;
-  peak_debt_pence: number;
+  peak_debt_pence: number | null;
   flags: FlagCode[];
+  validation_errors: ValidationIssue[];
 }
+
+/**
+ * The base case is always measured: `runSensitivity` throws when the base document fails
+ * validation (§12.7), so `result.base` needs no null check at its use sites. Cells and
+ * tornado endpoints carry the wider `SensitivityMetrics`.
+ */
+export type MeasuredMetrics = Omit<SensitivityMetrics, 'profit_pence' | 'peak_debt_pence'> & {
+  profit_pence: number;
+  peak_debt_pence: number;
+};
 
 /** A measurement at a grid position. Tornado endpoints are single-lever measurements
  *  with no grid position, so they carry `SensitivityMetrics` instead. */
@@ -97,12 +115,12 @@ export interface TornadoBar {
   high_step: number;
   low: SensitivityMetrics;
   high: SensitivityMetrics;
-  /** |profit(high) − profit(low)|, spec §12.4. */
-  span_pence: number;
+  /** |profit(high) − profit(low)| (§12.4), or null when either endpoint is unmeasured. */
+  span_pence: number | null;
 }
 
 export interface SensitivityResult {
-  base: SensitivityMetrics;
+  base: MeasuredMetrics;
   /** matrix[rowIndex][colIndex], indexed by `config.rows.steps` / `config.cols.steps`. */
   matrix: SensitivityCell[][];
   tornado: TornadoBar[];
@@ -200,10 +218,31 @@ function overridesFor(levers: Partial<Record<SensitivityLever, number>>): Scenar
   };
 }
 
-/** One measurement: an ordinary appraisal of the levered document, reduced to the
- *  compact record. This is the only place the suite calls the engine. */
+/** The record of a position that was not measured (§12.7). */
+function unmeasured(errors: ValidationIssue[]): SensitivityMetrics {
+  return {
+    profit_pence: null,
+    profit_on_cost_pct: null,
+    profit_on_gdv_pct: null,
+    irr_annual_pct: null,
+    ltgdv_developer_pct: null,
+    peak_debt_pence: null,
+    flags: [],
+    validation_errors: errors,
+  };
+}
+
+/**
+ * One position: the levered document is validated first (§12.7), and only a document that
+ * passes is appraised. An unmeasured position never reaches the ledger, so the suite does
+ * not depend on `buildSchedule`'s defensive term clamp holding.
+ */
 function measure(inputs: AnyCalculatorInputs, levers: Partial<Record<SensitivityLever, number>>): SensitivityMetrics {
-  const m = runAppraisal(applyScenario(inputs, overridesFor(levers))).metrics;
+  const levered = applyScenario(inputs, overridesFor(levers));
+  const errors = validateInputs(levered).filter((i) => i.severity === 'error');
+  if (errors.length > 0) return unmeasured(errors);
+
+  const m = runAppraisal(levered).metrics;
   return {
     profit_pence: m.profit_pence,
     profit_on_cost_pct: m.profit_on_cost_pct,
@@ -212,6 +251,7 @@ function measure(inputs: AnyCalculatorInputs, levers: Partial<Record<Sensitivity
     ltgdv_developer_pct: m.ltgdv_developer_pct,
     peak_debt_pence: m.peak_debt_pence,
     flags: m.flags.map((f) => f.code),
+    validation_errors: [],
   };
 }
 
@@ -240,6 +280,14 @@ export function runSensitivity(
   }
 
   const base = measure(inputs, {});
+  // §12.5 makes the base case an identity with the unadjusted appraisal, so a suite over
+  // an invalid base is meaningless in every position at once — this is an input error
+  // (§12.6/§12.7), not twenty-five unmeasured cells.
+  if (base.validation_errors.length > 0) {
+    throw new Error(
+      `Invalid base document: ${base.validation_errors.map((e) => e.message).join(' ')}`,
+    );
+  }
 
   const matrix: SensitivityCell[][] = config.rows.steps.map((rowStep) =>
     config.cols.steps.map((colStep) => ({
@@ -259,13 +307,29 @@ export function runSensitivity(
         high_step: range.high,
         low,
         high,
-        span_pence: Math.abs(high.profit_pence - low.profit_pence),
+        // §12.7: an unmeasured endpoint leaves the bar with no span at all, rather than a
+        // span computed against a number that was never a measurement.
+        span_pence: low.profit_pence === null || high.profit_pence === null
+          ? null
+          : Math.abs(high.profit_pence - low.profit_pence),
       };
     })
-    .sort((a, b) => (
-      b.span_pence - a.span_pence
-      || LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever)
-    ));
+    .sort((a, b) => {
+      // §12.4, extended by §12.7: spanless bars sort after every bar with a span; within
+      // each group the fixed lever order keeps the sort total and so deterministic (§1.4).
+      if (a.span_pence === null || b.span_pence === null) {
+        if (a.span_pence !== null) return -1;
+        if (b.span_pence !== null) return 1;
+        return LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever);
+      }
+      return (
+        b.span_pence - a.span_pence
+        || LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever)
+      );
+    });
 
-  return { base, matrix, tornado, config };
+  // The cast is sound and load-bearing only here: the throw immediately above is what
+  // proves the two money fields are non-null, and TypeScript cannot see that through the
+  // `validation_errors.length` check.
+  return { base: base as MeasuredMetrics, matrix, tornado, config };
 }

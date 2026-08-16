@@ -711,8 +711,11 @@ describe('sensitivityTables — memo §10 regression pin', () => {
     for (let i = 0; i < rows.length; i++) {
       const bar = engineTornado[i];
       expect(rows[i][0]).toBe(LEVER_LABEL[bar.lever]);
-      expect(rows[i][2]).toBe(gbp(bar.low.profit_pence));
-      expect(rows[i][3]).toBe(gbp(bar.high.profit_pence));
+      // §12.7: baseInputs() is a plain 12-month deal with no phasing, so no default
+      // tornado endpoint is ever unmeasured here — the null case is pinned on fixtures
+      // I and J in sensitivity.test.ts.
+      expect(rows[i][2]).toBe(gbp(bar.low.profit_pence as number));
+      expect(rows[i][3]).toBe(gbp(bar.high.profit_pence as number));
     }
   });
 

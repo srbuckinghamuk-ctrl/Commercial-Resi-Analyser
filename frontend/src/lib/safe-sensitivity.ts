@@ -20,9 +20,11 @@ export type SafeSensitivityResult =
  * and state the reason.
  *
  * Note what this does NOT cover: a *valid* config whose timeline step drives
- * finance.term_months to zero or below does not throw at all. The engine clamps
- * to a one-month term and returns a plausible result (verified 16 Aug 2026 —
- * see safe-sensitivity.test.ts). SensitivityPage guards that itself.
+ * finance.term_months to zero or below does not throw either. Since R5 (spec
+ * §12.7), that levered document fails validation and the position comes back
+ * unmeasured (null metrics, populated `validation_errors`) rather than throwing
+ * or being silently clamped — see safe-sensitivity.test.ts. SensitivityPage's
+ * own term guard (`isUnsoundTornadoBar`) predates that and is still in place.
  *
  * Callers must not substitute a stale or default grid for a failed one: spec §2
  * forbids showing a number that is not the current calculation.

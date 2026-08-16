@@ -170,8 +170,11 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     const { tornado } = runSensitivity(fixtureFInputs());
     expect(tornado).toHaveLength(4);
     const spans = tornado.map((b) => b.span_pence);
-    expect([...spans].sort((a, b) => b - a)).toEqual(spans);
-    expect(spans.every((s) => s >= 0)).toBe(true);
+    // §12.7: a span is null only when an endpoint is unmeasured, which cannot happen for
+    // Fixture F under the default tornado (its 9-month floor is a legal term) — see the
+    // §12.7 cell-validity tests below for the null case, pinned on fixtures I and J.
+    expect([...spans].sort((a, b) => (b as number) - (a as number))).toEqual(spans);
+    expect(spans.every((s) => (s as number) >= 0)).toBe(true);
   });
 
   it('orders bars independently of the order the ranges were configured in', () => {
@@ -239,7 +242,9 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     // runtime; the schema types it nullable only for funding sources that lack a
     // committed facility (e.g. cash deals), which Fixture F is not.
     const committed = inputs.finance.committed_net_facility_pence as number;
-    if (worst.peak_debt_pence > committed) {
+    // §12.7: worst is a cost/GDV cell, never a timeline position, so it is always
+    // measured for Fixture F — the null branch belongs to the §12.7 tests above.
+    if (worst.peak_debt_pence !== null && worst.peak_debt_pence > committed) {
       expect(worst.flags).toContain('funding_gap');
     }
 
@@ -295,5 +300,123 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     expect(second.matrix[0]).toHaveLength(5);
     // The shared module-level constant itself must also be untouched.
     expect(DEFAULT_SENSITIVITY_CONFIG.cols.steps).toEqual([-15, -10, -5, 0, 5]);
+  });
+});
+
+// ── Release 5: §12.7 cell validity ──
+describe('runSensitivity — §12.7 cell validity', () => {
+  // A 12-month base: a −12 timeline step empties the term, which validation
+  // rejects at error severity ("Term must be a whole number of months, at
+  // least 1."). Before R5 the suite clamped to one month and reported numbers.
+  it('does not measure a position whose levered document fails validation', () => {
+    const cfg = config();
+    cfg.rows = { lever: 'timeline', steps: [-12] };
+    cfg.cols = { lever: 'gdv', steps: [0] };
+    const cell = runSensitivity(fixtureFInputs(), cfg).matrix[0][0];
+
+    expect(cell.validation_errors.length).toBeGreaterThan(0);
+    expect(cell.validation_errors.every((e) => e.severity === 'error')).toBe(true);
+    expect(cell.validation_errors.some((e) => e.field === 'finance.term_months')).toBe(true);
+    expect(cell.profit_pence).toBeNull();
+    expect(cell.peak_debt_pence).toBeNull();
+    expect(cell.profit_on_cost_pct).toBeNull();
+    expect(cell.profit_on_gdv_pct).toBeNull();
+    expect(cell.irr_annual_pct).toBeNull();
+    expect(cell.ltgdv_developer_pct).toBeNull();
+    expect(cell.flags).toEqual([]);
+  });
+
+  // The boundary, from the measured side. −11 leaves exactly one month, which
+  // is legal, so it must still be a real measurement.
+  it('measures a position that leaves exactly one month of term', () => {
+    const cfg = config();
+    cfg.rows = { lever: 'timeline', steps: [-11] };
+    cfg.cols = { lever: 'gdv', steps: [0] };
+    const cell = runSensitivity(fixtureFInputs(), cfg).matrix[0][0];
+
+    expect(cell.validation_errors).toEqual([]);
+    expect(cell.profit_pence).not.toBeNull();
+  });
+
+  // Warnings must not invalidate: Fixture F carries one on
+  // conversion_costs.total_construction_sqm, and every cell of the default
+  // grid inherits it.
+  it('treats a warning-carrying document as measured', () => {
+    const result = runSensitivity(fixtureFInputs());
+    for (const cell of result.matrix.flat()) {
+      expect(cell.validation_errors).toEqual([]);
+      expect(cell.profit_pence).not.toBeNull();
+    }
+  });
+
+  // §12.2: a stress cell raising a covenant flag is a valid measurement, and
+  // the flag is the finding. Keying validity off reconciliation would break this.
+  it('measures a flagged cell rather than treating the flag as invalidity', () => {
+    const result = runSensitivity(fixtureFInputs());
+    const flagged = result.matrix.flat().filter((c) => c.flags.length > 0);
+    expect(flagged.length).toBeGreaterThan(0);
+    for (const cell of flagged) {
+      expect(cell.validation_errors).toEqual([]);
+      expect(cell.profit_pence).not.toBeNull();
+    }
+  });
+
+  it('gives a tornado bar with an unmeasured endpoint a null span', () => {
+    const cfg = config();
+    cfg.tornado = [
+      { lever: 'gdv', low: -10, high: 10 },
+      { lever: 'timeline', low: -12, high: 3 },
+    ];
+    const bars = runSensitivity(fixtureFInputs(), cfg).tornado;
+    const timeline = bars.find((b) => b.lever === 'timeline')!;
+    expect(timeline.span_pence).toBeNull();
+    expect(timeline.low.validation_errors.length).toBeGreaterThan(0);
+    expect(timeline.high.validation_errors).toEqual([]);
+  });
+
+  // §12.4: spanless bars sort after every bar with a span, in LEVER_ORDER.
+  it('orders spanless bars last', () => {
+    const cfg = config();
+    cfg.tornado = [
+      { lever: 'timeline', low: -12, high: 3 },
+      { lever: 'interest_rate', low: -1, high: 1 },
+      { lever: 'gdv', low: -10, high: 10 },
+    ];
+    const bars = runSensitivity(fixtureFInputs(), cfg).tornado;
+    expect(bars[bars.length - 1].lever).toBe('timeline');
+    expect(bars[bars.length - 1].span_pence).toBeNull();
+    expect(bars.slice(0, -1).every((b) => b.span_pence !== null)).toBe(true);
+  });
+
+  // §12.5 makes the base an identity with the unadjusted appraisal, so a suite
+  // over an invalid base is meaningless in every position at once — this is an
+  // input error (§12.6/§12.7), not twenty-five unmeasured cells.
+  it('throws when the base document itself fails validation', () => {
+    const bad = fixtureFInputs() as AnyCalculatorInputs & { finance: { term_months: number } };
+    bad.finance.term_months = 0;
+    expect(() => runSensitivity(bad)).toThrow(/base document/i);
+  });
+
+  // The realistic instance, and the reason this rule is not merely about exotic inputs.
+  // Fixture I is a phased-sales deal whose tranches sit in months 9–11 of a 12-month
+  // programme. The DEFAULT tornado's −3 month endpoint leaves a 9-month term, so those
+  // tranches point at months that no longer exist and validation rejects the document.
+  // Before R5 that endpoint reported a profit computed from exactly that document.
+  it('does not measure the default tornado low endpoint of a phased-sales deal', () => {
+    const fixtureI = JSON.parse(
+      readFileSync(resolve(__dirname, '../../../../fixtures/financial-model/i-phased-sales.json'), 'utf-8'),
+    ).inputs as AnyCalculatorInputs;
+
+    const bars = runSensitivity(fixtureI).tornado;
+    const timeline = bars.find((b) => b.lever === 'timeline')!;
+
+    expect(timeline.low.validation_errors.length).toBeGreaterThan(0);
+    expect(timeline.low.validation_errors.some((e) => e.field.startsWith('sales_phasing.tranches'))).toBe(true);
+    expect(timeline.low.profit_pence).toBeNull();
+    expect(timeline.span_pence).toBeNull();
+    // §12.4 as extended by §12.7: no span means it sorts last.
+    expect(bars[bars.length - 1].lever).toBe('timeline');
+    // The high endpoint lengthens the programme, so it stays measured.
+    expect(timeline.high.validation_errors).toEqual([]);
   });
 });

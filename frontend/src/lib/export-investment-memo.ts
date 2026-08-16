@@ -201,14 +201,19 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     .filter((bar) => isUnsoundTornadoBar(termMonths, bar))
     .map((bar) => bar.lever);
 
+  // §12.7: a tornado endpoint can now be unmeasured (validation_errors non-empty), so
+  // profit_pence and span_pence are nullable — this local tolerates that null without
+  // building richer presentation for it (that's a later task).
+  const money = (p: number | null) => (p === null ? '—' : fmt(p));
+
   const tornadoRows = soundBars.map((bar) => [
     LEVER_LABEL[bar.lever],
     formatRangeLabel(bar.lever, bar.low_step, bar.high_step),
-    fmt(bar.low.profit_pence),
-    fmt(bar.high.profit_pence),
+    money(bar.low.profit_pence),
+    money(bar.high.profit_pence),
     // |profit(high) - profit(low)| (spec §12.4) — a magnitude, so it stays
     // unsigned even where the high endpoint is the adverse one (cost, rate).
-    fmt(bar.span_pence),
+    money(bar.span_pence),
   ]);
 
   return {
