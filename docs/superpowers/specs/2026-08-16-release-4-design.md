@@ -141,9 +141,10 @@ interface SensitivityConfig {
   tornado: TornadoRange[];    // default the four ranges of §2.3
 }
 
-interface SensitivityCell {
-  row_step: number;
-  col_step: number;
+// The metric reduction, independent of where in the suite it was measured. A tornado
+// endpoint is a single-lever measurement and has no row/column position, so the grid
+// coordinates live on SensitivityCell rather than on the reduction itself.
+interface SensitivityMetrics {
   profit_pence: number;
   profit_on_cost_pct: number | null;
   profit_on_gdv_pct: number | null;
@@ -153,17 +154,22 @@ interface SensitivityCell {
   flags: FlagCode[];
 }
 
+interface SensitivityCell extends SensitivityMetrics {
+  row_step: number;
+  col_step: number;
+}
+
 interface TornadoBar {
   lever: SensitivityLever;
   low_step: number;
   high_step: number;
-  low: SensitivityCell;
-  high: SensitivityCell;
+  low: SensitivityMetrics;
+  high: SensitivityMetrics;
   span_pence: number;         // |high.profit_pence - low.profit_pence|
 }
 
 interface SensitivityResult {
-  base: SensitivityCell;
+  base: SensitivityMetrics;
   matrix: SensitivityCell[][];   // matrix[rowIndex][colIndex]
   tornado: TornadoBar[];         // sorted per §2.3
   config: SensitivityConfig;     // the *resolved* config, echoed back
