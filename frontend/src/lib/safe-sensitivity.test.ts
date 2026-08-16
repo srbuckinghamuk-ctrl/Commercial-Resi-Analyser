@@ -66,6 +66,12 @@ describe('safeRunSensitivity', () => {
       const [atOne, atZero, atMinusOne] = outcome.result.matrix.map((row) => row[0].profit_pence);
       expect(atZero).toBe(atOne);
       expect(atMinusOne).toBe(atOne);
+      // All three steps that empty the term clamp to one-month and raise funding_gap.
+      // This pins the *mechanism* of the duplicate values: they come from clamping,
+      // not from coincidence or a shared-reference bug.
+      expect(outcome.result.matrix[0][0].flags).toContain('funding_gap');
+      expect(outcome.result.matrix[1][0].flags).toContain('funding_gap');
+      expect(outcome.result.matrix[2][0].flags).toContain('funding_gap');
     }
   });
 });
