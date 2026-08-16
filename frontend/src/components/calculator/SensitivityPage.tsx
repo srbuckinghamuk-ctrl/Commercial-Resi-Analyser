@@ -4,12 +4,12 @@ import {
   defaultSensitivityConfig, validateSensitivityConfig, LEVER_ORDER, MAX_AXIS_STEPS,
 } from '../../lib/model/sensitivity';
 import type {
-  MeasuredMetrics, SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics, TornadoBar,
+  SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics,
 } from '../../lib/model/sensitivity';
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
-  formatStepLabel, formatRangeLabel, flagShortCodes,
+  formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct } from '../../lib/format';
@@ -44,18 +44,6 @@ function metricColor(key: SensitivityMetricKey, value: number | null): string {
   if (key === 'ltgdv_developer_pct') return value > 75 ? RED : value > 65 ? AMBER : TEXT;
   if (key === 'profit_pence') return value < 0 ? RED : TEXT;
   return TEXT;
-}
-
-/**
- * A tornado bar has a span (spec §12.4/§12.7) exactly when both endpoints were
- * measured, so `span_pence !== null` is sound evidence that `low` and `high` are
- * both `MeasuredMetrics`, not merely `SensitivityMetrics` — narrowing both here
- * is what lets every render site below read `.profit_pence` as a plain number.
- */
-function isMeasuredBar(
-  bar: TornadoBar,
-): bar is TornadoBar & { span_pence: number; low: MeasuredMetrics; high: MeasuredMetrics } {
-  return bar.span_pence !== null;
 }
 
 /**
@@ -322,15 +310,7 @@ export default function SensitivityPage({ inputs }: Props) {
           table above it. */}
       {omittedTornado.length > 0 && (
         <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
-          {omittedTornado
-            .map((bar) => {
-              const reasons = bar.low.validation_errors
-                .concat(bar.high.validation_errors)
-                .map((e) => e.message)
-                .join(' ');
-              return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
-            })
-            .join(' ')}
+          {omittedTornadoNotes(tornado).join(' ')}
         </p>
       )}
 
