@@ -1,9 +1,14 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, EligibilityAssessment } from '../types';
-import type { AppraisalRun, ModelFlag } from './model';
+import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
+import { runSensitivity } from './model/sensitivity';
+import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
+import {
+  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes, isUnsoundTornadoBar,
+} from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
 // ── This memo consumes the finished AppraisalRun only ─────
@@ -102,15 +107,6 @@ function flagPresent(flags: ModelFlag[], code: ModelFlag['code']): boolean {
   return flags.some((f) => f.code === code);
 }
 
-/** Short codes for the sensitivity-grid flag column (spec §11.8 — debt is never re-sized in scenarios). */
-function flagShortCodes(flags: ModelFlag[]): string {
-  const codes: string[] = [];
-  if (flagPresent(flags, 'facility_exceeded')) codes.push('FE');
-  if (flagPresent(flags, 'funding_gap')) codes.push('FG');
-  if (flagPresent(flags, 'senior_outstanding_at_maturity')) codes.push('NR');
-  return codes.join(',');
-}
-
 /** Full-word flag summary for the Scenario Comparison table's Flags row. */
 function flagSummary(flags: ModelFlag[]): string {
   const labels: string[] = [];
@@ -148,6 +144,80 @@ export function sourcesAndUsesTotals(run: AppraisalRun): {
     schedule.totals.selling_costs_pence +
     model.totals.exit_fee_pence;
   return { usesTotal, sourcesTotal, rolledInterestPence };
+}
+
+/**
+ * The §10 two-way sensitivity matrices and tornado, as the exact string rows
+ * the PDF prints. Kept separate from generateInvestmentMemo's body so its
+ * output can be pinned string-for-string by export-investment-memo.test.ts —
+ * presentation only, every number here comes from run.metrics of an ordinary
+ * appraisal (or the sensitivity engine's equivalent), per the file header's
+ * no-recalculation rule.
+ */
+export interface MemoSensitivityTables {
+  head: string[];
+  pocRows: string[][];
+  ltgdvRows: string[][];
+  /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar.
+   *  Excludes any bar `isUnsoundTornadoBar` flags — see `omittedTornadoLevers`. */
+  tornadoRows: string[][];
+  /** Levers dropped from `tornadoRows` because their fixed range would clamp
+   *  finance.term_months below one month (spec §12.6 gap, R5 backlog) — empty
+   *  when every bar is sound. The caller must print why these are missing
+   *  rather than silently shrinking the table. */
+  omittedTornadoLevers: SensitivityLever[];
+}
+
+export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
+  // R4b: the grid steps, the lever rule and the base-case identity are now the
+  // engine's (spec §12.3–§12.5) rather than constants living in this file. The
+  // default config *is* the grid this memo has always printed — R4a promoted
+  // these very steps into the specification — so the output is unchanged, and
+  // export-investment-memo.test.ts pins that string for string.
+  const result = runSensitivity(inputs);
+  const { rows, cols } = result.config;
+  const termMonths = inputs.finance.term_months;
+
+  const axisCaption = (lever: SensitivityLever, step: number) =>
+    `${LEVER_SHORT[lever]} ${formatStepLabel(lever, step)}`;
+
+  const cellText = (cell: SensitivityCell, key: 'profit_on_cost_pct' | 'ltgdv_developer_pct') => {
+    const codes = flagShortCodes(cell.flags);
+    return `${fmtPctSafe(cell[key])}${codes ? ` [${codes}]` : ''}`;
+  };
+
+  const bodyFor = (key: 'profit_on_cost_pct' | 'ltgdv_developer_pct') =>
+    result.matrix.map((row) => [
+      axisCaption(rows.lever, row[0].row_step),
+      ...row.map((cell) => cellText(cell, key)),
+    ]);
+
+  // A bar whose fixed range would clamp the term (see isUnsoundTornadoBar) is
+  // dropped rather than printed: its "low" or "high" figure is not really the
+  // stated step, it's the one-month-clamp floor, indistinguishable from any
+  // other step that clamps to the same place.
+  const soundBars = result.tornado.filter((bar) => !isUnsoundTornadoBar(termMonths, bar));
+  const omittedTornadoLevers = result.tornado
+    .filter((bar) => isUnsoundTornadoBar(termMonths, bar))
+    .map((bar) => bar.lever);
+
+  const tornadoRows = soundBars.map((bar) => [
+    LEVER_LABEL[bar.lever],
+    formatRangeLabel(bar.lever, bar.low_step, bar.high_step),
+    fmt(bar.low.profit_pence),
+    fmt(bar.high.profit_pence),
+    // |profit(high) - profit(low)| (spec §12.4) — a magnitude, so it stays
+    // unsigned even where the high endpoint is the adverse one (cost, rate).
+    fmt(bar.span_pence),
+  ]);
+
+  return {
+    head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
+    pocRows: bodyFor('profit_on_cost_pct'),
+    ltgdvRows: bodyFor('ltgdv_developer_pct'),
+    tornadoRows,
+    omittedTornadoLevers,
+  };
 }
 
 export function generateInvestmentMemo(
@@ -1175,37 +1245,53 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
-  // Shared grid: one runAppraisal per (cost, GDV) combination, feeding both matrices below.
-  const gdvSteps = [-15, -10, -5, 0, 5];
-  const costSteps = [-5, 0, 5, 10, 15];
-  const grid = costSteps.map((costAdj) =>
-    gdvSteps.map((gdvAdj) => {
-      const scenRun = runAppraisal(applyScenario(inputs, {
-        label: '',
-        gdv_adjustment_pct: gdvAdj,
-        construction_cost_adjustment_pct: costAdj,
-        timeline_adjustment_months: 0,
-        interest_rate_adjustment_pct: 0,
-      }));
-      return {
-        pocPct: scenRun.metrics.profit_on_cost_pct,
-        ltgdvPct: scenRun.metrics.ltgdv_developer_pct,
-        flags: flagShortCodes(scenRun.metrics.flags),
-      };
-    }),
+  const sens = sensitivityTables(inputs);
+
+  y = subHeading(y, 'Single-Lever Sensitivity (Tornado)');
+  y = bodyText(
+    y,
+    'Each lever is moved alone, with every other assumption at base. Swing is the absolute profit difference between the two endpoints; bars are listed widest swing first (spec §12.4).',
   );
 
+  if (sens.tornadoRows.length > 0) {
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Lever', 'Range', 'Profit at low', 'Profit at high', 'Swing']],
+      body: sens.tornadoRows,
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: {
+        0: { fontStyle: 'bold' },
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+        4: { halign: 'right', fontStyle: 'bold' },
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
+  }
+  // A bar is omitted rather than printed when its fixed range would clamp
+  // finance.term_months below one month (isUnsoundTornadoBar) — the omission
+  // itself is stated so the gap is never silent. If every bar were omitted,
+  // this line prints alone with no table above it (see sens.tornadoRows.length
+  // guard above) rather than an empty or misleadingly-partial table.
+  if (sens.omittedTornadoLevers.length > 0) {
+    y = bodyText(
+      y,
+      `${sens.omittedTornadoLevers.map((l) => LEVER_LABEL[l]).join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would clamp to a one-month term and print a figure that does not represent that step. See spec §12.6.`,
+    );
+  }
+  y += 4;
+
   y = subHeading(y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
-  const pocRows: (string | number)[][] = costSteps.map((costAdj, ci) => [
-    `Cost ${costAdj >= 0 ? '+' : ''}${costAdj}%`,
-    ...grid[ci].map((cell) => `${fmtPctSafe(cell.pocPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
-  ]);
 
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)]],
-    body: pocRows,
+    head: [sens.head],
+    body: sens.pocRows,
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
     bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
@@ -1225,16 +1311,12 @@ export function generateInvestmentMemo(
   y = lastAutoTableFinalY(doc) + 6;
 
   y = subHeading(y, 'Two-Way Sensitivity Matrix: LTGDV, developer basis (%)');
-  const ltgdvRows: (string | number)[][] = costSteps.map((costAdj, ci) => [
-    `Cost ${costAdj >= 0 ? '+' : ''}${costAdj}%`,
-    ...grid[ci].map((cell) => `${fmtPctSafe(cell.ltgdvPct)}${cell.flags ? ` [${cell.flags}]` : ''}`),
-  ]);
 
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['', ...gdvSteps.map((g) => `GDV ${g >= 0 ? '+' : ''}${g}%`)]],
-    body: ltgdvRows,
+    head: [sens.head],
+    body: sens.ltgdvRows,
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
     bodyStyles: { textColor: [51, 65, 85], halign: 'center' },

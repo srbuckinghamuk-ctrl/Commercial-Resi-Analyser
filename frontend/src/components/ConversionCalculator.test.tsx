@@ -89,3 +89,20 @@ describe('ConversionCalculator when the engine cannot compute', () => {
     expect(screen.queryByText('Developer GDV')).not.toBeInTheDocument();
   });
 });
+
+describe('ConversionCalculator — Sensitivity is page 9', () => {
+  it('offers thirteen numbered pages with Sensitivity ninth', () => {
+    render(<ConversionCalculator project={PROJECT} />);
+    for (const label of [
+      '9. Sensitivity', '10. Exit', '11. Risk', '12. Deal Spider', '13. Investor',
+    ]) {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it('renders the Sensitivity page when its tab is selected', () => {
+    render(<ConversionCalculator project={PROJECT} />);
+    fireEvent.click(screen.getByRole('button', { name: '9. Sensitivity' }));
+    expect(screen.getByRole('heading', { name: /9\. Sensitivity/ })).toBeInTheDocument();
+  });
+});
