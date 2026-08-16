@@ -1285,7 +1285,7 @@ export function generateInvestmentMemo(
   if (sens.omittedTornadoLevers.length > 0) {
     y = bodyText(
       y,
-      `${sens.omittedTornadoLevers.map((l) => LEVER_LABEL[l]).join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would clamp to a one-month term and print a figure that does not represent that step. See spec §12.6.`,
+      `${sens.omittedTornadoLevers.map((l) => LEVER_LABEL[l]).join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would leave a term of zero or less, which fails input validation rather than producing a measurement. See spec §12.7.`,
     );
   }
   y += 4;

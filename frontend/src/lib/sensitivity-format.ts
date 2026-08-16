@@ -33,16 +33,18 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
 
 /**
  * A tornado bar is unsound when it is the `timeline` lever and either endpoint
- * would drive `finance.term_months` below one month. Spec §12.6 constrains
- * timeline steps to whole months but says nothing about the term those months
- * leave behind, and the engine does not reject an empty one — it silently
- * clamps to a one-month term and returns a plausible-looking result (pinned as
- * current behaviour in safe-sensitivity.test.ts). Several distinct steps clamp
- * to the identical one-month answer, so a bar with a clamping endpoint is not
- * really reporting "-3 months" (or whatever the endpoint claims) — it is
- * reporting the clamp floor. Neither the memo nor the calculator page may
- * print or render that figure unflagged; both drop the bar instead. Shared
- * here so the two surfaces agree on what "unsound" means.
+ * would drive `finance.term_months` below one month. Before spec §12.7 (R5), the
+ * engine did not reject an empty term — it silently clamped to a one-month term
+ * and returned a plausible-looking result, so several distinct steps produced the
+ * identical one-month answer, indistinguishable from a genuine measurement. §12.7
+ * has since closed that: such a levered document now fails validation and the
+ * endpoint comes back unmeasured (null, with `validation_errors` populated) rather
+ * than clamped — see safe-sensitivity.test.ts, which now pins the unmeasured
+ * behaviour, not the old clamp. This function is a term-based heuristic that
+ * predates that fix; it still governs what the memo and the calculator page drop
+ * from the tornado, so it stays in place until Task 5 retires it in favour of the
+ * engine's own `validation_errors`. Shared here so the two surfaces agree on what
+ * "unsound" means in the meantime.
  */
 export function isUnsoundTornadoBar(
   termMonths: number,

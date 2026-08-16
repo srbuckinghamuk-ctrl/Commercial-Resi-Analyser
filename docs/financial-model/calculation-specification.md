@@ -612,9 +612,10 @@ The engine is month-indexed throughout (§1.3), so a fractional term has no mean
 ### 12.7 Cell validity [R5 — calc 2.5.0]
 
 A **measurement** is produced only for a levered document that passes validation. Before
-measuring, the levered document is validated (§10). If validation yields any
-**error**-severity issue, the position is **not measured**: it reports those issues and
-every metric field is null.
+measuring, the levered document is validated (`validateInputs`/`validate_inputs`) — the
+whole-document input check used ahead of an ordinary appraisal, distinct from §12.6's
+sensitivity-config check. If validation yields any **error**-severity issue, the position
+is **not measured**: it reports those issues and every metric field is null.
 
 Warning-severity issues do not invalidate a position.
 

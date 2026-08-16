@@ -174,7 +174,10 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     // Fixture F under the default tornado (its 9-month floor is a legal term) — see the
     // §12.7 cell-validity tests below for the null case, pinned on fixtures I and J.
     expect([...spans].sort((a, b) => (b as number) - (a as number))).toEqual(spans);
-    expect(spans.every((s) => (s as number) >= 0)).toBe(true);
+    // No cast here: `null >= 0` is `true` in JavaScript, so `(s as number) >= 0` would
+    // silently accept a null span. Spelling out the null check keeps this assertion at
+    // its original strength.
+    expect(spans.every((s) => s !== null && s >= 0)).toBe(true);
   });
 
   it('orders bars independently of the order the ranges were configured in', () => {
@@ -386,6 +389,34 @@ describe('runSensitivity — §12.7 cell validity', () => {
     expect(bars[bars.length - 1].lever).toBe('timeline');
     expect(bars[bars.length - 1].span_pence).toBeNull();
     expect(bars.slice(0, -1).every((b) => b.span_pence !== null)).toBe(true);
+  });
+
+  // The single-spanless-bar case above can't distinguish "sorts last" from "sorts last
+  // in LEVER_ORDER" — with only one null-span bar, any tie-break would look identical.
+  // Two invalidating levers closes that: gdv at -100% drives every unit's
+  // estimated_value_pence to zero (validation's "positive value" rule), so its low
+  // endpoint is unmeasured exactly like timeline's. Both must sort after every bar with
+  // a real span, and gdv (index 0) must sort before timeline (index 2) in LEVER_ORDER —
+  // this is the assertion the Python mirror's sort key must match too.
+  it('orders two spanless bars relative to each other by LEVER_ORDER', () => {
+    const cfg = config();
+    cfg.tornado = [
+      { lever: 'timeline', low: -12, high: 3 },
+      { lever: 'interest_rate', low: -1, high: 1 },
+      { lever: 'gdv', low: -100, high: 10 },
+      { lever: 'construction_cost', low: -10, high: 10 },
+    ];
+    const bars = runSensitivity(fixtureFInputs(), cfg).tornado;
+
+    const spanless = bars.filter((b) => b.span_pence === null).map((b) => b.lever);
+    expect(spanless).toEqual(['gdv', 'timeline']);
+    // Both spanless bars sit at the tail, in that same relative order.
+    expect(bars.slice(-2).map((b) => b.lever)).toEqual(['gdv', 'timeline']);
+    // Every bar ahead of them has a real span.
+    expect(bars.slice(0, -2).every((b) => b.span_pence !== null)).toBe(true);
+    // Confirms *why* gdv is unmeasured, not just that it is.
+    const gdvBar = bars.find((b) => b.lever === 'gdv')!;
+    expect(gdvBar.low.validation_errors.some((e) => e.field.includes('estimated_value_pence'))).toBe(true);
   });
 
   // §12.5 makes the base an identity with the unadjusted appraisal, so a suite
