@@ -9,7 +9,7 @@ import type {
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
-  formatStepLabel, formatRangeLabel, flagShortCodes, isUnsoundTornadoBar,
+  formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct } from '../../lib/format';
@@ -29,7 +29,8 @@ const AMBER = '#fbbf24';
 function metricText(cell: SensitivityMetrics, key: SensitivityMetricKey): string {
   const metric = SENSITIVITY_METRICS.find((m) => m.key === key)!;
   const value = cell[key];
-  return metric.kind === 'money' ? penceToPounds(value as number) : formatPct(value as number | null);
+  if (value === null) return '—';
+  return metric.kind === 'money' ? penceToPounds(value) : formatPct(value);
 }
 
 /**
@@ -90,31 +91,14 @@ export default function SensitivityPage({ inputs }: Props) {
     tornado: DEFAULTS.tornado,
   }), [rowLever, rowStepsText, colLever, colStepsText]);
 
-  const issues = useMemo(() => {
-    const found = validateSensitivityConfig(config).map((issue) => issue.message);
-    // Spec §12.6 constrains the timeline lever to whole months but says nothing
-    // about the term those months leave behind, and the appraisal engine does
-    // not reject an empty one — it clamps to a single month and returns a
-    // plausible result, so -11, -12 and -13 on a 12-month deal would render
-    // three identical columns under three different captions. Refusing the axis
-    // is the honest response until §12.6 says otherwise (R5).
-    //
-    // This covers only the user-editable axes (rows/cols) — the grid the editor
-    // above can actually fix. The tornado's own fixed ranges are NOT folded in
-    // here: an unsound tornado bar doesn't make the axes invalid, and the
-    // two-way matrix is still perfectly computable, so it must still render.
-    // Unsound tornado bars are instead dropped from the rendered tornado below
-    // (isUnsoundTornadoBar), with a note explaining the omission.
-    const term = inputs.finance.term_months;
-    const timelineSteps = [
-      ...(config.rows.lever === 'timeline' ? config.rows.steps : []),
-      ...(config.cols.lever === 'timeline' ? config.cols.steps : []),
-    ];
-    if (timelineSteps.some((step) => term + step < 1)) {
-      found.push(`Every timeline step must leave at least one month of term (this deal runs ${term} months).`);
-    }
-    return found;
-  }, [config, inputs.finance.term_months]);
+  // Spec §12.6 config errors only. A position whose *levered document* is invalid is no
+  // longer this component's problem: §12.7 makes the engine report it per position, which
+  // is strictly more informative than refusing the grid — the analyst sees which steps
+  // work and which do not.
+  const issues = useMemo(
+    () => validateSensitivityConfig(config).map((issue) => issue.message),
+    [config],
+  );
 
   // Spec §12.6 errors are input errors: report them and compute nothing, rather
   // than leaving the previous grid on screen beside an invalid config.
@@ -220,19 +204,17 @@ export default function SensitivityPage({ inputs }: Props) {
     );
   }
 
-  const { base, matrix, tornado: allTornado, config: resolved } = outcome.result;
+  const { base, matrix, tornado, config: resolved } = outcome.result;
 
-  // A bar whose fixed range would clamp finance.term_months below one month is
-  // dropped rather than rendered — its "low" or "high" endpoint is not really
-  // the stated step, it's the one-month-clamp floor (isUnsoundTornadoBar). The
-  // omission is stated below rather than left silent.
-  const term = inputs.finance.term_months;
-  const tornado = allTornado.filter((bar) => !isUnsoundTornadoBar(term, bar));
-  const omittedTornado = allTornado.filter((bar) => isUnsoundTornadoBar(term, bar));
+  // §12.7: a bar with an unmeasured endpoint has no span at all. `isMeasuredBar`
+  // narrows both endpoints to `MeasuredMetrics`, so every render site below can
+  // read `.profit_pence` as a plain number with no cast.
+  const measuredBars = tornado.filter(isMeasuredBar);
+  const omittedTornado = tornado.filter((bar) => bar.span_pence === null);
 
   // One shared scale across every tornado endpoint and the base, so bar lengths
   // are comparable between levers rather than each bar filling its own row.
-  const profits = tornado
+  const profits = measuredBars
     .flatMap((bar) => [bar.low.profit_pence, bar.high.profit_pence])
     .concat(base.profit_pence);
   const minProfit = Math.min(...profits);
@@ -254,7 +236,7 @@ export default function SensitivityPage({ inputs }: Props) {
         ordered widest swing first (spec §12.4).
       </p>
 
-      {tornado.length > 0 && (
+      {measuredBars.length > 0 && (
         <table
           aria-label="Single-lever sensitivity (tornado)"
           style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: omittedTornado.length > 0 ? 8 : 28 }}
@@ -268,9 +250,11 @@ export default function SensitivityPage({ inputs }: Props) {
             </tr>
           </thead>
           <tbody>
-            {tornado.map((bar) => {
-              const lowPos = pos(Math.min(bar.low.profit_pence, bar.high.profit_pence));
-              const highPos = pos(Math.max(bar.low.profit_pence, bar.high.profit_pence));
+            {measuredBars.map((bar) => {
+              const lowProfit = bar.low.profit_pence;
+              const highProfit = bar.high.profit_pence;
+              const lowPos = pos(Math.min(lowProfit, highProfit));
+              const highPos = pos(Math.max(lowProfit, highProfit));
               return (
                 <tr key={bar.lever} style={{ borderBottom: `1px solid ${PANEL}` }}>
                   <td style={{ padding: '8px 12px', color: TEXT }}>{LEVER_LABEL[bar.lever]}</td>
@@ -302,8 +286,8 @@ export default function SensitivityPage({ inputs }: Props) {
                       />
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', color: MUTED, fontSize: 12, marginTop: 3 }}>
-                      <span>{penceToPounds(bar.low.profit_pence)}</span>
-                      <span>{penceToPounds(bar.high.profit_pence)}</span>
+                      <span>{penceToPounds(lowProfit)}</span>
+                      <span>{penceToPounds(highProfit)}</span>
                     </div>
                   </td>
                   <td style={{ padding: '8px 12px', color: TEXT, textAlign: 'right', fontWeight: 600 }}>
@@ -316,15 +300,17 @@ export default function SensitivityPage({ inputs }: Props) {
         </table>
       )}
 
-      {/* A bar is dropped rather than rendered when its fixed range would
-          clamp finance.term_months below one month — the omission is stated
-          so the gap is never silent. If every bar were omitted this note
-          prints alone, with no tornado table above it. */}
+      {/* A bar is dropped rather than rendered when the engine could not measure one
+          of its endpoints — the levered document failed validation (spec §12.7). The
+          reason printed is the engine's own `validation_errors` message for that
+          endpoint, not a guess reconstructed here: an unmeasured timeline endpoint
+          and an unmeasured interest-rate endpoint fail for entirely different
+          reasons (an emptied term vs. a negative rate), and only the engine knows
+          which. If every bar were omitted this note prints alone, with no tornado
+          table above it. */}
       {omittedTornado.length > 0 && (
         <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
-          {omittedTornado.map((bar) => LEVER_LABEL[bar.lever]).join(', ')} omitted from the tornado: this
-          deal&rsquo;s {term}-month term is too short for the fixed range shown — one endpoint would clamp to
-          a one-month term and show a figure that does not represent that step (spec §12.6).
+          {omittedTornadoNotes(tornado).join(' ')}
         </p>
       )}
 
@@ -372,13 +358,16 @@ export default function SensitivityPage({ inputs }: Props) {
                 </th>
                 {row.map((cell: SensitivityCell) => {
                   const codes = flagShortCodes(cell.flags);
+                  const unmeasured = cell.validation_errors.length > 0;
                   return (
                     <td
                       key={cell.col_step}
+                      title={unmeasured ? cell.validation_errors.map((e) => e.message).join(' ') : undefined}
                       style={{
                         padding: '8px 12px',
                         textAlign: 'right',
-                        color: metricColor(metric, cell[metric]),
+                        color: unmeasured ? MUTED : metricColor(metric, cell[metric]),
+                        fontStyle: unmeasured ? 'italic' : undefined,
                         fontWeight: cell.row_step === 0 && cell.col_step === 0 ? 700 : 400,
                       }}
                     >

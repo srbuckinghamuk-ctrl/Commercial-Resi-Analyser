@@ -192,10 +192,10 @@ describe('runSensitivity — §12.7 cell validity', () => {
   // rejects at error severity ("Term must be a whole number of months, at
   // least 1."). Before R5 the suite clamped to one month and reported numbers.
   it('does not measure a position whose levered document fails validation', () => {
-    const config = defaultSensitivityConfig();
-    config.rows = { lever: 'timeline', steps: [-12] };
-    config.cols = { lever: 'gdv', steps: [0] };
-    const cell = runSensitivity(baseInputs(), config).matrix[0][0];
+    const cfg = config();
+    cfg.rows = { lever: 'timeline', steps: [-12] };
+    cfg.cols = { lever: 'gdv', steps: [0] };
+    const cell = runSensitivity(fixtureFInputs(), cfg).matrix[0][0];
 
     expect(cell.validation_errors.length).toBeGreaterThan(0);
     expect(cell.validation_errors.every((e) => e.severity === 'error')).toBe(true);
@@ -212,10 +212,10 @@ describe('runSensitivity — §12.7 cell validity', () => {
   // The boundary, from the measured side. −11 leaves exactly one month, which
   // is legal, so it must still be a real measurement.
   it('measures a position that leaves exactly one month of term', () => {
-    const config = defaultSensitivityConfig();
-    config.rows = { lever: 'timeline', steps: [-11] };
-    config.cols = { lever: 'gdv', steps: [0] };
-    const cell = runSensitivity(baseInputs(), config).matrix[0][0];
+    const cfg = config();
+    cfg.rows = { lever: 'timeline', steps: [-11] };
+    cfg.cols = { lever: 'gdv', steps: [0] };
+    const cell = runSensitivity(fixtureFInputs(), cfg).matrix[0][0];
 
     expect(cell.validation_errors).toEqual([]);
     expect(cell.profit_pence).not.toBeNull();
@@ -225,7 +225,7 @@ describe('runSensitivity — §12.7 cell validity', () => {
   // conversion_costs.total_construction_sqm, and every cell of the default
   // grid inherits it.
   it('treats a warning-carrying document as measured', () => {
-    const result = runSensitivity(baseInputs());
+    const result = runSensitivity(fixtureFInputs());
     for (const cell of result.matrix.flat()) {
       expect(cell.validation_errors).toEqual([]);
       expect(cell.profit_pence).not.toBeNull();
@@ -235,7 +235,7 @@ describe('runSensitivity — §12.7 cell validity', () => {
   // §12.2: a stress cell raising a covenant flag is a valid measurement, and
   // the flag is the finding. Keying validity off reconciliation would break this.
   it('measures a flagged cell rather than treating the flag as invalidity', () => {
-    const result = runSensitivity(baseInputs());
+    const result = runSensitivity(fixtureFInputs());
     const flagged = result.matrix.flat().filter((c) => c.flags.length > 0);
     expect(flagged.length).toBeGreaterThan(0);
     for (const cell of flagged) {
@@ -245,12 +245,12 @@ describe('runSensitivity — §12.7 cell validity', () => {
   });
 
   it('gives a tornado bar with an unmeasured endpoint a null span', () => {
-    const config = defaultSensitivityConfig();
-    config.tornado = [
+    const cfg = config();
+    cfg.tornado = [
       { lever: 'gdv', low: -10, high: 10 },
       { lever: 'timeline', low: -12, high: 3 },
     ];
-    const bars = runSensitivity(baseInputs(), config).tornado;
+    const bars = runSensitivity(fixtureFInputs(), cfg).tornado;
     const timeline = bars.find((b) => b.lever === 'timeline')!;
     expect(timeline.span_pence).toBeNull();
     expect(timeline.low.validation_errors.length).toBeGreaterThan(0);
@@ -259,13 +259,13 @@ describe('runSensitivity — §12.7 cell validity', () => {
 
   // §12.4: spanless bars sort after every bar with a span, in LEVER_ORDER.
   it('orders spanless bars last', () => {
-    const config = defaultSensitivityConfig();
-    config.tornado = [
+    const cfg = config();
+    cfg.tornado = [
       { lever: 'timeline', low: -12, high: 3 },
       { lever: 'interest_rate', low: -1, high: 1 },
       { lever: 'gdv', low: -10, high: 10 },
     ];
-    const bars = runSensitivity(baseInputs(), config).tornado;
+    const bars = runSensitivity(fixtureFInputs(), cfg).tornado;
     expect(bars[bars.length - 1].lever).toBe('timeline');
     expect(bars[bars.length - 1].span_pence).toBeNull();
     expect(bars.slice(0, -1).every((b) => b.span_pence !== null)).toBe(true);
@@ -304,7 +304,9 @@ describe('runSensitivity — §12.7 cell validity', () => {
 });
 ```
 
-Note the helper name: this file loads Fixture F through **`fixtureFInputs()`** (defined around line 129), not `baseInputs()`. It also has a local `config(overrides)` helper that deep-copies `DEFAULT_SENSITIVITY_CONFIG` — prefer it over calling `defaultSensitivityConfig()` directly, so a test that mutates an axis cannot leak into another. Where the tests above say `const config = defaultSensitivityConfig()`, use `const cfg = config({ rows: {...}, cols: {...} })` in the file's existing idiom instead, and check the file's import list before adding anything.
+**Helper names in this file, verified:** Fixture F comes from **`fixtureFInputs()`** (defined around line 129) and a deep copy of the default config from the local **`config(overrides?)`** helper (line 14) — there is no `baseInputs()` or bare `defaultSensitivityConfig()` call in this file. The tests above use both. `config()` deep-copies every axis and tornado range, so mutating `cfg.rows` cannot leak into another test.
+
+Check the file's existing import list before adding anything; `runSensitivity`, `applyScenario`, `runAppraisal`, `readFileSync` and `resolve` are already imported.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -561,10 +563,10 @@ Append to `tests/test_financial_model_sensitivity.py`, reusing whatever base-inp
 def test_position_failing_validation_is_not_measured():
     """A -12 timeline step on a 12-month base empties the term, which validation
     rejects at error severity. Before R5 the suite clamped and reported numbers."""
-    config = _default_config()
+    config = _config()
     config.rows = SensitivityAxis(lever="timeline", steps=[-12])
     config.cols = SensitivityAxis(lever="gdv", steps=[0])
-    cell = run_sensitivity(base_inputs(), config).matrix[0][0]
+    cell = run_sensitivity(_inputs(), config).matrix[0][0]
 
     assert len(cell.validation_errors) > 0
     assert all(e.severity == "error" for e in cell.validation_errors)
@@ -579,10 +581,10 @@ def test_position_failing_validation_is_not_measured():
 
 
 def test_position_leaving_exactly_one_month_is_measured():
-    config = _default_config()
+    config = _config()
     config.rows = SensitivityAxis(lever="timeline", steps=[-11])
     config.cols = SensitivityAxis(lever="gdv", steps=[0])
-    cell = run_sensitivity(base_inputs(), config).matrix[0][0]
+    cell = run_sensitivity(_inputs(), config).matrix[0][0]
 
     assert cell.validation_errors == []
     assert cell.profit_pence is not None
@@ -590,7 +592,7 @@ def test_position_leaving_exactly_one_month_is_measured():
 
 def test_warnings_do_not_invalidate_a_position():
     """Fixture F carries a warning on conversion_costs.total_construction_sqm."""
-    result = run_sensitivity(base_inputs())
+    result = run_sensitivity(_inputs())
     for row in result.matrix:
         for cell in row:
             assert cell.validation_errors == []
@@ -599,7 +601,7 @@ def test_warnings_do_not_invalidate_a_position():
 
 def test_flagged_cell_is_still_a_measurement():
     """Sec 12.2: a covenant flag is the finding, not invalidity."""
-    result = run_sensitivity(base_inputs())
+    result = run_sensitivity(_inputs())
     flagged = [c for row in result.matrix for c in row if c.flags]
     assert flagged
     for cell in flagged:
@@ -608,12 +610,12 @@ def test_flagged_cell_is_still_a_measurement():
 
 
 def test_tornado_bar_with_unmeasured_endpoint_has_no_span():
-    config = _default_config()
+    config = _config()
     config.tornado = [
         TornadoRange(lever="gdv", low=-10, high=10),
         TornadoRange(lever="timeline", low=-12, high=3),
     ]
-    bars = run_sensitivity(base_inputs(), config).tornado
+    bars = run_sensitivity(_inputs(), config).tornado
     timeline = next(b for b in bars if b.lever == "timeline")
     assert timeline.span_pence is None
     assert len(timeline.low.validation_errors) > 0
@@ -621,26 +623,28 @@ def test_tornado_bar_with_unmeasured_endpoint_has_no_span():
 
 
 def test_spanless_bars_sort_last():
-    config = _default_config()
+    config = _config()
     config.tornado = [
         TornadoRange(lever="timeline", low=-12, high=3),
         TornadoRange(lever="interest_rate", low=-1, high=1),
         TornadoRange(lever="gdv", low=-10, high=10),
     ]
-    bars = run_sensitivity(base_inputs(), config).tornado
+    bars = run_sensitivity(_inputs(), config).tornado
     assert bars[-1].lever == "timeline"
     assert bars[-1].span_pence is None
     assert all(b.span_pence is not None for b in bars[:-1])
 
 
 def test_invalid_base_document_raises():
-    bad = base_inputs()
+    bad = _inputs()
     bad.finance.term_months = 0
     with pytest.raises(ValueError, match="base document"):
         run_sensitivity(bad)
 ```
 
-Import whatever of `SensitivityAxis` / `TornadoRange` / `_default_config` the file does not already import; check its existing imports first and add only what is missing.
+**Helper names in this file, verified:** base inputs come from **`_inputs()`** (line 28) and a deep-copied default config from **`_config(**overrides)`** (line 32) — there is no `base_inputs()` or `_default_config()`. `SensitivityAxis`, `TornadoRange`, `SensitivityConfig`, `DEFAULT_SENSITIVITY_CONFIG` and `pytest` are already imported at the top of the file; add only `validate_inputs` if a test needs it directly (none above do).
+
+`_config()` returns a fresh deep copy, so mutating `config.rows` on the result is safe and cannot leak between tests.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 

@@ -1,6 +1,6 @@
 # Financial Model — Test Cases
 
-**Status:** Authoritative test-case register for calculation specification `2.4.0` (see
+**Status:** Authoritative test-case register for calculation specification `2.5.0` (see
 `docs/financial-model/calculation-specification.md`). This document enumerates every
 golden fixture, ledger fixture, invariant and regression vector that pins the engine's
 behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
@@ -2310,6 +2310,21 @@ re-deriving Fixture F end to end and reproducing all eight of F's pinned figures
 run only to confirm agreement, and it agreed on every value at the first attempt. The remaining
 twenty-three grid cells are *identity-asserted* rather than hand-derived, under the recorded and
 approved exception in `model-governance.md` §2.1.
+
+### Fixture K — `invalid_case` (spec §12.7, R5)
+
+Base fixture F runs `finance.term_months = 12`.
+
+| Timeline step | Resulting term | ≥ 1? | Outcome |
+|---|---|---|---|
+| −12 | 12 + (−12) = 0 | no | unmeasured — `finance.term_months` error |
+| −11 | 12 + (−11) = 1 | yes | measured |
+| 0 | 12 + 0 = 12 | yes | measured |
+
+No arithmetic beyond the term addition and the comparison against 1: §12.7 keys off
+validation, and `validation.ts:61` / `validation.py:83` reject a term below one month. The
+−11 row is carried deliberately so the boundary is pinned from the measured side too — a
+rule that marked every position unmeasured would satisfy the −12 row alone.
 
 ---
 

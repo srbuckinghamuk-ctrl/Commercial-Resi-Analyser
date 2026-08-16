@@ -158,26 +158,57 @@ describe('SensitivityPage — axis and step editor', () => {
     expect(screen.getByText(/at most 9 steps/i)).toBeInTheDocument();
   });
 
-  // The carried-forward §12.6 gap, and the reason this guard exists at all: the
-  // engine does NOT reject a timeline step that empties the term. It clamps to a
-  // one-month term, so -11, -12 and -13 on this 12-month deal would render three
-  // identical columns under three different captions. The page refuses the axis
-  // instead of printing an answer it cannot stand behind.
-  it('refuses a timeline step that would empty the term', () => {
+  // R5: §12.7 replaced the page's own term guard. A mixed axis now renders — the
+  // unmeasured row shows its reason and the measured rows show their numbers, which
+  // tells the analyst where the deal stops being modellable instead of refusing the
+  // whole grid. This must be able to fail against an implementation that renders
+  // "—" in every cell (row captions alone can't tell a mixed grid from a blank one),
+  // so it pins the unmeasured row's dash cells and the measured row's real values.
+  it('renders unmeasured and measured rows side by side for a mixed timeline axis', () => {
     render(<SensitivityPage inputs={buildInputs()} />);
     fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
-    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-3, -12' } });
-    expect(screen.getByText(/at least one month/i)).toBeInTheDocument();
-    expect(screen.queryByRole('table', { name: /two-way sensitivity/i })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12, -11' } });
+
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    const rows = within(matrix).getAllByRole('row');
+    expect(rows).toHaveLength(3); // header + 2 body rows
+
+    const unmeasuredRow = rows[1];
+    expect(within(unmeasuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline -12 months');
+    const unmeasuredCells = within(unmeasuredRow).getAllByRole('cell');
+    expect(unmeasuredCells).toHaveLength(5); // default GDV column axis has 5 steps
+    for (const cell of unmeasuredCells) {
+      expect(cell).toHaveTextContent('—');
+    }
+
+    const measuredRow = rows[2];
+    expect(within(measuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline -11 months');
+    for (const cell of within(measuredRow).getAllByRole('cell')) {
+      expect(cell.textContent).toMatch(/-?\d+\.\d%/);
+    }
+
+    expect(screen.queryByText(/at least one month of term/i)).not.toBeInTheDocument();
   });
 
-  it('allows a timeline step that leaves a one-month term', () => {
+  it('shows the validation reason on an unmeasured cell, and leaves measured cells untitled', () => {
     render(<SensitivityPage inputs={buildInputs()} />);
     fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
-    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-11, 0' } });
-    expect(screen.queryByText(/at least one month/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12' } });
+
     const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
-    expect(within(matrix).getByText('Timeline -11 months')).toBeInTheDocument();
+    // Every column in the row is unmeasured for the same reason (the row lever alone
+    // drives the term below one month), so the title is repeated across the row —
+    // pinned exactly at the default GDV column axis's step count, so this fails
+    // against an implementation that titled the measured cells too.
+    const titledCells = within(matrix).getAllByTitle(/whole number of months, at least 1/i);
+    expect(titledCells).toHaveLength(5);
+    for (const cell of titledCells) {
+      expect(cell).toHaveTextContent('—');
+      expect(cell).toHaveStyle({ color: 'rgb(148, 163, 184)', fontStyle: 'italic' });
+    }
+    // No other cell in the matrix carries a title.
+    const allCells = within(matrix).getAllByRole('cell');
+    expect(allCells.filter((cell) => cell.hasAttribute('title'))).toHaveLength(5);
   });
 
   it('restores the spec defaults on reset', () => {
@@ -202,17 +233,14 @@ describe('SensitivityPage — axis and step editor', () => {
   });
 });
 
-// ── Release 4b final review, finding 2 ──────────────────────────────────
+// ── Spec §12.7 (R5): cell validity ──────────────────────────────────────
 //
-// The default tornado's fixed -3-month low endpoint clamps finance.term_months
-// on any deal with a term of three months or less (the engine clamps rather
-// than throwing — see safe-sensitivity.test.ts). Before this fix, the page's
-// term guard folded that fixed range into the same check that gates the axis
-// editor, so the page was dead on first render for such a deal: only the error
-// panel showed, above an editor with no timeline step at all and a "Reset to
-// defaults" button that could not help. The fix drops just the unsound bar and
-// still renders everything else.
-describe('SensitivityPage — clamped-term tornado omission', () => {
+// The default tornado's fixed -3-month low endpoint drives finance.term_months
+// to zero or less on any deal with a term of three months or less. That levered
+// document fails validation (§12.7), so the endpoint is unmeasured and the bar
+// has no span — it is dropped from the tornado table with the omission stated,
+// while the two-way matrix and the rest of the tornado render normally.
+describe('SensitivityPage — unmeasured tornado endpoint omission', () => {
   function buildShortTermInputs(): CalculatorInputsV4 {
     const inputs = buildInputs();
     return { ...inputs, finance: { ...inputs.finance, term_months: 3 } };
@@ -226,14 +254,18 @@ describe('SensitivityPage — clamped-term tornado omission', () => {
     expect(screen.getByRole('table', { name: /two-way sensitivity/i })).toBeInTheDocument();
   });
 
-  it('drops the timeline bar from the tornado and states the omission', () => {
+  // The omission note must print the engine's own reason for the specific endpoint
+  // that failed (spec §12.7), not a term-shaped guess reconstructed on this page —
+  // a different lever (e.g. interest_rate going negative) fails for an unrelated
+  // reason, so a hard-coded "term too short" caption would be false for it.
+  it('drops the timeline bar from the tornado and states the engine-reported reason', () => {
     render(<SensitivityPage inputs={buildShortTermInputs()} />);
     const tornado = screen.getByRole('table', { name: /single-lever/i });
     const labels = within(tornado).getAllByRole('row').slice(1)
       .map((row) => within(row).getAllByRole('cell')[0].textContent);
     expect(labels).toEqual(['GDV', 'Construction cost', 'Interest rate']);
     expect(screen.getByText(/Timeline omitted/i)).toBeInTheDocument();
-    expect(screen.getByText(/3-month term/i)).toBeInTheDocument();
+    expect(screen.getByText(/whole number of months, at least 1/i)).toBeInTheDocument();
   });
 
   it('still renders the tornado table for the levers that remain sound', () => {
@@ -244,13 +276,33 @@ describe('SensitivityPage — clamped-term tornado omission', () => {
     expect(within(tornado).getByText('Interest rate')).toBeInTheDocument();
   });
 
-  // A user-entered axis step that empties the term must still refuse the
-  // grid — only the tornado's own fixed ranges were taken out of the gate.
-  it('still refuses the grid when the user edits a timeline axis step that empties the term', () => {
+  // R5: a user-entered axis step that empties the term no longer refuses the grid
+  // (that was the page's own term guard, retired in favour of §12.7). The matrix
+  // still renders, with the empty-term step unmeasured and its reason on the cell.
+  it('renders an unmeasured row rather than refusing the grid when a timeline axis step empties the term', () => {
     render(<SensitivityPage inputs={buildShortTermInputs()} />);
     fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
     fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '0, -3' } });
-    expect(screen.getByText(/at least one month/i)).toBeInTheDocument();
-    expect(screen.queryByRole('table', { name: /two-way sensitivity/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/does not describe a valid grid/i)).not.toBeInTheDocument();
+
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    const rows = within(matrix).getAllByRole('row');
+    expect(rows).toHaveLength(3); // header + 2 body rows
+
+    const measuredRow = rows[1];
+    expect(within(measuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline +0 months');
+    for (const cell of within(measuredRow).getAllByRole('cell')) {
+      expect(cell.textContent).toMatch(/-?\d+\.\d%/);
+      expect(cell).not.toHaveAttribute('title');
+    }
+
+    const unmeasuredRow = rows[2];
+    expect(within(unmeasuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline -3 months');
+    const unmeasuredCells = within(unmeasuredRow).getAllByRole('cell');
+    expect(unmeasuredCells).toHaveLength(5); // default GDV column axis has 5 steps
+    for (const cell of unmeasuredCells) {
+      expect(cell).toHaveTextContent('—');
+      expect(cell).toHaveAttribute('title', 'Term must be a whole number of months, at least 1.');
+    }
   });
 });

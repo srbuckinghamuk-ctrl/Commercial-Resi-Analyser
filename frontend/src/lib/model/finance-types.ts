@@ -338,4 +338,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.4.0';
+export const CALC_VERSION = '2.5.0';

@@ -187,6 +187,13 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
     expected_corner_cells: Array<Record<string, number | string[]>>;
     expected_tornado_order: string[];
     expected_tornado_spans_pence: Record<string, number>;
+    invalid_case: {
+      note: string;
+      config: SensitivityConfig;
+      expected_unmeasured_rows: number[];
+      expected_measured_rows: number[];
+      expected_unmeasured_error: { severity: string; field: string; message: string };
+    };
   }
 
   const k = JSON.parse(
@@ -294,5 +301,35 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         expect(cell.flags).toEqual(expected.flags.map((f) => f.code));
       });
     });
+  });
+
+  // Hand-derived (§12.7): 12 + (−12) = 0 < 1, so that row is unmeasured; 12 + (−11) = 1,
+  // which is legal, so that row must still measure. The measured row is the half that
+  // matters — a rule that marked everything unmeasured would satisfy the other half alone.
+  it('does not measure the positions §12.7 excludes, and still measures the boundary', () => {
+    const ic = k.invalid_case;
+    const r = runSensitivity(baseInputs, ic.config);
+
+    for (const step of ic.expected_unmeasured_rows) {
+      const row = r.matrix.find((cells) => cells[0].row_step === step);
+      expect(row, `row ${step}`).toBeDefined();
+      for (const cell of row!) {
+        expect(cell.profit_pence, `row ${step} profit`).toBeNull();
+        expect(cell.peak_debt_pence, `row ${step} peak debt`).toBeNull();
+        expect(cell.flags, `row ${step} flags`).toEqual([]);
+        expect(cell.validation_errors, `row ${step} errors`).toContainEqual(
+          ic.expected_unmeasured_error,
+        );
+      }
+    }
+
+    for (const step of ic.expected_measured_rows) {
+      const row = r.matrix.find((cells) => cells[0].row_step === step);
+      expect(row, `row ${step}`).toBeDefined();
+      for (const cell of row!) {
+        expect(cell.validation_errors, `row ${step} errors`).toEqual([]);
+        expect(cell.profit_pence, `row ${step} profit`).not.toBeNull();
+      }
+    }
   });
 });

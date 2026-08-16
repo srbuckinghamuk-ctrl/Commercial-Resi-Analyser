@@ -7,7 +7,8 @@ import { applyScenario } from './model/apply-scenario';
 import { runSensitivity } from './model/sensitivity';
 import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
 import {
-  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes, isUnsoundTornadoBar,
+  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
+  isMeasuredBar, omittedTornadoNotes,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
@@ -159,13 +160,23 @@ export interface MemoSensitivityTables {
   pocRows: string[][];
   ltgdvRows: string[][];
   /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar.
-   *  Excludes any bar `isUnsoundTornadoBar` flags — see `omittedTornadoLevers`. */
+   *  Excludes any bar with an unmeasured endpoint — see `omittedTornadoNotes`. */
   tornadoRows: string[][];
-  /** Levers dropped from `tornadoRows` because their fixed range would clamp
-   *  finance.term_months below one month (spec §12.6 gap, R5 backlog) — empty
-   *  when every bar is sound. The caller must print why these are missing
-   *  rather than silently shrinking the table. */
-  omittedTornadoLevers: SensitivityLever[];
+  /** One fully-formed sentence per lever dropped from `tornadoRows` because the engine
+   *  could not measure one of its endpoints — the levered document failed validation
+   *  (spec §12.7) — empty when every bar is measured. Each sentence carries the
+   *  engine's own `validation_errors` message for that endpoint, not a rationale
+   *  reconstructed here: different levers fail for different reasons (an emptied
+   *  term, a negative rate, a sales tranche past the programme end, …), and only the
+   *  engine knows which applies. The caller must print these rather than silently
+   *  shrinking the table. Built by the shared `omittedTornadoNotes` (sensitivity-format.ts),
+   *  the same function SensitivityPage.tsx uses, so the two surfaces cannot disagree. */
+  omittedTornadoNotes: string[];
+  /** True when at least one `pocRows`/`ltgdvRows` cell is a position the engine could
+   *  not measure (spec §12.7) rather than a metric that is merely null (e.g. a
+   *  zero-denominator ratio) — both print as "n/a", so the caller uses this to decide
+   *  whether the distinguishing footnote is needed. */
+  hasUnmeasuredMatrixCells: boolean;
 }
 
 export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
@@ -176,7 +187,6 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
   // export-investment-memo.test.ts pins that string for string.
   const result = runSensitivity(inputs);
   const { rows, cols } = result.config;
-  const termMonths = inputs.finance.term_months;
 
   const axisCaption = (lever: SensitivityLever, step: number) =>
     `${LEVER_SHORT[lever]} ${formatStepLabel(lever, step)}`;
@@ -192,14 +202,16 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
       ...row.map((cell) => cellText(cell, key)),
     ]);
 
-  // A bar whose fixed range would clamp the term (see isUnsoundTornadoBar) is
-  // dropped rather than printed: its "low" or "high" figure is not really the
-  // stated step, it's the one-month-clamp floor, indistinguishable from any
-  // other step that clamps to the same place.
-  const soundBars = result.tornado.filter((bar) => !isUnsoundTornadoBar(termMonths, bar));
-  const omittedTornadoLevers = result.tornado
-    .filter((bar) => isUnsoundTornadoBar(termMonths, bar))
-    .map((bar) => bar.lever);
+  // §12.7: the engine reports a bar with an unmeasured endpoint as having no span. The
+  // memo omits those rather than printing a partial bar, and says so beneath the table
+  // — using the engine's own `validation_errors` message for that endpoint, not a
+  // rationale reconstructed here (the earlier term-only wording was wrong for any bar
+  // whose endpoint failed validation for a reason other than an emptied term, e.g. an
+  // interest-rate endpoint gone negative, or a sales tranche landing past the
+  // programme end). Both `isMeasuredBar` and the sentence builder are shared with
+  // SensitivityPage.tsx via sensitivity-format.ts, so the two surfaces cannot drift.
+  const soundBars = result.tornado.filter(isMeasuredBar);
+  const tornadoNotes = omittedTornadoNotes(result.tornado);
 
   const tornadoRows = soundBars.map((bar) => [
     LEVER_LABEL[bar.lever],
@@ -211,12 +223,19 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     fmt(bar.span_pence),
   ]);
 
+  // §12.7: a matrix cell can be unmeasured too (validation_errors non-empty), and
+  // cellText() prints that identically to a metric that is merely null for an
+  // unrelated reason (fmtPctSafe's default "n/a") — this tells the caller whether
+  // the distinguishing footnote under the matrices is needed.
+  const hasUnmeasuredMatrixCells = result.matrix.some((row) => row.some((cell) => cell.validation_errors.length > 0));
+
   return {
     head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
     pocRows: bodyFor('profit_on_cost_pct'),
     ltgdvRows: bodyFor('ltgdv_developer_pct'),
     tornadoRows,
-    omittedTornadoLevers,
+    omittedTornadoNotes: tornadoNotes,
+    hasUnmeasuredMatrixCells,
   };
 }
 
@@ -1245,95 +1264,135 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
-  const sens = sensitivityTables(inputs);
+  // §12.7/§12.5: runSensitivity (and so sensitivityTables) throws when the *base*
+  // document itself fails validation — a saved appraisal can reach this function in
+  // that state (e.g. `finance.equity_draw_rule: 'pari_passu'`, a migration state
+  // some historical documents still carry), and other error-severity issues besides.
+  // A ten-section memo should not vanish for one section's sake: the DRAFT watermark
+  // already flags a document in this state (`run.reconciliation.report_safe`), so
+  // §10 degrades — states that the analysis was not produced and the engine's own
+  // reason, in the same omission-stated style the rest of this section already uses
+  // for a single dropped bar — rather than the whole export failing.
+  let sens: MemoSensitivityTables | null = null;
+  let sensitivityFailureMessage: string | null = null;
+  try {
+    sens = sensitivityTables(inputs);
+  } catch (err) {
+    sensitivityFailureMessage = err instanceof Error ? err.message : String(err);
+  }
 
-  y = subHeading(y, 'Single-Lever Sensitivity (Tornado)');
-  y = bodyText(
-    y,
-    'Each lever is moved alone, with every other assumption at base. Swing is the absolute profit difference between the two endpoints; bars are listed widest swing first (spec §12.4).',
-  );
+  if (sens) {
+    y = subHeading(y, 'Single-Lever Sensitivity (Tornado)');
+    y = bodyText(
+      y,
+      'Each lever is moved alone, with every other assumption at base. Swing is the absolute profit difference between the two endpoints; bars are listed widest swing first (spec §12.4).',
+    );
 
-  if (sens.tornadoRows.length > 0) {
+    if (sens.tornadoRows.length > 0) {
+      table({
+        startY: y,
+        margin: { left: MARGIN_L, right: MARGIN_R },
+        head: [['Lever', 'Range', 'Profit at low', 'Profit at high', 'Swing']],
+        body: sens.tornadoRows,
+        styles: { fontSize: 9, cellPadding: 2 },
+        headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+        bodyStyles: { textColor: [51, 65, 85] },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: {
+          0: { fontStyle: 'bold' },
+          2: { halign: 'right' },
+          3: { halign: 'right' },
+          4: { halign: 'right', fontStyle: 'bold' },
+        },
+      });
+      y = lastAutoTableFinalY(doc) + 4;
+    }
+    // A bar is omitted rather than printed when the engine could not measure one of
+    // its endpoints — the levered document failed validation (spec §12.7). Each
+    // sentence in `omittedTornadoNotes` already carries the engine's own reason for
+    // that specific endpoint (built in sensitivityTables()); this only joins them so
+    // the omission is stated rather than silent. If every bar were omitted, this line
+    // prints alone with no table above it (see sens.tornadoRows.length guard above)
+    // rather than an empty or misleadingly-partial table.
+    if (sens.omittedTornadoNotes.length > 0) {
+      y = bodyText(y, sens.omittedTornadoNotes.join(' '));
+    }
+    y += 4;
+
+    y = subHeading(y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
+
     table({
       startY: y,
       margin: { left: MARGIN_L, right: MARGIN_R },
-      head: [['Lever', 'Range', 'Profit at low', 'Profit at high', 'Swing']],
-      body: sens.tornadoRows,
-      styles: { fontSize: 9, cellPadding: 2 },
-      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
-      bodyStyles: { textColor: [51, 65, 85] },
-      alternateRowStyles: { fillColor: [241, 245, 249] },
-      columnStyles: {
-        0: { fontStyle: 'bold' },
-        2: { halign: 'right' },
-        3: { halign: 'right' },
-        4: { halign: 'right', fontStyle: 'bold' },
+      head: [sens.head],
+      body: sens.pocRows,
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
+      bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
+      columnStyles: { 0: { fontStyle: 'bold', halign: 'left' } },
+      didParseCell(data) {
+        if (data.section === 'body' && data.column.index > 0) {
+          const val = parseFloat(String(data.cell.raw));
+          if (val < 0) {
+            data.cell.styles.textColor = [220, 38, 38];
+            data.cell.styles.fontStyle = 'bold';
+          } else if (val < 15) {
+            data.cell.styles.textColor = [217, 119, 6];
+          }
+        }
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+
+    y = subHeading(y, 'Two-Way Sensitivity Matrix: LTGDV, developer basis (%)');
+
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [sens.head],
+      body: sens.ltgdvRows,
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
+      bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
+      columnStyles: { 0: { fontStyle: 'bold', halign: 'left' } },
+      didParseCell(data) {
+        if (data.section === 'body' && data.column.index > 0) {
+          const val = parseFloat(String(data.cell.raw));
+          if (val > 75) {
+            data.cell.styles.textColor = [220, 38, 38];
+            data.cell.styles.fontStyle = 'bold';
+          } else if (val > 65) {
+            data.cell.styles.textColor = [217, 119, 6];
+          }
+        }
       },
     });
     y = lastAutoTableFinalY(doc) + 4;
-  }
-  // A bar is omitted rather than printed when its fixed range would clamp
-  // finance.term_months below one month (isUnsoundTornadoBar) — the omission
-  // itself is stated so the gap is never silent. If every bar were omitted,
-  // this line prints alone with no table above it (see sens.tornadoRows.length
-  // guard above) rather than an empty or misleadingly-partial table.
-  if (sens.omittedTornadoLevers.length > 0) {
+
+    // A matrix cell reads "n/a" for two different reasons that print identically: a
+    // metric that is genuinely undefined (e.g. a zero-denominator ratio), or a
+    // position the engine could not measure at all because its levered document
+    // failed validation (spec §12.7). Printed only when the latter actually occurs
+    // in this grid, so an ordinary deal's matrices carry no extra caption.
+    if (sens.hasUnmeasuredMatrixCells) {
+      y = bodyText(
+        y,
+        '"n/a" above may mean the metric is undefined for that position, or that the position itself could not be measured — its levered document failed validation and no appraisal was run for it (spec §12.7).',
+      );
+    }
+  } else {
+    // In place of the tornado and the two matrices: the engine refused to run the
+    // suite at all because the base document itself fails validation (spec
+    // §12.5/§12.7) — not one position out of many, every position at once — so
+    // there is nothing partial to print. The reason is the engine's own thrown
+    // message, not a rationale reconstructed here.
+    y = subHeading(y, 'Sensitivity Analysis');
     y = bodyText(
       y,
-      `${sens.omittedTornadoLevers.map((l) => LEVER_LABEL[l]).join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would clamp to a one-month term and print a figure that does not represent that step. See spec §12.6.`,
+      `The spec §12 sensitivity analysis was not produced for this document: ${sensitivityFailureMessage} (spec §12.7).`,
     );
   }
-  y += 4;
-
-  y = subHeading(y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
-
-  table({
-    startY: y,
-    margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [sens.head],
-    body: sens.pocRows,
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
-    bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
-    columnStyles: { 0: { fontStyle: 'bold', halign: 'left' } },
-    didParseCell(data) {
-      if (data.section === 'body' && data.column.index > 0) {
-        const val = parseFloat(String(data.cell.raw));
-        if (val < 0) {
-          data.cell.styles.textColor = [220, 38, 38];
-          data.cell.styles.fontStyle = 'bold';
-        } else if (val < 15) {
-          data.cell.styles.textColor = [217, 119, 6];
-        }
-      }
-    },
-  });
-  y = lastAutoTableFinalY(doc) + 6;
-
-  y = subHeading(y, 'Two-Way Sensitivity Matrix: LTGDV, developer basis (%)');
-
-  table({
-    startY: y,
-    margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [sens.head],
-    body: sens.ltgdvRows,
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: [30, 58, 95], textColor: 255, halign: 'center' },
-    bodyStyles: { textColor: [51, 65, 85], halign: 'center' },
-    columnStyles: { 0: { fontStyle: 'bold', halign: 'left' } },
-    didParseCell(data) {
-      if (data.section === 'body' && data.column.index > 0) {
-        const val = parseFloat(String(data.cell.raw));
-        if (val > 75) {
-          data.cell.styles.textColor = [220, 38, 38];
-          data.cell.styles.fontStyle = 'bold';
-        } else if (val > 65) {
-          data.cell.styles.textColor = [217, 119, 6];
-        }
-      }
-    },
-  });
-  y = lastAutoTableFinalY(doc) + 6;
+  y += 2;
 
   y = subHeading(y, 'Senior Debt Position');
   y = bodyText(

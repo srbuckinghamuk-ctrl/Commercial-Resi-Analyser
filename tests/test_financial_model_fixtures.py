@@ -643,16 +643,16 @@ K_BASE_INPUTS = parse_calculator_inputs(
 )
 
 
-def _k_config() -> SensitivityConfig:
-    c = K_DOC["config"]
+def _config_from(c: dict) -> SensitivityConfig:
     return SensitivityConfig(
         rows=SensitivityAxis(lever=c["rows"]["lever"], steps=list(c["rows"]["steps"])),
         cols=SensitivityAxis(lever=c["cols"]["lever"], steps=list(c["cols"]["steps"])),
-        tornado=[
-            TornadoRange(lever=t["lever"], low=t["low"], high=t["high"])
-            for t in c["tornado"]
-        ],
+        tornado=[TornadoRange(lever=t["lever"], low=t["low"], high=t["high"]) for t in c["tornado"]],
     )
+
+
+def _k_config() -> SensitivityConfig:
+    return _config_from(K_DOC["config"])
 
 
 def _levered(**levers: float) -> AnyCalculatorInputs:
@@ -730,6 +730,32 @@ def test_fixture_k_defines_every_remaining_cell_as_the_levered_appraisal() -> No
             assert cell.ltgdv_developer_pct == expected.ltgdv_developer_pct
             assert cell.peak_debt_pence == expected.peak_debt_pence
             assert cell.flags == [f.code for f in expected.flags]
+
+
+def test_fixture_k_invalid_case_matches_spec_12_7():
+    """Hand-derived: 12 + (-12) = 0 < 1 -> unmeasured; 12 + (-11) = 1 -> measured."""
+    ic = K_DOC["invalid_case"]
+    result = run_sensitivity(K_BASE_INPUTS, _config_from(ic["config"]))
+    expected_error = ic["expected_unmeasured_error"]
+
+    for step in ic["expected_unmeasured_rows"]:
+        row = next(cells for cells in result.matrix if cells[0].row_step == step)
+        for cell in row:
+            assert cell.profit_pence is None
+            assert cell.peak_debt_pence is None
+            assert cell.flags == []
+            assert any(
+                e.severity == expected_error["severity"]
+                and e.field == expected_error["field"]
+                and e.message == expected_error["message"]
+                for e in cell.validation_errors
+            )
+
+    for step in ic["expected_measured_rows"]:
+        row = next(cells for cells in result.matrix if cells[0].row_step == step)
+        for cell in row:
+            assert cell.validation_errors == []
+            assert cell.profit_pence is not None
 
 
 # ---------------------------------------------------------------------------
@@ -813,7 +839,12 @@ def test_sensitivity_sorts_the_tornado_totally_and_deterministically(inputs: Any
     shuffled = run_sensitivity(inputs, shuffled_config)
     assert [b.lever for b in shuffled.tornado] == [b.lever for b in forward.tornado]
     spans = [b.span_pence for b in forward.tornado]
-    assert sorted(spans, reverse=True) == spans
+    # Sec 12.7: a null span (an unmeasured endpoint, e.g. fixtures I/J's timeline bar)
+    # always sorts last already, and treating None as 0 here (mirroring the TS sibling
+    # test's null-to-0 coercion) is <= every real span here (a magnitude) -- so this
+    # numeric re-sort still agrees with the engine's actual placement. This asserts
+    # total order, not nullness.
+    assert sorted(spans, key=lambda s: -(s or 0)) == spans
 
 
 @pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)

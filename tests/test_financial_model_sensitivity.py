@@ -23,10 +23,15 @@ from app.financial_model.sensitivity import (
 from app.financial_model.types import ScenarioOverrides, parse_calculator_inputs
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
+FIXTURE_I = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "i-phased-sales.json"
 
 
 def _inputs():
     return parse_calculator_inputs(json.loads(FIXTURE_F.read_text(encoding="utf-8"))["inputs"])
+
+
+def _fixture_i_inputs():
+    return parse_calculator_inputs(json.loads(FIXTURE_I.read_text(encoding="utf-8"))["inputs"])
 
 
 def _config(**overrides) -> SensitivityConfig:
@@ -255,3 +260,145 @@ def test_run_sensitivity_default_config_is_not_shared():
     assert len(second.matrix[0]) == 5
     # The shared module-level constant itself must also be untouched.
     assert list(DEFAULT_SENSITIVITY_CONFIG.cols.steps) == [-15, -10, -5, 0, 5]
+
+
+# ---- Release 5: Sec 12.7 cell validity ----
+
+def test_position_failing_validation_is_not_measured():
+    """A -12 timeline step on a 12-month base empties the term, which validation
+    rejects at error severity. Before R5 the suite clamped and reported numbers."""
+    config = _config()
+    config.rows = SensitivityAxis(lever="timeline", steps=[-12])
+    config.cols = SensitivityAxis(lever="gdv", steps=[0])
+    cell = run_sensitivity(_inputs(), config).matrix[0][0]
+
+    assert len(cell.validation_errors) > 0
+    assert all(e.severity == "error" for e in cell.validation_errors)
+    assert any(e.field == "finance.term_months" for e in cell.validation_errors)
+    assert cell.profit_pence is None
+    assert cell.peak_debt_pence is None
+    assert cell.profit_on_cost_pct is None
+    assert cell.profit_on_gdv_pct is None
+    assert cell.irr_annual_pct is None
+    assert cell.ltgdv_developer_pct is None
+    assert cell.flags == []
+
+
+def test_position_leaving_exactly_one_month_is_measured():
+    config = _config()
+    config.rows = SensitivityAxis(lever="timeline", steps=[-11])
+    config.cols = SensitivityAxis(lever="gdv", steps=[0])
+    cell = run_sensitivity(_inputs(), config).matrix[0][0]
+
+    assert cell.validation_errors == []
+    assert cell.profit_pence is not None
+
+
+def test_warnings_do_not_invalidate_a_position():
+    """Fixture F carries a warning on conversion_costs.total_construction_sqm."""
+    result = run_sensitivity(_inputs())
+    for row in result.matrix:
+        for cell in row:
+            assert cell.validation_errors == []
+            assert cell.profit_pence is not None
+
+
+def test_flagged_cell_is_still_a_measurement():
+    """Sec 12.2: a covenant flag is the finding, not invalidity."""
+    result = run_sensitivity(_inputs())
+    flagged = [c for row in result.matrix for c in row if c.flags]
+    assert flagged
+    for cell in flagged:
+        assert cell.validation_errors == []
+        assert cell.profit_pence is not None
+
+
+def test_tornado_bar_with_unmeasured_endpoint_has_no_span():
+    config = _config()
+    config.tornado = [
+        TornadoRange(lever="gdv", low=-10, high=10),
+        TornadoRange(lever="timeline", low=-12, high=3),
+    ]
+    bars = run_sensitivity(_inputs(), config).tornado
+    timeline = next(b for b in bars if b.lever == "timeline")
+    assert timeline.span_pence is None
+    assert len(timeline.low.validation_errors) > 0
+    assert timeline.high.validation_errors == []
+
+
+def test_spanless_bars_sort_last():
+    config = _config()
+    config.tornado = [
+        TornadoRange(lever="timeline", low=-12, high=3),
+        TornadoRange(lever="interest_rate", low=-1, high=1),
+        TornadoRange(lever="gdv", low=-10, high=10),
+    ]
+    bars = run_sensitivity(_inputs(), config).tornado
+    assert bars[-1].lever == "timeline"
+    assert bars[-1].span_pence is None
+    assert all(b.span_pence is not None for b in bars[:-1])
+
+
+def test_two_spanless_bars_sort_relative_to_each_other_by_lever_order():
+    """Mirror of sensitivity.test.ts's 'orders two spanless bars relative to each
+    other by LEVER_ORDER' (final whole-branch review, Finding 3). A single spanless
+    bar can't distinguish "sorts last" from "sorts last in LEVER_ORDER" -- with only
+    one null-span bar, any tie-break would look identical. Two invalidating levers
+    closes that: gdv at -100% drives every unit's estimated_value_pence to zero
+    (validation's "positive value" rule), so its low endpoint is unmeasured exactly
+    like timeline's -12 endpoint (which empties the term). Both must sort after every
+    bar with a real span, and gdv (index 0) must sort before timeline (index 2) in
+    LEVER_ORDER -- the third sort key TS pins and this file, before this test, did
+    not.
+    """
+    config = _config()
+    config.tornado = [
+        TornadoRange(lever="timeline", low=-12, high=3),
+        TornadoRange(lever="interest_rate", low=-1, high=1),
+        TornadoRange(lever="gdv", low=-100, high=10),
+        TornadoRange(lever="construction_cost", low=-10, high=10),
+    ]
+    bars = run_sensitivity(_inputs(), config).tornado
+
+    spanless = [b.lever for b in bars if b.span_pence is None]
+    assert spanless == ["gdv", "timeline"]
+    # Both spanless bars sit at the tail, in that same relative order.
+    assert [b.lever for b in bars[-2:]] == ["gdv", "timeline"]
+    # Every bar ahead of them has a real span.
+    assert all(b.span_pence is not None for b in bars[:-2])
+    # Confirms *why* gdv is unmeasured, not just that it is.
+    gdv_bar = next(b for b in bars if b.lever == "gdv")
+    assert any("estimated_value_pence" in e.field for e in gdv_bar.low.validation_errors)
+
+
+def test_invalid_base_document_raises():
+    bad = _inputs()
+    bad.finance.term_months = 0
+    with pytest.raises(ValueError, match="base document"):
+        run_sensitivity(bad)
+
+
+def test_does_not_measure_default_tornado_low_endpoint_of_phased_sales_deal():
+    """Mirror of sensitivity.test.ts's 'does not measure the default tornado low
+    endpoint of a phased-sales deal' (final whole-branch review, Finding 4). Fixture
+    I is a phased-sales deal whose tranches sit in months 9-11 of a 12-month
+    programme. The DEFAULT tornado's -3 month endpoint leaves a 9-month term, so
+    those tranches point at months that no longer exist and validation rejects the
+    document. Before R5 that endpoint reported a profit computed from exactly that
+    document; the parametrised corpus in test_financial_model_fixtures.py only
+    exercises fixture I through the null-as-0 assertion, so this is the realistic
+    instance -- not just the exotic term_months=0 case above -- pinned in the Python
+    engine, mirroring the existing TS pin.
+    """
+    fixture_i = _fixture_i_inputs()
+    bars = run_sensitivity(fixture_i).tornado
+    timeline = next(b for b in bars if b.lever == "timeline")
+
+    assert len(timeline.low.validation_errors) > 0
+    assert any(e.field.startswith("sales_phasing.tranches") for e in timeline.low.validation_errors)
+    assert timeline.low.profit_pence is None
+    assert timeline.span_pence is None
+    # Sec 12.4 as extended by Sec 12.7: no span means it sorts last.
+    assert bars[-1].lever == "timeline"
+    # The high endpoint lengthens the programme, so it stays measured.
+    assert timeline.high.validation_errors == []

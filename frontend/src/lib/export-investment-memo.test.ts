@@ -711,8 +711,11 @@ describe('sensitivityTables — memo §10 regression pin', () => {
     for (let i = 0; i < rows.length; i++) {
       const bar = engineTornado[i];
       expect(rows[i][0]).toBe(LEVER_LABEL[bar.lever]);
-      expect(rows[i][2]).toBe(gbp(bar.low.profit_pence));
-      expect(rows[i][3]).toBe(gbp(bar.high.profit_pence));
+      // §12.7: baseInputs() is a plain 12-month deal with no phasing, so no default
+      // tornado endpoint is ever unmeasured here — the null case is pinned on fixtures
+      // I and J in sensitivity.test.ts.
+      expect(rows[i][2]).toBe(gbp(bar.low.profit_pence as number));
+      expect(rows[i][3]).toBe(gbp(bar.high.profit_pence as number));
     }
   });
 
@@ -790,36 +793,41 @@ describe('generateInvestmentMemo — §10 sensitivity wiring', () => {
   });
 });
 
-// ── Release 4b final review, findings 1 & 2 ─────────────────────────────
+// ── Spec §12.7 (R5): cell validity ──────────────────────────────────────
 //
-// The engine clamps a timeline step that would drive finance.term_months
-// below one month instead of throwing (safe-sensitivity.test.ts pins this).
-// The default tornado's fixed -3-month low endpoint hits that clamp on any
-// deal with a term of three months or less. Before this fix, sensitivityTables()
-// printed the clamped, one-month figure as if it were the genuine "-3 months"
-// answer, with no caveat. The fix: drop the unsound bar and state why.
-describe('sensitivityTables — clamped-term tornado omission (finding 1)', () => {
+// The default tornado's fixed -3-month low endpoint drives finance.term_months
+// to zero or less on any deal with a term of three months or less. Under §12.7
+// that levered document fails validation and the endpoint is unmeasured rather
+// than clamped (safe-sensitivity.test.ts pins the unmeasured behaviour). A bar
+// with an unmeasured endpoint has no span (§12.4/§12.7): sensitivityTables()
+// drops it from the printed table and states why.
+describe('sensitivityTables — unmeasured tornado endpoint omission', () => {
   function shortTermInputs(): CalculatorInputsV2 {
     const inputs = baseInputs();
     inputs.finance.term_months = 3;
     return inputs;
   }
 
-  it('drops the timeline bar and reports it as omitted', () => {
+  it('drops the timeline bar and reports it with the engine\'s own reason', () => {
     const tables = sensitivityTables(shortTermInputs());
-    expect(tables.omittedTornadoLevers).toEqual(['timeline']);
+    expect(tables.omittedTornadoNotes).toHaveLength(1);
+    // The sentence carries the lever name and the engine's actual validation
+    // message (validation.ts's finance.term_months check) — not a rationale
+    // reconstructed in the memo.
+    expect(tables.omittedTornadoNotes[0]).toContain('Timeline omitted');
+    expect(tables.omittedTornadoNotes[0]).toContain('Term must be a whole number of months, at least 1.');
     expect(tables.tornadoRows.map((r) => r[0])).not.toContain('Timeline');
-    // GDV, construction cost and interest rate are untouched by the term guard.
+    // GDV, construction cost and interest rate remain measured.
     expect(tables.tornadoRows).toHaveLength(3);
   });
 
   it('does not omit anything for a term long enough to survive the fixed range', () => {
     const tables = sensitivityTables(baseInputs()); // 12-month term
-    expect(tables.omittedTornadoLevers).toEqual([]);
+    expect(tables.omittedTornadoNotes).toEqual([]);
     expect(tables.tornadoRows).toHaveLength(4);
   });
 
-  it('never prints the clamped tornado figure, and states what was omitted and why', async () => {
+  it('omits the unmeasured tornado bar rather than printing it, and states what was omitted and why', async () => {
     const inputs = shortTermInputs();
     const run = runAppraisal(inputs);
     const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
@@ -831,16 +839,116 @@ describe('sensitivityTables — clamped-term tornado omission (finding 1)', () =
     expect(pocHeadingIdx).toBeGreaterThan(tornadoHeadingIdx);
     const tornadoSection = text.slice(tornadoHeadingIdx, pocHeadingIdx);
 
-    // The omission is stated, not silent, names the lever and the term.
+    // The omission is stated, not silent, names the lever and the engine's own
+    // reason for that endpoint (spec §12.7) — not a term-shaped rationale
+    // reconstructed in this file. This deal's omission does happen to be
+    // term-caused, but the assertion is on the actual validation message (pinned
+    // precisely at the sensitivityTables() level above, not here — jsPDF's own
+    // line-wrapping of the body text can split a long sentence across two `Tj`
+    // operators in the raw content stream, so a substring straddling that wrap
+    // point is not a stable thing to assert on). The old hard-coded, term-shaped
+    // caption is gone (see the fixture-I test below, where the omission is caused
+    // by something else entirely and that caption would have been false).
     expect(tornadoSection).toContain('Timeline omitted');
-    expect(tornadoSection).toContain('3-month term');
-    // No Timeline *row* prints: the row's distinguishing unit ("months", plural
-    // — see formatRangeLabel) never appears, only the singular "month" inside
-    // the omission note's own prose ("one-month term").
-    expect(tornadoSection).not.toContain('months');
+    expect(tornadoSection).toContain('fails validation');
+    expect(tornadoSection).not.toContain('leave a term of zero or less');
+    expect(tornadoSection).not.toContain('too short for the fixed range shown');
+    // The bar is actually dropped, not merely relabeled: "-3 to +3 months" is the
+    // default timeline tornado's range label (formatRangeLabel), printed only in a
+    // measured bar's row — it never appears in the omission sentence itself, so its
+    // absence here proves the row is gone rather than just failing to trip over the
+    // word "Timeline" (which the omission sentence does legitimately contain).
+    expect(tornadoSection).not.toContain('-3 to +3 months');
 
     // The two-way matrices are unaffected by the tornado omission.
     expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
     expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: LTGDV, developer basis (%)'));
+  });
+
+  // Regression for a second-pass review finding: the omission note used to be
+  // hard-coded to a term-too-short rationale, which was simply false whenever a
+  // bar's endpoint failed validation for a different reason. Fixture I is a
+  // 12-month deal — the default tornado's timeline -3 endpoint leaves a valid
+  // 9-month term — but its sales-phasing tranches (months 9–11) land past the
+  // programme end once the term is shortened, so that endpoint's *levered
+  // document* still fails validation, for a reason that has nothing to do with
+  // the term being "too short".
+  it('states the engine\'s actual reason, not a term-shaped guess, when the omission is not term-caused', () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureI = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'i-phased-sales.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+    expect(fixtureI.inputs.finance.term_months).toBe(12);
+
+    const tables = sensitivityTables(fixtureI.inputs);
+    expect(tables.omittedTornadoNotes).toHaveLength(1);
+    const note = tables.omittedTornadoNotes[0];
+    expect(note).toContain('Timeline omitted');
+    // The real reason (a sales tranche past the shortened term) is printed…
+    expect(note).toMatch(/tranche/i);
+    // …and the false "term too short" framing this note used to carry is gone.
+    expect(note).not.toMatch(/too short/i);
+    expect(note).not.toMatch(/12-month term/i);
+  });
+});
+
+// Merge-blocker regression (final whole-branch review, Finding 1): runSensitivity
+// throws when the *base* document fails validation (spec §12.5/§12.7) — correctly,
+// per spec, and SensitivityPage.tsx already handles that throw via
+// safeRunSensitivity. But sensitivityTables() had no guard for it, so
+// generateInvestmentMemo used to propagate the throw and produce no PDF at all for
+// a document in this state — even though runAppraisal happily returns full metrics
+// alongside a `validation` array, and the ten other sections of the memo have
+// nothing to do with the sensitivity engine. `equity_draw_rule: 'pari_passu'` is a
+// migration state some historical saved documents still carry (validation.ts
+// rejects it outright), making this a realistic, not merely theoretical, trigger.
+describe('generateInvestmentMemo — base document fails validation (spec §12.7)', () => {
+  function fixtureIWithInvalidBase(): CalculatorInputsV4 {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureI = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'i-phased-sales.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+    const inputs = structuredClone(fixtureI.inputs);
+    inputs.finance.equity_draw_rule = 'pari_passu';
+    return inputs;
+  }
+
+  it('still produces a PDF, with the DRAFT watermark, when the levered base document fails validation', async () => {
+    const inputs = fixtureIWithInvalidBase();
+
+    // Sanity checks on the premise: runAppraisal does not refuse (it returns
+    // metrics alongside `validation`), the sensitivity engine does refuse (throws,
+    // per §12.5/§12.7), and the run is correctly flagged unreconciled.
+    const run = runAppraisal(inputs);
+    expect(run.metrics.profit_pence).not.toBeNull();
+    expect(run.reconciliation.report_safe).toBe(false);
+    expect(() => runSensitivity(inputs)).toThrow(/base document/i);
+
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.size).toBeGreaterThan(10000);
+
+    const text = await pdfText(blob);
+    expect(text).toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+
+    // §10 degrades rather than the export failing: no tornado, no matrices, and a
+    // stated §12.7 reason carrying the engine's own message (not a rationale
+    // reconstructed in the memo) in the space the tables would otherwise occupy.
+    expect(text).not.toContain(pdfEscape('Single-Lever Sensitivity (Tornado)'));
+    expect(text).not.toContain(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
+    expect(text).not.toContain(pdfEscape('Two-Way Sensitivity Matrix: LTGDV, developer basis (%)'));
+    // Two shorter, non-adjacent substrings rather than the full sentence: jsPDF's own
+    // line-wrapping (doc.splitTextToSize) can split a long sentence across two `Tj`
+    // operators in the raw content stream, and this sentence does wrap — a substring
+    // straddling that wrap point is not a stable thing to assert on (same caveat as
+    // the tornado-omission test above).
+    expect(text).toContain('sensitivity analysis was not produced');
+    expect(text).toContain('Pari-passu');
+    expect(text).toContain('not yet supported');
+    expect(text).toContain(pdfEscape('(spec §12.7)'));
+
+    // The rest of the ten-section memo is unaffected — this is a §10 degrade, not a
+    // whole-document failure.
+    expect(text).toContain('Senior Debt Position');
   });
 });

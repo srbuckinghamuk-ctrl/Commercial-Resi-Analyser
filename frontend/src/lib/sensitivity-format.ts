@@ -1,5 +1,5 @@
 import type { FlagCode } from './model';
-import type { SensitivityLever } from './model/sensitivity';
+import type { MeasuredMetrics, SensitivityLever, TornadoBar } from './model/sensitivity';
 
 /**
  * Presentation for the spec §12 sensitivity suite, shared by the investment
@@ -30,26 +30,6 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   timeline: 'Timeline',
   interest_rate: 'Rate',
 };
-
-/**
- * A tornado bar is unsound when it is the `timeline` lever and either endpoint
- * would drive `finance.term_months` below one month. Spec §12.6 constrains
- * timeline steps to whole months but says nothing about the term those months
- * leave behind, and the engine does not reject an empty one — it silently
- * clamps to a one-month term and returns a plausible-looking result (pinned as
- * current behaviour in safe-sensitivity.test.ts). Several distinct steps clamp
- * to the identical one-month answer, so a bar with a clamping endpoint is not
- * really reporting "-3 months" (or whatever the endpoint claims) — it is
- * reporting the clamp floor. Neither the memo nor the calculator page may
- * print or render that figure unflagged; both drop the bar instead. Shared
- * here so the two surfaces agree on what "unsound" means.
- */
-export function isUnsoundTornadoBar(
-  termMonths: number,
-  bar: { lever: SensitivityLever; low_step: number; high_step: number },
-): boolean {
-  return bar.lever === 'timeline' && (termMonths + bar.low_step < 1 || termMonths + bar.high_step < 1);
-}
 
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
 function decimalsFor(lever: SensitivityLever): number {
@@ -117,3 +97,53 @@ export const SENSITIVITY_METRICS: readonly {
   { key: 'ltgdv_developer_pct', label: 'LTGDV (developer basis)', kind: 'pct' },
   { key: 'peak_debt_pence', label: 'Peak Debt', kind: 'money' },
 ];
+
+/**
+ * A tornado bar has a span (spec §12.4/§12.7) exactly when both endpoints were
+ * measured, so `span_pence !== null` is sound evidence that `low` and `high` are
+ * both `MeasuredMetrics`, not merely `SensitivityMetrics` — narrowing both here is
+ * what lets every render site read `.profit_pence` as a plain number, with no cast.
+ *
+ * The narrowing to `MeasuredMetrics` covers all six metric fields, not just
+ * `profit_pence`: `span_pence !== null` only directly proves both endpoints'
+ * `profit_pence` are non-null, but `peak_debt_pence` being non-null too follows
+ * from a separate fact about the engine — `unmeasured()` (sensitivity.ts) nulls
+ * all six metric fields together, so a measured `profit_pence` implies a measured
+ * `peak_debt_pence` on the same endpoint. A reader should not have to rediscover
+ * that transitive step to trust the cast this predicate licenses.
+ *
+ * Single source shared by the memo (export-investment-memo.ts) and the
+ * calculator's Sensitivity page (SensitivityPage.tsx) — see this file's header
+ * for why the sharing matters.
+ */
+export function isMeasuredBar(
+  bar: TornadoBar,
+): bar is TornadoBar & { span_pence: number; low: MeasuredMetrics; high: MeasuredMetrics } {
+  return bar.span_pence !== null;
+}
+
+/**
+ * One fully-formed sentence per tornado bar dropped because the engine could not
+ * measure one of its endpoints — the levered document failed validation (spec
+ * §12.7) — empty when every bar is measured. Each sentence carries the engine's
+ * own `validation_errors` message for that endpoint, not a rationale reconstructed
+ * here: different levers fail for different reasons (an emptied term, a negative
+ * rate, a sales tranche landing past the programme end, …), and only the engine
+ * knows which applies. The caller must print these rather than silently shrinking
+ * the table.
+ *
+ * Named for what it now holds — sentences, not lever codes — after the R4b guards
+ * this module used to carry (`isUnsoundTornadoBar`) were retired in favour of the
+ * §12.7 rule (see this file's header).
+ */
+export function omittedTornadoNotes(tornado: readonly TornadoBar[]): string[] {
+  return tornado
+    .filter((bar) => bar.span_pence === null)
+    .map((bar) => {
+      const reasons = bar.low.validation_errors
+        .concat(bar.high.validation_errors)
+        .map((e) => e.message)
+        .join(' ');
+      return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
+    });
+}

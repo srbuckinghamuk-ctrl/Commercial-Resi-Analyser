@@ -463,7 +463,11 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
       });
       expect(shuffled.tornado.map((b) => b.lever)).toEqual(forward.tornado.map((b) => b.lever));
       const spans = forward.tornado.map((b) => b.span_pence);
-      expect([...spans].sort((a, b) => b - a)).toEqual(spans);
+      // §12.7: a null span (an unmeasured endpoint, e.g. fixtures I/J's timeline bar)
+      // always sorts last already, and `null` coerces to 0 in `-`, which is <= every
+      // real span here (a magnitude) — so the plain numeric re-sort below still agrees
+      // with the engine's actual placement. This asserts total order, not nullness.
+      expect([...spans].sort((a, b) => (b as number) - (a as number))).toEqual(spans);
     }
   });
 

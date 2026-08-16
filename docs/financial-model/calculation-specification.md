@@ -1,6 +1,6 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.4.0`.
+**Status:** Authoritative. Calculation version `2.5.0`.
 **Date:** 15 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
@@ -569,7 +569,7 @@ re-underwrite the deal at every grid point.
 The matrix has a row axis and a column axis. Each axis names one lever and a list of
 steps in that lever's unit. The two axes must name different levers. Each cell is the
 appraisal that results from applying the row lever at its step and the column lever at
-its step to the base document, per §12.1.
+its step to the base document, per §12.1. A cell whose levered document fails validation is not measured — see §12.7.
 
 The **normative default grid** is:
 
@@ -608,3 +608,28 @@ The following are input errors, not flags:
 - a step, or a tornado bound, for the `timeline` lever that is not a whole number of months.
 
 The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline` lever is therefore constrained to whole months at the point of input rather than rounded later.
+
+### 12.7 Cell validity [R5 — calc 2.5.0]
+
+A **measurement** is produced only for a levered document that passes validation. Before
+measuring, the levered document is validated (`validateInputs`/`validate_inputs`) — the
+whole-document input check used ahead of an ordinary appraisal, distinct from §12.6's
+sensitivity-config check. If validation yields any **error**-severity issue, the position
+is **not measured**: it reports those issues and every metric field is null.
+
+Warning-severity issues do not invalidate a position.
+
+**Reconciliation status is not a validity signal.** A position raising `facility_exceeded`,
+`funding_gap` or `senior_outstanding_at_maturity` is a valid measurement, and those flags
+are the finding (§12.2).
+
+This applies identically to matrix cells and tornado endpoints. A tornado bar with an
+unmeasured endpoint has no span; §12.4's ordering places bars with no span after all bars
+with a span, in the fixed lever order.
+
+If the **base** document yields an error-severity issue, the suite raises an input error
+(§12.6) rather than returning a grid: §12.5 makes the base case an identity with the
+unadjusted appraisal, so no position in the suite is meaningful.
+
+An unmeasured position is never appraised: the suite validates the levered document and
+does not run the ledger for it at all.
