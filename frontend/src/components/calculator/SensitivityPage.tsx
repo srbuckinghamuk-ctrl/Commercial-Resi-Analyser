@@ -10,6 +10,7 @@ import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
   formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
+  unmeasuredCellNotes,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct } from '../../lib/format';
@@ -206,6 +207,17 @@ export default function SensitivityPage({ inputs }: Props) {
 
   const { base, matrix, tornado, config: resolved } = outcome.result;
 
+  // §12.7: the reasons this grid's unmeasured positions exist, deduplicated. Built by
+  // the shared module so the memo prints the same sentences from the same source —
+  // neither surface writes its own explanation of what an unmeasured cell means.
+  //
+  // Not wrapped in useMemo: `matrix` only exists after the issues/outcome early
+  // returns above, so a hook here would run on some renders and not others,
+  // violating the Rules of Hooks (React throws "Rendered fewer hooks than
+  // expected" the moment a render crosses from the early-return path to this
+  // one). The scan itself is cheap — at most 9x9 cells (spec §12.6's MAX_AXIS_STEPS).
+  const cellNotes = unmeasuredCellNotes(matrix);
+
   // §12.7: a bar with an unmeasured endpoint has no span at all. `isMeasuredBar`
   // narrows both endpoints to `MeasuredMetrics`, so every render site below can
   // read `.profit_pence` as a plain number with no cast.
@@ -358,11 +370,12 @@ export default function SensitivityPage({ inputs }: Props) {
                 </th>
                 {row.map((cell: SensitivityCell) => {
                   const codes = flagShortCodes(cell.flags);
-                  const unmeasured = cell.validation_errors.length > 0;
+                  const noteIndex = cellNotes.noteIndexFor(cell);
+                  const unmeasured = noteIndex !== null;
                   return (
                     <td
                       key={cell.col_step}
-                      title={unmeasured ? cell.validation_errors.map((e) => e.message).join(' ') : undefined}
+                      aria-describedby={unmeasured ? `sens-note-${noteIndex}` : undefined}
                       style={{
                         padding: '8px 12px',
                         textAlign: 'right',
@@ -372,6 +385,13 @@ export default function SensitivityPage({ inputs }: Props) {
                       }}
                     >
                       {metricText(cell, metric)}
+                      {unmeasured && (
+                        // A text marker, not a colour or a style: it has to survive
+                        // print, high-contrast mode and a screenshot.
+                        <sup style={{ color: MUTED, fontSize: 11, marginLeft: 3 }}>
+                          {noteIndex + 1}
+                        </sup>
+                      )}
                       {codes && (
                         <span style={{ color: RED, fontSize: 11, marginLeft: 6 }}>[{codes}]</span>
                       )}
@@ -383,6 +403,23 @@ export default function SensitivityPage({ inputs }: Props) {
           </tbody>
         </table>
       </div>
+
+      {/* §12.7: an unmeasured position prints the same "—" as a genuinely null metric
+          (a zero-denominator ratio), so without the reason a reader cannot tell the two
+          apart. Before R6 this lived only in a `<td title>` — unreachable by screen
+          reader, print and touch — for information that is load-bearing. Each cell
+          points here by aria-describedby; the marker is what a sighted reader follows.
+          The sentences are the engine's own validation messages, built by the shared
+          module the memo reads too. */}
+      {cellNotes.notes.length > 0 && (
+        <ol style={{ color: MUTED, fontSize: 13, marginBottom: 24, paddingLeft: 20 }}>
+          {cellNotes.notes.map((note, i) => (
+            <li key={note} id={`sens-note-${i}`}>
+              Not measured — the levered document fails validation: {note} (spec §12.7).
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
