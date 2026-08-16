@@ -1,9 +1,10 @@
 import { useState, useCallback } from 'react';
 import type { Project, EligibilityAssessment } from '../types';
-import { getEligibility, getAppraisal } from '../lib/api';
+import { getEligibility, getAppraisal, isNotFound } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
 import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
+import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
 import { runAppraisal, migrateInputsToV4 } from '../lib/model';
 
@@ -113,7 +114,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       const appraisal = await getAppraisal(selectedProject.id);
       const raw = appraisal.inputs_snapshot as Record<string, unknown> | null;
       if (!raw || typeof raw !== 'object' || !('unit_mix' in raw) || !('acquisition' in raw)) {
-        throw new Error('No calculator data found in appraisal snapshot');
+        throw new SnapshotMissingError();
       }
 
       // Single authoritative run — the memo consumes it directly and performs
@@ -130,10 +131,24 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       const blob = generateInvestmentMemo(selectedProject, run, eligibility);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);
-    } catch {
-      setError(
-        'Could not generate Investment Memorandum. Ensure a financial appraisal has been saved with full calculator data.',
-      );
+    } catch (err) {
+      // R6: this used to swallow the error entirely and always blame a missing saved
+      // appraisal — including for a genuine engine defect thrown by generateInvestmentMemo,
+      // which lost the memo silently and told the user to check something that was not
+      // the problem. Distinguish by type, not by message content (error message text is
+      // not a contract): a missing/incomplete snapshot or a project with no saved
+      // appraisal at all are the two documented, user-actionable outcomes; anything else
+      // is a defect, logged so it stays findable instead of vanishing.
+      console.error('Investment Memorandum generation failed', err);
+      if (err instanceof SnapshotMissingError || isNotFound(err)) {
+        setError(
+          'Could not generate Investment Memorandum. Ensure a financial appraisal has been saved with full calculator data.',
+        );
+      } else {
+        setError(
+          'Could not generate Investment Memorandum — an unexpected error occurred while building it. Check the browser console for details.',
+        );
+      }
     } finally {
       setLoading(null);
     }
