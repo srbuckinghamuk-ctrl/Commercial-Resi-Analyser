@@ -1980,6 +1980,339 @@ exact integer evaluations at `G` and `G − 1`. The engine was run only to confi
 
 ---
 
+### Fixture K — sensitivity suite (spec §12, calc 2.4.0)
+
+Base document: Fixture F (`f-dev-finance-12mo`). Config: the §12.3/§12.4 defaults. Fixture K
+carries no `inputs` of its own — it names `base_fixture: "f-dev-finance-12mo"`, so Fixture F's
+document cannot drift away from the sensitivity contract built on it.
+
+**Derived inputs, by axis.** The four levers write to disjoint fields (§12.1), so the
+grid's derived inputs are the cross product of two short lists, not twenty-five
+separate derivations.
+
+GDV lever on a unit value of 30,000,000 pence (round-half-up, §1.1):
+
+| step | multiplier | unit value (pence) |
+|---|---|---|
+| −15% | 0.85 | 25,500,000 |
+| −10% | 0.90 | 27,000,000 |
+| −5%  | 0.95 | 28,500,000 |
+| 0%   | 1.00 | 30,000,000 |
+| +5%  | 1.05 | 31,500,000 |
+| +10% | 1.10 | 33,000,000 |
+
+(±10% appear for the tornado only.) Four units, so GDV = 4 × the unit value.
+
+Construction-cost lever on 100,000 pence/sqm:
+
+| step | multiplier | pence/sqm | construction cost = 400 × rate × 1.10 |
+|---|---|---|---|
+| −10% | 0.90 |  90,000 | 39,600,000 |
+| −5%  | 0.95 |  95,000 | 41,800,000 |
+| 0%   | 1.00 | 100,000 | 44,000,000 |
+| +5%  | 1.05 | 105,000 | 46,200,000 |
+| +10% | 1.10 | 110,000 | 48,400,000 |
+| +15% | 1.15 | 115,000 | 50,600,000 |
+
+The construction column is `base = round_half_up(rate × 400)`, `contingency =
+round_half_up(base × 10/100)`, total = base + contingency (§3.4) — e.g. at 115,000:
+base 46,000,000, contingency 4,600,000, total **50,600,000**; at 95,000: base 38,000,000,
+contingency 3,800,000, total **41,800,000**. Both are exact at every step here, so the
+"× 1.10" shorthand in the table's header is legitimate rather than a coincidence of rounding.
+
+Timeline lever on `term_months` 12: −3 → 9, +3 → 15.
+Interest-rate lever on 8.0%: −1.0 → 7.0, +1.0 → 9.0.
+
+**Base cell.** Identical to Fixture F's `expected_metrics` (§12.5), reused verbatim
+rather than re-derived: profit 23,535,047; profit on cost 24.4%; profit on GDV 19.61%;
+IRR 91.2%; LTGDV (developer) 48.84%; peak debt 58,604,953.
+
+#### Shared ground for every appraisal below
+
+Unchanged from Fixture F in all thirty-four appraisals (§12.2 — the facility is invariant):
+acquisition cost **42,150,000** (SDLT 950,000), professional fees **2,800,000**, statutory
+costs **238,400** (prior approval 9,600 × 4 = 38,400 at month 0; building control 200,000
+spread), committed net facility **60,000,000**, committed gross **66,000,000**, day-one
+advance **28,000,000**, arrangement fee `round(2% × 60,000,000)` = **1,200,000** capitalised
+in month 0, exit fee `round(1% × 66,000,000)` = **660,000** on the static
+`committed_gross_facility` basis, `development_cost_advance_pct` 100, `equity_first`, sweep
+100%, committed cash equity **35,000,000** at month 0, rolled-up interest.
+
+Monthly rate (§1.2) `r = annual/100/12`: 8.0% → **1/150**; 7.0% → **7/1200**; 9.0% → **3/400**.
+Gross-headroom draw cap (§4.2(c), rolled-up form, as pinned by fixture "F-grosscap" in §3
+below): `floor(committed_gross / (1 + r)) − opening_balance − capitalised_fees`. Its base term
+is `floor(66,000,000 × 150/151)` = **65,562,913** at 8%, `floor(66,000,000 × 1200/1207)` =
+**65,617,232** at 7%, `floor(66,000,000 × 400/403)` = **65,508,684** at 9%. **It never binds in
+any of the ten appraisals below** — the undrawn-net cap always bites first — and that is checked
+at each month where a draw is capped.
+
+Selling costs (§3.7) are `round(1.5% × GDV) + 400,000`, so they move with the GDV lever and
+with nothing else. Receipts are a single end-of-month event in the final month of the term
+(§4.4, `sales_phasing` null).
+
+Spend spread (§6, `programme: null`): construction straight-line over months `1..term−2`;
+professional and statutory (the spread portion only) over the first half of that window,
+`ceil(D/2)` months — the same reading used by fixture I's Step 2 above, and the only place
+the timeline endpoints below are sensitive to it.
+
+**Method note.** Every ledger below was rolled from §4's monthly loop on this worksheet before
+either engine was run, using the same columns fixture I's Step 4 uses. The worksheet's method was
+first validated by re-rolling Fixture F itself from scratch and reproducing all eight of F's
+pinned figures — `peak_debt_pence` 58,604,953, `finance_costs_pence` 5,076,553,
+`total_development_cost_pence` 96,464,953, `profit_pence` 23,535,047, 24.4%, 19.61%, 48.84% and
+IRR 91.2% — exactly. That reproduction is what licenses the derivations that follow.
+
+#### Corner cells
+
+**Worst corner — row `construction_cost` +15%, column `gdv` −15%.**
+Derived inputs: unit value 25,500,000 → GDV **102,000,000**; cost/sqm 115,000 → construction
+**50,600,000**. Everything else is F's.
+
+| Line | Derivation | Pence |
+|---|---|---:|
+| GDV (§3.1) | 4 × 25,500,000 | 102,000,000 |
+| Acquisition (§3.3) | unchanged | 42,150,000 |
+| Construction (§3.4) | 46,000,000 + 4,600,000 | 50,600,000 |
+| Professional (§3.5) | unchanged | 2,800,000 |
+| Statutory (§3.6) | unchanged | 238,400 |
+| Selling (§3.7) | `round(1.5% × 102,000,000)` = 1,530,000 + 400,000 | 1,930,000 |
+| Cost before finance **ex** selling | 42,150,000 + 50,600,000 + 2,800,000 + 238,400 | 95,788,400 |
+| Cost before finance (§3.8) | 95,788,400 + 1,930,000 | **97,718,400** |
+
+Spend spread: construction 50,600,000 over months 1–10 → `round(50,600,000/10)` = **5,060,000**
+each, final month absorbs `50,600,000 − 9 × 5,060,000 = 5,060,000`. Professional 560,000 and
+statutory 40,000 in months 1–5, as F. So uses are 42,188,400 (m0), 5,660,000 (m1–5),
+5,060,000 (m6–10), 0 (m11). Σ = 95,788,400 ✓
+
+| m | Opening | Uses | Equity | Draw | Cap fees | Interest = round((open+draw+fees)/150) | Gap | Closing |
+|--:|--:|--:|--:|--:|--:|---|--:|--:|
+| 0 | 0 | 42,188,400 | 14,188,400 | 28,000,000 | 1,200,000 | 29,200,000/150 = 194,666.67 → **194,667** | 0 | 29,394,667 |
+| 1 | 29,394,667 | 5,660,000 | 5,660,000 | 0 | 0 | → **195,964** | 0 | 29,590,631 |
+| 2 | 29,590,631 | 5,660,000 | 5,660,000 | 0 | 0 | → **197,271** | 0 | 29,787,902 |
+| 3 | 29,787,902 | 5,660,000 | 5,660,000 | 0 | 0 | → **198,586** | 0 | 29,986,488 |
+| 4 | 29,986,488 | 5,660,000 | 3,831,600 | 1,828,400 | 0 | 31,814,888/150 = 212,099.25 → **212,099** | 0 | 32,026,987 |
+| 5 | 32,026,987 | 5,660,000 | 0 | 5,660,000 | 0 | 37,686,987/150 = 251,246.58 → **251,247** | 0 | 37,938,234 |
+| 6 | 37,938,234 | 5,060,000 | 0 | 5,060,000 | 0 | 42,998,234/150 = 286,654.89 → **286,655** | 0 | 43,284,889 |
+| 7 | 43,284,889 | 5,060,000 | 0 | 5,060,000 | 0 | 48,344,889/150 = 322,299.26 → **322,299** | 0 | 48,667,188 |
+| 8 | 48,667,188 | 5,060,000 | 0 | 5,060,000 | 0 | 53,727,188/150 = 358,181.25 → **358,181** | 0 | 54,085,369 |
+| 9 | 54,085,369 | 5,060,000 | 0 | 5,060,000 | 0 | 59,145,369/150 = 394,302.46 → **394,302** | 0 | 59,539,671 |
+| 10 | 59,539,671 | 5,060,000 | 0 | **3,071,600** | 0 | 62,611,271/150 = 417,408.47 → **417,408** | **1,988,400** | 63,028,679 |
+| 11 | 63,028,679 | 0 | 0 | 0 | 0 | 63,028,679/150 = 420,191.19 → **420,191** | 0 | 0 (redeemed) |
+
+Draw derivation (§4.2), only where it differs from F:
+
+- **m0.** Identical to F: fee 1,200,000 capitalised (`cum_net_used = 1,200,000`), day-one advance
+  `min(28,000,000, 58,800,000, 42,188,400, 65,562,913 − 0 − 1,200,000)` = 28,000,000
+  (`cum_net_used = 29,200,000`), equity 14,188,400.
+- **m1–m3.** Equity remaining 20,811,600 / 15,151,600 / 9,491,600 — each ≥ 5,660,000, so equity
+  funds them entirely. Equity used after m3 = `14,188,400 + 3 × 5,660,000 = 31,168,400`.
+- **m4.** Equity remaining `35,000,000 − 31,168,400 = 3,831,600` < 5,660,000 → equity 3,831,600,
+  remainder 1,828,400. Caps: advance-% 5,660,000; undrawn net `60,000,000 − 29,200,000 =
+  30,800,000`; headroom `65,562,913 − 29,986,488 = 35,576,425`. Draw = **1,828,400**
+  (`cum_net_used = 31,028,400`). Equity is now exhausted at exactly 35,000,000 — one month
+  earlier than F, which is the first visible consequence of the +15% cost lever.
+- **m5–m9.** Equity 0; the undrawn-net cap is the only one anywhere near binding.
+  `cum_net_used` runs 36,688,400 (m5) → 41,748,400 → 46,808,400 → 51,868,400 → **56,928,400** (m9).
+  Headroom at m9 = `65,562,913 − 54,085,369 = 11,477,544`, far above the 5,060,000 drawn ✓
+- **m10.** Need 5,060,000. Caps: advance-% 5,060,000; undrawn net `60,000,000 − 56,928,400 =
+  **3,071,600**`; headroom `65,562,913 − 59,539,671 = 6,023,242`. Draw = min = **3,071,600**, and
+  the residual `5,060,000 − 3,071,600 = **1,988,400`** is a **funding gap** (§4.2 step 3) — not
+  funded, recorded, flagged red. The committed net facility is now used to exactly 60,000,000.
+  This is the §12.2 finding the suite exists to surface: the adverse cell is *not* given more debt.
+
+Sanity check on the gap, independent of the ledger: total funding capacity is equity 35,000,000
+plus net facility 60,000,000 less the 1,200,000 arrangement fee that consumes it = 93,800,000,
+against ex-selling costs of 95,788,400 → shortfall **1,988,400** ✓ (identical to the ledger's).
+
+Redemption, month 11: net receipt = `102,000,000 − 1,530,000 − 400,000` = 100,070,000; balance
+before receipts = **63,448,870**; full redemption needs `63,448,870 + 660,000 = 64,108,870` ≤
+100,070,000 → full-redemption arm. Repayment 63,448,870, exit fee 660,000 charged once,
+closing 0, distribution `100,070,000 − 63,448,870 − 660,000` = **35,961,130**.
+
+Roll-forward spot check (§4 invariant): m10 `59,539,671 + 3,071,600 + 0 + 417,408 = 63,028,679` ✓;
+m11 `63,028,679 + 0 + 0 + 420,191 − 63,448,870 = 0` ✓
+
+- Interest total = `194,667 + 195,964 + 197,271 + 198,586 + 212,099 + 251,247 + 286,655 + 322,299 +
+  358,181 + 394,302 + 417,408 + 420,191` = **3,448,870**
+- Finance costs (§3.9) = `3,448,870 + 1,200,000 + 660,000` = **5,308,870**
+- TDC (§3.10) = `97,718,400 + 5,308,870` = **103,027,270**
+- Profit (§3.12) = `102,000,000 − 103,027,270` = **−1,027,270** — negative, never clamped (§3.12/§9)
+- Profit on cost (§3.13) = `−1,027,270 / 103,027,270` = −0.9970855…% → **−1.0**
+- Profit on GDV (§3.14) = `−1,027,270 / 102,000,000` = −1.0071275…% → **−1.01**
+- Peak debt (§5.7) = max intra-month pre-repayment balance = month 11's **63,448,870**
+- LTGDV developer (§5.6) = `63,448,870 / 102,000,000` = 62.2047745…% → **62.2**
+- Equity cash flows (§3.15): m0 −14,188,400; m1–m3 −5,660,000 each; m4 −3,831,600; m5–m10 0;
+  m11 +35,961,130. Σ = `−35,000,000 + 35,961,130` = +961,130 = profit + funding gap − 0… no:
+  the §3.12 identity `profit = Σ equity flows` does **not** hold here, and correctly so — the
+  1,988,400 of unfunded cost never left anybody's pocket, so `Σ equity flows − profit =
+  961,130 − (−1,027,270) = 1,988,400` is exactly the funding gap. That reconciliation is itself
+  a check on the gap.
+- IRR (§3.17): monthly root of the flow vector above = 0.00282749/month → annual
+  `(1.00282749)¹² − 1` = 3.4462506…% → **3.45**
+- Facility position: peak 63,448,870 **exceeds the committed net facility** (60,000,000 −
+  63,448,870 = −3,448,870, the rolled-up interest sitting on top of a fully drawn net facility)
+  but sits **inside the committed gross facility** (66,000,000 − 63,448,870 = +2,551,130 headroom).
+  §5.9/§4 define `facility_exceeded` against the **gross** facility, so it does **not** fire here;
+  `funding_gap` is the flag that fires. Flags: **`["funding_gap"]`**.
+
+**Best corner — row `construction_cost` −5%, column `gdv` +5%.**
+Derived inputs: unit value 31,500,000 → GDV **126,000,000**; cost/sqm 95,000 → construction
+**41,800,000**.
+
+| Line | Derivation | Pence |
+|---|---|---:|
+| GDV | 4 × 31,500,000 | 126,000,000 |
+| Construction | 38,000,000 + 3,800,000 | 41,800,000 |
+| Selling | `round(1.5% × 126,000,000)` = 1,890,000 + 400,000 | 2,290,000 |
+| Cost before finance ex selling | 42,150,000 + 41,800,000 + 2,800,000 + 238,400 | 86,988,400 |
+| Cost before finance | 86,988,400 + 2,290,000 | **89,278,400** |
+
+Spend spread: construction 41,800,000 over months 1–10 → **4,180,000** each (final absorbs
+`41,800,000 − 9 × 4,180,000 = 4,180,000`). Uses: 42,188,400 (m0), 4,780,000 (m1–5),
+4,180,000 (m6–10), 0 (m11). Σ = 86,988,400 ✓
+
+| m | Opening | Uses | Equity | Draw | Cap fees | Interest (÷150) | Closing |
+|--:|--:|--:|--:|--:|--:|---|--:|
+| 0 | 0 | 42,188,400 | 14,188,400 | 28,000,000 | 1,200,000 | **194,667** | 29,394,667 |
+| 1 | 29,394,667 | 4,780,000 | 4,780,000 | 0 | 0 | **195,964** | 29,590,631 |
+| 2 | 29,590,631 | 4,780,000 | 4,780,000 | 0 | 0 | **197,271** | 29,787,902 |
+| 3 | 29,787,902 | 4,780,000 | 4,780,000 | 0 | 0 | **198,586** | 29,986,488 |
+| 4 | 29,986,488 | 4,780,000 | 4,780,000 | 0 | 0 | **199,910** | 30,186,398 |
+| 5 | 30,186,398 | 4,780,000 | 1,691,600 | 3,088,400 | 0 | 33,274,798/150 = 221,831.99 → **221,832** | 33,496,630 |
+| 6 | 33,496,630 | 4,180,000 | 0 | 4,180,000 | 0 | 37,676,630/150 = 251,177.53 → **251,178** | 37,927,808 |
+| 7 | 37,927,808 | 4,180,000 | 0 | 4,180,000 | 0 | 42,107,808/150 = 280,718.72 → **280,719** | 42,388,527 |
+| 8 | 42,388,527 | 4,180,000 | 0 | 4,180,000 | 0 | 46,568,527/150 = 310,456.85 → **310,457** | 46,878,984 |
+| 9 | 46,878,984 | 4,180,000 | 0 | 4,180,000 | 0 | 51,058,984/150 = 340,393.23 → **340,393** | 51,399,377 |
+| 10 | 51,399,377 | 4,180,000 | 0 | 4,180,000 | 0 | 55,579,377/150 = 370,529.18 → **370,529** | 55,949,906 |
+| 11 | 55,949,906 | 0 | 0 | 0 | 0 | 55,949,906/150 = 372,999.37 → **372,999** | 0 (redeemed) |
+
+Draws: equity remaining after m0 is 20,811,600 and covers m1–m4's 4,780,000 in full (leaving
+`20,811,600 − 4 × 4,780,000 = 1,691,600`); m5 takes the last 1,691,600 of equity and draws
+`4,780,000 − 1,691,600 = 3,088,400` (caps: advance-% 4,780,000, undrawn net 30,800,000, headroom
+`65,562,913 − 30,186,398 = 35,376,515` — none binds). m6–m10 draw 4,180,000 each; `cum_net_used`
+ends at `29,200,000 + 3,088,400 + 5 × 4,180,000 = 53,188,400`, leaving **6,811,600 of undrawn net
+facility** — this corner never approaches either cap. No funding gap in any month.
+
+Redemption, month 11: net receipt = `126,000,000 − 1,890,000 − 400,000` = 123,710,000; balance
+before receipts = **56,322,905**; `56,322,905 + 660,000` ≤ 123,710,000 → full redemption.
+Distribution = `123,710,000 − 56,322,905 − 660,000` = **66,727,095**.
+
+- Interest total = `194,667 + 195,964 + 197,271 + 198,586 + 199,910 + 221,832 + 251,178 + 280,719 +
+  310,457 + 340,393 + 370,529 + 372,999` = **3,134,505**
+- Finance costs = `3,134,505 + 1,200,000 + 660,000` = **4,994,505**
+- TDC = `89,278,400 + 4,994,505` = **94,272,905**
+- Profit = `126,000,000 − 94,272,905` = **31,727,095**
+- Profit on cost = `31,727,095 / 94,272,905` = 33.6545214…% → **33.65**
+- Profit on GDV = `31,727,095 / 126,000,000` = 25.1802341…% → **25.18**
+- Peak debt = month 11's **56,322,905**; LTGDV = `56,322,905 / 126,000,000` = 44.7007183…% → **44.7**
+- Equity flows: m0 −14,188,400; m1–m4 −4,780,000 each; m5 −1,691,600; m11 +66,727,095.
+  Σ = `−35,000,000 + 66,727,095` = **+31,727,095 = profit** ✓ (§3.12's identity, which holds here
+  because the facility is fully repaid and nothing is retained — and its failure to hold at the
+  worst corner is diagnosed above rather than ignored)
+- IRR: monthly root 0.07041062 → `(1.07041062)¹² − 1` = 126.2584925…% → **126.26**
+- Peak sits 9,677,095 inside the committed gross facility and 3,677,095 inside the committed net
+  facility. No flags: **`[]`**.
+
+#### Tornado spans
+
+Each bar is two more single-lever appraisals (§12.4). Only the endpoint profits are needed, but
+each is derived through the same chain, and each span carries a closed-form cross-check that does
+not go through the ledger roll at all.
+
+| lever | low document | low profit | high document | high profit | span |
+|---|---|---:|---|---:|---:|
+| `gdv` | unit 27,000,000 (GDV 108,000,000) | 11,715,047 | unit 33,000,000 (GDV 132,000,000) | 35,355,047 | **23,640,000** |
+| `construction_cost` | 90,000/sqm (39,600,000) | 28,099,145 | 110,000/sqm (48,400,000) | 18,964,323 | **9,134,822** |
+| `timeline` | `term_months` 9 | 24,322,508 | `term_months` 15 | 22,738,001 | **1,584,507** |
+| `interest_rate` | 7.0% | 23,948,077 | 9.0% | 23,118,809 | **829,268** |
+
+**`gdv` ±10%.** The GDV lever touches no ledger input, and both endpoints still redeem in full,
+so the entire ledger — every draw, every interest line, peak debt 58,604,953, finance costs
+5,076,553 — is *byte-identical to Fixture F's*. Only GDV and the 1.5% agent fee move:
+
+- low: selling `round(1.5% × 108,000,000) + 400,000` = 2,020,000; CBF 91,208,400;
+  TDC `91,208,400 + 5,076,553` = 96,284,953; profit `108,000,000 − 96,284,953` = **11,715,047**
+- high: selling `round(1.5% × 132,000,000) + 400,000` = 2,380,000; CBF 91,568,400;
+  TDC 96,644,953; profit `132,000,000 − 96,644,953` = **35,355,047**
+- span = 35,355,047 − 11,715,047 = **23,640,000**.
+  Cross-check without either appraisal: `ΔGDV − Δagent fee = 24,000,000 − 360,000 = 23,640,000` ✓
+
+**`construction_cost` ±10%.** GDV and selling costs are unchanged at 120,000,000 / 2,200,000;
+construction moves and drags the ledger with it.
+
+- low (39,600,000; months 1–10 at 3,960,000; uses 4,560,000 in m1–5, 3,960,000 in m6–10): equity
+  covers m1–m4 and 2,571,600 of m5, so m5 draws 1,988,400; interest lines 194,667 / 195,964 /
+  197,271 / 198,586 / 199,910 / 214,499 / 242,329 / 270,344 / 298,546 / 326,937 / 355,516 /
+  357,886 = **3,052,455**; finance 4,912,455; CBF 86,988,400; TDC 91,900,855;
+  profit **28,099,145**; peak 54,040,855.
+- high (48,400,000; months 1–10 at 4,840,000; uses 5,440,000 in m1–5, 4,840,000 in m6–10): equity
+  covers m1–m3 and 4,491,600 of m4, so m4 draws 948,400; interest lines 194,667 / 195,964 /
+  197,271 / 198,586 / 206,233 / 243,874 / 277,767 / 311,885 / 346,231 / 380,806 / 415,611 /
+  418,382 = **3,387,277**; finance 5,247,277; CBF 95,788,400; TDC 101,035,677;
+  profit **18,964,323**; peak 63,175,677 (still inside the 66,000,000 gross facility, and
+  `cum_net_used` peaks at 58,388,400 — no funding gap: the +10% cost lever stops just short of
+  the wall the +15% corner hits).
+- span = 28,099,145 − 18,964,323 = **9,134,822**.
+  Cross-check: `Δconstruction + Δinterest = 8,800,000 + (3,387,277 − 3,052,455) = 8,800,000 +
+  334,822 = 9,134,822` ✓
+
+**`timeline` ±3 months.** No cost total and no rate changes — only the number of months over
+which the same money is spread and interest compounds, so the span is purely `Δ(total interest)`.
+
+- low, `term_months` 9: construction window `max(1, 9 − 2)` = 7 months (1–7),
+  `round(44,000,000/7) = 6,285,714` with the final month absorbing
+  `44,000,000 − 6 × 6,285,714 = 6,285,716`; professional/statutory window `ceil(7/2)` = 4 months
+  (1–4) at 700,000 + 50,000. Uses: 42,188,400 (m0), 7,035,714 (m1–3), 7,035,714 (m4),
+  6,285,714 (m5–6), 6,285,716 (m7), 0 (m8). Equity covers m1–m2 in full and 6,740,172 of m3
+  (leaving a 295,542 draw); interest lines 194,667 / 195,964 / 197,271 / 200,556 / 248,798 /
+  292,362 / 336,215 / 380,362 / 382,897 = **2,429,092**; finance 4,289,092; TDC 95,677,492;
+  profit **24,322,508**; peak 57,817,492 at m8. `cum_net_used` ends at 55,388,400 — inside the
+  facility, no gap.
+- high, `term_months` 15: construction window 13 months (1–13), `round(44,000,000/13) = 3,384,615`
+  with the final month absorbing `44,000,000 − 12 × 3,384,615 = 3,384,620`;
+  professional/statutory window `ceil(13/2)` = 7 months (1–7) at 400,000 + 28,571, the seventh
+  absorbing `200,000 − 6 × 28,571 = 28,574`. Equity covers m1–m5 and 1,745,670 of m6; interest
+  lines 194,667 / 195,964 / 197,271 / 198,586 / 199,910 / 201,243 / 216,368 / 243,231 / 267,417 /
+  291,764 / 316,273 / 340,946 / 365,783 / 390,785 / 393,391 = **4,013,599**; finance 5,873,599;
+  TDC 97,261,999; profit **22,738,001**; peak 59,401,999 at m14.
+- span = 24,322,508 − 22,738,001 = **1,584,507**.
+  Cross-check: `Δinterest = 4,013,599 − 2,429,092 = 1,584,507`, and every other line of the two
+  appraisals is identical ✓ (CBF 91,388,400 both ends, as at the base)
+
+**`interest_rate` ±1.0pp.** Nothing but the monthly rate changes; the draw schedule is unchanged
+from F's because equity still runs out in month 5 in both endpoints.
+
+- low, 7.0% (`r = 7/1200`): interest lines 170,333 / 171,327 / 172,326 / 173,332 / 174,343 /
+  199,792 / 226,624 / 253,613 / 280,759 / 308,063 / 335,527 / 337,484 = **2,803,523**;
+  finance 4,663,523; TDC 96,051,923; profit **23,948,077**; peak 58,191,923.
+- high, 9.0% (`r = 3/400`): interest lines 219,000 / 220,643 / 222,297 / 223,965 / 225,644 /
+  258,750 / 293,690 / 328,893 / 364,360 / 400,092 / 436,093 / 439,364 = **3,632,791**;
+  finance 5,492,791; TDC 96,881,191; profit **23,118,809**; peak 59,021,191.
+- span = 23,948,077 − 23,118,809 = **829,268**.
+  Cross-check: `Δinterest = 3,632,791 − 2,803,523 = 829,268` ✓
+
+**Ordering (§12.4)** — spans descending, ties broken by the fixed lever order
+`gdv`, `construction_cost`, `timeline`, `interest_rate`. There are no ties here; the four spans
+are separated by more than a factor of two at every adjacent pair:
+
+`23,640,000 > 9,134,822 > 1,584,507 > 829,268` →
+**`["gdv", "construction_cost", "timeline", "interest_rate"]`**
+
+The order happens to coincide with the §12.4 tie-break order, so the *sequence* alone would also be
+produced by an engine that never sorted at all. What this fixture pins against that is the four
+span values themselves, which no unsorted implementation can fake. Pinning the sort's behaviour
+under a non-trivial ordering is left to the §12 invariant suite, which is Release 4a's next task —
+recorded here so the limitation is visible rather than assumed away.
+
+**Governance note.** Every figure in this section was derived on this worksheet *before* either
+engine was run, from §3, §4, §6 and §12 alone, and the worksheet's method was first validated by
+re-deriving Fixture F end to end and reproducing all eight of F's pinned figures. The engine was
+run only to confirm agreement, and it agreed on every value at the first attempt. The remaining
+twenty-three grid cells are *identity-asserted* rather than hand-derived, under the recorded and
+approved exception in `model-governance.md` §2.1.
+
+---
+
 ## 3. Ledger fixtures B–F — pinned in BOTH languages
 
 **Files:** `frontend/src/lib/model/monthly-engine.test.ts` (TS, the original) and

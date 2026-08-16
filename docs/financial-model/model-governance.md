@@ -59,6 +59,39 @@ Any change to a formula in this codebase — however small — follows this orde
    changes one without the other must fail CI (golden-fixture parity — §6.3 below) rather than
    merge and drift.
 
+### 2.1 Recorded exception — Fixture K's derivation split (R4, 2026-08-16)
+
+Fixture K (`k-sensitivity.json`, spec §12) does not hand-derive all thirty-four of its
+appraisals. Read literally, §2 step 2 would require that; it is disproportionate, and it
+is not what the rule protects.
+
+What §12 adds over the existing engine is **composition, not new arithmetic** — lever
+application, grid enumeration and ordering, the reduction to the compact record, and the
+tornado span-and-sort. Fixture K therefore hand-derives:
+
+- every derived input, per axis (§12.1's disjointness makes these per axis, not per cell);
+- the base cell, reused verbatim from Fixture F;
+- two corner cells, worked through on a worksheet the way Fixture F was;
+- every tornado span and the resulting order.
+
+and *identity-asserts* the remaining cells against
+`runAppraisal(applyScenario(base, overrides))` — the expression §12.3 defines a cell as.
+That assertion is the contract itself, not a snapshot: a wrong cell can only come from
+wrong lever composition or wrong enumeration, and the hand-derived items above pin both.
+
+This exception was put to the product owner and approved during the Release 4
+brainstorming session; see `docs/superpowers/specs/2026-08-16-release-4-design.md` §4.
+It licenses no other fixture: a change to appraisal *arithmetic* still hand-derives in
+full.
+
+The worksheet is in `test-cases.md` ("Fixture K — sensitivity suite"). It records the
+full twelve-month interest ledger of both corners and of all eight tornado endpoints,
+and it opens by re-deriving Fixture F from scratch and reproducing all eight of F's
+pinned figures — the method check that licenses everything after it. Every figure was
+derived and written down before either engine was run; both engines then agreed with all
+of them at the first attempt, which is the outcome §1's asymmetry is designed to make
+meaningful rather than tautological.
+
 This procedure is itself demonstrated in the implementation history of this release: the Fixture E
 arrangement fee (recomputed to 2% × £350,000 = £7,000 after a brief error was caught mid-task) and
 the Fixture F gross-headroom cap (added because spec §4.2(c) wasn't originally reflected in the

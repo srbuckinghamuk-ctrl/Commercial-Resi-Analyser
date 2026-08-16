@@ -13,7 +13,14 @@ import type {
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json'))
-  .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as { name: string; inputs: CalculatorInputsV3 });
+  .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as {
+    name: string; kind: string; inputs: CalculatorInputsV3;
+  })
+  // Release 4a: the corpus now contains an inputs-less fixture. Fixture K
+  // (kind 'sensitivity', spec §12) names a `base_fixture` rather than carrying its own
+  // document — see model-governance.md §2.1 — so there is nothing here to run through
+  // the ledger. Its own contract is asserted in golden-fixtures.test.ts.
+  .filter((fx) => fx.kind !== 'sensitivity');
 
 // Release 3a Task 9: a generic programme fitted to any term_months, sitting well
 // inside the spec §6 window bound (finish by term-2) — every package starts at
