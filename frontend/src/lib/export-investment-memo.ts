@@ -6,7 +6,7 @@ import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { runSensitivity } from './model/sensitivity';
 import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
-import { LEVER_SHORT, formatStepLabel, flagShortCodes } from './sensitivity-format';
+import { LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
 // ── This memo consumes the finished AppraisalRun only ─────
@@ -157,6 +157,8 @@ export interface MemoSensitivityTables {
   head: string[];
   pocRows: string[][];
   ltgdvRows: string[][];
+  /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar. */
+  tornadoRows: string[][];
 }
 
 export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
@@ -182,10 +184,21 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
       ...row.map((cell) => cellText(cell, key)),
     ]);
 
+  const tornadoRows = result.tornado.map((bar) => [
+    LEVER_LABEL[bar.lever],
+    formatRangeLabel(bar.lever, bar.low_step, bar.high_step),
+    fmt(bar.low.profit_pence),
+    fmt(bar.high.profit_pence),
+    // |profit(high) - profit(low)| (spec §12.4) — a magnitude, so it stays
+    // unsigned even where the high endpoint is the adverse one (cost, rate).
+    fmt(bar.span_pence),
+  ]);
+
   return {
     head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
     pocRows: bodyFor('profit_on_cost_pct'),
     ltgdvRows: bodyFor('ltgdv_developer_pct'),
+    tornadoRows,
   };
 }
 
@@ -1215,6 +1228,30 @@ export function generateInvestmentMemo(
   y = lastAutoTableFinalY(doc) + 8;
 
   const sens = sensitivityTables(inputs);
+
+  y = subHeading(y, 'Single-Lever Sensitivity (Tornado)');
+  y = bodyText(
+    y,
+    'Each lever is moved alone, with every other assumption at base. Swing is the absolute profit difference between the two endpoints; bars are listed widest swing first (spec §12.4).',
+  );
+
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [['Lever', 'Range', 'Profit at low', 'Profit at high', 'Swing']],
+    body: sens.tornadoRows,
+    styles: { fontSize: 9, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    alternateRowStyles: { fillColor: [241, 245, 249] },
+    columnStyles: {
+      0: { fontStyle: 'bold' },
+      2: { halign: 'right' },
+      3: { halign: 'right' },
+      4: { halign: 'right', fontStyle: 'bold' },
+    },
+  });
+  y = lastAutoTableFinalY(doc) + 8;
 
   y = subHeading(y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
 

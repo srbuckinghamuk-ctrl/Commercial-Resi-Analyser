@@ -661,4 +661,36 @@ describe('sensitivityTables — memo §10 regression pin', () => {
     expect(tables.pocRows[1][4]).toBe(`${run.metrics.profit_on_cost_pct!.toFixed(1)}%`);
     expect(tables.ltgdvRows[1][4]).toBe(`${run.metrics.ltgdv_developer_pct!.toFixed(1)}%`);
   });
+
+  // Spec §12.4: bars sort by span descending, ties broken by the fixed lever
+  // order. For any deal with meaningful sales revenue GDV dominates, so its bar
+  // leads — asserted on the fixture rather than hardcoding a pence figure.
+  it('lists tornado bars widest-swing first', () => {
+    const rows = sensitivityTables(baseInputs()).tornadoRows;
+    expect(rows.map((r) => r[0])).toEqual([
+      'GDV', 'Construction cost', 'Timeline', 'Interest rate',
+    ]);
+  });
+
+  it('prints each tornado bar with its range and both endpoint profits', () => {
+    const rows = sensitivityTables(baseInputs()).tornadoRows;
+    expect(rows[0][1]).toBe('-10% to +10%');
+    expect(rows[2][1]).toBe('-3 to +3 months');
+    expect(rows[3][1]).toBe('-1.0 to +1.0 pp');
+    // Five columns: lever, range, low profit, high profit, swing.
+    for (const row of rows) {
+      expect(row).toHaveLength(5);
+      expect(row[2]).toMatch(/^-?£[\d,]+$/);
+      expect(row[3]).toMatch(/^-?£[\d,]+$/);
+      expect(row[4]).toMatch(/^£[\d,]+$/);
+    }
+  });
+
+  // The swing is |profit(high) - profit(low)| (spec §12.4), so it is never
+  // signed even when the high endpoint is the worse one (as it is for cost).
+  it('prints the construction-cost swing unsigned despite its inverted endpoints', () => {
+    const rows = sensitivityTables(baseInputs()).tornadoRows;
+    const cost = rows.find((r) => r[0] === 'Construction cost')!;
+    expect(cost[4].startsWith('-')).toBe(false);
+  });
 });
