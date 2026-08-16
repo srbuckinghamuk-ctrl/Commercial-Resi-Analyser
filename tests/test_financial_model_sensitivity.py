@@ -146,13 +146,24 @@ def test_base_case_also_sits_at_the_zero_zero_grid_position():
     assert result.matrix[ri][ci].profit_pence == result.base.profit_pence
 
 
+def _by_span_descending(spans):
+    """Sec 12.4 extended by Sec 12.7: bars with a span first, widest first; spanless
+    bars last. sorted(spans, reverse=True) cannot express this -- it raises
+    TypeError: '<' not supported between instances of 'int' and 'NoneType' as soon as
+    a None enters the list, so the assertion it backed could never have been run
+    against a grid containing an unmeasured endpoint.
+    """
+    return sorted(spans, key=lambda s: (s is None, -(s or 0)))
+
+
 def test_tornado_is_sorted_by_span_descending():
     """Spec Sec 12.4."""
     bars = run_sensitivity(_inputs()).tornado
     assert len(bars) == 4
     spans = [b.span_pence for b in bars]
-    assert spans == sorted(spans, reverse=True)
-    assert all(s >= 0 for s in spans)
+    assert spans == _by_span_descending(spans)
+    # Sec 12.7: no span is null for Fixture F under the default tornado.
+    assert all(s is not None and s >= 0 for s in spans)
 
 
 def test_tornado_order_is_independent_of_input_order():
@@ -371,6 +382,43 @@ def test_two_spanless_bars_sort_relative_to_each_other_by_lever_order():
     # Confirms *why* gdv is unmeasured, not just that it is.
     gdv_bar = next(b for b in bars if b.lever == "gdv")
     assert any("estimated_value_pence" in e.field for e in gdv_bar.low.validation_errors)
+
+
+FIXTURE_A = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "a-all-cash.json"
+
+
+def _all_cash_inputs():
+    return parse_calculator_inputs(json.loads(FIXTURE_A.read_text(encoding="utf-8"))["inputs"])
+
+
+def test_genuine_zero_span_sorts_ahead_of_a_null_span():
+    """Sec 12.4/Sec 12.7 at the boundary -- mirror of the TS suite.
+
+    A 0-pence span is a measurement saying this lever does not move the deal; a null
+    span is the absence of a measurement. They compare equal under a null-as-zero sort
+    and mean opposite things. a-all-cash has no facility and no interest rate exposure,
+    so the interest_rate lever produces a real 0; its 12-month term makes timeline -12
+    unmeasurable.
+    """
+    cfg = SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[
+            TornadoRange(lever="interest_rate", low=-1, high=1),
+            TornadoRange(lever="gdv", low=-10, high=10),
+            TornadoRange(lever="timeline", low=-12, high=3),
+        ],
+    )
+    bars = run_sensitivity(_all_cash_inputs(), cfg).tornado
+    spans = {b.lever: b.span_pence for b in bars}
+
+    assert spans["interest_rate"] == 0
+    assert spans["timeline"] is None
+    assert spans["gdv"] > 0
+
+    assert [b.lever for b in bars] == ["gdv", "interest_rate", "timeline"]
+    ordered = [b.span_pence for b in bars]
+    assert ordered == _by_span_descending(ordered)
 
 
 def test_invalid_base_document_raises():

@@ -8,7 +8,7 @@ import {
 import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
-import type { SensitivityConfig } from './sensitivity';
+import type { SensitivityConfig, SensitivityLever } from './sensitivity';
 import type { AnyCalculatorInputs } from './finance-types';
 
 /** A deep copy of the defaults, so a test that mutates one field cannot leak into another. */
@@ -19,6 +19,25 @@ function config(overrides: Partial<SensitivityConfig> = {}): SensitivityConfig {
     tornado: DEFAULT_SENSITIVITY_CONFIG.tornado.map((r) => ({ ...r })),
     ...overrides,
   };
+}
+
+/**
+ * §12.4 extended by §12.7, as a comparator a test can re-sort spans with: a span comes
+ * before a null, and wider spans come first. A null is not a number and must never
+ * reach arithmetic — the form this replaces, `(b as number) - (a as number)`, yields
+ * NaN against a null span, and a comparator returning NaN accepts whatever order it
+ * was handed. It could not have failed on the case added below.
+ *
+ * The tie-break between two nulls is LEVER_ORDER, which lives in the engine; a
+ * comparator over bare spans cannot express it, so it returns 0 and leaves the
+ * relative order of nulls to the caller's assertion (see the LEVER_ORDER test that
+ * already covers it).
+ */
+function bySpanDescending(a: number | null, b: number | null): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return b - a;
 }
 
 describe('sensitivity defaults (spec §12.3, §12.4)', () => {
@@ -131,6 +150,12 @@ function fixtureFInputs(): AnyCalculatorInputs {
   return JSON.parse(readFileSync(FIXTURE_F, 'utf-8')).inputs as AnyCalculatorInputs;
 }
 
+const FIXTURE_A = resolve(__dirname, '../../../../fixtures/financial-model/a-all-cash.json');
+
+function allCashInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_A, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
 // R6: the suite has exactly two documented failures (§12.6 config, §12.7 base
 // document). Consumers must be able to tell them apart — and tell both apart from a
 // genuine defect — without matching on message text, which is the coupling that let
@@ -220,11 +245,11 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     // §12.7: a span is null only when an endpoint is unmeasured, which cannot happen for
     // Fixture F under the default tornado (its 9-month floor is a legal term) — see the
     // §12.7 cell-validity tests below for the null case, pinned on fixtures I and J.
-    expect([...spans].sort((a, b) => (b as number) - (a as number))).toEqual(spans);
-    // No cast here: `null >= 0` is `true` in JavaScript, so `(s as number) >= 0` would
-    // silently accept a null span. Spelling out the null check keeps this assertion at
-    // its original strength.
     expect(spans.every((s) => s !== null && s >= 0)).toBe(true);
+    // R6: the re-sort is null-aware. The previous form was `(b as number) - (a as
+    // number)`, which produces NaN against a null and so accepts any ordering at all —
+    // it could not have failed on the case Task 8 adds below.
+    expect([...spans].sort(bySpanDescending)).toEqual(spans);
   });
 
   it('orders bars independently of the order the ranges were configured in', () => {
@@ -464,6 +489,46 @@ describe('runSensitivity — §12.7 cell validity', () => {
     // Confirms *why* gdv is unmeasured, not just that it is.
     const gdvBar = bars.find((b) => b.lever === 'gdv')!;
     expect(gdvBar.low.validation_errors.some((e) => e.field.includes('estimated_value_pence'))).toBe(true);
+  });
+
+  // The boundary §12.4/§12.7 has never been tested at: a *genuine* 0-pence span next to
+  // a null one. Both print as "no movement" to a careless reader and both compare equal
+  // under a null-as-zero sort, but they mean opposite things — one is a measurement
+  // saying this lever does not matter for this deal, the other is the absence of a
+  // measurement. A 0-pence span must sort ahead of every null span.
+  //
+  // `a-all-cash` is the fixture that produces the real 0: with no facility and no
+  // interest rate exposure, the interest_rate lever cannot move profit. Its 12-month
+  // term makes a timeline low of -12 unmeasurable.
+  it('sorts a genuine 0-pence span ahead of a null one', () => {
+    const inputs = allCashInputs();
+    const bars = runSensitivity(inputs, {
+      ...DEFAULT_SENSITIVITY_CONFIG,
+      rows: { lever: 'gdv', steps: [0] },
+      cols: { lever: 'construction_cost', steps: [0] },
+      tornado: [
+        { lever: 'interest_rate', low: -1, high: 1 },
+        { lever: 'gdv', low: -10, high: 10 },
+        { lever: 'timeline', low: -12, high: 3 },
+      ],
+    }).tornado;
+
+    // The premise: this fixture really does produce one of each.
+    const spanOf = (lever: SensitivityLever) =>
+      bars.find((b) => b.lever === lever)!.span_pence;
+    expect(spanOf('interest_rate')).toBe(0);
+    expect(spanOf('timeline')).toBeNull();
+    // Narrowed before comparing: `toBeGreaterThan` on a `number | null` does not
+    // type-check, and a cast here would be the same unsound move this task removes.
+    const gdvSpan = spanOf('gdv');
+    expect(gdvSpan).not.toBeNull();
+    expect(gdvSpan as number).toBeGreaterThan(0);
+
+    // The rule: measured bars first by span, the spanless bar last.
+    expect(bars.map((b) => b.lever)).toEqual(['gdv', 'interest_rate', 'timeline']);
+    // And the comparator agrees, which is what the re-sort assertion above relies on.
+    expect([...bars.map((b) => b.span_pence)].sort(bySpanDescending))
+      .toEqual(bars.map((b) => b.span_pence));
   });
 
   // §12.5 makes the base an identity with the unadjusted appraisal, so a suite
