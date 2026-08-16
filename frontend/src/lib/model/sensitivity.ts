@@ -1,5 +1,8 @@
-import type { FlagCode } from './finance-types';
+import type { AnyCalculatorInputs, FlagCode } from './finance-types';
+import type { ScenarioOverrides } from '../conversion-types';
 import type { ValidationIssue } from './validation';
+import { applyScenario } from './apply-scenario';
+import { runAppraisal } from './index';
 
 /**
  * The fixed-facility sensitivity suite of spec §12. Every cell and every tornado
@@ -154,4 +157,82 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
   }
 
   return issues;
+}
+
+/** Builds the `ScenarioOverrides` for a set of lever positions. Levers not named sit at
+ *  zero, which §12.1 guarantees is a no-op because the four levers are disjoint. */
+function overridesFor(levers: Partial<Record<SensitivityLever, number>>): ScenarioOverrides {
+  return {
+    label: '',
+    gdv_adjustment_pct: levers.gdv ?? 0,
+    construction_cost_adjustment_pct: levers.construction_cost ?? 0,
+    timeline_adjustment_months: levers.timeline ?? 0,
+    interest_rate_adjustment_pct: levers.interest_rate ?? 0,
+  };
+}
+
+/** One measurement: an ordinary appraisal of the levered document, reduced to the
+ *  compact record. This is the only place the suite calls the engine. */
+function measure(inputs: AnyCalculatorInputs, levers: Partial<Record<SensitivityLever, number>>): SensitivityMetrics {
+  const m = runAppraisal(applyScenario(inputs, overridesFor(levers))).metrics;
+  return {
+    profit_pence: m.profit_pence,
+    profit_on_cost_pct: m.profit_on_cost_pct,
+    profit_on_gdv_pct: m.profit_on_gdv_pct,
+    irr_annual_pct: m.irr_annual_pct,
+    ltgdv_developer_pct: m.ltgdv_developer_pct,
+    peak_debt_pence: m.peak_debt_pence,
+    flags: m.flags.map((f) => f.code),
+  };
+}
+
+/**
+ * The fixed-facility sensitivity suite (spec §12). Runs `config.rows.steps.length ×
+ * config.cols.steps.length` matrix appraisals, two per tornado range, and one base —
+ * 34 with the default config, against the 28 the investment memo already ran before
+ * R4, so this is not a new order of magnitude. Callers that re-render on every
+ * keystroke should memoise on the inputs object.
+ *
+ * Throws on an invalid config (§12.6). It throws rather than returning issues because
+ * a partially-valid grid is a misleading grid; callers wanting to *display* the reason
+ * call `validateSensitivityConfig` first.
+ */
+export function runSensitivity(
+  inputs: AnyCalculatorInputs,
+  config: SensitivityConfig = DEFAULT_SENSITIVITY_CONFIG,
+): SensitivityResult {
+  const issues = validateSensitivityConfig(config);
+  if (issues.length > 0) {
+    throw new Error(`Invalid sensitivity config: ${issues.map((i) => i.message).join(' ')}`);
+  }
+
+  const base = measure(inputs, {});
+
+  const matrix: SensitivityCell[][] = config.rows.steps.map((rowStep) =>
+    config.cols.steps.map((colStep) => ({
+      row_step: rowStep,
+      col_step: colStep,
+      ...measure(inputs, { [config.rows.lever]: rowStep, [config.cols.lever]: colStep }),
+    })),
+  );
+
+  const tornado: TornadoBar[] = config.tornado
+    .map((range) => {
+      const low = measure(inputs, { [range.lever]: range.low });
+      const high = measure(inputs, { [range.lever]: range.high });
+      return {
+        lever: range.lever,
+        low_step: range.low,
+        high_step: range.high,
+        low,
+        high,
+        span_pence: Math.abs(high.profit_pence - low.profit_pence),
+      };
+    })
+    .sort((a, b) => (
+      b.span_pence - a.span_pence
+      || LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever)
+    ));
+
+  return { base, matrix, tornado, config };
 }
