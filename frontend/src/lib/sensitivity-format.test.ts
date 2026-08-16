@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   LEVER_LABEL, LEVER_SHORT, formatStepLabel, formatRangeLabel, flagShortCodes, unmeasuredCellNotes,
+  isMeasuredBar, omittedTornadoNotes,
 } from './sensitivity-format';
-import type { SensitivityCell } from './model/sensitivity';
+import type { SensitivityCell, TornadoBar } from './model/sensitivity';
 
 describe('sensitivity-format', () => {
   // The short labels are load-bearing: they reproduce the memo's historical
@@ -131,5 +132,94 @@ describe('unmeasuredCellNotes', () => {
   it('resolves a note index by reason rather than by object identity', () => {
     const { noteIndexFor } = unmeasuredCellNotes([[cell(-12, 0, TERM)]]);
     expect(noteIndexFor(cell(-99, 99, TERM))).toBe(0);
+  });
+});
+
+// Bars built by hand, not by running the suite: this tests the predicates, not the
+// engine, and a literal keeps every branch reachable without hunting for a fixture.
+function endpoint(profit: number | null, ...messages: string[]) {
+  return {
+    profit_pence: profit,
+    profit_on_cost_pct: profit === null ? null : 20,
+    profit_on_gdv_pct: profit === null ? null : 15,
+    irr_annual_pct: profit === null ? null : 25,
+    ltgdv_developer_pct: profit === null ? null : 60,
+    peak_debt_pence: profit === null ? null : 5_000_000,
+    flags: [],
+    validation_errors: messages.map((message) => ({
+      severity: 'error' as const,
+      field: 'finance.term_months',
+      message,
+    })),
+  };
+}
+
+function bar(
+  lever: 'gdv' | 'construction_cost' | 'timeline' | 'interest_rate',
+  low: ReturnType<typeof endpoint>,
+  high: ReturnType<typeof endpoint>,
+  span: number | null,
+): TornadoBar {
+  return { lever, low_step: -10, high_step: 10, low, high, span_pence: span };
+}
+
+describe('isMeasuredBar', () => {
+  it('accepts a bar with a span', () => {
+    expect(isMeasuredBar(bar('gdv', endpoint(1000), endpoint(2000), 1000))).toBe(true);
+  });
+
+  it('rejects a bar whose low endpoint was not measured', () => {
+    expect(isMeasuredBar(bar('timeline', endpoint(null, 'x'), endpoint(2000), null))).toBe(false);
+  });
+
+  it('rejects a bar whose high endpoint was not measured', () => {
+    expect(isMeasuredBar(bar('timeline', endpoint(1000), endpoint(null, 'x'), null))).toBe(false);
+  });
+
+  it('rejects a bar with neither endpoint measured', () => {
+    expect(isMeasuredBar(bar('timeline', endpoint(null, 'x'), endpoint(null, 'x'), null))).toBe(false);
+  });
+
+  // The distinction the whole predicate exists to make: a genuine zero span is a
+  // measurement, not an omission. Getting this wrong drops a real bar from the memo.
+  it('accepts a genuine zero span', () => {
+    expect(isMeasuredBar(bar('interest_rate', endpoint(1000), endpoint(1000), 0))).toBe(true);
+  });
+});
+
+describe('omittedTornadoNotes', () => {
+  const TERM = 'Term must be a whole number of months, at least 1.';
+  const RATE = 'Interest rate must not be negative.';
+
+  it('returns nothing when every bar is measured', () => {
+    expect(omittedTornadoNotes([bar('gdv', endpoint(1000), endpoint(2000), 1000)])).toEqual([]);
+  });
+
+  it('carries the engine\'s own message for the omitted bar', () => {
+    const notes = omittedTornadoNotes([bar('timeline', endpoint(null, TERM), endpoint(2000), null)]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('Timeline omitted');
+    expect(notes[0]).toContain(TERM);
+    expect(notes[0]).toContain('(spec §12.7)');
+  });
+
+  // Different levers fail for entirely different reasons — an emptied term versus a
+  // negative rate — which is exactly why the sentence must not be reconstructed by the
+  // caller from the lever alone.
+  it('gives each omitted bar its own reason, in bar order', () => {
+    const notes = omittedTornadoNotes([
+      bar('gdv', endpoint(1000), endpoint(2000), 1000),
+      bar('timeline', endpoint(null, TERM), endpoint(2000), null),
+      bar('interest_rate', endpoint(1000), endpoint(null, RATE), null),
+    ]);
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain(TERM);
+    expect(notes[1]).toContain(RATE);
+  });
+
+  it('joins both endpoints\' reasons when neither was measured', () => {
+    const notes = omittedTornadoNotes([bar('timeline', endpoint(null, TERM), endpoint(null, RATE), null)]);
+    expect(notes[0]).toContain(TERM);
+    expect(notes[0]).toContain(RATE);
   });
 });
