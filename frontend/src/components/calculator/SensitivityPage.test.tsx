@@ -105,3 +105,99 @@ describe('SensitivityPage — tornado', () => {
       .toBeInTheDocument();
   });
 });
+
+describe('SensitivityPage — axis and step editor', () => {
+  it('re-runs the suite on an edited column step list', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/column steps/i), { target: { value: '-20, 0' } });
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    expect(within(matrix).getByText('GDV -20%')).toBeInTheDocument();
+    expect(within(matrix).queryByText('GDV -15%')).not.toBeInTheDocument();
+    // 5 cost rows unchanged, now 2 GDV columns + the row label column.
+    const bodyRows = within(matrix).getAllByRole('row').slice(1);
+    expect(bodyRows).toHaveLength(5);
+    expect(within(bodyRows[0]).getAllByRole('cell')).toHaveLength(2);
+  });
+
+  it('switches a row axis to another lever', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '0, 3' } });
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    expect(within(matrix).getByText('Timeline +3 months')).toBeInTheDocument();
+  });
+
+  // Spec §12.6 errors are input errors, not flags. Showing the reason and
+  // hiding the grid is honest; showing the previous grid beside an invalid
+  // config would present numbers that are not the current calculation (spec §2).
+  it('states the reason and hides the matrix when both axes name one lever', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'gdv' } });
+    expect(screen.getByText(/must use different levers/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /two-way sensitivity/i })).not.toBeInTheDocument();
+  });
+
+  it('rejects an empty step list', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/column steps/i), { target: { value: '' } });
+    expect(screen.getByText(/at least one step/i)).toBeInTheDocument();
+  });
+
+  it('rejects a fractional timeline step (spec §12.6)', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '0, 1.5' } });
+    expect(screen.getByText(/whole months/i)).toBeInTheDocument();
+  });
+
+  it('rejects more than nine steps on an axis', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/column steps/i), {
+      target: { value: '-20,-15,-10,-5,0,5,10,15,20,25' },
+    });
+    expect(screen.getByText(/at most 9 steps/i)).toBeInTheDocument();
+  });
+
+  // The carried-forward §12.6 gap, and the reason this guard exists at all: the
+  // engine does NOT reject a timeline step that empties the term. It clamps to a
+  // one-month term, so -11, -12 and -13 on this 12-month deal would render three
+  // identical columns under three different captions. The page refuses the axis
+  // instead of printing an answer it cannot stand behind.
+  it('refuses a timeline step that would empty the term', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-3, -12' } });
+    expect(screen.getByText(/at least one month/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /two-way sensitivity/i })).not.toBeInTheDocument();
+  });
+
+  it('allows a timeline step that leaves a one-month term', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-11, 0' } });
+    expect(screen.queryByText(/at least one month/i)).not.toBeInTheDocument();
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    expect(within(matrix).getByText('Timeline -11 months')).toBeInTheDocument();
+  });
+
+  it('restores the spec defaults on reset', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/column steps/i), { target: { value: '-20, 0' } });
+    fireEvent.click(screen.getByRole('button', { name: /reset to defaults/i }));
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    expect(within(matrix).getByText('GDV -15%')).toBeInTheDocument();
+  });
+
+  // Design §5.1: view state only. The page has no onChange prop at all, so the
+  // strongest available statement is that the inputs object it was handed is
+  // untouched after every editor interaction.
+  it('never mutates the inputs document', () => {
+    const inputs = buildInputs();
+    const before = JSON.stringify(inputs);
+    render(<SensitivityPage inputs={inputs} />);
+    fireEvent.change(screen.getByLabelText(/column steps/i), { target: { value: '-20, 0' } });
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'interest_rate' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '0, 2' } });
+    expect(JSON.stringify(inputs)).toBe(before);
+  });
+});

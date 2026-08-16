@@ -1,6 +1,11 @@
 import { useMemo, useState } from 'react';
 import type { CalculatorInputsV4 } from '../../lib/model';
-import type { SensitivityCell, SensitivityMetrics } from '../../lib/model/sensitivity';
+import {
+  defaultSensitivityConfig, validateSensitivityConfig, LEVER_ORDER, MAX_AXIS_STEPS,
+} from '../../lib/model/sensitivity';
+import type {
+  SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics,
+} from '../../lib/model/sensitivity';
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
@@ -40,25 +45,176 @@ function metricColor(key: SensitivityMetricKey, value: number | null): string {
   return TEXT;
 }
 
+/**
+ * Steps are held as the user's raw text, not as numbers, so a half-typed "-" or
+ * a trailing comma does not silently become a different grid. Anything that is
+ * not a finite number becomes NaN and is reported by validateSensitivityConfig
+ * (spec §12.6) rather than dropped — dropping it would quietly run a grid the
+ * user did not ask for.
+ */
+function parseSteps(text: string): number[] {
+  return text
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => Number(part));
+}
+
+function stepsToText(steps: number[]): string {
+  return steps.join(', ');
+}
+
+const DEFAULTS = defaultSensitivityConfig();
+
 export default function SensitivityPage({ inputs }: Props) {
   const [metric, setMetric] = useState<SensitivityMetricKey>('profit_on_cost_pct');
+  const [rowLever, setRowLever] = useState<SensitivityLever>(DEFAULTS.rows.lever);
+  const [colLever, setColLever] = useState<SensitivityLever>(DEFAULTS.cols.lever);
+  const [rowStepsText, setRowStepsText] = useState(stepsToText(DEFAULTS.rows.steps));
+  const [colStepsText, setColStepsText] = useState(stepsToText(DEFAULTS.cols.steps));
 
-  // One call runs 34 appraisals (25 cells + 8 tornado endpoints + base), so it
-  // is memoised on the inputs object exactly as the engine's own docstring asks.
-  const outcome = useMemo(() => safeRunSensitivity(inputs), [inputs]);
+  const resetToDefaults = () => {
+    setRowLever(DEFAULTS.rows.lever);
+    setColLever(DEFAULTS.cols.lever);
+    setRowStepsText(stepsToText(DEFAULTS.rows.steps));
+    setColStepsText(stepsToText(DEFAULTS.cols.steps));
+  };
 
-  if (!outcome.ok) {
+  // The tornado ranges stay at the spec §12.4 defaults in R4b — only the matrix
+  // axes are editable, which is the whole of design §5.1's third region.
+  const config: SensitivityConfig = useMemo(() => ({
+    rows: { lever: rowLever, steps: parseSteps(rowStepsText) },
+    cols: { lever: colLever, steps: parseSteps(colStepsText) },
+    tornado: DEFAULTS.tornado,
+  }), [rowLever, rowStepsText, colLever, colStepsText]);
+
+  const issues = useMemo(() => {
+    const found = validateSensitivityConfig(config).map((issue) => issue.message);
+    // Spec §12.6 constrains the timeline lever to whole months but says nothing
+    // about the term those months leave behind, and the appraisal engine does
+    // not reject an empty one — it clamps to a single month and returns a
+    // plausible result, so -11, -12 and -13 on a 12-month deal would render
+    // three identical columns under three different captions. Refusing the axis
+    // is the honest response until §12.6 says otherwise (R5).
+    // The tornado's fixed -3 months is included: a deal with a term under four
+    // months hits this without the user editing anything.
+    const term = inputs.finance.term_months;
+    const timelineSteps = [
+      ...(config.rows.lever === 'timeline' ? config.rows.steps : []),
+      ...(config.cols.lever === 'timeline' ? config.cols.steps : []),
+      ...config.tornado.filter((bar) => bar.lever === 'timeline').flatMap((bar) => [bar.low, bar.high]),
+    ];
+    if (timelineSteps.some((step) => term + step < 1)) {
+      found.push(`Every timeline step must leave at least one month of term (this deal runs ${term} months).`);
+    }
+    return found;
+  }, [config, inputs.finance.term_months]);
+
+  // Spec §12.6 errors are input errors: report them and compute nothing, rather
+  // than leaving the previous grid on screen beside an invalid config.
+  const outcome = useMemo(
+    () => (issues.length > 0 ? null : safeRunSensitivity(inputs, config)),
+    [inputs, config, issues],
+  );
+
+  const editor = (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end',
+      padding: 16, background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 24,
+    }}>
+      <label style={{ color: MUTED, fontSize: 13 }}>
+        Row lever
+        <select
+          value={rowLever}
+          onChange={(e) => setRowLever(e.target.value as SensitivityLever)}
+          style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
+        >
+          {LEVER_ORDER.map((lever) => (
+            <option key={lever} value={lever}>{LEVER_LABEL[lever]}</option>
+          ))}
+        </select>
+      </label>
+      <label style={{ color: MUTED, fontSize: 13 }}>
+        Row steps
+        <input
+          type="text"
+          value={rowStepsText}
+          onChange={(e) => setRowStepsText(e.target.value)}
+          style={{ display: 'block', marginTop: 4, padding: '4px 8px', width: 200, background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
+        />
+      </label>
+      <label style={{ color: MUTED, fontSize: 13 }}>
+        Column lever
+        <select
+          value={colLever}
+          onChange={(e) => setColLever(e.target.value as SensitivityLever)}
+          style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
+        >
+          {LEVER_ORDER.map((lever) => (
+            <option key={lever} value={lever}>{LEVER_LABEL[lever]}</option>
+          ))}
+        </select>
+      </label>
+      <label style={{ color: MUTED, fontSize: 13 }}>
+        Column steps
+        <input
+          type="text"
+          value={colStepsText}
+          onChange={(e) => setColStepsText(e.target.value)}
+          style={{ display: 'block', marginTop: 4, padding: '4px 8px', width: 200, background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
+        />
+      </label>
+      <button
+        type="button"
+        onClick={resetToDefaults}
+        style={{ padding: '6px 14px', background: '#1e3a5f', border: `1px solid ${BORDER}`, borderRadius: 6, color: TEXT, fontSize: 13, cursor: 'pointer' }}
+      >
+        Reset to defaults
+      </button>
+      <span style={{ color: MUTED, fontSize: 12, flexBasis: '100%' }}>
+        Comma-separated, up to {MAX_AXIS_STEPS} per axis. This view only — nothing here is
+        saved with the appraisal, and reloading restores the specified defaults.
+      </span>
+    </div>
+  );
+
+  const heading = (
+    <>
+      <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 8 }}>9. Sensitivity</h3>
+      <p style={{ color: MUTED, fontSize: 13, marginBottom: 24, maxWidth: 780 }}>
+        Every cell and every bar re-runs the full appraisal with the committed facility and
+        equity sources held at their base values (spec §12.2). A position needing more debt
+        than the facility does not receive it — it raises FE (facility exceeded), FG (funding
+        gap) or NR (senior debt not repaid within the term), and that flag is the finding.
+      </p>
+    </>
+  );
+
+  if (issues.length > 0) {
     return (
       <div>
-        <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 20 }}>9. Sensitivity</h3>
-        <CalculatorFailurePanel title="The sensitivity suite could not be calculated">
-          {outcome.error.message}
+        {heading}
+        {editor}
+        <CalculatorFailurePanel title="These axes do not describe a valid grid">
+          {issues.join(' ')}
         </CalculatorFailurePanel>
       </div>
     );
   }
 
-  const { base, matrix, tornado, config } = outcome.result;
+  if (!outcome || !outcome.ok) {
+    return (
+      <div>
+        {heading}
+        {editor}
+        <CalculatorFailurePanel title="The sensitivity suite could not be calculated">
+          {outcome ? outcome.error.message : 'No result was produced for these axes.'}
+        </CalculatorFailurePanel>
+      </div>
+    );
+  }
+
+  const { base, matrix, tornado, config: resolved } = outcome.result;
 
   // One shared scale across every tornado endpoint and the base, so bar lengths
   // are comparable between levers rather than each bar filling its own row.
@@ -72,13 +228,8 @@ export default function SensitivityPage({ inputs }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 8 }}>9. Sensitivity</h3>
-      <p style={{ color: MUTED, fontSize: 13, marginBottom: 24, maxWidth: 780 }}>
-        Every cell and every bar re-runs the full appraisal with the committed facility and
-        equity sources held at their base values (spec §12.2). A position needing more debt
-        than the facility does not receive it — it raises FE (facility exceeded), FG (funding
-        gap) or NR (senior debt not repaid within the term), and that flag is the finding.
-      </p>
+      {heading}
+      {editor}
 
       {/* ── Region 1: tornado ── */}
       <h4 style={{ color: MUTED, fontSize: 14, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -176,11 +327,11 @@ export default function SensitivityPage({ inputs }: Props) {
           <thead>
             <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
               <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>
-                {LEVER_SHORT[config.rows.lever]} \ {LEVER_SHORT[config.cols.lever]}
+                {LEVER_SHORT[resolved.rows.lever]} \ {LEVER_SHORT[resolved.cols.lever]}
               </th>
-              {config.cols.steps.map((step) => (
+              {resolved.cols.steps.map((step) => (
                 <th key={step} style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>
-                  {`${LEVER_SHORT[config.cols.lever]} ${formatStepLabel(config.cols.lever, step)}`}
+                  {`${LEVER_SHORT[resolved.cols.lever]} ${formatStepLabel(resolved.cols.lever, step)}`}
                 </th>
               ))}
             </tr>
@@ -189,7 +340,7 @@ export default function SensitivityPage({ inputs }: Props) {
             {matrix.map((row) => (
               <tr key={row[0].row_step} style={{ borderBottom: `1px solid ${PANEL}` }}>
                 <th scope="row" style={{ padding: '8px 12px', color: TEXT, textAlign: 'left', fontWeight: 600 }}>
-                  {`${LEVER_SHORT[config.rows.lever]} ${formatStepLabel(config.rows.lever, row[0].row_step)}`}
+                  {`${LEVER_SHORT[resolved.rows.lever]} ${formatStepLabel(resolved.rows.lever, row[0].row_step)}`}
                 </th>
                 {row.map((cell: SensitivityCell) => {
                   const codes = flagShortCodes(cell.flags);
