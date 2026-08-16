@@ -263,8 +263,11 @@ def run_sensitivity(
 
     issues = validate_sensitivity_config(config)
     if issues:
+        # Deduplicated: e.g. both axes missing a step raises the identical "An axis
+        # needs at least one step." issue twice, and repeating it says nothing extra.
+        messages = dict.fromkeys(i.message for i in issues)
         raise InvalidSensitivityConfigError(
-            "Invalid sensitivity config: " + " ".join(i.message for i in issues)
+            "Invalid sensitivity config: " + " ".join(messages)
         )
 
     base = _measure(inputs, {})
@@ -272,9 +275,12 @@ def run_sensitivity(
     # over an invalid base is meaningless in every position at once -- an input error
     # (Sec 12.6/12.7), not twenty-five unmeasured cells.
     if base.validation_errors:
+        # Deduplicated for the same reason as the config message above: validate_inputs
+        # emits one issue per offending element (e.g. one per phased-sales tranche) and
+        # those issues carry an identical message.
+        messages = dict.fromkeys(e.message for e in base.validation_errors)
         raise InvalidBaseDocumentError(
-            "Invalid base document: "
-            + " ".join(e.message for e in base.validation_errors)
+            "Invalid base document: " + " ".join(messages)
         )
 
     matrix: list[list[SensitivityCell]] = []

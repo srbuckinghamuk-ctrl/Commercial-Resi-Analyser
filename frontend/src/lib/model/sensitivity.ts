@@ -289,9 +289,10 @@ export function runSensitivity(
 ): SensitivityResult {
   const issues = validateSensitivityConfig(config);
   if (issues.length > 0) {
-    throw new InvalidSensitivityConfigError(
-      `Invalid sensitivity config: ${issues.map((i) => i.message).join(' ')}`,
-    );
+    // Deduplicated: e.g. both axes missing a step raises the identical "An axis needs
+    // at least one step." issue twice, and repeating it says nothing extra.
+    const messages = [...new Set(issues.map((i) => i.message))];
+    throw new InvalidSensitivityConfigError(`Invalid sensitivity config: ${messages.join(' ')}`);
   }
 
   const base = measure(inputs, {});
@@ -299,9 +300,11 @@ export function runSensitivity(
   // an invalid base is meaningless in every position at once — this is an input error
   // (§12.6/§12.7), not twenty-five unmeasured cells.
   if (base.validation_errors.length > 0) {
-    throw new InvalidBaseDocumentError(
-      `Invalid base document: ${base.validation_errors.map((e) => e.message).join(' ')}`,
-    );
+    // Deduplicated for the same reason as the config message above: validateInputs
+    // emits one issue per offending element (e.g. one per phased-sales tranche) and
+    // those issues carry an identical message.
+    const messages = [...new Set(base.validation_errors.map((e) => e.message))];
+    throw new InvalidBaseDocumentError(`Invalid base document: ${messages.join(' ')}`);
   }
 
   const matrix: SensitivityCell[][] = config.rows.steps.map((rowStep) =>

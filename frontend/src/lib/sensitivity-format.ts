@@ -140,10 +140,13 @@ export function omittedTornadoNotes(tornado: readonly TornadoBar[]): string[] {
   return tornado
     .filter((bar) => bar.span_pence === null)
     .map((bar) => {
-      const reasons = bar.low.validation_errors
+      // Deduplicated within this bar: both endpoints can fail the same rule (e.g. an
+      // emptied term rejects both a low and a high timeline step identically), and the
+      // engine's message is byte-identical each time — repeating it says nothing extra.
+      const messages = bar.low.validation_errors
         .concat(bar.high.validation_errors)
-        .map((e) => e.message)
-        .join(' ');
+        .map((e) => e.message);
+      const reasons = [...new Set(messages)].join(' ');
       return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
     });
 }
@@ -178,10 +181,15 @@ export interface UnmeasuredCellNotes {
 export function unmeasuredCellNotes(
   matrix: readonly (readonly SensitivityCell[])[],
 ): UnmeasuredCellNotes {
-  const reasonOf = (cell: SensitivityCell): string | null =>
-    cell.validation_errors.length === 0
-      ? null
-      : cell.validation_errors.map((e) => e.message).join(' ');
+  const reasonOf = (cell: SensitivityCell): string | null => {
+    if (cell.validation_errors.length === 0) return null;
+    // Deduplicated within this cell: validateInputs emits one issue per offending
+    // element (e.g. one per phased-sales tranche) and those issues carry an
+    // identical message, so joining without dedup repeats the same sentence once
+    // per element rather than saying anything new.
+    const messages = cell.validation_errors.map((e) => e.message);
+    return [...new Set(messages)].join(' ');
+  };
 
   const index = new Map<string, number>();
   for (const row of matrix) {

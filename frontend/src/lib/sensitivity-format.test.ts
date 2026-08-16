@@ -133,6 +133,14 @@ describe('unmeasuredCellNotes', () => {
     const { noteIndexFor } = unmeasuredCellNotes([[cell(-12, 0, TERM)]]);
     expect(noteIndexFor(cell(-99, 99, TERM))).toBe(0);
   });
+
+  // F1: validateInputs emits one issue per offending element (e.g. one per phased-sales
+  // tranche) and those issues carry an identical message. A single cell with three such
+  // issues must not print the same sentence three times.
+  it('deduplicates a single cell\'s repeated identical message down to one occurrence', () => {
+    const { notes } = unmeasuredCellNotes([[cell(0, 0, TERM, TERM, TERM)]]);
+    expect(notes).toEqual([TERM]);
+  });
 });
 
 // Bars built by hand, not by running the suite: this tests the predicates, not the
@@ -221,5 +229,15 @@ describe('omittedTornadoNotes', () => {
     const notes = omittedTornadoNotes([bar('timeline', endpoint(null, TERM), endpoint(null, RATE), null)]);
     expect(notes[0]).toContain(TERM);
     expect(notes[0]).toContain(RATE);
+  });
+
+  // F1: both endpoints of a bar can fail the same rule (e.g. an emptied term rejects a
+  // low and a high timeline step identically), and the engine's message is
+  // byte-identical each time. The sentence must carry it once, not once per endpoint.
+  it('deduplicates a bar\'s repeated identical message down to one occurrence', () => {
+    const notes = omittedTornadoNotes([bar('timeline', endpoint(null, TERM), endpoint(null, TERM), null)]);
+    expect(notes).toHaveLength(1);
+    const occurrences = notes[0].split(TERM).length - 1;
+    expect(occurrences).toBe(1);
   });
 });
