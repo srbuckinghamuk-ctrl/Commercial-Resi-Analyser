@@ -44,18 +44,29 @@ export interface SensitivityConfig {
   tornado: TornadoRange[];
 }
 
+/** Spec §12.3 and §12.4, built by a factory rather than held as a module-level mutable
+ *  so a caller cannot adjust the defaults for the whole process — mirrors Python's
+ *  `_default_config()` (app/financial_model/sensitivity.py). Every call returns a fresh
+ *  structure with no shared references, so mutating one caller's result can never leak
+ *  into another's. */
+export function defaultSensitivityConfig(): SensitivityConfig {
+  return {
+    rows: { lever: 'construction_cost', steps: [-5, 0, 5, 10, 15] },
+    cols: { lever: 'gdv', steps: [-15, -10, -5, 0, 5] },
+    tornado: [
+      { lever: 'gdv', low: -10, high: 10 },
+      { lever: 'construction_cost', low: -10, high: 10 },
+      { lever: 'timeline', low: -3, high: 3 },
+      { lever: 'interest_rate', low: -1, high: 1 },
+    ],
+  };
+}
+
 /** Spec §12.3 and §12.4. These are the steps the investment memo has always used;
- *  R4 promoted them from a constant inside the exporter to a specified default. */
-export const DEFAULT_SENSITIVITY_CONFIG: SensitivityConfig = {
-  rows: { lever: 'construction_cost', steps: [-5, 0, 5, 10, 15] },
-  cols: { lever: 'gdv', steps: [-15, -10, -5, 0, 5] },
-  tornado: [
-    { lever: 'gdv', low: -10, high: 10 },
-    { lever: 'construction_cost', low: -10, high: 10 },
-    { lever: 'timeline', low: -3, high: 3 },
-    { lever: 'interest_rate', low: -1, high: 1 },
-  ],
-};
+ *  R4 promoted them from a constant inside the exporter to a specified default. Kept
+ *  for callers that want to compare against the normative shape (tests, the exporter);
+ *  `runSensitivity` never hands this object out by identity — see `defaultSensitivityConfig`. */
+export const DEFAULT_SENSITIVITY_CONFIG: SensitivityConfig = defaultSensitivityConfig();
 
 /**
  * The metric reduction of one appraisal. Percentage fields stay nullable to match
@@ -106,6 +117,17 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
   const axes: Array<['rows' | 'cols', SensitivityAxis]> = [['rows', config.rows], ['cols', config.cols]];
 
   for (const [name, axis] of axes) {
+    const field = `sensitivity.${name}.lever`;
+    // Spec §12.6: an axis lever must be one of the four §12.1 levers. `LEVER_ORDER`
+    // is the closed set — this is what stops a bad-cased or misspelled lever from
+    // silently producing a matrix in which that axis does nothing, or (in the Python
+    // mirror) crashing inside LEVER_ORDER.index() further down the pipeline.
+    if (!LEVER_ORDER.includes(axis.lever)) {
+      issues.push({ severity: 'error', field, message: `Unknown lever "${axis.lever}".` });
+    }
+  }
+
+  for (const [name, axis] of axes) {
     const field = `sensitivity.${name}.steps`;
     if (axis.steps.length === 0) {
       issues.push({ severity: 'error', field, message: 'An axis needs at least one step.' });
@@ -134,6 +156,13 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
 
   const seen = new Set<SensitivityLever>();
   for (const range of config.tornado) {
+    // Spec §12.6, same closed-set rule as the axes above.
+    if (!LEVER_ORDER.includes(range.lever)) {
+      issues.push({
+        severity: 'error', field: 'sensitivity.tornado',
+        message: `Unknown lever "${range.lever}".`,
+      });
+    }
     if (seen.has(range.lever)) {
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
@@ -199,7 +228,11 @@ function measure(inputs: AnyCalculatorInputs, levers: Partial<Record<Sensitivity
  */
 export function runSensitivity(
   inputs: AnyCalculatorInputs,
-  config: SensitivityConfig = DEFAULT_SENSITIVITY_CONFIG,
+  // A default parameter expression is re-evaluated on every call it fires for (unlike
+  // Python, where a default is bound once at function definition) — so this already
+  // hands each caller a fresh, unshared config, and `result.config` below echoes that
+  // resolved value rather than the `DEFAULT_SENSITIVITY_CONFIG` singleton.
+  config: SensitivityConfig = defaultSensitivityConfig(),
 ): SensitivityResult {
   const issues = validateSensitivityConfig(config);
   if (issues.length > 0) {

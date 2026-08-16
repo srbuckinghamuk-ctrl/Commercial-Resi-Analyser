@@ -109,6 +109,17 @@ def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIss
     issues: list[ValidationIssue] = []
 
     for name, axis in (("rows", config.rows), ("cols", config.cols)):
+        # Spec Sec 12.6: an axis lever must be one of the four Sec 12.1 levers.
+        # LEVER_ORDER is the closed set -- this is what stops a bad-cased or
+        # misspelled lever from crashing later inside LEVER_ORDER.index() in
+        # run_sensitivity (the TS mirror instead silently no-ops that axis, so this
+        # check is what keeps the two engines agreeing on the same input error rather
+        # than on a wrong answer).
+        if axis.lever not in LEVER_ORDER:
+            issues.append(ValidationIssue(severity="error", field=f"sensitivity.{name}.lever",
+                                          message=f'Unknown lever "{axis.lever}".'))
+
+    for name, axis in (("rows", config.rows), ("cols", config.cols)):
         field_name = f"sensitivity.{name}.steps"
         if len(axis.steps) == 0:
             issues.append(ValidationIssue(severity="error", field=field_name,
@@ -134,6 +145,11 @@ def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIss
 
     seen: set[str] = set()
     for rng in config.tornado:
+        # Spec Sec 12.6, same closed-set rule as the axes above.
+        if rng.lever not in LEVER_ORDER:
+            issues.append(ValidationIssue(
+                severity="error", field="sensitivity.tornado",
+                message=f'Unknown lever "{rng.lever}".'))
         if rng.lever in seen:
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",

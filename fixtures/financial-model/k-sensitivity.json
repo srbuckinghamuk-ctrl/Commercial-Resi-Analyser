@@ -30,7 +30,8 @@
     "profit_on_gdv_pct": 19.61,
     "irr_annual_pct": 91.2,
     "ltgdv_developer_pct": 48.84,
-    "peak_debt_pence": 58604953
+    "peak_debt_pence": 58604953,
+    "flags": []
   },
   "expected_corner_cells": [
     {

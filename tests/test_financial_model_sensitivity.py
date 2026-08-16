@@ -72,6 +72,13 @@ def test_defaults_validate_clean():
 @pytest.mark.parametrize(
     "overrides,expected_field",
     [
+        # Spec Sec 12.6: an axis or tornado lever must be one of the four Sec 12.1
+        # levers. Without this, an unknown AXIS lever silently no-ops that axis (both
+        # engines "agree" on a wrong answer), and an unknown TORNADO lever crashes
+        # run_sensitivity inside LEVER_ORDER.index() -- see the sibling TS test in
+        # sensitivity.test.ts.
+        ({"rows": SensitivityAxis(lever="GDV", steps=[0])}, "sensitivity.rows.lever"),
+        ({"tornado": [TornadoRange(lever="GDV", low=-10, high=10)]}, "sensitivity.tornado"),
         ({"rows": SensitivityAxis(lever="construction_cost", steps=[])}, "sensitivity.rows.steps"),
         ({"rows": SensitivityAxis(lever="construction_cost", steps=[0, float("nan")])}, "sensitivity.rows.steps"),
         ({"cols": SensitivityAxis(lever="gdv", steps=list(range(MAX_AXIS_STEPS + 1)))}, "sensitivity.cols.steps"),
@@ -219,3 +226,32 @@ def test_never_resizes_the_facility_whatever_the_cell():
 def test_invalid_config_raises():
     with pytest.raises(ValueError, match="different levers"):
         run_sensitivity(_inputs(), _config(rows=SensitivityAxis(lever="gdv", steps=[0])))
+
+
+def test_unknown_axis_lever_raises_a_validation_error_not_an_index_error():
+    """Spec Sec 12.6. Before the closed-set check existed, an unknown tornado lever
+    reached LEVER_ORDER.index() inside run_sensitivity and raised an uncaught
+    ValueError from tuple.index(), not the deliberate "Invalid sensitivity config"
+    message -- the same failure under a misleading label."""
+    with pytest.raises(ValueError, match="Invalid sensitivity config"):
+        run_sensitivity(_inputs(), _config(
+            tornado=[TornadoRange(lever="GDV", low=-10, high=10)]
+        ))
+
+
+# Mirrors sensitivity.test.ts's "does not leak a mutation of the default config into
+# later runs": _default_config() must hand out a fresh structure on every call so a
+# caller mutating run_sensitivity(...).config can never poison a later default-config
+# call for the rest of the process.
+def test_run_sensitivity_default_config_is_not_shared():
+    inputs = _inputs()
+    first = run_sensitivity(inputs)
+    assert list(first.config.cols.steps) == list(DEFAULT_SENSITIVITY_CONFIG.cols.steps)
+
+    first.config.cols.steps.append(10)
+
+    second = run_sensitivity(inputs)
+    assert list(second.config.cols.steps) == [-15, -10, -5, 0, 5]
+    assert len(second.matrix[0]) == 5
+    # The shared module-level constant itself must also be untouched.
+    assert list(DEFAULT_SENSITIVITY_CONFIG.cols.steps) == [-15, -10, -5, 0, 5]

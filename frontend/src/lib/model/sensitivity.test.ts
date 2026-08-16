@@ -66,6 +66,25 @@ describe('validateSensitivityConfig (spec §12.6)', () => {
     expect(issues.map((i) => i.field)).toContain('sensitivity.cols.steps');
   });
 
+  // §12.6: an axis or tornado lever must be one of the four §12.1 levers. Without
+  // this, an unknown AXIS lever silently no-ops that axis (both engines "agree" on a
+  // wrong answer), and an unknown TORNADO lever crashes the Python mirror inside
+  // LEVER_ORDER.index() — see the sibling test in test_financial_model_sensitivity.py.
+  it('rejects an axis naming an unknown lever', () => {
+    const issues = validateSensitivityConfig(config({
+      rows: { lever: 'GDV' as SensitivityConfig['rows']['lever'], steps: [0] },
+    }));
+    expect(issues.map((i) => i.field)).toContain('sensitivity.rows.lever');
+    expect(issues.every((i) => i.severity === 'error')).toBe(true);
+  });
+
+  it('rejects a tornado bar naming an unknown lever', () => {
+    const issues = validateSensitivityConfig(config({
+      tornado: [{ lever: 'GDV' as SensitivityConfig['tornado'][number]['lever'], low: -10, high: 10 }],
+    }));
+    expect(issues.map((i) => i.field)).toContain('sensitivity.tornado');
+  });
+
   it('rejects both axes naming the same lever', () => {
     const issues = validateSensitivityConfig(config({ rows: { lever: 'gdv', steps: [0] } }));
     expect(issues.map((i) => i.field)).toContain('sensitivity.cols.lever');
@@ -246,5 +265,35 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
       ...DEFAULT_SENSITIVITY_CONFIG,
       rows: { lever: 'gdv', steps: [0] },
     })).toThrow(/different levers/);
+  });
+
+  // Before the closed-set check existed, an unknown tornado lever reached
+  // LEVER_ORDER.indexOf() in the tie-break comparator, which returns -1 rather than
+  // throwing — so the TS mirror "succeeded" silently while the Python mirror crashed
+  // uncaught inside LEVER_ORDER.index(). Both engines must now reject it the same way.
+  it('throws on an unknown tornado lever rather than mis-sorting silently', () => {
+    expect(() => runSensitivity(fixtureFInputs(), {
+      ...DEFAULT_SENSITIVITY_CONFIG,
+      tornado: [{ lever: 'GDV' as SensitivityConfig['tornado'][number]['lever'], low: -10, high: 10 }],
+    })).toThrow(/Invalid sensitivity config/);
+  });
+
+  // Mirrors app/financial_model/sensitivity.py's _default_config() factory: the
+  // default config must never be handed out by reference, or a caller mutating
+  // `result.config` would poison every later default-config call for the process.
+  // See test_run_sensitivity_default_config_is_not_shared in
+  // tests/test_financial_model_sensitivity.py for the Python-side pin.
+  it('does not leak a mutation of the default config into later runs', () => {
+    const inputs = fixtureFInputs();
+    const first = runSensitivity(inputs);
+    expect(first.config.cols.steps).toEqual(DEFAULT_SENSITIVITY_CONFIG.cols.steps);
+
+    first.config.cols.steps.push(10);
+
+    const second = runSensitivity(inputs);
+    expect(second.config.cols.steps).toEqual([-15, -10, -5, 0, 5]);
+    expect(second.matrix[0]).toHaveLength(5);
+    // The shared module-level constant itself must also be untouched.
+    expect(DEFAULT_SENSITIVITY_CONFIG.cols.steps).toEqual([-15, -10, -5, 0, 5]);
   });
 });

@@ -183,7 +183,7 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
     base_fixture: string;
     config: SensitivityConfig;
     expected_derived_inputs: Record<string, Record<string, number>>;
-    expected_base: Record<string, number>;
+    expected_base: Record<string, number | string[]>;
     expected_corner_cells: Array<Record<string, number | string[]>>;
     expected_tornado_order: string[];
     expected_tornado_spans_pence: Record<string, number>;
@@ -236,10 +236,12 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
     }
   });
 
-  // Hand-derived: reused verbatim from Fixture F (§12.5).
+  // Hand-derived: reused verbatim from Fixture F (§12.5). `toEqual`, not `toBe`: the
+  // `flags` pin is an array, and `toBe`'s reference equality would fail against any
+  // freshly-built array even when its contents match — a pin that could never bite.
   it('reports the hand-derived base case', () => {
     for (const [key, expected] of Object.entries(k.expected_base)) {
-      expect(result.base[key as keyof typeof result.base]).toBe(expected);
+      expect(result.base[key as keyof typeof result.base]).toEqual(expected);
     }
   });
 
