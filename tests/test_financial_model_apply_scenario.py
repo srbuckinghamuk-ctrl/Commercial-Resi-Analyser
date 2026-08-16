@@ -83,6 +83,11 @@ def test_base_document_is_not_mutated():
 def test_timeline_adjustment_as_integral_float_is_cast_safely():
     """Spec Sec 12.6: timeline steps must be whole months, so a float like 3.0
     is valid (integral value in float representation) and the int() cast is a no-op.
-    Fixture F has 12-month term; adding 3.0 yields 15."""
+    Fixture F has 12-month term; adding 3.0 yields 15.
+
+    The value assertion alone (15.0 == 15) cannot distinguish int(3.0) from an
+    uncast 3.0 in Python, because 15.0 == 15 is True. The isinstance() check is
+    the part that catches a removed or weakened cast."""
     out = apply_scenario(_base(), _overrides(timeline_adjustment_months=3.0))
     assert out.finance.term_months == 15
+    assert isinstance(out.finance.term_months, int)
