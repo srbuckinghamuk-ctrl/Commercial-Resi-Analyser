@@ -31,6 +31,26 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   interest_rate: 'Rate',
 };
 
+/**
+ * A tornado bar is unsound when it is the `timeline` lever and either endpoint
+ * would drive `finance.term_months` below one month. Spec §12.6 constrains
+ * timeline steps to whole months but says nothing about the term those months
+ * leave behind, and the engine does not reject an empty one — it silently
+ * clamps to a one-month term and returns a plausible-looking result (pinned as
+ * current behaviour in safe-sensitivity.test.ts). Several distinct steps clamp
+ * to the identical one-month answer, so a bar with a clamping endpoint is not
+ * really reporting "-3 months" (or whatever the endpoint claims) — it is
+ * reporting the clamp floor. Neither the memo nor the calculator page may
+ * print or render that figure unflagged; both drop the bar instead. Shared
+ * here so the two surfaces agree on what "unsound" means.
+ */
+export function isUnsoundTornadoBar(
+  termMonths: number,
+  bar: { lever: SensitivityLever; low_step: number; high_step: number },
+): boolean {
+  return bar.lever === 'timeline' && (termMonths + bar.low_step < 1 || termMonths + bar.high_step < 1);
+}
+
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
 function decimalsFor(lever: SensitivityLever): number {
   return lever === 'interest_rate' ? 1 : 0;

@@ -5,6 +5,8 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './model';
 import { runAppraisal, migrateInputs } from './model';
+import { runSensitivity } from './model/sensitivity';
+import { LEVER_LABEL } from './sensitivity-format';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -162,6 +164,15 @@ const mockEligibility: EligibilityAssessment = {
 async function pdfText(blob: Blob): Promise<string> {
   const ab = await blob.arrayBuffer();
   return Buffer.from(ab).toString('latin1');
+}
+
+/**
+ * jsPDF escapes literal parentheses inside PDF text-show strings ("\(" / "\)")
+ * — searching pdfText() output for a heading like "... (Tornado)" needs the
+ * same escaping, or the match silently fails even though the text is present.
+ */
+function pdfEscape(text: string): string {
+  return text.replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
 
 describe('generateInvestmentMemo', () => {
@@ -673,7 +684,8 @@ describe('sensitivityTables — memo §10 regression pin', () => {
   });
 
   it('prints each tornado bar with its range and both endpoint profits', () => {
-    const rows = sensitivityTables(baseInputs()).tornadoRows;
+    const inputs = baseInputs();
+    const rows = sensitivityTables(inputs).tornadoRows;
     expect(rows[0][1]).toBe('-10% to +10%');
     expect(rows[2][1]).toBe('-3 to +3 months');
     expect(rows[3][1]).toBe('-1.0 to +1.0 pp');
@@ -684,6 +696,24 @@ describe('sensitivityTables — memo §10 regression pin', () => {
       expect(row[3]).toMatch(/^-?£[\d,]+$/);
       expect(row[4]).toMatch(/^£[\d,]+$/);
     }
+
+    // Finding 5 (R4b final review): row[2]/row[3] were only regex-matched as
+    // money above, so swapping bar.low.profit_pence and bar.high.profit_pence
+    // inside sensitivityTables() would pass every one of those assertions —
+    // the swing is Math.abs, so it wouldn't catch the swap either. Tie both
+    // columns to the engine's own tornado, computed independently here rather
+    // than by re-deriving from sensitivityTables() itself.
+    const gbp = (pence: number) => (pence / 100).toLocaleString('en-GB', {
+      style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+    });
+    const engineTornado = runSensitivity(inputs).tornado;
+    expect(engineTornado).toHaveLength(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const bar = engineTornado[i];
+      expect(rows[i][0]).toBe(LEVER_LABEL[bar.lever]);
+      expect(rows[i][2]).toBe(gbp(bar.low.profit_pence));
+      expect(rows[i][3]).toBe(gbp(bar.high.profit_pence));
+    }
   });
 
   // The swing is |profit(high) - profit(low)| (spec §12.4), so it is never
@@ -692,5 +722,125 @@ describe('sensitivityTables — memo §10 regression pin', () => {
     const rows = sensitivityTables(baseInputs()).tornadoRows;
     const cost = rows.find((r) => r[0] === 'Construction cost')!;
     expect(cost[4].startsWith('-')).toBe(false);
+  });
+});
+
+// ── Release 4b final review, finding 3 ──────────────────────────────────
+//
+// The pin tests above exercise sensitivityTables() as a pure function; none of
+// them touch generateInvestmentMemo's wiring of that output into the actual
+// PDF tables (`head: [sens.head]`, `body: sens.pocRows`, `body: sens.ltgdvRows`,
+// `body: sens.tornadoRows`). Swapping pocRows for ltgdvRows there left all 813
+// tests green before this fix — these assert the printed PDF actually contains
+// sensitivityTables()' output, under the correct heading.
+describe('generateInvestmentMemo — §10 sensitivity wiring', () => {
+  it('prints the tornado heading, both matrix headings, and every lever label', async () => {
+    const run = runAppraisal(baseInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    expect(text).toContain(pdfEscape('Single-Lever Sensitivity (Tornado)'));
+    expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
+    expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: LTGDV, developer basis (%)'));
+    for (const lever of ['GDV', 'Construction cost', 'Timeline', 'Interest rate']) {
+      expect(text).toContain(lever);
+    }
+  });
+
+  it('prints the matrix row captions for both two-way tables', async () => {
+    const run = runAppraisal(baseInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    for (const caption of ['Cost -5%', 'Cost +0%', 'Cost +5%', 'Cost +10%', 'Cost +15%']) {
+      expect(text).toContain(caption);
+    }
+    for (const caption of ['GDV -15%', 'GDV -10%', 'GDV -5%', 'GDV +0%', 'GDV +5%']) {
+      expect(text).toContain(caption);
+    }
+  });
+
+  // The direct check for the finding's bug scenario: a POC-only value must
+  // appear between the POC heading and the LTGDV heading, and an LTGDV-only
+  // value must appear after the LTGDV heading — not the other way round. A
+  // plain `text.toContain(value)` cannot catch a swapped `body:` assignment
+  // (both values would still be somewhere in the document); bounding by
+  // heading position can.
+  it('prints profit-on-cost values under the POC heading and LTGDV values under the LTGDV heading, not swapped', async () => {
+    const inputs = baseInputs();
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    const tables = sensitivityTables(inputs);
+
+    const pocHeadingIdx = text.indexOf(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
+    const ltgdvHeadingIdx = text.indexOf(pdfEscape('Two-Way Sensitivity Matrix: LTGDV, developer basis (%)'));
+    expect(pocHeadingIdx).toBeGreaterThan(-1);
+    expect(ltgdvHeadingIdx).toBeGreaterThan(pocHeadingIdx);
+
+    // Values that appear in one matrix's body but not the other, for this fixture.
+    const pocOnlyCell = tables.pocRows[0][1];
+    const ltgdvOnlyCell = tables.ltgdvRows[0][1];
+    expect(tables.ltgdvRows.flat()).not.toContain(pocOnlyCell);
+    expect(tables.pocRows.flat()).not.toContain(ltgdvOnlyCell);
+
+    const pocValueIdx = text.indexOf(pocOnlyCell, pocHeadingIdx);
+    const ltgdvValueIdx = text.indexOf(ltgdvOnlyCell, ltgdvHeadingIdx);
+    expect(pocValueIdx).toBeGreaterThan(pocHeadingIdx);
+    expect(pocValueIdx).toBeLessThan(ltgdvHeadingIdx);
+    expect(ltgdvValueIdx).toBeGreaterThan(ltgdvHeadingIdx);
+  });
+});
+
+// ── Release 4b final review, findings 1 & 2 ─────────────────────────────
+//
+// The engine clamps a timeline step that would drive finance.term_months
+// below one month instead of throwing (safe-sensitivity.test.ts pins this).
+// The default tornado's fixed -3-month low endpoint hits that clamp on any
+// deal with a term of three months or less. Before this fix, sensitivityTables()
+// printed the clamped, one-month figure as if it were the genuine "-3 months"
+// answer, with no caveat. The fix: drop the unsound bar and state why.
+describe('sensitivityTables — clamped-term tornado omission (finding 1)', () => {
+  function shortTermInputs(): CalculatorInputsV2 {
+    const inputs = baseInputs();
+    inputs.finance.term_months = 3;
+    return inputs;
+  }
+
+  it('drops the timeline bar and reports it as omitted', () => {
+    const tables = sensitivityTables(shortTermInputs());
+    expect(tables.omittedTornadoLevers).toEqual(['timeline']);
+    expect(tables.tornadoRows.map((r) => r[0])).not.toContain('Timeline');
+    // GDV, construction cost and interest rate are untouched by the term guard.
+    expect(tables.tornadoRows).toHaveLength(3);
+  });
+
+  it('does not omit anything for a term long enough to survive the fixed range', () => {
+    const tables = sensitivityTables(baseInputs()); // 12-month term
+    expect(tables.omittedTornadoLevers).toEqual([]);
+    expect(tables.tornadoRows).toHaveLength(4);
+  });
+
+  it('never prints the clamped tornado figure, and states what was omitted and why', async () => {
+    const inputs = shortTermInputs();
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+
+    const tornadoHeadingIdx = text.indexOf(pdfEscape('Single-Lever Sensitivity (Tornado)'));
+    const pocHeadingIdx = text.indexOf(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
+    expect(tornadoHeadingIdx).toBeGreaterThan(-1);
+    expect(pocHeadingIdx).toBeGreaterThan(tornadoHeadingIdx);
+    const tornadoSection = text.slice(tornadoHeadingIdx, pocHeadingIdx);
+
+    // The omission is stated, not silent, names the lever and the term.
+    expect(tornadoSection).toContain('Timeline omitted');
+    expect(tornadoSection).toContain('3-month term');
+    // No Timeline *row* prints: the row's distinguishing unit ("months", plural
+    // — see formatRangeLabel) never appears, only the singular "month" inside
+    // the omission note's own prose ("one-month term").
+    expect(tornadoSection).not.toContain('months');
+
+    // The two-way matrices are unaffected by the tornado omission.
+    expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: Profit on Cost (%)'));
+    expect(text).toContain(pdfEscape('Two-Way Sensitivity Matrix: LTGDV, developer basis (%)'));
   });
 });

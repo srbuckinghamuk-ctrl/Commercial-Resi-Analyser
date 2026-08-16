@@ -201,3 +201,56 @@ describe('SensitivityPage — axis and step editor', () => {
     expect(JSON.stringify(inputs)).toBe(before);
   });
 });
+
+// ── Release 4b final review, finding 2 ──────────────────────────────────
+//
+// The default tornado's fixed -3-month low endpoint clamps finance.term_months
+// on any deal with a term of three months or less (the engine clamps rather
+// than throwing — see safe-sensitivity.test.ts). Before this fix, the page's
+// term guard folded that fixed range into the same check that gates the axis
+// editor, so the page was dead on first render for such a deal: only the error
+// panel showed, above an editor with no timeline step at all and a "Reset to
+// defaults" button that could not help. The fix drops just the unsound bar and
+// still renders everything else.
+describe('SensitivityPage — clamped-term tornado omission', () => {
+  function buildShortTermInputs(): CalculatorInputsV4 {
+    const inputs = buildInputs();
+    return { ...inputs, finance: { ...inputs.finance, term_months: 3 } };
+  }
+
+  it('does not dead-end on first render for a deal whose term is too short for the fixed tornado range', () => {
+    render(<SensitivityPage inputs={buildShortTermInputs()} />);
+    // No "invalid grid" panel — the axes themselves are untouched and valid.
+    expect(screen.queryByText(/does not describe a valid grid/i)).not.toBeInTheDocument();
+    // The two-way matrix renders exactly as it does for any other deal.
+    expect(screen.getByRole('table', { name: /two-way sensitivity/i })).toBeInTheDocument();
+  });
+
+  it('drops the timeline bar from the tornado and states the omission', () => {
+    render(<SensitivityPage inputs={buildShortTermInputs()} />);
+    const tornado = screen.getByRole('table', { name: /single-lever/i });
+    const labels = within(tornado).getAllByRole('row').slice(1)
+      .map((row) => within(row).getAllByRole('cell')[0].textContent);
+    expect(labels).toEqual(['GDV', 'Construction cost', 'Interest rate']);
+    expect(screen.getByText(/Timeline omitted/i)).toBeInTheDocument();
+    expect(screen.getByText(/3-month term/i)).toBeInTheDocument();
+  });
+
+  it('still renders the tornado table for the levers that remain sound', () => {
+    render(<SensitivityPage inputs={buildShortTermInputs()} />);
+    const tornado = screen.getByRole('table', { name: /single-lever/i });
+    expect(within(tornado).getByText('GDV')).toBeInTheDocument();
+    expect(within(tornado).getByText('Construction cost')).toBeInTheDocument();
+    expect(within(tornado).getByText('Interest rate')).toBeInTheDocument();
+  });
+
+  // A user-entered axis step that empties the term must still refuse the
+  // grid — only the tornado's own fixed ranges were taken out of the gate.
+  it('still refuses the grid when the user edits a timeline axis step that empties the term', () => {
+    render(<SensitivityPage inputs={buildShortTermInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '0, -3' } });
+    expect(screen.getByText(/at least one month/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /two-way sensitivity/i })).not.toBeInTheDocument();
+  });
+});

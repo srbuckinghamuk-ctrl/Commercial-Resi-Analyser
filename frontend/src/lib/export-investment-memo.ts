@@ -6,7 +6,9 @@ import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { runSensitivity } from './model/sensitivity';
 import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
-import { LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes } from './sensitivity-format';
+import {
+  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes, isUnsoundTornadoBar,
+} from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
 // ── This memo consumes the finished AppraisalRun only ─────
@@ -145,20 +147,25 @@ export function sourcesAndUsesTotals(run: AppraisalRun): {
 }
 
 /**
- * The §10 two-way sensitivity matrices, as the exact string rows the PDF prints.
- *
- * Extracted from generateInvestmentMemo's body (R4b Task 1) so its output can be
- * pinned by a test before Task 2 reimplements it on the R4a engine
- * (frontend/src/lib/model/sensitivity.ts). Presentation only — every number in
- * here comes from run.metrics of an ordinary appraisal, per the file header's
+ * The §10 two-way sensitivity matrices and tornado, as the exact string rows
+ * the PDF prints. Kept separate from generateInvestmentMemo's body so its
+ * output can be pinned string-for-string by export-investment-memo.test.ts —
+ * presentation only, every number here comes from run.metrics of an ordinary
+ * appraisal (or the sensitivity engine's equivalent), per the file header's
  * no-recalculation rule.
  */
 export interface MemoSensitivityTables {
   head: string[];
   pocRows: string[][];
   ltgdvRows: string[][];
-  /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar. */
+  /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar.
+   *  Excludes any bar `isUnsoundTornadoBar` flags — see `omittedTornadoLevers`. */
   tornadoRows: string[][];
+  /** Levers dropped from `tornadoRows` because their fixed range would clamp
+   *  finance.term_months below one month (spec §12.6 gap, R5 backlog) — empty
+   *  when every bar is sound. The caller must print why these are missing
+   *  rather than silently shrinking the table. */
+  omittedTornadoLevers: SensitivityLever[];
 }
 
 export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
@@ -169,6 +176,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
   // export-investment-memo.test.ts pins that string for string.
   const result = runSensitivity(inputs);
   const { rows, cols } = result.config;
+  const termMonths = inputs.finance.term_months;
 
   const axisCaption = (lever: SensitivityLever, step: number) =>
     `${LEVER_SHORT[lever]} ${formatStepLabel(lever, step)}`;
@@ -184,7 +192,16 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
       ...row.map((cell) => cellText(cell, key)),
     ]);
 
-  const tornadoRows = result.tornado.map((bar) => [
+  // A bar whose fixed range would clamp the term (see isUnsoundTornadoBar) is
+  // dropped rather than printed: its "low" or "high" figure is not really the
+  // stated step, it's the one-month-clamp floor, indistinguishable from any
+  // other step that clamps to the same place.
+  const soundBars = result.tornado.filter((bar) => !isUnsoundTornadoBar(termMonths, bar));
+  const omittedTornadoLevers = result.tornado
+    .filter((bar) => isUnsoundTornadoBar(termMonths, bar))
+    .map((bar) => bar.lever);
+
+  const tornadoRows = soundBars.map((bar) => [
     LEVER_LABEL[bar.lever],
     formatRangeLabel(bar.lever, bar.low_step, bar.high_step),
     fmt(bar.low.profit_pence),
@@ -199,6 +216,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     pocRows: bodyFor('profit_on_cost_pct'),
     ltgdvRows: bodyFor('ltgdv_developer_pct'),
     tornadoRows,
+    omittedTornadoLevers,
   };
 }
 
@@ -1235,23 +1253,37 @@ export function generateInvestmentMemo(
     'Each lever is moved alone, with every other assumption at base. Swing is the absolute profit difference between the two endpoints; bars are listed widest swing first (spec §12.4).',
   );
 
-  table({
-    startY: y,
-    margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['Lever', 'Range', 'Profit at low', 'Profit at high', 'Swing']],
-    body: sens.tornadoRows,
-    styles: { fontSize: 9, cellPadding: 2 },
-    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
-    bodyStyles: { textColor: [51, 65, 85] },
-    alternateRowStyles: { fillColor: [241, 245, 249] },
-    columnStyles: {
-      0: { fontStyle: 'bold' },
-      2: { halign: 'right' },
-      3: { halign: 'right' },
-      4: { halign: 'right', fontStyle: 'bold' },
-    },
-  });
-  y = lastAutoTableFinalY(doc) + 8;
+  if (sens.tornadoRows.length > 0) {
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Lever', 'Range', 'Profit at low', 'Profit at high', 'Swing']],
+      body: sens.tornadoRows,
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: {
+        0: { fontStyle: 'bold' },
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+        4: { halign: 'right', fontStyle: 'bold' },
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
+  }
+  // A bar is omitted rather than printed when its fixed range would clamp
+  // finance.term_months below one month (isUnsoundTornadoBar) — the omission
+  // itself is stated so the gap is never silent. If every bar were omitted,
+  // this line prints alone with no table above it (see sens.tornadoRows.length
+  // guard above) rather than an empty or misleadingly-partial table.
+  if (sens.omittedTornadoLevers.length > 0) {
+    y = bodyText(
+      y,
+      `${sens.omittedTornadoLevers.map((l) => LEVER_LABEL[l]).join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would clamp to a one-month term and print a figure that does not represent that step. See spec §12.6.`,
+    );
+  }
+  y += 4;
 
   y = subHeading(y, 'Two-Way Sensitivity Matrix: Profit on Cost (%)');
 

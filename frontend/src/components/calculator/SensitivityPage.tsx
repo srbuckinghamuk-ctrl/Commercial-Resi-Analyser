@@ -9,7 +9,7 @@ import type {
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
-  formatStepLabel, formatRangeLabel, flagShortCodes,
+  formatStepLabel, formatRangeLabel, flagShortCodes, isUnsoundTornadoBar,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct } from '../../lib/format';
@@ -47,10 +47,12 @@ function metricColor(key: SensitivityMetricKey, value: number | null): string {
 
 /**
  * Steps are held as the user's raw text, not as numbers, so a half-typed "-" or
- * a trailing comma does not silently become a different grid. Anything that is
- * not a finite number becomes NaN and is reported by validateSensitivityConfig
- * (spec §12.6) rather than dropped — dropping it would quietly run a grid the
- * user did not ask for.
+ * a trailing comma does not silently become a different grid. Empty segments
+ * (from a leading, trailing or doubled comma) are dropped before parsing —
+ * `Number('')` is 0, and silently turning a stray comma into a "+0%" step
+ * would run a grid the user did not ask for. Anything left that is not a
+ * finite number becomes NaN, which validateSensitivityConfig (spec §12.6)
+ * then reports.
  */
 function parseSteps(text: string): number[] {
   return text
@@ -96,13 +98,17 @@ export default function SensitivityPage({ inputs }: Props) {
     // plausible result, so -11, -12 and -13 on a 12-month deal would render
     // three identical columns under three different captions. Refusing the axis
     // is the honest response until §12.6 says otherwise (R5).
-    // The tornado's fixed -3 months is included: a deal with a term under four
-    // months hits this without the user editing anything.
+    //
+    // This covers only the user-editable axes (rows/cols) — the grid the editor
+    // above can actually fix. The tornado's own fixed ranges are NOT folded in
+    // here: an unsound tornado bar doesn't make the axes invalid, and the
+    // two-way matrix is still perfectly computable, so it must still render.
+    // Unsound tornado bars are instead dropped from the rendered tornado below
+    // (isUnsoundTornadoBar), with a note explaining the omission.
     const term = inputs.finance.term_months;
     const timelineSteps = [
       ...(config.rows.lever === 'timeline' ? config.rows.steps : []),
       ...(config.cols.lever === 'timeline' ? config.cols.steps : []),
-      ...config.tornado.filter((bar) => bar.lever === 'timeline').flatMap((bar) => [bar.low, bar.high]),
     ];
     if (timelineSteps.some((step) => term + step < 1)) {
       found.push(`Every timeline step must leave at least one month of term (this deal runs ${term} months).`);
@@ -214,7 +220,15 @@ export default function SensitivityPage({ inputs }: Props) {
     );
   }
 
-  const { base, matrix, tornado, config: resolved } = outcome.result;
+  const { base, matrix, tornado: allTornado, config: resolved } = outcome.result;
+
+  // A bar whose fixed range would clamp finance.term_months below one month is
+  // dropped rather than rendered — its "low" or "high" endpoint is not really
+  // the stated step, it's the one-month-clamp floor (isUnsoundTornadoBar). The
+  // omission is stated below rather than left silent.
+  const term = inputs.finance.term_months;
+  const tornado = allTornado.filter((bar) => !isUnsoundTornadoBar(term, bar));
+  const omittedTornado = allTornado.filter((bar) => isUnsoundTornadoBar(term, bar));
 
   // One shared scale across every tornado endpoint and the base, so bar lengths
   // are comparable between levers rather than each bar filling its own row.
@@ -240,65 +254,79 @@ export default function SensitivityPage({ inputs }: Props) {
         ordered widest swing first (spec §12.4).
       </p>
 
-      <table
-        aria-label="Single-lever sensitivity (tornado)"
-        style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 28 }}
-      >
-        <thead>
-          <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
-            <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left', width: 160 }}>Lever</th>
-            <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left', width: 160 }}>Range</th>
-            <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Profit swing</th>
-            <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right', width: 130 }}>Swing</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tornado.map((bar) => {
-            const lowPos = pos(Math.min(bar.low.profit_pence, bar.high.profit_pence));
-            const highPos = pos(Math.max(bar.low.profit_pence, bar.high.profit_pence));
-            return (
-              <tr key={bar.lever} style={{ borderBottom: `1px solid ${PANEL}` }}>
-                <td style={{ padding: '8px 12px', color: TEXT }}>{LEVER_LABEL[bar.lever]}</td>
-                <td style={{ padding: '8px 12px', color: MUTED }}>
-                  {formatRangeLabel(bar.lever, bar.low_step, bar.high_step)}
-                </td>
-                <td style={{ padding: '8px 12px' }}>
-                  <div style={{ position: 'relative', height: 20, background: PANEL, borderRadius: 4 }}>
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: `${lowPos}%`,
-                        width: `${Math.max(highPos - lowPos, 0.5)}%`,
-                        top: 3,
-                        height: 14,
-                        background: '#2563eb',
-                        borderRadius: 3,
-                      }}
-                    />
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: `${pos(base.profit_pence)}%`,
-                        top: 0,
-                        width: 1,
-                        height: 20,
-                        background: MUTED,
-                      }}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', color: MUTED, fontSize: 12, marginTop: 3 }}>
-                    <span>{penceToPounds(bar.low.profit_pence)}</span>
-                    <span>{penceToPounds(bar.high.profit_pence)}</span>
-                  </div>
-                </td>
-                <td style={{ padding: '8px 12px', color: TEXT, textAlign: 'right', fontWeight: 600 }}>
-                  {penceToPounds(bar.span_pence)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {tornado.length > 0 && (
+        <table
+          aria-label="Single-lever sensitivity (tornado)"
+          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: omittedTornado.length > 0 ? 8 : 28 }}
+        >
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left', width: 160 }}>Lever</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left', width: 160 }}>Range</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Profit swing</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right', width: 130 }}>Swing</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tornado.map((bar) => {
+              const lowPos = pos(Math.min(bar.low.profit_pence, bar.high.profit_pence));
+              const highPos = pos(Math.max(bar.low.profit_pence, bar.high.profit_pence));
+              return (
+                <tr key={bar.lever} style={{ borderBottom: `1px solid ${PANEL}` }}>
+                  <td style={{ padding: '8px 12px', color: TEXT }}>{LEVER_LABEL[bar.lever]}</td>
+                  <td style={{ padding: '8px 12px', color: MUTED }}>
+                    {formatRangeLabel(bar.lever, bar.low_step, bar.high_step)}
+                  </td>
+                  <td style={{ padding: '8px 12px' }}>
+                    <div style={{ position: 'relative', height: 20, background: PANEL, borderRadius: 4 }}>
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${lowPos}%`,
+                          width: `${Math.max(highPos - lowPos, 0.5)}%`,
+                          top: 3,
+                          height: 14,
+                          background: '#2563eb',
+                          borderRadius: 3,
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${pos(base.profit_pence)}%`,
+                          top: 0,
+                          width: 1,
+                          height: 20,
+                          background: MUTED,
+                        }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: MUTED, fontSize: 12, marginTop: 3 }}>
+                      <span>{penceToPounds(bar.low.profit_pence)}</span>
+                      <span>{penceToPounds(bar.high.profit_pence)}</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: '8px 12px', color: TEXT, textAlign: 'right', fontWeight: 600 }}>
+                    {penceToPounds(bar.span_pence)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {/* A bar is dropped rather than rendered when its fixed range would
+          clamp finance.term_months below one month — the omission is stated
+          so the gap is never silent. If every bar were omitted this note
+          prints alone, with no tornado table above it. */}
+      {omittedTornado.length > 0 && (
+        <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
+          {omittedTornado.map((bar) => LEVER_LABEL[bar.lever]).join(', ')} omitted from the tornado: this
+          deal&rsquo;s {term}-month term is too short for the fixed range shown — one endpoint would clamp to
+          a one-month term and show a figure that does not represent that step (spec §12.6).
+        </p>
+      )}
 
       {/* ── Region 2: two-way matrix ── */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 12 }}>
