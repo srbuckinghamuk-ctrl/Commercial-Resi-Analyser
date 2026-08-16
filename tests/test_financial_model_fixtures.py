@@ -813,7 +813,12 @@ def test_sensitivity_sorts_the_tornado_totally_and_deterministically(inputs: Any
     shuffled = run_sensitivity(inputs, shuffled_config)
     assert [b.lever for b in shuffled.tornado] == [b.lever for b in forward.tornado]
     spans = [b.span_pence for b in forward.tornado]
-    assert sorted(spans, reverse=True) == spans
+    # Sec 12.7: a null span (an unmeasured endpoint, e.g. fixtures I/J's timeline bar)
+    # always sorts last already, and treating None as 0 here (mirroring the TS sibling
+    # test's null-to-0 coercion) is <= every real span here (a magnitude) -- so this
+    # numeric re-sort still agrees with the engine's actual placement. This asserts
+    # total order, not nullness.
+    assert sorted(spans, key=lambda s: -(s or 0)) == spans
 
 
 @pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)

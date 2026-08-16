@@ -18,7 +18,7 @@ from typing import Literal
 
 from .apply_scenario import apply_scenario
 from .types import AnyCalculatorInputs, ScenarioOverrides
-from .validation import ValidationIssue
+from .validation import ValidationIssue, validate_inputs
 
 SensitivityLever = Literal["gdv", "construction_cost", "timeline", "interest_rate"]
 
@@ -53,13 +53,23 @@ class SensitivityConfig:
 
 @dataclass
 class SensitivityMetrics:
-    profit_pence: int
+    """The metric reduction of one appraisal (Sec 12.3), or the record of why no appraisal
+    was run (Sec 12.7). `validation_errors` is empty exactly when the position was
+    measured; it carries error-severity issues only, so a measured document that merely
+    raises warnings still reports an empty list.
+
+    Every metric field is nullable. The four percentages already were; R5 widened the two
+    money fields so an unmeasured position cannot present a number at all.
+    """
+
+    profit_pence: int | None
     profit_on_cost_pct: float | None
     profit_on_gdv_pct: float | None
     irr_annual_pct: float | None
     ltgdv_developer_pct: float | None
-    peak_debt_pence: int
+    peak_debt_pence: int | None
     flags: list[str]
+    validation_errors: list[ValidationIssue]
 
 
 @dataclass
@@ -75,7 +85,7 @@ class TornadoBar:
     high_step: float
     low: SensitivityMetrics
     high: SensitivityMetrics
-    span_pence: int  # |profit(high) - profit(low)|, spec Sec 12.4
+    span_pence: int | None  # |profit(high) - profit(low)|, spec Sec 12.4; null when either endpoint is unmeasured (Sec 12.7)
 
 
 @dataclass
@@ -182,12 +192,31 @@ def _overrides_for(levers: dict[str, float]) -> ScenarioOverrides:
     )
 
 
+def _unmeasured(errors: list[ValidationIssue]) -> SensitivityMetrics:
+    """The record of a position that was not measured (Sec 12.7)."""
+    return SensitivityMetrics(
+        profit_pence=None,
+        profit_on_cost_pct=None,
+        profit_on_gdv_pct=None,
+        irr_annual_pct=None,
+        ltgdv_developer_pct=None,
+        peak_debt_pence=None,
+        flags=[],
+        validation_errors=errors,
+    )
+
+
 def _measure(inputs: AnyCalculatorInputs, levers: dict[str, float]) -> SensitivityMetrics:
-    """One measurement: an ordinary appraisal of the levered document, reduced to the
-    compact record. The only place the suite calls the engine."""
+    """One position: the levered document is validated first (Sec 12.7), and only a
+    document that passes is appraised. An unmeasured position never reaches the ledger."""
     from app.financial_model import run_appraisal  # local import: see module docstring
 
-    m = run_appraisal(apply_scenario(inputs, _overrides_for(levers))).metrics
+    levered = apply_scenario(inputs, _overrides_for(levers))
+    errors = [i for i in validate_inputs(levered) if i.severity == "error"]
+    if errors:
+        return _unmeasured(errors)
+
+    m = run_appraisal(levered).metrics
     return SensitivityMetrics(
         profit_pence=m.profit_pence,
         profit_on_cost_pct=m.profit_on_cost_pct,
@@ -196,6 +225,7 @@ def _measure(inputs: AnyCalculatorInputs, levers: dict[str, float]) -> Sensitivi
         ltgdv_developer_pct=m.ltgdv_developer_pct,
         peak_debt_pence=m.peak_debt_pence,
         flags=[f.code for f in m.flags],
+        validation_errors=[],
     )
 
 
@@ -218,6 +248,14 @@ def run_sensitivity(
         raise ValueError("Invalid sensitivity config: " + " ".join(i.message for i in issues))
 
     base = _measure(inputs, {})
+    # Sec 12.5 makes the base case an identity with the unadjusted appraisal, so a suite
+    # over an invalid base is meaningless in every position at once -- an input error
+    # (Sec 12.6/12.7), not twenty-five unmeasured cells.
+    if base.validation_errors:
+        raise ValueError(
+            "Invalid base document: "
+            + " ".join(e.message for e in base.validation_errors)
+        )
 
     matrix: list[list[SensitivityCell]] = []
     for row_step in config.rows.steps:
@@ -232,6 +270,7 @@ def run_sensitivity(
                 ltgdv_developer_pct=m.ltgdv_developer_pct,
                 peak_debt_pence=m.peak_debt_pence,
                 flags=m.flags,
+                validation_errors=m.validation_errors,
                 row_step=row_step,
                 col_step=col_step,
             ))
@@ -241,14 +280,26 @@ def run_sensitivity(
     for rng in config.tornado:
         low = _measure(inputs, {rng.lever: rng.low})
         high = _measure(inputs, {rng.lever: rng.high})
+        # Sec 12.7: an unmeasured endpoint leaves the bar with no span at all.
+        span = (
+            None
+            if low.profit_pence is None or high.profit_pence is None
+            else abs(high.profit_pence - low.profit_pence)
+        )
         bars.append(TornadoBar(
             lever=rng.lever,
             low_step=rng.low,
             high_step=rng.high,
             low=low,
             high=high,
-            span_pence=abs(high.profit_pence - low.profit_pence),
+            span_pence=span,
         ))
-    bars.sort(key=lambda b: (-b.span_pence, LEVER_ORDER.index(b.lever)))
+    # Sec 12.4 extended by Sec 12.7: spanless bars sort after every bar with a span; the
+    # fixed lever order keeps the sort total within each group (Sec 1.4).
+    bars.sort(key=lambda b: (
+        b.span_pence is None,
+        -b.span_pence if b.span_pence is not None else 0,
+        LEVER_ORDER.index(b.lever),
+    ))
 
     return SensitivityResult(base=base, matrix=matrix, tornado=bars, config=config)

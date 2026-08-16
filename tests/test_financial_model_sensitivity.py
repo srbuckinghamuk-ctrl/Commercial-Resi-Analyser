@@ -255,3 +255,87 @@ def test_run_sensitivity_default_config_is_not_shared():
     assert len(second.matrix[0]) == 5
     # The shared module-level constant itself must also be untouched.
     assert list(DEFAULT_SENSITIVITY_CONFIG.cols.steps) == [-15, -10, -5, 0, 5]
+
+
+# ---- Release 5: Sec 12.7 cell validity ----
+
+def test_position_failing_validation_is_not_measured():
+    """A -12 timeline step on a 12-month base empties the term, which validation
+    rejects at error severity. Before R5 the suite clamped and reported numbers."""
+    config = _config()
+    config.rows = SensitivityAxis(lever="timeline", steps=[-12])
+    config.cols = SensitivityAxis(lever="gdv", steps=[0])
+    cell = run_sensitivity(_inputs(), config).matrix[0][0]
+
+    assert len(cell.validation_errors) > 0
+    assert all(e.severity == "error" for e in cell.validation_errors)
+    assert any(e.field == "finance.term_months" for e in cell.validation_errors)
+    assert cell.profit_pence is None
+    assert cell.peak_debt_pence is None
+    assert cell.profit_on_cost_pct is None
+    assert cell.profit_on_gdv_pct is None
+    assert cell.irr_annual_pct is None
+    assert cell.ltgdv_developer_pct is None
+    assert cell.flags == []
+
+
+def test_position_leaving_exactly_one_month_is_measured():
+    config = _config()
+    config.rows = SensitivityAxis(lever="timeline", steps=[-11])
+    config.cols = SensitivityAxis(lever="gdv", steps=[0])
+    cell = run_sensitivity(_inputs(), config).matrix[0][0]
+
+    assert cell.validation_errors == []
+    assert cell.profit_pence is not None
+
+
+def test_warnings_do_not_invalidate_a_position():
+    """Fixture F carries a warning on conversion_costs.total_construction_sqm."""
+    result = run_sensitivity(_inputs())
+    for row in result.matrix:
+        for cell in row:
+            assert cell.validation_errors == []
+            assert cell.profit_pence is not None
+
+
+def test_flagged_cell_is_still_a_measurement():
+    """Sec 12.2: a covenant flag is the finding, not invalidity."""
+    result = run_sensitivity(_inputs())
+    flagged = [c for row in result.matrix for c in row if c.flags]
+    assert flagged
+    for cell in flagged:
+        assert cell.validation_errors == []
+        assert cell.profit_pence is not None
+
+
+def test_tornado_bar_with_unmeasured_endpoint_has_no_span():
+    config = _config()
+    config.tornado = [
+        TornadoRange(lever="gdv", low=-10, high=10),
+        TornadoRange(lever="timeline", low=-12, high=3),
+    ]
+    bars = run_sensitivity(_inputs(), config).tornado
+    timeline = next(b for b in bars if b.lever == "timeline")
+    assert timeline.span_pence is None
+    assert len(timeline.low.validation_errors) > 0
+    assert timeline.high.validation_errors == []
+
+
+def test_spanless_bars_sort_last():
+    config = _config()
+    config.tornado = [
+        TornadoRange(lever="timeline", low=-12, high=3),
+        TornadoRange(lever="interest_rate", low=-1, high=1),
+        TornadoRange(lever="gdv", low=-10, high=10),
+    ]
+    bars = run_sensitivity(_inputs(), config).tornado
+    assert bars[-1].lever == "timeline"
+    assert bars[-1].span_pence is None
+    assert all(b.span_pence is not None for b in bars[:-1])
+
+
+def test_invalid_base_document_raises():
+    bad = _inputs()
+    bad.finance.term_months = 0
+    with pytest.raises(ValueError, match="base document"):
+        run_sensitivity(bad)
