@@ -1,6 +1,6 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.3.0`.
+**Status:** Authoritative. Calculation version `2.4.0`.
 **Date:** 15 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
@@ -519,6 +519,87 @@ Terms: committed net facility £500,000; committed gross £550,000; day-one adva
 5. "Senior debt impairment" = GDV vs TDC comparison.
 6. Sale income booked for retained exits.
 7. Synthetic IRR from `[−equity, 0, …, profit+equity]`.
-8. Debt re-sized inside scenario/downside calculations.
+8. Debt re-sized inside scenario/downside calculations (see §12.2, which states the
+   same rule constructively for the sensitivity suite).
 9. Any report/export/page recomputing a formula instead of consuming the engine result.
 10. The Deal Spider's 15% construction-VAT saving presented as anything other than an unconfirmed illustration; it never enters the appraisal, TDC or lender metrics.
+
+---
+
+## 12. Sensitivity analysis [R4 — calc 2.4.0]
+
+This section is the normative home for both the fixed-facility sensitivity suite and
+the three named scenarios (`base`, `upside`, `downside`), which share its lever rule.
+
+### 12.1 Levers
+
+A **lever** is one named adjustment applied to an inputs document. There are four:
+
+| Lever | Unit | Effect on the inputs document |
+|---|---|---|
+| `gdv` | percent | scales every `unit_mix.units[].estimated_value_pence` |
+| `construction_cost` | percent | scales `conversion_costs.construction_cost_per_sqm_pence` |
+| `timeline` | months | adds to `finance.term_months` |
+| `interest_rate` | percentage points | adds to `finance.annual_interest_rate_pct` |
+
+A percent lever of `p` multiplies its target by `(1 + p/100)` and rounds half-up to
+integer pence (§1.1). A months or percentage-point lever adds its value directly.
+
+The four levers write to **disjoint input fields**, so applying several to one document
+is order-independent. Any lever added in a later release that shares a field with an
+existing lever must define its composition order in this section at the same time.
+
+### 12.2 The facility is invariant
+
+In every sensitivity cell and every tornado endpoint,
+`finance.committed_net_facility_pence`, `finance.committed_gross_facility_pence`,
+`finance.day_one_advance_pence` and `equity_sources` are held at their base-document
+values. No lever may write to them, directly or indirectly.
+
+This is §11.8 ("debt re-sized inside scenario/downside calculations" — prohibited)
+stated as a construction rule rather than only as a prohibition. A cell whose adjusted
+assumptions would require more debt than the committed facility does not receive more
+debt: it raises `facility_exceeded` and/or `funding_gap`, and that flag is the finding.
+The suite measures a committed structure against adverse assumptions; it does not
+re-underwrite the deal at every grid point.
+
+### 12.3 The two-way matrix
+
+The matrix has a row axis and a column axis. Each axis names one lever and a list of
+steps in that lever's unit. The two axes must name different levers. Each cell is the
+appraisal that results from applying the row lever at its step and the column lever at
+its step to the base document, per §12.1.
+
+The **normative default grid** is:
+
+- rows: `construction_cost` at `[-5, 0, +5, +10, +15]` percent
+- columns: `gdv` at `[-15, -10, -5, 0, +5]` percent
+
+### 12.4 The tornado
+
+Each tornado bar names one lever and a low and a high value in that lever's unit. The
+bar's endpoints are the appraisals resulting from applying that lever alone at its low
+and at its high. A bar's **span** is `|profit(high) − profit(low)|` in pence.
+
+The **normative default ranges** are: `gdv` ±10 percent, `construction_cost` ±10
+percent, `timeline` ±3 months, `interest_rate` ±1.0 percentage points.
+
+Bars are ordered by span descending. Ties are broken by the fixed lever order
+`gdv`, `construction_cost`, `timeline`, `interest_rate`. This makes the ordering total
+and therefore deterministic (§1.4).
+
+### 12.5 The base case is a cell
+
+The measurement taken with every lever at zero must equal the unadjusted appraisal of
+the base document exactly, in every reported quantity. Where the default grid is used,
+this is the `(construction_cost = 0, gdv = 0)` cell.
+
+### 12.6 Validation
+
+The following are input errors, not flags:
+
+- an axis with an empty step list, or any non-finite step;
+- an axis with more than nine steps (the suite is bounded at 81 cells);
+- a row axis and a column axis naming the same lever;
+- a lever appearing more than once among the tornado bars;
+- a tornado bar whose low is not strictly less than its high, or either non-finite.
