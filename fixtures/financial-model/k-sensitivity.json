@@ -63,5 +63,25 @@
     "construction_cost": 9134822,
     "timeline": 1584507,
     "interest_rate": 829268
+  },
+  "invalid_case": {
+    "note": "Spec §12.7. Base fixture F runs a 12-month term, so a -12 timeline step leaves 0 months and is not measured, while -11 leaves exactly 1 month and must still be measured. Hand derivation: 12 + (-12) = 0, and 0 < 1, therefore unmeasured; 12 + (-11) = 1, and 1 >= 1, therefore measured. No arithmetic beyond that.",
+    "config": {
+      "rows": { "lever": "timeline", "steps": [-12, -11, 0] },
+      "cols": { "lever": "gdv", "steps": [0] },
+      "tornado": [
+        { "lever": "gdv", "low": -10, "high": 10 },
+        { "lever": "construction_cost", "low": -10, "high": 10 },
+        { "lever": "timeline", "low": -3, "high": 3 },
+        { "lever": "interest_rate", "low": -1, "high": 1 }
+      ]
+    },
+    "expected_unmeasured_rows": [-12],
+    "expected_measured_rows": [-11, 0],
+    "expected_unmeasured_error": {
+      "severity": "error",
+      "field": "finance.term_months",
+      "message": "Term must be a whole number of months, at least 1."
+    }
   }
 }
