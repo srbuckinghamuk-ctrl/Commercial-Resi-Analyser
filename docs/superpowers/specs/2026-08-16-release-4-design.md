@@ -197,7 +197,13 @@ Validation (input errors, not flags):
 - every axis `steps` array non-empty, all entries finite;
 - at most 9 steps per axis (bounds the work at 81 cells);
 - `rows.lever !== cols.lever`;
-- `tornado` levers unique; `low < high` for each range.
+- `tornado` levers unique; `low < high` for each range;
+- a `timeline` step or tornado bound must be a whole number of months. Added during
+  R4a implementation after review found that the Python mirror narrows
+  `timeline_adjustment_months` with `int()` while TypeScript adds it directly, so a
+  fractional step made the two engines disagree on `term_months`. The engine is
+  month-indexed throughout (§1.3) and a fractional term has no meaning in the ledger,
+  so the input is rejected rather than the arithmetic changed. User-approved.
 
 New invariants in `invariants.test.ts` and the Python mirror:
 
