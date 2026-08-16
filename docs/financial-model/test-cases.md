@@ -2326,6 +2326,82 @@ validation, and `validation.ts:61` / `validation.py:83` reject a term below one 
 −11 row is carried deliberately so the boundary is pinned from the measured side too — a
 rule that marked every position unmeasured would satisfy the −12 row alone.
 
+### Sensitivity suite hardening — typed failures, notes, and page/memo wiring (spec §12.6/§12.7, R6)
+
+R6 adds no formula and changes no computed value — calc stays `2.5.0` — so this section records
+tests only, not new fixture arithmetic: the two documented §12.6/§12.7 failures become named error
+types (spec §12.7's added sentence above), and the page/memo/format layer around them is tightened
+to match.
+
+**The two typed failures are distinguishable, both engines.** `runSensitivity`/`run_sensitivity`
+raise `InvalidSensitivityConfigError` for a §12.6 config defect and `InvalidBaseDocumentError` for
+a §12.7 base-document defect, and a consumer can tell them apart by type alone:
+- TS `frontend/src/lib/model/sensitivity.test.ts`, describe block `'runSensitivity — the two
+  documented failures are typed (§12.6, §12.7)'`: `'raises InvalidSensitivityConfigError for a
+  config that is not a grid'`, `'raises InvalidBaseDocumentError when the base document fails
+  validation'`, `'keeps the two failures distinguishable'`, `'keeps both errors instances of
+  Error'`.
+- Python `tests/test_financial_model_sensitivity.py`: `test_config_failure_is_typed`,
+  `test_base_document_failure_is_typed`, `test_the_two_failures_are_distinguishable`,
+  `test_both_failures_remain_value_errors`.
+
+**The memo propagates a non-base-document failure instead of degrading §10.**
+`frontend/src/lib/export-investment-memo.test.ts`, describe block `'generateInvestmentMemo — base
+document fails validation (spec §12.7)'`: `'propagates a failure that is not an invalid base
+document, rather than degrading §10'` pins that a mocked `runSensitivity` throw which is not
+`InvalidBaseDocumentError` reaches the caller rather than being rendered as a §12.7 omission;
+`'still degrades §10 for the documented invalid-base-document failure'` re-pins the one condition
+§10 does handle against the same narrowed catch.
+
+**`safeRunSensitivity` rethrows a failure that is not one of the two documented ones.**
+`frontend/src/lib/safe-sensitivity.test.ts`: `'rethrows a failure that is neither of the suite\'s
+documented ones'` (a mocked `TypeError` from inside `runSensitivity` propagates, rather than being
+folded into the `{ ok: false }` result); the documented pair remain values, per `'returns the
+invalid-base-document failure as a value (§12.7)'` and `'returns the invalid-config failure as a
+value (§12.6)'`.
+
+**`unmeasuredCellNotes` — dedup, first-appearance order, multi-error joining.**
+`frontend/src/lib/sensitivity-format.test.ts`, describe block `'unmeasuredCellNotes'`:
+`'returns no notes for a fully measured grid'`, `'gives a measured cell no note index'`,
+`'deduplicates one reason shared across many cells into a single note'`, `'keeps distinct reasons
+as separate notes, in first-appearance order'`, `'does not alphabetize the notes'`, `'joins a
+cell\'s several validation errors into one note'`, `'resolves a note index by reason rather than by
+object identity'`.
+
+**Direct tests for `isMeasuredBar` and `omittedTornadoNotes`.** Same file:
+- describe `'isMeasuredBar'`: `'accepts a bar with a span'`, `'rejects a bar whose low endpoint was
+  not measured'`, `'rejects a bar whose high endpoint was not measured'`, `'rejects a bar with
+  neither endpoint measured'`, `'accepts a genuine zero span'`.
+- describe `'omittedTornadoNotes'`: `'returns nothing when every bar is measured'`, `'carries the
+  engine\'s own message for the omitted bar'`, `'gives each omitted bar its own reason, in bar
+  order'`, `'joins both endpoints\' reasons when neither was measured'`.
+
+**A genuine 0-pence span sorts ahead of a null span, both engines.** Fixture `a-all-cash` has no
+facility and no interest-rate exposure, so its `interest_rate` tornado bar produces a real 0 span
+while its 12-month term makes the `timeline` bar at −12 unmeasurable — the two must not compare
+equal under a null-as-zero sort:
+- TS `sensitivity.test.ts`: `'sorts a genuine 0-pence span ahead of a null one'`.
+- Python `tests/test_financial_model_sensitivity.py`: `test_genuine_zero_span_sorts_ahead_of_a_null_span`.
+
+**The cost lever moves peak debt until the committed facility caps it, both engines (Fixture F,
+spec §12.2).**
+- TS `sensitivity.test.ts`: `'lets the cost lever move peak debt until the committed facility
+  stops it (§12.2)'`.
+- Python `tests/test_financial_model_sensitivity.py`: `test_cost_lever_moves_peak_debt_until_the_facility_stops_it`.
+
+**Unmeasured-cell reasons reach the page as visible text with `aria-describedby`.**
+`frontend/src/components/calculator/SensitivityPage.test.tsx`: `'names an unmeasured cell\'s
+reason in visible text tied to the cell'` asserts the reason is rendered as a visible note and that
+each unmeasured cell's `aria-describedby` resolves to that note's `id` (companion regression:
+`'no longer carries the reason in a title attribute'`).
+
+**The memo's §10 carries the notes instead of the old generic caption.**
+`export-investment-memo.test.ts`, describe block `'sensitivityTables — unmeasured matrix cells name
+their reason'`: `'carries no notes for a grid whose positions are all measured'`, `'carries the
+engine\'s own reason, once, for a row invalidated by one cause'`, `'no longer carries the caption
+that only described the ambiguity'` (asserts the PDF text no longer contains the string `'may mean
+the metric is undefined'`).
+
 ---
 
 ## 3. Ledger fixtures B–F — pinned in BOTH languages

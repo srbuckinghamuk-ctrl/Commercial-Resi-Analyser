@@ -631,5 +631,10 @@ If the **base** document yields an error-severity issue, the suite raises an inp
 (§12.6) rather than returning a grid: §12.5 makes the base case an identity with the
 unadjusted appraisal, so no position in the suite is meaningful.
 
+This refusal is a distinct, identifiable condition — an invalid **base document** — and
+is reported separately from §12.6's invalid **configuration**. A consumer distinguishes
+the two by the error the suite raises (`InvalidBaseDocumentError`,
+`InvalidSensitivityConfigError`), never by its message text. [R6]
+
 An unmeasured position is never appraised: the suite validates the levered document and
 does not run the ledger for it at all.
