@@ -185,8 +185,12 @@ export interface UnmeasuredCellNotes {
  * carry information the engine had already handed over.
  *
  * A cell's reason is its `validation_errors` messages joined, exactly as
- * `omittedTornadoNotes` joins a bar's. Deduplicating matters because the ordinary case
- * is one lever position invalidating an entire row for one reason.
+ * `omittedTornadoNotes` joins a bar's. Deduplication is keyed on the exact message
+ * text, not on the lever position: it collapses a row into one note whenever every
+ * cell in it produces byte-identical text, which is common but not universal — three
+ * `validateInputs` messages interpolate `finance.term_months` (the very quantity the
+ * timeline lever moves), so a set of timeline steps can still surface one distinct
+ * note per step for what is, underneath, a single cause.
  *
  * Keyed on the reason string rather than on cell identity: the page rebuilds its cell
  * objects on every render and the memo holds different objects again, so identity is
