@@ -57,6 +57,8 @@ class ProjectRepository:
             description=row.description,
             image_urls=row.image_urls or [],
             stage=row.stage,
+            pa_submitted_date=row.pa_submitted_date,
+            pa_decision_date=row.pa_decision_date,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -72,12 +74,15 @@ class ProjectRepository:
         self,
         stage: PipelineStage | None = None,
         use_class: UseClass | None = None,
+        limit: int = 500,
+        offset: int = 0,
     ) -> list[Project]:
         stmt = select(ProjectORM).order_by(ProjectORM.created_at.desc())
         if stage:
             stmt = stmt.where(ProjectORM.stage == stage)
         if use_class:
             stmt = stmt.where(ProjectORM.use_class == use_class)
+        stmt = stmt.limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]
 
@@ -124,6 +129,7 @@ class EligibilityAssessmentRepository:
             verdict=row.verdict,
             suggested_next_steps=row.suggested_next_steps or [],
             notes=row.notes,
+            ruleset_version=row.ruleset_version,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -138,11 +144,19 @@ class EligibilityAssessmentRepository:
         return self._to_domain(orm)
 
     async def get_by_project_id(self, project_id: UUID) -> EligibilityAssessment | None:
-        stmt = select(EligibilityAssessmentORM).where(
-            EligibilityAssessmentORM.project_id == project_id
+        # Resilient to legacy duplicate rows: return the most recent one
+        # instead of raising MultipleResultsFound.
+        stmt = (
+            select(EligibilityAssessmentORM)
+            .where(EligibilityAssessmentORM.project_id == project_id)
+            .order_by(
+                EligibilityAssessmentORM.updated_at.desc(),
+                EligibilityAssessmentORM.created_at.desc(),
+            )
+            .limit(1)
         )
         result = await self.db.execute(stmt)
-        row = result.scalar_one_or_none()
+        row = result.scalars().first()
         return self._to_domain(row) if row else None
 
     async def update(
@@ -209,11 +223,19 @@ class FinancialAppraisalRepository:
         return self._to_domain(orm)
 
     async def get_by_project_id(self, project_id: UUID) -> FinancialAppraisal | None:
-        stmt = select(FinancialAppraisalORM).where(
-            FinancialAppraisalORM.project_id == project_id
+        # Resilient to legacy duplicate rows: return the most recent one
+        # instead of raising MultipleResultsFound.
+        stmt = (
+            select(FinancialAppraisalORM)
+            .where(FinancialAppraisalORM.project_id == project_id)
+            .order_by(
+                FinancialAppraisalORM.updated_at.desc(),
+                FinancialAppraisalORM.created_at.desc(),
+            )
+            .limit(1)
         )
         result = await self.db.execute(stmt)
-        row = result.scalar_one_or_none()
+        row = result.scalars().first()
         return self._to_domain(row) if row else None
 
     async def update(self, project_id: UUID, data: dict) -> FinancialAppraisal | None:
@@ -255,10 +277,11 @@ class StageTransitionRepository:
         return self._to_domain(orm)
 
     async def list_by_project_id(self, project_id: UUID) -> list[StageTransition]:
+        # Newest first — this feeds the project timeline endpoint.
         stmt = (
             select(StageTransitionORM)
             .where(StageTransitionORM.project_id == project_id)
-            .order_by(StageTransitionORM.transitioned_at.asc())
+            .order_by(StageTransitionORM.transitioned_at.desc())
         )
         result = await self.db.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]

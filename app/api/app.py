@@ -8,19 +8,22 @@ from uuid import UUID
 
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, run_appraisal, validate_inputs
 from app.financial_model.hashing import canonical_hash, input_hash
 from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v4
 from app.financial_model.types import CalculatorInputsV4
+from app.integrations.http import close_client
+from app.logging_config import configure_logging
 from app.models import (
     ApiResponse,
     EligibilityAssessment,
@@ -37,6 +40,7 @@ from app.models import (
     ProjectUpdate,
     ScrapeUrlRequest,
     StageTransitionCreate,
+    StageTransitionResponse,
     UseClass,
 )
 from app.persistence.database import Base, engine, get_db
@@ -47,6 +51,11 @@ from app.persistence.repositories import (
     StageTransitionRepository,
 )
 from config.settings import get_settings
+
+# Docker runs `uvicorn app.api.app:app` directly, bypassing main.py where
+# logging is normally configured — configure at import time here too
+# (configure_logging is idempotent).
+configure_logging()
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -63,7 +72,41 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("commercial-resi-analyser started")
     yield
+    await close_client()
     await engine.dispose()
+
+
+class SpaStaticFiles(StaticFiles):
+    """Serve the built SPA with a history-API fallback.
+
+    BrowserRouter deep links like /projects/<id> are client-side routes with
+    no file on disk — a plain StaticFiles mount 404s them on refresh. Any
+    404 under the mount falls back to index.html so the SPA can route it.
+    API paths never reach here (register_api_fallback catches them first).
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except (HTTPException, StarletteHTTPException) as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
+def register_api_fallback(app: FastAPI) -> None:
+    """Unmatched /api/* paths return a JSON 404 instead of index.html-as-200.
+
+    Must be registered after the real API routers and before the SPA mount.
+    """
+
+    @app.api_route(
+        "/api/{rest:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def api_not_found(rest: str):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 def create_app() -> FastAPI:
@@ -89,9 +132,12 @@ def create_app() -> FastAPI:
     app.include_router(lookup_router, prefix=settings.api_prefix, tags=["lookup"])
     app.include_router(system_router, tags=["system"])
 
-    dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    register_api_fallback(app)
+
+    # repo_root/frontend/dist — __file__ is repo_root/app/api/app.py.
+    dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
     if dist.is_dir():
-        app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
+        app.mount("/", SpaStaticFiles(directory=str(dist), html=True), name="spa")
 
     return app
 
@@ -108,9 +154,11 @@ async def list_projects(
     db: DbDep,
     stage: PipelineStage | None = None,
     use_class: UseClass | None = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ):
     repo = ProjectRepository(db)
-    return await repo.list_all(stage=stage, use_class=use_class)
+    return await repo.list_all(stage=stage, use_class=use_class, limit=limit, offset=offset)
 
 
 @projects_router.post("", response_model=Project, status_code=201)
@@ -183,6 +231,28 @@ async def change_stage(project_id: UUID, body: StageChangeRequest, db: DbDep):
     return updated
 
 
+@projects_router.get("/{project_id}/transitions", response_model=list[StageTransitionResponse])
+async def list_stage_transitions(project_id: UUID, db: DbDep):
+    """Stage-transition timeline for a project, newest first."""
+    project_repo = ProjectRepository(db)
+    project = await project_repo.get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    transition_repo = StageTransitionRepository(db)
+    transitions = await transition_repo.list_by_project_id(project_id)
+    return [
+        StageTransitionResponse(
+            id=t.id,
+            project_id=t.project_id,
+            from_stage=t.from_stage,
+            to_stage=t.to_stage,
+            notes=t.notes,
+            created_at=t.transitioned_at,
+        )
+        for t in transitions
+    ]
+
+
 # --- Eligibility Router ---
 
 eligibility_router = APIRouter(prefix="/eligibility")
@@ -196,7 +266,22 @@ async def create_eligibility(project_id: UUID, body: EligibilityAssessmentCreate
         raise HTTPException(status_code=404, detail="Project not found")
     body.project_id = project_id
     repo = EligibilityAssessmentRepository(db)
-    assessment = await repo.create(body)
+    # Upsert: only one assessment may exist per project.
+    existing = await repo.get_by_project_id(project_id)
+    if existing:
+        assessment = await repo.update(
+            project_id,
+            EligibilityAssessmentUpdate(
+                pdr_class=body.pdr_class,
+                criteria=body.criteria,
+                verdict=body.verdict,
+                suggested_next_steps=body.suggested_next_steps,
+                notes=body.notes,
+                ruleset_version=body.ruleset_version,
+            ),
+        )
+    else:
+        assessment = await repo.create(body)
     await db.commit()
     return assessment
 
@@ -243,6 +328,7 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
                 criteria=engine_result.criteria,
                 verdict=engine_result.verdict,
                 suggested_next_steps=engine_result.suggested_next_steps,
+                ruleset_version=engine_result.ruleset_version,
             ),
         )
     else:
@@ -253,6 +339,7 @@ async def run_eligibility_endpoint(project_id: UUID, body: EligibilityRunRequest
                 criteria=engine_result.criteria,
                 verdict=engine_result.verdict,
                 suggested_next_steps=engine_result.suggested_next_steps,
+                ruleset_version=engine_result.ruleset_version,
             )
         )
     await db.commit()
@@ -375,7 +462,15 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
         raise HTTPException(status_code=404, detail="Project not found")
     computed = calculate_authoritative(body)
     repo = FinancialAppraisalRepository(db)
-    appraisal = await repo.create({"project_id": body.project_id, "name": body.name, **computed})
+    # Upsert: only one appraisal may exist per project (migration 004 adds the
+    # unique constraint). Both arms persist the server-authored `computed`
+    # payload -- the client never supplies outputs or governance columns (Task 12).
+    existing = await repo.get_by_project_id(body.project_id)
+    payload = {"name": body.name, **computed}
+    if existing:
+        appraisal = await repo.update(body.project_id, payload)
+    else:
+        appraisal = await repo.create({"project_id": body.project_id, **payload})
     await db.commit()
     return appraisal
 
@@ -449,13 +544,27 @@ async def scrape_url_endpoint(request: ScrapeUrlRequest):
     if listing is None:
         return ApiResponse(error="Could not extract listing data from this page.")
 
+    # Reject obviously-garbage extractions (login pages, empty shells)
+    # rather than returning them as listings.
+    address_raw = (listing.address.raw or "").strip()
+    address_lower = address_raw.lower()
+    if not address_raw or "sign in" in address_lower or "log in" in address_lower:
+        logger.warning("Scrape of %s produced a garbage address: %r", request.url, address_raw)
+        return ApiResponse(error="Could not extract meaningful data from this page")
+    has_floor_area = listing.floor_area_sqm is not None or listing.floor_area_sqft is not None
+    if listing.price.amount <= 0 and not has_floor_area:
+        logger.warning(
+            "Scrape of %s produced no price and no floor area — rejecting", request.url
+        )
+        return ApiResponse(error="Could not extract meaningful data from this page")
+
     return ApiResponse(listing=listing)
 
 
 # --- Lookup Router ---
 
 from app.integrations.postcodes import lookup_postcode
-from app.integrations.flood import lookup_flood_risk
+from app.integrations.flood import lookup_flood_warnings
 from app.integrations.epc import lookup_epc
 from app.integrations.article4 import lookup_article4
 from app.models import (
@@ -490,15 +599,20 @@ async def postcode_lookup(postcode: str):
 async def flood_lookup(postcode: str):
     pc = await lookup_postcode(postcode)
     if not pc:
-        raise HTTPException(status_code=404, detail="Postcode not found — cannot look up flood risk")
-    result = await lookup_flood_risk(postcode, pc.latitude, pc.longitude)
+        raise HTTPException(status_code=404, detail="Postcode not found — cannot look up flood warnings")
+    result = await lookup_flood_warnings(postcode, pc.latitude, pc.longitude)
     if not result:
-        raise HTTPException(status_code=502, detail="Flood risk API unavailable")
+        raise HTTPException(status_code=502, detail="EA flood warnings API unavailable")
     return FloodRiskResponse(
         postcode=pc.postcode,
-        flood_zone=result.flood_zone,
-        flood_zone_numeric=result.flood_zone_numeric,
-        in_flood_zone_2_or_3=result.in_flood_zone_2_or_3,
+        flood_zone=(
+            "Unknown — check the EA Flood Map for Planning "
+            "(flood-map-for-planning.service.gov.uk)"
+        ),
+        flood_zone_numeric=None,
+        in_flood_zone_2_or_3=None,
+        has_active_warnings=result.has_active_warnings,
+        warning_count=result.warning_count,
         source=result.source,
     )
 
@@ -517,6 +631,7 @@ async def epc_lookup(postcode: str, address: str | None = None):
         certificate_url=result.certificate_url,
         property_type=result.property_type,
         floor_area_sqm=result.floor_area_sqm,
+        matched_address=result.matched_address,
     )
 
 
@@ -526,6 +641,7 @@ async def article4_lookup(lpa_code: str):
     return Article4Response(
         lpa_code=result.lpa_code,
         lpa_name=result.lpa_name,
+        lpa_in_dataset=result.lpa_in_dataset,
         has_article4=result.has_article4,
         directions=[
             Article4DirectionResponse(

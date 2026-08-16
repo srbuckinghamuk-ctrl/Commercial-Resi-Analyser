@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 
 import httpx
@@ -16,7 +17,10 @@ from app.adapters.patterns import (
     sqft_to_sqm,
 )
 from app.adapters.registry import register_adapter
+from app.integrations.http import get_client
 from app.models import Address, CommercialListing, PriceInfo, Tenure, UseClass
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_listing(html: str, url: str) -> CommercialListing | None:
@@ -116,16 +120,13 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
 class EigAdapter(BaseAdapter):
     async def fetch_listing(self, url: str) -> CommercialListing | None:
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=15.0,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; CommercialResiBot/1.0)"},
-            ) as client:
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    return None
-                return _parse_listing(resp.text, url)
-        except httpx.HTTPError:
+            resp = await get_client().get(url, timeout=15.0)
+            if resp.status_code != 200:
+                logger.warning("EIG fetch for %s returned HTTP %s", url, resp.status_code)
+                return None
+            return _parse_listing(resp.text, url)
+        except httpx.HTTPError as exc:
+            logger.warning("EIG fetch failed for %s: %s", url, exc)
             return None
 
 

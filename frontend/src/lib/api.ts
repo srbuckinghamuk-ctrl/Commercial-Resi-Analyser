@@ -8,6 +8,7 @@ import type {
   FinancialAppraisalCreate,
   ApiResponse,
   PipelineStage,
+  StageTransition,
   PostcodeLookup,
   FloodRisk,
   EpcData,
@@ -33,6 +34,12 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+
+/** True when the error represents an HTTP 404 -- a missing record, not a failure. */
+export function isNotFound(e: unknown): boolean {
+  if (e instanceof ApiError) return e.status === 404;
+  return e instanceof Error && e.message.startsWith('HTTP 404');
 }
 
 /** Renders an ApiError's `detail` (Pydantic errors, validation issues, or a
@@ -74,6 +81,13 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     throw new ApiError(response.status, `HTTP ${response.status}: ${text}`, detail);
   }
   if (response.status === 204) return undefined as T;
+  // The SPA static-file mount can answer an unmatched API path with index.html
+  // and a 200. Refuse to parse it so the failure is reported honestly rather
+  // than surfacing as opaque JSON-parse noise.
+  const contentType = response.headers?.get?.('content-type');
+  if (contentType != null && !contentType.includes('json')) {
+    throw new Error(`Unexpected non-JSON response from the API (${contentType})`);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -120,6 +134,12 @@ export async function changeStage(
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ to_stage: toStage, notes }),
+  });
+}
+
+export async function listTransitions(projectId: string): Promise<StageTransition[]> {
+  return request<StageTransition[]>(`/api/v1/projects/${projectId}/transitions`, {
+    headers: HEADERS,
   });
 }
 

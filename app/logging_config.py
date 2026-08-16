@@ -5,8 +5,18 @@ import sys
 import structlog
 from config.settings import get_settings
 
+_configured = False
+
 
 def configure_logging() -> None:
+    # Idempotent: called both from main.py and at import time in
+    # app.api.app (docker runs uvicorn against app.api.app:app directly,
+    # bypassing main.py).
+    global _configured
+    if _configured:
+        return
+    _configured = True
+
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
@@ -36,5 +46,5 @@ def configure_logging() -> None:
     )
 
     # Silence noisy libraries
-    for lib in ("playwright", "asyncio", "sqlalchemy.engine", "httpx"):
+    for lib in ("asyncio", "sqlalchemy.engine", "httpx"):
         logging.getLogger(lib).setLevel(logging.WARNING)

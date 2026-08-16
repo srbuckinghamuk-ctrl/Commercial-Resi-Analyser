@@ -1,11 +1,18 @@
 import logging
+import time
 from dataclasses import dataclass
 
-import httpx
+from app.integrations.http import get_client
 
 logger = logging.getLogger(__name__)
 
 POSTCODES_IO_BASE = "https://api.postcodes.io"
+
+# Postcode → LPA/coords is effectively immutable, so successful lookups are
+# cached in-memory with a generous TTL.
+_CACHE_TTL_SECONDS = 24 * 60 * 60  # 24h
+_CACHE_MAX_ENTRIES = 1000
+_cache: dict[str, tuple[float, "PostcodeLookupResult"]] = {}
 
 
 @dataclass(frozen=True)
@@ -20,18 +27,45 @@ class PostcodeLookupResult:
     admin_district: str
 
 
+def _cache_get(key: str) -> PostcodeLookupResult | None:
+    entry = _cache.get(key)
+    if entry is None:
+        return None
+    ts, result = entry
+    if time.monotonic() - ts > _CACHE_TTL_SECONDS:
+        _cache.pop(key, None)
+        return None
+    return result
+
+
+def _cache_put(key: str, result: PostcodeLookupResult) -> None:
+    if len(_cache) >= _CACHE_MAX_ENTRIES:
+        # Evict the oldest entries (by insertion timestamp).
+        oldest = sorted(_cache.items(), key=lambda kv: kv[1][0])
+        for k, _ in oldest[: max(1, _CACHE_MAX_ENTRIES // 10)]:
+            _cache.pop(k, None)
+    _cache[key] = (time.monotonic(), result)
+
+
 async def lookup_postcode(postcode: str) -> PostcodeLookupResult | None:
     normalised = postcode.replace(" ", "").upper()
+
+    cached = _cache_get(normalised)
+    if cached is not None:
+        return cached
+
     url = f"{POSTCODES_IO_BASE}/postcodes/{normalised}"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
+        resp = await get_client().get(url, timeout=10.0)
         if resp.status_code != 200:
+            logger.warning(
+                "Postcodes.io lookup for %s returned HTTP %s", postcode, resp.status_code
+            )
             return None
         data = resp.json().get("result")
         if not data:
             return None
-        return PostcodeLookupResult(
+        result = PostcodeLookupResult(
             postcode=data["postcode"],
             latitude=data["latitude"],
             longitude=data["longitude"],
@@ -41,6 +75,8 @@ async def lookup_postcode(postcode: str) -> PostcodeLookupResult | None:
             country=data.get("country", ""),
             admin_district=data.get("admin_district", ""),
         )
+        _cache_put(normalised, result)
+        return result
     except Exception:
         logger.exception("Postcodes.io lookup failed for %s", postcode)
         return None

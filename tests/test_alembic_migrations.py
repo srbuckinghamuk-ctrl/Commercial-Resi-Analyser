@@ -34,8 +34,10 @@ def make_config(db_url: str) -> Config:
 def test_alembic_discovers_migration_chain():
     cfg = make_config("sqlite+aiosqlite:///:memory:")
     script = ScriptDirectory.from_config(cfg)
-    # walk_revisions yields head-first
-    assert [s.revision for s in script.walk_revisions()] == ["002", "001"]
+    # walk_revisions yields head-first. 003/004 arrived with the R4
+    # reconciliation merge and were renumbered to sit after 002, which the
+    # financial-model line had already claimed.
+    assert [s.revision for s in script.walk_revisions()] == ["004", "003", "002", "001"]
 
 
 def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):

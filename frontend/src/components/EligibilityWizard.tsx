@@ -1,19 +1,26 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Project, EligibilityAssessment as EligAssessment } from '../types';
-import { runEligibility, getEligibility } from '../lib/api';
+import { runEligibility, getEligibility, isNotFound } from '../lib/api';
+import { overridesFromAssessment } from '../lib/eligibility-overrides';
+import { formatUseClass } from '../lib/format';
 import EligibilityVerdictDisplay from './EligibilityVerdict';
 
 interface EligibilityWizardProps {
   project: Project;
 }
 
-type WizardState = 'idle' | 'running' | 'complete' | 'error';
+type WizardState = 'loading' | 'idle' | 'running' | 'complete' | 'error';
 
 export default function EligibilityWizard({ project }: EligibilityWizardProps) {
-  const [state, setState] = useState<WizardState>('idle');
+  const [state, setState] = useState<WizardState>('loading');
   const [assessment, setAssessment] = useState<EligAssessment | null>(null);
   const [manualOverrides, setManualOverrides] = useState<Record<string, boolean | null>>({});
+  const [updating, setUpdating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  // Monotonic sequence for engine runs: a response is applied only if no
+  // newer run has started since, so rapid answers can't interleave stale
+  // server state over fresh clicks.
+  const runSeq = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -22,42 +29,66 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
         const existing = await getEligibility(project.id);
         if (!cancelled) {
           setAssessment(existing);
+          // Seed overrides from the stored answers so a re-run (or a new
+          // answer after a reload) preserves them instead of wiping them.
+          setManualOverrides(overridesFromAssessment(existing));
           setState('complete');
         }
-      } catch {
-        // No existing assessment — that's fine
+      } catch (e) {
+        if (cancelled) return;
+        if (isNotFound(e)) {
+          setState('idle'); // no assessment yet — normal for a new project
+        } else {
+          setState('error');
+          setErrorMsg('Could not load the existing assessment — check your connection and try again.');
+        }
       }
     })();
     return () => { cancelled = true; };
   }, [project.id]);
 
   const handleRun = useCallback(async () => {
+    const seq = ++runSeq.current;
     setState('running');
     setErrorMsg('');
     try {
       const result = await runEligibility(project.id, manualOverrides);
+      if (seq !== runSeq.current) return; // a newer run superseded this one
       setAssessment(result.assessment);
+      setManualOverrides(overridesFromAssessment(result.assessment));
       setState('complete');
-    } catch (e) {
+    } catch {
+      if (seq !== runSeq.current) return;
       setState('error');
-      setErrorMsg(e instanceof Error ? e.message : 'Failed to run eligibility check');
+      setErrorMsg('Could not run the eligibility checks — check your connection and try again.');
     }
   }, [project.id, manualOverrides]);
 
+  // Answering a manual criterion re-runs the engine but keeps the list on
+  // screen — no full-page flash, and answers can be changed or cleared.
   const handleOverride = useCallback(
     (key: string, value: boolean | null) => {
-      const updated = { ...manualOverrides, [key]: value };
+      const seq = ++runSeq.current;
+      const updated = { ...manualOverrides };
+      if (value === null) {
+        delete updated[key];
+      } else {
+        updated[key] = value;
+      }
       setManualOverrides(updated);
-      setState('running');
+      setUpdating(true);
       setErrorMsg('');
       runEligibility(project.id, updated)
         .then((result) => {
+          if (seq !== runSeq.current) return;
           setAssessment(result.assessment);
-          setState('complete');
         })
-        .catch((e) => {
-          setState('error');
-          setErrorMsg(e instanceof Error ? e.message : 'Failed to update');
+        .catch(() => {
+          if (seq !== runSeq.current) return;
+          setErrorMsg('Could not save your answer — check your connection and try again.');
+        })
+        .finally(() => {
+          if (seq === runSeq.current) setUpdating(false);
         });
     },
     [project.id, manualOverrides],
@@ -76,38 +107,49 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
       >
         <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{project.address_raw}</div>
         <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-          {project.use_class} · £{(project.price_pence / 100).toLocaleString()}
+          {formatUseClass(project.use_class)} · £{(project.price_pence / 100).toLocaleString()}
           {project.floor_area_sqm != null && ` · ${project.floor_area_sqm} m²`}
           {project.address_postcode && ` · ${project.address_postcode}`}
         </div>
       </div>
 
+      {state === 'loading' && (
+        <p style={{ color: '#94a3b8', padding: 16 }}>Loading…</p>
+      )}
+
       {state === 'idle' && (
-        <button
-          onClick={handleRun}
-          style={{
-            padding: '10px 24px',
-            background: '#2563eb',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontSize: 14,
-          }}
-        >
-          Run Eligibility Assessment
-        </button>
+        <div>
+          <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12 }}>
+            Checks this property against the Permitted Development Rights (PDR) criteria for its
+            use class — flood risk, Article 4 directions, EPC data and floorspace limits — then
+            asks you to confirm anything that can't be verified automatically.
+          </p>
+          <button
+            onClick={handleRun}
+            style={{
+              padding: '10px 24px',
+              background: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 14,
+            }}
+          >
+            Run eligibility assessment
+          </button>
+        </div>
       )}
 
       {state === 'running' && (
-        <div style={{ color: '#60a5fa', padding: 16 }}>
-          Running eligibility checks — querying flood risk, Article 4, EPC data...
+        <div style={{ color: '#60a5fa', padding: 16 }} role="status">
+          Running eligibility checks — querying flood risk, Article 4, EPC data…
         </div>
       )}
 
       {state === 'error' && (
         <div>
-          <p style={{ color: '#ef4444', marginBottom: 8 }}>{errorMsg}</p>
+          <p role="alert" style={{ color: '#ef4444', marginBottom: 8 }}>{errorMsg}</p>
           <button
             onClick={handleRun}
             style={{
@@ -126,9 +168,22 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
 
       {state === 'complete' && assessment && (
         <div>
-          <EligibilityVerdictDisplay assessment={assessment} onOverride={handleOverride} />
+          {updating && (
+            <p role="status" style={{ color: '#60a5fa', fontSize: 13, margin: '0 0 8px' }}>Updating verdict…</p>
+          )}
+          {errorMsg && (
+            <p role="alert" style={{ color: '#ef4444', fontSize: 13, margin: '0 0 8px' }}>{errorMsg}</p>
+          )}
+          <div style={{ opacity: updating ? 0.6 : 1, transition: 'opacity 0.15s ease' }}>
+            <EligibilityVerdictDisplay
+              assessment={assessment}
+              onOverride={handleOverride}
+              overrides={manualOverrides}
+            />
+          </div>
           <button
             onClick={handleRun}
+            disabled={updating}
             style={{
               marginTop: 16,
               padding: '8px 16px',
@@ -136,11 +191,11 @@ export default function EligibilityWizard({ project }: EligibilityWizardProps) {
               color: '#e2e8f0',
               border: 'none',
               borderRadius: 6,
-              cursor: 'pointer',
+              cursor: updating ? 'default' : 'pointer',
               fontSize: 13,
             }}
           >
-            Re-run Assessment
+            Re-run assessment
           </button>
         </div>
       )}

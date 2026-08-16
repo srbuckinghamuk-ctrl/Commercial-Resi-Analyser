@@ -119,6 +119,8 @@ const mockProject: Project = {
   address_county: 'Surrey',
   address_postcode: 'GU1 3DY',
   address_postcode_district: 'GU1',
+  pa_submitted_date: null,
+  pa_decision_date: null,
   price_pence: 40_000_000,
   price_qualifier: 'Guide price',
   use_class: 'office',
@@ -144,6 +146,7 @@ const mockEligibility: EligibilityAssessment = {
   id: 'assess-id',
   project_id: 'test-id',
   pdr_class: 'class_ma',
+  ruleset_version: 'gpdo-2026-08.2',
   criteria: [
     { key: 'use_class', label: 'Use class E(a) office', passed: true, source: 'user', auto_checked: false, value: 'office', risk_flag: null },
     { key: 'floor_area', label: 'Floor area ≤ 1,500 sq m', passed: true, source: 'auto', auto_checked: true, value: '400 m²', risk_flag: null },

@@ -9,7 +9,8 @@ import { runAppraisal, migrateInputsToV4 } from '../lib/model';
 
 interface ExportPageProps {
   projects: Project[];
-  selectedProject: Project | null;
+  projectsLoading: boolean;
+  backendOffline: boolean;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -46,7 +47,11 @@ function normaliseUnitAreas(raw: Record<string, unknown>): Record<string, unknow
   };
 }
 
-export default function ExportPage({ projects, selectedProject }: ExportPageProps) {
+export default function ExportPage({ projects, projectsLoading, backendOffline }: ExportPageProps) {
+  // The router-based shell has no notion of a globally "selected" project, so
+  // the export page owns the choice itself.
+  const [selectedId, setSelectedId] = useState<string>('');
+  const selectedProject = projects.find((p) => p.id === selectedId) ?? null;
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,6 +163,34 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
         </div>
       )}
 
+      {/* Project picker */}
+      <div style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+        <label htmlFor="export-project" style={{ display: 'block', color: '#94a3b8', fontSize: 13, marginBottom: 8 }}>
+          Project
+        </label>
+        {projectsLoading ? (
+          <p style={{ color: '#94a3b8', fontSize: 14, margin: 0 }}>Loading projects…</p>
+        ) : backendOffline ? (
+          <p role="alert" style={{ color: '#f87171', fontSize: 14, margin: 0 }}>
+            Can't reach the server — your projects will appear here once the connection recovers.
+          </p>
+        ) : projects.length === 0 ? (
+          <p style={{ color: '#64748b', fontSize: 14, margin: 0 }}>No projects yet.</p>
+        ) : (
+          <select
+            id="export-project"
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 6, color: '#e2e8f0', fontSize: 14 }}
+          >
+            <option value="">Select a project…</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.address_raw}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
       {/* Investment Memorandum */}
       <div style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8, padding: 16, marginBottom: 16 }}>
         <h3 style={{ color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Investment Memorandum (PDF)</h3>
@@ -189,7 +222,7 @@ export default function ExportPage({ projects, selectedProject }: ExportPageProp
           </div>
         ) : (
           <p style={{ color: '#64748b', fontSize: 13 }}>
-            Select a project from the Pipeline tab to generate its Investment Memorandum.
+            Choose a project above to generate its Investment Memorandum.
           </p>
         )}
       </div>

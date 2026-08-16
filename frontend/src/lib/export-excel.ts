@@ -41,3 +41,10 @@ export function generateProjectsExcel(projects: Project[]): Blob {
   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
+
+// NOTE: a `generateAppraisalExcel` workbook existed on the improve/audit-phase-1-2
+// branch but was written against the pre-R1 `calculateAppraisal` metrics shape and
+// was never wired to any caller. It is deliberately not carried across the R4
+// reconciliation merge: a second financial export path built on formulas the
+// calculation spec no longer defines would breach spec section 11.9. Rebuild it on
+// `runAppraisal`/`AppraisalRun` if the workbook is wanted.

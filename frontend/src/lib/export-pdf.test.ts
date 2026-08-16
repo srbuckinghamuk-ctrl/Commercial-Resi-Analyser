@@ -16,6 +16,8 @@ const mockProject: Project = {
   address_county: null,
   address_postcode: 'SW1A 1AA',
   address_postcode_district: 'SW1A',
+  pa_submitted_date: null,
+  pa_decision_date: null,
   price_pence: 50000000,
   price_qualifier: null,
   use_class: 'office',
@@ -41,6 +43,7 @@ const mockAssessment: EligibilityAssessment = {
   id: 'assess-id',
   project_id: 'test-id',
   pdr_class: 'class_ma',
+  ruleset_version: 'gpdo-2026-08.2',
   criteria: [
     { key: 'use_class', label: 'Use class E(a) office', passed: true, source: 'user', auto_checked: false, value: 'office', risk_flag: null },
     { key: 'floor_area', label: 'Floor area ≤ 1,500 sq m', passed: false, source: 'auto', auto_checked: true, value: '185.8 sq m', risk_flag: null },

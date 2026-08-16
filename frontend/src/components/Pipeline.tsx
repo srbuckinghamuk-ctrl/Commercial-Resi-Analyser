@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import type { Project, PipelineStage, UseClass } from '../types';
 import { PIPELINE_STAGES, USE_CLASS_OPTIONS } from '../types';
 import { changeStage, deleteProject } from '../lib/api';
@@ -8,17 +9,20 @@ import ProjectCard from './ProjectCard';
 
 interface PipelineProps {
   projects: Project[];
-  onSelectProject: (project: Project) => void;
+  loading: boolean;
+  backendOffline: boolean;
   onProjectsChanged: () => void;
 }
 
-export default function Pipeline({ projects, onSelectProject, onProjectsChanged }: PipelineProps) {
+export default function Pipeline({ projects, loading, backendOffline, onProjectsChanged }: PipelineProps) {
+  const navigate = useNavigate();
   const [filters, setFilters] = useState<PipelineFilters>({
     stage: 'all',
     useClass: 'all',
   });
   const [sortBy, setSortBy] = useState<SortField>('created_at');
   const [sortDir, setSortDir] = useState<SortDirection>('desc');
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const processed = useMemo(() => {
     const filtered = filterProjects(projects, filters);
@@ -39,27 +43,84 @@ export default function Pipeline({ projects, onSelectProject, onProjectsChanged 
 
   const handleStageChange = useCallback(
     async (projectId: string, newStage: PipelineStage) => {
+      setActionError(null);
       try {
         await changeStage(projectId, newStage);
         onProjectsChanged();
-      } catch (err) {
-        console.error('Stage change failed:', err);
+      } catch {
+        setActionError('Could not move the project — check your connection and try again.');
       }
     },
     [onProjectsChanged],
   );
 
   const handleDelete = useCallback(
-    async (projectId: string) => {
+    async (project: Project) => {
+      const confirmed = window.confirm(
+        `Delete "${project.address_raw}"?\n\nThis also deletes its eligibility assessment and financial appraisal, and cannot be undone.`,
+      );
+      if (!confirmed) return;
+      setActionError(null);
       try {
-        await deleteProject(projectId);
+        await deleteProject(project.id);
         onProjectsChanged();
-      } catch (err) {
-        console.error('Delete failed:', err);
+      } catch {
+        setActionError('Could not delete the project — check your connection and try again.');
       }
     },
     [onProjectsChanged],
   );
+
+  // A connection failure must never render as an empty portfolio.
+  if (backendOffline && projects.length === 0) {
+    return (
+      <div style={{ padding: '64px 24px', maxWidth: 560, margin: '0 auto', textAlign: 'center' }}>
+        <h2 style={{ color: '#e2e8f0', fontSize: 22, marginBottom: 10 }}>Can't reach the server</h2>
+        <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 20 }}>
+          Your projects are safe — this is a connection problem, not data loss. Retrying
+          automatically every few seconds…
+        </p>
+        <button
+          onClick={onProjectsChanged}
+          style={{ padding: '10px 24px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}
+        >
+          Retry now
+        </button>
+      </div>
+    );
+  }
+
+  if (!loading && projects.length === 0) {
+    return (
+      <div style={{ padding: '64px 24px', maxWidth: 560, margin: '0 auto', textAlign: 'center' }}>
+        <h2 style={{ color: '#e2e8f0', fontSize: 22, marginBottom: 10 }}>
+          Screen commercial buildings for residential conversion
+        </h2>
+        <p style={{ color: '#94a3b8', fontSize: 15, lineHeight: 1.6, marginBottom: 24 }}>
+          Add a property to check its Permitted Development eligibility, run a full
+          development appraisal, and generate an investor-ready report.
+        </p>
+        <Link
+          to="/new"
+          style={{
+            display: 'inline-block',
+            padding: '12px 28px',
+            background: '#2563eb',
+            color: '#fff',
+            borderRadius: 6,
+            fontSize: 15,
+            fontWeight: 600,
+            textDecoration: 'none',
+          }}
+        >
+          Add your first property
+        </Link>
+        <p style={{ color: '#64748b', fontSize: 13, marginTop: 16 }}>
+          Paste a listing URL from Rightmove Commercial, Savills Auctions, Allsop or EIG — or enter details manually.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: 16 }}>
@@ -88,21 +149,25 @@ export default function Pipeline({ projects, onSelectProject, onProjectsChanged 
           >
             <option value="created_at">Date Added</option>
             <option value="price_pence">Price</option>
-            <option value="stage">Stage</option>
           </select>
         </label>
 
         <button
           onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+          aria-label={`Sort ${sortDir === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
           style={{ background: '#0f1d32', border: '1px solid #1e3a5f', color: '#93c5fd', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
         >
           {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
         </button>
 
-        <span style={{ color: '#64748b', fontSize: 13, marginLeft: 'auto' }}>
+        <span style={{ color: '#94a3b8', fontSize: 13, marginLeft: 'auto' }}>
           {processed.length} project{processed.length !== 1 ? 's' : ''}
         </span>
       </div>
+
+      {actionError && (
+        <p role="alert" style={{ color: '#f87171', fontSize: 13, margin: '0 0 12px' }}>{actionError}</p>
+      )}
 
       {/* Kanban columns */}
       <div
@@ -152,18 +217,18 @@ export default function Pipeline({ projects, onSelectProject, onProjectsChanged 
                   {stageProjects.length}
                 </span>
               </div>
-              <div style={{ padding: 8, flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 220px)' }}>
+              <div style={{ padding: 8, flex: 1, overflowY: 'auto', maxHeight: 'calc(100dvh - 220px)' }}>
                 {stageProjects.map((p) => (
                   <ProjectCard
                     key={p.id}
                     project={p}
                     onStageChange={handleStageChange}
-                    onSelect={onSelectProject}
-                    onDelete={handleDelete}
+                    onSelect={(project) => navigate(`/projects/${project.id}`)}
+                    onDelete={() => handleDelete(p)}
                   />
                 ))}
                 {stageProjects.length === 0 && (
-                  <div style={{ color: '#475569', fontSize: 12, textAlign: 'center', padding: 16 }}>
+                  <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: 16 }}>
                     No projects
                   </div>
                 )}

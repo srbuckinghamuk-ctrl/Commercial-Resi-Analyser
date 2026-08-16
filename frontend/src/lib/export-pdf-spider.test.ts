@@ -25,6 +25,7 @@ function assessment(criteria: EligibilityCriterion[]): EligibilityAssessment {
     id: 'a1',
     project_id: 'p1',
     pdr_class: 'class_ma',
+    ruleset_version: 'gpdo-2026-08.2',
     criteria,
     verdict: 'green',
     suggested_next_steps: [],
