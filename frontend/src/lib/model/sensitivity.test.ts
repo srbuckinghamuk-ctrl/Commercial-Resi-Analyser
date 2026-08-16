@@ -6,6 +6,7 @@ import {
 } from './sensitivity';
 import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
+import { applyScenario } from './apply-scenario';
 import type { SensitivityConfig } from './sensitivity';
 import type { AnyCalculatorInputs } from './finance-types';
 
@@ -178,6 +179,19 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
 
   // Spec §12.2 made constructive: the committed facility is identical in every cell,
   // so a stressed cell reports facility_exceeded rather than quietly borrowing more.
+  //
+  // What was learned running this against Fixture F: the worst corner (construction_cost
+  // +15%, gdv −15%) drives peak_debt_pence to 63,448,870p, which breaches the committed
+  // *net* facility (60,000,000p) but not the committed *gross* facility (66,000,000p).
+  // `facility_exceeded` (monthly-engine.ts:264) is gated on the gross facility, because
+  // capitalised interest/fees are allowed to occupy the net-to-gross headroom without
+  // tripping it — capitalisation adds straight to the closing balance and never passes
+  // through the net-capped draw. The shortfall against the net facility (the ceiling that
+  // actually gates new cash draws) is what shows up, correctly, as `funding_gap`. So for
+  // this fixture the deterministic, reproducible flag is `funding_gap`, not
+  // `facility_exceeded` — asserting the specific flag (rather than "either flag") keeps
+  // this test able to catch a regression that quietly loosens the *gross* facility for
+  // stressed cells, which an either-flag assertion could not.
   it('never re-sizes the facility, whatever the cell', () => {
     const inputs = fixtureFInputs();
     const { matrix } = runSensitivity(inputs);
@@ -190,16 +204,24 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     // committed facility (e.g. cash deals), which Fixture F is not.
     const committed = inputs.finance.committed_net_facility_pence as number;
     if (worst.peak_debt_pence > committed) {
-      // Spec §12.2, verbatim: a stressed cell raises "facility_exceeded and/or
-      // funding_gap, and that flag is the finding" — either flag satisfies the
-      // invariant. Capitalised interest/fees can occupy net-to-gross facility
-      // headroom (peak debt above the committed *net* facility) without breaching
-      // the committed *gross* facility, in which case the finding surfaces as
-      // funding_gap alone; that is spec-compliant, not a missing flag.
-      expect(
-        worst.flags.includes('facility_exceeded') || worst.flags.includes('funding_gap'),
-      ).toBe(true);
+      expect(worst.flags).toContain('funding_gap');
     }
+
+    // The constructive form of §12.2, independent of any flag: the levered document
+    // itself must carry the same committed facility and the same raised equity as the
+    // base document. This fails if and only if a lever actually reached one of these
+    // fields — it cannot be satisfied by accident the way a flag-based check could.
+    const levered = applyScenario(inputs, {
+      label: '',
+      gdv_adjustment_pct: worst.col_step,
+      construction_cost_adjustment_pct: worst.row_step,
+      timeline_adjustment_months: 0,
+      interest_rate_adjustment_pct: 0,
+    });
+    expect(levered.finance.committed_net_facility_pence).toBe(inputs.finance.committed_net_facility_pence);
+    expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);
+    expect(levered.finance.day_one_advance_pence).toBe(inputs.finance.day_one_advance_pence);
+    expect(levered.equity_sources).toEqual(inputs.equity_sources);
   });
 
   it('throws on an invalid config rather than computing a misleading grid', () => {
