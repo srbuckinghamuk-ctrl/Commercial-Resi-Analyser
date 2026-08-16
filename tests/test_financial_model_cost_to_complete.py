@@ -252,6 +252,11 @@ class TestShortfallDirectionAgainstFundingGap:
         saw_positive_case = False
         for path in sorted(FIXTURE_DIR.glob("*.json")):
             doc = json.loads(path.read_text())
+            # Release 4a: Fixture K (kind "sensitivity", spec Sec 12) carries no `inputs`
+            # of its own -- it names a `base_fixture` instead (model-governance.md
+            # Sec 2.1) -- so it has no ledger of its own to check this implication against.
+            if doc.get("kind") == "sensitivity":
+                continue
             inputs = parse_calculator_inputs(doc["inputs"])
             schedule = build_schedule(inputs)
             model = run_ledger(schedule, inputs.finance, inputs.equity_sources)

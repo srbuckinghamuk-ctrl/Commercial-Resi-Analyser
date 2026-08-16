@@ -6,7 +6,16 @@ import pytest
 from app.financial_model import AppraisalRun, run_appraisal
 from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
+from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v4
+from app.financial_model.schedule import build_schedule
+from app.financial_model.sensitivity import (
+    DEFAULT_SENSITIVITY_CONFIG,
+    SensitivityAxis,
+    SensitivityConfig,
+    TornadoRange,
+    run_sensitivity,
+)
 from app.financial_model.types import (
     AnyCalculatorInputs,
     CalculatorInputsV4,
@@ -14,6 +23,7 @@ from app.financial_model.types import (
     ProgrammePackage,
     ProgrammePackages,
     SalesPhasingInputs,
+    ScenarioOverrides,
     SalesPhasingTranche,
     SimpleSpendCurve,
     parse_calculator_inputs,
@@ -33,6 +43,17 @@ EXPECTED_FIXTURE_STEMS = [
     "h-programme-scurve",
     "i-phased-sales",
     "j-blended-refinance",
+    "k-sensitivity",
+]
+
+# Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
+# parametrisations below can run. Fixture K (kind "sensitivity", spec Sec 12) names a
+# `base_fixture` instead of carrying inputs -- see model-governance.md Sec 2.1 -- so it is
+# asserted by TestFixtureKSensitivity at the end of this module instead. Mirrors
+# golden-fixtures.test.ts's `appraisalFixtures`.
+APPRAISAL_FIXTURES = [
+    p for p in FIXTURES
+    if json.loads(p.read_text(encoding="utf-8")).get("kind") != "sensitivity"
 ]
 
 # Minimal flat-key -> run-structure mapping for the fixture keys that are not direct
@@ -85,7 +106,7 @@ def test_every_expected_fixture_file_is_present_in_the_shared_corpus() -> None:
     assert [p.name for p in FIXTURES] == [f"{s}.json" for s in EXPECTED_FIXTURE_STEMS]
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_golden_fixture_parity(path: Path) -> None:
     doc = _load_fixture(path)
     inputs = parse_calculator_inputs(doc["inputs"])
@@ -93,7 +114,7 @@ def test_golden_fixture_parity(path: Path) -> None:
     _assert_expected_metrics(run, doc, path.stem)
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4(path: Path) -> None:
     """Release 3a identity guarantee (spec Sec 6.1 / design Sec 2.4): the v3 -> v4
     migration is purely additive, so running a pre-v4 fixture's inputs through the full
@@ -107,7 +128,7 @@ def test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4(path: Pat
     _assert_expected_metrics(run_appraisal(v4), doc, f"{path.stem}[migrated-to-v4]")
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_invariants(path: Path) -> None:
     doc = _load_fixture(path)
     run = run_appraisal(parse_calculator_inputs(doc["inputs"]))
@@ -171,7 +192,7 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
 
 def _fixture_variant_matrix() -> list[tuple[str, str, AnyCalculatorInputs]]:
     out: list[tuple[str, str, AnyCalculatorInputs]] = []
-    for path in FIXTURES:
+    for path in APPRAISAL_FIXTURES:
         doc = _load_fixture(path)
         base_inputs = parse_calculator_inputs(doc["inputs"])
         for label, variant_inputs in _invariant_variants(base_inputs):
@@ -344,7 +365,7 @@ def _sweep_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, CalculatorIn
 
 def _sweep_fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV4]]:
     out: list[tuple[str, str, CalculatorInputsV4]] = []
-    for path in FIXTURES:
+    for path in APPRAISAL_FIXTURES:
         if path.stem not in ("i-phased-sales", "j-blended-refinance"):
             continue
         doc = _load_fixture(path)
@@ -426,7 +447,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
             assert run.model.redemption_balance_at_disposal_pence == sched[-1].balance_pence
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_lender_gdv_never_defaults_to_developer_gdv(path: Path) -> None:
     """Spec Sec 3.2 / Release 2b Task 3: lender-basis metrics must never default
     to developer GDV -- null is the only representation of "unknown", exactly
@@ -445,7 +466,7 @@ def test_lender_gdv_never_defaults_to_developer_gdv(path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_senior_breakeven_null_iff_no_disposal(path: Path) -> None:
     """Release 2b Task 4 (spec Sec 5.11): senior_breakeven_pence is null exactly when
     the ledger recorded no disposal (cash deals, or nothing sold)."""
@@ -456,7 +477,7 @@ def test_senior_breakeven_null_iff_no_disposal(path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_senior_breakeven_covers_redemption_plus_exit_fee(path: Path) -> None:
     """When non-null, senior_breakeven_pence >= redemption balance + exit fee due on
     redeeming it (spec Sec 5.11 invariant)."""
@@ -472,7 +493,7 @@ def test_senior_breakeven_covers_redemption_plus_exit_fee(path: Path) -> None:
         assert run.metrics.senior_breakeven_pence >= redemption + exit_fee
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_senior_breakeven_percentages_null_unless_lender_gdv_present(path: Path) -> None:
     doc = _load_fixture(path)
     run = run_appraisal(parse_calculator_inputs(doc["inputs"]))
@@ -490,7 +511,7 @@ def test_senior_breakeven_percentages_null_unless_lender_gdv_present(path: Path)
         assert round(total, 2) == 100.0
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_developer_breakeven_null_iff_no_disposal(path: Path) -> None:
     """Release 2b Task 5 (spec Sec 5.12): developer_breakeven_pence is null exactly when
     the schedule recorded no disposal at all (gross_sales_pence == 0) -- a strictly wider
@@ -503,7 +524,7 @@ def test_developer_breakeven_null_iff_no_disposal(path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_developer_breakeven_covers_tdc_ex_selling_plus_legal(path: Path) -> None:
     """When non-null, developer_breakeven_pence >= TDC-ex-selling + the flat selling
     legal fee (spec Sec 5.12 invariant -- the fixed-cost floor before the agent's
@@ -593,3 +614,252 @@ def test_migration_preserves_floors_zero() -> None:
     run = migrate_inputs({}, project)
     assert run.deal_spider.storeys == 0
     assert run.deal_spider.building_height_m == 0
+
+
+# ---------------------------------------------------------------------------
+# Fixture K -- the sensitivity suite (spec Sec 12, calc 2.4.0)
+#
+# Mirror of golden-fixtures.test.ts's `describe('Fixture K - sensitivity suite')`
+# block: the same five tests, in the same order, reading the same hand-derived
+# expectations out of the same JSON document.
+#
+# Fixture K carries no `inputs` of its own -- it names `base_fixture`, so Fixture F's
+# document cannot drift away from the contract built on it -- which is why it is
+# excluded from APPRAISAL_FIXTURES above and asserted here instead.
+#
+# WHICH ASSERTIONS ARE WHICH (the distinction is the point -- see
+# docs/financial-model/model-governance.md Sec 2.1). The derived inputs, the base cell,
+# the two corner cells and every tornado span are HAND-DERIVED on the worksheet in
+# docs/financial-model/test-cases.md ("Fixture K -- sensitivity suite"), independently
+# of both engines. The final test is IDENTITY-ASSERTED, not a snapshot: Sec 12.3 *defines*
+# a cell as run_appraisal(apply_scenario(base, overrides)), so asserting that equality
+# is asserting the contract itself. A future reader must not mistake it for a snapshot,
+# and must not "fix" a hand-derived number by copying what the engine printed.
+# ---------------------------------------------------------------------------
+
+K_DOC = _load_fixture(FIXTURE_DIR / "k-sensitivity.json")
+K_BASE_INPUTS = parse_calculator_inputs(
+    _load_fixture(FIXTURE_DIR / f"{K_DOC['base_fixture']}.json")["inputs"]
+)
+
+
+def _k_config() -> SensitivityConfig:
+    c = K_DOC["config"]
+    return SensitivityConfig(
+        rows=SensitivityAxis(lever=c["rows"]["lever"], steps=list(c["rows"]["steps"])),
+        cols=SensitivityAxis(lever=c["cols"]["lever"], steps=list(c["cols"]["steps"])),
+        tornado=[
+            TornadoRange(lever=t["lever"], low=t["low"], high=t["high"])
+            for t in c["tornado"]
+        ],
+    )
+
+
+def _levered(**levers: float) -> AnyCalculatorInputs:
+    return apply_scenario(K_BASE_INPUTS, ScenarioOverrides(
+        label="",
+        gdv_adjustment_pct=levers.get("gdv", 0),
+        construction_cost_adjustment_pct=levers.get("construction_cost", 0),
+        timeline_adjustment_months=levers.get("timeline", 0),
+        interest_rate_adjustment_pct=levers.get("interest_rate", 0),
+    ))
+
+
+K_RESULT = run_sensitivity(K_BASE_INPUTS, _k_config())
+
+
+def test_fixture_k_applies_each_lever_to_the_hand_derived_value() -> None:
+    """Hand-derived: the per-axis derived inputs (Sec 12.1 disjointness makes these per
+    axis, not per cell). A lever-composition bug shows up here first."""
+    for step, expected in K_DOC["expected_derived_inputs"]["gdv"].items():
+        levered = _levered(gdv=float(step))
+        assert all(u.estimated_value_pence == expected for u in levered.unit_mix.units)
+    for step, expected in K_DOC["expected_derived_inputs"]["construction_cost"].items():
+        levered = _levered(construction_cost=float(step))
+        assert levered.conversion_costs.construction_cost_per_sqm_pence == expected
+    for step, expected in K_DOC["expected_derived_inputs"]["timeline"].items():
+        assert _levered(timeline=float(step)).finance.term_months == expected
+    for step, expected in K_DOC["expected_derived_inputs"]["interest_rate"].items():
+        assert _levered(interest_rate=float(step)).finance.annual_interest_rate_pct == expected
+
+
+def test_fixture_k_reports_the_hand_derived_base_case() -> None:
+    """Hand-derived: reused verbatim from Fixture F (Sec 12.5)."""
+    for key, expected in K_DOC["expected_base"].items():
+        assert getattr(K_RESULT.base, key) == expected, key
+
+
+def test_fixture_k_reports_the_hand_derived_corner_cells() -> None:
+    """Hand-derived: two corners worked through on a worksheet, the way Fixture F was."""
+    cells = [c for row in K_RESULT.matrix for c in row]
+    for corner in K_DOC["expected_corner_cells"]:
+        match = [
+            c for c in cells
+            if c.row_step == corner["row_step"] and c.col_step == corner["col_step"]
+        ]
+        assert len(match) == 1, f"corner {corner['row_step']}/{corner['col_step']}"
+        cell = match[0]
+        for key, expected in corner.items():
+            if key in ("row_step", "col_step"):
+                continue
+            actual = getattr(cell, key)
+            assert actual == expected, (
+                f"corner {corner['row_step']}/{corner['col_step']}.{key}: {actual} != {expected}"
+            )
+
+
+def test_fixture_k_reports_the_hand_derived_tornado_spans_and_order() -> None:
+    """Hand-derived: spans and the resulting order."""
+    assert [b.lever for b in K_RESULT.tornado] == K_DOC["expected_tornado_order"]
+    for bar in K_RESULT.tornado:
+        assert bar.span_pence == K_DOC["expected_tornado_spans_pence"][bar.lever], bar.lever
+
+
+def test_fixture_k_defines_every_remaining_cell_as_the_levered_appraisal() -> None:
+    """Identity-asserted, NOT snapshotted: Sec 12.3 *defines* a cell as this expression,
+    so the assertion is the contract. Wrong composition or enumeration is already caught
+    by the hand-derived derived-inputs and corners above."""
+    for ri, row_step in enumerate(K_RESULT.config.rows.steps):
+        for ci, col_step in enumerate(K_RESULT.config.cols.steps):
+            expected = run_appraisal(
+                _levered(construction_cost=row_step, gdv=col_step)
+            ).metrics
+            cell = K_RESULT.matrix[ri][ci]
+            assert cell.profit_pence == expected.profit_pence
+            assert cell.profit_on_cost_pct == expected.profit_on_cost_pct
+            assert cell.ltgdv_developer_pct == expected.ltgdv_developer_pct
+            assert cell.peak_debt_pence == expected.peak_debt_pence
+            assert cell.flags == [f.code for f in expected.flags]
+
+
+# ---------------------------------------------------------------------------
+# Release 4a Task 8 (spec Sec 12, calc 2.4.0): sensitivity suite invariants,
+# asserted across the whole fixture corpus rather than pinned to one document.
+#
+# Fixture K (above) pins exact numbers for a single document (Fixture F levered).
+# These assert Sec 12's *properties* hold for every document in the corpus -- the
+# base-case identity (Sec 12.5), facility-and-equity invariance in every cell
+# (Sec 12.2), total tornado ordering (Sec 12.4), and reproducibility (Sec 1.4) --
+# which is what would catch a regression on a deal shaped unlike Fixture F, that
+# Fixture K alone cannot. Mirrors invariants.test.ts's "sensitivity suite
+# invariants" describe block field-for-field (same four checks, same order).
+# ---------------------------------------------------------------------------
+
+def _sensitivity_corpus() -> list[AnyCalculatorInputs]:
+    """Every pipeline-shaped fixture in the corpus, not just Fixture F. Includes
+    fixture A (all-cash, no debt at all) -- every invariant below must therefore hold
+    for a zero-facility document too, not only for financed deals."""
+    return [parse_calculator_inputs(_load_fixture(p)["inputs"]) for p in APPRAISAL_FIXTURES]
+
+
+_SENSITIVITY_CORPUS = _sensitivity_corpus()
+_SENSITIVITY_CORPUS_IDS = [p.stem for p in APPRAISAL_FIXTURES]
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_base_case_identical_to_unadjusted_appraisal(inputs: AnyCalculatorInputs) -> None:
+    """Spec Sec 12.5: the measurement taken with every lever at zero must equal the
+    unadjusted appraisal of the base document exactly, in every reported quantity."""
+    plain = run_appraisal(inputs).metrics
+    base = run_sensitivity(inputs).base
+    assert base.profit_pence == plain.profit_pence
+    assert base.peak_debt_pence == plain.peak_debt_pence
+    assert base.flags == [f.code for f in plain.flags]
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_holds_committed_facility_and_equity_invariant_in_every_cell(
+    inputs: AnyCalculatorInputs,
+) -> None:
+    """Spec Sec 12.2: the committed facility and equity sources are held at their
+    base-document values in every cell of the default grid -- no lever may write to
+    them, directly or indirectly."""
+    config = DEFAULT_SENSITIVITY_CONFIG
+    for row_step in config.rows.steps:
+        for col_step in config.cols.steps:
+            levered = apply_scenario(inputs, ScenarioOverrides(
+                label="",
+                gdv_adjustment_pct=col_step,
+                construction_cost_adjustment_pct=row_step,
+                timeline_adjustment_months=0,
+                interest_rate_adjustment_pct=0,
+            ))
+            assert (
+                levered.finance.committed_net_facility_pence
+                == inputs.finance.committed_net_facility_pence
+            )
+            assert (
+                levered.finance.committed_gross_facility_pence
+                == inputs.finance.committed_gross_facility_pence
+            )
+            assert levered.finance.day_one_advance_pence == inputs.finance.day_one_advance_pence
+            assert (
+                [e.amount_pence for e in levered.equity_sources]
+                == [e.amount_pence for e in inputs.equity_sources]
+            )
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_sorts_the_tornado_totally_and_deterministically(inputs: AnyCalculatorInputs) -> None:
+    """Spec Sec 12.4: bars are ordered by span descending, ties broken by the fixed
+    lever order -- total, and therefore independent of the order ranges were supplied
+    in (Sec 1.4)."""
+    forward = run_sensitivity(inputs)
+    shuffled_config = SensitivityConfig(
+        rows=DEFAULT_SENSITIVITY_CONFIG.rows,
+        cols=DEFAULT_SENSITIVITY_CONFIG.cols,
+        tornado=list(reversed(DEFAULT_SENSITIVITY_CONFIG.tornado)),
+    )
+    shuffled = run_sensitivity(inputs, shuffled_config)
+    assert [b.lever for b in shuffled.tornado] == [b.lever for b in forward.tornado]
+    spans = [b.span_pence for b in forward.tornado]
+    assert sorted(spans, reverse=True) == spans
+
+
+@pytest.mark.parametrize("inputs", _SENSITIVITY_CORPUS, ids=_SENSITIVITY_CORPUS_IDS)
+def test_sensitivity_is_reproducible(inputs: AnyCalculatorInputs) -> None:
+    """Spec Sec 1.4: two runs of one document agree exactly."""
+    assert run_sensitivity(inputs) == run_sensitivity(inputs)
+
+
+def test_odd_construction_window_derives_a_4_month_professional_statutory_window() -> None:
+    """Not in the original Task 8 brief -- a confirmed coverage gap found during
+    Task 7. Every pre-existing fixture in the corpus runs term_months: 12, an even
+    (10-month) construction window, so ceil and floor agree there and nothing in the
+    whole corpus can ever exercise Sec 6's "odd windows round up" rule (professional /
+    statutory window = ceil(construction_window / 2), not floor). A -3 month timeline
+    lever on Fixture F (a plain v3 document with no explicit `programme`, so
+    build_schedule takes the auto-window branch at schedule.py:158) turns its 12-month
+    term into 9 months, so construction_window = max(1, 9 - 2) = 7 (odd) and, per
+    Sec 6, professional_window = ceil(7 / 2) = 4 -- derived here from the rule itself,
+    not read off the engine and copied back in. Guarded inside this sensitivity-suite
+    module, rather than the general schedule tests, because the timeline lever is what
+    the corpus needed to reach an odd window in the first place."""
+    f_doc = _load_fixture(FIXTURE_DIR / "f-dev-finance-12mo.json")
+    f_inputs = parse_calculator_inputs(f_doc["inputs"])
+    assert getattr(f_inputs, "programme", None) is None  # must take the auto-window branch
+
+    levered = apply_scenario(f_inputs, ScenarioOverrides(
+        label="",
+        gdv_adjustment_pct=0,
+        construction_cost_adjustment_pct=0,
+        timeline_adjustment_months=-3,
+        interest_rate_adjustment_pct=0,
+    ))
+    assert levered.finance.term_months == 9
+
+    schedule = build_schedule(levered)
+    assert schedule.term_months == 9
+
+    # construction_window = max(1, term - 2) = 7 (odd); professional_window =
+    # ceil(7 / 2) = 4, per Sec 6's "odd windows round up" rule. Both spreads are
+    # placed starting at month index 1, so the professional window occupies exactly
+    # indices 1..4 of a 9-month schedule.
+    professional_presence = [m.professional_pence > 0 for m in schedule.uses]
+    assert professional_presence == [False, True, True, True, True, False, False, False, False]
+
+    # Statutory month 0 also always carries the flat prior-approval fee
+    # (unconditional, schedule.py), so the window check excludes it and looks only
+    # at the spread that starts at month 1 -- the same 4-month window as professional.
+    statutory_window_months = sum(1 for m in schedule.uses[1:] if m.statutory_pence > 0)
+    assert statutory_window_months == 4

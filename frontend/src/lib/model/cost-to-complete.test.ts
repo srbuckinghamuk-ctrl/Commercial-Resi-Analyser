@@ -194,7 +194,13 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
     const fixtureDir = resolve(__dirname, '../../../../fixtures/financial-model');
     const files = readdirSync(fixtureDir).filter((f) => f.endsWith('.json'));
     for (const f of files) {
-      const fx = JSON.parse(readFileSync(join(fixtureDir, f), 'utf-8')) as { inputs: CalculatorInputsV3 };
+      const fx = JSON.parse(readFileSync(join(fixtureDir, f), 'utf-8')) as {
+        kind: string; inputs: CalculatorInputsV3;
+      };
+      // Release 4a: Fixture K (kind 'sensitivity', spec §12) carries no `inputs` of its
+      // own — it names a `base_fixture` instead (model-governance.md §2.1) — so it has no
+      // ledger of its own to check this implication against.
+      if (fx.kind === 'sensitivity') continue;
       const schedule = buildSchedule(fx.inputs);
       const model = runLedger(schedule, fx.inputs.finance, fx.inputs.equity_sources);
       const ctc = computeCostToComplete(schedule, model, fx.inputs);

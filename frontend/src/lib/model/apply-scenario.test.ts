@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyScenario } from './apply-scenario';
-import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from './conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV3, LenderValuation } from './model';
+import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from '../conversion-defaults';
+import type { CalculatorInputsV2, CalculatorInputsV3, LenderValuation } from './';
 
 function fixtureInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -48,7 +48,58 @@ describe('applyScenario', () => {
     expect(base).toEqual(before);
   });
 
-  it('holds the committed facility and equity fixed under downside overrides', () => {
+  it('the four levers are order-independent because they write to disjoint fields (spec Sec 12.1)', () => {
+    // Hand-derived from Fixture F: units 30,000,000 pence each, cost/sqm 100,000 pence,
+    // term 12 months, rate 8.0%.
+    const base = defaultCalculatorInputsV2();
+    base.unit_mix.units = Array(4).fill(null).map((_, i) => ({
+      id: `u${i + 1}`,
+      type: '2bed',
+      floor_area_sqm: 100,
+      estimated_value_pence: 30_000_000,
+      comparable_notes: '',
+    }));
+    base.conversion_costs.construction_cost_per_sqm_pence = 100_000;
+    base.finance.term_months = 12;
+    base.finance.annual_interest_rate_pct = 8.0;
+
+    const both = applyScenario(base, {
+      label: 'Test',
+      gdv_adjustment_pct: -15,
+      construction_cost_adjustment_pct: 15,
+      timeline_adjustment_months: -3,
+      interest_rate_adjustment_pct: 1.0,
+    });
+
+    const staged = applyScenario(
+      applyScenario(base, {
+        label: 'Test',
+        gdv_adjustment_pct: -15,
+        construction_cost_adjustment_pct: 0,
+        timeline_adjustment_months: 0,
+        interest_rate_adjustment_pct: 0,
+      }),
+      {
+        label: 'Test',
+        gdv_adjustment_pct: 0,
+        construction_cost_adjustment_pct: 15,
+        timeline_adjustment_months: -3,
+        interest_rate_adjustment_pct: 1.0,
+      },
+    );
+
+    // GDV results are identical regardless of application order:
+    expect(both.unit_mix.units[0].estimated_value_pence).toBe(25_500_000);
+    expect(both.unit_mix.units[0].estimated_value_pence).toBe(staged.unit_mix.units[0].estimated_value_pence);
+
+    // Cost results are identical regardless of application order:
+    expect(both.conversion_costs.construction_cost_per_sqm_pence).toBe(115_000);
+    expect(both.conversion_costs.construction_cost_per_sqm_pence).toBe(
+      staged.conversion_costs.construction_cost_per_sqm_pence,
+    );
+  });
+
+  it('holds the committed facility and equity fixed under downside overrides (spec Sec 12.2)', () => {
     const v2Inputs = fixtureInputs();
     const out = applyScenario(v2Inputs, {
       label: 'Downside',

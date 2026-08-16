@@ -9,7 +9,7 @@ import {
   HARD_GATE_KEYS,
 } from './deal-spider';
 import { defaultCalculatorInputsV2 } from './conversion-defaults';
-import { applyScenario } from './apply-scenario';
+import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
 import { calculateCommercialSdlt } from './commercial-sdlt';
 import { calculateResidentialSdlt } from './residential-sdlt';

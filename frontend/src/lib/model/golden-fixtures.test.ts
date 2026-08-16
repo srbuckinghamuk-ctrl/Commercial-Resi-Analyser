@@ -3,6 +3,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { migrateInputsToV4 } from './migrate';
+import { runSensitivity } from './sensitivity';
+import type { SensitivityConfig } from './sensitivity';
+import { applyScenario } from './apply-scenario';
 import type { AppraisalRun } from './index';
 import type { AnyCalculatorInputs, AppraisalResultV2 } from './finance-types';
 
@@ -18,7 +21,11 @@ interface Fixture {
   // carries both blocks and a `blended` exit route. All are labels only: every
   // fixture, whatever its kind, runs through the same `runAppraisal` assertion
   // loop below.
-  kind: 'pipeline' | 'programme' | 'phased-sales' | 'refinance';
+  // 'sensitivity' marks the R4 suite fixture (spec §12, calc 2.4.0) —
+  // k-sensitivity.json. Unlike every other kind it carries no `inputs` of its own,
+  // naming a `base_fixture` instead, so it is excluded from the runAppraisal loop
+  // below and asserted by its own describe block.
+  kind: 'pipeline' | 'programme' | 'phased-sales' | 'refinance' | 'sensitivity';
   // Widened from CalculatorInputsV2 in Release 3a: the corpus now mixes v3 and v4
   // documents, and `runAppraisal` takes the union directly (no downcast adapter).
   inputs: AnyCalculatorInputs;
@@ -44,7 +51,14 @@ const EXPECTED_FIXTURE_STEMS = [
   'h-programme-scurve',
   'i-phased-sales',
   'j-blended-refinance',
+  'k-sensitivity',
 ];
+
+// Every fixture that carries its own `inputs` document, i.e. everything the
+// runAppraisal loops below can run. Fixture K names a `base_fixture` instead of
+// carrying inputs (spec §12, governance §2.1), so it is asserted by its own describe
+// block at the end of this file rather than here.
+const appraisalFixtures = fixtures.filter((f) => f.kind !== 'sensitivity');
 
 // Minimal flat-key -> run-structure mapping for the fixture keys that are not direct
 // AppraisalResultV2 properties. Every other expected_metrics key is a real, direct
@@ -85,13 +99,13 @@ describe('golden fixtures (shared with the Python engine)', () => {
     }
   }
 
-  for (const fx of fixtures) {
+  for (const fx of appraisalFixtures) {
     it(fx.name, () => {
       assertExpectedMetrics(runAppraisal(fx.inputs), fx, fx.name);
     });
   }
 
-  for (const fx of fixtures) {
+  for (const fx of appraisalFixtures) {
     // Mirrors Python's test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4.
     it(`${fx.name} — reproduces its metrics after migration to v4`, () => {
       // Release 3a identity guarantee (spec §6.1 / design §2.4): the v3 → v4 migration
@@ -160,4 +174,125 @@ describe('golden fixtures (shared with the Python engine)', () => {
       }
     });
   }
+});
+
+describe('Fixture K — sensitivity suite (spec §12)', () => {
+  interface SensitivityFixture {
+    name: string;
+    kind: 'sensitivity';
+    base_fixture: string;
+    config: SensitivityConfig;
+    expected_derived_inputs: Record<string, Record<string, number>>;
+    expected_base: Record<string, number | string[]>;
+    expected_corner_cells: Array<Record<string, number | string[]>>;
+    expected_tornado_order: string[];
+    expected_tornado_spans_pence: Record<string, number>;
+  }
+
+  const k = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 'k-sensitivity.json'), 'utf-8'),
+  ) as SensitivityFixture;
+
+  const baseInputs = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, `${k.base_fixture}.json`), 'utf-8'),
+  ).inputs as AnyCalculatorInputs;
+
+  const result = runSensitivity(baseInputs, k.config);
+
+  // Hand-derived: the per-axis derived inputs (§12.1 disjointness makes these per axis,
+  // not per cell). A lever-composition bug shows up here first.
+  it('applies each lever to the hand-derived value', () => {
+    for (const [step, expected] of Object.entries(k.expected_derived_inputs.gdv)) {
+      const levered = applyScenario(baseInputs, {
+        label: '', gdv_adjustment_pct: Number(step),
+        construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0,
+        interest_rate_adjustment_pct: 0,
+      });
+      expect(levered.unit_mix.units.every((u) => u.estimated_value_pence === expected)).toBe(true);
+    }
+    for (const [step, expected] of Object.entries(k.expected_derived_inputs.construction_cost)) {
+      const levered = applyScenario(baseInputs, {
+        label: '', gdv_adjustment_pct: 0,
+        construction_cost_adjustment_pct: Number(step), timeline_adjustment_months: 0,
+        interest_rate_adjustment_pct: 0,
+      });
+      expect(levered.conversion_costs.construction_cost_per_sqm_pence).toBe(expected);
+    }
+    for (const [step, expected] of Object.entries(k.expected_derived_inputs.timeline)) {
+      const levered = applyScenario(baseInputs, {
+        label: '', gdv_adjustment_pct: 0,
+        construction_cost_adjustment_pct: 0, timeline_adjustment_months: Number(step),
+        interest_rate_adjustment_pct: 0,
+      });
+      expect(levered.finance.term_months).toBe(expected);
+    }
+    for (const [step, expected] of Object.entries(k.expected_derived_inputs.interest_rate)) {
+      const levered = applyScenario(baseInputs, {
+        label: '', gdv_adjustment_pct: 0,
+        construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0,
+        interest_rate_adjustment_pct: Number(step),
+      });
+      expect(levered.finance.annual_interest_rate_pct).toBe(expected);
+    }
+  });
+
+  // Hand-derived: reused verbatim from Fixture F (§12.5). `toEqual`, not `toBe`: the
+  // `flags` pin is an array, and `toBe`'s reference equality would fail against any
+  // freshly-built array even when its contents match — a pin that could never bite.
+  it('reports the hand-derived base case', () => {
+    for (const [key, expected] of Object.entries(k.expected_base)) {
+      expect(result.base[key as keyof typeof result.base]).toEqual(expected);
+    }
+  });
+
+  // Hand-derived: two corners worked through on a worksheet
+  // (docs/financial-model/test-cases.md, "Fixture K — sensitivity suite").
+  it('reports the hand-derived corner cells', () => {
+    for (const corner of k.expected_corner_cells) {
+      // Matched by filter-and-count rather than `.find`, mirroring the Python assertion:
+      // a matrix that enumerated a grid position twice would silently satisfy a
+      // first-match lookup, and a corner assertion that can pass against a duplicated
+      // cell is not pinning the position it names.
+      const matches = result.matrix
+        .flat()
+        .filter((c) => c.row_step === corner.row_step && c.col_step === corner.col_step);
+      expect(matches, `corner ${corner.row_step}/${corner.col_step}`).toHaveLength(1);
+      const found = matches[0] as unknown as Record<string, unknown>;
+      for (const [key, expected] of Object.entries(corner)) {
+        if (key === 'row_step' || key === 'col_step') continue;
+        expect(found[key], `corner ${corner.row_step}/${corner.col_step} → ${key}`).toEqual(expected);
+      }
+    }
+  });
+
+  // Hand-derived: spans and the resulting order.
+  it('reports the hand-derived tornado spans and order', () => {
+    expect(result.tornado.map((b) => b.lever)).toEqual(k.expected_tornado_order);
+    for (const bar of result.tornado) {
+      expect(bar.span_pence).toBe(k.expected_tornado_spans_pence[bar.lever]);
+    }
+  });
+
+  // Identity-asserted, not snapshotted: §12.3 *defines* a cell as this expression, so
+  // the assertion is the contract. Wrong composition or enumeration is already caught
+  // by the hand-derived derived-inputs and corners above.
+  it('defines every remaining cell as the levered appraisal (spec §12.3)', () => {
+    result.config.rows.steps.forEach((rowStep, ri) => {
+      result.config.cols.steps.forEach((colStep, ci) => {
+        const expected = runAppraisal(applyScenario(baseInputs, {
+          label: '',
+          gdv_adjustment_pct: colStep,
+          construction_cost_adjustment_pct: rowStep,
+          timeline_adjustment_months: 0,
+          interest_rate_adjustment_pct: 0,
+        })).metrics;
+        const cell = result.matrix[ri][ci];
+        expect(cell.profit_pence).toBe(expected.profit_pence);
+        expect(cell.profit_on_cost_pct).toBe(expected.profit_on_cost_pct);
+        expect(cell.ltgdv_developer_pct).toBe(expected.ltgdv_developer_pct);
+        expect(cell.peak_debt_pence).toBe(expected.peak_debt_pence);
+        expect(cell.flags).toEqual(expected.flags.map((f) => f.code));
+      });
+    });
+  });
 });

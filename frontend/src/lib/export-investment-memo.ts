@@ -3,7 +3,7 @@ import autoTable from 'jspdf-autotable';
 import type { Project, EligibilityAssessment } from '../types';
 import type { AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
-import { applyScenario } from './apply-scenario';
+import { applyScenario } from './model/apply-scenario';
 import { formatProgrammeMonth } from './programme-months';
 
 // ── This memo consumes the finished AppraisalRun only ─────

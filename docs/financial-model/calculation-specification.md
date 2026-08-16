@@ -1,15 +1,16 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.3.0`.
+**Status:** Authoritative. Calculation version `2.4.0`.
 **Date:** 15 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.4.0** — fixed-facility sensitivity suite: the two-way matrix, the tornado, and their shared lever and validation rules (§12, R4). No existing computed value changed — §12 only composes calls to the existing appraisal engine over levered copies of an inputs document, it does not alter any formula — which is why this is a minor bump, not a major one.
 - **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`. Also corrects §3.12's refinance-profit wording to match §3.11 and the engine (a refinance is a financing event and does not enter profit) — a **specification** correction only, no computed value changed.
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented). A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines) — no UI page consumes it yet, which is Release 4b's job, so §12 has no user-visible surface today even though the engine work is complete. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4) carry no such restriction.
 
 ---
 
@@ -430,7 +431,7 @@ Minimum gross sale price giving zero developer profit: `TDC` restated at the bre
 
 ## 6. Spend profiles [R1 minimal]
 
-R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). The complete set of spend curves is defined in §6.1 (calc 2.2.0, [R3a]): `straight_line`, `s_curve`, `back_loaded`, and `user_defined`. An `upfront` curve was planned but removed before implementation — it is expressible via a 1-month window or user_defined weights concentrated in month 1.
+R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. **Odd windows round up:** where an auto-derived window spans an odd number of months, its "first half" is `ceil(D/2)` months, `D` being the construction window's length — so a 7-month construction window gives a 4-month professional/statutory window, not 3. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). The complete set of spend curves is defined in §6.1 (calc 2.2.0, [R3a]): `straight_line`, `s_curve`, `back_loaded`, and `user_defined`. An `upfront` curve was planned but removed before implementation — it is expressible via a 1-month window or user_defined weights concentrated in month 1.
 
 **Note (calc 2.1.0):** §5.10 cost-to-complete is derived directly from the ledger, which follows this straight-line schedule when `programme` is null (remaining cost per month = totals less cumulative spend to date under this profile) and the dated programme (§6.1, calc 2.2.0, [R3a]) otherwise — the relationship is unchanged, not redefined, either way.
 
@@ -519,6 +520,91 @@ Terms: committed net facility £500,000; committed gross £550,000; day-one adva
 5. "Senior debt impairment" = GDV vs TDC comparison.
 6. Sale income booked for retained exits.
 7. Synthetic IRR from `[−equity, 0, …, profit+equity]`.
-8. Debt re-sized inside scenario/downside calculations.
+8. Debt re-sized inside scenario/downside calculations (see §12.2, which states the
+   same rule constructively for the sensitivity suite).
 9. Any report/export/page recomputing a formula instead of consuming the engine result.
 10. The Deal Spider's 15% construction-VAT saving presented as anything other than an unconfirmed illustration; it never enters the appraisal, TDC or lender metrics.
+
+---
+
+## 12. Sensitivity analysis [R4 — calc 2.4.0]
+
+This section is the normative home for both the fixed-facility sensitivity suite and
+the three named scenarios (`base`, `upside`, `downside`), which share its lever rule.
+
+### 12.1 Levers
+
+A **lever** is one named adjustment applied to an inputs document. There are four:
+
+| Lever | Unit | Effect on the inputs document |
+|---|---|---|
+| `gdv` | percent | scales every `unit_mix.units[].estimated_value_pence` |
+| `construction_cost` | percent | scales `conversion_costs.construction_cost_per_sqm_pence` |
+| `timeline` | months | adds to `finance.term_months` |
+| `interest_rate` | percentage points | adds to `finance.annual_interest_rate_pct` |
+
+A percent lever of `p` multiplies its target by `(1 + p/100)` and rounds half-up to
+integer pence (§1.1). A months or percentage-point lever adds its value directly.
+
+The four levers write to **disjoint input fields**, so applying several to one document
+is order-independent. Any lever added in a later release that shares a field with an
+existing lever must define its composition order in this section at the same time.
+
+### 12.2 The facility is invariant
+
+In every sensitivity cell and every tornado endpoint,
+`finance.committed_net_facility_pence`, `finance.committed_gross_facility_pence`,
+`finance.day_one_advance_pence` and `equity_sources` are held at their base-document
+values. No lever may write to them, directly or indirectly.
+
+This is §11.8 ("debt re-sized inside scenario/downside calculations" — prohibited)
+stated as a construction rule rather than only as a prohibition. A cell whose adjusted
+assumptions would require more debt than the committed facility does not receive more
+debt: it raises `facility_exceeded` and/or `funding_gap`, and that flag is the finding.
+The suite measures a committed structure against adverse assumptions; it does not
+re-underwrite the deal at every grid point.
+
+### 12.3 The two-way matrix
+
+The matrix has a row axis and a column axis. Each axis names one lever and a list of
+steps in that lever's unit. The two axes must name different levers. Each cell is the
+appraisal that results from applying the row lever at its step and the column lever at
+its step to the base document, per §12.1.
+
+The **normative default grid** is:
+
+- rows: `construction_cost` at `[-5, 0, +5, +10, +15]` percent
+- columns: `gdv` at `[-15, -10, -5, 0, +5]` percent
+
+### 12.4 The tornado
+
+Each tornado bar names one lever and a low and a high value in that lever's unit. The
+bar's endpoints are the appraisals resulting from applying that lever alone at its low
+and at its high. A bar's **span** is `|profit(high) − profit(low)|` in pence.
+
+The **normative default ranges** are: `gdv` ±10 percent, `construction_cost` ±10
+percent, `timeline` ±3 months, `interest_rate` ±1.0 percentage points.
+
+Bars are ordered by span descending. Ties are broken by the fixed lever order
+`gdv`, `construction_cost`, `timeline`, `interest_rate`. This makes the ordering total
+and therefore deterministic (§1.4).
+
+### 12.5 The base case is a cell
+
+The measurement taken with every lever at zero must equal the unadjusted appraisal of
+the base document exactly, in every reported quantity. Where the default grid is used,
+this is the `(construction_cost = 0, gdv = 0)` cell.
+
+### 12.6 Validation
+
+The following are input errors, not flags:
+
+- an axis or a tornado bar naming a lever that is not one of the four §12.1 levers;
+- an axis with an empty step list, or any non-finite step;
+- an axis with more than nine steps (the suite is bounded at 81 cells);
+- a row axis and a column axis naming the same lever;
+- a lever appearing more than once among the tornado bars;
+- a tornado bar whose low is not strictly less than its high, or either non-finite;
+- a step, or a tornado bound, for the `timeline` lever that is not a whole number of months.
+
+The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline` lever is therefore constrained to whole months at the point of input rather than rounded later.

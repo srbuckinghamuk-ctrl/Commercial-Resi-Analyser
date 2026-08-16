@@ -610,6 +610,25 @@ describe('validateSensitivityConfig (spec §12.6)', () => {
     }));
     expect(issues.map((i) => i.field)).toContain('sensitivity.tornado');
   });
+
+  // The engine is month-indexed (§1.3): a fractional term has no meaning in the ledger.
+  // This rule is also what keeps the Python mirror's int() narrowing of
+  // `timeline_adjustment_months` from ever seeing a value it would truncate.
+  it('rejects a fractional timeline step', () => {
+    const issues = validateSensitivityConfig(config({ rows: { lever: 'timeline', steps: [0, 3.5] } }));
+    expect(issues.map((i) => i.field)).toContain('sensitivity.rows.steps');
+  });
+
+  it('rejects a fractional timeline tornado bound', () => {
+    const issues = validateSensitivityConfig(config({
+      tornado: [{ lever: 'timeline', low: -3, high: 3.5 }],
+    }));
+    expect(issues.map((i) => i.field)).toContain('sensitivity.tornado');
+  });
+
+  it('accepts a whole-month timeline axis', () => {
+    expect(validateSensitivityConfig(config({ rows: { lever: 'timeline', steps: [-3, 0, 3] } }))).toEqual([]);
+  });
 });
 ```
 
@@ -738,6 +757,13 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
     if (axis.steps.some((s) => !Number.isFinite(s))) {
       issues.push({ severity: 'error', field, message: 'Every step must be a finite number.' });
     }
+    // Spec §12.6: the engine is month-indexed (§1.3), so a fractional term has no
+    // meaning in the ledger. Constraining the timeline lever here is also what makes
+    // the Python mirror's int() narrowing of `timeline_adjustment_months` safe — see
+    // app/financial_model/apply_scenario.py.
+    if (axis.lever === 'timeline' && axis.steps.some((s) => !Number.isInteger(s))) {
+      issues.push({ severity: 'error', field, message: 'Timeline steps must be whole months.' });
+    }
   }
 
   if (config.rows.lever === config.cols.lever) {
@@ -760,6 +786,13 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
         message: `Tornado range for ${range.lever} needs finite low < high.`,
+      });
+    }
+    // Spec §12.6, same whole-month rule as the axes above.
+    if (range.lever === 'timeline' && (!Number.isInteger(range.low) || !Number.isInteger(range.high))) {
+      issues.push({
+        severity: 'error', field: 'sensitivity.tornado',
+        message: 'Timeline bounds must be whole months.',
       });
     }
   }
@@ -1151,6 +1184,10 @@ def test_defaults_validate_clean():
         ({"tornado": [TornadoRange(lever="gdv", low=-10, high=10),
                       TornadoRange(lever="gdv", low=-5, high=5)]}, "sensitivity.tornado"),
         ({"tornado": [TornadoRange(lever="gdv", low=10, high=10)]}, "sensitivity.tornado"),
+        # Spec Sec 12.6 whole-month rule: the engine is month-indexed, and this is also
+        # what keeps apply_scenario.py's int() narrowing from ever truncating anything.
+        ({"rows": SensitivityAxis(lever="timeline", steps=[0, 3.5])}, "sensitivity.rows.steps"),
+        ({"tornado": [TornadoRange(lever="timeline", low=-3, high=3.5)]}, "sensitivity.tornado"),
     ],
 )
 def test_validation_rejects_bad_configs(overrides, expected_field):
@@ -1158,6 +1195,13 @@ def test_validation_rejects_bad_configs(overrides, expected_field):
     issues = validate_sensitivity_config(_config(**overrides))
     assert expected_field in [i.field for i in issues]
     assert all(i.severity == "error" for i in issues)
+
+
+def test_whole_month_timeline_axis_is_accepted():
+    """Spec Sec 12.6: whole months are fine; only fractions are rejected."""
+    assert validate_sensitivity_config(
+        _config(rows=SensitivityAxis(lever="timeline", steps=[-3, 0, 3]))
+    ) == []
 
 
 def test_matrix_is_shaped_by_the_axes():
@@ -1347,6 +1391,14 @@ def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIss
         if any(not isfinite(s) for s in axis.steps):
             issues.append(ValidationIssue(severity="error", field=field_name,
                                           message="Every step must be a finite number."))
+        # Spec Sec 12.6: the engine is month-indexed (Sec 1.3), so a fractional term has
+        # no meaning in the ledger. This rule is also what makes apply_scenario.py's
+        # int() narrowing of timeline_adjustment_months safe.
+        if axis.lever == "timeline" and any(
+            not isfinite(s) or not float(s).is_integer() for s in axis.steps
+        ):
+            issues.append(ValidationIssue(severity="error", field=field_name,
+                                          message="Timeline steps must be whole months."))
 
     if config.rows.lever == config.cols.lever:
         issues.append(ValidationIssue(severity="error", field="sensitivity.cols.lever",
@@ -1363,6 +1415,13 @@ def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIss
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",
                 message=f"Tornado range for {rng.lever} needs finite low < high."))
+        # Spec Sec 12.6, same whole-month rule as the axes above.
+        if rng.lever == "timeline" and not (
+            float(rng.low).is_integer() and float(rng.high).is_integer()
+        ):
+            issues.append(ValidationIssue(
+                severity="error", field="sensitivity.tornado",
+                message="Timeline bounds must be whole months."))
 
     return issues
 

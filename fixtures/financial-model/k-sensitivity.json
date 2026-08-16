@@ -1,0 +1,67 @@
+{
+  "name": "K — sensitivity suite over Fixture F",
+  "kind": "sensitivity",
+  "base_fixture": "f-dev-finance-12mo",
+  "config": {
+    "rows": { "lever": "construction_cost", "steps": [-5, 0, 5, 10, 15] },
+    "cols": { "lever": "gdv", "steps": [-15, -10, -5, 0, 5] },
+    "tornado": [
+      { "lever": "gdv", "low": -10, "high": 10 },
+      { "lever": "construction_cost", "low": -10, "high": 10 },
+      { "lever": "timeline", "low": -3, "high": 3 },
+      { "lever": "interest_rate", "low": -1, "high": 1 }
+    ]
+  },
+  "expected_derived_inputs": {
+    "gdv": {
+      "-15": 25500000, "-10": 27000000, "-5": 28500000,
+      "0": 30000000, "5": 31500000, "10": 33000000
+    },
+    "construction_cost": {
+      "-10": 90000, "-5": 95000, "0": 100000,
+      "5": 105000, "10": 110000, "15": 115000
+    },
+    "timeline": { "-3": 9, "3": 15 },
+    "interest_rate": { "-1": 7.0, "1": 9.0 }
+  },
+  "expected_base": {
+    "profit_pence": 23535047,
+    "profit_on_cost_pct": 24.4,
+    "profit_on_gdv_pct": 19.61,
+    "irr_annual_pct": 91.2,
+    "ltgdv_developer_pct": 48.84,
+    "peak_debt_pence": 58604953,
+    "flags": []
+  },
+  "expected_corner_cells": [
+    {
+      "row_step": 15,
+      "col_step": -15,
+      "profit_pence": -1027270,
+      "profit_on_cost_pct": -1.0,
+      "profit_on_gdv_pct": -1.01,
+      "irr_annual_pct": 3.45,
+      "ltgdv_developer_pct": 62.2,
+      "peak_debt_pence": 63448870,
+      "flags": ["funding_gap"]
+    },
+    {
+      "row_step": -5,
+      "col_step": 5,
+      "profit_pence": 31727095,
+      "profit_on_cost_pct": 33.65,
+      "profit_on_gdv_pct": 25.18,
+      "irr_annual_pct": 126.26,
+      "ltgdv_developer_pct": 44.7,
+      "peak_debt_pence": 56322905,
+      "flags": []
+    }
+  ],
+  "expected_tornado_order": ["gdv", "construction_cost", "timeline", "interest_rate"],
+  "expected_tornado_spans_pence": {
+    "gdv": 23640000,
+    "construction_cost": 9134822,
+    "timeline": 1584507,
+    "interest_rate": 829268
+  }
+}

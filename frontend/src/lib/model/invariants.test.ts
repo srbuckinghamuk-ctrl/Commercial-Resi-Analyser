@@ -6,6 +6,9 @@ import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
 import { migrateInputsToV4 } from './migrate';
 import { spreadByCurve } from './curves';
+import { buildSchedule } from './schedule';
+import { applyScenario } from './apply-scenario';
+import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './sensitivity';
 import type {
   AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4,
   ProgrammeInputs, SpendCurve,
@@ -13,7 +16,14 @@ import type {
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json'))
-  .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as { name: string; inputs: CalculatorInputsV3 });
+  .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as {
+    name: string; kind: string; inputs: CalculatorInputsV3;
+  })
+  // Release 4a: the corpus now contains an inputs-less fixture. Fixture K
+  // (kind 'sensitivity', spec §12) names a `base_fixture` rather than carrying its own
+  // document — see model-governance.md §2.1 — so there is nothing here to run through
+  // the ledger. Its own contract is asserted in golden-fixtures.test.ts.
+  .filter((fx) => fx.kind !== 'sensitivity');
 
 // Release 3a Task 9: a generic programme fitted to any term_months, sitting well
 // inside the spec §6 window bound (finish by term-2) — every package starts at
@@ -386,5 +396,128 @@ describe('developer profit break-even (spec §5.12)', () => {
     expect(run.model.redemption_balance_at_disposal_pence).toBeNull();
     expect(run.metrics.senior_breakeven_pence).toBeNull();
     expect(run.metrics.developer_breakeven_pence).not.toBeNull();
+  });
+});
+
+// Release 4a Task 8 (spec §12, calc 2.4.0): the sensitivity suite is pinned exactly for
+// one document (Fixture K, over Fixture F). These invariants instead assert §12's
+// *properties* hold for every document in the corpus — the base-case identity (§12.5),
+// facility-and-equity invariance in every cell (§12.2), total tornado ordering (§12.4)
+// and reproducibility (§1.4) — which is what would catch a regression on a deal shaped
+// unlike Fixture F, that Fixture K alone cannot.
+//
+// `fixtures` (built above, §-level top of file) already excludes Fixture K by kind —
+// it names a `base_fixture` rather than carrying its own `inputs` document (§2.1 of
+// model-governance.md) — so this just re-exposes the inputs documents.
+function fixtureInputsCorpus(): AnyCalculatorInputs[] {
+  return fixtures.map((fx) => fx.inputs);
+}
+
+describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
+  // Every pipeline-shaped fixture in the corpus, not just Fixture F. Includes Fixture A
+  // (all-cash, no debt at all) — every invariant below must therefore hold for a
+  // zero-facility document too, not only for financed deals.
+  const documents = fixtureInputsCorpus();
+
+  it('reports a base case identical to the unadjusted appraisal (§12.5)', () => {
+    for (const inputs of documents) {
+      const plain = runAppraisal(inputs).metrics;
+      const { base } = runSensitivity(inputs);
+      expect(base.profit_pence).toBe(plain.profit_pence);
+      expect(base.peak_debt_pence).toBe(plain.peak_debt_pence);
+      expect(base.flags).toEqual(plain.flags.map((f) => f.code));
+    }
+  });
+
+  it('holds the committed facility and equity invariant in every cell (§12.2)', () => {
+    for (const inputs of documents) {
+      const config = DEFAULT_SENSITIVITY_CONFIG;
+      for (const rowStep of config.rows.steps) {
+        for (const colStep of config.cols.steps) {
+          const levered = applyScenario(inputs, {
+            label: '',
+            gdv_adjustment_pct: colStep,
+            construction_cost_adjustment_pct: rowStep,
+            timeline_adjustment_months: 0,
+            interest_rate_adjustment_pct: 0,
+          });
+          expect(levered.finance.committed_net_facility_pence)
+            .toBe(inputs.finance.committed_net_facility_pence);
+          expect(levered.finance.committed_gross_facility_pence)
+            .toBe(inputs.finance.committed_gross_facility_pence);
+          expect(levered.finance.day_one_advance_pence)
+            .toBe(inputs.finance.day_one_advance_pence);
+          expect(levered.equity_sources.map((e) => e.amount_pence))
+            .toEqual(inputs.equity_sources.map((e) => e.amount_pence));
+        }
+      }
+    }
+  });
+
+  it('sorts the tornado totally and deterministically (§12.4)', () => {
+    for (const inputs of documents) {
+      const forward = runSensitivity(inputs);
+      const shuffled = runSensitivity(inputs, {
+        ...DEFAULT_SENSITIVITY_CONFIG,
+        tornado: [...DEFAULT_SENSITIVITY_CONFIG.tornado].reverse(),
+      });
+      expect(shuffled.tornado.map((b) => b.lever)).toEqual(forward.tornado.map((b) => b.lever));
+      const spans = forward.tornado.map((b) => b.span_pence);
+      expect([...spans].sort((a, b) => b - a)).toEqual(spans);
+    }
+  });
+
+  it('is reproducible — two runs of one document agree exactly (§1.4)', () => {
+    for (const inputs of documents) {
+      expect(runSensitivity(inputs)).toEqual(runSensitivity(inputs));
+    }
+  });
+
+  // Release 4a Task 8 addition (not in the original brief): a deliberate regression
+  // guard for spec §6's odd-window rounding rule. Every pre-existing fixture in the
+  // corpus runs term_months: 12, which yields a 10-month (even) construction window —
+  // ceil and floor agree on an even number, so nothing above, and nothing else in the
+  // whole corpus, can ever exercise "odd windows round up" (§6: professional/statutory
+  // window = ceil(constructionWindow / 2), not floor). A -3 month timeline lever on
+  // Fixture F (a plain v3 document with no explicit `programme`, so buildSchedule takes
+  // the auto-window branch at schedule.ts:58) turns its 12-month term into 9 months, so
+  // constructionWindow = max(1, 9 − 2) = 7 (odd) and, per §6, professionalWindow =
+  // ceil(7 / 2) = 4 — derived here from the rule itself, not read off the engine and
+  // copied back in. Guarded inside this sensitivity-suite file, rather than the general
+  // schedule tests, because the timeline lever is what the corpus needed to reach an odd
+  // window in the first place.
+  it('derives a 4-month professional/statutory window from an odd 7-month construction window (§6 odd-window rounding)', () => {
+    const fx = fixtures.find((f) => f.name.startsWith('F —'));
+    expect(fx).toBeDefined();
+    expect('programme' in fx!.inputs).toBe(false); // must take the auto-window branch
+
+    const levered = applyScenario(fx!.inputs, {
+      label: '',
+      gdv_adjustment_pct: 0,
+      construction_cost_adjustment_pct: 0,
+      timeline_adjustment_months: -3,
+      interest_rate_adjustment_pct: 0,
+    });
+    expect(levered.finance.term_months).toBe(9);
+
+    const schedule = buildSchedule(levered);
+    expect(schedule.term_months).toBe(9);
+
+    // constructionWindow = max(1, term − 2) = 7 (odd); professionalWindow =
+    // ceil(7 / 2) = 4, per §6's "odd windows round up" rule. Both spreads are placed
+    // starting at month index 1, so the professional window occupies exactly indices
+    // 1..4 of a 9-month schedule.
+    const professionalPresence = schedule.uses.map((m) => m.professional_pence > 0);
+    expect(professionalPresence).toEqual([
+      false, true, true, true, true, false, false, false, false,
+    ]);
+
+    // Statutory month 0 also always carries the flat prior-approval fee (unconditional,
+    // schedule.ts:46), so the window check excludes it and looks only at the spread
+    // that starts at month 1 — the same 4-month window as professional.
+    const statutoryWindowMonths = schedule.uses
+      .slice(1)
+      .filter((m) => m.statutory_pence > 0).length;
+    expect(statutoryWindowMonths).toBe(4);
   });
 });
