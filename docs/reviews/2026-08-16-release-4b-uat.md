@@ -1,7 +1,7 @@
 # Release 4b — UAT record
 
 **Date:** 16 August 2026
-**Build under test:** branch `release-4b-ui-memo` at `11ef103`, cut from `main` at `d7ad919`
+**Build under test:** branch `release-4b-ui-memo` at `11ef103` (branch head is now `e60c05e`), cut from `main` at `d7ad919`
 **Environment:** Docker compose stack on localhost. `docker restart commercial-resi-analyser-frontend-1` run before testing — Windows bind mounts do not propagate inotify, so the container otherwise serves a stale Vite module graph.
 **Subject project:** `da471fca-3901-4c35-9027-2a5c08b2d493` — 9 & 9A Stonegate, York. Chosen because it carries a saved **inputs v3** snapshot (5 units, 12-month term, £527,437 committed net facility), so the page is exercised through the v3→v4 migration path rather than on a v4-native document.
 
@@ -29,7 +29,9 @@ Screenshots: `docs/reviews/assets/2026-08-16-release-4b/`.
 | 12 | Memo §10 has the tornado above the two matrices, and the matrices' numbers are unchanged from `main` | **PASS — split evidence, see below** | Programmatic PDF probe |
 | 13 | A timeline step exceeding the deal's term is refused | **PASS** | `03-term-guard.jpg` — "Every timeline step must leave at least one month of term (this deal runs 12 months)." Matrix and tornado both hidden; editor stays on screen above the panel. |
 
-**Defects found: none.** One pre-existing engine behaviour was surfaced — recorded below, not a Release 4b defect.
+**Defects found by this UAT: none.** One pre-existing engine behaviour was surfaced — recorded below, not a Release 4b defect.
+
+> **Read with the implementation report.** The whole-branch review run *after* this UAT found a real defect the UAT did not: for a deal with a term of three months or less, the memo printed a silently-clamped tornado figure, and page 9 dead-ended on first render. Every project in this environment runs a 12-month term, so no amount of clicking here would have reached it — the boundary needed a deliberately constructed fixture. Fixed in `7e6344e`; see the implementation report. **A clean UAT is evidence about the paths walked, not about the ones that were not.**
 
 ---
 
