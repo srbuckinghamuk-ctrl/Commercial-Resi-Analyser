@@ -169,12 +169,28 @@ def test_tornado_order_is_independent_of_input_order():
 # asserting the specific flag (rather than "either flag") keeps this test able to catch
 # a regression that quietly loosens the GROSS facility for stressed cells, which an
 # either-flag assertion could not.
+#
+# Round-2 fix: the peak-debt and profit comparisons below are strict (> / <), not loose
+# (>= / <=). A non-strict comparison is satisfied by equality, and equality is exactly
+# what a no-op regression produces: if every lever silently stopped being applied, the
+# "worst corner" cell would degenerate to being numerically identical to the base case,
+# `>=`/`<=` would pass on that equality, and the conditional funding_gap assertion below
+# would never even run (Fixture F's base peak debt already sits under the committed net
+# facility, so the degenerated worst corner would too). This was found empirically, not
+# theoretically: patching _measure to discard its `levers` argument and rerunning the
+# suite left every test passing under `>=`. Construction cost +15% strictly increases
+# spend and GDV -15% strictly reduces sale proceeds, so both peak debt and profit are
+# guaranteed to move under a correctly-applied worst corner -- `>`/`<` is safe here and
+# fails, as required, under the no-op.
 def test_never_resizes_the_facility_whatever_the_cell():
     inputs = _inputs()
     result = run_sensitivity(inputs)
-    base_peak = run_appraisal(inputs).metrics.peak_debt_pence
+    base = run_appraisal(inputs).metrics
     worst = result.matrix[4][0]  # cost +15%, GDV -15%
-    assert worst.peak_debt_pence >= base_peak
+    assert worst.peak_debt_pence > base.peak_debt_pence
+    # A more direct proof the levers were actually applied: cost up and GDV down
+    # cannot leave profit unchanged, whereas a no-op regression leaves it identical.
+    assert worst.profit_pence < base.profit_pence
     # The committed facility is an input, so the only way a cell can exceed it is a
     # flag. Fixture F is a development-finance deal, so this is always a real number
     # at runtime; the schema types it nullable only for funding sources that lack a
