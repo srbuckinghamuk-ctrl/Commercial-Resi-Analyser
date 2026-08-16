@@ -85,7 +85,7 @@ Whether the underlying behaviour is correct is a separate question. This project
 
 | Gate | Result |
 |---|---|
-| `npx vitest run` | **813 passed** (44 files) — baseline 776 + 37 new |
+| `npx vitest run` | **827 passed** (44 files) — baseline 776 + 51 new (13 UAT-time, +14 from the final fix wave) |
 | `python -m pytest -q` | **750 passed** — unchanged, as required |
 | `npx tsc -b` | clean |
 | `npx eslint .` | clean |

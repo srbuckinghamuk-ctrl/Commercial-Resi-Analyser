@@ -1,7 +1,7 @@
 # Release 4b — implementation report
 
 **Date:** 16 August 2026
-**Branch:** `release-4b-ui-memo`, cut from `main` at `d7ad919`, head `11ef103`
+**Branch:** `release-4b-ui-memo`, cut from `main` at `d7ad919`, head `7e6344e`
 **Plan:** `docs/superpowers/plans/2026-08-16-release-4b-ui-memo.md`
 **Design:** `docs/superpowers/specs/2026-08-16-release-4-design.md` §5
 **UAT:** `docs/reviews/2026-08-16-release-4b-uat.md`
@@ -32,12 +32,14 @@ Exit, Risk, Deal Spider and Investor renumbered to 10–13.
 | `f19716d` | `SensitivityPage` — tornado and two-way matrix |
 | `254a762` | Editable axes, as view state only |
 | `11ef103` | Sensitivity becomes calculator page 9 |
+| `1eca400` | UAT record and this report |
+| `7e6344e` | Final-review fixes: unsound tornado bars omitted in both surfaces (see below) |
 
 ## Gates
 
 | Gate | Result |
 |---|---|
-| `npx vitest run` | **813 passed**, 44 files (baseline 776; +37) |
+| `npx vitest run` | **827 passed**, 44 files (baseline 776; +51) |
 | `python -m pytest -q` | **750 passed** — unchanged, as required |
 | `npx tsc -b` | clean |
 | `npx eslint .` | clean |
@@ -45,7 +47,33 @@ Exit, Risk, Deal Spider and Investor renumbered to 10–13.
 | Scope | nothing outside `frontend/` and `docs/` |
 | `git stash list` | unchanged throughout (one pre-existing entry) |
 
-Every task passed an independent spec-compliance and code-quality review. One fix round was needed, on Task 4.
+Every task passed an independent spec-compliance and code-quality review. One fix round was needed on Task 4, and one fix wave after the final whole-branch review.
+
+---
+
+## The final review caught a defect this release created
+
+The per-task reviews were clean, the UAT was clean, and the whole-branch review still found something neither could see — because it was the *interaction* between two tasks, on a class of deal neither task's fixture covered.
+
+**R4b put the timeline lever into the lender-facing PDF for the first time.** Before this release §10 was cost × GDV only; the tornado added in Task 3 introduced `timeline ±3 months`. Task 6 then decided, correctly, that a silently-clamped timeline figure was too misleading to show on screen — and guarded the page. Nobody guarded the memo. For a deal with `term_months ≤ 3` (which the validator permits: `term_months >= 1`), the PDF printed the clamped one-month figure as "Profit at low" with a Swing derived from it, uncaveated, in bold. Verified against fixture F:
+
+```
+term=3   Timeline  -3 to +3 months   £265,569   £250,825   £14,744
+term=2   Timeline  -3 to +3 months   £265,569   £253,370   £12,199
+term=1   Timeline  -3 to +3 months   £265,569   £255,865    £9,705
+```
+
+The £265,569 is identical in all three — it is the clamp, not a −3 month result. **One containment, two surfaces, opposite answers.**
+
+The same review found the guard's other edge: because it folded the tornado's *fixed* ±3 into its validation gate, a 3-month deal killed page 9 on first render with the axes untouched, showing an error about timeline steps above an editor containing no timeline step, and a Reset button that could not help. The two-way matrix was perfectly computable throughout.
+
+**Both were fixed by one rule, in one place.** `isUnsoundTornadoBar(termMonths, bar)` now lives in `lib/sensitivity-format.ts` — the shared presentation module both surfaces already import — and an unsound bar is *omitted with the omission stated* rather than printed (memo) or allowed to suppress the whole suite (page). The page's gate now covers only the user-editable axes, which is what the editor can actually fix; a user-entered axis step that empties the term is still refused, as before.
+
+A third finding closed the last mile of the release's own guarantee: nothing tested that the PDF actually printed `sensitivityTables()`' output. Swapping `pocRows` for `ltgdvRows` in the wiring left all 813 tests green. It no longer does — the re-review confirmed this by applying that exact mutation.
+
+The re-review verified the boundary adversarially: the predicate fires at exactly `term + step < 1`, mutating it to `< 0` or `< 2` breaks tests in both directions, and the low/high column swap now fails too.
+
+**The lesson worth keeping:** the per-task reviews could not have caught this. Task 3 added the tornado to the memo and Task 6 guarded the page; each was correct in isolation. Only a whole-branch pass with a fixture outside every task's happy path saw that the release had shipped a number to lenders it had already judged unfit for the screen.
 
 ---
 
@@ -89,12 +117,19 @@ This is worse than a throw. A throw is visible; a clamp prints a number a reader
 
 **Deferred minor review findings**, none blocking merge, all recorded in the SDD ledger and triaged by the final whole-branch review:
 
-- Tornado memo tests shape-check endpoint and swing values but pin no exact figure; a wrong-cell bug would escape unless it also broke ordering or sign.
-- No test exercises `safeRunSensitivity`'s non-`Error` throw normalisation branch, though `safe-run.test.ts` has an equivalent.
+*Fixed in the final wave (`7e6344e`):* the tornado value pin and the `parseSteps` docstring.
+
+*Triaged as leave-alone by the final review, carried to R5:*
+
+- No test exercises `safeRunSensitivity`'s non-`Error` throw normalisation branch, though `safe-run.test.ts` covers the identical construct.
 - `SENSITIVITY_METRICS.kind` and `SensitivityMetrics`'s nullability are two independent sources of truth; `penceToPounds(null)` would coerce to `£0` if they ever diverged (unreachable today).
-- `parseSteps`'s docstring claims malformed input is never dropped, but empty segments from a double or trailing comma are dropped. The behaviour is arguably the right call mid-typing; the comment overstates it.
 - An unreachable `outcome === null` fallback branch in `SensitivityPage`, inherited from the plan text.
 - The first `ConversionCalculator` test asserts button presence rather than tab order.
+- **Colour thresholds are duplicated, not shared** — `< 0` red / `< 15` amber for profit-on-cost and `> 75` / `> 65` for LTGDV exist as literals in both the memo and the page, so a change to one silently diverges. `sensitivity-format.ts` is the natural home.
+- **Duplicate axis steps produce duplicate React keys.** `validateSensitivityConfig` does not reject repeated steps, so typing `-5, -5` renders two identical columns under identical captions and triggers a key-collision warning.
+- The page holds `DEFAULTS.tornado` as a shared module-level reference, which is the pattern `defaultSensitivityConfig()`'s own comment argues against. Latent only — nothing mutates it today.
+- The memo prints `n/a` for a null percentage where the page prints `—`. Each is internally consistent with its medium; it is the one place the two surfaces present the same engine output differently.
+- A base-anchored half-bar (showing the sound endpoint when only one endpoint of a tornado bar clamps) would recover information the omission rule currently discards. That redefines swing, so it is a feature, not a fix.
 
 ---
 
