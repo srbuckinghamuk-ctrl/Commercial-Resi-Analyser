@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.financial_model import run_appraisal
+from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     LEVER_ORDER,
@@ -19,7 +20,7 @@ from app.financial_model.sensitivity import (
     run_sensitivity,
     validate_sensitivity_config,
 )
-from app.financial_model.types import parse_calculator_inputs
+from app.financial_model.types import ScenarioOverrides, parse_calculator_inputs
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 
@@ -106,6 +107,10 @@ def test_matrix_is_shaped_by_the_axes():
     assert (result.matrix[4][4].row_step, result.matrix[4][4].col_step) == (15, 5)
 
 
+def test_echoes_the_resolved_config_back():
+    assert run_sensitivity(_inputs()).config == DEFAULT_SENSITIVITY_CONFIG
+
+
 def test_base_case_is_the_unadjusted_appraisal():
     """Spec Sec 12.5."""
     inputs = _inputs()
@@ -147,6 +152,52 @@ def test_tornado_order_is_independent_of_input_order():
         TornadoRange(lever="gdv", low=-10, high=10),
     ]))
     assert [b.lever for b in forward.tornado] == [b.lever for b in reversed_.tornado]
+
+
+# Spec Sec 12.2 made constructive: the committed facility is identical in every cell,
+# so a stressed cell reports facility_exceeded rather than quietly borrowing more.
+#
+# What was learned running this against Fixture F: the worst corner (construction_cost
+# +15%, gdv -15%) drives peak_debt_pence to 63,448,870p, which breaches the committed
+# NET facility (60,000,000p) but not the committed GROSS facility (66,000,000p).
+# facility_exceeded (engine.py) is gated on the gross facility, because capitalised
+# interest/fees are allowed to occupy the net-to-gross headroom without tripping it --
+# capitalisation adds straight to the closing balance and never passes through the
+# net-capped draw. The shortfall against the net facility (the ceiling that actually
+# gates new cash draws) is what shows up, correctly, as funding_gap. So for this
+# fixture the deterministic, reproducible flag is funding_gap, not facility_exceeded --
+# asserting the specific flag (rather than "either flag") keeps this test able to catch
+# a regression that quietly loosens the GROSS facility for stressed cells, which an
+# either-flag assertion could not.
+def test_never_resizes_the_facility_whatever_the_cell():
+    inputs = _inputs()
+    result = run_sensitivity(inputs)
+    base_peak = run_appraisal(inputs).metrics.peak_debt_pence
+    worst = result.matrix[4][0]  # cost +15%, GDV -15%
+    assert worst.peak_debt_pence >= base_peak
+    # The committed facility is an input, so the only way a cell can exceed it is a
+    # flag. Fixture F is a development-finance deal, so this is always a real number
+    # at runtime; the schema types it nullable only for funding sources that lack a
+    # committed facility (e.g. cash deals), which Fixture F is not.
+    committed = inputs.finance.committed_net_facility_pence
+    if worst.peak_debt_pence > committed:
+        assert "funding_gap" in worst.flags
+
+    # The constructive form of Sec 12.2, independent of any flag: the levered document
+    # itself must carry the same committed facility and the same raised equity as the
+    # base document. This fails if and only if a lever actually reached one of these
+    # fields -- it cannot be satisfied by accident the way a flag-based check could.
+    levered = apply_scenario(inputs, ScenarioOverrides(
+        label="",
+        gdv_adjustment_pct=worst.col_step,
+        construction_cost_adjustment_pct=worst.row_step,
+        timeline_adjustment_months=0,
+        interest_rate_adjustment_pct=0,
+    ))
+    assert levered.finance.committed_net_facility_pence == inputs.finance.committed_net_facility_pence
+    assert levered.finance.committed_gross_facility_pence == inputs.finance.committed_gross_facility_pence
+    assert levered.finance.day_one_advance_pence == inputs.finance.day_one_advance_pence
+    assert levered.equity_sources == inputs.equity_sources
 
 
 def test_invalid_config_raises():
