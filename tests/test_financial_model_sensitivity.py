@@ -476,6 +476,20 @@ def test_base_document_failure_is_typed():
     assert str(exc.value).startswith("Invalid base document: ")
 
 
+def test_base_document_failure_deduplicates_a_repeated_identical_message():
+    """F1 follow-up, mirror of the TS suite: validate_inputs emits one issue per
+    offending element (one per phased-sales tranche here) with an identical message.
+    All three of fixture I's tranches pushed past the term the same way must not
+    repeat the same sentence three times in the thrown message."""
+    inputs = _fixture_i_inputs()
+    for tranche in inputs.sales_phasing.tranches:
+        tranche.month_offset = 999
+    with pytest.raises(InvalidBaseDocumentError) as exc:
+        run_sensitivity(inputs)
+    message = str(exc.value)
+    assert message.count("Tranche month must be a whole month between") == 1
+
+
 def test_the_two_failures_are_distinguishable():
     """A consumer catching one and re-raising the rest depends on this."""
     inputs = _inputs()

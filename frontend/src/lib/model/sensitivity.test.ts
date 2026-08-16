@@ -9,7 +9,7 @@ import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
-import type { AnyCalculatorInputs } from './finance-types';
+import type { AnyCalculatorInputs, SalesPhasingInputs } from './finance-types';
 
 /** A deep copy of the defaults, so a test that mutates one field cannot leak into another. */
 function config(overrides: Partial<SensitivityConfig> = {}): SensitivityConfig {
@@ -156,6 +156,12 @@ function allCashInputs(): AnyCalculatorInputs {
   return JSON.parse(readFileSync(FIXTURE_A, 'utf-8')).inputs as AnyCalculatorInputs;
 }
 
+const FIXTURE_I = resolve(__dirname, '../../../../fixtures/financial-model/i-phased-sales.json');
+
+function phasedSalesInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_I, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
 // R6: the suite has exactly two documented failures (§12.6 config, §12.7 base
 // document). Consumers must be able to tell them apart — and tell both apart from a
 // genuine defect — without matching on message text, which is the coupling that let
@@ -181,6 +187,21 @@ describe('runSensitivity — the two documented failures are typed (§12.6, §12
     try { runSensitivity(inputs); } catch (e) { caught = e; }
     expect(caught).toBeInstanceOf(InvalidBaseDocumentError);
     expect((caught as Error).message).toMatch(/^Invalid base document: /);
+  });
+
+  // F1 follow-up: validateInputs emits one issue per offending element (one per
+  // phased-sales tranche here), and those issues carry an identical message. All
+  // three of fixture I's tranches pushed past the term the same way must not repeat
+  // the same sentence three times in the thrown message.
+  it('deduplicates a repeated identical message in InvalidBaseDocumentError', () => {
+    const inputs = phasedSalesInputs() as AnyCalculatorInputs & { sales_phasing: SalesPhasingInputs };
+    for (const tranche of inputs.sales_phasing.tranches) tranche.month_offset = 999;
+    let caught: unknown;
+    try { runSensitivity(inputs); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(InvalidBaseDocumentError);
+    const message = (caught as Error).message;
+    const occurrences = message.split('Tranche month must be a whole month between').length - 1;
+    expect(occurrences).toBe(1);
   });
 
   // The two must not be mistakable for each other: a consumer catching one and
