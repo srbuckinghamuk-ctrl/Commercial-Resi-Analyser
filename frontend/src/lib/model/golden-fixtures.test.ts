@@ -247,11 +247,15 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
   // (docs/financial-model/test-cases.md, "Fixture K — sensitivity suite").
   it('reports the hand-derived corner cells', () => {
     for (const corner of k.expected_corner_cells) {
-      const cell = result.matrix
+      // Matched by filter-and-count rather than `.find`, mirroring the Python assertion:
+      // a matrix that enumerated a grid position twice would silently satisfy a
+      // first-match lookup, and a corner assertion that can pass against a duplicated
+      // cell is not pinning the position it names.
+      const matches = result.matrix
         .flat()
-        .find((c) => c.row_step === corner.row_step && c.col_step === corner.col_step);
-      expect(cell, `corner ${corner.row_step}/${corner.col_step}`).toBeDefined();
-      const found = cell as unknown as Record<string, unknown>;
+        .filter((c) => c.row_step === corner.row_step && c.col_step === corner.col_step);
+      expect(matches, `corner ${corner.row_step}/${corner.col_step}`).toHaveLength(1);
+      const found = matches[0] as unknown as Record<string, unknown>;
       for (const [key, expected] of Object.entries(corner)) {
         if (key === 'row_step' || key === 'col_step') continue;
         expect(found[key], `corner ${corner.row_step}/${corner.col_step} → ${key}`).toEqual(expected);

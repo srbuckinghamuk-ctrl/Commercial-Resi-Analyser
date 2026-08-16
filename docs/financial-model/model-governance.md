@@ -59,6 +59,12 @@ Any change to a formula in this codebase — however small — follows this orde
    changes one without the other must fail CI (golden-fixture parity — §6.3 below) rather than
    merge and drift.
 
+This procedure is itself demonstrated in the implementation history of this release: the Fixture E
+arrangement fee (recomputed to 2% × £350,000 = £7,000 after a brief error was caught mid-task) and
+the Fixture F gross-headroom cap (added because spec §4.2(c) wasn't originally reflected in the
+ledger) both went through spec → fixture (with hand derivation) → both engines, recorded in
+`.superpowers/sdd/2026-08-12-release-1-p0-financial-correction/progress.md` (Task 4 entries).
+
 ### 2.1 Recorded exception — Fixture K's derivation split (R4, 2026-08-16)
 
 Fixture K (`k-sensitivity.json`, spec §12) does not hand-derive all thirty-four of its
@@ -84,19 +90,15 @@ brainstorming session; see `docs/superpowers/specs/2026-08-16-release-4-design.m
 It licenses no other fixture: a change to appraisal *arithmetic* still hand-derives in
 full.
 
-The worksheet is in `test-cases.md` ("Fixture K — sensitivity suite"). It records the
-full twelve-month interest ledger of both corners and of all eight tornado endpoints,
-and it opens by re-deriving Fixture F from scratch and reproducing all eight of F's
-pinned figures — the method check that licenses everything after it. Every figure was
-derived and written down before either engine was run; both engines then agreed with all
+The worksheet is in `test-cases.md` ("Fixture K — sensitivity suite"). It tabulates the
+full twelve-month ledger of each corner month by month; for the tornado it gives each
+endpoint's interest lines and totals, except the two `gdv` endpoints, whose ledgers are
+Fixture F's unchanged and which are derived by that identity instead. It opens by
+re-deriving Fixture F from scratch and reproducing all eight of F's pinned figures — the
+method check that licenses everything after it. Every figure was derived and written
+down before either engine was run; both engines then agreed with all
 of them at the first attempt, which is the outcome §1's asymmetry is designed to make
 meaningful rather than tautological.
-
-This procedure is itself demonstrated in the implementation history of this release: the Fixture E
-arrangement fee (recomputed to 2% × £350,000 = £7,000 after a brief error was caught mid-task) and
-the Fixture F gross-headroom cap (added because spec §4.2(c) wasn't originally reflected in the
-ledger) both went through spec → fixture (with hand derivation) → both engines, recorded in
-`.superpowers/sdd/2026-08-12-release-1-p0-financial-correction/progress.md` (Task 4 entries).
 
 ## 3. Versioning
 
