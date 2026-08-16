@@ -4,7 +4,7 @@ import type { Project, EligibilityAssessment } from '../types';
 import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
-import { runSensitivity } from './model/sensitivity';
+import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
 import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
@@ -1264,21 +1264,27 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
-  // §12.7/§12.5: runSensitivity (and so sensitivityTables) throws when the *base*
-  // document itself fails validation — a saved appraisal can reach this function in
-  // that state (e.g. `finance.equity_draw_rule: 'pari_passu'`, a migration state
-  // some historical documents still carry), and other error-severity issues besides.
-  // A ten-section memo should not vanish for one section's sake: the DRAFT watermark
-  // already flags a document in this state (`run.reconciliation.report_safe`), so
-  // §10 degrades — states that the analysis was not produced and the engine's own
-  // reason, in the same omission-stated style the rest of this section already uses
-  // for a single dropped bar — rather than the whole export failing.
+  // §12.7/§12.5: runSensitivity throws when the *base* document itself fails validation
+  // — a saved appraisal can reach this function in that state (e.g.
+  // `finance.equity_draw_rule: 'pari_passu'`, a migration state some historical
+  // documents still carry). A ten-section memo should not vanish for one section's
+  // sake: the DRAFT watermark already flags a document in this state
+  // (`run.reconciliation.report_safe`), so §10 degrades rather than the whole export
+  // failing.
+  //
+  // R6: that degradation answers exactly one condition, so it catches exactly one type.
+  // Anything else thrown from the suite is a defect, and rendering a defect as an
+  // orderly §12.7 omission in a lender-facing PDF is how a defect stays unfound —
+  // it propagates instead. `InvalidSensitivityConfigError` (§12.6) is deliberately not
+  // caught either: this memo only ever passes the fixed default config, so reaching it
+  // would itself be a defect.
   let sens: MemoSensitivityTables | null = null;
   let sensitivityFailureMessage: string | null = null;
   try {
     sens = sensitivityTables(inputs);
   } catch (err) {
-    sensitivityFailureMessage = err instanceof Error ? err.message : String(err);
+    if (!(err instanceof InvalidBaseDocumentError)) throw err;
+    sensitivityFailureMessage = err.message;
   }
 
   if (sens) {

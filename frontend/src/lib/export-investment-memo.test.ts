@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from './export-investment-memo';
@@ -6,6 +6,8 @@ import type { Project, EligibilityAssessment } from '../types';
 import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './model';
 import { runAppraisal, migrateInputs } from './model';
 import { runSensitivity } from './model/sensitivity';
+import * as sensitivityModule from './model/sensitivity';
+import { InvalidBaseDocumentError } from './model/sensitivity';
 import { LEVER_LABEL } from './sensitivity-format';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
@@ -949,6 +951,44 @@ describe('generateInvestmentMemo — base document fails validation (spec §12.7
 
     // The rest of the ten-section memo is unaffected — this is a §10 degrade, not a
     // whole-document failure.
+    expect(text).toContain('Senior Debt Position');
+  });
+
+  // R6: §10's degradation is the documented response to ONE documented condition. Any
+  // other throw is a defect, and a defect that renders as an orderly §12.7 omission in
+  // a lender-facing PDF is a defect nobody will ever be told about. The export must
+  // fail loudly instead.
+  it('propagates a failure that is not an invalid base document, rather than degrading §10', async () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureI = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'i-phased-sales.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV4 };
+    const inputs = structuredClone(fixtureI.inputs);
+    const run = runAppraisal(inputs);
+
+    // A stand-in for any engine defect: something thrown from inside the suite that is
+    // not one of its two documented failures.
+    const boom = new TypeError('cannot read properties of undefined (reading "flags")');
+    const spy = vi.spyOn(sensitivityModule, 'runSensitivity').mockImplementation(() => {
+      throw boom;
+    });
+    try {
+      expect(() => generateInvestmentMemo(mockProject, run, mockEligibility)).toThrow(boom);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // The counterpart: the one condition §10 does handle still degrades, and the other
+  // nine sections still print. This is R5's behaviour, re-pinned against the narrowed
+  // catch so a too-tight catch cannot pass Task 2 either.
+  it('still degrades §10 for the documented invalid-base-document failure', async () => {
+    const inputs = fixtureIWithInvalidBase();
+    const run = runAppraisal(inputs);
+    expect(() => runSensitivity(inputs)).toThrow(InvalidBaseDocumentError);
+
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('sensitivity analysis was not produced');
     expect(text).toContain('Senior Debt Position');
   });
 });
