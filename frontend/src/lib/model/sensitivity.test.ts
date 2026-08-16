@@ -340,6 +340,48 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     expect(levered.equity_sources).toEqual(inputs.equity_sources);
   });
 
+  // R4 carried an open question into three releases: peak_debt_pence looked unmoved by
+  // the cost lever on one project while TDC and profit moved, which reads like a lever
+  // that is not reaching the ledger. It is §12.2 working. peak_debt_pence is
+  // max(balance) (monthly-engine.ts:175) and the committed facility is invariant, so a
+  // facility drawn to its ceiling cannot take on the extra cost — it becomes a funding
+  // gap instead. Both halves are asserted here so the question stops being re-opened.
+  it('lets the cost lever move peak debt until the committed facility stops it (§12.2)', () => {
+    const inputs = fixtureFInputs();
+    const { matrix } = runSensitivity(inputs, {
+      ...DEFAULT_SENSITIVITY_CONFIG,
+      rows: { lever: 'construction_cost', steps: [0, 5, 10, 15] },
+      cols: { lever: 'gdv', steps: [0] },
+    });
+    // Asserted, not cast. R5 widened these fields to `number | null` precisely so a
+    // consumer has to handle the unmeasured case; a cast here would put back the
+    // silence that widening removed. Cost and GDV steps never invalidate a document,
+    // so all four are measured — and if that ever stops being true, this line says so.
+    const peaks = matrix.map((row) => {
+      const peak = row[0].peak_debt_pence;
+      expect(peak).not.toBeNull();
+      return peak as number;
+    });
+    const flags = matrix.map((row) => row[0].flags);
+
+    // Half one — the lever reaches the ledger. Strict, because a lever silently stopped
+    // being applied is exactly the regression that produces equality here.
+    expect(peaks[1]).toBeGreaterThan(peaks[0]);
+    expect(peaks[2]).toBeGreaterThan(peaks[1]);
+
+    // Half two — the ceiling bites. The step into +15% adds an order of magnitude less
+    // debt than the two before it, and the shortfall shows up as a funding gap rather
+    // than as more borrowing.
+    expect(peaks[3] - peaks[2]).toBeLessThan((peaks[2] - peaks[1]) / 2);
+    expect(flags[0]).not.toContain('funding_gap');
+    expect(flags[3]).toContain('funding_gap');
+
+    // And the ceiling itself never moved — the constructive form of §12.2.
+    expect(inputs.finance.committed_net_facility_pence).toBe(
+      fixtureFInputs().finance.committed_net_facility_pence,
+    );
+  });
+
   it('throws on an invalid config rather than computing a misleading grid', () => {
     expect(() => runSensitivity(fixtureFInputs(), {
       ...DEFAULT_SENSITIVITY_CONFIG,

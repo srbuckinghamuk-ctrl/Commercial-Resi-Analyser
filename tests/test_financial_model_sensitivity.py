@@ -241,6 +241,33 @@ def test_never_resizes_the_facility_whatever_the_cell():
     assert levered.equity_sources == inputs.equity_sources
 
 
+def test_cost_lever_moves_peak_debt_until_the_facility_stops_it():
+    """Spec Sec 12.2 -- mirror of the TS suite.
+
+    R4 left this open: peak_debt_pence looked unmoved by the cost lever on one project.
+    It is Sec 12.2 working. peak_debt_pence is max(balance) and the committed facility
+    is invariant, so a facility drawn to its ceiling turns extra cost into a funding gap
+    rather than into more debt.
+    """
+    cfg = SensitivityConfig(
+        rows=SensitivityAxis(lever="construction_cost", steps=[0, 5, 10, 15]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    )
+    matrix = run_sensitivity(_inputs(), cfg).matrix
+    peaks = [row[0].peak_debt_pence for row in matrix]
+    flags = [row[0].flags for row in matrix]
+
+    # Half one -- the lever reaches the ledger.
+    assert peaks[1] > peaks[0]
+    assert peaks[2] > peaks[1]
+
+    # Half two -- the ceiling bites, and the shortfall is a funding gap, not more debt.
+    assert peaks[3] - peaks[2] < (peaks[2] - peaks[1]) / 2
+    assert "funding_gap" not in flags[0]
+    assert "funding_gap" in flags[3]
+
+
 def test_invalid_config_raises():
     with pytest.raises(ValueError, match="different levers"):
         run_sensitivity(_inputs(), _config(rows=SensitivityAxis(lever="gdv", steps=[0])))
