@@ -222,7 +222,11 @@ export default function SensitivityPage({ inputs }: Props) {
   // narrows both endpoints to `MeasuredMetrics`, so every render site below can
   // read `.profit_pence` as a plain number with no cast.
   const measuredBars = tornado.filter(isMeasuredBar);
-  const omittedTornado = tornado.filter((bar) => bar.span_pence === null);
+  // The omitted-bar sentences, built once and reused below both to decide whether the
+  // note paragraph renders at all and to print it — rather than a third, separately
+  // maintained filter over the same `span_pence === null` condition `omittedTornadoNotes`
+  // already applies internally.
+  const tornadoNotes = omittedTornadoNotes(tornado);
 
   // One shared scale across every tornado endpoint and the base, so bar lengths
   // are comparable between levers rather than each bar filling its own row.
@@ -251,7 +255,7 @@ export default function SensitivityPage({ inputs }: Props) {
       {measuredBars.length > 0 && (
         <table
           aria-label="Single-lever sensitivity (tornado)"
-          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: omittedTornado.length > 0 ? 8 : 28 }}
+          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: tornadoNotes.length > 0 ? 8 : 28 }}
         >
           <thead>
             <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
@@ -320,9 +324,9 @@ export default function SensitivityPage({ inputs }: Props) {
           reasons (an emptied term vs. a negative rate), and only the engine knows
           which. If every bar were omitted this note prints alone, with no tornado
           table above it. */}
-      {omittedTornado.length > 0 && (
+      {tornadoNotes.length > 0 && (
         <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
-          {omittedTornadoNotes(tornado).join(' ')}
+          {tornadoNotes.join(' ')}
         </p>
       )}
 
