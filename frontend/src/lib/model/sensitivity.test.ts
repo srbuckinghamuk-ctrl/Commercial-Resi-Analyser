@@ -138,16 +138,24 @@ function fixtureFInputs(): AnyCalculatorInputs {
 describe('runSensitivity — the two documented failures are typed (§12.6, §12.7)', () => {
   it('raises InvalidSensitivityConfigError for a config that is not a grid', () => {
     const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
-    expect(() => runSensitivity(fixtureFInputs(), cfg)).toThrow(InvalidSensitivityConfigError);
+    // Asserted against the caught value, not through `toThrow`'s matcher: when the
+    // imported class name is unresolved, `toThrow(SomeUndefinedValue)` silently
+    // degrades to a generic "did it throw at all" check and would still pass
+    // against a plain `Error` — `toBeInstanceOf` does not have that failure mode.
+    let caught: unknown;
+    try { runSensitivity(fixtureFInputs(), cfg); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(InvalidSensitivityConfigError);
     // The message is unchanged — the memo prints it and safe-sensitivity's tests pin it.
-    expect(() => runSensitivity(fixtureFInputs(), cfg)).toThrow(/^Invalid sensitivity config: /);
+    expect((caught as Error).message).toMatch(/^Invalid sensitivity config: /);
   });
 
   it('raises InvalidBaseDocumentError when the base document fails validation', () => {
     const inputs = fixtureFInputs();
     inputs.finance.equity_draw_rule = 'pari_passu';
-    expect(() => runSensitivity(inputs)).toThrow(InvalidBaseDocumentError);
-    expect(() => runSensitivity(inputs)).toThrow(/^Invalid base document: /);
+    let caught: unknown;
+    try { runSensitivity(inputs); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(InvalidBaseDocumentError);
+    expect((caught as Error).message).toMatch(/^Invalid base document: /);
   });
 
   // The two must not be mistakable for each other: a consumer catching one and
