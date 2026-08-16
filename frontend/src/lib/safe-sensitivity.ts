@@ -23,8 +23,8 @@ export type SafeSensitivityResult =
  * finance.term_months to zero or below does not throw either. Since R5 (spec
  * §12.7), that levered document fails validation and the position comes back
  * unmeasured (null metrics, populated `validation_errors`) rather than throwing
- * or being silently clamped — see safe-sensitivity.test.ts. SensitivityPage's
- * own term guard (`isUnsoundTornadoBar`) predates that and is still in place.
+ * or being silently clamped — see safe-sensitivity.test.ts. SensitivityPage
+ * renders that position rather than refusing the whole grid over it.
  *
  * Callers must not substitute a stale or default grid for a failed one: spec §2
  * forbids showing a number that is not the current calculation.

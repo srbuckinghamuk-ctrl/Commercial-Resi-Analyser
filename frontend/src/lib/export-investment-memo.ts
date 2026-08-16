@@ -7,7 +7,7 @@ import { applyScenario } from './model/apply-scenario';
 import { runSensitivity } from './model/sensitivity';
 import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
 import {
-  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes, isUnsoundTornadoBar,
+  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
@@ -159,13 +159,13 @@ export interface MemoSensitivityTables {
   pocRows: string[][];
   ltgdvRows: string[][];
   /** [lever, range, profit at low, profit at high, swing] per spec §12.4 bar.
-   *  Excludes any bar `isUnsoundTornadoBar` flags — see `omittedTornadoLevers`. */
+   *  Excludes any bar with an unmeasured endpoint — see `omittedTornadoLevers`. */
   tornadoRows: string[][];
-  /** Levers dropped from `tornadoRows` because their fixed range would clamp
-   *  finance.term_months below one month (spec §12.6 gap, R5 backlog) — empty
-   *  when every bar is sound. The caller must print why these are missing
-   *  rather than silently shrinking the table. */
-  omittedTornadoLevers: SensitivityLever[];
+  /** Labels of the levers dropped from `tornadoRows` because the engine could not
+   *  measure one of their endpoints — the levered document failed validation
+   *  (spec §12.7) — empty when every bar is measured. The caller must print why
+   *  these are missing rather than silently shrinking the table. */
+  omittedTornadoLevers: string[];
 }
 
 export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
@@ -176,7 +176,6 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
   // export-investment-memo.test.ts pins that string for string.
   const result = runSensitivity(inputs);
   const { rows, cols } = result.config;
-  const termMonths = inputs.finance.term_months;
 
   const axisCaption = (lever: SensitivityLever, step: number) =>
     `${LEVER_SHORT[lever]} ${formatStepLabel(lever, step)}`;
@@ -192,14 +191,12 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
       ...row.map((cell) => cellText(cell, key)),
     ]);
 
-  // A bar whose fixed range would clamp the term (see isUnsoundTornadoBar) is
-  // dropped rather than printed: its "low" or "high" figure is not really the
-  // stated step, it's the one-month-clamp floor, indistinguishable from any
-  // other step that clamps to the same place.
-  const soundBars = result.tornado.filter((bar) => !isUnsoundTornadoBar(termMonths, bar));
+  // §12.7: the engine reports a bar with an unmeasured endpoint as having no span. The
+  // memo omits those rather than printing a partial bar, and says so beneath the table.
+  const soundBars = result.tornado.filter((bar) => bar.span_pence !== null);
   const omittedTornadoLevers = result.tornado
-    .filter((bar) => isUnsoundTornadoBar(termMonths, bar))
-    .map((bar) => bar.lever);
+    .filter((bar) => bar.span_pence === null)
+    .map((bar) => LEVER_LABEL[bar.lever]);
 
   // §12.7: a tornado endpoint can now be unmeasured (validation_errors non-empty), so
   // profit_pence and span_pence are nullable — this local tolerates that null without
@@ -1277,15 +1274,15 @@ export function generateInvestmentMemo(
     });
     y = lastAutoTableFinalY(doc) + 4;
   }
-  // A bar is omitted rather than printed when its fixed range would clamp
-  // finance.term_months below one month (isUnsoundTornadoBar) — the omission
-  // itself is stated so the gap is never silent. If every bar were omitted,
+  // A bar is omitted rather than printed when the engine could not measure one of
+  // its endpoints — the levered document failed validation (spec §12.7) — and the
+  // omission itself is stated so the gap is never silent. If every bar were omitted,
   // this line prints alone with no table above it (see sens.tornadoRows.length
   // guard above) rather than an empty or misleadingly-partial table.
   if (sens.omittedTornadoLevers.length > 0) {
     y = bodyText(
       y,
-      `${sens.omittedTornadoLevers.map((l) => LEVER_LABEL[l]).join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would leave a term of zero or less, which fails input validation rather than producing a measurement. See spec §12.7.`,
+      `${sens.omittedTornadoLevers.join(', ')} omitted from the tornado above: this deal's ${inputs.finance.term_months}-month term is too short for the fixed range shown — one endpoint would leave a term of zero or less, which fails input validation rather than producing a measurement. See spec §12.7.`,
     );
   }
   y += 4;

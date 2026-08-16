@@ -793,15 +793,15 @@ describe('generateInvestmentMemo — §10 sensitivity wiring', () => {
   });
 });
 
-// ── Release 4b final review, findings 1 & 2 ─────────────────────────────
+// ── Spec §12.7 (R5): cell validity ──────────────────────────────────────
 //
-// The engine clamps a timeline step that would drive finance.term_months
-// below one month instead of throwing (safe-sensitivity.test.ts pins this).
-// The default tornado's fixed -3-month low endpoint hits that clamp on any
-// deal with a term of three months or less. Before this fix, sensitivityTables()
-// printed the clamped, one-month figure as if it were the genuine "-3 months"
-// answer, with no caveat. The fix: drop the unsound bar and state why.
-describe('sensitivityTables — clamped-term tornado omission (finding 1)', () => {
+// The default tornado's fixed -3-month low endpoint drives finance.term_months
+// to zero or less on any deal with a term of three months or less. Under §12.7
+// that levered document fails validation and the endpoint is unmeasured rather
+// than clamped (safe-sensitivity.test.ts pins the unmeasured behaviour). A bar
+// with an unmeasured endpoint has no span (§12.4/§12.7): sensitivityTables()
+// drops it from the printed table and states why.
+describe('sensitivityTables — unmeasured tornado endpoint omission', () => {
   function shortTermInputs(): CalculatorInputsV2 {
     const inputs = baseInputs();
     inputs.finance.term_months = 3;
@@ -810,9 +810,9 @@ describe('sensitivityTables — clamped-term tornado omission (finding 1)', () =
 
   it('drops the timeline bar and reports it as omitted', () => {
     const tables = sensitivityTables(shortTermInputs());
-    expect(tables.omittedTornadoLevers).toEqual(['timeline']);
+    expect(tables.omittedTornadoLevers).toEqual(['Timeline']);
     expect(tables.tornadoRows.map((r) => r[0])).not.toContain('Timeline');
-    // GDV, construction cost and interest rate are untouched by the term guard.
+    // GDV, construction cost and interest rate remain measured.
     expect(tables.tornadoRows).toHaveLength(3);
   });
 
@@ -838,8 +838,8 @@ describe('sensitivityTables — clamped-term tornado omission (finding 1)', () =
     expect(tornadoSection).toContain('Timeline omitted');
     expect(tornadoSection).toContain('3-month term');
     // No Timeline *row* prints: the row's distinguishing unit ("months", plural
-    // — see formatRangeLabel) never appears, only the singular "month" inside
-    // the omission note's own prose ("one-month term").
+    // — see formatRangeLabel) never appears anywhere in the tornado section,
+    // including the omission note's own prose.
     expect(tornadoSection).not.toContain('months');
 
     // The two-way matrices are unaffected by the tornado omission.

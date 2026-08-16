@@ -31,28 +31,6 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   interest_rate: 'Rate',
 };
 
-/**
- * A tornado bar is unsound when it is the `timeline` lever and either endpoint
- * would drive `finance.term_months` below one month. Before spec §12.7 (R5), the
- * engine did not reject an empty term — it silently clamped to a one-month term
- * and returned a plausible-looking result, so several distinct steps produced the
- * identical one-month answer, indistinguishable from a genuine measurement. §12.7
- * has since closed that: such a levered document now fails validation and the
- * endpoint comes back unmeasured (null, with `validation_errors` populated) rather
- * than clamped — see safe-sensitivity.test.ts, which now pins the unmeasured
- * behaviour, not the old clamp. This function is a term-based heuristic that
- * predates that fix; it still governs what the memo and the calculator page drop
- * from the tornado, so it stays in place until Task 5 retires it in favour of the
- * engine's own `validation_errors`. Shared here so the two surfaces agree on what
- * "unsound" means in the meantime.
- */
-export function isUnsoundTornadoBar(
-  termMonths: number,
-  bar: { lever: SensitivityLever; low_step: number; high_step: number },
-): boolean {
-  return bar.lever === 'timeline' && (termMonths + bar.low_step < 1 || termMonths + bar.high_step < 1);
-}
-
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
 function decimalsFor(lever: SensitivityLever): number {
   return lever === 'interest_rate' ? 1 : 0;
