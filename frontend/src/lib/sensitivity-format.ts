@@ -75,3 +75,25 @@ export function flagShortCodes(codes: readonly FlagCode[]): string {
   ];
   return shorthand.filter(([code]) => codes.includes(code)).map(([, short]) => short).join(',');
 }
+
+/** The six fields of the §12 compact record, in the order the page offers them. */
+export type SensitivityMetricKey =
+  | 'profit_pence'
+  | 'profit_on_cost_pct'
+  | 'profit_on_gdv_pct'
+  | 'irr_annual_pct'
+  | 'ltgdv_developer_pct'
+  | 'peak_debt_pence';
+
+export const SENSITIVITY_METRICS: readonly {
+  key: SensitivityMetricKey;
+  label: string;
+  kind: 'money' | 'pct';
+}[] = [
+  { key: 'profit_on_cost_pct', label: 'Profit on Cost', kind: 'pct' },
+  { key: 'profit_pence', label: 'Profit', kind: 'money' },
+  { key: 'profit_on_gdv_pct', label: 'Profit on GDV', kind: 'pct' },
+  { key: 'irr_annual_pct', label: 'IRR (Annual)', kind: 'pct' },
+  { key: 'ltgdv_developer_pct', label: 'LTGDV (developer basis)', kind: 'pct' },
+  { key: 'peak_debt_pence', label: 'Peak Debt', kind: 'money' },
+];
