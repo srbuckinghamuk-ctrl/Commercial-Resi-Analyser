@@ -9,7 +9,7 @@ import {
   SCENARIO_COLORS,
   type SpiderResult,
 } from '../../lib/deal-spider';
-import { applyScenario } from '../../lib/apply-scenario';
+import { applyScenario } from '../../lib/model/apply-scenario';
 import { getEligibility } from '../../lib/api';
 import { penceToPounds } from '../../lib/format';
 

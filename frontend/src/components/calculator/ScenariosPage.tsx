@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { ScenarioOverrides } from '../../lib/conversion-types';
 import type { AppraisalRun, CalculatorInputsV4 } from '../../lib/model';
 import { runAppraisal } from '../../lib/model';
-import { applyScenario } from '../../lib/apply-scenario';
+import { applyScenario } from '../../lib/model/apply-scenario';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {

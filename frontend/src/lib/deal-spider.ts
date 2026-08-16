@@ -3,7 +3,7 @@ import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
 import { calculateCommercialSdlt } from './commercial-sdlt';
 import { calculateResidentialSdlt } from './residential-sdlt';
-import { applyScenario } from './apply-scenario';
+import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
 import type { AnyCalculatorInputs } from './model';
 import { CLASS_MA_AXES } from './spider-axes';

@@ -1,6 +1,13 @@
-import type { ScenarioOverrides } from './conversion-types';
-import type { AnyCalculatorInputs } from './model/finance-types';
+import type { ScenarioOverrides } from '../conversion-types';
+import type { AnyCalculatorInputs } from './finance-types';
 
+/**
+ * The lever-application rule of spec §12.1, shared by the named scenarios and the
+ * sensitivity suite. It lives inside `model/` — rather than beside the other `lib/`
+ * helpers, where it started — because §12.1 makes it normative, and governance §1
+ * requires the authoritative Python engine to mirror model modules file-for-file
+ * (`app/financial_model/apply_scenario.py`).
+ */
 /**
  * Applies a scenario's GDV / cost / timeline / rate adjustments to a v2, v3
  * or v4 inputs document, returning the same version it was given (Task 8:

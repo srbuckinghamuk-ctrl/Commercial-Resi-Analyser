@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyScenario } from './apply-scenario';
-import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from './conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV3, LenderValuation } from './model';
+import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from '../conversion-defaults';
+import type { CalculatorInputsV2, CalculatorInputsV3, LenderValuation } from './';
 
 function fixtureInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
