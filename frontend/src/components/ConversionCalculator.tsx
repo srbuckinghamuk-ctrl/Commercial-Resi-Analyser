@@ -16,6 +16,7 @@ import ProgrammePage from './calculator/ProgrammePage';
 import CashflowPage from './calculator/CashflowPage';
 import AppraisalSummaryPage from './calculator/AppraisalSummaryPage';
 import ScenariosPage from './calculator/ScenariosPage';
+import SensitivityPage from './calculator/SensitivityPage';
 import ExitStrategyPage from './calculator/ExitStrategyPage';
 import RiskRegisterPage from './calculator/RiskRegisterPage';
 import DealSpiderPage from './calculator/DealSpiderPage';
@@ -30,6 +31,7 @@ type CalcPage =
   | 'cashflow'
   | 'appraisal'
   | 'scenarios'
+  | 'sensitivity'
   | 'exit_strategy'
   | 'risk_register'
   | 'deal_spider'
@@ -44,10 +46,11 @@ const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'cashflow', label: 'Cashflow', num: 6 },
   { key: 'appraisal', label: 'Appraisal', num: 7 },
   { key: 'scenarios', label: 'Scenarios', num: 8 },
-  { key: 'exit_strategy', label: 'Exit', num: 9 },
-  { key: 'risk_register', label: 'Risk', num: 10 },
-  { key: 'deal_spider', label: 'Deal Spider', num: 11 },
-  { key: 'investor_summary', label: 'Investor', num: 12 },
+  { key: 'sensitivity', label: 'Sensitivity', num: 9 },
+  { key: 'exit_strategy', label: 'Exit', num: 10 },
+  { key: 'risk_register', label: 'Risk', num: 11 },
+  { key: 'deal_spider', label: 'Deal Spider', num: 12 },
+  { key: 'investor_summary', label: 'Investor', num: 13 },
 ];
 
 interface Props {
@@ -276,6 +279,9 @@ export default function ConversionCalculator({ project }: Props) {
         )}
         {activePage === 'scenarios' && (
           <ScenariosPage inputs={inputs} onChange={updateInputs} />
+        )}
+        {activePage === 'sensitivity' && (
+          <SensitivityPage inputs={inputs} />
         )}
         {activePage === 'exit_strategy' && (
           <ExitStrategyPage inputs={inputs} onChange={updateInputs} run={run} />

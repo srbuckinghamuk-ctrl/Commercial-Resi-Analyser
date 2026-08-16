@@ -49,7 +49,7 @@ export default function RiskRegisterPage({ inputs, onChange }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>10. Risk Register</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>11. Risk Register</h3>
 
       {risks.map((risk, i) => (
         <div key={risk.id} style={{ padding: 16, marginBottom: 12, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
