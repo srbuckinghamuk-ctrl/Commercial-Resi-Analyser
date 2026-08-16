@@ -29,6 +29,10 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
         out.conversion_costs.construction_cost_per_sqm_pence * cost_multiplier
     )
 
+    # ScenarioOverrides types this float, but a term is a whole month count and spec Sec 12.6
+    # rejects a fractional timeline step at input, so this cast only ever narrows a value that
+    # is already integral. The TS twin adds directly — this cast is the one deliberate divergence,
+    # and Sec 12.6 is what makes it safe.
     out.finance.term_months = inputs.finance.term_months + int(overrides.timeline_adjustment_months)
     out.finance.annual_interest_rate_pct = (
         inputs.finance.annual_interest_rate_pct + overrides.interest_rate_adjustment_pct

@@ -602,4 +602,7 @@ The following are input errors, not flags:
 - an axis with more than nine steps (the suite is bounded at 81 cells);
 - a row axis and a column axis naming the same lever;
 - a lever appearing more than once among the tornado bars;
-- a tornado bar whose low is not strictly less than its high, or either non-finite.
+- a tornado bar whose low is not strictly less than its high, or either non-finite;
+- a step, or a tornado bound, for the `timeline` lever that is not a whole number of months.
+
+The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline` lever is therefore constrained to whole months at the point of input rather than rounded later.

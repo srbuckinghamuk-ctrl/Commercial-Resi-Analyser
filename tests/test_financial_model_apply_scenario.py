@@ -78,3 +78,11 @@ def test_base_document_is_not_mutated():
     base = _base()
     apply_scenario(base, _overrides(gdv_adjustment_pct=-15.0))
     assert base.unit_mix.units[0].estimated_value_pence == 30000000
+
+
+def test_timeline_adjustment_as_integral_float_is_cast_safely():
+    """Spec Sec 12.6: timeline steps must be whole months, so a float like 3.0
+    is valid (integral value in float representation) and the int() cast is a no-op.
+    Fixture F has 12-month term; adding 3.0 yields 15."""
+    out = apply_scenario(_base(), _overrides(timeline_adjustment_months=3.0))
+    assert out.finance.term_months == 15
