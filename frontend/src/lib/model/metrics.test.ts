@@ -460,19 +460,75 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
     expect(m.acquisition_tax.date_basis).toBe('assumed_current');
   });
 
-  it('feeds the override into RLV via cost-excluding-land', () => {
+  // Fix round 1 (R8 Task 5). The brief's original test here asserted that an
+  // override *changes* the RLV. That is the opposite of what spec §3.18 defines,
+  // and it passed only while this engine computed the acquisition tax twice from
+  // two different band sets. §3.18: cost excluding land = TDC − purchase price −
+  // acquisition tax. Once both sites (deriveMetrics and calculateTotalAcquisition
+  // Cost) use the same figure, the tax cancels out of that expression, so the RLV
+  // is invariant to it *by design* — and §3.18's disclosed limitation records
+  // exactly this: "finance and SDLT within 'cost excluding land' are those of the
+  // appraised structure, not re-solved for the residual price (a fixed-point
+  // refinement is R3)". This has always been true for English documents. R8 makes
+  // it true for Welsh and Scottish ones too. Do not "fix" this back.
+  it('an override moves acquisition cost and TDC but leaves RLV unchanged (§3.18)', () => {
     const base = englishBase();
     const withOverride = migrateInputsToV5(
       JSON.parse(JSON.stringify(base)) as Record<string, unknown>,
     );
     withOverride.acquisition.acquisition_tax_override_pence = 0;
     withOverride.acquisition.acquisition_tax_override_reason = 'Group relief claimed.';
-    const overridden = runAppraisal(withOverride).metrics;
-    expect(overridden.acquisition_tax_pence).toBe(0);
-    expect(overridden.acquisition_tax.is_override).toBe(true);
-    expect(overridden.acquisition_tax.computed_total_pence).toBe(2_717_410);
-    expect(overridden.rlv_pence).not.toBe(runAppraisal(base).metrics.rlv_pence);
+
+    const before = runAppraisal(base).metrics;
+    const after = runAppraisal(withOverride).metrics;
+
+    expect(after.acquisition_tax_pence).toBe(0);
+    expect(after.acquisition_tax.is_override).toBe(true);
+    expect(after.acquisition_tax.computed_total_pence).toBe(2_717_410);
+
+    // The tax really did leave the cost stack — both figures fall by exactly it.
+    expect(before.acquisition_cost_pence - after.acquisition_cost_pence).toBe(2_717_410);
+    expect(
+      before.total_development_cost_pence - after.total_development_cost_pence,
+    ).toBe(2_717_410);
+    // …and the RLV does not move, because the tax cancels in cost-excluding-land.
+    expect(after.rlv_pence).toBe(before.rlv_pence);
   });
+
+  // The regression guard for fix round 1: acquisition tax is computed in two
+  // places — deriveMetrics (reported as acquisition_tax_pence) and
+  // calculateTotalAcquisitionCost (folded into acquisition_cost_pence, and from
+  // there into TDC, profit and every ratio). Before this fix the second site was
+  // hard-wired to England/NI, so a Welsh appraisal reported LTT while charging
+  // SDLT. This asserts the two can never drift apart again.
+  function taxInsideAcquisitionCost(
+    inputs: ReturnType<typeof englishBase>, m: { acquisition_cost_pence: number },
+  ): number {
+    const a = inputs.acquisition;
+    return m.acquisition_cost_pence
+      - a.purchase_price_pence
+      - a.legal_fees_pence
+      - a.survey_cost_pence
+      - Math.round((a.purchase_price_pence * a.broker_fee_pct) / 100)
+      - a.other_acquisition_costs_pence;
+  }
+
+  it.each([
+    ['wales', 'LTT', 2_542_410],
+    ['scotland', 'LBTT', 2_617_410],
+    ['england_ni', 'SDLT', 2_717_410],
+  ] as const)(
+    'the tax inside acquisition_cost_pence is the %s figure, not the England/NI one',
+    (jurisdiction, regime, expected) => {
+      const inputs = englishBase();
+      inputs.acquisition.jurisdiction = jurisdiction;
+      inputs.acquisition.acquisition_date = '2026-08-17';
+      const m = runAppraisal(inputs).metrics;
+      expect(m.acquisition_tax.regime).toBe(regime);
+      expect(m.acquisition_tax_pence).toBe(expected);
+      expect(taxInsideAcquisitionCost(inputs, m)).toBe(expected);
+    },
+  );
 
   // The load-bearing property of R8 Task 5, asserted on a document built here
   // rather than read from `fixtures/financial-model/` — the fixture corpus makes

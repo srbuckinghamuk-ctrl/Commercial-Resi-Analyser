@@ -3,6 +3,7 @@ import type {
   ConversionCostInputs,
   ProposedUnit,
 } from './conversion-types';
+import type { AcquisitionInputsV5 } from './model/finance-types';
 import { calculateAcquisitionTax } from './tax/acquisition-tax';
 
 export function calculateGdv(units: ProposedUnit[]): number {
@@ -15,21 +16,32 @@ export function calculateBrokerFee(pricePence: number, pct: number): number {
   return Math.round((pricePence * pct) / 100);
 }
 
-export function calculateTotalAcquisitionCost(acq: AcquisitionInputs): number {
-  // R8: `commercial-sdlt.ts` is gone, but this helper takes only the acquisition
-  // block of a *v1* document (conversion-types' AcquisitionInputs), which carries
-  // no jurisdiction, no date and no override. England/NI non-residential on the
-  // current band set is byte-for-byte what `calculateCommercialSdlt` returned, so
-  // this is a like-for-like substitution and no schedule figure moves.
-  // NOTE (R8 carry-forward): the schedule's acquisition line therefore stays
-  // England/NI even on a Scottish or Welsh document, while metrics.acquisition_tax_pence
-  // is jurisdiction-aware. See the Task 5 report — this is out of Task 5's scope
-  // and must be resolved before a non-English fixture is pinned (Task 12).
+/**
+ * Spec §3.3 — the acquisition line of the cost stack, acquisition tax included.
+ *
+ * R8 (spec §14): the tax is the document's own regime, not England/NI's. This is
+ * the *second* site that computes acquisition tax — `deriveMetrics` is the other,
+ * and the two must always agree, because `acquisition_cost_pence` (this figure)
+ * flows into TDC while `acquisition_tax_pence` (that one) is what the report
+ * names. `golden-fixtures.test.ts` and `metrics.test.ts` both pin their equality.
+ *
+ * The parameter is widened to accept a v5 acquisition block; v2–v4 documents
+ * carry none of the new keys, so the same `in` guards `deriveMetrics` uses resolve
+ * them to `england_ni` with a null date and no override — byte-for-byte what
+ * `calculateCommercialSdlt` returned before R8 deleted it.
+ */
+export function calculateTotalAcquisitionCost(
+  acq: AcquisitionInputs | AcquisitionInputsV5,
+): number {
   const sdlt = calculateAcquisitionTax({
     consideration_pence: acq.purchase_price_pence,
-    jurisdiction: 'england_ni',
+    jurisdiction: 'jurisdiction' in acq ? acq.jurisdiction : 'england_ni',
     basis: 'non_residential',
-    date: null,
+    date: 'acquisition_date' in acq ? acq.acquisition_date : null,
+    override_pence:
+      'acquisition_tax_override_pence' in acq ? acq.acquisition_tax_override_pence : null,
+    override_reason:
+      'acquisition_tax_override_reason' in acq ? acq.acquisition_tax_override_reason : null,
   }).total_pence;
   const brokerFee = calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct);
   return (

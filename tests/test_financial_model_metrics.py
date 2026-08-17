@@ -6,8 +6,10 @@ convention already used across both languages' test suites.
 """
 from dataclasses import fields
 
+import pytest
+
 from app.financial_model import run_appraisal
-from app.financial_model.engine import run_ledger
+from app.financial_model.engine import money_round, run_ledger
 from app.financial_model.metrics import breakeven_flags, derive_metrics
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import (
@@ -409,16 +411,70 @@ class TestAcquisitionTaxIsJurisdictionAware:
         m = run_appraisal(_english_base()).metrics
         assert m.acquisition_tax.date_basis == "assumed_current"
 
-    def test_feeds_the_override_into_rlv_via_cost_excluding_land(self):
+    # Fix round 1 (R8 Task 5). The brief's original test here asserted that an
+    # override *changes* the RLV. That is the opposite of what spec Sec 3.18
+    # defines, and it passed only while this engine computed the acquisition tax
+    # twice from two different band sets. Sec 3.18: cost excluding land = TDC -
+    # purchase price - acquisition tax. Once both sites (derive_metrics and
+    # calculate_total_acquisition_cost) use the same figure, the tax cancels out
+    # of that expression, so the RLV is invariant to it *by design* -- and Sec
+    # 3.18's disclosed limitation records exactly this: "finance and SDLT within
+    # 'cost excluding land' are those of the appraised structure, not re-solved
+    # for the residual price (a fixed-point refinement is R3)". This has always
+    # been true for English documents. R8 makes it true for Welsh and Scottish
+    # ones too. Do not "fix" this back. Mirrors metrics.test.ts.
+    def test_an_override_moves_acquisition_cost_and_tdc_but_leaves_rlv_unchanged(self):
         base = _english_base()
         with_override = base.model_copy(deep=True)
         with_override.acquisition.acquisition_tax_override_pence = 0
         with_override.acquisition.acquisition_tax_override_reason = "Group relief claimed."
-        overridden = run_appraisal(with_override).metrics
-        assert overridden.acquisition_tax_pence == 0
-        assert overridden.acquisition_tax.is_override is True
-        assert overridden.acquisition_tax.computed_total_pence == 2_717_410
-        assert overridden.rlv_pence != run_appraisal(base).metrics.rlv_pence
+
+        before = run_appraisal(base).metrics
+        after = run_appraisal(with_override).metrics
+
+        assert after.acquisition_tax_pence == 0
+        assert after.acquisition_tax.is_override is True
+        assert after.acquisition_tax.computed_total_pence == 2_717_410
+
+        # The tax really did leave the cost stack -- both figures fall by exactly it.
+        assert before.acquisition_cost_pence - after.acquisition_cost_pence == 2_717_410
+        assert (
+            before.total_development_cost_pence - after.total_development_cost_pence
+        ) == 2_717_410
+        # ...and the RLV does not move: the tax cancels in cost-excluding-land.
+        assert after.rlv_pence == before.rlv_pence
+
+    # The regression guard for fix round 1: acquisition tax is computed in two
+    # places -- derive_metrics (reported as acquisition_tax_pence) and
+    # calculate_total_acquisition_cost (folded into acquisition_cost_pence, and
+    # from there into TDC, profit and every ratio). Before this fix the second
+    # site was hard-wired to England/NI, so a Welsh appraisal reported LTT while
+    # charging SDLT. This asserts the two can never drift apart again.
+    @pytest.mark.parametrize(
+        "jurisdiction,regime,expected",
+        [("wales", "LTT", 2_542_410), ("scotland", "LBTT", 2_617_410),
+         ("england_ni", "SDLT", 2_717_410)],
+    )
+    def test_the_tax_inside_acquisition_cost_pence_is_the_documents_own_figure(
+        self, jurisdiction, regime, expected,
+    ):
+        inputs = _english_base()
+        inputs.acquisition.jurisdiction = jurisdiction
+        inputs.acquisition.acquisition_date = "2026-08-17"
+        m = run_appraisal(inputs).metrics
+        assert m.acquisition_tax.regime == regime
+        assert m.acquisition_tax_pence == expected
+
+        a = inputs.acquisition
+        tax_inside_acquisition_cost = (
+            m.acquisition_cost_pence
+            - a.purchase_price_pence
+            - a.legal_fees_pence
+            - a.survey_cost_pence
+            - money_round((a.purchase_price_pence * a.broker_fee_pct) / 100)
+            - a.other_acquisition_costs_pence
+        )
+        assert tax_inside_acquisition_cost == expected
 
     def test_migration_to_v5_adds_the_two_new_metrics_and_changes_no_other_figure(self):
         """The load-bearing property of R8 Task 5, asserted on a document built

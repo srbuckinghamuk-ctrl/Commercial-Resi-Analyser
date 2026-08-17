@@ -13,6 +13,7 @@ from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax
 from .types import (
     AcquisitionInputs,
+    AcquisitionInputsV5,
     AnyCalculatorInputs,
     ConversionCostInputs,
     ProgrammePackage,
@@ -25,19 +26,31 @@ def calculate_gdv(units: list[ProposedUnit]) -> int:
 
 
 def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
-    # R8: sdlt.py is gone, but this helper takes only the *base* acquisition
-    # block, which carries no jurisdiction, no date and no override. England/NI
-    # non-residential on the current band set is byte-for-byte what
-    # calculate_commercial_sdlt returned, so this is a like-for-like
-    # substitution and no schedule figure moves. Mirrors
-    # conversion-calc-engine.ts, including its carry-forward note: the schedule's
-    # acquisition line therefore stays England/NI even on a Scottish or Welsh
-    # document, while metrics.acquisition_tax_pence is jurisdiction-aware.
+    """Spec Sec 3.3 -- the acquisition line of the cost stack, acquisition tax
+    included.
+
+    R8 (spec Sec 14): the tax is the document's own regime, not England/NI's.
+    This is the *second* site that computes acquisition tax -- derive_metrics is
+    the other, and the two must always agree, because acquisition_cost_pence
+    (this figure) flows into TDC while acquisition_tax_pence (that one) is what
+    the report names. Both fixture suites and test_financial_model_metrics.py
+    pin their equality.
+
+    ``acq`` is annotated with the base class, which AcquisitionInputsV5
+    subclasses; the isinstance gate is Python's stand-in for the TS engine's
+    ``'jurisdiction' in acq`` guard (the same pairing derive_metrics uses). A
+    v2-v4 acquisition block carries none of the new fields, so it resolves to
+    england_ni with a null date and no override -- byte-for-byte what
+    calculate_commercial_sdlt returned before R8 deleted it.
+    """
+    is_v5 = isinstance(acq, AcquisitionInputsV5)
     sdlt = calculate_acquisition_tax(
         consideration_pence=acq.purchase_price_pence,
-        jurisdiction="england_ni",
+        jurisdiction=acq.jurisdiction if is_v5 else "england_ni",
         basis="non_residential",
-        date=None,
+        date=acq.acquisition_date if is_v5 else None,
+        override_pence=acq.acquisition_tax_override_pence if is_v5 else None,
+        override_reason=acq.acquisition_tax_override_reason if is_v5 else None,
     ).total_pence
     broker_fee = money_round((acq.purchase_price_pence * acq.broker_fee_pct) / 100)
     return (
