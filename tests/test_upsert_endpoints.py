@@ -1,7 +1,9 @@
 """Upsert semantics: POSTing an eligibility assessment or appraisal twice for
 the same project must update the existing row, not insert a duplicate."""
+import asyncio
 import copy
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -290,6 +292,56 @@ class TestAppraisalV5Normalisation:
         assert resp.status_code == 422, resp.text
         assert "inputs_snapshot" in resp.json()["detail"]
 
+    @pytest.mark.asyncio
+    async def test_unrecognised_inputs_version_is_422_not_silently_rebuilt_as_v1(
+        self, client, monkeypatch,
+    ):
+        """Fix round 1, review item 1: an inputs_version this module doesn't
+        implement (here 6, a stand-in for a future/unknown client version)
+        satisfies none of the is_vN structural checks and used to fall
+        through, undetected, all the way to migrate_inputs' v1 fallback --
+        reading a real, fully-formed document as noise and rebuilding
+        finance/equity_sources from an LTV-based heuristic. That must now be
+        a 422, not a 201 carrying a silently corrupted snapshot."""
+        monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
+        project_id = await _create_project(client)
+
+        unknown_version_doc = copy.deepcopy(FIXTURE_A_INPUTS)
+        unknown_version_doc["inputs_version"] = 6
+
+        resp = await client.post("/api/v1/appraisals", json={
+            "project_id": project_id,
+            "name": "Unknown version appraisal",
+            "inputs_snapshot": unknown_version_doc,
+        })
+        assert resp.status_code == 422, resp.text
+        assert "inputs_snapshot" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_structurally_invalid_v5_is_422_not_silently_rebuilt_as_v1(
+        self, client, monkeypatch,
+    ):
+        """Fix round 1, review item 1: a document tagged inputs_version 5
+        that fails is_v5's own structural check (finance missing
+        committed_net_facility_pence) also used to fall through to the v1
+        fallback undetected -- exactly the corruption the v5-vs-v4 guard
+        elsewhere in migrate.py exists to stop, just triggered by a document
+        that claims to be v5 rather than one that plainly is."""
+        monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
+        project_id = await _create_project(client)
+
+        malformed_v5_doc = copy.deepcopy(FIXTURE_A_INPUTS)
+        malformed_v5_doc["inputs_version"] = 5
+        del malformed_v5_doc["finance"]["committed_net_facility_pence"]
+
+        resp = await client.post("/api/v1/appraisals", json={
+            "project_id": project_id,
+            "name": "Malformed v5 appraisal",
+            "inputs_snapshot": malformed_v5_doc,
+        })
+        assert resp.status_code == 422, resp.text
+        assert "inputs_snapshot" in resp.json()["detail"]
+
 
 class TestPostcodeJurisdictionDerivation:
     """R8 Task 10: a project with a known postcode country proposes a
@@ -445,3 +497,30 @@ class TestPostcodeJurisdictionDerivation:
         assert acq["jurisdiction"] == "scotland"
         assert acq["jurisdiction_source"] == "user"
         assert acq["jurisdiction_evidence_status"] == "confirmed"
+
+    @pytest.mark.asyncio
+    async def test_slow_postcode_lookup_does_not_block_the_save(self, client, monkeypatch):
+        """Fix round 1, review item 3: lookup_postcode's own timeout is 10s
+        *per phase*, so a peer that is merely slow -- not outright failing --
+        could otherwise hold a save open well past that for a value this
+        endpoint only ever treats as advisory. create_appraisal wraps the
+        call in `asyncio.wait_for(..., 2.0)`; a lookup that hangs longer than
+        that must fall back to the unconfirmed default, not block the save."""
+        async def hanging_lookup(_postcode: str):
+            await asyncio.sleep(30)
+            return _postcode_result("Wales")  # never reached
+
+        monkeypatch.setattr("app.api.app.lookup_postcode", hanging_lookup)
+        project_id = await _create_project(client)
+
+        started = time.perf_counter()
+        resp = await client.post(
+            "/api/v1/appraisals", json=_appraisal_body(project_id, "slow postcode lookup"),
+        )
+        elapsed = time.perf_counter() - started
+
+        assert resp.status_code == 201, resp.text
+        assert elapsed < 10, f"save took {elapsed:.1f}s -- the 2s cap did not apply"
+        acq = resp.json()["inputs_snapshot"]["acquisition"]
+        assert acq["jurisdiction"] == "england_ni"
+        assert acq["jurisdiction_source"] == "migrated_default"

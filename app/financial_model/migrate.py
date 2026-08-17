@@ -656,6 +656,9 @@ def migrate_v4_to_v5(v4: dict[str, Any] | CalculatorInputsV4) -> CalculatorInput
     return CalculatorInputsV5.model_validate(doc)
 
 
+_RECOGNISED_VERSIONS = (1, 2, 3, 4, 5)
+
+
 def migrate_inputs_to_v5(
     snapshot: dict[str, Any], project: dict[str, Any] | None = None,
 ) -> CalculatorInputsV5:
@@ -677,7 +680,48 @@ def migrate_inputs_to_v5(
     Every pre-v5 snapshot (v1 through v4) routes through
     migrate_v4_to_v5(migrate_inputs_to_v4(...)) unchanged, exactly as
     migrateInputsToV5 does.
+
+    Task 10 fix round 1: two shapes must be refused outright rather than
+    silently reaching ``migrate_inputs``'s v1 fallback path, which reads an
+    unrecognised document as noise and rebuilds ``finance``/``equity_sources``
+    from an LTV-based heuristic -- the exact corruption the is_v5-vs-v4 guard
+    in migrate_inputs_to_v4 already exists to stop, just for a different
+    trigger (a document that plainly IS v5, rather than one this module
+    cannot place at all):
+
+    1. An ``inputs_version`` this module does not implement at all (e.g. a
+       future ``6`` from a newer client, or a stray ``99``). Every ``is_vN``
+       check below is version-specific, so an unrecognised number satisfies
+       none of them and falls all the way through undetected.
+    2. A document declaring ``inputs_version: 5`` that nonetheless fails
+       ``is_v5``'s own structural check (``finance`` missing
+       ``committed_net_facility_pence``, or not a dict at all). ``is_v5``
+       returning False for a document that claims to be v5 is exactly the gap
+       between "structurally recognised" and "declared" that the v1 fallback
+       silently exploits.
+
+    A document declaring ``inputs_version: 2``/``3``/``4`` that fails ITS OWN
+    structural check is deliberately NOT covered by either rule above: that
+    is the existing, tested, permissive behaviour (falls through to the v1
+    legacy path, surfaced to the caller as ``status: "legacy_unreconciled"``
+    -- see ``test_malformed_v2_snapshot_migrates_to_legacy_unreconciled`` in
+    tests/test_appraisal_governance.py, which pins it). Only an entirely
+    unplaceable version number, or a version-5 tag that is not structurally
+    v5, is refused here; anything already accepted stays accepted.
     """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS:
+        raise ValueError(
+            f"migrate_inputs_to_v5: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS}, or absent for a v1 document)"
+        )
+    if version == 5 and not is_v5(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v5: inputs_version is 5 but the document fails "
+            "the v5 structural check (finance is not a dict, or is missing "
+            "committed_net_facility_pence) -- refusing to silently reinterpret "
+            "it via the v1 fallback path"
+        )
     if is_v5(snapshot):
         defaults = migrate_v4_to_v5(
             migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),

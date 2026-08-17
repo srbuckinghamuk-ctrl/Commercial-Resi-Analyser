@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import type { Project } from '../types';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { Project, FinancialAppraisal } from '../types';
 
 // Only the network boundary is stubbed. The engine is the real one: the tests
 // below make it throw by driving the real UI, so they prove the component
@@ -15,6 +15,8 @@ vi.mock('../lib/api', async (importOriginal) => {
 });
 
 const { default: ConversionCalculator } = await import('./ConversionCalculator');
+const { getAppraisal, saveAppraisal } = await import('../lib/api');
+const { defaultCalculatorInputsV4 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -104,5 +106,87 @@ describe('ConversionCalculator — Sensitivity is page 9', () => {
     render(<ConversionCalculator project={PROJECT} />);
     fireEvent.click(screen.getByRole('button', { name: '9. Sensitivity' }));
     expect(screen.getByRole('heading', { name: /9\. Sensitivity/ })).toBeInTheDocument();
+  });
+});
+
+// R8 Task 10 fix round 1: this is the flag-day load path every existing
+// appraisal goes through -- a stored v4 snapshot, migrated to v5 on load
+// (ConversionCalculator.tsx's getAppraisal(...).then(...) handler). It had
+// zero coverage: the module-level mock above always rejects getAppraisal
+// with 404, so this branch never ran in any prior test.
+describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)', () => {
+  function storedV4Appraisal(): FinancialAppraisal {
+    const v4Snapshot = defaultCalculatorInputsV4(PROJECT);
+    return {
+      id: 'a1',
+      project_id: 'p1',
+      name: 'Stored appraisal',
+      inputs_snapshot: v4Snapshot as unknown as Record<string, unknown>,
+      gdv_pence: null,
+      total_cost_pence: null,
+      profit_on_cost_pct: null,
+      profit_on_gdv_pct: null,
+      return_on_equity_pct: null,
+      irr: null,
+      rlv_pence: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+  }
+
+  it('migrates the snapshot to v5 and renders it without an error, not a load failure', async () => {
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
+
+    render(<ConversionCalculator project={PROJECT} />);
+
+    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV5(...))
+    // succeeds -- if that call threw (as migrateInputsToV4 would on a v5
+    // document), the promise chain's .catch() would run instead and the
+    // button would stay "Save Appraisal". Finding "Update Appraisal" is
+    // proof the v4->v5 migration executed cleanly on load.
+    expect(
+      await screen.findByRole('button', { name: /update appraisal/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/failed to load the saved appraisal/i)).not.toBeInTheDocument();
+  });
+
+  it('the migrated state carries the six R8 acquisition fields at their migrated defaults', async () => {
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
+    vi.mocked(saveAppraisal).mockResolvedValueOnce(storedV4Appraisal());
+
+    render(<ConversionCalculator project={PROJECT} />);
+    await screen.findByRole('button', { name: /update appraisal/i });
+
+    // handleSave spreads the current `inputs` state as-is into inputs_snapshot
+    // (ConversionCalculator.tsx: `inputs_snapshot: inputs as unknown as Record<string,
+    // unknown>`) -- it is not rebuilt from the v4 type the component declares for
+    // its own state, so the six fields migrateInputsToV5 added are still on the
+    // runtime object even though this component's state type doesn't model them
+    // yet (Task 11 widens it). Inspecting the real payload sent to saveAppraisal
+    // is therefore the direct way to prove they made it through the load, not a
+    // rendered string (nothing in the UI shows them until Task 11).
+    fireEvent.click(screen.getByRole('button', { name: /update appraisal/i }));
+    await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
+
+    const sentSnapshot = vi.mocked(saveAppraisal).mock.calls[0][1]
+      .inputs_snapshot as unknown as {
+        inputs_version: number;
+        acquisition: {
+          jurisdiction: string;
+          jurisdiction_source: string;
+          jurisdiction_evidence_status: string;
+          acquisition_date: string | null;
+          acquisition_tax_override_pence: number | null;
+          acquisition_tax_override_reason: string;
+        };
+      };
+
+    expect(sentSnapshot.inputs_version).toBe(5);
+    expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
+    expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
+    expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
+    expect(sentSnapshot.acquisition.acquisition_date).toBeNull();
+    expect(sentSnapshot.acquisition.acquisition_tax_override_pence).toBeNull();
+    expect(sentSnapshot.acquisition.acquisition_tax_override_reason).toBe('');
   });
 });

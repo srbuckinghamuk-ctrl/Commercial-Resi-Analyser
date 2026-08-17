@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -526,7 +527,20 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     # actually carrying a postcode, keeping it off the hot re-save path.
     derived_jurisdiction = None
     if existing is None and project.address_postcode:
-        pc_result = await lookup_postcode(project.address_postcode)
+        # lookup_postcode already catches every exception internally and
+        # returns None on failure (a blanket try/except -- left as-is here).
+        # But its own timeout is 10s *per phase* (connect, then read), so a
+        # merely slow/hanging peer -- not an outright failure -- could still
+        # block a user's save well past that on a value this endpoint only
+        # ever treats as advisory. A tighter cap specific to this write path:
+        # a save must not wait on a jurisdiction proposal it can fall back
+        # from for free (the "migrated_default"/"unconfirmed" default).
+        try:
+            pc_result = await asyncio.wait_for(
+                lookup_postcode(project.address_postcode), timeout=2.0,
+            )
+        except asyncio.TimeoutError:
+            pc_result = None
         if pc_result is not None:
             derived_jurisdiction = derive_jurisdiction(pc_result.country)
 

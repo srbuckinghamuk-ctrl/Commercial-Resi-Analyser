@@ -18,7 +18,13 @@ from .breakeven import PhasedSeniorBreakevenTerms, phased_replay_redeems, solve_
 from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, breakeven_flags, derive_metrics
-from .migrate import is_v4, migrate_inputs, migrate_inputs_to_v4, migrate_v3_to_v4
+from .migrate import (
+    is_v4,
+    migrate_inputs,
+    migrate_inputs_to_v4,
+    migrate_inputs_to_v5,
+    migrate_v3_to_v4,
+)
 from .schedule import Schedule, build_schedule
 from .types import (
     CALC_VERSION,
@@ -86,6 +92,7 @@ __all__ = [
     "is_v4",
     "migrate_inputs",
     "migrate_inputs_to_v4",
+    "migrate_inputs_to_v5",
     "migrate_v3_to_v4",
     "parse_calculator_inputs",
     "phased_replay_redeems",
