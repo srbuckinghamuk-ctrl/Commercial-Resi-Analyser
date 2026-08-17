@@ -286,6 +286,34 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     expect(screen.getByText(/Derived from the project postcode/)).toBeInTheDocument();
   });
 
+  // Fix round 1. `saving` disables only the Save button -- it has no other
+  // consumer -- so every field on every page stays editable for the whole
+  // round-trip. An unguarded adoption therefore silently reverted anything
+  // typed while the POST was in flight, which is a data-loss path this repo's
+  // audit history grades P0. The adoption is identity-guarded against the
+  // document that was posted, so a newer one wins.
+  it('does not discard an edit made while the save was in flight', async () => {
+    let resolveSave: (value: FinancialAppraisal) => void = () => {};
+    vi.mocked(saveAppraisal).mockReturnValueOnce(
+      new Promise<FinancialAppraisal>((resolve) => { resolveSave = resolve; }),
+    );
+    render(<ConversionCalculator project={PROJECT} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
+    // £400,000 -> £500,000 while the request is still open.
+    fireEvent.change(screen.getByDisplayValue('400000'), { target: { value: '500000' } });
+
+    resolveSave(savedAppraisal(serverDerivedWelshSnapshot()));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /update appraisal/i })).toBeInTheDocument());
+
+    // The edit survives, and with it the rest of the document the user is
+    // holding -- the server's answer was about the superseded one.
+    expect(screen.getByDisplayValue('500000')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('400000')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'SDLT Breakdown' })).toBeInTheDocument();
+  });
+
   it('a snapshot the migration cannot read leaves the local document alone and is not a save failure', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(
       savedAppraisal({ ...serverDerivedWelshSnapshot(), inputs_version: 99 }),

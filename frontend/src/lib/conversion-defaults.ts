@@ -12,7 +12,7 @@ import type {
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  AcquisitionInputsV5, EquitySource, FacilityTerms,
+  EquitySource, FacilityTerms,
 } from './model/finance-types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
@@ -268,26 +268,17 @@ export function defaultCalculatorInputsV4(project?: {
   return { ...v3, inputs_version: 4, programme: null, sales_phasing: null, refinance: null };
 }
 
-/** The v5 acquisition fields for a *new* appraisal: jurisdiction derived where a
- *  postcode is known (set by the caller), date defaulting to today. */
-export function defaultAcquisitionV5Fields(
-  today: string,
-): Omit<AcquisitionInputsV5, keyof AcquisitionInputs> {
-  return {
-    jurisdiction: 'england_ni',
-    jurisdiction_source: 'derived',
-    jurisdiction_evidence_status: 'unconfirmed',
-    acquisition_date: today,
-    acquisition_tax_override_pence: null,
-    acquisition_tax_override_reason: '',
-  };
-}
-
 /**
  * v5 defaults (R8 Task 11): the document a freshly opened calculator starts on.
  *
  * The acquisition-tax block is deliberately identical to what `migrateV4toV5`
- * stamps on a v4 document, NOT to `defaultAcquisitionV5Fields` above:
+ * stamps on a v4 document. (Fix round 1 deleted the unused
+ * `defaultAcquisitionV5Fields` helper that used to sit above this one: it
+ * returned `jurisdiction: 'england_ni'` together with
+ * `jurisdiction_source: 'derived'` unconditionally, so any caller taking its
+ * doc comment at its word would have produced a document claiming England/NI
+ * was derived when nothing derived it — and simultaneously suppressed the
+ * server's real derivation. Both reasons below are why.)
  *
  *  - `jurisdiction_source: 'migrated_default'` means "nothing has recorded a
  *    jurisdiction for this document yet", which is exactly true of a brand new

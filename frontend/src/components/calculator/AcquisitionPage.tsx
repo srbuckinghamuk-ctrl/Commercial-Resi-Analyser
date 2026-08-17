@@ -117,6 +117,7 @@ export default function AcquisitionPage({ inputs, onChange, run, project }: Prop
   };
 
   const unconfirmed = acq.jurisdiction_evidence_status === 'unconfirmed';
+  const dateBasisAssumed = tax.date_basis === 'assumed_current';
 
   // Rendered, never re-derived: `validateInputs` (spec §14) owns the rule that
   // an override must state a reason.
@@ -237,6 +238,17 @@ export default function AcquisitionPage({ inputs, onChange, run, project }: Prop
             Confirm jurisdiction
           </button>
         </div>
+      ) : dateBasisAssumed ? (
+        // Fix round 1. `taxBasisConfirmedFor` (report-provenance.ts) requires
+        // BOTH a confirmed jurisdiction AND `date_basis === 'transaction_date'`,
+        // so a confirmed jurisdiction with no usable acquisition date still
+        // watermarks the memo DRAFT — TAX BASIS UNCONFIRMED. A flat green
+        // "confirmed" here contradicted that. Name what is still outstanding.
+        <div style={{ color: AMBER_TEXT, fontSize: 13, marginBottom: 20 }}>
+          {sourceLine} — jurisdiction confirmed, but no usable acquisition date is recorded,
+          so the band set currently in force is assumed. The tax basis is not fully evidenced
+          and the report stays a draft until a date is given.
+        </div>
       ) : (
         <div style={{ color: GREEN, fontSize: 13, marginBottom: 20 }}>
           {sourceLine} — confirmed. Acquisition tax is charged as {tax.regime}.
@@ -252,7 +264,7 @@ export default function AcquisitionPage({ inputs, onChange, run, project }: Prop
           <a href={tax.source_url} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>
             Source
           </a>
-          {tax.date_basis === 'assumed_current' && (
+          {dateBasisAssumed && (
             <span style={{ color: AMBER_TEXT }}>
               {' '}— no usable acquisition date recorded, so the band set currently in force is assumed.
             </span>

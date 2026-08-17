@@ -15,7 +15,7 @@ import { welshInputs, scottishInputs, unconfirmedJurisdictionInputs } from '../.
  *     override at all.
  *
  * The exact-figure assertions below are the teeth: £425,000 of consideration is
- * £9,000 of Welsh LTT, £4,750 of Scottish LBTT and £10,750 of England/NI SDLT,
+ * £9,000 of Welsh LTT, £9,750 of Scottish LBTT and £10,750 of England/NI SDLT,
  * so a page that quietly applied the wrong band set — or reverted to a
  * hard-wired one — cannot pass by rendering "a tax".
  */
@@ -58,7 +58,7 @@ describe('AcquisitionPage — the applied regime and its figures (R8 defect A)',
     expect(screen.queryByText(/£10,750/)).not.toBeInTheDocument();
   });
 
-  it('charges the Scottish band set exactly: the same consideration is £4,750 of LBTT', () => {
+  it('charges the Scottish band set exactly: the same consideration is £9,750 of LBTT', () => {
     const { run } = setup(scottishInputs());
     // 0% to £150,000; 1% on £150,000-£250,000 = £1,000; 5% on £175,000 = £8,750.
     expect(run.metrics.acquisition_tax.total_pence).toBe(975_000);
@@ -130,6 +130,48 @@ describe('AcquisitionPage — the jurisdiction control (R8 defect B)', () => {
         jurisdiction_evidence_status: 'unconfirmed',
       }),
     });
+  });
+
+  // Fix round 1: the 'migrated_default' source line had no assertion at all --
+  // the reviewer corrupted the string to garbage and all 125 calculator tests
+  // still passed. It is the line every brand-new document renders, because
+  // defaultCalculatorInputsV5 deliberately records no jurisdiction of its own.
+  it('says a defaulted jurisdiction was never recorded, and flags it unconfirmed', () => {
+    const base = welshInputs();
+    const migrated: CalculatorInputsV5 = {
+      ...base,
+      acquisition: {
+        ...base.acquisition,
+        jurisdiction: 'england_ni',
+        jurisdiction_source: 'migrated_default',
+        jurisdiction_evidence_status: 'unconfirmed',
+      },
+    };
+    setup(migrated);
+    expect(screen.getByText(/unconfirmed/i, { selector: 'span' }))
+      .toHaveTextContent('No jurisdiction recorded — defaulted to England & Northern Ireland');
+    expect(screen.getByRole('button', { name: /confirm jurisdiction/i })).toBeInTheDocument();
+  });
+
+  // Fix round 1: taxBasisConfirmedFor (report-provenance.ts) needs BOTH a
+  // confirmed jurisdiction AND date_basis === 'transaction_date', so a flat
+  // green "confirmed" on a dateless document contradicted the memo's own
+  // DRAFT - TAX BASIS UNCONFIRMED watermark.
+  it('does not claim a confirmed basis when the acquisition date is still outstanding', () => {
+    const base = welshInputs();
+    const noDate: CalculatorInputsV5 = {
+      ...base, acquisition: { ...base.acquisition, acquisition_date: null },
+    };
+    setup(noDate);
+    expect(screen.getByText(/jurisdiction confirmed, but no usable acquisition date is recorded/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/the report stays a draft until a date is given/)).toBeInTheDocument();
+  });
+
+  it('claims a confirmed basis only when the date evidences the band set too', () => {
+    setup(welshInputs());
+    expect(screen.getByText(/— confirmed\. Acquisition tax is charged as LTT\./)).toBeInTheDocument();
+    expect(screen.queryByText(/no usable acquisition date is recorded/)).not.toBeInTheDocument();
   });
 
   it('offers all three jurisdictions', () => {

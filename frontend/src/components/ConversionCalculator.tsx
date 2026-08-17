@@ -194,14 +194,31 @@ export default function ConversionCalculator({ project }: Props) {
       // the load path is: the response is JSON of unknown provenance to this
       // component, and the migration is the one place that knows how to put a
       // stored snapshot onto the current shape.
+      //
+      // Fix round 1. The adoption is identity-guarded against the document
+      // that was actually posted. `saving` disables only the Save button
+      // (it has no other consumer), so every field on every page stays
+      // editable for the whole round-trip: without the guard, typing a new
+      // purchase price while the POST was in flight was silently undone by
+      // the response, which is a data-loss path this repo's audit history
+      // grades P0. `cur === inputs` is the exact question worth asking --
+      // "is the state still the one the server was answering about?" -- and
+      // when it is not, the user's newer document wins and the next save
+      // reconciles it. The migration runs outside the updater so the updater
+      // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
+        let adopted: CalculatorInputsV5 | null = null;
         try {
-          setInputs(migrateInputsToV5(result.inputs_snapshot, project));
+          adopted = migrateInputsToV5(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was
           // in before this adoption existed; the next load re-reads the stored
           // one through the identical migration.
+        }
+        if (adopted !== null) {
+          const next = adopted;
+          setInputs((cur) => (cur === inputs ? next : cur));
         }
       }
     } catch (err) {
