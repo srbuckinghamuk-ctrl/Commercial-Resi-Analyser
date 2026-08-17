@@ -7,6 +7,7 @@ Python disagrees, the Python port is wrong -- never adjust these to make peace.
 import pydantic
 import pytest
 
+from app.financial_model import run_appraisal
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
@@ -523,3 +524,25 @@ class TestAcquisitionTaxValidation:
         assert issue is not None
         assert issue.severity == "warning"
         assert not any(i.severity == "error" for i in issues)
+
+    # Fix round 1. Before this fix, run_appraisal computed the acquisition cost
+    # stack (build_schedule/derive_metrics) *before* validate_inputs ran, and
+    # both reached select_band_set unwrapped -- a bad date crashed the whole
+    # appraisal with an uncaught ValueError instead of surfacing the
+    # field-level error above. This proves the full pipeline now degrades
+    # instead of raising, while the hard error (and report_safe=False) still
+    # fire. Mirrors validation.test.ts.
+    @pytest.mark.parametrize("bad_date", ["1990-01-01", "17/08/2026"])
+    def test_completes_the_full_pipeline_on_a_bad_date_instead_of_raising(self, bad_date):
+        inputs = self.v5()
+        inputs.acquisition.acquisition_date = bad_date
+
+        run = run_appraisal(inputs)  # must not raise
+
+        assert run.metrics.acquisition_tax.date_basis == "assumed_current"
+        issue = next(
+            (i for i in run.validation if i.field == "acquisition.acquisition_date"), None,
+        )
+        assert issue is not None
+        assert issue.severity == "error"
+        assert run.reconciliation.report_safe is False

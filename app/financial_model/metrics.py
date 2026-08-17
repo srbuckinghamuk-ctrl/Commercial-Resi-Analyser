@@ -18,7 +18,7 @@ from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
-from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax
+from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax, resolve_acquisition_date
 from .types import (
     CALC_VERSION,
     AcquisitionInputsV5,
@@ -263,11 +263,20 @@ def derive_metrics(
     # TS engine, which is structural on the block at both sites.
     acq = inputs.acquisition
     is_v5 = isinstance(acq, AcquisitionInputsV5)
+    jurisdiction = acq.jurisdiction if is_v5 else "england_ni"
+    raw_date = acq.acquisition_date if is_v5 else None
+    # Fix round 1 (R8): derive_metrics runs before validate_inputs in
+    # run_appraisal, so an unusable date must degrade rather than raise here --
+    # see resolve_acquisition_date's docstring. validate_inputs re-derives this
+    # as a hard acquisition.acquisition_date error independently, and
+    # calculate_total_acquisition_cost degrades identically so the two tax
+    # sites cannot drift.
+    date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
     acquisition_tax = calculate_acquisition_tax(
         consideration_pence=acq.purchase_price_pence,
-        jurisdiction=acq.jurisdiction if is_v5 else "england_ni",
+        jurisdiction=jurisdiction,
         basis="non_residential",
-        date=acq.acquisition_date if is_v5 else None,
+        date=date,
         override_pence=acq.acquisition_tax_override_pence if is_v5 else None,
         override_reason=acq.acquisition_tax_override_reason if is_v5 else None,
     )

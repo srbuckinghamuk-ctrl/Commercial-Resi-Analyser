@@ -4,6 +4,7 @@ import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
 import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5 } from './migrate';
+import { runAppraisal } from './index';
 import type { CalculatorInputsV3, CalculatorInputsV4, ProgrammePackage, RefinanceInputs } from './finance-types';
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
@@ -479,6 +480,27 @@ describe('v4 programme validation', () => {
       );
       expect(issue?.severity).toBe('warning');
       expect(validateInputs(inputs).some((i) => i.severity === 'error')).toBe(false);
+    });
+
+    // Fix round 1. Before this fix, runAppraisal computed the acquisition cost
+    // stack (buildSchedule/deriveMetrics) *before* validateInputs ran, and both
+    // reached selectBandSet unwrapped — a bad date crashed the whole appraisal
+    // with an uncaught exception instead of surfacing the field-level error
+    // above. This proves the full pipeline now degrades instead of throwing,
+    // while the hard error (and report_safe: false) still fire.
+    it.each([
+      ['an uncovered date', '1990-01-01'],
+      ['a malformed date', '17/08/2026'],
+    ])('completes the full pipeline on %s instead of throwing', (_label, badDate) => {
+      const inputs = v5();
+      inputs.acquisition.acquisition_date = badDate;
+
+      const run = runAppraisal(inputs); // must not throw
+
+      expect(run.metrics.acquisition_tax.date_basis).toBe('assumed_current');
+      const issue = run.validation.find((i) => i.field === 'acquisition.acquisition_date');
+      expect(issue?.severity).toBe('error');
+      expect(run.reconciliation.report_safe).toBe(false);
     });
   });
 });

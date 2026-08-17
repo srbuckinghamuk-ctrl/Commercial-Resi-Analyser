@@ -177,6 +177,41 @@ export function selectBandSet(
   return { set: match, dateBasis: 'transaction_date' };
 }
 
+/**
+ * R8 Fix round 1. `runAppraisal` computes the acquisition cost stack — both
+ * `deriveMetrics` and `calculateTotalAcquisitionCost` — *before* `validateInputs`
+ * runs, so a date `selectBandSet` cannot place (malformed, or not covered by any
+ * band set) must not throw and crash the whole appraisal here; it must degrade.
+ * `null` is already defined as "use the currently open-ended set" and reports
+ * `date_basis: 'assumed_current'`, so degrading to it is self-describing rather
+ * than a silent substitute value (spec §1.5 is about *figures*, not about which
+ * band set a bad date resolves to). `validateInputs` independently re-derives
+ * the exact same unusable-date condition as a hard `acquisition.acquisition_date`
+ * `ValidationIssue`, so the failure is never silent — just never fatal. This is
+ * the same pattern as the `computeLenderGdv` catch in `metrics.ts` (see the
+ * comment there).
+ *
+ * Both tax call sites (`deriveMetrics` and `calculateTotalAcquisitionCost`) call
+ * this instead of passing their raw date straight to `calculateAcquisitionTax`,
+ * so they can never drift apart on how a bad date degrades — see the
+ * `taxInsideAcquisitionCost` drift guard in `metrics.test.ts`.
+ *
+ * Deliberately narrow: this only ever catches `selectBandSet`'s own throw (there
+ * is nothing else in the try block that can throw). Any other failure must keep
+ * propagating.
+ */
+export function resolveAcquisitionDate(
+  jurisdiction: Jurisdiction, basis: TaxBasis, date: string | null,
+): string | null {
+  if (date === null) return null;
+  try {
+    selectBandSet(jurisdiction, basis, date);
+    return date;
+  } catch {
+    return null;
+  }
+}
+
 export interface AcquisitionTaxBandResult {
   threshold_pence: number;
   rate_pct: number;

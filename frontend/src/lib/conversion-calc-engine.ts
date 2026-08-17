@@ -4,7 +4,7 @@ import type {
   ProposedUnit,
 } from './conversion-types';
 import type { AcquisitionInputsV5 } from './model/finance-types';
-import { calculateAcquisitionTax } from './tax/acquisition-tax';
+import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 
 export function calculateGdv(units: ProposedUnit[]): number {
   return units.reduce((sum, u) => sum + u.estimated_value_pence, 0);
@@ -33,18 +33,24 @@ export function calculateBrokerFee(pricePence: number, pct: number): number {
 export function calculateTotalAcquisitionCost(
   acq: AcquisitionInputs | AcquisitionInputsV5,
 ): number {
+  // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
+  // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
+  // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
+  // guard would then reach selectBandSet and throw "No band sets for
+  // null/non_residential", where the Python engine rejects the same document at
+  // validation. Both engines must degrade the same way. Only `jurisdiction` is
+  // fatal; a null date, override or reason are all absorbed downstream.
+  const jurisdiction = 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni';
+  const rawDate = 'acquisition_date' in acq ? acq.acquisition_date : null;
+  // Fix round 1: an unusable date (malformed, or uncovered) degrades to null
+  // (assumed-current) here instead of throwing — see resolveAcquisitionDate's
+  // doc comment. validateInputs re-derives this as a hard error independently.
+  const date = resolveAcquisitionDate(jurisdiction, 'non_residential', rawDate);
   const sdlt = calculateAcquisitionTax({
     consideration_pence: acq.purchase_price_pence,
-    // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
-    // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
-    // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
-    // guard would then reach selectBandSet and throw "No band sets for
-    // null/non_residential", where the Python engine rejects the same document at
-    // validation. Both engines must degrade the same way. Only `jurisdiction` is
-    // fatal; a null date, override or reason are all absorbed downstream.
-    jurisdiction: 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni',
+    jurisdiction,
     basis: 'non_residential',
-    date: 'acquisition_date' in acq ? acq.acquisition_date : null,
+    date,
     override_pence:
       'acquisition_tax_override_pence' in acq ? acq.acquisition_tax_override_pence : null,
     override_reason:

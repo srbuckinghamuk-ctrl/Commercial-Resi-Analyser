@@ -3,7 +3,7 @@ import type {
 } from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
-import { calculateAcquisitionTax } from '../tax/acquisition-tax';
+import { calculateAcquisitionTax, resolveAcquisitionDate } from '../tax/acquisition-tax';
 import { computeLenderGdv } from './lender-valuation';
 import { exitFeeAmount } from './monthly-engine';
 import { solveDeveloperBreakeven, solveSeniorBreakeven, solveSeniorBreakevenPhased } from './breakeven';
@@ -82,18 +82,26 @@ export function deriveMetrics(
   // the England/NI non-residential band set has been unchanged since 17 March 2016
   // and is the current set — so this preserves their figures to the penny.
   const acq = inputs.acquisition;
+  // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
+  // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
+  // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
+  // guard would then reach selectBandSet and throw "No band sets for
+  // null/non_residential", where the Python engine rejects the same document at
+  // validation. Both engines must degrade the same way. Only `jurisdiction` is
+  // fatal; a null date, override or reason are all absorbed downstream.
+  const acqJurisdiction = 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni';
+  const acqRawDate = 'acquisition_date' in acq ? acq.acquisition_date : null;
+  // Fix round 1: metrics runs before validateInputs in runAppraisal, so an
+  // unusable date must degrade rather than throw here — see
+  // resolveAcquisitionDate's doc comment. validateInputs re-derives this as a
+  // hard acquisition.acquisition_date error independently, and calculateTotal
+  // AcquisitionCost degrades identically so the two tax sites cannot drift.
+  const acqDate = resolveAcquisitionDate(acqJurisdiction, 'non_residential', acqRawDate);
   const acquisitionTax = calculateAcquisitionTax({
     consideration_pence: acq.purchase_price_pence,
-    // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
-    // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
-    // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
-    // guard would then reach selectBandSet and throw "No band sets for
-    // null/non_residential", where the Python engine rejects the same document at
-    // validation. Both engines must degrade the same way. Only `jurisdiction` is
-    // fatal; a null date, override or reason are all absorbed downstream.
-    jurisdiction: 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni',
+    jurisdiction: acqJurisdiction,
     basis: 'non_residential',
-    date: 'acquisition_date' in acq ? acq.acquisition_date : null,
+    date: acqDate,
     override_pence:
       'acquisition_tax_override_pence' in acq ? acq.acquisition_tax_override_pence : null,
     override_reason:

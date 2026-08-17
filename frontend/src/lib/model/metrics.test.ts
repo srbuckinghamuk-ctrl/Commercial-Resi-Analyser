@@ -540,6 +540,26 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
     },
   );
 
+  // Fix round 1: the COVERAGE LIMIT above named an untested axis — a *bad* date
+  // (malformed, or not covered by any band set) reaching the two sites. Both now
+  // route through resolveAcquisitionDate instead of calling selectBandSet
+  // directly, so an unusable date degrades to null (assumed-current) instead of
+  // throwing — this extends the drift guard onto that axis. (Verified this has
+  // teeth by reverting calculateTotalAcquisitionCost's site alone to the raw,
+  // unresolved date: both cases below then fail — the wales/scotland/england_ni
+  // block above does not catch it, because it never uses a bad date.)
+  it.each([
+    ['an uncovered date', '1990-01-01'],
+    ['a malformed date', '17/08/2026'],
+  ])('%s degrades to the assumed-current band set identically at both sites', (_label, badDate) => {
+    const inputs = englishBase();
+    inputs.acquisition.acquisition_date = badDate;
+    const m = runAppraisal(inputs).metrics;
+    expect(m.acquisition_tax.date_basis).toBe('assumed_current');
+    expect(m.acquisition_tax_pence).toBe(2_717_410);
+    expect(taxInsideAcquisitionCost(inputs, m)).toBe(m.acquisition_tax_pence);
+  });
+
   // Fix round 2. The Python mirror of this test exists because Pydantic's default
   // revalidate_instances='never' lets a CalculatorInputsV4 hold an
   // AcquisitionInputsV5, at which point a gate on the *container* and a gate on

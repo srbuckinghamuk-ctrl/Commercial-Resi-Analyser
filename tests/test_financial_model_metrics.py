@@ -489,6 +489,23 @@ class TestAcquisitionTaxIsJurisdictionAware:
 
         assert _tax_inside_acquisition_cost(inputs.acquisition, m) == expected
 
+    # Fix round 1: the COVERAGE LIMIT above named an untested axis -- a *bad*
+    # date (malformed, or not covered by any band set) reaching the two sites.
+    # Both now route through resolve_acquisition_date instead of calling
+    # select_band_set directly, so an unusable date degrades to None
+    # (assumed-current) instead of raising -- this extends the drift guard
+    # onto that axis. Mirrors metrics.test.ts. (Verified this has teeth by
+    # reverting calculate_total_acquisition_cost's site alone to the raw,
+    # unresolved date: both cases below then fail.)
+    @pytest.mark.parametrize("bad_date", ["1990-01-01", "17/08/2026"])
+    def test_a_bad_date_degrades_to_the_assumed_current_band_set_at_both_sites(self, bad_date):
+        inputs = _english_base()
+        inputs.acquisition.acquisition_date = bad_date
+        m = run_appraisal(inputs).metrics
+        assert m.acquisition_tax.date_basis == "assumed_current"
+        assert m.acquisition_tax_pence == 2_717_410
+        assert _tax_inside_acquisition_cost(inputs.acquisition, m) == m.acquisition_tax_pence
+
     # Fix round 2. Pydantic's default revalidate_instances='never' lets a
     # CalculatorInputsV4 hold an AcquisitionInputsV5 instance, so a gate on the
     # *container* (isinstance(inputs, CalculatorInputsV5)) and a gate on the

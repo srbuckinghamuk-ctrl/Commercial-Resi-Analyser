@@ -148,6 +148,41 @@ def select_band_set(
     )
 
 
+def resolve_acquisition_date(
+    jurisdiction: Jurisdiction, basis: TaxBasis, date: str | None,
+) -> str | None:
+    """R8 Fix round 1. Port of resolveAcquisitionDate (acquisition-tax.ts).
+
+    run_appraisal computes the acquisition cost stack -- both derive_metrics and
+    calculate_total_acquisition_cost -- *before* validate_inputs runs, so a date
+    select_band_set cannot place (malformed, or not covered by any band set) must
+    not raise and crash the whole appraisal here; it must degrade. None is
+    already defined as "use the currently open-ended set" and reports
+    date_basis="assumed_current", so degrading to it is self-describing rather
+    than a silent substitute value. validate_inputs independently re-derives the
+    exact same unusable-date condition as a hard acquisition.acquisition_date
+    ValidationIssue, so the failure is never silent -- just never fatal. Same
+    pattern as the compute_lender_gdv catch in metrics.py.
+
+    Both tax call sites (derive_metrics and calculate_total_acquisition_cost)
+    call this instead of passing their raw date straight to
+    calculate_acquisition_tax, so they can never drift apart on how a bad date
+    degrades -- see the _tax_inside_acquisition_cost drift guard in
+    test_financial_model_metrics.py.
+
+    Deliberately narrow: this only ever catches select_band_set's own raise
+    (nothing else in the try block can raise). Any other failure must keep
+    propagating.
+    """
+    if date is None:
+        return None
+    try:
+        select_band_set(jurisdiction, basis, date)
+        return date
+    except ValueError:
+        return None
+
+
 @dataclass
 class AcquisitionTaxBandResult:
     threshold_pence: float
