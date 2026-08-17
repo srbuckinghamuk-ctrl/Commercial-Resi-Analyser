@@ -1,6 +1,7 @@
 import type { CalculatorInputs, FinanceInputs } from '../conversion-types';
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, EquitySource, FacilityTerms, LenderValuation,
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
+  AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs,
 } from './finance-types';
 import {
@@ -22,6 +23,12 @@ export function isV3(snapshot: Record<string, unknown>): snapshot is Record<stri
 /** A v4 document has the same finance shape as v2/v3, discriminated by inputs_version === 4. */
 export function isV4(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV4 {
   return snapshot.inputs_version === 4 && typeof snapshot.finance === 'object' && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/** A v5 document has the same finance shape as v2–v4, discriminated by inputs_version === 5. */
+export function isV5(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV5 {
+  return snapshot.inputs_version === 5 && typeof snapshot.finance === 'object' && snapshot.finance !== null
     && 'committed_net_facility_pence' in (snapshot.finance as object);
 }
 
@@ -235,6 +242,9 @@ export function migrateInputsToV4(
   snapshot: Record<string, unknown>,
   project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
 ): CalculatorInputsV4 {
+  if (isV5(snapshot)) {
+    throw new Error('migrateInputsToV4: input is a v5 document — use migrateInputsToV5');
+  }
   if (isV4(snapshot)) {
     const defaults = migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)));
     const saved = snapshot as unknown as Partial<CalculatorInputsV4>;
@@ -301,4 +311,81 @@ export function migrateV3toV4(v3: CalculatorInputsV3): CalculatorInputsV4 {
     sales_phasing: extra.sales_phasing ?? null,
     refinance: extra.refinance ?? null,
   };
+}
+
+/**
+ * Upgrades a v4 document to v5 by stamping `inputs_version: 5` and adding the
+ * acquisition block's six R8 fields. Purely additive, and deliberately so:
+ * `england_ni` with unchanged bands means **no existing appraisal's computed
+ * values move**. The jurisdiction is stamped `migrated_default` and
+ * `unconfirmed` — a legacy document never told us where the property is, and
+ * saying otherwise would be a claim the record does not support.
+ *
+ * `acquisition_date` is null rather than today's date: stamping a date the
+ * transaction did not have would be inventing evidence, and a null is handled
+ * explicitly downstream (`date_basis: 'assumed_current'`).
+ */
+export function migrateV4toV5(v4: CalculatorInputsV4): CalculatorInputsV5 {
+  if (isV5(v4 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV4toV5: input is already a v5 document');
+  }
+  const { inputs_version: _v4Version, acquisition, ...rest } = v4;
+  const existing = acquisition as Partial<AcquisitionInputsV5>;
+  return {
+    ...rest,
+    inputs_version: 5,
+    acquisition: {
+      ...acquisition,
+      jurisdiction: existing.jurisdiction ?? 'england_ni',
+      jurisdiction_source: existing.jurisdiction_source ?? 'migrated_default',
+      jurisdiction_evidence_status: existing.jurisdiction_evidence_status ?? 'unconfirmed',
+      acquisition_date: existing.acquisition_date ?? null,
+      acquisition_tax_override_pence: existing.acquisition_tax_override_pence ?? null,
+      acquisition_tax_override_reason: existing.acquisition_tax_override_reason ?? '',
+    },
+  };
+}
+
+/**
+ * Normalises any stored snapshot (v1–v5) to v5. Mirrors migrateInputsToV4's
+ * shape exactly: an already-v5 document is merged field-by-field onto v5
+ * defaults so fields added after it was saved get sane values rather than
+ * `undefined`; anything older routes through the existing chain.
+ */
+export function migrateInputsToV5(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV5 {
+  if (isV5(snapshot)) {
+    const defaults = migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project))));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV5>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 5,
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: saved.unit_mix ?? defaults.unit_mix,
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+    };
+  }
+  return migrateV4toV5(migrateInputsToV4(snapshot, project));
 }

@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   migrateInputs, migrateV2toV3, migrateInputsToV3, isV3,
   migrateV3toV4, migrateInputsToV4,
+  migrateV4toV5, migrateInputsToV5,
 } from './migrate';
-import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 const V1_SNAPSHOT = {
@@ -225,5 +226,62 @@ describe('migrateV3toV4 / migrateInputsToV4', () => {
     };
     const again = migrateInputsToV4(v4 as unknown as Record<string, unknown>);
     expect(again.programme).toEqual(v4.programme);
+  });
+});
+
+describe('v5 migration (R8 — jurisdiction and acquisition tax)', () => {
+  it('stamps a migrated default jurisdiction, unconfirmed, with no date', () => {
+    const v4 = migrateInputsToV4({ inputs_version: 1 } as Record<string, unknown>);
+    const v5 = migrateV4toV5(v4);
+    expect(v5.inputs_version).toBe(5);
+    expect(v5.acquisition.jurisdiction).toBe('england_ni');
+    expect(v5.acquisition.jurisdiction_source).toBe('migrated_default');
+    expect(v5.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
+    expect(v5.acquisition.acquisition_date).toBeNull();
+    expect(v5.acquisition.acquisition_tax_override_pence).toBeNull();
+    expect(v5.acquisition.acquisition_tax_override_reason).toBe('');
+  });
+
+  it('carries every other field across unchanged', () => {
+    const v4 = migrateInputsToV4({ inputs_version: 1 } as Record<string, unknown>);
+    const v5 = migrateV4toV5(v4);
+    const { inputs_version: _iv, acquisition: a5, ...rest5 } = v5;
+    const { inputs_version: _iv4, acquisition: a4, ...rest4 } = v4;
+    expect(rest5).toEqual(rest4);
+    // The v4 acquisition fields survive verbatim alongside the five new ones.
+    expect(a5.purchase_price_pence).toBe(a4.purchase_price_pence);
+    expect(a5.legal_fees_pence).toBe(a4.legal_fees_pence);
+    expect(a5.broker_fee_pct).toBe(a4.broker_fee_pct);
+  });
+
+  it('refuses to double-migrate', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    expect(() => migrateV4toV5(v5 as unknown as CalculatorInputsV4))
+      .toThrow('migrateV4toV5: input is already a v5 document');
+  });
+
+  it('refuses to downgrade a v5 document through the v4 entry point', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    expect(() => migrateInputsToV4(v5 as unknown as Record<string, unknown>))
+      .toThrow('migrateInputsToV4: input is a v5 document — use migrateInputsToV5');
+  });
+
+  it.each([1, 2, 3, 4])('normalises a v%i snapshot to v5', (version) => {
+    const v5 = migrateInputsToV5({ inputs_version: version } as Record<string, unknown>);
+    expect(v5.inputs_version).toBe(5);
+    expect(v5.acquisition.jurisdiction).toBe('england_ni');
+  });
+
+  it('preserves a saved v5 document’s confirmed jurisdiction', () => {
+    const saved = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    saved.acquisition.jurisdiction = 'wales';
+    saved.acquisition.jurisdiction_source = 'user';
+    saved.acquisition.jurisdiction_evidence_status = 'confirmed';
+    saved.acquisition.acquisition_date = '2026-05-01';
+    const round = migrateInputsToV5(saved as unknown as Record<string, unknown>);
+    expect(round.acquisition.jurisdiction).toBe('wales');
+    expect(round.acquisition.jurisdiction_source).toBe('user');
+    expect(round.acquisition.jurisdiction_evidence_status).toBe('confirmed');
+    expect(round.acquisition.acquisition_date).toBe('2026-05-01');
   });
 });

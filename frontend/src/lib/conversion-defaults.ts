@@ -10,7 +10,10 @@ import type {
   CalculatorInputs,
 } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
-import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, EquitySource, FacilityTerms } from './model/finance-types';
+import type {
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4,
+  AcquisitionInputsV5, EquitySource, FacilityTerms,
+} from './model/finance-types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -263,4 +266,19 @@ export function defaultCalculatorInputsV4(project?: {
 }): CalculatorInputsV4 {
   const v3 = defaultCalculatorInputsV3(project);
   return { ...v3, inputs_version: 4, programme: null, sales_phasing: null, refinance: null };
+}
+
+/** The v5 acquisition fields for a *new* appraisal: jurisdiction derived where a
+ *  postcode is known (set by the caller), date defaulting to today. */
+export function defaultAcquisitionV5Fields(
+  today: string,
+): Omit<AcquisitionInputsV5, keyof AcquisitionInputs> {
+  return {
+    jurisdiction: 'england_ni',
+    jurisdiction_source: 'derived',
+    jurisdiction_evidence_status: 'unconfirmed',
+    acquisition_date: today,
+    acquisition_tax_override_pence: null,
+    acquisition_tax_override_reason: '',
+  };
 }

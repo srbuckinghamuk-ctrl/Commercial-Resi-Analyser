@@ -3,6 +3,7 @@ import type {
   RiskItem, ScenarioOverrides, DealSpiderInputs,
 } from '../conversion-types';
 import type { SpendCurve } from './curves';
+import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export type { SpendCurve };
 
@@ -164,7 +165,36 @@ export interface CalculatorInputsV4 {
   refinance: RefinanceInputs | null;
 }
 
-export type AnyCalculatorInputs = CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4;
+/** How the jurisdiction on a document came to be set. */
+export type JurisdictionSource = 'derived' | 'user' | 'migrated_default';
+
+/**
+ * R8 (spec §14). The acquisition block gains the tax basis the appraisal is
+ * charged on. Extended rather than edited because `AcquisitionInputs` is shared
+ * with the v1 document shape.
+ */
+export interface AcquisitionInputsV5 extends AcquisitionInputs {
+  jurisdiction: Jurisdiction;
+  jurisdiction_source: JurisdictionSource;
+  /** Reuses the vocabulary of EquitySource.evidence_status deliberately: the
+   *  report handles evidence with one mechanism, not two. */
+  jurisdiction_evidence_status: 'unconfirmed' | 'confirmed';
+  /** Effective date of the transaction; selects the band set. Null on migrated
+   *  documents, which then use the current set and say so. */
+  acquisition_date: string | null;
+  /** Set only where a relief, linked transaction or other rule no band table
+   *  models applies. Requires a reason (validation, Task 6). */
+  acquisition_tax_override_pence: number | null;
+  acquisition_tax_override_reason: string;
+}
+
+export interface CalculatorInputsV5 extends Omit<CalculatorInputsV4, 'inputs_version' | 'acquisition'> {
+  inputs_version: 5;
+  acquisition: AcquisitionInputsV5;
+}
+
+export type AnyCalculatorInputs =
+  CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
