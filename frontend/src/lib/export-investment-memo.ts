@@ -740,6 +740,21 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 0, 'Report Provenance');
   const hashOrAbsent = (hash: string | null) =>
     hash ?? 'not recorded — result predates provenance hashing';
+  // R8 fix round 1 (spec §14). A pre-R8 document records no jurisdiction, so
+  // `deriveMetrics` defaults it to England/NI — and such a document can still
+  // reach FINAL, because it is not re-graded against a condition that post-dates
+  // it. That combination is precisely how a credit paper ends up asserting an
+  // assumption as a recorded fact, which is the defect this release exists to
+  // remove. The claim is therefore qualified wherever it is not evidenced. The
+  // two qualifiers are independent and both may apply: a jurisdiction can be
+  // absent, and the basis can additionally be unconfirmed for the date's sake.
+  const taxBasisQualifiers: string[] = [];
+  if (!prov.jurisdictionRecorded) {
+    taxBasisQualifiers.push('assumed; no jurisdiction recorded on this document');
+  }
+  if (!prov.taxBasisConfirmed) taxBasisQualifiers.push('basis unconfirmed');
+  const taxBasisQualifier =
+    taxBasisQualifiers.length === 0 ? '' : ` — ${taxBasisQualifiers.join('; ')}`;
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
@@ -760,7 +775,7 @@ export function generateInvestmentMemo(
       // Spec §14. Two figures the audit hash already commits to transitively
       // (jurisdiction through the inputs, table version through the metrics),
       // printed here so a reader can see the tax basis without re-running.
-      ['Tax jurisdiction applied', `${JURISDICTION_LABEL[prov.jurisdiction]} (${tax.regime})${prov.taxBasisConfirmed ? '' : ' — basis unconfirmed'}`],
+      ['Tax jurisdiction applied', `${JURISDICTION_LABEL[prov.jurisdiction]} (${tax.regime})${taxBasisQualifier}`],
       ['Acquisition tax table version', prov.taxTableVersion],
     ],
     styles: { fontSize: 8, cellPadding: 2 },
@@ -783,10 +798,16 @@ export function generateInvestmentMemo(
   // another. They sit here rather than in the numbered Appendix B schedule
   // because they qualify the provenance panel immediately above them.
   //
-  // A pre-R8 document carries no evidence field at all; it is not asked to
-  // produce evidence of a status it never recorded, only to supply the missing
-  // transaction date, which is the second line's job.
-  if (
+  // Fix round 1: a pre-R8 document records no jurisdiction *at all*, so asking
+  // it for "evidence of a recorded but unconfirmed jurisdiction" would misstate
+  // what it is missing. The two cases are different requests and the branches
+  // are exclusive: one asks for a jurisdiction, the other for evidence of one.
+  if (!prov.jurisdictionRecorded) {
+    y = infoRequired(
+      y,
+      `The property's jurisdiction. This document records none, so the acquisition tax above is charged as ${tax.regime} on an assumed ${JURISDICTION_LABEL[tax.jurisdiction]} property rather than an evidenced one. A different jurisdiction would charge a different regime and a different figure.`,
+    );
+  } else if (
     'jurisdiction_evidence_status' in inputs.acquisition
     && inputs.acquisition.jurisdiction_evidence_status === 'unconfirmed'
   ) {
@@ -1972,8 +1993,15 @@ export function generateInvestmentMemo(
     // credit committee to discount a figure that is in fact right.
     `Acquisition tax is calculated on the ${tax.regime} non-residential bands for `
     + `${JURISDICTION_LABEL[tax.jurisdiction]} in force from ${formatBandDate(tax.band_set_effective_from)} `
-    + `(assumption table version ${tax.table_version}). Reliefs, linked transactions and multiple `
-    + `dwellings relief are not modelled.`,
+    + `(assumption table version ${tax.table_version}). `
+    // Fix round 1. Without this clause the sentence above reads as a statement
+    // of record on a document that recorded nothing, which is the same fault as
+    // the sentence it replaced, one degree milder.
+    + (prov.jurisdictionRecorded
+      ? ''
+      : `This document records no jurisdiction, so ${JURISDICTION_LABEL[tax.jurisdiction]} `
+        + 'has been assumed rather than evidenced, and the regime above is an assumption not a finding. ')
+    + 'Reliefs, linked transactions and multiple dwellings relief are not modelled.',
     'Areas are taken from the unit schedule and the entered construction area. There is no reconciled area bridge between existing GIA, proposed GIA, net internal area and saleable area.',
     'Technical, title, occupation and planning due diligence is recorded as narrative and as a free-form risk register, not as an evidenced schedule with status, owner and date.',
   ];

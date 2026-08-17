@@ -4,6 +4,7 @@ import type { AnyCalculatorInputs } from '../model';
 import { runAppraisal, migrateInputsToV4 } from '../model';
 import { generateInvestmentMemo } from '../export-investment-memo';
 import { buildProvenance } from '../report-provenance';
+import { TAX_TABLE_VERSION } from '../tax/acquisition-tax';
 import type { ReportProvenance } from '../report-provenance';
 import { inspectPdf } from './pdf-inspect';
 import type { PdfDocumentInfo } from './pdf-inspect';
@@ -141,6 +142,10 @@ describe('investment memorandum release gate', () => {
       expect(text).toContain(savedRecord.audit_hash!);
       expect(text).toContain('2.6.0');
       expect(text).toContain('Europe/London');
+      // Fix round 1 (item 4): the row's value, which survived being replaced by
+      // 'n/a'. Asserted adjacent to its own label so it cannot be satisfied by
+      // the same version string printed somewhere else on the page.
+      expect(countOccurrences(documentProse(info), `Acquisition tax table version ${TAX_TABLE_VERSION}`)).toBe(1);
     });
 
     it('never claims a full cost plan', async () => {
@@ -160,9 +165,16 @@ describe('investment memorandum release gate', () => {
       // taxed by this version." Both halves stopped being true when the engine
       // became jurisdiction-aware, so the gate now pins the opposite: the memo
       // names the regime it actually applied, and never disclaims the other two.
-      expect(prose).toContain('Acquisition tax is calculated on the SDLT non-residential bands for');
+      expect(countOccurrences(prose, 'Acquisition tax is calculated on the SDLT non-residential bands for')).toBe(1);
       expect(countOccurrences(prose, 'is not correctly taxed by this version')).toBe(0);
       expect(countOccurrences(prose, 'England and Northern Ireland non-residential SDLT bands')).toBe(0);
+      // Fix round 1 (item 4). Traceability to a dated table is the whole point
+      // of the table, so the *value* is pinned, not merely the label — both
+      // prose sites survived being replaced with a literal 9.9.9. Compared
+      // against the exported constant so a legitimate table bump does not have
+      // to be chased through the report tests.
+      expect(countOccurrences(prose, `(assumption table version ${TAX_TABLE_VERSION})`)).toBe(1);
+      expect(countOccurrences(prose, `(table ${TAX_TABLE_VERSION})`)).toBe(1);
       expect(prose).toContain('VAT is not modelled as a cash flow');
       expect(prose).toContain('not a credit paper');
     });
@@ -344,6 +356,36 @@ describe('investment memorandum release gate', () => {
     const prose = documentProse(info);
     expect(countOccurrences(prose, 'the acquisition tax jurisdiction has not been confirmed')).toBe(1);
     expect(countOccurrences(prose, "Evidence of the property's jurisdiction")).toBe(1);
+    // Fix round 1 (item 2). The qualifier on the provenance row survived being
+    // deleted outright, so it is pinned by count here and by its legacy
+    // counterpart in the test below.
+    expect(countOccurrences(prose, 'England & Northern Ireland (SDLT) — basis unconfirmed')).toBe(1);
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+  });
+
+  it('calls a pre-R8 jurisdiction assumed, without re-grading the document', async () => {
+    // The defect this closes: `sellAllInputs` is a v4 document with no
+    // jurisdiction field at all. `deriveMetrics` defaults it to england_ni, and
+    // the legacy exemption lets it reach FINAL — so, uncorrected, a credit paper
+    // that can be issued FINAL asserted a defaulted jurisdiction as a recorded
+    // fact. The document must still be able to reach FINAL (it is not re-graded
+    // against a condition that post-dates it); it must not overstate its basis.
+    const run = runAppraisal(sellAllInputs());
+    const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.documentStatus).toBe('FINAL');
+    expect(prov.jurisdictionRecorded).toBe(false);
+
+    const info = await inspectPdf(generateInvestmentMemo(qaProject, run, qaEligibility, prov));
+    const prose = documentProse(info);
+    expect(countOccurrences(prose, 'assumed; no jurisdiction recorded on this document')).toBe(1);
+    expect(countOccurrences(
+      prose,
+      'This document records no jurisdiction, so England & Northern Ireland has been assumed rather than evidenced',
+    )).toBe(1);
+    expect(countOccurrences(prose, "The property's jurisdiction. This document records none")).toBe(1);
+    // The two requests are alternatives, not a pair: this document has no
+    // evidence status to be unconfirmed, so it is never asked to evidence one.
+    expect(countOccurrences(prose, "Evidence of the property's jurisdiction")).toBe(0);
     expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
   });
 
@@ -375,8 +417,14 @@ describe('investment memorandum release gate', () => {
     const prose = documentProse(info);
     for (const phrase of [
       "Evidence of the property's jurisdiction",
+      "The property's jurisdiction. This document records none",
       'The date of the transaction.',
       'Supporting advice for the acquisition tax override',
+      // No qualifier at all on a document whose basis is fully evidenced —
+      // neither of the two the fix introduced.
+      'assumed; no jurisdiction recorded on this document',
+      'basis unconfirmed',
+      'has been assumed rather than evidenced',
     ]) {
       expect(countOccurrences(prose, phrase), phrase).toBe(0);
     }

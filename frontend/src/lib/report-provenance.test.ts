@@ -21,6 +21,17 @@ describe('tax basis in provenance (R8)', () => {
       { taxBasisConfirmed: false })).toBe('unreconciled');
     expect(draftReason({ report_safe: true, senior_repaid: false }, 'credit_approved',
       { taxBasisConfirmed: false })).toBe('senior_not_repaid');
+    // Fix round 1 — the diagonal, and the only case that pins the clause's
+    // position *below* `not_approved` rather than merely above the two reasons
+    // in the lines above. Without it, moving the tax clause after `not_approved`
+    // passes the entire suite, and the failure would be silent in production:
+    // ExportPage builds provenance with no lender case at all, so `not_approved`
+    // holds on every real export until R14 and would mask the tax gate
+    // completely — an unconfirmed basis would never once raise its watermark.
+    expect(draftReason(reconciled, null, { taxBasisConfirmed: false }))
+      .toBe('tax_basis_unconfirmed');
+    expect(draftReason(reconciled, 'declined', { taxBasisConfirmed: false }))
+      .toBe('tax_basis_unconfirmed');
   });
 
   it('still reports not_approved when the basis is confirmed', () => {
@@ -106,5 +117,25 @@ describe('buildProvenance derives the tax basis (R8)', () => {
     });
     expect(prov.taxBasisConfirmed).toBe(true);
     expect(prov.draftReason).not.toBe('tax_basis_unconfirmed');
+    // …but it must not be reported as having *recorded* the jurisdiction it was
+    // defaulted. Able to reach FINAL, obliged to say the basis is assumed.
+    expect(prov.jurisdictionRecorded).toBe(false);
+    expect(prov.jurisdiction).toBe('england_ni');
+  });
+
+  it('counts a v5 document that recorded an explicit null as not recorded', () => {
+    // migrateInputsToV5's already-v5 branch spreads a stored null straight over
+    // the defaults, so this shape reaches the report in practice.
+    const prov = buildProvenance(runAppraisal(withAcquisition({ jurisdiction: null })), null);
+    expect(prov.jurisdictionRecorded).toBe(false);
+    expect(prov.jurisdiction).toBe('england_ni');
+  });
+
+  it('reports a recorded jurisdiction as recorded', () => {
+    expect(buildProvenance(runAppraisal(withAcquisition({})), null).jurisdictionRecorded).toBe(true);
+    expect(
+      buildProvenance(runAppraisal(withAcquisition({ jurisdiction: 'wales' })), null)
+        .jurisdictionRecorded,
+    ).toBe(true);
   });
 });

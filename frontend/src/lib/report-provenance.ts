@@ -62,6 +62,18 @@ export interface ReportProvenance {
   /** The jurisdiction the printed acquisition tax was actually charged under. */
   jurisdiction: Jurisdiction;
   /**
+   * Whether `jurisdiction` was *recorded on the document* or defaulted for it.
+   *
+   * Separate from `taxBasisConfirmed` on purpose. A pre-R8 document carries no
+   * jurisdiction field at all, so `metrics` defaults it to `england_ni` — and
+   * such a document may still reach FINAL, because it is not re-graded against a
+   * condition that post-dates it (see `taxBasisConfirmedFor`). But a FINAL
+   * credit paper must not print a defaulted jurisdiction as a recorded fact, so
+   * the report says "assumed" wherever this is false. This field gates wording,
+   * never document status.
+   */
+  jurisdictionRecorded: boolean;
+  /**
    * Spec §14. True when the reader can rely on the tax basis without further
    * enquiry: the jurisdiction is evidenced *and* the band set was selected by
    * the transaction's own date rather than assumed to be the current one.
@@ -145,6 +157,15 @@ export function documentStatus(
  * was saved, which is a change of meaning rather than a new finding. The `in`
  * guard is the established idiom for reading a field a legacy document lacks.
  *
+ * Do not "tidy" the two halves into one. An undated v5 document is held and an
+ * undated v4 document is not, and that asymmetry is not an oversight: the test
+ * is *opportunity*, not irreproducibility. Both are equally irreproducible after
+ * a Budget — but v5 gives the user a field in which to record the date and the
+ * evidence status, so leaving them blank is a choice the document can fairly be
+ * held to. v4 offered no such field, so its silence says nothing about its
+ * author and cannot be graded. Honesty about the v4 case is the report's job
+ * instead, not the gate's — see `jurisdictionRecorded`.
+ *
  * `date_basis` is read from `metrics.acquisition_tax` rather than re-derived
  * from the date input, because it is the engine's own statement of which band
  * set it used — including where an unusable date degraded to the current set.
@@ -154,6 +175,21 @@ export function taxBasisConfirmedFor(run: AppraisalRun): boolean {
   if (!('jurisdiction' in acq)) return true;
   return acq.jurisdiction_evidence_status === 'confirmed'
     && run.metrics.acquisition_tax.date_basis === 'transaction_date';
+}
+
+/**
+ * Whether the document itself records a jurisdiction, as opposed to having one
+ * defaulted for it by `deriveMetrics`.
+ *
+ * The null check matters as well as the `in` check: `migrateInputsToV5`'s
+ * already-v5 branch spreads a stored `"jurisdiction": null` straight over the
+ * defaults, and `metrics.ts` then coalesces it to `england_ni`. Such a document
+ * has a jurisdiction field but has recorded nothing in it, and the report must
+ * describe it exactly as it describes a pre-R8 document: assumed.
+ */
+export function jurisdictionRecordedOn(run: AppraisalRun): boolean {
+  const acq = run.inputs.acquisition;
+  return 'jurisdiction' in acq && acq.jurisdiction !== null && acq.jurisdiction !== undefined;
 }
 
 /**
@@ -209,6 +245,7 @@ export function buildProvenance(
     recomputedSinceSave: storedCalcVersion !== null && storedCalcVersion !== runCalcVersion,
     taxTableVersion: run.metrics.acquisition_tax.table_version,
     jurisdiction: run.metrics.acquisition_tax.jurisdiction,
+    jurisdictionRecorded: jurisdictionRecordedOn(run),
     taxBasisConfirmed,
   };
 }
