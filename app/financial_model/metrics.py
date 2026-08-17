@@ -116,6 +116,11 @@ class AppraisalResultV2:
     total_development_cost_pence: int
     profit_pence: int
     profit_is_unrealised: bool
+    # Spec Sec 3.16.1 -- a disposal or refinance is booked within the term.
+    has_realisation_event: bool
+    # Spec Sec 3.16.1 -- return on equity is an accounting return, not a
+    # distributed one; reports must label it "unrealised" when true.
+    return_on_equity_is_unrealised: bool
     unrealised_value_pence: int
     profit_on_cost_pct: float | None
     profit_on_gdv_pct: float | None
@@ -233,9 +238,14 @@ def derive_metrics(
     profit_is_unrealised = t.retained_value_pence > 0
 
     equity_contributed = model.totals.equity_contributed_pence + model.totals.additional_equity_pence
+    # Spec Sec 3.16.1 (calc 2.6.0) -- mirrors frontend/src/lib/model/metrics.ts.
+    # A distributed-return metric needs a realisation event to measure against;
+    # without one there is no answer, and "0.00x" reads as a total loss of
+    # capital rather than as a retain-all case with no exit modelled.
+    has_realisation_event = t.gross_sales_pence > 0 or schedule.refinance is not None
     equity_multiple = (
         money_round((model.totals.distributions_pence / equity_contributed) * 100) / 100
-        if equity_contributed > 0 else None
+        if has_realisation_event and equity_contributed > 0 else None
     )
 
     irr = solve_irr(model.equity_cashflows_pence)
@@ -388,6 +398,8 @@ def derive_metrics(
         total_development_cost_pence=tdc,
         profit_pence=profit,
         profit_is_unrealised=profit_is_unrealised,
+        has_realisation_event=has_realisation_event,
+        return_on_equity_is_unrealised=profit_is_unrealised or not has_realisation_event,
         unrealised_value_pence=t.retained_value_pence,
         profit_on_cost_pct=pct(profit, tdc),
         profit_on_gdv_pct=pct(profit, t.gdv_pence),

@@ -1,0 +1,266 @@
+/**
+ * Representative appraisals for the report release gate.
+ *
+ * The audit asks the gate to run over "sell, retain, refinance and blended"
+ * reports, because the memo's page composition changes route by route: a
+ * sell-all case prints sale tranches and a redemption schedule, a retain-all
+ * case prints neither and is where the audit found its near-blank page.
+ *
+ * These are authored here rather than shared with export-investment-memo.test.ts
+ * so a change made to satisfy one suite cannot quietly move the other's ground.
+ *
+ * Test-support only; not imported by the application.
+ */
+import type { Project, EligibilityAssessment } from '../../types';
+import type { CalculatorInputsV4 } from '../model';
+
+export const qaProject: Project = {
+  id: '9f1c2d34-5e6a-4b7c-8d9e-0a1b2c3d4e5f',
+  address_raw: '9 & 9A Stonegate, York, YO1 8AN',
+  address_line1: '9 & 9A Stonegate',
+  address_line2: null,
+  address_town: 'York',
+  address_county: 'North Yorkshire',
+  address_postcode: 'YO1 8AN',
+  address_postcode_district: 'YO1',
+  pa_submitted_date: null,
+  pa_decision_date: null,
+  price_pence: 42_500_000,
+  price_qualifier: 'Guide price',
+  use_class: 'office',
+  floor_area_sqft: 5382,
+  floor_area_sqm: 500,
+  floors: 3,
+  tenure: 'freehold',
+  lease_years_remaining: null,
+  current_use_description: 'Ground-floor retail with upper parts',
+  epc_rating: 'C',
+  is_vacant: false,
+  vacancy_date: null,
+  source_url: null,
+  source_name: null,
+  description:
+    'The subject comprises a mid-terrace period building arranged over three floors, '
+    + 'with ground-floor retail accommodation and upper parts in ancillary use.',
+  image_urls: [],
+  stage: 'financial_appraisal',
+  created_at: '2026-03-01T00:00:00Z',
+  updated_at: '2026-08-16T00:00:00Z',
+};
+
+export const qaEligibility: EligibilityAssessment = {
+  id: 'a1b2c3d4-0000-4000-8000-000000000001',
+  project_id: qaProject.id,
+  pdr_class: 'class_ma',
+  ruleset_version: 'gpdo-2026-08.2',
+  criteria: [
+    { key: 'use_class', label: 'Use class E', passed: true, source: 'user', auto_checked: false, value: 'office', risk_flag: null },
+    { key: 'floor_area', label: 'Floor area within limit', passed: true, source: 'auto', auto_checked: true, value: '500 m²', risk_flag: null },
+    { key: 'vacant_3m', label: 'Vacant for 3+ months', passed: null, source: 'user', auto_checked: false, value: null, risk_flag: 'Occupation status unconfirmed' },
+  ],
+  verdict: 'amber',
+  suggested_next_steps: ['Confirm vacancy period', 'Submit prior approval application'],
+  notes: null,
+  created_at: '2026-03-05T00:00:00Z',
+  updated_at: '2026-03-05T00:00:00Z',
+};
+
+/**
+ * A reconciled, report-safe base case: five one-bed units, a real facility, and
+ * a sell-all exit. Every route fixture below is a modification of this one, so a
+ * difference in the rendered report is a difference in the route, not the deal.
+ */
+export function sellAllInputs(): CalculatorInputsV4 {
+  return {
+    inputs_version: 4,
+    project_id: qaProject.id,
+    acquisition: {
+      purchase_price_pence: 42_500_000,
+      legal_fees_pence: 750_000,
+      survey_cost_pence: 250_000,
+      broker_fee_pct: 0.5,
+      other_acquisition_costs_pence: 0,
+    },
+    unit_mix: {
+      units: [
+        { id: 'u1', type: '1bed', floor_area_sqm: 52, estimated_value_pence: 25_000_000, comparable_notes: '12 Stonegate, sold Feb 2026' },
+        { id: 'u2', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 24_500_000, comparable_notes: '' },
+        { id: 'u3', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 24_500_000, comparable_notes: '' },
+        { id: 'u4', type: '2bed', floor_area_sqm: 68, estimated_value_pence: 31_000_000, comparable_notes: '' },
+        { id: 'u5', type: '2bed', floor_area_sqm: 70, estimated_value_pence: 32_000_000, comparable_notes: '' },
+      ],
+    },
+    conversion_costs: {
+      prior_approval_fee_per_dwelling_pence: 9_600,
+      cil_s106_pence: 0,
+      architect_pence: 1_200_000,
+      structural_engineer_pence: 450_000,
+      mande_pence: 400_000,
+      planning_consultant_pence: 350_000,
+      building_control_pence: 200_000,
+      other_professional_fees_pence: 200_000,
+      construction_cost_per_sqm_pence: 145_000,
+      total_construction_sqm: 340,
+      contingency_pct: 10,
+      fire_safety_pence: 1_500_000,
+      sound_insulation_pence: 900_000,
+      part_l_compliance_pence: 700_000,
+    },
+    finance: {
+      funding_source: 'development_finance',
+      day_one_advance_pence: 25_000_000,
+      day_one_market_value_pence: 45_000_000,
+      development_cost_advance_pct: 100,
+      committed_net_facility_pence: 75_000_000,
+      committed_gross_facility_pence: 82_000_000,
+      annual_interest_rate_pct: 9.0,
+      interest_type: 'rolled_up',
+      arrangement_fee_pct: 2,
+      arrangement_fee_basis: 'committed_net_facility',
+      exit_fee_pct: 1,
+      exit_fee_basis: 'committed_gross_facility',
+      broker_fee_pence: 250_000,
+      lender_legal_fee_pence: 350_000,
+      valuation_fee_pence: 180_000,
+      monitoring_surveyor_fee_pence: 240_000,
+      interest_reserve_pence: 7_000_000,
+      term_months: 18,
+      equity_draw_rule: 'equity_first',
+      sales_sweep_pct: 100,
+      legacy_leverage_pct: null,
+      requires_confirmation: false,
+      enforcement_cost_assumption_pence: 0,
+    },
+    equity_sources: [
+      { id: 'e1', classification: 'cash', amount_pence: 40_000_000, timing_month: 0, repayment_priority: 1, evidence_status: 'confirmed', notes: 'Sponsor cash' },
+    ],
+    exit_strategy: {
+      route: 'sell_all',
+      selling_agent_fee_pct: 1.5,
+      selling_legal_fee_pence: 150_000,
+      retained_units: [],
+    },
+    risks: [
+      { id: 'r1', description: 'Existing building structural capacity for new openings', likelihood: 'medium', impact: 'high', mitigation: 'Intrusive survey before contract' },
+      { id: 'r2', description: 'Planning prior approval refused or delayed', likelihood: 'low', impact: 'high', mitigation: 'Pre-application advice obtained' },
+      { id: 'r3', description: 'Construction cost inflation', likelihood: 'medium', impact: 'medium', mitigation: 'Fixed-price contract at RIBA 4' },
+      { id: 'r4', description: 'Sales absorption slower than modelled', likelihood: 'medium', impact: 'medium', mitigation: 'Retain-and-refinance contingent exit' },
+    ],
+    scenarios: {
+      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0 },
+      upside: { label: 'Upside', gdv_adjustment_pct: 8, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0 },
+      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 12, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1 },
+      severe: { label: 'Severe', gdv_adjustment_pct: -18, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2 },
+    },
+    deal_spider: {
+      storeys: 3,
+      building_height_m: 11,
+      bsa_higher_risk: false,
+      daylight_pass_pct: 90,
+      absorption_months: 8,
+      exit_sell: true,
+      exit_refinance: true,
+      exit_hold: false,
+      exit_part_sale: true,
+      prior_approval_window_months: 3,
+      programme_contingency_months: 2,
+      cil_offset_pence: 0,
+      target_profit_on_cost_pct: 20,
+      weights: {},
+    },
+    lender_valuation: {
+      basis: 'global_pct',
+      global_value: -7.5,
+      per_key_values: null,
+      reason: 'Valuer applied a discount to the sponsor comparables',
+      author: 'A. Valuer MRICS',
+      date: '2026-07-14',
+    },
+    programme: {
+      anchor_month: '2026-09',
+      packages: {
+        construction: { start_offset: 3, duration_months: 9, curve: { kind: 'straight_line' } },
+        professional: { start_offset: 0, duration_months: 12, curve: { kind: 's_curve' } },
+        statutory: { start_offset: 1, duration_months: 2, curve: { kind: 'straight_line' } },
+      },
+    },
+    sales_phasing: null,
+    refinance: null,
+  };
+}
+
+/** Every unit retained — the audit's York shape, and the sparse-page case. */
+export function retainAllInputs(): CalculatorInputsV4 {
+  const inputs = sellAllInputs();
+  inputs.exit_strategy = {
+    route: 'retain_all',
+    selling_agent_fee_pct: 1.5,
+    selling_legal_fee_pence: 150_000,
+    retained_units: inputs.unit_mix.units.map((u) => ({
+      unit_id: u.id,
+      monthly_rent_pence: Math.round(u.estimated_value_pence * 0.055 / 12),
+    })),
+  };
+  return inputs;
+}
+
+/** Retained and refinanced — the take-out case a lender actually underwrites. */
+export function refinanceInputs(): CalculatorInputsV4 {
+  const inputs = retainAllInputs();
+  inputs.refinance = {
+    month_offset: 16,
+    investment_value_pence: 150_000_000,
+    ltv_pct: 65,
+    arrangement_fee_pence: 975_000,
+    legal_costs_pence: 400_000,
+  };
+  return inputs;
+}
+
+/** Part sold, part retained, with the sale receipts phased across three months. */
+export function blendedInputs(): CalculatorInputsV4 {
+  const inputs = sellAllInputs();
+  inputs.exit_strategy = {
+    route: 'blended',
+    selling_agent_fee_pct: 1.5,
+    selling_legal_fee_pence: 150_000,
+    retained_units: [
+      { unit_id: 'u4', monthly_rent_pence: 142_000 },
+      { unit_id: 'u5', monthly_rent_pence: 146_000 },
+    ],
+  };
+  inputs.sales_phasing = {
+    tranches: [
+      { month_offset: 14, pct_of_gross_receipts: 40 },
+      { month_offset: 16, pct_of_gross_receipts: 35 },
+      { month_offset: 18, pct_of_gross_receipts: 25 },
+    ],
+  };
+  return inputs;
+}
+
+/**
+ * The legacy v1 snapshot shape. Migrating it forces
+ * `finance.requires_confirmation`, which is what makes a run not report-safe —
+ * the state every DRAFT-watermark assertion needs.
+ */
+export function legacyV1Snapshot(): Record<string, unknown> {
+  const base = sellAllInputs();
+  return {
+    project_id: qaProject.id,
+    acquisition: base.acquisition,
+    unit_mix: base.unit_mix,
+    conversion_costs: base.conversion_costs,
+    finance: {
+      funding_source: 'bridging',
+      ltv_pct: 65,
+      interest_rate_annual_pct: 9.5,
+      arrangement_fee_pct: 2,
+      exit_fee_pct: 1,
+      loan_term_months: 12,
+      interest_type: 'rolled_up',
+    },
+    exit_strategy: { route: 'retain_all', selling_agent_fee_pct: 1.5, selling_legal_fee_pence: 150_000, retained_units: [] },
+    risks: [],
+  };
+}

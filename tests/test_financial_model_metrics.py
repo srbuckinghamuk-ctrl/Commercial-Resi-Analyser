@@ -9,7 +9,13 @@ from app.financial_model.engine import run_ledger
 from app.financial_model.metrics import breakeven_flags, derive_metrics
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import default_calculator_inputs_v2, migrate_inputs_to_v4
-from app.financial_model.schedule import MonthReceipts, MonthUses, Schedule, ScheduleTotals
+from app.financial_model.schedule import (
+    MonthReceipts,
+    MonthUses,
+    Schedule,
+    ScheduleRefinance,
+    ScheduleTotals,
+)
 from app.financial_model.types import (
     AcquisitionInputs,
     CalculatorInputsV2,
@@ -283,3 +289,66 @@ class TestBreakevenFlagsWithAStructuralReason:
         out = breakeven_flags(False, False, 2, "no sale price redeems — test reason")
         assert [f.code for f in out] == ["senior_breakeven_unsolvable"]
         assert out[0].message == "no sale price redeems — test reason"
+
+
+def _default_inputs() -> CalculatorInputsV2:
+    return CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+
+
+class TestDistributedReturnBasis:
+    """Spec Sec 3.16.1 (calc 2.6.0) -- mirrors metrics.test.ts's
+    'distributed-return basis' block.
+
+    The discriminator is whether the schedule books a realisation event, not
+    whether any cash reached equity. A sale that sweeps entirely to senior debt
+    returns 0.00x, which is a real answer; a retain-all case has no answer at
+    all, and printing zero there told the second audit's reviewer that the
+    sponsor had lost its capital.
+    """
+
+    def test_multiple_is_zero_when_a_sale_returns_nothing_to_equity(self):
+        schedule = mk_schedule(
+            [uses(acquisition_pence=50_000_000), uses()],
+            [receipts(), receipts(gross_sale_pence=20_000_000)],
+        )
+        model = run_ledger(schedule, TERMS, equity(5_000_000))
+        r = derive_metrics(_default_inputs(), schedule, model)
+
+        assert schedule.totals.gross_sales_pence > 0
+        assert model.totals.distributions_pence == 0
+        assert r.has_realisation_event is True
+        assert r.equity_multiple == 0
+
+    def test_no_multiple_at_all_when_nothing_is_sold_or_refinanced(self):
+        schedule = mk_schedule([uses(acquisition_pence=50_000_000)], [receipts()])
+        model = run_ledger(schedule, TERMS, equity(50_000_000))
+        r = derive_metrics(_default_inputs(), schedule, model)
+
+        assert schedule.totals.gross_sales_pence == 0
+        assert schedule.refinance is None
+        assert r.has_realisation_event is False
+        assert r.equity_multiple is None
+        assert r.return_on_equity_is_unrealised is True
+
+    def test_refinance_counts_as_a_realisation_event(self):
+        schedule = mk_schedule([uses(acquisition_pence=50_000_000)], [receipts()])
+        schedule.refinance = ScheduleRefinance(month=1, net_proceeds_pence=30_000_000)
+        model = run_ledger(schedule, TERMS, equity(50_000_000))
+        r = derive_metrics(_default_inputs(), schedule, model)
+
+        assert schedule.totals.gross_sales_pence == 0
+        assert r.has_realisation_event is True
+        assert r.equity_multiple is not None
+
+    def test_retained_value_in_the_profit_makes_return_on_equity_unrealised(self):
+        schedule = mk_schedule(
+            [uses(acquisition_pence=50_000_000)],
+            [receipts(gross_sale_pence=30_000_000)],
+        )
+        schedule.totals.retained_value_pence = 40_000_000
+        model = run_ledger(schedule, TERMS, equity(50_000_000))
+        r = derive_metrics(_default_inputs(), schedule, model)
+
+        assert r.has_realisation_event is True
+        assert r.profit_is_unrealised is True
+        assert r.return_on_equity_is_unrealised is True

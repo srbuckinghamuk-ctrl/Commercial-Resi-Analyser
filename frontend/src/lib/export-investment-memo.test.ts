@@ -261,12 +261,20 @@ describe('generateInvestmentMemo', () => {
     expect(text).toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
   });
 
-  it('omits the draft watermark when the run reconciles cleanly', async () => {
+  // R7 (audit §9): a clean reconciliation no longer clears the watermark on its
+  // own. It clears the *unreconciled* banner -- saying the figures may be wrong
+  // when they reconcile would be a false statement about the model -- but an
+  // appraisal that nobody has approved is still not a lender document, so the
+  // banner becomes NOT APPROVED. Asserting only the absence of the old string
+  // would let a document with no watermark at all pass this test, which is the
+  // outcome it exists to prevent.
+  it('replaces the unreconciled banner with NOT APPROVED when the run reconciles cleanly', async () => {
     const run = runAppraisal(baseInputs());
     expect(run.reconciliation.report_safe).toBe(true); // sanity check the fixture
     const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
     const text = await pdfText(blob);
     expect(text).not.toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+    expect(text).toContain('DRAFT - NOT APPROVED FOR LENDER RELIANCE');
   });
 
   // Regression test (round-1 review, CRITICAL): jspdf-autotable paginates

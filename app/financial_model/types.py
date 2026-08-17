@@ -380,4 +380,4 @@ FlagCode = Literal[
     "breakeven_cap_exhausted", "facility_redrawn_after_redemption",
 ]
 
-CALC_VERSION = "2.5.0"
+CALC_VERSION = "2.6.0"

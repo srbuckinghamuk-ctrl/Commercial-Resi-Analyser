@@ -210,7 +210,10 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       <div style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: 8, padding: 16, marginBottom: 16 }}>
         <h3 style={{ color: '#e2e8f0', fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Investment Memorandum (PDF)</h3>
         <p style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
-          Comprehensive report with full cost plan, sensitivity analysis, risk register, cashflow, and funding request. Suitable for equity investors and senior debt funders.
+          Comprehensive report with headline cost estimate, sensitivity analysis, risk register, cashflow
+          and funding request. Issued as a DRAFT development appraisal: it is suitable for sponsor and
+          preliminary lender review, and becomes a document a credit committee can rely on only once the
+          appraisal is report-safe and a lender case has been approved.
         </p>
         {selectedProject ? (
           <div>

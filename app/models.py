@@ -382,6 +382,7 @@ class FinancialAppraisal(BaseModel):
     status: str = "draft"                  # draft | reconciled | legacy_unreconciled
     input_hash: str | None = None
     outputs_hash: str | None = None
+    audit_hash: str | None = None          # spec Sec 13.2
     # legacy columns retained for backward-compat, now always server-computed:
     gdv_pence: int | None = None
     total_cost_pence: int | None = None

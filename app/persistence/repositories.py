@@ -204,6 +204,7 @@ class FinancialAppraisalRepository:
             status=row.status,
             input_hash=row.input_hash,
             outputs_hash=row.outputs_hash,
+            audit_hash=row.audit_hash,
             gdv_pence=row.gdv_pence,
             total_cost_pence=row.total_cost_pence,
             profit_on_cost_pct=row.profit_on_cost_pct,

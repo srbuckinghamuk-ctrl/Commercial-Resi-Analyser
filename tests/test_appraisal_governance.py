@@ -129,7 +129,7 @@ async def test_invalid_lender_valuation_rejected_with_422(client, project):
 async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
     response status == 'legacy_unreconciled', outputs recalculated under
-    calc_version 2.5.0, and finance.requires_confirmation True in the stored
+    calc_version 2.6.0, and finance.requires_confirmation True in the stored
     (migrated) snapshot."""
     v1_snapshot = {
         "acquisition": FIXTURE_A_INPUTS["acquisition"],
@@ -156,7 +156,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     body = resp.json()
 
     assert body["status"] == "legacy_unreconciled"
-    assert body["calc_version"] == "2.5.0"
+    assert body["calc_version"] == "2.6.0"
     # Release 3a: the server normalisation chain now runs v1 -> v2 -> v3 -> v4.
     assert body["inputs_snapshot"]["inputs_version"] == 4
     assert body["inputs_snapshot"]["lender_valuation"] is None
@@ -165,7 +165,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert body["inputs_snapshot"]["refinance"] is None
     assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
     # Outputs were recalculated by the v2 engine, not just passed through.
-    assert body["outputs"]["metrics"]["calc_version"] == "2.5.0"
+    assert body["outputs"]["metrics"]["calc_version"] == "2.6.0"
 
 
 async def test_partial_v3_snapshot_is_merged_onto_defaults_not_rejected(client, project):
@@ -248,6 +248,72 @@ async def test_input_hash_and_outputs_hash_persisted(client, project):
     assert body2["outputs_hash"] == body["outputs_hash"]
 
 
+async def test_audit_hash_binds_inputs_outputs_and_status(client, project):
+    """Spec Sec 13.2. The audit hash printed in the report provenance panel is
+    recomputable from the six values printed beside it, and moves whenever any
+    one of them does.
+
+    The expected value is derived here independently of the API -- sha256 over
+    the joined tuple -- rather than by calling the same helper the endpoint
+    calls, so a change to the composition rule fails this test instead of
+    passing through both sides of it.
+    """
+    import hashlib
+
+    payload = {
+        "project_id": project["id"],
+        "name": "Audit hash appraisal",
+        "inputs_snapshot": fixture_a_inputs(),
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    expected = hashlib.sha256(
+        "|".join(
+            [
+                project["id"],
+                body["calc_version"],
+                str(body["inputs_version"]),
+                body["status"],
+                body["input_hash"],
+                body["outputs_hash"],
+            ]
+        ).encode()
+    ).hexdigest()
+    assert body["audit_hash"] == expected
+
+    # Same inputs -> same hash.
+    resp2 = await client.put(
+        f"/api/v1/appraisals/{project['id']}",
+        json={"inputs_snapshot": fixture_a_inputs()},
+    )
+    assert resp2.json()["audit_hash"] == body["audit_hash"]
+
+    # Different inputs -> different hash, because outputs_hash moved.
+    changed = fixture_a_inputs()
+    changed["acquisition"]["purchase_price_pence"] += 100_000
+    resp3 = await client.put(
+        f"/api/v1/appraisals/{project['id']}",
+        json={"inputs_snapshot": changed},
+    )
+    assert resp3.status_code == 200, resp3.text
+    assert resp3.json()["audit_hash"] != body["audit_hash"]
+
+
+async def test_audit_hash_moves_with_governance_status_alone(client, project):
+    """Two records whose inputs and outputs hash identically but whose status
+    differs must not share an audit hash -- the status is what a reader relies
+    on when deciding whether the printed figures may be relied upon."""
+    from app.financial_model.hashing import audit_hash
+
+    common = dict(
+        project_id="p", calc_version="2.5.0", inputs_version=4,
+        input_hash_value="ih", outputs_hash_value="oh",
+    )
+    assert audit_hash(status="draft", **common) != audit_hash(status="reconciled", **common)
+
+
 async def test_status_reconciled_only_when_report_safe(client, project):
     """Fixture A (clean) -> status 'reconciled'. A case with a funding gap
     (tiny net facility, tiny equity) -> status 'draft' with issues listed."""
@@ -296,7 +362,7 @@ async def test_get_returns_authoritative_outputs(client, project):
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
     assert body["gdv_pence"] == 120_000_000
-    assert body["calc_version"] == "2.5.0"
+    assert body["calc_version"] == "2.6.0"
 
 
 def _programme(construction: dict) -> dict:
