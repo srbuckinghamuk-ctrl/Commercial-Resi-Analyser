@@ -8,8 +8,8 @@ import type { ReportProvenance } from '../report-provenance';
 import { inspectPdf } from './pdf-inspect';
 import type { PdfDocumentInfo } from './pdf-inspect';
 import {
-  overflowingItems, sparsePages, documentText, documentProse, watermarkTexts,
-  describeLayout, bodyItems,
+  overflowingItems, sparsePages, orphanHeadings, documentText, documentProse,
+  watermarkTexts, describeLayout, bodyItems,
 } from './report-checks';
 import {
   qaProject, qaEligibility, sellAllInputs, retainAllInputs,
@@ -105,6 +105,13 @@ describe('investment memorandum release gate', () => {
       ).toEqual([]);
     });
 
+    it('never leaves a heading alone at the foot of a page', async () => {
+      const { info } = await report(makeInputs());
+      expect(
+        orphanHeadings(info).map((o) => `page ${o.page}: "${o.text}" (${o.sizePt}pt)`),
+      ).toEqual([]);
+    });
+
     it('gives every page a running footer and no page beyond the last', async () => {
       const { info } = await report(makeInputs());
       expect(info.pages.length).toBeGreaterThan(5);
@@ -149,6 +156,45 @@ describe('investment memorandum release gate', () => {
       expect(prose).toContain('VAT is not modelled as a cash flow');
       expect(prose).toContain('not a credit paper');
     });
+  });
+
+  // ── Generated prose says each thing once ─────────────────────────────────
+  //
+  // R6's lesson, in a new place: `toContain` cannot see a repeat, so a document
+  // that states a requirement twice passes every substring assertion written
+  // about it. Both defects below were live, and both were found by rendering a
+  // page and reading it. Counting is what makes them a gate.
+
+  function countOccurrences(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  it('lists each information requirement once', async () => {
+    const prose = documentProse((await report(sellAllInputs())).info);
+    // Folding the old "Additional Appendices Required" block into the numbered
+    // schedule printed team CVs, the professional team schedule and the
+    // insurance schedule twice each, under two wordings.
+    for (const phrase of ['collateral warranties', 'CAR, PI', 'CVs']) {
+      expect(countOccurrences(prose, phrase), `"${phrase}" appears more than once`).toBe(1);
+    }
+  });
+
+  it('gives the reason a document is a draft once, not once per phrasing', async () => {
+    const prose = documentProse((await report(sellAllInputs())).info);
+    // With no lender case submitted, "no lender case has been submitted" and
+    // "no lender case has been credit approved" are the same fact twice.
+    expect(countOccurrences(prose, 'No lender case has been submitted for credit approval')).toBe(1);
+    expect(countOccurrences(prose, 'no lender case has been credit approved')).toBe(0);
+  });
+
+  it('keeps both sentences when the lender case exists but is unapproved', async () => {
+    // The collapse above must not swallow a genuinely different second fact.
+    const run = runAppraisal(sellAllInputs());
+    const prov = provenanceFor(run, { lenderCaseStatus: 'information_required' });
+    const info = await inspectPdf(generateInvestmentMemo(qaProject, run, qaEligibility, prov));
+    const prose = documentProse(info);
+    expect(prose).toContain('The lender case is at "Information required".');
+    expect(prose).toContain('It is a draft because no lender case has been credit approved.');
   });
 
   // ── Watermark and document status ────────────────────────────────────────

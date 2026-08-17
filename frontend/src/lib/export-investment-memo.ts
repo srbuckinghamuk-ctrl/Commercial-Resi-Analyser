@@ -13,7 +13,9 @@ import {
 import { formatProgrammeMonth } from './programme-months';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
-import { drawWatermark, fitWatermark, setDocumentMetadata } from './report-layout';
+import {
+  DARK_PAGE_TONE, LIGHT_PAGE_TONE, drawWatermark, fitWatermark, setDocumentMetadata,
+} from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
 
 // ── This memo consumes the finished AppraisalRun only ─────
@@ -41,10 +43,6 @@ const FOOTER_Y = 287;
 /** Last baseline the flowing content may occupy; the footer sits below it. */
 const CONTENT_BOTTOM = 272;
 
-/** A section heading plus its rule and two lines of whatever follows. */
-const SECTION_KEEP_MM = 26;
-/** A sub-heading plus two lines. */
-const SUBHEAD_KEEP_MM = 18;
 /** A table's header row plus roughly three body rows at the memo's 8-9pt sizes. */
 const TABLE_MIN_BLOCK_MM = 34;
 /** Tables at or below this height are kept whole rather than split (see `table`). */
@@ -357,8 +355,15 @@ export function generateInvestmentMemo(
   // and the answer cannot change between pages of the same document.
   const watermarkGeometry = draft ? fitWatermark(doc, watermarkText) : null;
 
+  // The cover is a full-bleed dark page; every other page is white.
+  let onDarkPage = true;
+
   function watermark(): void {
-    if (watermarkGeometry) drawWatermark(doc, watermarkText, watermarkGeometry);
+    if (!watermarkGeometry) return;
+    drawWatermark(
+      doc, watermarkText, watermarkGeometry,
+      onDarkPage ? DARK_PAGE_TONE : LIGHT_PAGE_TONE,
+    );
   }
 
   // jspdf-autotable paginates internally via its own doc.addPage() calls when
@@ -415,6 +420,12 @@ export function generateInvestmentMemo(
   function table(options: Parameters<typeof autoTable>[1]): void {
     const requestedY = typeof options.startY === 'number' ? options.startY : MARGIN_T;
     const height = measureTableHeight(options);
+    // Heading first, and measured together with the table, so a heading can
+    // never be left on the page the table just moved off.
+    const afterHeadings = flushHeadings(
+      requestedY,
+      Number.isFinite(height) && height <= MOVE_WHOLE_MAX_MM ? height : TABLE_MIN_BLOCK_MM,
+    );
     // A short table moves whole rather than splitting: splitting one costs more
     // in legibility than the white space it saves, and a two-row tail on its own
     // page is the orphan the second audit reported. A long one is allowed to
@@ -422,8 +433,8 @@ export function generateInvestmentMemo(
     // worse hole than the split it avoided — and only has to clear the
     // header-plus-a-few-rows minimum where it starts.
     const startY = height <= MOVE_WHOLE_MAX_MM
-      ? ensureSpace(requestedY, height)
-      : ensureSpace(requestedY, TABLE_MIN_BLOCK_MM);
+      ? ensureSpace(afterHeadings, height)
+      : ensureSpace(afterHeadings, TABLE_MIN_BLOCK_MM);
     autoTable(doc, {
       ...options,
       startY,
@@ -481,9 +492,7 @@ export function generateInvestmentMemo(
    */
   function writeLines(y: number, lines: string[], style: Style, lineHeight: number): number {
     const blockHeight = lines.length * lineHeight;
-    if (blockHeight <= CONTENT_BOTTOM - MARGIN_T) {
-      y = ensureSpace(y, blockHeight);
-    }
+    y = flushHeadings(y, blockHeight);
     for (const line of lines) {
       y = ensureSpace(y, lineHeight);
       applyStyle(style);
@@ -493,24 +502,67 @@ export function generateInvestmentMemo(
     return y;
   }
 
+  // ── Headings are deferred, not drawn where they are asked for ────────────
+  //
+  // A heading cannot decide its own page, because whether it fits depends on
+  // the height of the block that follows it — and that block is measured after
+  // the heading has already been placed. Reserving a guessed 18 mm for "the
+  // heading plus a couple of lines" is not enough when what follows is a 90 mm
+  // table that then moves whole to the next page, leaving the heading stranded
+  // at the foot of the previous one. (Which is exactly what happened to "Two-Way
+  // Sensitivity Matrix: LTGDV, developer basis" on the first pass of this fix.)
+  //
+  // So a heading is queued, and the next block to draw flushes the queue as part
+  // of its own keep-together decision: heading heights are added to the block's
+  // height, the page break is taken once for the lot, and the heading is drawn
+  // on whichever page its content ended up on. A section title followed by a
+  // sub-heading followed by a table travels as one unit.
+  type PendingHeading =
+    | { kind: 'section'; num: number; title: string }
+    | { kind: 'sub'; text: string };
+
+  const SECTION_HEADING_MM = 12;
+  const SUB_HEADING_MM = 6;
+  let pendingHeadings: PendingHeading[] = [];
+
+  function headingHeight(h: PendingHeading): number {
+    return h.kind === 'section' ? SECTION_HEADING_MM : SUB_HEADING_MM;
+  }
+
+  /**
+   * Take the page break for the queued headings plus `contentMm` of the block
+   * about to be drawn, draw the headings, and return the cursor for the content.
+   */
+  function flushHeadings(y: number, contentMm: number): number {
+    const headingsMm = pendingHeadings.reduce((sum, h) => sum + headingHeight(h), 0);
+    y = ensureSpace(y, headingsMm + Math.min(contentMm, CONTENT_BOTTOM - MARGIN_T));
+    for (const heading of pendingHeadings) {
+      if (heading.kind === 'section') {
+        applyStyle(SECTION);
+        doc.text(`${heading.num}. ${heading.title}`, MARGIN_L, y);
+        y += 4;
+        doc.setDrawColor(30, 58, 95);
+        doc.setLineWidth(0.5);
+        doc.line(MARGIN_L, y, MARGIN_L + CONTENT_W, y);
+        y += 8;
+      } else {
+        applyStyle(SUBHEAD);
+        doc.text(heading.text, MARGIN_L, y);
+        y += SUB_HEADING_MM;
+      }
+    }
+    pendingHeadings = [];
+    return y;
+  }
+
   function sectionTitle(y: number, num: number, title: string): number {
-    // A section heading keeps its rule and enough of what follows that it can
-    // never be the last thing on a page.
-    y = ensureSpace(y, SECTION_KEEP_MM);
-    applyStyle(SECTION);
-    doc.text(`${num}. ${title}`, MARGIN_L, y);
-    y += 4;
-    doc.setDrawColor(30, 58, 95);
-    doc.setLineWidth(0.5);
-    doc.line(MARGIN_L, y, MARGIN_L + CONTENT_W, y);
-    return y + 8;
+    pendingHeadings.push({ kind: 'section', num, title });
+    return y;
   }
 
   function subHeading(y: number, text: string): number {
-    y = ensureSpace(y, SUBHEAD_KEEP_MM);
-    applyStyle(SUBHEAD);
-    doc.text(text, MARGIN_L, y);
-    return y + 6;
+    pendingHeadings.push({ kind: 'sub', text });
+    return y;
   }
 
   function bodyText(y: number, text: string): number {
@@ -643,6 +695,7 @@ export function generateInvestmentMemo(
   doc.addPage();
   doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, PAGE_W, PAGE_H, 'F');
+  onDarkPage = false;
   ensureWatermark();
   let y = MARGIN_T;
 
@@ -1770,10 +1823,12 @@ export function generateInvestmentMemo(
     'Security package details',
     'Drawdown profile',
     'Contingent exit strategy with evidence',
-    'Team CVs',
-    'Professional team schedule and warranties / collateral warranties',
-    "Insurance schedule (CAR, PI, employer's liability)",
   ];
+  // The former "C. Additional Appendices Required" block asked for team CVs, a
+  // professional team schedule and an insurance schedule. All three were already
+  // in the list above under slightly different wording (items 8, 9 and 10), so
+  // folding that block in here printed each of them twice. The block is gone;
+  // the items it duplicated stay where they were.
   if (missing.length > 0) {
     infoItems.push(`Risk register gaps: ${missing.join(', ')}`);
   }
@@ -1807,13 +1862,23 @@ export function generateInvestmentMemo(
   y = bodyText(
     y,
     `This document is a ${prov.documentStatus} development appraisal prepared from the sponsor's own inputs. `
-    + `It is ${prov.reportSafe ? 'report-safe: every hard validation in the model passes' : 'NOT report-safe: one or more hard validations fail and the figures may be wrong'}, `
-    + `and ${prov.lenderCaseStatus === null
-        ? 'no lender case has been submitted for credit approval'
-        : `the lender case is at "${lenderCaseLabel(prov.lenderCaseStatus)}"`}. `
-    + `${prov.draftReason === null
-        ? ''
-        : `It remains a draft because ${DRAFT_REASON_SENTENCE[prov.draftReason]}. `}`
+    + `${prov.reportSafe
+        ? 'It is report-safe: every hard validation in the model passes.'
+        : 'It is NOT report-safe: one or more hard validations fail, and the figures may be wrong.'} `
+    // The lender-case sentence and the draft-reason sentence collapse into one
+    // when they would otherwise state the same fact twice: with no case
+    // submitted, "no lender case has been credit approved" is not a second
+    // reason, it is the same reason reworded.
+    + `${prov.lenderCaseStatus === null && prov.draftReason === 'not_approved'
+        ? 'No lender case has been submitted for credit approval, which is why it remains a draft.'
+        : [
+            prov.lenderCaseStatus === null
+              ? 'No lender case has been submitted for credit approval.'
+              : `The lender case is at "${lenderCaseLabel(prov.lenderCaseStatus)}".`,
+            prov.draftReason === null
+              ? 'It is a final lender report.'
+              : `It is a draft because ${DRAFT_REASON_SENTENCE[prov.draftReason]}.`,
+          ].join(' ')} `
     + 'It is suitable for sponsor review and for preliminary lender appraisal. It is not a credit paper, '
     + 'a valuation, a cost plan, a tax opinion or a legal report, and no lender should rely on it for a '
     + 'credit decision without independently verifying the matters listed below.',
@@ -1867,11 +1932,16 @@ export function generateInvestmentMemo(
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [180, 83, 9], textColor: 255 },
     bodyStyles: { textColor: [51, 65, 85] },
-    footStyles: { fillColor: [255, 251, 235], textColor: [100, 116, 139], fontStyle: 'normal' },
+    footStyles: { fillColor: [226, 232, 240], textColor: [71, 85, 105], fontStyle: 'normal' },
     alternateRowStyles: { fillColor: [255, 251, 235] },
     columnStyles: { 0: { cellWidth: 10, halign: 'center' } },
   });
   y = lastAutoTableFinalY(doc) + 8;
+
+  // A heading queued with nothing after it would otherwise never be drawn. It
+  // is a defect if this ever fires, but a silently missing heading is worse
+  // than one sitting alone at the end of the document.
+  y = flushHeadings(y, 0);
 
   // ── Footer on all pages ──
   addPageFooter();

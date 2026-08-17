@@ -166,6 +166,49 @@ export function sparsePages(info: PdfDocumentInfo, options: SparseOptions = {}):
   return sparse;
 }
 
+export interface OrphanHeading {
+  page: number;
+  text: string;
+  sizePt: number;
+}
+
+export interface OrphanOptions extends BodyItemOptions {
+  /** Smallest size counted as a heading. Table header cells are bold at 8pt. */
+  minHeadingSizePt?: number;
+}
+
+/**
+ * Headings left alone at the foot of a page while the content they introduce
+ * starts on the next one.
+ *
+ * This check exists because the geometric gate did not catch the defect: a
+ * sub-heading reserved its own space correctly, the table beneath it then
+ * measured itself and moved whole to the next page, and the heading stayed
+ * behind. Every bounds and sparseness assertion passed. It was found by
+ * rendering the page and looking at it, which is not a repeatable gate — so it
+ * became one.
+ *
+ * A heading is bold text at or above `minHeadingSizePt`; body text is 10pt
+ * regular and table header cells are bold at 8pt, so the two do not collide.
+ */
+export function orphanHeadings(
+  info: PdfDocumentInfo,
+  options: OrphanOptions = {},
+): OrphanHeading[] {
+  const { minHeadingSizePt = 11, ...bodyOptions } = options;
+  const orphans: OrphanHeading[] = [];
+  for (const page of info.pages) {
+    if (page.page === info.pages.length) continue; // nothing follows the last page
+    const items = bodyItems(page, bodyOptions);
+    if (items.length === 0) continue;
+    const last = items.reduce((a, b) => (b.box.bottom > a.box.bottom ? b : a));
+    if (last.baseFont.endsWith('-Bold') && last.sizePt >= minHeadingSizePt) {
+      orphans.push({ page: page.page, text: last.text, sizePt: last.sizePt });
+    }
+  }
+  return orphans;
+}
+
 /** Every distinct font size drawn on a page, largest first — a heading-scale probe. */
 export function fontSizesOnPage(page: PageInfo): number[] {
   return [...new Set(bodyItems(page).map((i) => i.sizePt))].sort((a, b) => b - a);

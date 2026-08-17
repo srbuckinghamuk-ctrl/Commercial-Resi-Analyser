@@ -20,6 +20,20 @@ export const WATERMARK_CY = 160;
 /** Clear space the banner keeps from every page edge. */
 export const WATERMARK_MARGIN = 6;
 
+/** Watermark grey for an ordinary white page. */
+export const LIGHT_PAGE_TONE = 200;
+/**
+ * Watermark tone for the dark cover.
+ *
+ * The banner has to be legible without obliterating what it crosses. On a white
+ * page a light grey does both; on the cover's near-black field the same grey is
+ * *brighter* than the headline metrics it runs through, so the numbers a reader
+ * opens the document for are the first thing it obscures. A mid slate sits above
+ * the background and well below the text, so the banner reads as a banner and
+ * the metrics overprint it cleanly.
+ */
+export const DARK_PAGE_TONE: [number, number, number] = [71, 85, 105];
+
 /** Baseline-relative glyph extents as a fraction of font size. */
 const ASCENT_RATIO = 0.75;
 const DESCENT_RATIO = 0.25;
@@ -105,12 +119,18 @@ export function fitWatermark(doc: jsPDF, text: string): WatermarkGeometry {
  * size in grey, and the next thing drawn — typically the first line on the page
  * the banner was just added to — inherits it.
  */
-export function drawWatermark(doc: jsPDF, text: string, geometry?: WatermarkGeometry): void {
+export function drawWatermark(
+  doc: jsPDF,
+  text: string,
+  geometry?: WatermarkGeometry,
+  tone: number | [number, number, number] = LIGHT_PAGE_TONE,
+): void {
   const box = geometry ?? fitWatermark(doc, text);
   const size = doc.getFontSize();
   const { fontName, fontStyle } = doc.getFont();
   const color = doc.getTextColor();
-  doc.setTextColor(200);
+  if (Array.isArray(tone)) doc.setTextColor(tone[0], tone[1], tone[2]);
+  else doc.setTextColor(tone);
   doc.setFontSize(box.sizePt);
   doc.setFont('helvetica', 'bold');
   doc.text(text, box.xStart, box.yStart, { angle: WATERMARK_ANGLE });

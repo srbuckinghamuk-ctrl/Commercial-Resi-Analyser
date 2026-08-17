@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { jsPDF } from 'jspdf';
 import { inspectPdf } from './pdf-inspect';
+import { orphanHeadings } from './report-checks';
 
 /**
  * The inspector is the instrument the report QA gate depends on, so it is
@@ -119,5 +120,41 @@ describe('inspectPdf', () => {
     const texts = info.items.map((i) => i.text);
     expect(texts).toContain('Peak debt');
     expect(texts).toContain('£123,456');
+  });
+
+  it('detects a heading stranded at the foot of a page, and only then', async () => {
+    // Calibration for the gate's orphan check: the same document with and
+    // without a stranded heading, so a check that always returns nothing (or
+    // always returns something) fails here rather than passing silently in the
+    // release gate.
+    const stranded = new jsPDF({ unit: 'mm', format: 'a4' });
+    stranded.setFont('helvetica', 'normal');
+    stranded.setFontSize(10);
+    stranded.text('body line', 20, 100);
+    stranded.setFont('helvetica', 'bold');
+    stranded.setFontSize(11);
+    stranded.text('Stranded Sub-Heading', 20, 265);
+    stranded.addPage();
+    stranded.setFont('helvetica', 'normal');
+    stranded.setFontSize(10);
+    stranded.text('the content it introduced', 20, 25);
+
+    expect(orphanHeadings(await inspectPdf(stranded.output('blob')))).toEqual([
+      { page: 1, text: 'Stranded Sub-Heading', sizePt: 11 },
+    ]);
+
+    const fixed = new jsPDF({ unit: 'mm', format: 'a4' });
+    fixed.setFont('helvetica', 'normal');
+    fixed.setFontSize(10);
+    fixed.text('body line', 20, 100);
+    fixed.addPage();
+    fixed.setFont('helvetica', 'bold');
+    fixed.setFontSize(11);
+    fixed.text('Stranded Sub-Heading', 20, 25);
+    fixed.setFont('helvetica', 'normal');
+    fixed.setFontSize(10);
+    fixed.text('the content it introduced', 20, 32);
+
+    expect(orphanHeadings(await inspectPdf(fixed.output('blob')))).toEqual([]);
   });
 });
