@@ -11,7 +11,7 @@ import type {
 } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4,
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   AcquisitionInputsV5, EquitySource, FacilityTerms,
 } from './model/finance-types';
 
@@ -280,5 +280,47 @@ export function defaultAcquisitionV5Fields(
     acquisition_date: today,
     acquisition_tax_override_pence: null,
     acquisition_tax_override_reason: '',
+  };
+}
+
+/**
+ * v5 defaults (R8 Task 11): the document a freshly opened calculator starts on.
+ *
+ * The acquisition-tax block is deliberately identical to what `migrateV4toV5`
+ * stamps on a v4 document, NOT to `defaultAcquisitionV5Fields` above:
+ *
+ *  - `jurisdiction_source: 'migrated_default'` means "nothing has recorded a
+ *    jurisdiction for this document yet", which is exactly true of a brand new
+ *    one. It is also the only value the server will overwrite with a
+ *    postcode-derived proposal (`calculate_authoritative` in app/api/app.py
+ *    applies `derived_jurisdiction` only when the source is
+ *    `'migrated_default'`), so stamping `'derived'` here client-side would
+ *    silently disable R8 Task 10's postcode derivation on every new appraisal.
+ *  - `acquisition_date: null` rather than today's date. Today is not the
+ *    transaction date; it is a plausible substitute for one, and spec §1.5
+ *    forbids substituting a plausible value for an unknown. Null is already
+ *    defined as "use the currently open-ended band set and say so"
+ *    (`date_basis: 'assumed_current'`), which is the honest reading.
+ *
+ * `conversion-defaults.test.ts` pins this against `migrateV4toV5(...)` field for
+ * field so the two cannot drift; it is spelled out literally here rather than
+ * calling the migration because `model/migrate.ts` already imports this module.
+ */
+export function defaultCalculatorInputsV5(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV5 {
+  const v4 = defaultCalculatorInputsV4(project);
+  return {
+    ...v4,
+    inputs_version: 5,
+    acquisition: {
+      ...v4.acquisition,
+      jurisdiction: 'england_ni',
+      jurisdiction_source: 'migrated_default',
+      jurisdiction_evidence_status: 'unconfirmed',
+      acquisition_date: null,
+      acquisition_tax_override_pence: null,
+      acquisition_tax_override_reason: '',
+    },
   };
 }

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4, DEFAULT_SCENARIOS } from './conversion-defaults';
-import { migrateInputs } from './model';
+import {
+  defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
+  defaultCalculatorInputsV5, DEFAULT_SCENARIOS,
+} from './conversion-defaults';
+import { migrateInputs, migrateV4toV5 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
 
 describe('defaultCalculatorInputs', () => {
@@ -67,5 +70,38 @@ describe('defaultCalculatorInputsV4', () => {
     expect(v4.sales_phasing).toBeNull();
     expect(v4.refinance).toBeNull();
     expect(v4.finance).toEqual(defaultCalculatorInputsV3().finance);
+  });
+});
+
+describe('defaultCalculatorInputsV5 (R8 Task 11)', () => {
+  // The calculator's fresh document and a migrated one must be the same
+  // document. This is spelled out literally in conversion-defaults.ts (that
+  // module cannot import model/migrate.ts -- migrate.ts imports it), so this is
+  // the guard that stops the two definitions drifting apart.
+  it('is exactly what migrateV4toV5 makes of the v4 defaults', () => {
+    // `risks` and `equity_sources` carry freshly minted crypto.randomUUID()s on
+    // every call, so they are compared by shape rather than by id; everything
+    // else -- the acquisition block above all -- is compared field for field.
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV5>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV5()))
+      .toEqual(stripIds(migrateV4toV5(defaultCalculatorInputsV4())));
+  });
+
+  it('records no jurisdiction of its own, so the server may still derive one from the postcode', () => {
+    const v5 = defaultCalculatorInputsV5();
+    expect(v5.inputs_version).toBe(5);
+    // app/api/app.py applies a postcode-derived jurisdiction ONLY when the
+    // source is 'migrated_default'. Stamping 'derived' here would silently
+    // disable derivation on every new appraisal.
+    expect(v5.acquisition.jurisdiction_source).toBe('migrated_default');
+    expect(v5.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
+  });
+
+  it('leaves the acquisition date unknown rather than assuming today (spec §1.5)', () => {
+    expect(defaultCalculatorInputsV5().acquisition.acquisition_date).toBeNull();
   });
 });

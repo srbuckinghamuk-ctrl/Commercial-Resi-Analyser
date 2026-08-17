@@ -16,7 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 const { default: ConversionCalculator } = await import('./ConversionCalculator');
 const { getAppraisal, saveAppraisal } = await import('../lib/api');
-const { defaultCalculatorInputsV4 } = await import('../lib/conversion-defaults');
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV5 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -215,5 +215,87 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
     expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /7\. Appraisal/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save appraisal/i })).toBeEnabled();
+  });
+});
+
+// R8 Task 11 (defect B). The calculator posts the document it is holding, but
+// the server is authoritative over that document: it normalises the snapshot to
+// v5 and, on a project's first appraisal, derives the tax jurisdiction from the
+// postcode. Before this, `handleSave` set `appraisalRecord` and dropped the
+// returned snapshot on the floor, so the screen kept charging England/NI SDLT
+// on a Welsh deal while the store held LTT -- measured on one fixture as
+// total_development_cost_pence 91,388,400 shown against 91,213,400 stored --
+// and a `client_mismatch` was recorded on every such first save.
+describe('ConversionCalculator adopts the saved snapshot the server returns (R8 Task 11)', () => {
+  function savedAppraisal(inputsSnapshot: Record<string, unknown>): FinancialAppraisal {
+    return {
+      id: 'a2',
+      project_id: 'p1',
+      name: 'Saved appraisal',
+      inputs_snapshot: inputsSnapshot,
+      gdv_pence: null,
+      total_cost_pence: null,
+      profit_on_cost_pct: null,
+      profit_on_gdv_pct: null,
+      return_on_equity_pct: null,
+      irr: null,
+      rlv_pence: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    } as unknown as FinancialAppraisal;
+  }
+
+  /** What app/api/app.py stores for a Welsh postcode on a first save. */
+  function serverDerivedWelshSnapshot(): Record<string, unknown> {
+    const v5 = defaultCalculatorInputsV5(PROJECT);
+    return {
+      ...v5,
+      acquisition: { ...v5.acquisition, jurisdiction: 'wales', jurisdiction_source: 'derived' },
+    } as unknown as Record<string, unknown>;
+  }
+
+  it('posts a v5 document whose jurisdiction the server is still free to derive', async () => {
+    vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
+    render(<ConversionCalculator project={PROJECT} />);
+    fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
+    await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
+
+    const sent = vi.mocked(saveAppraisal).mock.calls.at(-1)![1].inputs_snapshot as unknown as {
+      inputs_version: number;
+      acquisition: { jurisdiction_source: string; acquisition_date: string | null };
+    };
+    expect(sent.inputs_version).toBe(5);
+    expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
+    expect(sent.acquisition.acquisition_date).toBeNull();
+  });
+
+  it('re-renders on the jurisdiction the server derived instead of the one it posted', async () => {
+    vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
+    render(<ConversionCalculator project={PROJECT} />);
+
+    // Before the save: the client-side default document is England/NI.
+    expect(screen.getByRole('heading', { name: 'SDLT Breakdown' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
+
+    // After it: the stored document, charged as LTT and shown as derived.
+    expect(await screen.findByRole('heading', { name: 'LTT Breakdown' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'SDLT Breakdown' })).not.toBeInTheDocument();
+    // This fixture PROJECT carries no address_postcode, so the page names the
+    // source without quoting one.
+    expect(screen.getByText(/Derived from the project postcode/)).toBeInTheDocument();
+  });
+
+  it('a snapshot the migration cannot read leaves the local document alone and is not a save failure', async () => {
+    vi.mocked(saveAppraisal).mockResolvedValueOnce(
+      savedAppraisal({ ...serverDerivedWelshSnapshot(), inputs_version: 99 }),
+    );
+    render(<ConversionCalculator project={PROJECT} />);
+    fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /update appraisal/i })).toBeInTheDocument());
+    expect(screen.queryByText(/save failed/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'SDLT Breakdown' })).toBeInTheDocument();
   });
 });

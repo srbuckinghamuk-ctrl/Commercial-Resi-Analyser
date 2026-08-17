@@ -2,8 +2,8 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
 import { migrateInputsToV5 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV4 } from '../lib/model';
-import { defaultCalculatorInputsV4 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV5 } from '../lib/model';
+import { defaultCalculatorInputsV5 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
@@ -82,8 +82,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV4>(() =>
-    defaultCalculatorInputsV4(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV5>(() =>
+    defaultCalculatorInputsV5(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -93,7 +93,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV4(project));
+      setInputs(defaultCalculatorInputsV5(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -107,20 +107,13 @@ export default function ConversionCalculator({ project }: Props) {
             // server already normalises to v5, per app/api/app.py), so this
             // must use migrateInputsToV5 too.
             //
-            // The cast back to CalculatorInputsV4 is deliberate and narrow:
-            // widening this component's state (and every calculator sub-page
-            // prop it feeds) to CalculatorInputsV5 is Task 11's job, which
-            // also builds the UI that reads/writes the six new acquisition
-            // fields. Until then the runtime object still carries them (a JS
-            // object keeps every property regardless of the TS view of it),
-            // so nothing is lost on save -- only unreadable to this
-            // component's own code, which never branches on inputs_version's
-            // literal value (grep confirms) so the mismatched literal type is
-            // safe to paper over here.
+            // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
+            // that used to sit here: this component's state, and every
+            // calculator sub-page prop it feeds, is now v5-native, so the
+            // migration's return type is the state's type and no cast is
+            // needed to bridge them.
             setInputs(
-              migrateInputsToV5(
-                appraisal.inputs_snapshot as Record<string, unknown>, project,
-              ) as unknown as CalculatorInputsV4,
+              migrateInputsToV5(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -149,12 +142,12 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV4 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV5 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV4>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV5>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -166,9 +159,10 @@ export default function ConversionCalculator({ project }: Props) {
     setSaving(true);
     setSaveError(null);
     try {
-      // inputs_snapshot is always v4 (R3b: this component's state is v4-native); the
-      // seven client metric fields are used server-side ONLY to record mismatches for
-      // audit -- the server always recalculates and persists its own values (Task 12).
+      // inputs_snapshot is always v5 (R8 Task 11: this component's state is
+      // v5-native); the seven client metric fields are used server-side ONLY to
+      // record mismatches for audit -- the server always recalculates and
+      // persists its own values (Task 12).
       const payload: FinancialAppraisalCreate = {
         project_id: project.id,
         name: `Appraisal — ${project.address_raw}`,
@@ -184,6 +178,32 @@ export default function ConversionCalculator({ project }: Props) {
       const result = await saveAppraisal(project.id, payload, savedId);
       setSavedId(result.id);
       setAppraisalRecord(result);
+
+      // R8 Task 11 (defect B). The server is authoritative over the document,
+      // not just over the metrics: `calculate_authoritative` normalises the
+      // snapshot to v5 and, on a project's first appraisal, derives the tax
+      // jurisdiction from the postcode (app/api/app.py). Before this, the
+      // screen kept the england_ni document it posted while the store held the
+      // derived one -- measured on a Welsh fixture as
+      // total_development_cost_pence 91,388,400 on screen against 91,213,400
+      // stored, with a `client_mismatch` recorded on every such first save,
+      // and the divergence surviving until the component remounted. Adopting
+      // what came back makes the save the point at which the two agree.
+      //
+      // Routed through migrateInputsToV5 rather than cast, for the same reason
+      // the load path is: the response is JSON of unknown provenance to this
+      // component, and the migration is the one place that knows how to put a
+      // stored snapshot onto the current shape.
+      if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
+        try {
+          setInputs(migrateInputsToV5(result.inputs_snapshot, project));
+        } catch {
+          // The save itself succeeded, so this must not surface as a save
+          // failure. Keeping the local document is the same state the app was
+          // in before this adoption existed; the next load re-reads the stored
+          // one through the identical migration.
+        }
+      }
     } catch (err) {
       setSaveError(describeApiError(err, 'Failed to save the appraisal.'));
     } finally {
@@ -271,7 +291,7 @@ export default function ConversionCalculator({ project }: Props) {
         ) : (
         <CalculatorErrorBoundary resetKeys={[activePage]}>
         {activePage === 'acquisition' && (
-          <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} />
+          <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} project={project} />
         )}
         {activePage === 'unit_mix' && (
           <UnitMixPage inputs={inputs} onChange={updateInputs} run={run} />

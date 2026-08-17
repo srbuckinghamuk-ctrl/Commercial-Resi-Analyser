@@ -1,10 +1,10 @@
 import type { Project } from '../../types';
-import type { CalculatorInputsV4, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV5, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 
 interface Props {
-  inputs: CalculatorInputsV4;
+  inputs: CalculatorInputsV5;
   run: AppraisalRun;
   project: Project;
 }
