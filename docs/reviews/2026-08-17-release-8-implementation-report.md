@@ -180,27 +180,58 @@ Read by eye, and worth recording:
 
 ## 6. Plan defects found mid-release
 
-Four, all of them defects in **my plan** rather than in the implementation of it. Each was
-found by an implementer and verified independently by the controller; the first two were
-recorded as formal controller adjudications, the third as an adjudication on Task 4, and
-the fourth as a controller scope correction. They are listed together because they share a
-cause: a plan author writing confidently about code they had read too quickly.
+Four, all of them defects in **my plan** rather than in the implementation of it — and the
+first of them recurred three times, at every layer it could. Each was found by an
+implementer or a reviewer and verified independently by the controller; (a) and (b) were
+recorded as formal controller adjudications, (c) as an adjudication on Task 4, and (d) as a
+controller scope correction. They are listed together because they share a cause: a plan
+author writing confidently about code they had read too quickly.
 
-### (a) Acquisition tax was computed at two sites; the plan named one
+### (a) Acquisition tax was computed at more sites than the plan named — three times
 
-**Found by the Task 5 implementer.** `calculateTotalAcquisitionCost` /
-`calculate_total_acquisition_cost` (`conversion-calc-engine.ts:18`, `schedule.py`) feeds
-`acquisition_cost_pence` and hence TDC, and was still hard-wired to `england_ni`, while
-`metrics.ts:120`'s `costExLand` used the new jurisdiction-aware figure.
+This is the release's most instructive defect, because it **recurred at every layer it
+could**. The plan's mental model was "there is one place that computes acquisition tax".
+There were three, and the plan named one of them each time.
 
-On a Welsh document the two disagreed by £1,750 on the York price, and the memo's headline
-"Acquisition (inc. SDLT)" line would have printed **English SDLT on a Welsh property** —
-the precise defect this release exists to remove, reintroduced one layer up.
+**Instance 1 — the cost stack (Task 5, found by the implementer).**
+`calculateTotalAcquisitionCost` / `calculate_total_acquisition_cost`
+(`conversion-calc-engine.ts:18`, `schedule.py`) feeds `acquisition_cost_pence` and hence
+TDC, and was still hard-wired to `england_ni`, while `metrics.ts:120`'s `costExLand` used
+the new jurisdiction-aware figure. On a Welsh document the two disagreed by £1,750 on the
+York price, and the memo's headline "Acquisition (inc. SDLT)" line would have printed
+**English SDLT on a Welsh property** — the precise defect this release exists to remove,
+reintroduced one layer up.
 
 Ruled: route the second site as well, and add a cross-site agreement guard parametrised
 over all three jurisdictions. English behaviour is unchanged; the fix makes Wales and
 Scotland behave as England already did. The Task 5 reviewer mutated **both** engines to
 prove the drift guard has teeth (two failures each, Wales and Scotland).
+
+**Instance 2 — the same defect surviving the fix (Task 5 fix round 2).** After instance 1
+was closed, the two Python gates still used different predicates, so the sites could drift
+apart again on a constructed object. Recorded in full as §7(6), because it was a review
+finding rather than a plan defect.
+
+**Instance 3 — the calculator UI (Task 11, carried forward from the Task 5 review).**
+`AcquisitionPage.tsx`'s SDLT breakdown panel was hard-wired to `england_ni` while the
+**Total Acquisition Cost figure directly beneath it** was already jurisdiction-aware. A
+user opening a Welsh appraisal would have seen **two contradicting tax figures on one
+screen**, inches apart — a breakdown that did not add up to the total printed under it.
+
+My Task 11 brief named only the heading. The Task 5 reviewer caught the panel while
+reviewing a different task and wrote it into the ledger as an explicit carry-forward
+("Task 11 must fix BOTH, not just the heading"), which is the only reason it was fixed.
+**No test failed on it** — there was no assertion tying the panel to the card. Task 11
+owned it as its defect A and closed it at `08c5d1a`; the reviewer verified the panel and
+the cost card now agree **pence-exact** on a Welsh document.
+
+**The lesson.** Two instances would suggest a slip. Three, at the engine and then at the
+UI, say the plan was wrong about the shape of the system rather than about one line of it
+— and that each fix reached only as far as the layer the task's brief was looking at. The
+cross-site agreement guard now pins the engine layer; the UI layer is pinned by Task 11's
+panel-equals-card assertion. What is still unpinned is the *general* property, that no
+third site can appear: nothing structurally prevents a fourth consumer from computing its
+own figure. Worth a lint rule or a single exported accessor in a later release.
 
 ### (b) A plan test asserted the opposite of spec §3.18
 
@@ -257,7 +288,10 @@ difference.
 
 These are the release's real lesson: eight defects that a fully green suite did not see.
 Several were introduced *by fixes*, and two turned working features into dead code without
-failing a single test.
+failing a single test. A ninth belongs to this class but is told in §6(a) instead, because
+it is the third instance of that section's pattern: the calculator's SDLT panel contradicting
+the total printed directly beneath it on a Welsh appraisal, caught by a carry-forward from
+another task's review rather than by any test.
 
 1. **A v5 document silently corrupted by the v4 migration path** *(Task 4, Critical)*.
    `migrate_inputs_to_v4` had no `is_v5` guard, so a v5 document fell through to the v1
@@ -415,7 +449,14 @@ PDF/UA structure tagging.
   the table, and the `resolveAcquisitionDate` degradation contract with its deliberately
   narrow catch.
 - `frontend/src/lib/model/metrics.ts` and `frontend/src/lib/conversion-calc-engine.ts` —
-  the two tax call sites of §6(a), and the cross-site drift guard that holds them together.
+  the two engine tax call sites of §6(a), and the cross-site drift guard that holds them
+  together.
+- `frontend/src/components/calculator/AcquisitionPage.tsx` — §6(a)'s third instance: the SDLT breakdown
+  panel and the Total Acquisition Cost card beneath it must agree pence-exact on a
+  non-English document. This is the layer the engine's drift guard does not reach; the
+  assertion that holds it is `AcquisitionPage.test.tsx` › *"the tax on screen is the tax
+  inside Total Acquisition Cost, not a second calculation"* (900,000p inside 44,612,500p on
+  a Welsh document).
 - `fixtures/financial-model/m-wales-jurisdiction.json` — the new fixture, and the
   England/NI-vs-Wales assertions that replace the pre-R8 loop for it
   (`golden-fixtures.test.ts`, `tests/test_financial_model_fixtures.py`).
