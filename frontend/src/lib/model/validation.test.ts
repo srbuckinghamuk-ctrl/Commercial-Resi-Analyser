@@ -3,7 +3,7 @@ import { validateInputs, reconcile } from './validation';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
-import { migrateV2toV3, migrateInputsToV4 } from './migrate';
+import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5 } from './migrate';
 import type { CalculatorInputsV3, CalculatorInputsV4, ProgrammePackage, RefinanceInputs } from './finance-types';
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
@@ -432,6 +432,53 @@ describe('v4 programme validation', () => {
         { ltv_pct: 0 }, { ltv_pct: 101 }, { ltv_pct: Number.NaN },
         { arrangement_fee_pence: -1 }, { legal_costs_pence: -1 },
       ]) expect(errorsOn(withRefi(bad))).toBe(true);
+    });
+  });
+
+  describe('acquisition tax validation (R8)', () => {
+    const v5 = () => migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+
+    it('rejects an override with no reason', () => {
+      const inputs = v5();
+      inputs.acquisition.acquisition_tax_override_pence = 500_000;
+      inputs.acquisition.acquisition_tax_override_reason = '   ';
+      const issues = validateInputs(inputs);
+      const issue = issues.find((i) => i.field === 'acquisition.acquisition_tax_override_reason');
+      expect(issue?.severity).toBe('error');
+    });
+
+    it('accepts an override with a reason', () => {
+      const inputs = v5();
+      inputs.acquisition.acquisition_tax_override_pence = 500_000;
+      inputs.acquisition.acquisition_tax_override_reason = 'Group relief claimed.';
+      expect(validateInputs(inputs).some(
+        (i) => i.field === 'acquisition.acquisition_tax_override_reason',
+      )).toBe(false);
+    });
+
+    it('rejects an acquisition date no band set covers', () => {
+      const inputs = v5();
+      inputs.acquisition.jurisdiction = 'wales';
+      inputs.acquisition.acquisition_date = '1990-01-01';
+      const issue = validateInputs(inputs).find((i) => i.field === 'acquisition.acquisition_date');
+      expect(issue?.severity).toBe('error');
+      expect(issue?.message).toContain('2020-12-22');
+    });
+
+    it('rejects a malformed acquisition date', () => {
+      const inputs = v5();
+      inputs.acquisition.acquisition_date = '17/08/2026';
+      const issue = validateInputs(inputs).find((i) => i.field === 'acquisition.acquisition_date');
+      expect(issue?.severity).toBe('error');
+    });
+
+    it('warns — but does not error — on an unconfirmed jurisdiction', () => {
+      const inputs = v5();
+      const issue = validateInputs(inputs).find(
+        (i) => i.field === 'acquisition.jurisdiction_evidence_status',
+      );
+      expect(issue?.severity).toBe('warning');
+      expect(validateInputs(inputs).some((i) => i.severity === 'error')).toBe(false);
     });
   });
 });

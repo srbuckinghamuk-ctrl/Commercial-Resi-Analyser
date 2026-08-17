@@ -11,6 +11,7 @@ from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
+    migrate_inputs_to_v5,
     migrate_v2_to_v3,
 )
 from app.financial_model.schedule import build_schedule
@@ -465,3 +466,60 @@ class TestReconcileRefinanceShortfall:
         rec = reconcile(inputs, schedule, model)
         assert rec.sources_equal_uses is True
         assert any(f.code == "additional_equity_required" for f in model.flags)
+
+
+class TestAcquisitionTaxValidation:
+    """Port of the R8 'acquisition tax validation' describe block in
+    validation.test.ts -- same field codes, severities and messages."""
+
+    @staticmethod
+    def v5():
+        return migrate_inputs_to_v5({"inputs_version": 1})
+
+    def test_rejects_an_override_with_no_reason(self):
+        inputs = self.v5()
+        inputs.acquisition.acquisition_tax_override_pence = 500_000
+        inputs.acquisition.acquisition_tax_override_reason = "   "
+        issues = validate_inputs(inputs)
+        issue = next(
+            (i for i in issues if i.field == "acquisition.acquisition_tax_override_reason"), None,
+        )
+        assert issue is not None
+        assert issue.severity == "error"
+
+    def test_accepts_an_override_with_a_reason(self):
+        inputs = self.v5()
+        inputs.acquisition.acquisition_tax_override_pence = 500_000
+        inputs.acquisition.acquisition_tax_override_reason = "Group relief claimed."
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "acquisition.acquisition_tax_override_reason" for i in issues)
+
+    def test_rejects_an_acquisition_date_no_band_set_covers(self):
+        inputs = self.v5()
+        inputs.acquisition.jurisdiction = "wales"
+        inputs.acquisition.acquisition_date = "1990-01-01"
+        issue = next(
+            (i for i in validate_inputs(inputs) if i.field == "acquisition.acquisition_date"), None,
+        )
+        assert issue is not None
+        assert issue.severity == "error"
+        assert "2020-12-22" in issue.message
+
+    def test_rejects_a_malformed_acquisition_date(self):
+        inputs = self.v5()
+        inputs.acquisition.acquisition_date = "17/08/2026"
+        issue = next(
+            (i for i in validate_inputs(inputs) if i.field == "acquisition.acquisition_date"), None,
+        )
+        assert issue is not None
+        assert issue.severity == "error"
+
+    def test_warns_but_does_not_error_on_an_unconfirmed_jurisdiction(self):
+        inputs = self.v5()
+        issues = validate_inputs(inputs)
+        issue = next(
+            (i for i in issues if i.field == "acquisition.jurisdiction_evidence_status"), None,
+        )
+        assert issue is not None
+        assert issue.severity == "warning"
+        assert not any(i.severity == "error" for i in issues)
