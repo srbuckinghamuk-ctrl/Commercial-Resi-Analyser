@@ -1,0 +1,90 @@
+{
+  "name": "M — Welsh acquisition, LTT non-residential, all-cash",
+  "kind": "pipeline",
+  "inputs": {
+    "inputs_version": 5,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 75348200, "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000, "broker_fee_pct": 1.0, "other_acquisition_costs_pence": 0,
+      "jurisdiction": "wales",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-08-17",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "unit_mix": { "units": [
+      { "id": "u1", "type": "2bed", "floor_area_sqm": 60, "estimated_value_pence": 27500000, "comparable_notes": "" },
+      { "id": "u2", "type": "2bed", "floor_area_sqm": 60, "estimated_value_pence": 27500000, "comparable_notes": "" },
+      { "id": "u3", "type": "2bed", "floor_area_sqm": 60, "estimated_value_pence": 27500000, "comparable_notes": "" },
+      { "id": "u4", "type": "2bed", "floor_area_sqm": 60, "estimated_value_pence": 27500000, "comparable_notes": "" },
+      { "id": "u5", "type": "2bed", "floor_area_sqm": 60, "estimated_value_pence": 27500000, "comparable_notes": "" },
+      { "id": "u6", "type": "2bed", "floor_area_sqm": 60, "estimated_value_pence": 27500000, "comparable_notes": "" }
+    ] },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 9600, "cil_s106_pence": 0,
+      "architect_pence": 1800000, "structural_engineer_pence": 600000, "mande_pence": 600000,
+      "planning_consultant_pence": 400000, "building_control_pence": 250000,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 105000,
+      "total_construction_sqm": 360, "contingency_pct": 10.0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "finance": {
+      "funding_source": "cash", "day_one_advance_pence": null, "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 0,
+      "committed_gross_facility_pence": 0, "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 12, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 130000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "sell_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 400000, "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2 }
+    },
+    "deal_spider": {
+      "storeys": 3, "building_height_m": 10, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 9, "exit_sell": true, "exit_refinance": true, "exit_hold": false,
+      "exit_part_sale": false, "prior_approval_window_months": 2, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 165000000,
+    "acquisition_tax_pence": 2542410,
+    "sdlt_pence": 2542410,
+    "acquisition_cost_pence": 79444092,
+    "construction_cost_pence": 41580000,
+    "professional_fees_pence": 3400000,
+    "statutory_costs_pence": 307600,
+    "selling_costs_pence": 2875000,
+    "cost_before_finance_pence": 127606692,
+    "finance_costs_pence": 0,
+    "total_development_cost_pence": 127606692,
+    "profit_pence": 37393308,
+    "profit_is_unrealised": false,
+    "profit_on_cost_pct": 29.3,
+    "profit_on_gdv_pct": 22.66,
+    "peak_debt_pence": 0,
+    "day_one_advance_pence": 0,
+    "gross_ltc_pct": 0,
+    "equity_contributed_pence": 124731692,
+    "developer_breakeven_pence": 127037251
+  }
+}

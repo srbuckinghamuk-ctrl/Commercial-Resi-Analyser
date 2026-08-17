@@ -46,6 +46,7 @@ EXPECTED_FIXTURE_STEMS = [
     "j-blended-refinance",
     "k-sensitivity",
     "l-retain-all",
+    "m-wales-jurisdiction",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -158,7 +159,32 @@ def _as_pre_r8_document(inputs: dict) -> dict:
     return doc
 
 
-@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+# R8 Task 12. The property below ("a pre-R8 document reproduces its pins") is only
+# well-defined for a fixture whose pinned figures are England/NI ones: the migration
+# stamps `england_ni` *by definition*, because that is what every legacy document
+# implicitly was. A non-English fixture has no pre-R8 form -- stripping the R8 fields
+# does not recover an older document, it asserts a different property. So the
+# parametrisation runs over the England/NI fixtures, and the excluded ones are covered
+# by the stronger assertion below rather than by silence. Mirrors
+# golden-fixtures.test.ts's preR8Fixtures / nonEnglishFixtures split.
+def _jurisdiction_of(path: Path) -> str:
+    return _load_fixture(path)["inputs"]["acquisition"].get("jurisdiction", "england_ni")
+
+
+_PRE_R8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _jurisdiction_of(p) == "england_ni"]
+_NON_ENGLISH_FIXTURES = [p for p in APPRAISAL_FIXTURES if _jurisdiction_of(p) != "england_ni"]
+
+
+def test_the_pre_r8_parametrisation_covers_every_england_ni_fixture() -> None:
+    """Without this, deleting a fixture's `jurisdiction` field -- or mistyping it --
+    would quietly move it out of the parametrisation below and reduce coverage
+    without failing."""
+    assert len(_PRE_R8_FIXTURES) + len(_NON_ENGLISH_FIXTURES) == len(APPRAISAL_FIXTURES)
+    assert [_jurisdiction_of(p) for p in _NON_ENGLISH_FIXTURES] == ["wales"]
+    assert len(_PRE_R8_FIXTURES) == len(APPRAISAL_FIXTURES) - 1
+
+
+@pytest.mark.parametrize("path", _PRE_R8_FIXTURES, ids=lambda p: p.stem)
 def test_pre_r8_fixture_form_reproduces_its_metrics_after_migration(path: Path) -> None:
     doc = _load_fixture(path)
     pre = _as_pre_r8_document(doc["inputs"])
@@ -174,6 +200,41 @@ def test_pre_r8_fixture_form_reproduces_its_metrics_after_migration(path: Path) 
     assert v5.acquisition.jurisdiction_evidence_status == "unconfirmed"
     assert v5.acquisition.acquisition_date is None
     _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[pre-R8 -> v5]")
+
+
+@pytest.mark.parametrize("path", _NON_ENGLISH_FIXTURES, ids=lambda p: p.stem)
+def test_a_non_english_fixtures_pre_r8_form_is_a_different_england_ni_appraisal(
+    path: Path,
+) -> None:
+    """The excluded fixtures get the *stronger* statement: stripping the R8 fields must
+    change the acquisition tax, and change it to precisely the England/NI figure on the
+    same consideration. That is what makes the fixture's jurisdiction load-bearing -- a
+    table edit, or a mis-wired call site that quietly reverted to SDLT, fails here rather
+    than passing because the two regimes happened to agree. Mirrors
+    golden-fixtures.test.ts's "its pre-R8 form is a different, England/NI, appraisal"."""
+    doc = _load_fixture(path)
+    v5 = migrate_inputs_to_v5(_as_pre_r8_document(doc["inputs"]))
+    assert v5.acquisition.jurisdiction == "england_ni"
+    english = run_appraisal(v5)
+    welsh = run_appraisal(parse_calculator_inputs(doc["inputs"]))
+
+    assert doc["inputs"]["acquisition"]["purchase_price_pence"] == 75_348_200
+    # Hand-verified against the band tables (spec Sec 14), slice basis:
+    #   SDLT = 2% x (250k-150k) + 5% x (753,482-250,000) = 200,000p + 2,517,410p
+    #   LTT  = 1% x (250k-225k) + 5% x (753,482-250,000) =  25,000p + 2,517,410p
+    assert english.metrics.acquisition_tax_pence == 2_717_410
+    assert welsh.metrics.acquisition_tax_pence == 2_542_410
+    assert english.metrics.acquisition_tax.regime == "SDLT"
+    assert welsh.metrics.acquisition_tax.regime == "LTT"
+    # The 175,000p difference must reach the headline cost stack, not stop at the metrics
+    # object -- this is the two-call-site defect Task 5 found, pinned.
+    assert (
+        english.metrics.acquisition_cost_pence - welsh.metrics.acquisition_cost_pence
+    ) == 175_000
+    assert (
+        english.metrics.total_development_cost_pence
+        - welsh.metrics.total_development_cost_pence
+    ) == 175_000
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)

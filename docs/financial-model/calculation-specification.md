@@ -1,16 +1,17 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.6.0`.
-**Date:** 15 August 2026
+**Status:** Authoritative. Calculation version `2.7.0`.
+**Date:** 17 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.7.0** — jurisdiction-aware acquisition tax: SDLT (England/NI), LBTT (Scotland) and LTT (Wales) computed from a dated, sourced and versioned band table (§14, R8), with inputs v5 carrying the jurisdiction, its evidence status, the acquisition date and a reasoned override. **No existing computed value changed** — §1.6 explains why. §3.3's formula term is renamed from `SDLT` to `acquisition_tax` and its false "other jurisdictions are out of scope" sentence is deleted; §3.18 records that the RLV is invariant to it; §13.1 gains the table version and applied jurisdiction; §13.3 gains a fourth draft condition. What does change in practice is that every pre-R8 document is marked DRAFT until its jurisdiction is confirmed once (§14.6).
 - **2.4.0** — fixed-facility sensitivity suite: the two-way matrix, the tornado, and their shared lever and validation rules (§12, R4). No existing computed value changed — §12 only composes calls to the existing appraisal engine over levered copies of an inputs document, it does not alter any formula — which is why this is a minor bump, not a major one.
 - **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`. Also corrects §3.12's refinance-profit wording to match §3.11 and the engine (a refinance is a financing event and does not enter profit) — a **specification** correction only, no computed value changed.
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8) carry no such restriction.
 
 ---
 
@@ -49,7 +50,9 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+
+Calc 2.7.0 (R8) adds §14's jurisdiction-aware acquisition tax. **It changes no existing computed value.** Every document that existed before it was implicitly an England/NI one, the migration to inputs v5 stamps exactly that, and the England/NI non-residential bands have not moved since 17 March 2016 — so every stored appraisal reproduces its figures to the penny. What 2.7.0 changes is what a *non*-English appraisal computes (previously wrong) and what every report *says* about its own tax basis (§14.6).
 
 ---
 
@@ -92,8 +95,9 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 ### 3.3 Acquisition cost [R1]
 
-- **Formula:** `purchase_price + SDLT + legal_fees + survey_cost + round(purchase_price × broker_fee_pct/100) + other_acquisition_costs`.
-- **SDLT:** commercial (non-residential) England/NI slice bands: 0% to £150,000; 2% to £250,000; 5% above. Jurisdiction other than England/NI is out of scope in R1 and must be flagged as an assumption in reports.
+- **Formula:** `purchase_price + acquisition_tax + legal_fees + survey_cost + round(purchase_price × broker_fee_pct/100) + other_acquisition_costs`.
+- **Acquisition tax:** SDLT in England and Northern Ireland, LBTT in Scotland, LTT in Wales, on the non-residential band set in force at the acquisition date. **See §14** for the band tables, the selection rule, the override and the stated limitations. [R8 — calc 2.7.0. Before it, this line read "SDLT … England/NI slice bands" and stated that other jurisdictions were out of scope and were to be flagged as an assumption in reports. That is no longer true and the sentence has been removed rather than softened: the engine now computes the correct regime, and a report that still flagged Scotland or Wales as unmodelled would be making a false statement about the figures beside it.]
+- **One figure, two call sites.** The acquisition tax that enters this formula and the `metrics.acquisition_tax_pence` a report prints are the same computation on the same inputs. They are separately implemented (the cost stack and the metrics derivation) and are held together by an explicit cross-site agreement test in both engines; a run in which they differ is an engine defect.
 - **Timing:** month 0 in full.
 - **Gross/net:** VAT on purchase is not modelled in R1; reports must carry the assumption "purchase price treated as VAT-exempt/TOGC — unconfirmed".
 - **Rounding:** broker fee rounded half-up; other terms integer inputs.
@@ -231,6 +235,7 @@ Consequences:
 
 - **Formula:** `RLV = GDV / (1 + target_profit_on_cost_pct/100) − total cost excluding land`, where total cost excluding land = TDC − purchase price − SDLT, and `target_profit_on_cost_pct` is the **configurable** deal-spider target (`deal_spider.target_profit_on_cost_pct`), no longer hard-coded 20%.
 - **Disclosed limitation:** finance and SDLT within "cost excluding land" are those of the appraised structure, not re-solved for the residual price (a fixed-point refinement is R3). Reports state this.
+- **Invariant to acquisition tax [R8 — calc 2.7.0].** "Cost excluding land" subtracts the acquisition tax back out, so the same figure enters TDC and leaves again and the RLV does not move when the tax does — changing jurisdiction, acquisition date or applying an override (§14.5) leaves the RLV unchanged. This holds only because both tax call sites (§3.3) use the same figure; a mid-R8 defect in which they did not made the RLV appear to respond to an override, and a plan test asserted that wrong behaviour. Both engines now pin the invariance directly.
 - **Negative RLV:** reported as-is.
 
 ---
@@ -693,6 +698,8 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 | Scenario ID and name | the scenario the printed figures are on | — (always present; default `base` / "Base Case") |
 | Input schema version | `inputs.inputs_version` | — |
 | Calculation version | `metrics.calc_version` of the printed run | — |
+| Tax table version | `metrics.acquisition_tax.table_version` (§14.2) | — |
+| Applied tax jurisdiction | `metrics.acquisition_tax.jurisdiction` and its regime (§14.3) | — |
 | Authoritative result hash | stored `outputs_hash` | "not recorded — result predates provenance hashing" |
 | Input hash | stored `input_hash` | as above |
 | Audit hash | stored `audit_hash` (§13.2) | as above |
@@ -701,6 +708,14 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 | Document status | §13.3 | — |
 | Lender-case approval status | lender case, when one exists | "No lender case — not submitted for credit approval" |
 
+- **The audit hash picks up the two R8 fields transitively, and gains no new parts
+  [R8 — calc 2.7.0].** §13.2's formula is unchanged. It hashes `input_hash` and
+  `outputs_hash`, which already commit to the *whole* input and output documents —
+  and the jurisdiction lives in the input document while the table version and the
+  applied regime live in the output document. Both are therefore already bound by
+  the audit hash, and adding them as further named components would rewrite every
+  stored hash while binding nothing that was not bound before. The R8 design
+  document reads as though they are added directly; they are not, and must not be.
 - **Hashes are the server's, never the client's.** They describe what the server
   computed and stored. A client-side re-derivation would hash the client's own
   arithmetic, which is the confusion the hashes exist to prevent.
@@ -737,12 +752,14 @@ joined by the literal `|`, over UTF-8, lower-case hex.
 
 ### 13.3 Document status and draft marking
 
-A document is **FINAL** only when all three hold, tested in this order:
+A document is **FINAL** only when all four hold, tested in this order:
 
 1. `reconciliation.report_safe` — hard validations pass.
 2. `reconciliation.senior_repaid` — the ledger clears the senior facility within
    the modelled term.
-3. An approved lender case: status `credit_approved` or `approved_with_conditions`.
+3. `jurisdiction_evidence_status == 'confirmed'` — the tax basis has been
+   verified (§14.6). [R8 — calc 2.7.0]
+4. An approved lender case: status `credit_approved` or `approved_with_conditions`.
 
 Otherwise the document is **DRAFT** and carries the banner for the **first**
 failing condition:
@@ -751,14 +768,24 @@ failing condition:
 |---|---|
 | not report-safe | `DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE` |
 | senior not repaid | `DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE` |
+| tax basis unconfirmed | `DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
 | not approved | `DRAFT - NOT APPROVED FOR LENDER RELIANCE` |
 
-- **The three conditions are distinct claims and must not be collapsed.** An
+- **The four conditions are distinct claims and must not be collapsed.** An
   unreconciled run's figures may be wrong. A reconciled run that does not repay
   the senior facility is arithmetically sound and shows a real repayment failure.
-  A reconciled, repaying run with no approved case is a correct appraisal that
-  nobody has approved. Printing "UNRECONCILED" over the last two would state
-  something untrue about the model.
+  A run whose tax basis is unconfirmed is arithmetically sound *on a basis nobody
+  has verified*. A reconciled, repaying run with no approved case is a correct
+  appraisal that nobody has approved. Printing "UNRECONCILED" over the last three
+  would state something untrue about the model.
+- **Why the tax gate is third and not a hard validation [R8].** An unconfirmed
+  jurisdiction leaves `report_safe` **true**. Making it false would print "one or
+  more hard validations fail" — a claim that the *figures* are wrong, when in fact
+  only the basis is unverified. It sits above `not_approved` because a reader needs
+  to know the basis is unverified before they read an approval status. This
+  ordering is load-bearing and is pinned diagonally in both engines: with no lender
+  case in existence, `not_approved` would otherwise win every time and the tax gate
+  would be unreachable dead code.
 - **`report_safe` deliberately excludes senior repayment** (§7): an appraisal
   intending to refinance later is a valid appraisal. The FINAL gate tests it
   separately, so no document showing an unrepaid senior balance at maturity can
@@ -803,3 +830,166 @@ streams — position and measured width, not the generator's intentions.
 **Not yet asserted:** raster rendering of each page for pixel-level visual
 regression, and PDF/UA structure tagging. Both are recorded as open in the R7
 release report rather than claimed.
+
+---
+
+## 14. Acquisition tax [R8 — calc 2.7.0]
+
+The product is sold UK-wide. Before this release it charged England/NI SDLT on
+every acquisition regardless of where the property was, and *disclosed* the fact
+in the report's assumptions. A disclosed wrong number is still a wrong number: it
+flows into acquisition cost, TDC, profit, every profit ratio, LTC and the deal
+spider. §14 replaces the undated module constants with a dated, sourced and
+versioned table, so that a figure can always be traced to the band set that
+produced it and re-running a historic appraisal after a Budget returns the number
+it returned before.
+
+The error was **bidirectional** — Wales is cheaper than England below £1m and
+dearer above it — so no single correction factor would have covered it.
+
+### 14.1 Regimes
+
+| Jurisdiction | Regime |
+|---|---|
+| `england_ni` — England and Northern Ireland | SDLT — Stamp Duty Land Tax |
+| `scotland` | LBTT — Land and Buildings Transaction Tax |
+| `wales` | LTT — Land Transaction Tax |
+
+England and Northern Ireland are one jurisdiction because they share one regime.
+
+### 14.2 The band table
+
+Every band set carries `effective_from`, an exclusive `effective_to` (`null` for
+the set currently in force), its bands on a **slice** basis ascending, a flat
+`surcharge_pct` where the regime has one, and a source URL. The whole table
+carries a semver `TAX_TABLE_VERSION`, bumped on any change to any set, stamped
+into every result and printed in the provenance panel (§13.1).
+
+`fixtures/tax/acquisition-tax-tables.json` is the **normative** record. Each
+engine holds its own native copy and a parity test asserts equality field for
+field, in both directions, so a table edit after a Budget fails both engines'
+gates until both are updated. Rates below were read from the statutory authority
+on **17 August 2026**.
+
+**Non-residential / mixed, freehold consideration** — the basis this product's
+acquisitions use (§14.4):
+
+| Regime | Bands (slice) | In force from | Supplement | Source |
+|---|---|---|---|---|
+| SDLT (England/NI) | 0% to £150,000 · 2% to £250,000 · 5% above | 17 Mar 2016 | none | [GOV.UK](https://www.gov.uk/stamp-duty-land-tax/nonresidential-and-mixed-rates) |
+| LBTT (Scotland) | 0% to £150,000 · 1% to £250,000 · 5% above | 25 Jan 2019 | none | [gov.scot](https://www.gov.scot/publications/scottish-budget-2026-2027-scottish-tax-ready-reckoners/pages/4/) |
+| LTT (Wales) | 0% to £225,000 · 1% to £250,000 · 5% to £1,000,000 · 6% above | 22 Dec 2020 | none | [gov.wales](https://www.gov.wales/land-transaction-tax-rates-and-bands) |
+
+**Residential higher rates** — held only for the deal spider's tax-advantage
+comparison (§14.7), never for an acquisition. Note the structural difference:
+England and Scotland charge a flat supplement on the whole consideration, Wales
+embeds the uplift in the bands and charges no supplement.
+
+| Regime | Bands (slice) | In force from | Supplement | Source |
+|---|---|---|---|---|
+| SDLT (England/NI) | 0% to £125,000 · 2% to £250,000 · 5% to £925,000 · 10% to £1,500,000 · 12% above | bands 1 Apr 2025 | +5% on whole consideration, from 31 Oct 2024 | [GOV.UK](https://www.gov.uk/stamp-duty-land-tax/residential-property-rates) |
+| LBTT (Scotland) | 0% to £145,000 · 2% to £250,000 · 5% to £325,000 · 10% to £750,000 · 12% above | 5 Dec 2024 | +8% ADS on whole consideration | [gov.scot](https://www.gov.scot/publications/scottish-budget-2026-2027-scottish-tax-ready-reckoners/pages/4/) |
+| LTT (Wales) | 5% to £180,000 · 8.5% to £250,000 · 10% to £400,000 · 12.5% to £750,000 · 15% to £1,500,000 · 17% above | 11 Dec 2024 | none — embedded in the bands | [gov.wales](https://www.gov.wales/land-transaction-tax-rates-and-bands) |
+
+Scottish Budget 2026–27 confirms all LBTT rates and bands, including ADS, hold at
+current levels.
+
+### 14.3 Selection
+
+`selectBandSet(jurisdiction, basis, date)` returns the single set whose
+`[effective_from, effective_to)` window contains `date`.
+
+- Windows within a `(jurisdiction, basis)` group must be **contiguous and
+  non-overlapping**. A test asserts this over the whole table rather than trusting
+  the author.
+- **A date no set covers is a hard error, not a clamp.** §1.5 forbids substituting
+  a plausible value for an unknown one, and clamping to the earliest set would do
+  exactly that — it would return a confident figure computed on a band set that was
+  not in force. The error names the offending date and the earliest covered date.
+- **A null `acquisition_date` is a distinct case and is not an error.** Legacy
+  documents carry no acquisition date. The currently open-ended set is used and the
+  result is marked `date_basis: 'assumed_current'`, which the report prints. It is
+  not silent, because a re-run after a Budget would return a different number.
+
+**Degradation, not a crash.** Both engines compute the acquisition cost stack
+*before* validation runs, so a date `selectBandSet` cannot place must not throw
+and destroy the whole appraisal. Both call sites resolve the date through one
+shared helper that degrades an unusable date to `null` — which is already defined
+above as "assume the current set", and so is self-describing rather than a silent
+substitute figure. Validation independently re-derives the same condition as a
+**hard** field-level error, so the failure is never silent, only never fatal. The
+catch is deliberately narrow: an invalid *jurisdiction* still propagates.
+
+### 14.4 Evaluation and basis
+
+Slice arithmetic with half-up rounding to whole pence per band, plus
+`round(consideration × surcharge_pct/100)` where the set carries a supplement. The
+England/NI path reproduces every pre-R8 golden figure to the penny.
+
+The basis is always `non_residential`. A commercial building bought for conversion
+takes non-residential rates by nature, so the "6 or more dwellings" rule that would
+otherwise reach the same answer is **noted here as the reason the basis is
+non-residential, not implemented as a branch** (§14.8).
+
+The result carries the total, the effective rate, the per-band working, the
+surcharge, the regime, jurisdiction and basis, the band set's `effective_from`, the
+table version, the source URL, the date basis, and the override fields below.
+
+### 14.5 Override
+
+`acquisition_tax_override_pence`, when non-null, becomes the total. The
+band-derived figure is preserved in `computed_total_pence` so the report can show
+both, and `is_override` is set.
+
+- **Validity condition:** an override with an empty `acquisition_tax_override_reason`
+  is a **hard validation error** — the same rule shape as §12.7's cell validity. An
+  unexplained override is an unattributable figure.
+- The report prints the override, the computed figure it replaced, and the reason.
+- The override is the honest escape hatch for everything in §14.8.
+- **It does not move the RLV** (§3.18), because cost-excluding-land subtracts the
+  acquisition tax back out.
+
+### 14.6 Evidence and the draft gate
+
+`jurisdiction` is accompanied by `jurisdiction_source` (`derived` from a postcode
+lookup, `user`, or `migrated_default`) and `jurisdiction_evidence_status`
+(`unconfirmed` / `confirmed`), deliberately reusing the vocabulary of
+`EquitySource.evidence_status` so the report's evidence handling stays one
+mechanism rather than two.
+
+- **Derivation only ever proposes.** A postcode lookup's country maps onto a
+  jurisdiction, but the result stays `unconfirmed` until a user accepts it;
+  accepting sets `user` / `confirmed`. An unrecognised or absent country returns
+  nothing and leaves the field at its default, unconfirmed — it never guesses.
+- **An unconfirmed jurisdiction leaves `report_safe` true** and instead makes the
+  document a DRAFT under §13.3's third condition. The figures are not alleged to be
+  wrong; the basis is stated to be unverified.
+- **Migration stamps what a legacy document honestly is:** `england_ni` /
+  `migrated_default` / `unconfirmed`, with a null date. It is purely additive and no
+  existing appraisal's computed values move. The consequence is deliberate and was
+  accepted by the product owner rather than worked around: **every document that
+  predates this release shows the tax-basis draft banner until its jurisdiction is
+  confirmed once.** There is no grandfathering and no England-first exemption,
+  because a migrated document genuinely is unverified.
+
+### 14.7 The deal spider
+
+The spider's tax-advantage comparison sets non-residential against residential
+higher rates **within one regime**. Comparing a Welsh acquisition's LTT against
+England's residential SDLT would measure the border, not the conversion.
+
+### 14.8 Stated limitations
+
+Recorded so they are not read as oversights. None of the following is modelled;
+§14.5's override is the escape hatch for all of them.
+
+- **Reliefs** — multiple dwellings relief, group relief and sub-sale relief.
+- **Linked transactions** — no aggregation across linked purchases.
+- **The non-resident surcharge** — not applied.
+- **Leasehold premium and the NPV-of-rent charge** — freehold consideration only.
+- **The "6 or more dwellings" rule** — noted in §14.4 as the reason the basis is
+  non-residential, not implemented as a branch.
+- **VAT and TOGC** (R11) and **disposal taxes** (out of scope for this plan) remain
+  unmodelled and are disclosed separately.
+
+A report states that it is not a tax opinion (§13.4).

@@ -27,7 +27,7 @@ FIXTURE_A_PATH = (
 )
 FIXTURE_A_INPUTS = json.loads(FIXTURE_A_PATH.read_text())["inputs"]
 
-# Fields the R8 migration to v5 added to the acquisition block (calc 2.6.0+).
+# Fields the R8 migration to v5 added to the acquisition block (calc 2.7.0).
 _R8_ACQUISITION_FIELDS = (
     "jurisdiction", "jurisdiction_source", "jurisdiction_evidence_status",
     "acquisition_date", "acquisition_tax_override_pence",

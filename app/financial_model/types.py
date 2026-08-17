@@ -353,7 +353,7 @@ class CalculatorInputsV4(CalculatorInputsV3):
     refinance: RefinanceInputs | None = None
 
 
-# --- Release 8 (calc 2.6.0+): jurisdiction, acquisition date and tax override -
+# --- Release 8 (calc 2.7.0): jurisdiction, acquisition date and tax override --
 
 JurisdictionSource = Literal["derived", "user", "migrated_default"]
 
@@ -424,4 +424,4 @@ FlagCode = Literal[
     "breakeven_cap_exhausted", "facility_redrawn_after_redemption",
 ]
 
-CALC_VERSION = "2.6.0"
+CALC_VERSION = "2.7.0"

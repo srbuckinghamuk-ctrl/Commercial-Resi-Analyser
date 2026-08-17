@@ -603,7 +603,7 @@ def migrate_inputs_to_v4(
     return migrate_v3_to_v4(migrate_inputs_to_v3(snapshot, project))
 
 
-# --- Release 8 (calc 2.6.0+): jurisdiction, acquisition date, tax override ---
+# --- Release 8 (calc 2.7.0): jurisdiction, acquisition date, tax override ---
 
 
 def migrate_v4_to_v5(v4: dict[str, Any] | CalculatorInputsV4) -> CalculatorInputsV5:
