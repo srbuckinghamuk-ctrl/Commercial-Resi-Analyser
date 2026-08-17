@@ -41,12 +41,12 @@ versioned band table rather than from hard-coded institutional knowledge.
 | 1 | Band table + evaluator (TS) + normative JSON | `86fa677..579cd58` |
 | 2 | Python mirror | `579cd58..e612bf3` |
 | 3 | Inputs v5 types, defaults, migration (TS) | `e612bf3..a7f0679` |
-| 4 | Inputs v5 (Python) | `ccb98fc..af20731` |
+| 4 | Inputs v5 (Python) — *merge branch ported from TS, see §6(c)* | `ccb98fc..af20731` |
 | 5 | Both tax call sites rerouted | `af20731..148bb92` |
 | 6 | Validation rules, both engines | `148bb92..1e4a2e9` |
 | 7 | Deal spider compares within one regime | `1e4a2e9..21df0eb` |
 | 8 | Report provenance, regime disclosure, draft gate | `21df0eb..695dd9b` |
-| 9 | Report-QA corpus: Welsh / Scottish / unconfirmed routes | `695dd9b..ed57afa` |
+| 9 | Report-QA corpus: Welsh / Scottish / unconfirmed routes — *rescoped, see §6(d)* | `695dd9b..ed57afa` |
 | 10 | Server boundary, postcode derivation, version guard | `ed57afa..d1f4cf9` |
 | 11 | Calculator UI: jurisdiction, date, override | `d1f4cf9..5f13fe5` |
 | 12 | Spec §14, calc 2.7.0, Welsh golden fixture, this report | this commit |
@@ -178,11 +178,13 @@ Read by eye, and worth recording:
 
 ---
 
-## 6. The two plan defects found mid-release
+## 6. Plan defects found mid-release
 
-Both were found by implementers, verified independently by the controller, and recorded as
-controller adjudications in the release ledger. Both were defects in **my plan**, not in
-the implementation of it.
+Four, all of them defects in **my plan** rather than in the implementation of it. Each was
+found by an implementer and verified independently by the controller; the first two were
+recorded as formal controller adjudications, the third as an adjudication on Task 4, and
+the fourth as a controller scope correction. They are listed together because they share a
+cause: a plan author writing confidently about code they had read too quickly.
 
 ### (a) Acquisition tax was computed at two sites; the plan named one
 
@@ -214,11 +216,48 @@ Ruled: delete the wrong test, replace it with the §3.18 invariance property, an
 the invariance in the specification (done in this task). §3.18 now states it explicitly,
 along with the fact that it holds only because both sites use the same figure.
 
+### (c) The plan told Python to do something different from TypeScript
+
+**Found by the Task 4 implementer, adjudicated by the controller.** My Task 4 brief
+specified a bare `model_validate` for the already-v5 branch of `migrate_inputs_to_v5`,
+where the TypeScript does a **field-by-field merge onto v5 defaults**. That is a
+plan-internal contradiction: the plan's own standing Global Constraint says *both engines
+mirror*, and a snippet in one task cannot override a constraint that binds every task.
+
+It is not a stylistic difference. A v5 row saved before a schema field existed would
+**raise in Python and default-fill in TypeScript** — the same stored document accepted by
+one engine and rejected by the other. And a `deal_spider` block missing its `weights` key
+collapsed to `{}`, which moves spider scoring rather than merely failing loudly.
+
+Ruled: the Global Constraints govern over the brief snippet; port the merge. The additive
+property was then confirmed empirically across all seven fixtures — byte-identical metrics
+v4 vs v5.
+
+### (d) Half of Task 9 was unbuildable as planned
+
+**Found by the implementer, corrected in scope by the controller.** The plan gave Task 9
+four halves' worth of work, two of which could not be done because they described code
+that does not do what the plan assumed: `export-excel.ts` exports the **projects**
+pipeline and carries no tax figure at all, and `export-pdf.ts` prints no acquisition tax.
+There was nothing in either to make jurisdiction-aware.
+
+The real gap was elsewhere and the plan had missed it: all five standing report-QA routes
+were **English pre-R8 v4 documents**, so the QA corpus could not observe a non-English
+memo at all. Task 9 was rescoped to add Welsh, Scottish and unconfirmed v5 fixtures to the
+iterated `ROUTES` plus a reusable `checkAcquisitionTaxDisclosure`. The reviewer confirmed
+the new helper is a strict **superset** of the assertions it replaced, including all three
+load-bearing zero-counts.
+
+§2's table lists Task 9 by what it delivered, not by what the plan asked for; this is the
+difference.
+
 ---
 
 ## 7. Defects the reviews caught that the tests did not
 
-These are the release's real lesson: five defects that a fully green suite did not see.
+These are the release's real lesson: eight defects that a fully green suite did not see.
+Several were introduced *by fixes*, and two turned working features into dead code without
+failing a single test.
 
 1. **A v5 document silently corrupted by the v4 migration path** *(Task 4, Critical)*.
    `migrate_inputs_to_v4` had no `is_v5` guard, so a v5 document fell through to the v1
@@ -256,12 +295,45 @@ These are the release's real lesson: five defects that a fully green suite did n
    silently reverted with no message. The repo's own audit history flags this class as P0.
    The reviewer reproduced the failure by removing the guard.
 
-Two further findings are worth recording for their shape rather than their severity: the
+6. **The two Python tax gates used different predicates, so the sites could drift again**
+   *(Task 5 fix round 2, Important)*. After the §6(a) fix, `metrics.py` gated on the
+   **container** while `schedule.py` gated on the **acquisition block**. Pydantic's
+   `revalidate_instances='never'` means a constructed object can hold a v4 container with a
+   v5 acquisition block — and on exactly that hybrid document the two tax sites disagreed
+   again. The §6(a) fix had closed the path through parsed input and left the constructed
+   one open. The re-reviewer verified this hands-on: reverting `metrics.py` to the container
+   gate fails precisely the new hybrid-document guard.
+
+7. **The client displayed and posted English SDLT on a non-English property**
+   *(Task 10 carry-forward to Task 11)*. On the **first save** of a non-English project the
+   calculator state started from `defaultCalculatorInputsV4` on `england_ni`, so the client
+   showed and posted SDLT while the server derived the real jurisdiction and stored
+   LTT/LBTT. Measured on fixture A: **91,388,400 shown against 91,213,400 stored**, plus a
+   spurious `client_mismatch` recorded on every such first save, because `handleSave` never
+   adopted the server snapshot. This was a user-visible wrong tax figure on a non-English
+   property — precisely the defect this release exists to remove, surviving into the release
+   that removes it. Task 11 made `handleSave` adopt the server snapshot; what remains is
+   §10 item 6's residue, one audit row, not a stored wrong figure.
+
+8. **A timeout set in a fix round would have made jurisdiction derivation never fire**
+   *(Task 10 fix round 2)*. My 2.0s cap on the postcode lookup was set against ~2s measured
+   `postcodes.io` latency. It would have turned a working feature into dead code —
+   derivation silently timing out on essentially every real request, the field left at its
+   `england_ni` default, and **every test still green**, because the suite is hermetic and
+   never pays real latency. Raised to 5.0s. Worth stating plainly: this is the failure mode
+   the whole release is about — a plausible default standing in for an unknown — reproduced
+   inside the fix for it.
+
+Three further findings are worth recording for their shape rather than their severity. The
 Task 7 implementer caught that my brief's spider fixture had `gdv_pence = 0`, which
 short-circuits `taxAdvantagePct` to 0 on **both** sides — the test would have passed for
-the wrong reason. And the Task 10 report claimed frontend test coverage that did not
-exist (`ConversionCalculator.test.tsx` mocks `getAppraisal` to always 404; `ExportPage`
-had no test file at all); the coverage was then actually written.
+the wrong reason. The Task 10 report claimed frontend test coverage that did not exist
+(`ConversionCalculator.test.tsx` mocks `getAppraisal` to always 404; `ExportPage` had no
+test file at all); the coverage was then actually written, and mutation-checked at 14
+failing tests. And the Task 10 version guard shipped **Python-only**, breaking the standing
+both-engines-mirror constraint — `migrateInputsToV5` carried the identical hole on the path
+every existing appraisal now loads through, which is the worst possible place for it. Both
+were flagged by the implementer, not by a test.
 
 ---
 
@@ -319,7 +391,7 @@ Carried from the ledger's `minor (deferred)` lines. None blocks the release.
 | 3 | v5 symbols not re-exported from `app/financial_model/__init__.py`. | Python |
 | 4 | `.claude/worktrees/release-3b-exits-ui/.../export-investment-memo.ts:1387` still carries the old false England/NI-only string. Tracked but never compiled (outside `tsconfig.app.json`) and **predates this branch** — repo hygiene, not this release. | worktree |
 | 5 | Task 9's write-up says mutation 3 failed one test; it actually fails two. The write-up **understates** its own coverage. No code change. | doc only |
-| 6 | Task 11 residue: on a first save of a non-English project the adopted server snapshot leaves one audit row recording a `client_mismatch`, rather than a stored wrong figure. Reviewed and accepted. | UI |
+| 6 | Residue of §7(7). The original defect — the client displaying and posting English SDLT on a non-English property, 91,388,400 shown against 91,213,400 stored — is **fixed**: `handleSave` now adopts the server snapshot. What remains is that the first such save still writes one audit row recording a `client_mismatch`. That is a spurious audit entry, not a stored wrong figure. Reviewed and accepted. | UI |
 
 Process note from Task 1, recorded rather than actioned: the implementer transcribed the
 band values without independently re-checking the sources. The reviewer did re-check and

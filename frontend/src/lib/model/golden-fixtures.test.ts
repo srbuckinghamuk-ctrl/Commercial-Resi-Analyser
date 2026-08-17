@@ -191,6 +191,13 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // the same consideration. That is what makes the fixture's jurisdiction load-bearing
     // — a table edit, or a mis-wired call site that quietly reverted to SDLT, fails here
     // rather than passing because the two regimes happened to agree.
+    //
+    // MAINTENANCE: the figures below are hard-coded for fixture M's consideration, inside
+    // a loop over every non-English fixture. Adding a second non-English fixture therefore
+    // means *rewriting this assertion* (drive the expected pair off the fixture, or split
+    // the loop) — not just adding a roster line. It fails loudly rather than silently if
+    // you forget, but the failure will look like a wrong figure rather than a missing
+    // case, so read this comment before "fixing" the number.
     it(`${fx.name} — its pre-R8 form is a different, England/NI, appraisal`, () => {
       const pre = asPreR8Document(fx.inputs);
       const v5 = migrateInputsToV5(pre);

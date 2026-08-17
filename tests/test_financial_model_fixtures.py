@@ -211,7 +211,14 @@ def test_a_non_english_fixtures_pre_r8_form_is_a_different_england_ni_appraisal(
     same consideration. That is what makes the fixture's jurisdiction load-bearing -- a
     table edit, or a mis-wired call site that quietly reverted to SDLT, fails here rather
     than passing because the two regimes happened to agree. Mirrors
-    golden-fixtures.test.ts's "its pre-R8 form is a different, England/NI, appraisal"."""
+    golden-fixtures.test.ts's "its pre-R8 form is a different, England/NI, appraisal".
+
+    MAINTENANCE: the figures below are hard-coded for fixture M's consideration, inside a
+    parametrisation over every non-English fixture. Adding a second non-English fixture
+    therefore means *rewriting this assertion* (drive the expected pair off the fixture, or
+    split the parametrisation) -- not just adding a roster line. It fails loudly rather
+    than silently if you forget, but the failure will look like a wrong figure rather than
+    a missing case, so read this before "fixing" the number."""
     doc = _load_fixture(path)
     v5 = migrate_inputs_to_v5(_as_pre_r8_document(doc["inputs"]))
     assert v5.acquisition.jurisdiction == "england_ni"
