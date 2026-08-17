@@ -10,11 +10,12 @@ import { inspectPdf } from './pdf-inspect';
 import type { PdfDocumentInfo } from './pdf-inspect';
 import {
   overflowingItems, sparsePages, orphanHeadings, documentText, documentProse,
-  watermarkTexts, describeLayout, bodyItems,
+  watermarkTexts, describeLayout, bodyItems, checkAcquisitionTaxDisclosure,
 } from './report-checks';
 import {
   qaProject, qaEligibility, sellAllInputs, retainAllInputs,
   refinanceInputs, blendedInputs, legacyV1Snapshot,
+  welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
 } from './memo-fixtures';
 
 /**
@@ -77,6 +78,14 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   ['refinance', refinanceInputs],
   ['blended', blendedInputs],
   ['legacy migrated draft', () => migrateInputsToV4(legacyV1Snapshot(), qaProject)],
+  // R8 (spec §14). The standing corpus previously held no non-English, non-v4
+  // document, so every route above prints an England/NI SDLT case and none of
+  // them exercises a Welsh or Scottish memo's actually-different string
+  // lengths — exactly the difference the page-bounds, sparse-page and orphan
+  // gates below exist to catch.
+  ['wales (LTT)', welshInputs],
+  ['scotland (LBTT)', scottishInputs],
+  ['unconfirmed jurisdiction', unconfirmedJurisdictionInputs],
 ];
 
 describe('investment memorandum release gate', () => {
@@ -156,7 +165,7 @@ describe('investment memorandum release gate', () => {
     });
 
     it('states its own limitations, including the tax and VAT basis', async () => {
-      const { info } = await report(makeInputs());
+      const { info, run } = await report(makeInputs());
       const prose = documentProse(info);
       expect(prose).toContain('Basis of Preparation and Limitations');
       // R8 (spec §14). This assertion used to pin the sentence "Acquisition tax
@@ -164,10 +173,14 @@ describe('investment memorandum release gate', () => {
       // bands. A property in Scotland (LBTT) or Wales (LTT) is not correctly
       // taxed by this version." Both halves stopped being true when the engine
       // became jurisdiction-aware, so the gate now pins the opposite: the memo
-      // names the regime it actually applied, and never disclaims the other two.
-      expect(countOccurrences(prose, 'Acquisition tax is calculated on the SDLT non-residential bands for')).toBe(1);
-      expect(countOccurrences(prose, 'is not correctly taxed by this version')).toBe(0);
-      expect(countOccurrences(prose, 'England and Northern Ireland non-residential SDLT bands')).toBe(0);
+      // names the regime it actually applied — whatever regime that is for
+      // this route, read off the run's own authoritative result rather than
+      // hard-coded, now that the corpus includes non-SDLT routes — and never
+      // disclaims the other two.
+      expect(checkAcquisitionTaxDisclosure(info, {
+        jurisdiction: run.metrics.acquisition_tax.jurisdiction,
+        regime: run.metrics.acquisition_tax.regime,
+      })).toEqual([]);
       // Fix round 1 (item 4). Traceability to a dated table is the whole point
       // of the table, so the *value* is pinned, not merely the label — both
       // prose sites survived being replaced with a literal 9.9.9. Compared
@@ -327,23 +340,30 @@ describe('investment memorandum release gate', () => {
   }
 
   it('names the regime actually applied to a Scottish acquisition', async () => {
-    const { info } = await report(v5WithAcquisition({ jurisdiction: 'scotland' }));
+    const { info } = await report(scottishInputs());
     const prose = documentProse(info);
-    const text = documentText(info);
-    expect(countOccurrences(prose, 'Acquisition tax is calculated on the LBTT non-residential bands for Scotland')).toBe(1);
     // Twice, deliberately and exactly: the Appendix A assumption row and the
     // §13 limitation sentence. A third would mean a section printed it again.
+    // `checkAcquisitionTaxDisclosure` below asserts the regime is named at
+    // each of those two places (plus the provenance row) and that neither
+    // retired false statement survives; this pins the *date* specifically,
+    // which the helper does not, because a correct regime quoting the wrong
+    // band-set date would still pass every check the helper runs.
     expect(countOccurrences(prose, 'in force from 25 Jan 2019')).toBe(2);
-    expect(countOccurrences(text, 'LBTT — Scotland, non-residential')).toBe(1);
-    expect(countOccurrences(text, 'Scotland (LBTT)')).toBe(1); // the provenance row
-    // The two false statements the R7 memo carried, in either wording.
-    expect(countOccurrences(text, 'England/NI only')).toBe(0);
-    expect(countOccurrences(prose, 'is not correctly taxed by this version')).toBe(0);
+    expect(checkAcquisitionTaxDisclosure(info, { jurisdiction: 'scotland', regime: 'LBTT' })).toEqual([]);
+  });
+
+  it('names the regime actually applied to a Welsh acquisition', async () => {
+    const { info } = await report(welshInputs());
+    const prose = documentProse(info);
+    // The LTT band set in force from 22 Dec 2020 covers the fixture's
+    // 10 Feb 2026 transaction date.
+    expect(countOccurrences(prose, 'in force from 22 Dec 2020')).toBe(2);
+    expect(checkAcquisitionTaxDisclosure(info, { jurisdiction: 'wales', regime: 'LTT' })).toEqual([]);
   });
 
   it('holds a document in DRAFT while the jurisdiction is unconfirmed', async () => {
-    const inputs = v5WithAcquisition({ jurisdiction_evidence_status: 'unconfirmed' });
-    const run = runAppraisal(inputs);
+    const run = runAppraisal(unconfirmedJurisdictionInputs());
     const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
     expect(prov.draftReason).toBe('tax_basis_unconfirmed');
 
@@ -361,6 +381,9 @@ describe('investment memorandum release gate', () => {
     // counterpart in the test below.
     expect(countOccurrences(prose, 'England & Northern Ireland (SDLT) — basis unconfirmed')).toBe(1);
     expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+    // The regime itself (SDLT, since this fixture is England/NI) is still
+    // named correctly and once, and neither retired false statement is back.
+    expect(checkAcquisitionTaxDisclosure(info, { jurisdiction: 'england_ni', regime: 'SDLT' })).toEqual([]);
   });
 
   it('calls a pre-R8 jurisdiction assumed, without re-grading the document', async () => {

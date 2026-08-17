@@ -11,6 +11,7 @@
  * Test-support only; not imported by the application.
  */
 import type { PdfDocumentInfo, PageInfo, TextItem } from './pdf-inspect';
+import type { Jurisdiction, Regime } from '../tax/acquisition-tax';
 
 /** Page furniture that is deliberately outside the flowing content box. */
 export interface BodyItemOptions {
@@ -239,6 +240,88 @@ export function documentProse(info: PdfDocumentInfo): string {
 /** Watermark banners drawn on a page - rotated, so outside the body text. */
 export function watermarkTexts(page: PageInfo): string[] {
   return page.items.filter((i) => Math.abs(i.angleDeg) > 0.001).map((i) => i.text);
+}
+
+/**
+ * Human labels for a tax jurisdiction, mirrored from `export-investment-memo`'s
+ * own `JURISDICTION_LABEL` table (spec §14) rather than imported from it: this
+ * check exists to verify the printed page independently of the generator's own
+ * idea of what it drew, for the same reason `bodyItems` above measures geometry
+ * off `inspectPdf`'s output rather than the generator's page-break bookkeeping.
+ */
+const JURISDICTION_LABEL: Record<Jurisdiction, string> = {
+  england_ni: 'England & Northern Ireland',
+  scotland: 'Scotland',
+  wales: 'Wales',
+};
+
+export interface AcquisitionTaxExpectation {
+  jurisdiction: Jurisdiction;
+  regime: Regime;
+}
+
+export interface AcquisitionTaxDisclosureViolation {
+  reason: string;
+}
+
+/** Count non-overlapping occurrences of `needle` in `haystack`. */
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
+
+/**
+ * Spec §14 (R8): whatever regime a document actually applied — SDLT, LBTT or
+ * LTT, for whichever jurisdiction the caller expects — the memo must name it,
+ * exactly once, at each of the two places it is stated (the Appendix A
+ * assumption row and the provenance panel's "Tax jurisdiction applied" row,
+ * plus the §13 Limitations sentence that states the same fact in prose), and
+ * it must never carry any of the three retired false statements the pre-R8
+ * memo printed unconditionally on every document: that the Appendix A basis
+ * was "England/NI only", or either half of the old Limitations sentence
+ * claiming the model taxed every acquisition on "England and Northern Ireland
+ * non-residential SDLT bands" and that Scotland or Wales "is not correctly
+ * taxed by this version".
+ *
+ * `toContain` cannot see a second copy of the true statement sitting next to a
+ * surviving copy of the false one — both defects were live in this report and
+ * both passed every substring assertion written about them — so this counts,
+ * following the same convention as `overflowingItems` and `sparsePages`:
+ * return violations, do not assert.
+ */
+export function checkAcquisitionTaxDisclosure(
+  info: PdfDocumentInfo,
+  expected: AcquisitionTaxExpectation,
+): AcquisitionTaxDisclosureViolation[] {
+  const violations: AcquisitionTaxDisclosureViolation[] = [];
+  const text = documentText(info);
+  const prose = documentProse(info);
+  const label = JURISDICTION_LABEL[expected.jurisdiction];
+
+  const expectCount = (haystack: string, needle: string, expectedCount: number, where: string) => {
+    const count = countOccurrences(haystack, needle);
+    if (count !== expectedCount) {
+      violations.push({
+        reason: `expected "${needle}" ${expectedCount} time(s) in ${where}, found ${count}`,
+      });
+    }
+  };
+
+  // States the regime, exactly once, at each of the three places it is named.
+  expectCount(text, `${expected.regime} — ${label}, non-residential`, 1, 'Appendix A assumption row');
+  expectCount(text, `${label} (${expected.regime})`, 1, 'provenance "Tax jurisdiction applied" row');
+  expectCount(
+    prose,
+    `Acquisition tax is calculated on the ${expected.regime} non-residential bands for ${label}`,
+    1,
+    '§13 Limitations sentence',
+  );
+
+  // Never carries a retired false statement about the basis.
+  expectCount(text, 'England/NI only', 0, 'Appendix A (retired basis text)');
+  expectCount(prose, 'England and Northern Ireland non-residential SDLT bands', 0, 'Limitations (retired first half)');
+  expectCount(prose, 'is not correctly taxed by this version', 0, 'Limitations (retired second half)');
+
+  return violations;
 }
 
 /**

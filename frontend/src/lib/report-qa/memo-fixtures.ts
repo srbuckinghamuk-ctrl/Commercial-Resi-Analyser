@@ -12,7 +12,8 @@
  * Test-support only; not imported by the application.
  */
 import type { Project, EligibilityAssessment } from '../../types';
-import type { CalculatorInputsV4 } from '../model';
+import type { CalculatorInputsV4, CalculatorInputsV5, AcquisitionInputsV5 } from '../model';
+import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
   id: '9f1c2d34-5e6a-4b7c-8d9e-0a1b2c3d4e5f',
@@ -241,6 +242,69 @@ export function blendedInputs(): CalculatorInputsV4 {
     ],
   };
   return inputs;
+}
+
+/**
+ * R8 (spec §14). `sellAllInputs()` promoted to a v5 document with the
+ * acquisition tax basis set: a confirmed jurisdiction and a real transaction
+ * date, so `selectBandSet` resolves the band set by that date rather than
+ * assuming the currently open-ended one. Every jurisdiction fixture below is
+ * this function with one field changed, so a difference in the rendered
+ * report is a difference in the jurisdiction, not the deal — the same
+ * discipline `sellAllInputs`'s own doc comment asks of the exit-route
+ * fixtures above.
+ *
+ * Before this, the standing report-QA corpus held no non-English, non-v4
+ * document at all: every one of `sellAllInputs`/`retainAllInputs`/
+ * `refinanceInputs`/`blendedInputs` is a pre-R8 v4 document, so every route
+ * the release gate ran was an England/NI SDLT case defaulted by
+ * `deriveMetrics`, never a document that actually recorded a jurisdiction.
+ */
+function v5AcquisitionInputs(overrides: Partial<AcquisitionInputsV5> = {}): CalculatorInputsV5 {
+  const base = sellAllInputs();
+  return {
+    ...base,
+    inputs_version: 5,
+    acquisition: {
+      ...base.acquisition,
+      jurisdiction: 'england_ni' as Jurisdiction,
+      jurisdiction_source: 'user',
+      jurisdiction_evidence_status: 'confirmed',
+      acquisition_date: '2026-01-15',
+      acquisition_tax_override_pence: null,
+      acquisition_tax_override_reason: '',
+      ...overrides,
+    },
+  };
+}
+
+/**
+ * A Welsh acquisition: LTT, a confirmed jurisdiction and a transaction date
+ * (10 Feb 2026) inside the current non-residential band set (in force from
+ * 22 Dec 2020) — so the tax basis is fully evidenced, not assumed.
+ */
+export function welshInputs(): CalculatorInputsV5 {
+  return v5AcquisitionInputs({ jurisdiction: 'wales', acquisition_date: '2026-02-10' });
+}
+
+/**
+ * A Scottish acquisition: LBTT, likewise a confirmed jurisdiction and a
+ * transaction date inside the current band set (in force from 25 Jan 2019).
+ */
+export function scottishInputs(): CalculatorInputsV5 {
+  return v5AcquisitionInputs({ jurisdiction: 'scotland', acquisition_date: '2026-02-10' });
+}
+
+/**
+ * An England/NI acquisition whose jurisdiction is recorded but not yet
+ * evidenced. `jurisdiction_evidence_status: 'unconfirmed'` is what
+ * `taxBasisConfirmedFor` (report-provenance.ts) reads as an unconfirmed basis,
+ * which drives `draftReason` to `'tax_basis_unconfirmed'` and puts the memo on
+ * the DRAFT - TAX BASIS UNCONFIRMED path rather than the ordinary
+ * DRAFT - NOT APPROVED one the other standing fixtures reach.
+ */
+export function unconfirmedJurisdictionInputs(): CalculatorInputsV5 {
+  return v5AcquisitionInputs({ jurisdiction_evidence_status: 'unconfirmed' });
 }
 
 /**
