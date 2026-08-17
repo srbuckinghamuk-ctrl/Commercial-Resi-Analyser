@@ -1,0 +1,86 @@
+{
+  "table_version": "1.0.0",
+  "note": "Normative record of every acquisition-tax band set (spec §14). Both engines are tested against this file. An unbounded top band is encoded as null because JSON cannot represent infinity. Edit this file first when a Budget changes a rate; both engines' parity tests will then fail until they are updated to match.",
+  "band_sets": [
+    {
+      "regime": "SDLT", "jurisdiction": "england_ni", "basis": "non_residential",
+      "effective_from": "2016-03-17", "effective_to": null,
+      "bands": [
+        { "up_to_pence": 15000000, "rate_pct": 0 },
+        { "up_to_pence": 25000000, "rate_pct": 2 },
+        { "up_to_pence": null, "rate_pct": 5 }
+      ],
+      "surcharge_pct": null,
+      "source_url": "https://www.gov.uk/stamp-duty-land-tax/nonresidential-and-mixed-rates",
+      "source_note": "Non-residential and mixed freehold rates, unchanged since 17 March 2016."
+    },
+    {
+      "regime": "LBTT", "jurisdiction": "scotland", "basis": "non_residential",
+      "effective_from": "2019-01-25", "effective_to": null,
+      "bands": [
+        { "up_to_pence": 15000000, "rate_pct": 0 },
+        { "up_to_pence": 25000000, "rate_pct": 1 },
+        { "up_to_pence": null, "rate_pct": 5 }
+      ],
+      "surcharge_pct": null,
+      "source_url": "https://www.gov.scot/publications/scottish-budget-2026-2027-scottish-tax-ready-reckoners/pages/4/",
+      "source_note": "Non-residential conveyance rates from 25 January 2019; held at current levels by Scottish Budget 2026-27."
+    },
+    {
+      "regime": "LTT", "jurisdiction": "wales", "basis": "non_residential",
+      "effective_from": "2020-12-22", "effective_to": null,
+      "bands": [
+        { "up_to_pence": 22500000, "rate_pct": 0 },
+        { "up_to_pence": 25000000, "rate_pct": 1 },
+        { "up_to_pence": 100000000, "rate_pct": 5 },
+        { "up_to_pence": null, "rate_pct": 6 }
+      ],
+      "surcharge_pct": null,
+      "source_url": "https://www.gov.wales/land-transaction-tax-rates-and-bands",
+      "source_note": "Non-residential rates from 22 December 2020."
+    },
+    {
+      "regime": "SDLT", "jurisdiction": "england_ni", "basis": "residential_higher",
+      "effective_from": "2025-04-01", "effective_to": null,
+      "bands": [
+        { "up_to_pence": 12500000, "rate_pct": 0 },
+        { "up_to_pence": 25000000, "rate_pct": 2 },
+        { "up_to_pence": 92500000, "rate_pct": 5 },
+        { "up_to_pence": 150000000, "rate_pct": 10 },
+        { "up_to_pence": null, "rate_pct": 12 }
+      ],
+      "surcharge_pct": 5,
+      "source_url": "https://www.gov.uk/stamp-duty-land-tax/residential-property-rates",
+      "source_note": "Residential bands from 1 April 2025 with the 5% higher-rates supplement in force from 31 October 2024."
+    },
+    {
+      "regime": "LBTT", "jurisdiction": "scotland", "basis": "residential_higher",
+      "effective_from": "2024-12-05", "effective_to": null,
+      "bands": [
+        { "up_to_pence": 14500000, "rate_pct": 0 },
+        { "up_to_pence": 25000000, "rate_pct": 2 },
+        { "up_to_pence": 32500000, "rate_pct": 5 },
+        { "up_to_pence": 75000000, "rate_pct": 10 },
+        { "up_to_pence": null, "rate_pct": 12 }
+      ],
+      "surcharge_pct": 8,
+      "source_url": "https://www.gov.scot/publications/scottish-budget-2026-2027-scottish-tax-ready-reckoners/pages/4/",
+      "source_note": "Residential conveyance bands with the 8% Additional Dwelling Supplement in force from 5 December 2024."
+    },
+    {
+      "regime": "LTT", "jurisdiction": "wales", "basis": "residential_higher",
+      "effective_from": "2024-12-11", "effective_to": null,
+      "bands": [
+        { "up_to_pence": 18000000, "rate_pct": 5 },
+        { "up_to_pence": 25000000, "rate_pct": 8.5 },
+        { "up_to_pence": 40000000, "rate_pct": 10 },
+        { "up_to_pence": 75000000, "rate_pct": 12.5 },
+        { "up_to_pence": 150000000, "rate_pct": 15 },
+        { "up_to_pence": null, "rate_pct": 17 }
+      ],
+      "surcharge_pct": null,
+      "source_url": "https://www.gov.wales/land-transaction-tax-rates-and-bands",
+      "source_note": "Higher residential rates from 11 December 2024. The uplift is embedded in the bands, not charged as a supplement."
+    }
+  ]
+}
