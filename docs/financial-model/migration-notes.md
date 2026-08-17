@@ -267,3 +267,56 @@ were updated to `inputs_version: 3` with `lender_valuation: null` and
 `finance.enforcement_cost_assumption_pence: 0`, and both `expected_metrics` blocks are byte-identical
 to before this change — the full TS and Python suites (`npx vitest run`, `python -m pytest -q`) stay
 green with the same pinned numbers, which is the additive-only proof for this migration.
+
+---
+
+## 8. Release 7 — no input-schema move; one output change and one column [calc 2.6.0]
+
+R7 is a report release. The input schema stays at **v4** and no migration of
+stored `inputs_snapshot` documents is required or performed.
+
+### 8.1 Output change: `equity_multiple`
+
+Spec §3.16.1. For a schedule with no realisation event — no sale receipts and no
+refinance — `equity_multiple` moves from `0` to `null`. Two new outputs carry the
+condition: `has_realisation_event` and `return_on_equity_is_unrealised`.
+
+- **Effect on stored results.** None until a record is next saved. Stored
+  `outputs` blobs are preserved verbatim with the `calc_version` they were
+  computed under, as they always have been; §13.1's provenance panel discloses a
+  recomputation when the printed run's version differs from the stored one.
+- **Effect on recalculation.** A retain-all appraisal re-saved after this release
+  will show `equity_multiple: null` where it previously showed `0`. This is the
+  correction the second audit asked for: `0.00x` beside a positive return on
+  equity read as a total loss of capital rather than as a case with no exit
+  modelled.
+- **Cases unaffected.** Any schedule that books a disposal or a refinance —
+  including one whose receipts sweep entirely to senior debt, which keeps its
+  genuine `0.00`.
+
+### 8.2 New column: `financial_appraisals.audit_hash`
+
+Migration **005**, nullable `String(64)`. Populated by the server on every
+recalculation; see spec §13.2 for the composition.
+
+Existing rows are left `NULL`. The value is derivable from columns a row already
+holds, so a backfill would be *computable* — but a row that has not been
+recalculated since this release is a pre-provenance result, and stamping it with
+a hash would assert a binding no run ever produced. Reports print "not recorded —
+result predates provenance hashing" until the row is next saved.
+
+### 8.3 The York appraisal after R7
+
+The saved Stonegate record is a migrated v1 snapshot: `requires_confirmation` is
+true, so it is not report-safe, and it is a retain-all case with no refinance, so
+it has no realisation event.
+
+| Field | Before R7 | After R7 | Why |
+|---|---|---|---|
+| `equity_multiple` | `0` | `null` | §3.16.1 — no realisation event |
+| `return_on_equity_pct` | unchanged | unchanged | still an accounting return; now *labelled* unrealised |
+| every cost, finance and profit figure | unchanged | unchanged | no formula moved |
+| exported memo | DRAFT (unreconciled) | DRAFT (unreconciled) | `requires_confirmation` still fails condition 1 of §13.3 |
+
+The audit's independently reconciled figures for this case therefore remain
+reproducible line for line.

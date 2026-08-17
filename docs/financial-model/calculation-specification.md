@@ -1,6 +1,6 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.5.0`.
+**Status:** Authoritative. Calculation version `2.6.0`.
 **Date:** 15 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
@@ -49,7 +49,7 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks). Outputs are only comparable within a `calc_version`.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
 
 ---
 
@@ -179,10 +179,44 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 - Equity is not released before senior debt is fully repaid (100% sweep default; a `sales_sweep_pct < 100` releases the unswept share of net receipts).
 - This vector is the sole basis for IRR and equity multiple.
 
-### 3.16 Equity multiple [R1]
+### 3.16 Equity multiple [R1; realisation basis R7 — calc 2.6.0]
 
 - **Numerator:** Σ distributions. **Denominator:** Σ contributions (absolute).
 - **Zero contributions:** `null`. **Negative profit:** multiple < 1.0, reported as-is.
+- **No realisation event (§3.16.1):** `null`, not `0`.
+
+### 3.16.1 Realisation basis [R7 — calc 2.6.0]
+
+Distributed-return metrics need something to measure against. Two outputs carry
+that condition so no consumer has to re-derive it.
+
+- **`has_realisation_event`** = `schedule.totals.gross_sales_pence > 0` **or**
+  `schedule.refinance ≠ null`. It asks whether the model books a realisation
+  *event*, not whether cash reached equity.
+- **`return_on_equity_is_unrealised`** = `profit_is_unrealised` **or**
+  `not has_realisation_event`.
+
+Consequences:
+
+| Case | `has_realisation_event` | `equity_multiple` | Return on equity |
+|---|---|---|---|
+| Units sold, cash distributed | true | Σ distributions ÷ Σ contributions | realised |
+| Units sold, receipts swept entirely to senior debt | true | `0.00` — a real answer | realised |
+| Retained, refinanced | true | computed from the refinance flow | unrealised (retained value in profit) |
+| Retained, no refinance | **false** | **`null`** | **unrealised** |
+
+- **Why `null` and not `0` in the last row.** §1.5: `null` means unknown, `0`
+  means known to be zero. A retain-all case with no exit has no exit to measure,
+  so the multiple is unknown; printing `0.00x` beside a positive return on equity
+  states that the sponsor's capital was lost, which is a different claim and a
+  false one. The distinction survives only because the discriminator is the
+  *event*, not the distribution: a sale that returns nothing genuinely is
+  `0.00x`, and that row must keep its zero.
+- **Reports** must print return on equity as **"Return on Equity (unrealised)"**
+  whenever `return_on_equity_is_unrealised`, and must not substitute any figure
+  where the multiple or IRR is `null` (§13.4).
+- **Rounding/timing:** unchanged from §3.16/§3.17; these are classification
+  outputs, not new arithmetic.
 
 ### 3.17 IRR — monthly and annual [R1]
 
@@ -638,3 +672,134 @@ the two by the error the suite raises (`InvalidBaseDocumentError`,
 
 An unmeasured position is never appraised: the suite validates the levered document and
 does not run the ledger for it at all.
+
+---
+
+## 13. Report provenance and document governance [R7 — calc 2.6.0]
+
+A generated report is a claim about a calculation. §13 defines what the document
+must say about itself, and what it must be true of before it may drop its draft
+marking. None of it changes a computed value; all of it is normative for every
+export path.
+
+### 13.1 The provenance panel
+
+Every generated appraisal report prints, before any figure, a panel carrying:
+
+| Field | Source | Absent value |
+|---|---|---|
+| Appraisal ID | stored record | "unsaved — generated from an in-session run" |
+| Project ID | stored record, else `inputs.project_id` | "not recorded" |
+| Scenario ID and name | the scenario the printed figures are on | — (always present; default `base` / "Base Case") |
+| Input schema version | `inputs.inputs_version` | — |
+| Calculation version | `metrics.calc_version` of the printed run | — |
+| Authoritative result hash | stored `outputs_hash` | "not recorded — result predates provenance hashing" |
+| Input hash | stored `input_hash` | as above |
+| Audit hash | stored `audit_hash` (§13.2) | as above |
+| Generation timestamp | injected clock, with IANA zone and UTC offset | — |
+| Report-safe status | `reconciliation.report_safe` | — |
+| Document status | §13.3 | — |
+| Lender-case approval status | lender case, when one exists | "No lender case — not submitted for credit approval" |
+
+- **Hashes are the server's, never the client's.** They describe what the server
+  computed and stored. A client-side re-derivation would hash the client's own
+  arithmetic, which is the confusion the hashes exist to prevent.
+- **Recomputation is disclosed.** When the run being printed was computed under a
+  different `calc_version` from the stored result, the report says so and states
+  that the printed hashes describe the stored result rather than the printed
+  figures. It does not silently reuse them.
+
+### 13.2 Audit hash
+
+```
+audit_hash = sha256( project_id | calc_version | inputs_version | status | input_hash | outputs_hash )
+```
+
+joined by the literal `|`, over UTF-8, lower-case hex.
+
+- **Why a hash of hashes.** `input_hash` and `outputs_hash` already commit to the
+  full documents, so re-deriving from them keeps the value cheap to recompute and
+  makes the binding explicit: a reviewer holding a printed provenance panel can
+  recompute the audit hash from the six fields beside it and detect that any one
+  of them was altered after the fact.
+- **Record identity is `project_id`**, not the appraisal row's own id: migration
+  004 made the appraisal unique per project, so the project is the stable
+  identity, and it is known before the row exists — which lets the value be
+  computed in the same place as the other two hashes.
+- **Status is inside the hash.** Two records whose inputs and outputs hash
+  identically but whose governance status differs must not share an audit hash;
+  the status is what a reader relies on when deciding whether the printed figures
+  may be relied upon at all.
+- **Absent rows.** Records saved before this release carry `null` and the report
+  prints "not recorded". They are not backfilled: a row that has not been
+  recalculated is a pre-provenance result, and stamping it would assert a binding
+  no run produced.
+
+### 13.3 Document status and draft marking
+
+A document is **FINAL** only when all three hold, tested in this order:
+
+1. `reconciliation.report_safe` — hard validations pass.
+2. `reconciliation.senior_repaid` — the ledger clears the senior facility within
+   the modelled term.
+3. An approved lender case: status `credit_approved` or `approved_with_conditions`.
+
+Otherwise the document is **DRAFT** and carries the banner for the **first**
+failing condition:
+
+| Failing condition | Banner |
+|---|---|
+| not report-safe | `DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE` |
+| senior not repaid | `DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE` |
+| not approved | `DRAFT - NOT APPROVED FOR LENDER RELIANCE` |
+
+- **The three conditions are distinct claims and must not be collapsed.** An
+  unreconciled run's figures may be wrong. A reconciled run that does not repay
+  the senior facility is arithmetically sound and shows a real repayment failure.
+  A reconciled, repaying run with no approved case is a correct appraisal that
+  nobody has approved. Printing "UNRECONCILED" over the last two would state
+  something untrue about the model.
+- **`report_safe` deliberately excludes senior repayment** (§7): an appraisal
+  intending to refinance later is a valid appraisal. The FINAL gate tests it
+  separately, so no document showing an unrepaid senior balance at maturity can
+  be issued as final.
+- **With no lender case in existence, every document is a DRAFT.** That is the
+  intended answer, not a gap.
+
+### 13.4 What a report may claim
+
+- **Cost basis.** The construction model is a rate × area **headline cost
+  estimate** with named allowances. A report may not describe it as a cost plan
+  until a detailed package mode is the active basis.
+- **Suitability.** A report states that it is suitable for sponsor review and
+  preliminary lender appraisal, and that it is not a credit paper, valuation,
+  cost plan, tax opinion or legal report.
+- **Unrealised returns.** §3.16.1's labels are mandatory. Where the multiple or
+  IRR is `null`, the report prints the reason, never a substitute figure.
+- **Limitations are printed, not implied.** Every disclosed limitation is stated
+  in the document, conditioned on the run: unavailable lender valuation,
+  unconfirmed migrated facility terms, jurisdiction/tax basis, VAT treatment,
+  absent area bridge, narrative-only due diligence, and any failing governance
+  condition from §13.3.
+
+### 13.5 Layout invariants
+
+Automated report QA asserts these against the generated PDF's own content
+streams — position and measured width, not the generator's intentions.
+
+1. **No drawn item leaves the page.** Every text item's bounding box, the draft
+   banner included, sits inside the media box within 0.5 mm.
+2. **No blank, orphaned or sparse page.** Content extent covers ≥ 40 % of the
+   content box on interior pages and ≥ 20 % on the last; a page carries ≥ 5 body
+   items and ≥ 6 % inked rows. The cover is exempt.
+3. **Style never outlives its call.** Anything drawn out of band restores the
+   font, size and colour it found; style is applied immediately before a draw and
+   never before a page break.
+4. **Blocks that fit a page are not split.** A paragraph or a short table moves
+   whole rather than leaving two lines behind.
+5. **Every page after the cover carries a running footer** with the property, a
+   confidentiality mark and "Page n of m".
+
+**Not yet asserted:** raster rendering of each page for pixel-level visual
+regression, and PDF/UA structure tagging. Both are recorded as open in the R7
+release report rather than claimed.

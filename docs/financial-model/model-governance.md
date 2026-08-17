@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.5.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.6.0`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -104,7 +104,7 @@ meaningful rather than tautological.
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.5.0"`
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.6.0"`
   (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
   `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
   Outputs are only comparable within one `calc_version` — a report or comparison spanning two
@@ -118,7 +118,7 @@ Two independent version numbers travel with every appraisal document:
   v1→v2→v3→v4 is applied in-place before persistence, so the stored document is never left in
   an older shape after a save.
 
-`calc_version` and `inputs_version` are independent axes. Calc `2.5.0` consumes v2, v3 and v4
+`calc_version` and `inputs_version` are independent axes. Calc `2.6.0` consumes v2, v3 and v4
 input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis metrics
 are null, and a document with `programme: null` produces a byte-identical schedule to its v3
 source), but **v4 is canonical server-side**: `calculate_authoritative` migrates whatever arrives
@@ -254,3 +254,46 @@ to pages reached via the module's own pagination.
   file for v1→v2 migration (`migrate.test.ts`, 4 cases) with no direct Python counterpart (Python's
   migration coverage is a narrow floors-zero regression plus an end-to-end API test, not a
   case-for-case port). Both are recorded as Release 2 scope in `test-cases.md` §7.
+
+---
+
+## 12. Report governance [R7 — calc 2.6.0]
+
+The engine's authority stops at the number. §13 of the specification governs the
+document that carries it.
+
+### 12.1 Where the rules live
+
+`frontend/src/lib/report-provenance.ts` owns the governance decisions —
+`draftReason`, `documentStatus`, `buildProvenance` — so neither the report
+generator nor a React component decides them. This is the same rule as
+prohibited-calculation #9: a report consumes decisions, it does not make them.
+
+`frontend/src/lib/report-layout.ts` owns page geometry shared by every generated
+PDF. Before R7 the draft watermark existed twice, with a comment on the second
+copy explaining why it could not be shared; both copies were wrong in the same
+two ways.
+
+### 12.2 The FINAL gate
+
+Spec §13.3. Three conditions, tested in order, each with its own banner:
+reconciled, senior repaid, lender case approved. `report_safe` deliberately does
+not include senior repayment (§7) — an appraisal that intends to refinance later
+is valid — so the document gate tests it separately. No document showing an
+unrepaid senior balance at maturity can be issued as final.
+
+Until a lender case exists (R14), condition 3 cannot be met and every document is
+a DRAFT. That is the intended answer.
+
+### 12.3 The audit hash
+
+Computed once, server-side, in `calculate_authoritative` alongside the other two
+hashes; stored on `financial_appraisals.audit_hash` (migration 005); printed in
+the provenance panel. Recomputable by a reviewer from the six printed fields.
+Pre-existing rows are not backfilled — see spec §13.2.
+
+### 12.4 Release gate
+
+`docs/financial-model/test-cases.md` §12. A report change is not releasable until
+the page-bounds, sparse-page, provenance, watermark and figure-reconciliation
+assertions pass over all five representative documents.
