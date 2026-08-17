@@ -131,6 +131,8 @@ describe('investment memorandum release gate', () => {
         'Appraisal ID', 'Project ID', 'Scenario', 'Input schema version',
         'Calculation version', 'Authoritative result hash', 'Input hash',
         'Audit hash', 'Generated', 'Report-safe status', 'Document status', 'Lender case',
+        // R8 (spec §14): the tax basis the printed acquisition tax rests on.
+        'Tax jurisdiction applied', 'Acquisition tax table version',
       ]) {
         expect(text, `provenance field "${label}" missing`).toContain(label);
       }
@@ -152,7 +154,15 @@ describe('investment memorandum release gate', () => {
       const { info } = await report(makeInputs());
       const prose = documentProse(info);
       expect(prose).toContain('Basis of Preparation and Limitations');
-      expect(prose).toContain('England and Northern Ireland non-residential SDLT bands');
+      // R8 (spec §14). This assertion used to pin the sentence "Acquisition tax
+      // is calculated on the England and Northern Ireland non-residential SDLT
+      // bands. A property in Scotland (LBTT) or Wales (LTT) is not correctly
+      // taxed by this version." Both halves stopped being true when the engine
+      // became jurisdiction-aware, so the gate now pins the opposite: the memo
+      // names the regime it actually applied, and never disclaims the other two.
+      expect(prose).toContain('Acquisition tax is calculated on the SDLT non-residential bands for');
+      expect(countOccurrences(prose, 'is not correctly taxed by this version')).toBe(0);
+      expect(countOccurrences(prose, 'England and Northern Ireland non-residential SDLT bands')).toBe(0);
       expect(prose).toContain('VAT is not modelled as a cash flow');
       expect(prose).toContain('not a credit paper');
     });
@@ -275,6 +285,101 @@ describe('investment memorandum release gate', () => {
     expect(documentProse(info)).toContain(
       'no document showing an unrepaid senior balance at maturity can be issued as a final lender report',
     );
+  });
+
+  // ── R8: the tax basis the memo prints (spec §14) ─────────────────────────
+  //
+  // The memo used to state, on every document, that the figure was England/NI
+  // SDLT and that Scotland and Wales were "not correctly taxed by this
+  // version". Once the engine became jurisdiction-aware that was not an
+  // omission but a false statement on a credit paper: it invited a committee to
+  // discount a figure that was right. These assert the corrected copy by
+  // counting, because a substring check cannot see the true sentence printed
+  // beside a surviving copy of the false one.
+
+  /** `sellAllInputs` as a v5 document with the acquisition tax block set. */
+  function v5WithAcquisition(patch: Record<string, unknown>): AnyCalculatorInputs {
+    const doc = JSON.parse(JSON.stringify(sellAllInputs())) as Record<string, unknown>;
+    doc.inputs_version = 5;
+    doc.acquisition = {
+      ...(doc.acquisition as Record<string, unknown>),
+      jurisdiction: 'england_ni',
+      jurisdiction_source: 'user',
+      jurisdiction_evidence_status: 'confirmed',
+      acquisition_date: '2026-01-15',
+      acquisition_tax_override_pence: null,
+      acquisition_tax_override_reason: '',
+      ...patch,
+    };
+    return doc as unknown as AnyCalculatorInputs;
+  }
+
+  it('names the regime actually applied to a Scottish acquisition', async () => {
+    const { info } = await report(v5WithAcquisition({ jurisdiction: 'scotland' }));
+    const prose = documentProse(info);
+    const text = documentText(info);
+    expect(countOccurrences(prose, 'Acquisition tax is calculated on the LBTT non-residential bands for Scotland')).toBe(1);
+    // Twice, deliberately and exactly: the Appendix A assumption row and the
+    // §13 limitation sentence. A third would mean a section printed it again.
+    expect(countOccurrences(prose, 'in force from 25 Jan 2019')).toBe(2);
+    expect(countOccurrences(text, 'LBTT — Scotland, non-residential')).toBe(1);
+    expect(countOccurrences(text, 'Scotland (LBTT)')).toBe(1); // the provenance row
+    // The two false statements the R7 memo carried, in either wording.
+    expect(countOccurrences(text, 'England/NI only')).toBe(0);
+    expect(countOccurrences(prose, 'is not correctly taxed by this version')).toBe(0);
+  });
+
+  it('holds a document in DRAFT while the jurisdiction is unconfirmed', async () => {
+    const inputs = v5WithAcquisition({ jurisdiction_evidence_status: 'unconfirmed' });
+    const run = runAppraisal(inputs);
+    const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBe('tax_basis_unconfirmed');
+
+    const info = await inspectPdf(generateInvestmentMemo(qaProject, run, qaEligibility, prov));
+    const banners = info.pages.flatMap(watermarkTexts);
+    expect(banners).toContain('DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE');
+    // Named as its own reason, never collapsed into "unreconciled": the
+    // arithmetic is sound, the basis for it is merely unevidenced.
+    expect(banners.join(' ')).not.toContain('UNRECONCILED');
+    const prose = documentProse(info);
+    expect(countOccurrences(prose, 'the acquisition tax jurisdiction has not been confirmed')).toBe(1);
+    expect(countOccurrences(prose, "Evidence of the property's jurisdiction")).toBe(1);
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+  });
+
+  it('asks for the transaction date once when the band set was assumed', async () => {
+    const { info } = await report(v5WithAcquisition({ acquisition_date: null }));
+    const prose = documentProse(info);
+    expect(countOccurrences(prose, 'The date of the transaction.')).toBe(1);
+  });
+
+  it('discloses an acquisition tax override with the figure it replaced', async () => {
+    const { info, run } = await report(v5WithAcquisition({
+      acquisition_tax_override_pence: 123_456,
+      acquisition_tax_override_reason: 'Group relief claimed on the transfer',
+    }));
+    expect(run.metrics.acquisition_tax.is_override).toBe(true);
+    const prose = documentProse(info);
+    expect(countOccurrences(prose, 'Supporting advice for the acquisition tax override')).toBe(1);
+    expect(countOccurrences(prose, 'Group relief claimed on the transfer')).toBe(1);
+    // The ROUTES layout sweep never reaches this line (it needs a v5 override),
+    // and a free-text override reason is exactly the kind of unbounded string
+    // that used to be drawn off the right-hand edge. Measured, not assumed.
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+  });
+
+  it('keeps a confirmed, dated document free of every tax information request', async () => {
+    // The negative control: the three requests above must be conditional, not
+    // printed on every memo.
+    const { info } = await report(v5WithAcquisition({}));
+    const prose = documentProse(info);
+    for (const phrase of [
+      "Evidence of the property's jurisdiction",
+      'The date of the transaction.',
+      'Supporting advice for the acquisition tax override',
+    ]) {
+      expect(countOccurrences(prose, phrase), phrase).toBe(0);
+    }
   });
 
   // ── Reconciliation of printed figures to authoritative outputs ───────────

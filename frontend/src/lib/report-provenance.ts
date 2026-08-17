@@ -16,6 +16,7 @@
 import type { FinancialAppraisal } from '../types';
 import type { AppraisalRun, ReconciliationStatus } from './model';
 import { CALC_VERSION } from './model';
+import type { Jurisdiction } from './tax/acquisition-tax';
 
 /** Where a lender case has reached. Populated from R14; null until then. */
 export type LenderCaseStatus =
@@ -56,6 +57,18 @@ export interface ReportProvenance {
    * re-computation, not a reprint, and says so.
    */
   recomputedSinceSave: boolean;
+  /** Semver of the acquisition-tax band table the printed figure came from. */
+  taxTableVersion: string;
+  /** The jurisdiction the printed acquisition tax was actually charged under. */
+  jurisdiction: Jurisdiction;
+  /**
+   * Spec §14. True when the reader can rely on the tax basis without further
+   * enquiry: the jurisdiction is evidenced *and* the band set was selected by
+   * the transaction's own date rather than assumed to be the current one.
+   * Either half missing means a re-run after a Budget could return a different
+   * number, which a credit paper must not hide.
+   */
+  taxBasisConfirmed: boolean;
 }
 
 export interface ProvenanceOptions {
@@ -67,11 +80,20 @@ export interface ProvenanceOptions {
   lenderCaseStatus?: LenderCaseStatus | null;
 }
 
-export type DraftReason = 'unreconciled' | 'senior_not_repaid' | 'not_approved';
+export type DraftReason =
+  | 'unreconciled' | 'senior_not_repaid' | 'tax_basis_unconfirmed' | 'not_approved';
+
+/** What `draftReason` needs to know about the acquisition-tax basis. Defaulted
+ *  so that a pre-R8 two-argument caller keeps its exact previous behaviour. */
+export interface TaxBasisGate {
+  taxBasisConfirmed: boolean;
+}
+
+const TAX_BASIS_ASSUMED_CONFIRMED: TaxBasisGate = { taxBasisConfirmed: true };
 
 /**
- * Spec §13.3. A document is FINAL only when three separate things hold, and the
- * reason it is not is worth naming rather than collapsing.
+ * Spec §13.3, extended by spec §14. A document is FINAL only when four separate
+ * things hold, and the reason it is not is worth naming rather than collapsing.
  *
  * 1. **Reconciled.** Hard validations pass, so the figures may be right at all.
  * 2. **Senior repaid.** The ledger clears the facility inside the modelled term.
@@ -79,7 +101,9 @@ export type DraftReason = 'unreconciled' | 'senior_not_repaid' | 'not_approved';
  *    intends to refinance later is a perfectly valid appraisal — but a document
  *    a credit committee relies on cannot show the senior facility unrepaid at
  *    maturity and call itself final.
- * 3. **Approved.** A lender case exists and has been credit approved.
+ * 3. **Tax basis confirmed.** The jurisdiction the acquisition tax was charged
+ *    under is evidenced, and the band set was chosen by the transaction date.
+ * 4. **Approved.** A lender case exists and has been credit approved.
  *
  * With no lender case in existence (the position until R14 lands) the third
  * condition cannot be met, so every document is a DRAFT. That is the honest
@@ -91,9 +115,15 @@ export type DraftReason = 'unreconciled' | 'senior_not_repaid' | 'not_approved';
 export function draftReason(
   reconciliation: Pick<ReconciliationStatus, 'report_safe' | 'senior_repaid'>,
   lenderCaseStatus: LenderCaseStatus | null,
+  taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
 ): DraftReason | null {
   if (!reconciliation.report_safe) return 'unreconciled';
   if (!reconciliation.senior_repaid) return 'senior_not_repaid';
+  // R8 (spec §14). Ordered here, not earlier: an unconfirmed jurisdiction does
+  // not make the arithmetic wrong, so it must not displace a reason that says
+  // the figures themselves may be. It sits above `not_approved` because a
+  // reader needs to know the basis is unverified before they read an approval.
+  if (!taxBasis.taxBasisConfirmed) return 'tax_basis_unconfirmed';
   if (lenderCaseStatus === null || !APPROVED_STATUSES.includes(lenderCaseStatus)) return 'not_approved';
   return null;
 }
@@ -101,8 +131,29 @@ export function draftReason(
 export function documentStatus(
   reconciliation: Pick<ReconciliationStatus, 'report_safe' | 'senior_repaid'>,
   lenderCaseStatus: LenderCaseStatus | null,
+  taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
 ): 'DRAFT' | 'FINAL' {
-  return draftReason(reconciliation, lenderCaseStatus) === null ? 'FINAL' : 'DRAFT';
+  return draftReason(reconciliation, lenderCaseStatus, taxBasis) === null ? 'FINAL' : 'DRAFT';
+}
+
+/**
+ * Whether the printed acquisition tax rests on an evidenced basis (spec §14).
+ *
+ * A v2/v3/v4 document carries no jurisdiction field at all, and is treated as
+ * confirmed. That is deliberate: every stored record predating R8 would
+ * otherwise flip to DRAFT for a governance condition that did not exist when it
+ * was saved, which is a change of meaning rather than a new finding. The `in`
+ * guard is the established idiom for reading a field a legacy document lacks.
+ *
+ * `date_basis` is read from `metrics.acquisition_tax` rather than re-derived
+ * from the date input, because it is the engine's own statement of which band
+ * set it used — including where an unusable date degraded to the current set.
+ */
+export function taxBasisConfirmedFor(run: AppraisalRun): boolean {
+  const acq = run.inputs.acquisition;
+  if (!('jurisdiction' in acq)) return true;
+  return acq.jurisdiction_evidence_status === 'confirmed'
+    && run.metrics.acquisition_tax.date_basis === 'transaction_date';
 }
 
 /**
@@ -132,7 +183,8 @@ export function buildProvenance(
 
   const reportSafe = run.reconciliation.report_safe;
   const seniorRepaid = run.reconciliation.senior_repaid;
-  const reason = draftReason(run.reconciliation, lenderCaseStatus);
+  const taxBasisConfirmed = taxBasisConfirmedFor(run);
+  const reason = draftReason(run.reconciliation, lenderCaseStatus, { taxBasisConfirmed });
   const storedCalcVersion = record?.calc_version ?? null;
   const runCalcVersion = run.metrics.calc_version || CALC_VERSION;
 
@@ -155,6 +207,9 @@ export function buildProvenance(
     draftReason: reason,
     lenderCaseStatus,
     recomputedSinceSave: storedCalcVersion !== null && storedCalcVersion !== runCalcVersion,
+    taxTableVersion: run.metrics.acquisition_tax.table_version,
+    jurisdiction: run.metrics.acquisition_tax.jurisdiction,
+    taxBasisConfirmed,
   };
 }
 
