@@ -189,4 +189,31 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
     expect(sentSnapshot.acquisition.acquisition_tax_override_pence).toBeNull();
     expect(sentSnapshot.acquisition.acquisition_tax_override_reason).toBe('');
   });
+
+  it('a load-path migration throw (e.g. an unrecognised inputs_version) is a usable failure, not a blank screen', async () => {
+    // Task 10 fix round 2: the coordinator asked whether a throw from the
+    // v4->v5 migration guard (mirrored client-side this round) produces a
+    // usable failure or a blank screen, before deciding whether Task 11
+    // needs to build anything here. It does not need to: getAppraisal(...)
+    // .then(...) already sits in a plain promise chain above any
+    // CalculatorErrorBoundary, not inside a render body, so a throw here
+    // rejects the promise and is caught by the existing .catch() -- the
+    // same path a 500 or a network error already takes -- rather than
+    // escaping to unmount the component. And setInputs(defaultCalculatorInputsV4(project))
+    // already ran synchronously before this async load even started
+    // (ConversionCalculator.tsx's effect, first line), so there is always a
+    // fresh, computable document on screen regardless of how the load goes.
+    const badAppraisal = storedV4Appraisal();
+    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 6 };
+    vi.mocked(getAppraisal).mockResolvedValueOnce(badAppraisal);
+
+    render(<ConversionCalculator project={PROJECT} />);
+
+    expect(await screen.findByText(/failed to load saved appraisal/i)).toBeInTheDocument();
+    // Not a blank screen: the calculator chrome is fully present and usable
+    // on the default document the effect seeded before the failed load.
+    expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /7\. Appraisal/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save appraisal/i })).toBeEnabled();
+  });
 });

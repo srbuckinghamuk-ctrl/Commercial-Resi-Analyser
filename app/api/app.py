@@ -535,9 +535,17 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
         # ever treats as advisory. A tighter cap specific to this write path:
         # a save must not wait on a jurisdiction proposal it can fall back
         # from for free (the "migrated_default"/"unconfirmed" default).
+        #
+        # Fix round 2: was 2.0s. Measured a real postcodes.io call at ~2s in
+        # this sandbox (see Task 10 fix-round-1 report), so a 2.0s ceiling
+        # left almost no margin -- a merely slightly-slow-but-healthy
+        # response would time out and silently never derive, turning a
+        # working feature into one that rarely fires. 5.0s stays well below
+        # lookup_postcode's own 10s-per-phase default while giving a normal
+        # response room to land.
         try:
             pc_result = await asyncio.wait_for(
-                lookup_postcode(project.address_postcode), timeout=2.0,
+                lookup_postcode(project.address_postcode), timeout=5.0,
             )
         except asyncio.TimeoutError:
             pc_result = None

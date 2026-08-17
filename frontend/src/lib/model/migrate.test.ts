@@ -284,4 +284,37 @@ describe('v5 migration (R8 — jurisdiction and acquisition tax)', () => {
     expect(round.acquisition.jurisdiction_evidence_status).toBe('confirmed');
     expect(round.acquisition.acquisition_date).toBe('2026-05-01');
   });
+
+  // Task 10 fix round 2: mirrors migrate_inputs_to_v5's Python guard
+  // (app/financial_model/migrate.py, added fix round 1). Both cases used to
+  // fall through every isVN check undetected into the v1 fallback path,
+  // which reads the document as noise and rebuilds finance/equity_sources
+  // from an LTV-based heuristic.
+  it('refuses an unrecognised inputs_version rather than silently rebuilding via the v1 fallback', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    const doc = { ...v5, inputs_version: 6 } as unknown as Record<string, unknown>;
+    expect(() => migrateInputsToV5(doc)).toThrow(/unrecognised inputs_version 6/);
+  });
+
+  it('refuses a document tagged inputs_version 5 that fails the v5 structural check', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    const finance = { ...v5.finance } as Record<string, unknown>;
+    delete finance.committed_net_facility_pence;
+    const doc = { ...v5, finance } as unknown as Record<string, unknown>;
+    expect(() => migrateInputsToV5(doc))
+      .toThrow(/inputs_version is 5 but the document fails the v5 structural check/);
+  });
+
+  it('still lets a malformed v2 document fall through to the v1 legacy path (unchanged, permissive)', () => {
+    // Mirrors the Python-side pin (test_malformed_v2_snapshot_migrates_to_
+    // legacy_unreconciled): only an unrecognised version, or a version-5 tag
+    // that isn't structurally v5, is refused -- a malformed v2/v3/v4 tag
+    // keeps the existing, deliberately permissive v1-fallback behaviour.
+    const doc = {
+      inputs_version: 2,
+      finance: { funding_source: 'cash' }, // missing committed_net_facility_pence -- isV2 is false
+    } as unknown as Record<string, unknown>;
+    const v5 = migrateInputsToV5(doc);
+    expect(v5.inputs_version).toBe(5);
+  });
 });

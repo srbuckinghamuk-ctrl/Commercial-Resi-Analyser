@@ -500,12 +500,16 @@ class TestPostcodeJurisdictionDerivation:
 
     @pytest.mark.asyncio
     async def test_slow_postcode_lookup_does_not_block_the_save(self, client, monkeypatch):
-        """Fix round 1, review item 3: lookup_postcode's own timeout is 10s
-        *per phase*, so a peer that is merely slow -- not outright failing --
-        could otherwise hold a save open well past that for a value this
-        endpoint only ever treats as advisory. create_appraisal wraps the
-        call in `asyncio.wait_for(..., 2.0)`; a lookup that hangs longer than
-        that must fall back to the unconfirmed default, not block the save."""
+        """Fix round 1, review item 3 (raised to 5.0s in fix round 2 -- a
+        real postcodes.io call measured ~2s in this sandbox, so the original
+        2.0s ceiling left almost no margin and would time out on a merely
+        slightly-slow-but-healthy response, not just a pathological one).
+        lookup_postcode's own timeout is 10s *per phase*, so a peer that is
+        merely slow -- not outright failing -- could otherwise hold a save
+        open well past that for a value this endpoint only ever treats as
+        advisory. create_appraisal wraps the call in
+        `asyncio.wait_for(..., 5.0)`; a lookup that hangs longer than that
+        must fall back to the unconfirmed default, not block the save."""
         async def hanging_lookup(_postcode: str):
             await asyncio.sleep(30)
             return _postcode_result("Wales")  # never reached
@@ -520,7 +524,7 @@ class TestPostcodeJurisdictionDerivation:
         elapsed = time.perf_counter() - started
 
         assert resp.status_code == 201, resp.text
-        assert elapsed < 10, f"save took {elapsed:.1f}s -- the 2s cap did not apply"
+        assert elapsed < 10, f"save took {elapsed:.1f}s -- the 5s cap did not apply"
         acq = resp.json()["inputs_snapshot"]["acquisition"]
         assert acq["jurisdiction"] == "england_ni"
         assert acq["jurisdiction_source"] == "migrated_default"
