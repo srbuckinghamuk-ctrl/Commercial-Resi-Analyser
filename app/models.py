@@ -350,7 +350,15 @@ class EligibilityAssessment(BaseModel):
 class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
-    inputs_snapshot: dict  # validated/migrated in the endpoint; may be v1 or v2
+    # Deliberately untyped here (validated/migrated in the endpoint via
+    # migrate_inputs_to_v5, not by this schema) -- may be any of v1 through
+    # v5. A v5 document's `acquisition` block carries the R8 fields
+    # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
+    # `acquisition_date`, `acquisition_tax_override_pence`,
+    # `acquisition_tax_override_reason`) defined on
+    # `app.financial_model.types.AcquisitionInputsV5`, which is the typed
+    # schema those fields are actually enforced against.
+    inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the
     # server always recalculates and never trusts these for persistence:
     gdv_pence: int | None = None

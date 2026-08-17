@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from app.financial_model import AppraisalRun, run_appraisal
 from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v4
+from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v5
 from app.financial_model.schedule import build_schedule
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
@@ -18,7 +19,7 @@ from app.financial_model.sensitivity import (
 )
 from app.financial_model.types import (
     AnyCalculatorInputs,
-    CalculatorInputsV4,
+    CalculatorInputsV5,
     ProgrammeInputs,
     ProgrammePackage,
     ProgrammePackages,
@@ -45,6 +46,7 @@ EXPECTED_FIXTURE_STEMS = [
     "j-blended-refinance",
     "k-sensitivity",
     "l-retain-all",
+    "m-wales-jurisdiction",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -116,17 +118,130 @@ def test_golden_fixture_parity(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
-def test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4(path: Path) -> None:
-    """Release 3a identity guarantee (spec Sec 6.1 / design Sec 2.4): the v3 -> v4
-    migration is purely additive, so running a pre-v4 fixture's inputs through the full
-    normalisation chain (exactly what app.py now does on every request) must reproduce
-    that fixture's pinned expected_metrics unchanged -- not merely "close", byte-for-byte.
-    Fixture H is already v4; migrating it is a no-op merge onto v4 defaults, which is
-    itself worth asserting (the merge must not drop its programme block)."""
+def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> None:
+    """Release 3a identity guarantee (spec Sec 6.1 / design Sec 2.4), carried to v5
+    by R8: the migration chain is purely additive, so running a fixture's inputs
+    through the full normalisation chain (exactly what app.py does on every request)
+    must reproduce that fixture's pinned expected_metrics unchanged -- not merely
+    "close", byte-for-byte. Every fixture is now v5, so migrating it is a merge onto
+    v5 defaults, which is itself worth asserting (the merge must not drop the
+    programme block, nor the R8 acquisition block)."""
     doc = _load_fixture(path)
-    v4 = parse_calculator_inputs(migrate_inputs_to_v4(doc["inputs"]))
-    assert v4.inputs_version == 4
-    _assert_expected_metrics(run_appraisal(v4), doc, f"{path.stem}[migrated-to-v4]")
+    # migrate_inputs_to_v5 returns a validated CalculatorInputsV5 directly
+    # (unlike migrate_inputs_to_v4, which returns a plain dict).
+    v5 = migrate_inputs_to_v5(doc["inputs"])
+    assert v5.inputs_version == 5
+    _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[migrated-to-v5]")
+
+
+# Fix round 2 (R8 Task 5). Every fixture in the corpus is now v5, so the test above
+# proves only that "a v5 document merged onto v5 defaults reproduces its pins". The
+# property that matters for real data is the other one: *an old stored document still
+# reproduces its pins after normalisation* -- every persisted row in the database is
+# v3 or v4, and nothing writes v5 yet. This reverses the R8 additions and re-runs the
+# whole corpus through the migration chain from where it actually was before this
+# release. Mirrors golden-fixtures.test.ts.
+_R8_ACQUISITION_KEYS = (
+    "jurisdiction", "jurisdiction_source", "jurisdiction_evidence_status",
+    "acquisition_date", "acquisition_tax_override_pence",
+    "acquisition_tax_override_reason",
+)
+
+
+def _as_pre_r8_document(inputs: dict) -> dict:
+    doc = copy.deepcopy(inputs)
+    for key in _R8_ACQUISITION_KEYS:
+        doc["acquisition"].pop(key, None)
+    # The pre-R8 version, derived structurally rather than hard-coded per stem: the
+    # three v4 blocks arrived together in Release 3a, so a fixture carrying
+    # `programme` was v4 and one without it was v3.
+    doc["inputs_version"] = 4 if "programme" in doc else 3
+    return doc
+
+
+# R8 Task 12. The property below ("a pre-R8 document reproduces its pins") is only
+# well-defined for a fixture whose pinned figures are England/NI ones: the migration
+# stamps `england_ni` *by definition*, because that is what every legacy document
+# implicitly was. A non-English fixture has no pre-R8 form -- stripping the R8 fields
+# does not recover an older document, it asserts a different property. So the
+# parametrisation runs over the England/NI fixtures, and the excluded ones are covered
+# by the stronger assertion below rather than by silence. Mirrors
+# golden-fixtures.test.ts's preR8Fixtures / nonEnglishFixtures split.
+def _jurisdiction_of(path: Path) -> str:
+    return _load_fixture(path)["inputs"]["acquisition"].get("jurisdiction", "england_ni")
+
+
+_PRE_R8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _jurisdiction_of(p) == "england_ni"]
+_NON_ENGLISH_FIXTURES = [p for p in APPRAISAL_FIXTURES if _jurisdiction_of(p) != "england_ni"]
+
+
+def test_the_pre_r8_parametrisation_covers_every_england_ni_fixture() -> None:
+    """Without this, deleting a fixture's `jurisdiction` field -- or mistyping it --
+    would quietly move it out of the parametrisation below and reduce coverage
+    without failing."""
+    assert len(_PRE_R8_FIXTURES) + len(_NON_ENGLISH_FIXTURES) == len(APPRAISAL_FIXTURES)
+    assert [_jurisdiction_of(p) for p in _NON_ENGLISH_FIXTURES] == ["wales"]
+    assert len(_PRE_R8_FIXTURES) == len(APPRAISAL_FIXTURES) - 1
+
+
+@pytest.mark.parametrize("path", _PRE_R8_FIXTURES, ids=lambda p: p.stem)
+def test_pre_r8_fixture_form_reproduces_its_metrics_after_migration(path: Path) -> None:
+    doc = _load_fixture(path)
+    pre = _as_pre_r8_document(doc["inputs"])
+    assert pre["inputs_version"] != 5
+    assert not any(k in pre["acquisition"] for k in _R8_ACQUISITION_KEYS)
+
+    v5 = migrate_inputs_to_v5(pre)
+    assert v5.inputs_version == 5
+    # The migration stamps what a legacy document honestly is: England/NI by
+    # default, unconfirmed, no transaction date (spec Sec 14).
+    assert v5.acquisition.jurisdiction == "england_ni"
+    assert v5.acquisition.jurisdiction_source == "migrated_default"
+    assert v5.acquisition.jurisdiction_evidence_status == "unconfirmed"
+    assert v5.acquisition.acquisition_date is None
+    _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[pre-R8 -> v5]")
+
+
+@pytest.mark.parametrize("path", _NON_ENGLISH_FIXTURES, ids=lambda p: p.stem)
+def test_a_non_english_fixtures_pre_r8_form_is_a_different_england_ni_appraisal(
+    path: Path,
+) -> None:
+    """The excluded fixtures get the *stronger* statement: stripping the R8 fields must
+    change the acquisition tax, and change it to precisely the England/NI figure on the
+    same consideration. That is what makes the fixture's jurisdiction load-bearing -- a
+    table edit, or a mis-wired call site that quietly reverted to SDLT, fails here rather
+    than passing because the two regimes happened to agree. Mirrors
+    golden-fixtures.test.ts's "its pre-R8 form is a different, England/NI, appraisal".
+
+    MAINTENANCE: the figures below are hard-coded for fixture M's consideration, inside a
+    parametrisation over every non-English fixture. Adding a second non-English fixture
+    therefore means *rewriting this assertion* (drive the expected pair off the fixture, or
+    split the parametrisation) -- not just adding a roster line. It fails loudly rather
+    than silently if you forget, but the failure will look like a wrong figure rather than
+    a missing case, so read this before "fixing" the number."""
+    doc = _load_fixture(path)
+    v5 = migrate_inputs_to_v5(_as_pre_r8_document(doc["inputs"]))
+    assert v5.acquisition.jurisdiction == "england_ni"
+    english = run_appraisal(v5)
+    welsh = run_appraisal(parse_calculator_inputs(doc["inputs"]))
+
+    assert doc["inputs"]["acquisition"]["purchase_price_pence"] == 75_348_200
+    # Hand-verified against the band tables (spec Sec 14), slice basis:
+    #   SDLT = 2% x (250k-150k) + 5% x (753,482-250,000) = 200,000p + 2,517,410p
+    #   LTT  = 1% x (250k-225k) + 5% x (753,482-250,000) =  25,000p + 2,517,410p
+    assert english.metrics.acquisition_tax_pence == 2_717_410
+    assert welsh.metrics.acquisition_tax_pence == 2_542_410
+    assert english.metrics.acquisition_tax.regime == "SDLT"
+    assert welsh.metrics.acquisition_tax.regime == "LTT"
+    # The 175,000p difference must reach the headline cost stack, not stop at the metrics
+    # object -- this is the two-call-site defect Task 5 found, pinned.
+    assert (
+        english.metrics.acquisition_cost_pence - welsh.metrics.acquisition_cost_pence
+    ) == 175_000
+    assert (
+        english.metrics.total_development_cost_pence
+        - welsh.metrics.total_development_cost_pence
+    ) == 175_000
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
@@ -179,8 +294,8 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     serviced.finance.interest_type = "serviced"
     short_term = inputs.model_copy(deep=True)
     short_term.finance.term_months = 1
-    programmed = parse_calculator_inputs(migrate_inputs_to_v4(inputs.model_dump(mode="json")))
-    assert isinstance(programmed, CalculatorInputsV4)
+    programmed = migrate_inputs_to_v5(inputs.model_dump(mode="json"))
+    assert isinstance(programmed, CalculatorInputsV5)
     programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
@@ -328,23 +443,27 @@ class TestInvariantMatrix:
 # these runs is attributable to the refinance-shortfall branches alone. Mirrors
 # invariants.test.ts's "phased-sale / refinance sweep invariants" describe block
 # field-for-field (same variant labels, same 4 checks, same order).
-def _to_v4_clone(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
-    if not isinstance(inputs, CalculatorInputsV4):
-        raise TypeError("sweep-invariant fixture must be inputs_version 4")
+# R8: the shared corpus moved to inputs v5. The check stays exact (isinstance
+# alone would pass for a v4 document too, since V5 subclasses V4, letting a
+# fixture drift out of this matrix without failing), mirroring
+# invariants.test.ts's toV5Clone.
+def _to_v5_clone(inputs: AnyCalculatorInputs) -> CalculatorInputsV5:
+    if inputs.inputs_version != 5 or not isinstance(inputs, CalculatorInputsV5):
+        raise TypeError("sweep-invariant fixture must be inputs_version 5")
     return inputs.model_copy(deep=True)
 
 
-def _odd_gross_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
+def _odd_gross_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV5:
     """Nudge each unit's value by a distinct odd pence amount so gross sale totals,
     tranche splits and agent-fee rounding all land on awkward (non-round) pence."""
-    v = _to_v4_clone(inputs)
+    v = _to_v5_clone(inputs)
     for i, u in enumerate(v.unit_mix.units):
         u.estimated_value_pence += 2 * i + 1
     return v
 
 
-def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
-    v = _to_v4_clone(inputs)
+def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV5:
+    v = _to_v5_clone(inputs)
     last = max(0, int(v.finance.term_months) - 1)
     v.sales_phasing = SalesPhasingInputs(
         tranches=[
@@ -356,16 +475,16 @@ def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInput
     return v
 
 
-def _sweep_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, CalculatorInputsV4]]:
+def _sweep_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, CalculatorInputsV5]]:
     return [
-        ("base", _to_v4_clone(inputs)),
+        ("base", _to_v5_clone(inputs)),
         ("odd-gross", _odd_gross_sweep_variant(inputs)),
         ("three-tranche", _three_tranche_sweep_variant(inputs)),
     ]
 
 
-def _sweep_fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV4]]:
-    out: list[tuple[str, str, CalculatorInputsV4]] = []
+def _sweep_fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV5]]:
+    out: list[tuple[str, str, CalculatorInputsV5]] = []
     for path in APPRAISAL_FIXTURES:
         if path.stem not in ("i-phased-sales", "j-blended-refinance"):
             continue
@@ -390,7 +509,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
     order), so a single invariant's failure doesn't mask the others."""
 
     def test_tranche_conservation_gross_agent_legal(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         run = run_appraisal(inputs)
         sum_gross = sum(r.gross_sale_pence for r in run.schedule.receipts)
@@ -406,7 +525,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
         )
 
     def test_sweep_conservation_every_month(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         """Pinned identity, derived from engine.py's sweep block (repayment/exit_fee/
         distribution split net_receipts exactly: `distribution = net_receipts - repayment -
@@ -424,7 +543,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
             )
 
     def test_interest_never_accrues_on_repaid_principal(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         run = run_appraisal(inputs)
         monthly_rate = inputs.finance.annual_interest_rate_pct / 100 / 12
@@ -437,7 +556,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
             assert months[i + 1].interest_accrued_pence == expected
 
     def test_redemption_schedule_declines(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         run = run_appraisal(inputs)
         sched = run.model.redemption_schedule

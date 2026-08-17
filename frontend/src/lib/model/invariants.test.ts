@@ -4,20 +4,20 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import { migrateInputsToV4 } from './migrate';
+import { migrateInputsToV5 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './sensitivity';
 import type {
-  AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4,
+  AnyCalculatorInputs, CalculatorInputsV5,
   ProgrammeInputs, SpendCurve,
 } from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtures = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json'))
   .map((f) => JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as {
-    name: string; kind: string; inputs: CalculatorInputsV3;
+    name: string; kind: string; inputs: CalculatorInputsV5;
   })
   // Release 4a: the corpus now contains an inputs-less fixture. Fixture K
   // (kind 'sensitivity', spec §12) names a `base_fixture` rather than carrying its own
@@ -43,9 +43,9 @@ function programmeForTerm(termMonths: number): ProgrammeInputs {
 
 // Variants derived from each fixture to widen coverage without new hand calcs.
 function variants(
-  inputs: CalculatorInputsV2 | CalculatorInputsV3,
+  inputs: CalculatorInputsV5,
 ): Array<{ label: string; inputs: AnyCalculatorInputs }> {
-  const clone = () => JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV2 | CalculatorInputsV3;
+  const clone = () => JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV5;
   const retained = clone();
   retained.exit_strategy.route = 'retain_all';
   const serviced = clone();
@@ -55,7 +55,7 @@ function variants(
   // Release 3a Task 9: a programme variant so every existing ledger invariant in this
   // file's top describe block also exercises the dated-programme path (spec §6.1),
   // not just fixture H's hand-authored one.
-  const programmed = migrateInputsToV4(clone() as unknown as Record<string, unknown>);
+  const programmed = migrateInputsToV5(clone() as unknown as Record<string, unknown>);
   programmed.programme = programmeForTerm(programmed.finance.term_months);
   return [
     { label: 'base', inputs },
@@ -155,21 +155,24 @@ describe('model invariants hold for every fixture and variant', () => {
 // additional_equity_pence, lines ~166-172) never fires, so every pence of
 // additional_equity_pence(m) in these runs is attributable to the refinance-shortfall
 // branches alone (lines ~211-238) — see the identity derivation in the test body.
-function toV4Clone(inputs: AnyCalculatorInputs): CalculatorInputsV4 {
-  if (inputs.inputs_version !== 4) throw new Error('sweep-invariant fixture must be inputs_version 4');
-  return JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV4;
+// R8: the shared corpus moved to inputs v5. The version check stays exact (a
+// silently-downcast document would let a fixture drift out of this matrix without
+// failing), it just names the current version.
+function toV5Clone(inputs: AnyCalculatorInputs): CalculatorInputsV5 {
+  if (inputs.inputs_version !== 5) throw new Error('sweep-invariant fixture must be inputs_version 5');
+  return JSON.parse(JSON.stringify(inputs)) as CalculatorInputsV5;
 }
 
-function oddGrossSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputsV4 {
-  const v = toV4Clone(inputs);
+function oddGrossSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputsV5 {
+  const v = toV5Clone(inputs);
   // Nudge each unit's value by a distinct odd pence amount so gross sale totals,
   // tranche splits and agent-fee rounding all land on awkward (non-round) pence.
   v.unit_mix.units.forEach((u, i) => { u.estimated_value_pence += 2 * i + 1; });
   return v;
 }
 
-function threeTrancheSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputsV4 {
-  const v = toV4Clone(inputs);
+function threeTrancheSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputsV5 {
+  const v = toV5Clone(inputs);
   const last = Math.max(0, Math.floor(v.finance.term_months) - 1);
   v.sales_phasing = {
     tranches: [
@@ -183,9 +186,9 @@ function threeTrancheSweepVariant(inputs: AnyCalculatorInputs): CalculatorInputs
 
 function sweepVariants(
   inputs: AnyCalculatorInputs,
-): Array<{ label: string; inputs: CalculatorInputsV4 }> {
+): Array<{ label: string; inputs: CalculatorInputsV5 }> {
   return [
-    { label: 'base', inputs: toV4Clone(inputs) },
+    { label: 'base', inputs: toV5Clone(inputs) },
     { label: 'odd-gross', inputs: oddGrossSweepVariant(inputs) },
     { label: 'three-tranche', inputs: threeTrancheSweepVariant(inputs) },
   ];

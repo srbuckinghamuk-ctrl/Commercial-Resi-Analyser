@@ -1,11 +1,11 @@
-import type { ProposedUnit, UnitType, DealSpiderInputs } from './conversion-types';
+import type { ProposedUnit, UnitType, DealSpiderInputs, AcquisitionInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
-import { calculateCommercialSdlt } from './commercial-sdlt';
-import { calculateResidentialSdlt } from './residential-sdlt';
+import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
 import type { AnyCalculatorInputs } from './model';
+import type { AcquisitionInputsV5 } from './model/finance-types';
 import { CLASS_MA_AXES } from './spider-axes';
 import type { SpiderAxisId, SpiderAxisDef } from './spider-axes';
 
@@ -182,8 +182,29 @@ export function computeSpider(
 
   // Tax advantage
   const price = inputs.acquisition.purchase_price_pence;
-  const residentialSdlt = calculateResidentialSdlt(price).total_pence;
-  const commercialSdlt = calculateCommercialSdlt(price).total_pence;
+  // R8 Task 7: both sides of this comparison must be the same regime, or the
+  // score compares English residential rates against Scottish/Welsh commercial
+  // ones. v2–v4 documents carry no jurisdiction at all — same `in` guard as
+  // metrics.ts and conversion-calc-engine.ts — so they degrade to england_ni,
+  // exactly as they always implicitly were, unchanged to the penny (Task 5's
+  // reproduction of the deleted residential-sdlt.ts module).
+  const acq = inputs.acquisition as Partial<AcquisitionInputsV5> & AcquisitionInputs;
+  const jurisdiction = 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni';
+  const rawDate = 'acquisition_date' in acq ? acq.acquisition_date ?? null : null;
+  // Fix round 1 (metrics.ts / conversion-calc-engine.ts): an unusable date
+  // degrades to null (assumed-current) instead of throwing — see
+  // resolveAcquisitionDate's doc comment. Resolved once per basis, since a
+  // date can be covered by one basis's band set and not the other's.
+  const residentialDate = resolveAcquisitionDate(jurisdiction, 'residential_higher', rawDate);
+  const commercialDate = resolveAcquisitionDate(jurisdiction, 'non_residential', rawDate);
+  const residentialSdlt = calculateAcquisitionTax({
+    consideration_pence: price, jurisdiction,
+    basis: 'residential_higher', date: residentialDate,
+  }).total_pence;
+  const commercialSdlt = calculateAcquisitionTax({
+    consideration_pence: price, jurisdiction,
+    basis: 'non_residential', date: commercialDate,
+  }).total_pence;
   const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
   const taxAdvantagePct =
     metrics.gdv_pence > 0

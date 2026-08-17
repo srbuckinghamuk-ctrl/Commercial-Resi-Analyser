@@ -18,8 +18,13 @@ from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
-from .sdlt import calculate_commercial_sdlt
-from .types import CALC_VERSION, AnyCalculatorInputs, CalculatorInputsV3
+from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax, resolve_acquisition_date
+from .types import (
+    CALC_VERSION,
+    AcquisitionInputsV5,
+    AnyCalculatorInputs,
+    CalculatorInputsV3,
+)
 
 # --- irr.ts --------------------------------------------------------------
 
@@ -106,6 +111,16 @@ class AppraisalResultV2:
     lender_gdv_variance_pence: float | None
     lender_gdv_variance_pct: float | None
     acquisition_cost_pence: int
+    # Spec Sec 14 (R8) -- the tax actually charged on the acquisition under the
+    # document's jurisdiction: SDLT, LBTT or LTT. Equal to
+    # acquisition_tax.total_pence.
+    acquisition_tax_pence: int
+    # Spec Sec 14 (R8) -- the full derivation: regime, band breakdown, surcharge,
+    # band-set effective date, table version, source and override provenance.
+    acquisition_tax: AcquisitionTaxResult
+    # DEPRECATED (R8): a jurisdiction-neutral figure under an England/NI-only
+    # name. Carries the identical value to acquisition_tax_pence; retained only
+    # so pre-R8 report and export readers keep working. Removed in R16.
     sdlt_pence: int
     construction_cost_pence: int
     professional_fees_pence: int
@@ -229,7 +244,43 @@ def derive_metrics(
         except ValueError:
             lender_gdv = None
     lender_gdv_variance = None if lender_gdv is None else lender_gdv.lender_gdv_pence - t.gdv_pence
-    sdlt = calculate_commercial_sdlt(inputs.acquisition.purchase_price_pence).total_pence
+    # Acquisition tax (spec Sec 14, R8). Mirrors metrics.ts. v2-v4 documents carry
+    # no jurisdiction at all, exactly as they carry no lender_valuation, so the
+    # new fields are read behind the same isinstance gate the TS engine spells
+    # `'jurisdiction' in acq`. england_ni with a null date is precisely what those
+    # documents always implicitly were -- the England/NI non-residential band set
+    # has been unchanged since 17 March 2016 and is the current set -- so this
+    # preserves their figures to the penny.
+    #
+    # Fix round 2: the gate is on the *acquisition block*, not on the container.
+    # schedule.py's calculate_total_acquisition_cost is handed the block alone and
+    # can only gate on it, and the two sites must use the identical predicate or
+    # they can disagree -- Pydantic's default revalidate_instances='never' lets a
+    # CalculatorInputsV4 hold an AcquisitionInputsV5, at which point a
+    # container-level gate here reports SDLT while the schedule charges LTT. Not
+    # reachable from JSON or the migration chain, but this is precisely the
+    # invariant the drift guard exists to make unbreakable. This also mirrors the
+    # TS engine, which is structural on the block at both sites.
+    acq = inputs.acquisition
+    is_v5 = isinstance(acq, AcquisitionInputsV5)
+    jurisdiction = acq.jurisdiction if is_v5 else "england_ni"
+    raw_date = acq.acquisition_date if is_v5 else None
+    # Fix round 1 (R8): derive_metrics runs before validate_inputs in
+    # run_appraisal, so an unusable date must degrade rather than raise here --
+    # see resolve_acquisition_date's docstring. validate_inputs re-derives this
+    # as a hard acquisition.acquisition_date error independently, and
+    # calculate_total_acquisition_cost degrades identically so the two tax
+    # sites cannot drift.
+    date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
+    acquisition_tax = calculate_acquisition_tax(
+        consideration_pence=acq.purchase_price_pence,
+        jurisdiction=jurisdiction,
+        basis="non_residential",
+        date=date,
+        override_pence=acq.acquisition_tax_override_pence if is_v5 else None,
+        override_reason=acq.acquisition_tax_override_reason if is_v5 else None,
+    )
+    sdlt = acquisition_tax.total_pence
     cost_before_finance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence
     finance_costs = model.totals.finance_costs_pence
     tdc = cost_before_finance + finance_costs
@@ -388,6 +439,9 @@ def derive_metrics(
             None if lender_gdv_variance is None else pct(lender_gdv_variance, t.gdv_pence)
         ),
         acquisition_cost_pence=t.acquisition_pence,
+        acquisition_tax_pence=sdlt,
+        acquisition_tax=acquisition_tax,
+        # DEPRECATED (R8) -- use acquisition_tax_pence. Removed in R16.
         sdlt_pence=sdlt,
         construction_cost_pence=t.construction_pence,
         professional_fees_pence=t.professional_pence,

@@ -12,12 +12,20 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from pydantic import BaseModel
+
 from .schedule import (
     calculate_total_acquisition_cost,
     calculate_total_construction_cost,
     calculate_total_professional_fees,
 )
-from .types import AcquisitionInputs, CalculatorInputsV2, ConversionCostInputs
+from .types import (
+    AcquisitionInputs,
+    CalculatorInputsV2,
+    CalculatorInputsV4,
+    CalculatorInputsV5,
+    ConversionCostInputs,
+)
 
 # --- conversion-defaults.ts (the slice migrate.py needs) -------------------
 
@@ -250,8 +258,19 @@ def is_v4(snapshot: dict[str, Any]) -> bool:
     )
 
 
+def is_v5(snapshot: dict[str, Any]) -> bool:
+    """A v5 document has the same finance shape as v2-v4, discriminated by
+    inputs_version == 5."""
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 5
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
-    return is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
+    return is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot) or is_v5(snapshot)
 
 
 def migrate_finance_v1(
@@ -561,7 +580,17 @@ def migrate_inputs_to_v4(
     Returns a plain dict, like migrate_v2_to_v3 and unlike migrate_inputs:
     Pydantic validation of the result belongs at the boundary (app.py), which
     is where the 422 is raised.
+
+    A v5 document is refused (R8): see the `is_v5` guard below. Without it, a
+    v5 snapshot fails every is_v2/is_v3/is_v4 check in the chain below and
+    falls through all the way to migrate_inputs' v1 fallback path, which
+    reads the R8 acquisition/jurisdiction fields as noise, rebuilds `finance`
+    and `equity_sources` from scratch via the v1 LTV-based heuristic, and
+    silently destroys the document -- no exception, no flag. Reachable live
+    from app.py's `calculate_authoritative`.
     """
+    if is_v5(snapshot):
+        raise ValueError("migrate_inputs_to_v4: input is a v5 document - use migrate_inputs_to_v5")
     if is_v4(snapshot):
         defaults = migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project)))
         return {
@@ -572,3 +601,133 @@ def migrate_inputs_to_v4(
             "refinance": snapshot.get("refinance"),
         }
     return migrate_v3_to_v4(migrate_inputs_to_v3(snapshot, project))
+
+
+# --- Release 8 (calc 2.7.0): jurisdiction, acquisition date, tax override ---
+
+
+def migrate_v4_to_v5(v4: dict[str, Any] | CalculatorInputsV4) -> CalculatorInputsV5:
+    """Upgrades a v4 document to v5 by stamping ``inputs_version: 5`` and
+    adding the acquisition block's six R8 fields. Port of migrateV4toV5.
+
+    Purely additive, and deliberately so: ``england_ni`` with unchanged bands
+    means no existing appraisal's computed values move (spec Sec 14). The
+    jurisdiction is stamped ``migrated_default``/``unconfirmed`` -- a legacy
+    document never told us where the property is, and saying otherwise would
+    be a claim the record does not support. ``acquisition_date`` is left
+    ``None`` rather than stamped to today: inventing a date the transaction
+    did not have would be inventing evidence; a null date is handled
+    explicitly downstream (``date_basis: 'assumed_current'``).
+
+    Unlike migrate_v2_to_v3/migrate_v3_to_v4 (which take and return plain
+    dicts, this module's working convention -- see the module docstring),
+    this returns a validated ``CalculatorInputsV5`` model, mirroring
+    migrateV4toV5's typed TS return and matching migrate_inputs_to_v5 below.
+    The input is accepted as either shape: a plain v4 snapshot dict (what
+    migrate_inputs_to_v4 returns) or an already-validated Pydantic model
+    instance (any of CalculatorInputsV2/V3/V4/V5) -- both appear across call
+    sites and the test suite. Any Pydantic model is normalised via
+    ``model_dump`` rather than special-cased to CalculatorInputsV4 alone, so
+    an older/unexpected model shape produces a clear validation error from
+    ``CalculatorInputsV5.model_validate`` below instead of an opaque
+    ``AttributeError`` from treating it as a dict.
+
+    Precondition: `v4` must not already be a v5 document -- this guards
+    against double-migration (idempotence), same as migrate_v3_to_v4.
+    """
+    if isinstance(v4, CalculatorInputsV5):
+        raise ValueError("migrate_v4_to_v5: input is already a v5 document")
+    if isinstance(v4, BaseModel):
+        doc = v4.model_dump(mode="json")
+    else:
+        if is_v5(v4):
+            raise ValueError("migrate_v4_to_v5: input is already a v5 document")
+        doc = dict(v4)
+
+    acq = dict(doc.get("acquisition") or {})
+    acq.setdefault("jurisdiction", "england_ni")
+    acq.setdefault("jurisdiction_source", "migrated_default")
+    acq.setdefault("jurisdiction_evidence_status", "unconfirmed")
+    acq.setdefault("acquisition_date", None)
+    acq.setdefault("acquisition_tax_override_pence", None)
+    acq.setdefault("acquisition_tax_override_reason", "")
+    doc["acquisition"] = acq
+    doc["inputs_version"] = 5
+    return CalculatorInputsV5.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS = (1, 2, 3, 4, 5)
+
+
+def migrate_inputs_to_v5(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV5:
+    """Normalises any stored snapshot (v1-v5) to v5 -- the shape every R8
+    consumer needs. Port of migrateInputsToV5 (migrate.ts:355-391).
+
+    A v5 snapshot is merged onto v5 defaults field-by-field (mirroring
+    migrate_inputs_to_v4's own v4-merge branch above, migrate.py:582-590, and
+    ultimately migrate_inputs' v2-merge branch the whole chain descends
+    from), so a field added to the schema after the row was saved is
+    default-filled instead of raising a Pydantic ``ValidationError`` at this
+    boundary (e.g. a v5 row saved before ``scenarios.upside`` existed) or
+    silently under-filling (``deal_spider.weights`` collapsing to ``{}``
+    instead of the full nine-axis default) -- neither of which the TS engine
+    does. Bare ``CalculatorInputsV5.model_validate(snapshot)`` would do
+    exactly that wrong thing for any snapshot not already carrying every
+    current field, so it is not used here.
+
+    Every pre-v5 snapshot (v1 through v4) routes through
+    migrate_v4_to_v5(migrate_inputs_to_v4(...)) unchanged, exactly as
+    migrateInputsToV5 does.
+
+    Task 10 fix round 1: two shapes must be refused outright rather than
+    silently reaching ``migrate_inputs``'s v1 fallback path, which reads an
+    unrecognised document as noise and rebuilds ``finance``/``equity_sources``
+    from an LTV-based heuristic -- the exact corruption the is_v5-vs-v4 guard
+    in migrate_inputs_to_v4 already exists to stop, just for a different
+    trigger (a document that plainly IS v5, rather than one this module
+    cannot place at all):
+
+    1. An ``inputs_version`` this module does not implement at all (e.g. a
+       future ``6`` from a newer client, or a stray ``99``). Every ``is_vN``
+       check below is version-specific, so an unrecognised number satisfies
+       none of them and falls all the way through undetected.
+    2. A document declaring ``inputs_version: 5`` that nonetheless fails
+       ``is_v5``'s own structural check (``finance`` missing
+       ``committed_net_facility_pence``, or not a dict at all). ``is_v5``
+       returning False for a document that claims to be v5 is exactly the gap
+       between "structurally recognised" and "declared" that the v1 fallback
+       silently exploits.
+
+    A document declaring ``inputs_version: 2``/``3``/``4`` that fails ITS OWN
+    structural check is deliberately NOT covered by either rule above: that
+    is the existing, tested, permissive behaviour (falls through to the v1
+    legacy path, surfaced to the caller as ``status: "legacy_unreconciled"``
+    -- see ``test_malformed_v2_snapshot_migrates_to_legacy_unreconciled`` in
+    tests/test_appraisal_governance.py, which pins it). Only an entirely
+    unplaceable version number, or a version-5 tag that is not structurally
+    v5, is refused here; anything already accepted stays accepted.
+    """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS:
+        raise ValueError(
+            f"migrate_inputs_to_v5: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS}, or absent for a v1 document)"
+        )
+    if version == 5 and not is_v5(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v5: inputs_version is 5 but the document fails "
+            "the v5 structural check (finance is not a dict, or is missing "
+            "committed_net_facility_pence) -- refusing to silently reinterpret "
+            "it via the v1 fallback path"
+        )
+    if is_v5(snapshot):
+        defaults = migrate_v4_to_v5(
+            migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+        ).model_dump(mode="json")
+        return CalculatorInputsV5.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 5,
+        })
+    return migrate_v4_to_v5(migrate_inputs_to_v4(snapshot, project))

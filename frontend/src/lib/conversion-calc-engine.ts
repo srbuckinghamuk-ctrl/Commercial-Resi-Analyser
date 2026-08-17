@@ -3,7 +3,8 @@ import type {
   ConversionCostInputs,
   ProposedUnit,
 } from './conversion-types';
-import { calculateCommercialSdlt } from './commercial-sdlt';
+import type { AcquisitionInputsV5 } from './model/finance-types';
+import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 
 export function calculateGdv(units: ProposedUnit[]): number {
   return units.reduce((sum, u) => sum + u.estimated_value_pence, 0);
@@ -15,8 +16,46 @@ export function calculateBrokerFee(pricePence: number, pct: number): number {
   return Math.round((pricePence * pct) / 100);
 }
 
-export function calculateTotalAcquisitionCost(acq: AcquisitionInputs): number {
-  const sdlt = calculateCommercialSdlt(acq.purchase_price_pence).total_pence;
+/**
+ * Spec §3.3 — the acquisition line of the cost stack, acquisition tax included.
+ *
+ * R8 (spec §14): the tax is the document's own regime, not England/NI's. This is
+ * the *second* site that computes acquisition tax — `deriveMetrics` is the other,
+ * and the two must always agree, because `acquisition_cost_pence` (this figure)
+ * flows into TDC while `acquisition_tax_pence` (that one) is what the report
+ * names. `golden-fixtures.test.ts` and `metrics.test.ts` both pin their equality.
+ *
+ * The parameter is widened to accept a v5 acquisition block; v2–v4 documents
+ * carry none of the new keys, so the same `in` guards `deriveMetrics` uses resolve
+ * them to `england_ni` with a null date and no override — byte-for-byte what
+ * `calculateCommercialSdlt` returned before R8 deleted it.
+ */
+export function calculateTotalAcquisitionCost(
+  acq: AcquisitionInputs | AcquisitionInputsV5,
+): number {
+  // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
+  // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
+  // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
+  // guard would then reach selectBandSet and throw "No band sets for
+  // null/non_residential", where the Python engine rejects the same document at
+  // validation. Both engines must degrade the same way. Only `jurisdiction` is
+  // fatal; a null date, override or reason are all absorbed downstream.
+  const jurisdiction = 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni';
+  const rawDate = 'acquisition_date' in acq ? acq.acquisition_date : null;
+  // Fix round 1: an unusable date (malformed, or uncovered) degrades to null
+  // (assumed-current) here instead of throwing — see resolveAcquisitionDate's
+  // doc comment. validateInputs re-derives this as a hard error independently.
+  const date = resolveAcquisitionDate(jurisdiction, 'non_residential', rawDate);
+  const sdlt = calculateAcquisitionTax({
+    consideration_pence: acq.purchase_price_pence,
+    jurisdiction,
+    basis: 'non_residential',
+    date,
+    override_pence:
+      'acquisition_tax_override_pence' in acq ? acq.acquisition_tax_override_pence : null,
+    override_reason:
+      'acquisition_tax_override_reason' in acq ? acq.acquisition_tax_override_reason : null,
+  }).total_pence;
   const brokerFee = calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct);
   return (
     acq.purchase_price_pence +

@@ -4,19 +4,22 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV4 } from '../../lib/model';
-import { defaultCalculatorInputsV4 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV5 } from '../../lib/model';
+import { defaultCalculatorInputsV5 } from '../../lib/conversion-defaults';
 
 // Same fixture directory the shared golden-fixtures test reads from (frontend/src/lib/model/golden-fixtures.test.ts)
 // — fixture G is the Release 2b lender-valuation fixture (spec §3.2), used here as the
 // "fixture-G-shaped props" the brief asks component tests to render against.
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+// R8 Task 11: the golden fixtures on disk are v5 documents (they carry
+// `inputs_version: 5` and the acquisition-tax block), so this now names the
+// version the file actually holds rather than the v4 it used to claim.
 const fixtureG = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV4 };
+) as { inputs: CalculatorInputsV5 };
 
 describe('AppraisalSummaryPage — null lender state', () => {
-  const inputs = defaultCalculatorInputsV4();
+  const inputs = defaultCalculatorInputsV5();
   const run = runAppraisal(inputs);
 
   it('renders the existing not-available treatment for lender GDV and LTGDV lender', () => {

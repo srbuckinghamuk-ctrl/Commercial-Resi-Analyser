@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { deriveMetrics, pct, breakevenFlags } from './metrics';
 import { runLedger } from './monthly-engine';
-import { runAppraisal, migrateInputsToV4 } from './index';
+import { runAppraisal, migrateInputsToV4, migrateInputsToV5 } from './index';
 import { defaultCalculatorInputsV2, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
-import type { EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule } from './finance-types';
+import type {
+  AcquisitionInputsV5, AnyCalculatorInputs, EquitySource, FacilityTerms,
+  MonthReceipts, MonthUses, Schedule,
+} from './finance-types';
 
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
@@ -408,5 +411,211 @@ describe('breakevenFlags with a structural reason', () => {
     const out = breakevenFlags(false, false, 2, 'no sale price redeems — test reason');
     expect(out.map((f) => f.code)).toEqual(['senior_breakeven_unsolvable']);
     expect(out[0].message).toBe('no sale price redeems — test reason');
+  });
+});
+
+// ── R8 (spec §14): acquisition tax is jurisdiction-aware ──────────────────────
+
+describe('acquisition tax is jurisdiction-aware (R8)', () => {
+  // £753,482. England/NI non-residential: 0% to £150k, 2% on the next £100k
+  // (£2,000), 5% on the £503,482 above £250k (£25,174.10) = £27,174.10.
+  const PRICE_PENCE = 75_348_200;
+
+  function englishBase() {
+    const inputs = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    inputs.acquisition.purchase_price_pence = PRICE_PENCE;
+    return inputs;
+  }
+
+  it('taxes an English appraisal identically to the pre-R8 engine', () => {
+    const m = runAppraisal(englishBase()).metrics;
+    expect(m.acquisition_tax_pence).toBe(2_717_410);
+    // The deprecated alias must carry the same value until R16 removes it.
+    expect(m.sdlt_pence).toBe(m.acquisition_tax_pence);
+    expect(m.acquisition_tax.regime).toBe('SDLT');
+    expect(m.acquisition_tax.jurisdiction).toBe('england_ni');
+    expect(m.acquisition_tax.basis).toBe('non_residential');
+  });
+
+  it('taxes a Welsh appraisal on LTT', () => {
+    const inputs = englishBase();
+    inputs.acquisition.jurisdiction = 'wales';
+    inputs.acquisition.acquisition_date = '2026-08-17';
+    const m = runAppraisal(inputs).metrics;
+    expect(m.acquisition_tax_pence).toBe(2_542_410);
+    expect(m.sdlt_pence).toBe(2_542_410);
+    expect(m.acquisition_tax.regime).toBe('LTT');
+    expect(m.acquisition_tax.date_basis).toBe('transaction_date');
+  });
+
+  it('taxes a Scottish appraisal on LBTT', () => {
+    const inputs = englishBase();
+    inputs.acquisition.jurisdiction = 'scotland';
+    inputs.acquisition.acquisition_date = '2026-08-17';
+    const m = runAppraisal(inputs).metrics;
+    // 0% to £150k; 1% on the next £100k (£1,000); 5% on £503,482 (£25,174.10).
+    expect(m.acquisition_tax_pence).toBe(2_617_410);
+    expect(m.acquisition_tax.regime).toBe('LBTT');
+  });
+
+  it('reports an assumed-current basis when no acquisition date is recorded', () => {
+    const m = runAppraisal(englishBase()).metrics;
+    expect(m.acquisition_tax.date_basis).toBe('assumed_current');
+  });
+
+  // Fix round 1 (R8 Task 5). The brief's original test here asserted that an
+  // override *changes* the RLV. That is the opposite of what spec §3.18 defines,
+  // and it passed only while this engine computed the acquisition tax twice from
+  // two different band sets. §3.18: cost excluding land = TDC − purchase price −
+  // acquisition tax. Once both sites (deriveMetrics and calculateTotalAcquisition
+  // Cost) use the same figure, the tax cancels out of that expression, so the RLV
+  // is invariant to it *by design* — and §3.18's disclosed limitation records
+  // exactly this: "finance and SDLT within 'cost excluding land' are those of the
+  // appraised structure, not re-solved for the residual price (a fixed-point
+  // refinement is R3)". This has always been true for English documents. R8 makes
+  // it true for Welsh and Scottish ones too. Do not "fix" this back.
+  it('an override moves acquisition cost and TDC but leaves RLV unchanged (§3.18)', () => {
+    const base = englishBase();
+    const withOverride = migrateInputsToV5(
+      JSON.parse(JSON.stringify(base)) as Record<string, unknown>,
+    );
+    withOverride.acquisition.acquisition_tax_override_pence = 0;
+    withOverride.acquisition.acquisition_tax_override_reason = 'Group relief claimed.';
+
+    const before = runAppraisal(base).metrics;
+    const after = runAppraisal(withOverride).metrics;
+
+    expect(after.acquisition_tax_pence).toBe(0);
+    expect(after.acquisition_tax.is_override).toBe(true);
+    expect(after.acquisition_tax.computed_total_pence).toBe(2_717_410);
+
+    // The tax really did leave the cost stack — both figures fall by exactly it.
+    expect(before.acquisition_cost_pence - after.acquisition_cost_pence).toBe(2_717_410);
+    expect(
+      before.total_development_cost_pence - after.total_development_cost_pence,
+    ).toBe(2_717_410);
+    // …and the RLV does not move, because the tax cancels in cost-excluding-land.
+    expect(after.rlv_pence).toBe(before.rlv_pence);
+  });
+
+  // The regression guard for fix round 1: acquisition tax is computed in two
+  // places — deriveMetrics (reported as acquisition_tax_pence) and
+  // calculateTotalAcquisitionCost (folded into acquisition_cost_pence, and from
+  // there into TDC, profit and every ratio). Before this fix the second site was
+  // hard-wired to England/NI, so a Welsh appraisal reported LTT while charging
+  // SDLT. This asserts the two can never drift apart again.
+  //
+  // COVERAGE LIMIT: this guard varies the jurisdiction and the override, but not
+  // the acquisition *date*. A date mismatch between the two sites is currently
+  // unobservable, because every (jurisdiction, basis) group in TAX_TABLES holds a
+  // single open-ended band set — any date resolves to the same set. **The first
+  // time a second dated band set is added to a group, extend this guard with a
+  // date case**, or a date read at one site and not the other will pass silently.
+  function taxInsideAcquisitionCost(
+    inputs: { acquisition: AcquisitionInputsV5 }, m: { acquisition_cost_pence: number },
+  ): number {
+    const a = inputs.acquisition;
+    return m.acquisition_cost_pence
+      - a.purchase_price_pence
+      - a.legal_fees_pence
+      - a.survey_cost_pence
+      - Math.round((a.purchase_price_pence * a.broker_fee_pct) / 100)
+      - a.other_acquisition_costs_pence;
+  }
+
+  it.each([
+    ['wales', 'LTT', 2_542_410],
+    ['scotland', 'LBTT', 2_617_410],
+    ['england_ni', 'SDLT', 2_717_410],
+  ] as const)(
+    'the tax inside acquisition_cost_pence is the %s figure, not the England/NI one',
+    (jurisdiction, regime, expected) => {
+      const inputs = englishBase();
+      inputs.acquisition.jurisdiction = jurisdiction;
+      inputs.acquisition.acquisition_date = '2026-08-17';
+      const m = runAppraisal(inputs).metrics;
+      expect(m.acquisition_tax.regime).toBe(regime);
+      expect(m.acquisition_tax_pence).toBe(expected);
+      expect(taxInsideAcquisitionCost(inputs, m)).toBe(expected);
+    },
+  );
+
+  // Fix round 1: the COVERAGE LIMIT above named an untested axis — a *bad* date
+  // (malformed, or not covered by any band set) reaching the two sites. Both now
+  // route through resolveAcquisitionDate instead of calling selectBandSet
+  // directly, so an unusable date degrades to null (assumed-current) instead of
+  // throwing — this extends the drift guard onto that axis. (Verified this has
+  // teeth by reverting calculateTotalAcquisitionCost's site alone to the raw,
+  // unresolved date: both cases below then fail — the wales/scotland/england_ni
+  // block above does not catch it, because it never uses a bad date.)
+  it.each([
+    ['an uncovered date', '1990-01-01'],
+    ['a malformed date', '17/08/2026'],
+  ])('%s degrades to the assumed-current band set identically at both sites', (_label, badDate) => {
+    const inputs = englishBase();
+    inputs.acquisition.acquisition_date = badDate;
+    const m = runAppraisal(inputs).metrics;
+    expect(m.acquisition_tax.date_basis).toBe('assumed_current');
+    expect(m.acquisition_tax_pence).toBe(2_717_410);
+    expect(taxInsideAcquisitionCost(inputs, m)).toBe(m.acquisition_tax_pence);
+  });
+
+  // Fix round 2. The Python mirror of this test exists because Pydantic's default
+  // revalidate_instances='never' lets a CalculatorInputsV4 hold an
+  // AcquisitionInputsV5, at which point a gate on the *container* and a gate on
+  // the *block* disagree. The TS engine cannot have that bug — both sites read the
+  // block structurally — and this pins that: a document declaring inputs_version 4
+  // whose acquisition block carries the R8 keys is taxed on those keys at both
+  // sites, consistently. Neither engine may report one regime and charge another.
+  it('a v4 container carrying a v5 acquisition block agrees at both sites', () => {
+    const v5 = englishBase();
+    v5.acquisition.jurisdiction = 'wales';
+    v5.acquisition.acquisition_date = '2026-08-17';
+    const hybrid = { ...JSON.parse(JSON.stringify(v5)), inputs_version: 4 } as
+      unknown as AnyCalculatorInputs & { acquisition: AcquisitionInputsV5 };
+    expect(hybrid.inputs_version).toBe(4);
+
+    const m = runAppraisal(hybrid).metrics;
+    expect(m.acquisition_tax.regime).toBe('LTT');
+    expect(m.acquisition_tax_pence).toBe(2_542_410);
+    expect(taxInsideAcquisitionCost(hybrid, m)).toBe(m.acquisition_tax_pence);
+  });
+
+  // The load-bearing property of R8 Task 5, asserted on a document built here
+  // rather than read from `fixtures/financial-model/` — the fixture corpus makes
+  // the same statement through its own pinned `expected` blocks, and this test
+  // must not depend on those files staying at any particular version.
+  //
+  // v2–v4 documents carry no jurisdiction at all. Migrating one to v5 is purely
+  // additive: it must add `acquisition_tax_pence` and `acquisition_tax` and move
+  // nothing else, to the penny — total development cost, profit, every profit
+  // ratio, LTC, LTGDV and the RLV all flow through the figure being rerouted.
+  it('migration to v5 adds the two new metrics and changes no other figure', () => {
+    const v4 = devFinanceV4();
+    expect(v4.inputs_version).toBe(4);
+    const v5 = migrateInputsToV5(JSON.parse(JSON.stringify(v4)) as Record<string, unknown>);
+    expect(v5.inputs_version).toBe(5);
+
+    const before = runAppraisal(v4).metrics;
+    const after = runAppraisal(v5).metrics;
+
+    const {
+      acquisition_tax: _atAfter, acquisition_tax_pence: _atpAfter, ...restAfter
+    } = after;
+    const {
+      acquisition_tax: _atBefore, acquisition_tax_pence: _atpBefore, ...restBefore
+    } = before;
+    expect(restAfter).toEqual(restBefore);
+
+    // Negative control: the comparison above is only meaningful if the metrics
+    // object it strips down is actually populated with the figures at risk.
+    expect(restBefore.total_development_cost_pence).toBeGreaterThan(0);
+    expect(restBefore.profit_pence).not.toBe(0);
+    expect(restBefore.rlv_pence).not.toBe(0);
+    // And the new fields really are new: absent before, present after.
+    expect(_atpBefore).toBe(_atpAfter);
+    expect(_atBefore.jurisdiction).toBe('england_ni');
+    expect(_atAfter.jurisdiction).toBe('england_ni');
+    expect(_atAfter.date_basis).toBe('assumed_current');
   });
 });

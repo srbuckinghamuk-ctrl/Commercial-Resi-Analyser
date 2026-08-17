@@ -2,14 +2,20 @@
   "name": "J — blended exit, phased sales + same-month refinance",
   "kind": "refinance",
   "inputs": {
-    "inputs_version": 4,
+    "inputs_version": 5,
     "project_id": null,
     "acquisition": {
       "purchase_price_pence": 40000000,
       "legal_fees_pence": 500000,
       "survey_cost_pence": 300000,
       "broker_fee_pct": 1.0,
-      "other_acquisition_costs_pence": 0
+      "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-01-15",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
     },
     "unit_mix": {
       "units": [

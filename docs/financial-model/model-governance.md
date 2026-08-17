@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.6.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.7.0`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -104,7 +104,7 @@ meaningful rather than tautological.
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.6.0"`
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.7.0"`
   (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
   `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
   Outputs are only comparable within one `calc_version` — a report or comparison spanning two
@@ -114,16 +114,20 @@ Two independent version numbers travel with every appraisal document:
   `3` = Release 2b's `CalculatorInputsV3` shape (adds the optional `lender_valuation` block and
   `finance.enforcement_cost_assumption_pence`, see `migration-notes.md` §5); `4` = Release 3a's
   `CalculatorInputsV4` shape (adds the optional `programme`, `sales_phasing` and `refinance`
-  blocks, spec §6.1). Every new save persists `inputs_version: 4` — the migration chain
-  v1→v2→v3→v4 is applied in-place before persistence, so the stored document is never left in
-  an older shape after a save.
+  blocks, spec §6.1); `5` = Release 8's `CalculatorInputsV5` shape (adds the acquisition block's
+  `jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`, `acquisition_date` and
+  the two acquisition-tax override fields, spec §14). Every new save persists
+  `inputs_version: 5` — the migration chain v1→v2→v3→v4→v5 is applied in-place before
+  persistence, so the stored document is never left in an older shape after a save. An
+  *unrecognised* `inputs_version` (6, 99) is rejected with a 422 by both engines rather than
+  falling through to the v1 fallback path, which would silently rebuild the finance block.
 
-`calc_version` and `inputs_version` are independent axes. Calc `2.6.0` consumes v2, v3 and v4
-input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis metrics
-are null, and a document with `programme: null` produces a byte-identical schedule to its v3
-source), but **v4 is canonical server-side**: `calculate_authoritative` migrates whatever arrives
-to v4 before validating, calculating and persisting it, so no older-shaped input reaches the
-engines without migration and no older-shaped document is ever stored.
+`calc_version` and `inputs_version` are independent axes. Calc `2.7.0` consumes v2, v3, v4 and
+v5 input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis
+metrics are null, and a document with `programme: null` produces a byte-identical schedule to
+its v3 source), but **v5 is canonical server-side** [R8]: `calculate_authoritative` migrates
+whatever arrives to v5 before validating, calculating and persisting it, so no older-shaped
+input reaches the engines without migration and no older-shaped document is ever stored.
 
 ## 4. Status lifecycle
 

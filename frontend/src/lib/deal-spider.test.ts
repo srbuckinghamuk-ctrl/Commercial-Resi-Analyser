@@ -11,8 +11,8 @@ import {
 import { defaultCalculatorInputsV2 } from './conversion-defaults';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
-import { calculateCommercialSdlt } from './commercial-sdlt';
-import { calculateResidentialSdlt } from './residential-sdlt';
+import { migrateInputsToV5 } from './model';
+import { calculateAcquisitionTax } from './tax/acquisition-tax';
 import type { CalculatorInputsV2 } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
 
@@ -241,8 +241,14 @@ describe('tax advantage axis', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.cil_offset_pence = 1_000_000;
     const metrics = runAppraisal(inputs).metrics;
-    const resSdlt = calculateResidentialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
-    const commSdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
+    const resSdlt = calculateAcquisitionTax({
+      consideration_pence: inputs.acquisition.purchase_price_pence,
+      jurisdiction: 'england_ni', basis: 'residential_higher', date: null,
+    }).total_pence;
+    const commSdlt = calculateAcquisitionTax({
+      consideration_pence: inputs.acquisition.purchase_price_pence,
+      jurisdiction: 'england_ni', basis: 'non_residential', date: null,
+    }).total_pence;
     const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
     const expected =
       ((resSdlt - commSdlt + vatSaving + 1_000_000) / metrics.gdv_pence) * 100;
@@ -263,6 +269,42 @@ describe('tax advantage axis', () => {
     for (const def of others) {
       expect(def.illustrative).toBeFalsy();
     }
+  });
+});
+
+describe('tax advantage is computed within one regime (R8)', () => {
+  it('is unchanged for an English appraisal', () => {
+    const inputs = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    inputs.acquisition.purchase_price_pence = 75_348_200;
+    const residential = calculateAcquisitionTax({
+      consideration_pence: 75_348_200, jurisdiction: 'england_ni',
+      basis: 'residential_higher', date: null,
+    }).total_pence;
+    expect(residential).toBe(6_534_820); // the pre-R8 residential-sdlt figure
+    expect(() => computeSpider(inputs, null)).not.toThrow();
+  });
+
+  it('uses Welsh bands on both sides for a Welsh appraisal', () => {
+    const eng = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    eng.acquisition.purchase_price_pence = 75_348_200;
+    // A non-zero GDV so the axis isn't short-circuited to 0 by the
+    // `metrics.gdv_pence > 0` guard before the jurisdiction can matter.
+    eng.unit_mix.units = [
+      { id: 'u1', type: '2bed', floor_area_sqm: 65, estimated_value_pence: 32_000_000, comparable_notes: '' },
+      { id: 'u2', type: '1bed', floor_area_sqm: 52, estimated_value_pence: 24_000_000, comparable_notes: '' },
+      { id: 'u3', type: 'studio', floor_area_sqm: 39, estimated_value_pence: 18_000_000, comparable_notes: '' },
+    ];
+    eng.conversion_costs.total_construction_sqm = 160;
+    const wal = migrateInputsToV5(
+      JSON.parse(JSON.stringify(eng)) as Record<string, unknown>,
+    );
+    wal.acquisition.jurisdiction = 'wales';
+    // Wales's residential-higher and non-residential bands both differ from
+    // England's, so the axis must move. If it does not, the jurisdiction is
+    // not reaching the comparison.
+    const engAxis = computeSpider(eng, null).axes.find((a) => a.id === 'tax_advantage')!;
+    const walAxis = computeSpider(wal, null).axes.find((a) => a.id === 'tax_advantage')!;
+    expect(walAxis.raw).not.toBe(engAxis.raw);
   });
 });
 

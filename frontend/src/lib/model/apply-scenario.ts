@@ -9,16 +9,20 @@ import type { AnyCalculatorInputs } from './finance-types';
  * (`app/financial_model/apply_scenario.py`).
  */
 /**
- * Applies a scenario's GDV / cost / timeline / rate adjustments to a v2, v3
- * or v4 inputs document, returning the same version it was given (Task 8:
+ * Applies a scenario's GDV / cost / timeline / rate adjustments to a v2, v3,
+ * v4 or v5 inputs document, returning the same version it was given (Task 8:
  * callers now hold v3 state and still need `lender_valuation`/`inputs_version`
  * carried through unchanged, exactly like every other field this function
  * doesn't touch; Release 3a Task 4 widened this further to v4, whose extra
  * `programme`/`sales_phasing`/`refinance` fields likewise pass through
- * untouched). The committed facility (`committed_net_facility_pence`,
- * `committed_gross_facility_pence`, `day_one_advance_pence`) and
- * `equity_sources` are held fixed — a scenario stresses the deal's
- * assumptions, not the lender's commitment or the capital already raised.
+ * untouched; R8 widened this further to v5, whose extra jurisdiction,
+ * acquisition date and tax override fields (spec §14) likewise pass through
+ * untouched — a scenario stresses GDV, cost, timeline and rate, not where the
+ * property is or when it was bought). The committed facility
+ * (`committed_net_facility_pence`, `committed_gross_facility_pence`,
+ * `day_one_advance_pence`) and `equity_sources` are held fixed — a scenario
+ * stresses the deal's assumptions, not the lender's commitment or the capital
+ * already raised.
  */
 export function applyScenario<T extends AnyCalculatorInputs>(
   inputs: T,

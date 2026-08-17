@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .acquisition_tax import regime_for, select_band_set
 from .engine import MonthlyModel
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .types import AnyCalculatorInputs
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass
@@ -305,6 +309,46 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             err("refinance", "Refinance arrangement fee must be zero or more.")
         if not math.isfinite(rf.legal_costs_pence) or rf.legal_costs_pence < 0:
             err("refinance", "Refinance legal costs must be zero or more.")
+
+    # R8 (spec Sec 14). Mirrors validation.ts's `'jurisdiction' in inputs.acquisition`
+    # guard: v2-v4 documents carry none of these fields via getattr(..., None) and
+    # must not be reported as failing rules that did not exist when they were saved.
+    jurisdiction = getattr(inputs.acquisition, "jurisdiction", None)
+    if jurisdiction is not None:
+        acq = inputs.acquisition
+
+        if acq.acquisition_tax_override_pence is not None and acq.acquisition_tax_override_reason.strip() == "":
+            err(
+                "acquisition.acquisition_tax_override_reason",
+                "An acquisition tax override must state why the band calculation does not "
+                "apply (for example a relief or a linked transaction).",
+            )
+
+        if acq.acquisition_date is not None:
+            # Known limitation, mirrored exactly from validation.ts: this checks
+            # shape only, not calendar validity, and select_band_set compares
+            # dates lexicographically rather than parsing them -- so a string
+            # like "2026-02-31" passes here and is accepted as date_basis
+            # 'transaction_date'. `<input type="date">` cannot produce such a
+            # value, so this is reachable only via the API, and the effect is
+            # cosmetic (band selection is still monotonic in the lexicographic
+            # ordering). Not tightened here: adding a calendar check would be a
+            # behaviour change, which this comment deliberately is not.
+            if not _ISO_DATE.match(acq.acquisition_date):
+                err("acquisition.acquisition_date", "Acquisition date must be an ISO date (YYYY-MM-DD).")
+            else:
+                try:
+                    select_band_set(acq.jurisdiction, "non_residential", acq.acquisition_date)
+                except ValueError as exc:
+                    err("acquisition.acquisition_date", str(exc))
+
+        if acq.jurisdiction_evidence_status == "unconfirmed":
+            warn(
+                "acquisition.jurisdiction_evidence_status",
+                "The tax jurisdiction has not been confirmed. Acquisition tax is computed "
+                f"on {regime_for(acq.jurisdiction)} and the report will remain a draft until "
+                "it is confirmed.",
+            )
 
     return issues
 

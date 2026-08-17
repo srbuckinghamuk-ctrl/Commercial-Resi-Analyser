@@ -4,20 +4,22 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import CashflowPage from './CashflowPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV4 } from '../../lib/model';
-import { defaultCalculatorInputsV4 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV5 } from '../../lib/model';
+import { defaultCalculatorInputsV5 } from '../../lib/conversion-defaults';
 
 // Same fixture directory as AppraisalSummaryPage.test.tsx / export-investment-memo.test.ts.
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+// v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureH = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'h-programme-scurve.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV4 };
+) as { inputs: CalculatorInputsV5 };
+// v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureJ = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV4 };
+) as { inputs: CalculatorInputsV5 };
 
 describe('CashflowPage — no programme, no sales phasing (default v4)', () => {
-  const inputs = defaultCalculatorInputsV4();
+  const inputs = defaultCalculatorInputsV5();
   const run = runAppraisal(inputs);
 
   it('keeps the original assumptions note verbatim', () => {

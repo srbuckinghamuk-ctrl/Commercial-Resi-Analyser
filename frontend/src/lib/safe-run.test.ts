@@ -9,7 +9,7 @@ describe('safeRunAppraisal', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       // The real engine ran — not a stub — so the result carries real metrics.
-      expect(result.run.metrics.calc_version).toBe('2.6.0');
+      expect(result.run.metrics.calc_version).toBe('2.7.0');
       expect(result.run.model.months).toHaveLength(result.run.schedule.term_months);
     }
   });

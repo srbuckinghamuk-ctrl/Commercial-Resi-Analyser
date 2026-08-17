@@ -1,12 +1,12 @@
-import type { AppraisalRun, CalculatorInputsV4 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV5 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import CostToCompleteCard from './CostToCompleteCard';
 
 interface Props {
-  inputs: CalculatorInputsV4;
-  onChange: (partial: Partial<CalculatorInputsV4>) => void;
+  inputs: CalculatorInputsV5;
+  onChange: (partial: Partial<CalculatorInputsV5>) => void;
   run: AppraisalRun;
 }
 
@@ -46,7 +46,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * null, whether because no lender valuation was recorded or because a recorded one could not
  * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
  * surfaces the distinction via its own validation messages). */
-function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV4; run: AppraisalRun }) {
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV5; run: AppraisalRun }) {
   const { metrics } = run;
   const lv = inputs.lender_valuation;
 
@@ -100,6 +100,9 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
   const { metrics } = run;
   const target = inputs.deal_spider.target_profit_on_cost_pct;
   const reserveRemaining = metrics.interest_reserve_remaining_pence;
+  // R8 Task 11: the acquisition tax line is not SDLT on a Scottish or Welsh
+  // document. Name the regime the engine actually charged.
+  const regime = metrics.acquisition_tax.regime;
 
   return (
     <div>
@@ -133,7 +136,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
         <MetricCard
           label="Acquisition"
           value={penceToPounds(metrics.acquisition_cost_pence)}
-          tooltip="§3.3: purchase price + SDLT + legal fees + survey cost + broker fee + other acquisition costs."
+          tooltip={`§3.3: purchase price + ${regime} + legal fees + survey cost + broker fee + other acquisition costs.`}
         />
         <MetricCard
           label="Construction"
@@ -209,7 +212,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
         <MetricCard
           label="Residual land value"
           value={`${penceToPounds(metrics.rlv_pence)} (target ${target.toFixed(1)}% PoC)`}
-          tooltip={`§3.18: RLV = GDV / (1 + target profit-on-cost / 100) − (TDC − purchase price − SDLT). Target is the configurable deal-spider target (currently ${target.toFixed(1)}%), not a hard-coded 20%.`}
+          tooltip={`§3.18: RLV = GDV / (1 + target profit-on-cost / 100) − (TDC − purchase price − ${regime}). Target is the configurable deal-spider target (currently ${target.toFixed(1)}%), not a hard-coded 20%.`}
         />
       </Group>
 

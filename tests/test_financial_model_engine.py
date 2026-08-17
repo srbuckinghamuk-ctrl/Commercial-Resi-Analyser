@@ -25,6 +25,7 @@ from app.financial_model.types import (
     ConversionCostInputs,
     EquitySource,
     FacilityTerms,
+    parse_calculator_inputs,
 )
 from app.financial_model.validation import reconcile
 
@@ -418,7 +419,8 @@ class TestRedemptionBalanceAtDisposal:
         ledger's own totals.exit_fee_pence rather than assumed (Task 4 Step 1
         verification)."""
         doc = json.loads((FIXTURE_DIR / "f-dev-finance-12mo.json").read_text())
-        inputs = CalculatorInputsV3.model_validate(doc["inputs"])
+        # R8: the shared corpus is v5; parse by version rather than pinning a class.
+        inputs = parse_calculator_inputs(doc["inputs"])
         schedule = build_schedule(inputs)
         m = run_ledger(schedule, inputs.finance, inputs.equity_sources)
         assert m.redemption_balance_at_disposal_pence == 58_604_953

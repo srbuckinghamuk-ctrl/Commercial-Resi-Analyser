@@ -2843,3 +2843,69 @@ behaviour and would not have caught the defect the audit reported.
 - **PDF/UA structure tagging.** Not expressible through jsPDF's public API. The
   documents carry title, subject, language and `DisplayDocTitle`; a structure
   tree, role map and artifact marking remain open.
+
+
+---
+
+## 13. Acquisition tax and jurisdiction [R8 — calc 2.7.0]
+
+### 13.1 New golden fixture M
+
+`fixtures/financial-model/m-wales-jurisdiction.json` — the corpus's first
+**non-English** fixture: an all-cash Welsh acquisition on LTT, jurisdiction
+`confirmed`, acquisition date 17 Aug 2026, consideration £753,482 (the audited
+York case's price, so the three regimes' figures are directly comparable).
+
+Every expected value was derived by hand from the specification *before* the
+engine was run, and every one matched on the first execution. The tax figure is
+the load-bearing pin:
+
+```
+LTT non-residential, bands in force from 22 Dec 2020, slice basis:
+  0%  on the first £225,000                    =        0p
+  1%  on £225,000..£250,000  (£25,000)          =   25,000p
+  5%  on £250,000..£753,482  (£503,482)         =   2,517,410p
+                                          total = 2,542,410p
+```
+
+Cross-checked against the same consideration under the other two regimes:
+
+| Regime | Consideration £753,482 | Difference vs LTT |
+|---|---|---|
+| SDLT (England/NI) | 2,717,410p | +175,000p |
+| LBTT (Scotland) | 2,617,410p | +75,000p |
+| LTT (Wales) | **2,542,410p** | — |
+
+Registered in both rosters (`EXPECTED_FIXTURE_STEMS` in
+`tests/test_financial_model_fixtures.py` and `golden-fixtures.test.ts`).
+
+### 13.2 Why fixture M is excluded from the pre-R8 migration loop
+
+Both engines run every fixture through a "reduce to its pre-R8 (v3/v4) form and
+re-migrate" loop, asserting the pins still reproduce. That property is **only
+well-defined for an England/NI fixture**: the migration stamps `england_ni` by
+definition, because that is what every legacy document implicitly was. Stripping
+the R8 fields from a Welsh fixture does not recover an older document — it
+produces a *different, English* appraisal.
+
+So the loop is filtered to the England/NI fixtures, and the exclusion is made
+explicit rather than silent, in three parts:
+
+1. A roster guard asserts the split is exhaustive and that exactly one fixture is
+   non-English. Deleting or mistyping a `jurisdiction` field fails here instead of
+   quietly shrinking coverage.
+2. The excluded fixture gets a **stronger** assertion: its pre-R8 form must produce
+   precisely the England/NI figure (2,717,410p, SDLT) while the fixture itself
+   produces the Welsh one (2,542,410p, LTT). A table edit, or a call site that
+   quietly reverted to SDLT, fails here rather than passing because two regimes
+   happened to agree.
+3. The 175,000p difference is asserted to reach `acquisition_cost_pence` **and**
+   `total_development_cost_pence`, not to stop at the metrics object — this pins
+   the two-call-site defect found mid-release (see the R8 implementation report).
+
+### 13.3 Rendered-output check
+
+The gate and the rendered page catch different defects (R7's lesson), so all three
+regimes plus an unconfirmed case were rendered and read, not merely asserted. See
+§5 of `docs/reviews/2026-08-17-release-8-implementation-report.md` for what was
+seen.

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { CalculatorInputsV4 } from '../../lib/model';
+import type { AnyCalculatorInputs } from '../../lib/model';
 import {
   defaultSensitivityConfig, validateSensitivityConfig, LEVER_ORDER, MAX_AXIS_STEPS,
 } from '../../lib/model/sensitivity';
@@ -17,7 +17,10 @@ import { penceToPounds, formatPct } from '../../lib/format';
 import CalculatorFailurePanel from '../CalculatorFailurePanel';
 
 interface Props {
-  inputs: CalculatorInputsV4;
+  // R8 Task 5: widened from CalculatorInputsV4 — the shared corpus is now v5 and
+  // the only thing this page does with the document is hand it to
+  // safeRunSensitivity, which has always taken the union. Pure type widening.
+  inputs: AnyCalculatorInputs;
 }
 
 const TEXT = '#e2e8f0';

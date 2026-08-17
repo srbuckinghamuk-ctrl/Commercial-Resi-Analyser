@@ -1,5 +1,6 @@
-import type { AnyCalculatorInputs, MonthlyModel, Schedule } from './finance-types';
+import type { AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule } from './finance-types';
 import { computeLenderGdv } from './lender-valuation';
+import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -234,6 +235,49 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
     if (!Number.isFinite(rf.legal_costs_pence) || rf.legal_costs_pence < 0) {
       err('refinance', 'Refinance legal costs must be zero or more.');
+    }
+  }
+
+  // R8 (spec §14). Read through an `in` guard: v2–v4 documents carry none of
+  // these fields and must not be reported as failing rules that did not exist
+  // when they were saved.
+  if ('jurisdiction' in inputs.acquisition) {
+    const acq = inputs.acquisition as AcquisitionInputsV5;
+
+    if (acq.acquisition_tax_override_pence !== null && acq.acquisition_tax_override_reason.trim() === '') {
+      err(
+        'acquisition.acquisition_tax_override_reason',
+        'An acquisition tax override must state why the band calculation does not apply '
+        + '(for example a relief or a linked transaction).',
+      );
+    }
+
+    if (acq.acquisition_date !== null) {
+      // Known limitation: this checks shape only, not calendar validity, and
+      // selectBandSet compares dates lexicographically rather than parsing
+      // them — so a string like "2026-02-31" passes here and is accepted as
+      // date_basis 'transaction_date'. `<input type="date">` cannot produce
+      // such a value, so this is reachable only via the API, and the effect
+      // is cosmetic (band selection is still monotonic in the lexicographic
+      // ordering). Not tightened here: adding a calendar check would be a
+      // behaviour change, which this comment deliberately is not.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(acq.acquisition_date)) {
+        err('acquisition.acquisition_date', 'Acquisition date must be an ISO date (YYYY-MM-DD).');
+      } else {
+        try {
+          selectBandSet(acq.jurisdiction, 'non_residential', acq.acquisition_date);
+        } catch (e) {
+          err('acquisition.acquisition_date', (e as Error).message);
+        }
+      }
+    }
+
+    if (acq.jurisdiction_evidence_status === 'unconfirmed') {
+      warn(
+        'acquisition.jurisdiction_evidence_status',
+        'The tax jurisdiction has not been confirmed. Acquisition tax is computed on '
+        + `${regimeFor(acq.jurisdiction)} and the report will remain a draft until it is confirmed.`,
+      );
     }
   }
 

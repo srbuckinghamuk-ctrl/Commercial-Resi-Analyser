@@ -18,6 +18,7 @@ import {
   DARK_PAGE_TONE, LIGHT_PAGE_TONE, drawWatermark, fitWatermark, setDocumentMetadata,
 } from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
+import type { Jurisdiction } from './tax/acquisition-tax';
 
 // ── This memo consumes the finished AppraisalRun only ─────
 //
@@ -63,14 +64,41 @@ const MOVE_WHOLE_MAX_MM = 110;
 const DRAFT_REASON_SENTENCE: Record<DraftReason, string> = {
   unreconciled: 'one or more hard validations fail',
   senior_not_repaid: 'the senior facility is not repaid within the modelled term',
+  tax_basis_unconfirmed: 'the acquisition tax jurisdiction has not been confirmed',
   not_approved: 'no lender case has been credit approved',
 };
 
 const WATERMARK_TEXT: Record<DraftReason, string> = {
   unreconciled: 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE',
   senior_not_repaid: 'DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE',
+  tax_basis_unconfirmed: 'DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
   not_approved: 'DRAFT - NOT APPROVED FOR LENDER RELIANCE',
 };
+
+/** Spec §14. The reader is told which country's regime was applied, not the
+ *  internal key. Kept beside the memo's other label tables so a new
+ *  jurisdiction cannot be added without a printed name for it. */
+const JURISDICTION_LABEL: Record<Jurisdiction, string> = {
+  england_ni: 'England & Northern Ireland',
+  scotland: 'Scotland',
+  wales: 'Wales',
+};
+
+/**
+ * An ISO band-set date as `25 Jan 2019`.
+ *
+ * Parsed by hand rather than through `new Date(...)`: `band_set_effective_from`
+ * is a plain calendar date with no time or zone, and putting it through the
+ * Date constructor would re-interpret it as UTC midnight and print the previous
+ * day for any reader west of Greenwich. `fmtDate` above has the same shape but
+ * takes timestamps, so it is deliberately not reused here.
+ */
+function formatBandDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (m === null) return iso;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${Number(m[3])} ${months[Number(m[2]) - 1]} ${m[1]}`;
+}
 
 /**
  * jspdf-autotable augments the jsPDF instance with `lastAutoTable` at
@@ -293,6 +321,10 @@ export function generateInvestmentMemo(
   // and merely unapproved. Only the first may claim the model is at fault.
   const draft = prov.draftReason !== null;
   const watermarkText = prov.draftReason === null ? '' : WATERMARK_TEXT[prov.draftReason];
+  // Spec §14. The engine's own record of which regime, jurisdiction, band set
+  // and table version produced `acquisition_tax_pence`. Read, never re-derived:
+  // the memo names the basis the figure came from, it does not choose one.
+  const tax = metrics.acquisition_tax;
   // `inputs` may be a pre-Release-2b v2 document with no `lender_valuation` field at all —
   // this mirrors the null it would carry on a v3 document with no block recorded.
   const lenderValuation = 'lender_valuation' in inputs ? inputs.lender_valuation : null;
@@ -708,6 +740,21 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 0, 'Report Provenance');
   const hashOrAbsent = (hash: string | null) =>
     hash ?? 'not recorded — result predates provenance hashing';
+  // R8 fix round 1 (spec §14). A pre-R8 document records no jurisdiction, so
+  // `deriveMetrics` defaults it to England/NI — and such a document can still
+  // reach FINAL, because it is not re-graded against a condition that post-dates
+  // it. That combination is precisely how a credit paper ends up asserting an
+  // assumption as a recorded fact, which is the defect this release exists to
+  // remove. The claim is therefore qualified wherever it is not evidenced. The
+  // two qualifiers are independent and both may apply: a jurisdiction can be
+  // absent, and the basis can additionally be unconfirmed for the date's sake.
+  const taxBasisQualifiers: string[] = [];
+  if (!prov.jurisdictionRecorded) {
+    taxBasisQualifiers.push('assumed; no jurisdiction recorded on this document');
+  }
+  if (!prov.taxBasisConfirmed) taxBasisQualifiers.push('basis unconfirmed');
+  const taxBasisQualifier =
+    taxBasisQualifiers.length === 0 ? '' : ` — ${taxBasisQualifiers.join('; ')}`;
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
@@ -725,6 +772,11 @@ export function generateInvestmentMemo(
       ['Report-safe status', prov.reportSafe ? 'Report-safe — hard validations pass' : 'NOT report-safe — hard validations fail'],
       ['Document status', prov.documentStatus],
       ['Lender case', lenderCaseLabel(prov.lenderCaseStatus)],
+      // Spec §14. Two figures the audit hash already commits to transitively
+      // (jurisdiction through the inputs, table version through the metrics),
+      // printed here so a reader can see the tax basis without re-running.
+      ['Tax jurisdiction applied', `${JURISDICTION_LABEL[prov.jurisdiction]} (${tax.regime})${taxBasisQualifier}`],
+      ['Acquisition tax table version', prov.taxTableVersion],
     ],
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255 },
@@ -738,6 +790,42 @@ export function generateInvestmentMemo(
     y = infoRequired(
       y,
       `Recomputed for this export under calculation version ${prov.calcVersion}; the stored result was produced under ${prov.storedCalcVersion}. The hashes above describe the stored result, not the figures printed here — re-save the appraisal to bring them back into agreement.`,
+    );
+  }
+
+  // Spec §14. Three separate things can leave the acquisition tax basis needing
+  // enquiry, and each asks for a different document, so none is folded into
+  // another. They sit here rather than in the numbered Appendix B schedule
+  // because they qualify the provenance panel immediately above them.
+  //
+  // Fix round 1: a pre-R8 document records no jurisdiction *at all*, so asking
+  // it for "evidence of a recorded but unconfirmed jurisdiction" would misstate
+  // what it is missing. The two cases are different requests and the branches
+  // are exclusive: one asks for a jurisdiction, the other for evidence of one.
+  if (!prov.jurisdictionRecorded) {
+    y = infoRequired(
+      y,
+      `The property's jurisdiction. This document records none, so the acquisition tax above is charged as ${tax.regime} on an assumed ${JURISDICTION_LABEL[tax.jurisdiction]} property rather than an evidenced one. A different jurisdiction would charge a different regime and a different figure.`,
+    );
+  } else if (
+    'jurisdiction_evidence_status' in inputs.acquisition
+    && inputs.acquisition.jurisdiction_evidence_status === 'unconfirmed'
+  ) {
+    y = infoRequired(
+      y,
+      `Evidence of the property's jurisdiction. The acquisition tax above is charged as ${tax.regime} on the basis of a ${JURISDICTION_LABEL[tax.jurisdiction]} property, but that jurisdiction is recorded as unconfirmed. A different jurisdiction would charge a different regime and a different figure.`,
+    );
+  }
+  if (tax.date_basis === 'assumed_current') {
+    y = infoRequired(
+      y,
+      `The date of the transaction. With no date recorded, acquisition tax uses the ${tax.regime} band set currently in force (from ${formatBandDate(tax.band_set_effective_from)}) rather than the set in force on the transaction date, so re-running this appraisal after a change to the bands could return a different figure.`,
+    );
+  }
+  if (tax.is_override) {
+    y = infoRequired(
+      y,
+      `Supporting advice for the acquisition tax override. The printed figure of ${fmt(tax.total_pence)} was entered manually and replaces the band-derived figure of ${tax.computed_total_pence === null ? 'not recorded' : fmt(tax.computed_total_pence)}. Reason given: ${tax.override_reason === null || tax.override_reason.trim() === '' ? 'none recorded' : tax.override_reason}.`,
     );
   }
 
@@ -776,7 +864,7 @@ export function generateInvestmentMemo(
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Category', 'Amount', '% of Total']],
     body: [
-      ['Acquisition (inc. SDLT)', fmt(metrics.acquisition_cost_pence), shareOfTdc(metrics.acquisition_cost_pence)],
+      ['Acquisition (inc. tax)', fmt(metrics.acquisition_cost_pence), shareOfTdc(metrics.acquisition_cost_pence)],
       ['Construction', fmt(metrics.construction_cost_pence), shareOfTdc(metrics.construction_cost_pence)],
       ['Professional Fees', fmt(metrics.professional_fees_pence), shareOfTdc(metrics.professional_fees_pence)],
       ['Statutory Costs', fmt(metrics.statutory_costs_pence), shareOfTdc(metrics.statutory_costs_pence)],
@@ -998,12 +1086,12 @@ export function generateInvestmentMemo(
     body: [
       ['ACQUISITION', '', ''],
       ['  Purchase price', fmt(inputs.acquisition.purchase_price_pence), perSqftPence(inputs.acquisition.purchase_price_pence, totalSqm)],
-      ['  SDLT', fmt(metrics.sdlt_pence), perSqftPence(metrics.sdlt_pence, totalSqm)],
+      ['  Acquisition tax', fmt(metrics.acquisition_tax_pence), perSqftPence(metrics.acquisition_tax_pence, totalSqm)],
       ['  Legal fees', fmt(inputs.acquisition.legal_fees_pence), ''],
       ['  Survey', fmt(inputs.acquisition.survey_cost_pence), ''],
       [`  Broker fee rate`, fmtPct(inputs.acquisition.broker_fee_pct), ''],
       ['  Other acquisition costs', fmt(inputs.acquisition.other_acquisition_costs_pence), ''],
-      ['  Sub-total acquisition (inc. SDLT, fees)', fmt(metrics.acquisition_cost_pence), perSqftPence(metrics.acquisition_cost_pence, totalSqm)],
+      ['  Sub-total acquisition (inc. tax, fees)', fmt(metrics.acquisition_cost_pence), perSqftPence(metrics.acquisition_cost_pence, totalSqm)],
       ['', '', ''],
       ['CONSTRUCTION', '', ''],
       ['  Build rate', `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`, ''],
@@ -1095,7 +1183,7 @@ export function generateInvestmentMemo(
     : 0;
   y = bodyText(
     y,
-    `At the deal spider's configured target profit on cost of ${fmtPct(inputs.deal_spider.target_profit_on_cost_pct)}, the residual land value is ${fmt(metrics.rlv_pence)}. The purchase price of ${fmt(inputs.acquisition.purchase_price_pence)} is ${rlvDiff >= 0 ? `${fmt(Math.abs(rlvDiff))} below` : `${fmt(Math.abs(rlvDiff))} above`} the RLV, representing ${rlvDiff >= 0 ? 'positive' : 'negative'} headroom of ${fmtPct(Math.abs(rlvHeadroom))}. This RLV uses the appraisal's own finance and SDLT (spec §3.18) — it is not re-solved for the residual price.`,
+    `At the deal spider's configured target profit on cost of ${fmtPct(inputs.deal_spider.target_profit_on_cost_pct)}, the residual land value is ${fmt(metrics.rlv_pence)}. The purchase price of ${fmt(inputs.acquisition.purchase_price_pence)} is ${rlvDiff >= 0 ? `${fmt(Math.abs(rlvDiff))} below` : `${fmt(Math.abs(rlvDiff))} above`} the RLV, representing ${rlvDiff >= 0 ? 'positive' : 'negative'} headroom of ${fmtPct(Math.abs(rlvHeadroom))}. This RLV uses the appraisal's own finance and acquisition tax (spec §3.18) — it is not re-solved for the residual price.`,
   );
 
   // ── Section 6: Programme ──
@@ -1229,7 +1317,7 @@ export function generateInvestmentMemo(
   y = subHeading(y, 'Sources & Uses');
   const { usesTotal, sourcesTotal, rolledInterestPence } = sourcesAndUsesTotals(run);
   const usesRows: Array<[string, number]> = [
-    ['Acquisition (inc. SDLT)', metrics.acquisition_cost_pence],
+    ['Acquisition (inc. tax)', metrics.acquisition_cost_pence],
     ['Construction', metrics.construction_cost_pence],
     ['Professional fees', metrics.professional_fees_pence],
     ['Statutory costs', metrics.statutory_costs_pence],
@@ -1788,7 +1876,14 @@ export function generateInvestmentMemo(
     head: [['Assumption', 'Value', 'Basis']],
     body: [
       ['Purchase price', fmt(inputs.acquisition.purchase_price_pence), 'Asking price / offer'],
-      ['SDLT', fmt(metrics.sdlt_pence), 'Commercial (non-residential) bands — England/NI only (spec §3.3)'],
+      // R8 (spec §14). This row previously read "Commercial (non-residential)
+      // bands — England/NI only", which stopped being true when the engine
+      // became jurisdiction-aware: it named a regime the figure may not have
+      // been charged under. It now states the basis actually applied.
+      ['Acquisition tax', fmt(metrics.acquisition_tax_pence),
+        `${tax.regime} — ${JURISDICTION_LABEL[tax.jurisdiction]}, non-residential, `
+        + `bands in force from ${formatBandDate(tax.band_set_effective_from)} `
+        + `(table ${tax.table_version})`],
       ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
       ['Contingency', fmtPct(inputs.conversion_costs.contingency_pct), 'On base build cost only'],
       ['Blended GDV £/sq ft', perSqftPence(metrics.gdv_pence, totalSqm), 'Comparable evidence — verify'],
@@ -1891,7 +1986,22 @@ export function generateInvestmentMemo(
   const limitations: string[] = [
     'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
     'VAT is not modelled as a cash flow. Conversion VAT treatment is fact-specific and no reduced-rate saving is assumed; purchase VAT and any TOGC treatment are unconfirmed. An adverse VAT position would increase the funding requirement.',
-    'Acquisition tax is calculated on the England and Northern Ireland non-residential SDLT bands. A property in Scotland (LBTT) or Wales (LTT) is not correctly taxed by this version.',
+    // R8 (spec §14). The sentence this replaces said the model taxed every
+    // property on England/NI SDLT bands and that Scotland and Wales were not
+    // correctly taxed. Both halves became false when the engine became
+    // jurisdiction-aware, and a false limitation is worse than none: it tells a
+    // credit committee to discount a figure that is in fact right.
+    `Acquisition tax is calculated on the ${tax.regime} non-residential bands for `
+    + `${JURISDICTION_LABEL[tax.jurisdiction]} in force from ${formatBandDate(tax.band_set_effective_from)} `
+    + `(assumption table version ${tax.table_version}). `
+    // Fix round 1. Without this clause the sentence above reads as a statement
+    // of record on a document that recorded nothing, which is the same fault as
+    // the sentence it replaced, one degree milder.
+    + (prov.jurisdictionRecorded
+      ? ''
+      : `This document records no jurisdiction, so ${JURISDICTION_LABEL[tax.jurisdiction]} `
+        + 'has been assumed rather than evidenced, and the regime above is an assumption not a finding. ')
+    + 'Reliefs, linked transactions and multiple dwellings relief are not modelled.',
     'Areas are taken from the unit schedule and the entered construction area. There is no reconciled area bridge between existing GIA, proposed GIA, net internal area and saleable area.',
     'Technical, title, occupation and planning due diligence is recorded as narrative and as a free-form risk register, not as an evidenced schedule with status, owner and date.',
   ];

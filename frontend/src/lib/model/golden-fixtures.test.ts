@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import { migrateInputsToV4 } from './migrate';
+import { migrateInputsToV5 } from './migrate';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -53,6 +53,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'j-blended-refinance',
   'k-sensitivity',
   'l-retain-all',
+  'm-wales-jurisdiction',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -107,17 +108,120 @@ describe('golden fixtures (shared with the Python engine)', () => {
   }
 
   for (const fx of appraisalFixtures) {
-    // Mirrors Python's test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4.
-    it(`${fx.name} — reproduces its metrics after migration to v4`, () => {
-      // Release 3a identity guarantee (spec §6.1 / design §2.4): the v3 → v4 migration
-      // is purely additive, so running a fixture's inputs through the full normalisation
-      // chain — exactly what app.py now does on every request — must reproduce that
-      // fixture's pinned expected_metrics unchanged, not merely "close". Fixture H is
-      // already v4; migrating it is a no-op merge onto v4 defaults, which is itself worth
-      // asserting (the merge must not drop its programme block).
-      const v4 = migrateInputsToV4(fx.inputs as unknown as Record<string, unknown>);
-      expect(v4.inputs_version).toBe(4);
-      assertExpectedMetrics(runAppraisal(v4), fx, `${fx.name}[migrated-to-v4]`);
+    // Mirrors Python's test_fixtures_reproduce_their_metrics_after_migration_to_v5.
+    it(`${fx.name} — reproduces its metrics after migration to v5`, () => {
+      // Release 3a identity guarantee (spec §6.1 / design §2.4), carried to v5 by R8
+      // (spec §14): the migration chain is purely additive, so running a fixture's
+      // inputs through the full normalisation chain must reproduce that fixture's
+      // pinned expected_metrics unchanged, not merely "close". Every fixture is now
+      // v5, so this exercises migrateInputsToV5's merge branch — which must drop
+      // neither the programme block nor the R8 acquisition block.
+      const v5 = migrateInputsToV5(fx.inputs as unknown as Record<string, unknown>);
+      expect(v5.inputs_version).toBe(5);
+      assertExpectedMetrics(runAppraisal(v5), fx, `${fx.name}[migrated-to-v5]`);
+    });
+  }
+
+  // Fix round 2 (R8 Task 5). Every fixture in the corpus is now v5, so the loop
+  // above proves only that "a v5 document merged onto v5 defaults reproduces its
+  // pins". The property that matters for real data is the other one: *an old
+  // stored document still reproduces its pins after normalisation* — every
+  // persisted row in the database is v3 or v4, and nothing writes v5 yet. This
+  // reverses the R8 additions and re-runs the whole corpus through the migration
+  // chain from where it actually was before this release, restoring corpus-wide
+  // coverage of that path (it was previously the `migrated-to-v4` loop's job).
+  const R8_ACQUISITION_KEYS = [
+    'jurisdiction', 'jurisdiction_source', 'jurisdiction_evidence_status',
+    'acquisition_date', 'acquisition_tax_override_pence', 'acquisition_tax_override_reason',
+  ];
+
+  function asPreR8Document(inputs: AnyCalculatorInputs): Record<string, unknown> {
+    const doc = JSON.parse(JSON.stringify(inputs)) as Record<string, unknown>;
+    const acq = doc.acquisition as Record<string, unknown>;
+    for (const key of R8_ACQUISITION_KEYS) delete acq[key];
+    // The pre-R8 version, derived structurally rather than hard-coded per stem:
+    // the three v4 blocks arrived together in Release 3a, so a fixture carrying
+    // `programme` was v4 and one without it was v3.
+    doc.inputs_version = 'programme' in doc ? 4 : 3;
+    return doc;
+  }
+
+  // R8 Task 12. The property above ("a pre-R8 document reproduces its pins") is only
+  // well-defined for a fixture whose pinned figures are England/NI ones: the migration
+  // stamps `england_ni` *by definition*, because that is what every legacy document
+  // implicitly was. A non-English fixture has no pre-R8 form — stripping the R8 fields
+  // does not recover an older document, it asserts a different property. So the loop
+  // runs over the England/NI fixtures, and the excluded ones are covered by the
+  // stronger assertion below rather than by silence.
+  const jurisdictionOf = (fx: Fixture): string =>
+    (fx.inputs.acquisition as unknown as Record<string, unknown>).jurisdiction as string
+    ?? 'england_ni';
+  const preR8Fixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) === 'england_ni');
+  const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
+
+  it('the pre-R8 loop covers every England/NI fixture and excludes only non-English ones', () => {
+    // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
+    // quietly move it out of the loop above and reduce coverage without failing.
+    expect(preR8Fixtures.length + nonEnglishFixtures.length).toBe(appraisalFixtures.length);
+    expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales']);
+    expect(preR8Fixtures.length).toBe(appraisalFixtures.length - 1);
+  });
+
+  for (const fx of preR8Fixtures) {
+    // Mirrors Python's test_pre_r8_fixture_form_reproduces_its_metrics_after_migration.
+    it(`${fx.name} — reproduces its metrics from its pre-R8 (v3/v4) form`, () => {
+      const pre = asPreR8Document(fx.inputs);
+      expect(pre.inputs_version).not.toBe(5);
+      expect(R8_ACQUISITION_KEYS.some((k) => k in (pre.acquisition as object))).toBe(false);
+      const v5 = migrateInputsToV5(pre);
+      expect(v5.inputs_version).toBe(5);
+      // The migration stamps what a legacy document honestly is: England/NI by
+      // default, unconfirmed, no transaction date (spec §14).
+      expect(v5.acquisition.jurisdiction).toBe('england_ni');
+      expect(v5.acquisition.jurisdiction_source).toBe('migrated_default');
+      expect(v5.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
+      expect(v5.acquisition.acquisition_date).toBeNull();
+      assertExpectedMetrics(runAppraisal(v5), fx, `${fx.name}[pre-R8 → v5]`);
+    });
+  }
+
+  for (const fx of nonEnglishFixtures) {
+    // The excluded fixtures get the *stronger* statement: stripping the R8 fields must
+    // change the acquisition tax, and change it to precisely the England/NI figure on
+    // the same consideration. That is what makes the fixture's jurisdiction load-bearing
+    // — a table edit, or a mis-wired call site that quietly reverted to SDLT, fails here
+    // rather than passing because the two regimes happened to agree.
+    //
+    // MAINTENANCE: the figures below are hard-coded for fixture M's consideration, inside
+    // a loop over every non-English fixture. Adding a second non-English fixture therefore
+    // means *rewriting this assertion* (drive the expected pair off the fixture, or split
+    // the loop) — not just adding a roster line. It fails loudly rather than silently if
+    // you forget, but the failure will look like a wrong figure rather than a missing
+    // case, so read this comment before "fixing" the number.
+    it(`${fx.name} — its pre-R8 form is a different, England/NI, appraisal`, () => {
+      const pre = asPreR8Document(fx.inputs);
+      const v5 = migrateInputsToV5(pre);
+      expect(v5.acquisition.jurisdiction).toBe('england_ni');
+      const englishRun = runAppraisal(v5);
+      const welshRun = runAppraisal(fx.inputs);
+
+      const consideration = fx.inputs.acquisition.purchase_price_pence;
+      expect(consideration).toBe(75_348_200);
+      // Hand-verified against the band tables (spec §14), slice basis:
+      //   SDLT  = 2% x (250k-150k) + 5% x (753,482-250,000) = 200,000p + 2,517,410p
+      //   LTT   = 1% x (250k-225k) + 5% x (753,482-250,000) =  25,000p + 2,517,410p
+      expect(englishRun.metrics.acquisition_tax_pence).toBe(2_717_410);
+      expect(welshRun.metrics.acquisition_tax_pence).toBe(2_542_410);
+      expect(englishRun.metrics.acquisition_tax.regime).toBe('SDLT');
+      expect(welshRun.metrics.acquisition_tax.regime).toBe('LTT');
+      // The 175,000p difference must reach the headline cost stack, not stop at the
+      // metrics object — this is the two-call-site defect Task 5 found, pinned.
+      expect(englishRun.metrics.acquisition_cost_pence - welshRun.metrics.acquisition_cost_pence)
+        .toBe(175_000);
+      expect(
+        englishRun.metrics.total_development_cost_pence
+        - welshRun.metrics.total_development_cost_pence,
+      ).toBe(175_000);
     });
   }
 

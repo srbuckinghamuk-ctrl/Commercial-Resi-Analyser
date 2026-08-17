@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { safeRunSensitivity } from './safe-sensitivity';
-import { migrateInputsToV4 } from './model';
+import { migrateInputsToV5 } from './model';
 import * as sensitivityModule from './model/sensitivity';
 import {
   defaultSensitivityConfig, InvalidBaseDocumentError, InvalidSensitivityConfigError,
@@ -14,7 +14,7 @@ const fixtureF = JSON.parse(
 ) as { inputs: Record<string, unknown> };
 
 function baseInputs() {
-  return migrateInputsToV4(fixtureF.inputs);
+  return migrateInputsToV5(fixtureF.inputs);
 }
 
 describe('safeRunSensitivity', () => {

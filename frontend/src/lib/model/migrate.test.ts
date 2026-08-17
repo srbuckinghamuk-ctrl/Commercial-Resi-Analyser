@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   migrateInputs, migrateV2toV3, migrateInputsToV3, isV3,
   migrateV3toV4, migrateInputsToV4,
+  migrateV4toV5, migrateInputsToV5,
 } from './migrate';
-import type { CalculatorInputsV2, CalculatorInputsV3 } from './finance-types';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 const V1_SNAPSHOT = {
@@ -225,5 +226,95 @@ describe('migrateV3toV4 / migrateInputsToV4', () => {
     };
     const again = migrateInputsToV4(v4 as unknown as Record<string, unknown>);
     expect(again.programme).toEqual(v4.programme);
+  });
+});
+
+describe('v5 migration (R8 — jurisdiction and acquisition tax)', () => {
+  it('stamps a migrated default jurisdiction, unconfirmed, with no date', () => {
+    const v4 = migrateInputsToV4({ inputs_version: 1 } as Record<string, unknown>);
+    const v5 = migrateV4toV5(v4);
+    expect(v5.inputs_version).toBe(5);
+    expect(v5.acquisition.jurisdiction).toBe('england_ni');
+    expect(v5.acquisition.jurisdiction_source).toBe('migrated_default');
+    expect(v5.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
+    expect(v5.acquisition.acquisition_date).toBeNull();
+    expect(v5.acquisition.acquisition_tax_override_pence).toBeNull();
+    expect(v5.acquisition.acquisition_tax_override_reason).toBe('');
+  });
+
+  it('carries every other field across unchanged', () => {
+    const v4 = migrateInputsToV4({ inputs_version: 1 } as Record<string, unknown>);
+    const v5 = migrateV4toV5(v4);
+    const { inputs_version: _iv, acquisition: a5, ...rest5 } = v5;
+    const { inputs_version: _iv4, acquisition: a4, ...rest4 } = v4;
+    expect(rest5).toEqual(rest4);
+    // The v4 acquisition fields survive verbatim alongside the five new ones.
+    expect(a5.purchase_price_pence).toBe(a4.purchase_price_pence);
+    expect(a5.legal_fees_pence).toBe(a4.legal_fees_pence);
+    expect(a5.broker_fee_pct).toBe(a4.broker_fee_pct);
+  });
+
+  it('refuses to double-migrate', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    expect(() => migrateV4toV5(v5 as unknown as CalculatorInputsV4))
+      .toThrow('migrateV4toV5: input is already a v5 document');
+  });
+
+  it('refuses to downgrade a v5 document through the v4 entry point', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    expect(() => migrateInputsToV4(v5 as unknown as Record<string, unknown>))
+      .toThrow('migrateInputsToV4: input is a v5 document — use migrateInputsToV5');
+  });
+
+  it.each([1, 2, 3, 4])('normalises a v%i snapshot to v5', (version) => {
+    const v5 = migrateInputsToV5({ inputs_version: version } as Record<string, unknown>);
+    expect(v5.inputs_version).toBe(5);
+    expect(v5.acquisition.jurisdiction).toBe('england_ni');
+  });
+
+  it('preserves a saved v5 document’s confirmed jurisdiction', () => {
+    const saved = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    saved.acquisition.jurisdiction = 'wales';
+    saved.acquisition.jurisdiction_source = 'user';
+    saved.acquisition.jurisdiction_evidence_status = 'confirmed';
+    saved.acquisition.acquisition_date = '2026-05-01';
+    const round = migrateInputsToV5(saved as unknown as Record<string, unknown>);
+    expect(round.acquisition.jurisdiction).toBe('wales');
+    expect(round.acquisition.jurisdiction_source).toBe('user');
+    expect(round.acquisition.jurisdiction_evidence_status).toBe('confirmed');
+    expect(round.acquisition.acquisition_date).toBe('2026-05-01');
+  });
+
+  // Task 10 fix round 2: mirrors migrate_inputs_to_v5's Python guard
+  // (app/financial_model/migrate.py, added fix round 1). Both cases used to
+  // fall through every isVN check undetected into the v1 fallback path,
+  // which reads the document as noise and rebuilds finance/equity_sources
+  // from an LTV-based heuristic.
+  it('refuses an unrecognised inputs_version rather than silently rebuilding via the v1 fallback', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    const doc = { ...v5, inputs_version: 6 } as unknown as Record<string, unknown>;
+    expect(() => migrateInputsToV5(doc)).toThrow(/unrecognised inputs_version 6/);
+  });
+
+  it('refuses a document tagged inputs_version 5 that fails the v5 structural check', () => {
+    const v5 = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    const finance = { ...v5.finance } as Record<string, unknown>;
+    delete finance.committed_net_facility_pence;
+    const doc = { ...v5, finance } as unknown as Record<string, unknown>;
+    expect(() => migrateInputsToV5(doc))
+      .toThrow(/inputs_version is 5 but the document fails the v5 structural check/);
+  });
+
+  it('still lets a malformed v2 document fall through to the v1 legacy path (unchanged, permissive)', () => {
+    // Mirrors the Python-side pin (test_malformed_v2_snapshot_migrates_to_
+    // legacy_unreconciled): only an unrecognised version, or a version-5 tag
+    // that isn't structurally v5, is refused -- a malformed v2/v3/v4 tag
+    // keeps the existing, deliberately permissive v1-fallback behaviour.
+    const doc = {
+      inputs_version: 2,
+      finance: { funding_source: 'cash' }, // missing committed_net_facility_pence -- isV2 is false
+    } as unknown as Record<string, unknown>;
+    const v5 = migrateInputsToV5(doc);
+    expect(v5.inputs_version).toBe(5);
   });
 });

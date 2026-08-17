@@ -10,9 +10,10 @@ from dataclasses import dataclass
 
 from .curves import spread_by_curve
 from .engine import money_round
-from .sdlt import calculate_commercial_sdlt
+from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
 from .types import (
     AcquisitionInputs,
+    AcquisitionInputsV5,
     AnyCalculatorInputs,
     ConversionCostInputs,
     ProgrammePackage,
@@ -25,7 +26,40 @@ def calculate_gdv(units: list[ProposedUnit]) -> int:
 
 
 def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
-    sdlt = calculate_commercial_sdlt(acq.purchase_price_pence).total_pence
+    """Spec Sec 3.3 -- the acquisition line of the cost stack, acquisition tax
+    included.
+
+    R8 (spec Sec 14): the tax is the document's own regime, not England/NI's.
+    This is the *second* site that computes acquisition tax -- derive_metrics is
+    the other, and the two must always agree, because acquisition_cost_pence
+    (this figure) flows into TDC while acquisition_tax_pence (that one) is what
+    the report names. Both fixture suites and test_financial_model_metrics.py
+    pin their equality.
+
+    ``acq`` is annotated with the base class, which AcquisitionInputsV5
+    subclasses; the isinstance gate is Python's stand-in for the TS engine's
+    ``'jurisdiction' in acq`` guard (the same pairing derive_metrics uses). A
+    v2-v4 acquisition block carries none of the new fields, so it resolves to
+    england_ni with a null date and no override -- byte-for-byte what
+    calculate_commercial_sdlt returned before R8 deleted it.
+    """
+    is_v5 = isinstance(acq, AcquisitionInputsV5)
+    jurisdiction = acq.jurisdiction if is_v5 else "england_ni"
+    raw_date = acq.acquisition_date if is_v5 else None
+    # Fix round 1 (R8): build_schedule runs before validate_inputs in
+    # run_appraisal, so an unusable date must degrade rather than raise here --
+    # see resolve_acquisition_date's docstring. validate_inputs re-derives this
+    # as a hard acquisition.acquisition_date error independently, and
+    # derive_metrics degrades identically so the two tax sites cannot drift.
+    date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
+    sdlt = calculate_acquisition_tax(
+        consideration_pence=acq.purchase_price_pence,
+        jurisdiction=jurisdiction,
+        basis="non_residential",
+        date=date,
+        override_pence=acq.acquisition_tax_override_pence if is_v5 else None,
+        override_reason=acq.acquisition_tax_override_reason if is_v5 else None,
+    ).total_pence
     broker_fee = money_round((acq.purchase_price_pence * acq.broker_fee_pct) / 100)
     return (
         acq.purchase_price_pence + sdlt + acq.legal_fees_pence + acq.survey_cost_pence

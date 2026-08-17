@@ -3,6 +3,7 @@ import type {
   RiskItem, ScenarioOverrides, DealSpiderInputs,
 } from '../conversion-types';
 import type { SpendCurve } from './curves';
+import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 
 export type { SpendCurve };
 
@@ -164,7 +165,36 @@ export interface CalculatorInputsV4 {
   refinance: RefinanceInputs | null;
 }
 
-export type AnyCalculatorInputs = CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4;
+/** How the jurisdiction on a document came to be set. */
+export type JurisdictionSource = 'derived' | 'user' | 'migrated_default';
+
+/**
+ * R8 (spec §14). The acquisition block gains the tax basis the appraisal is
+ * charged on. Extended rather than edited because `AcquisitionInputs` is shared
+ * with the v1 document shape.
+ */
+export interface AcquisitionInputsV5 extends AcquisitionInputs {
+  jurisdiction: Jurisdiction;
+  jurisdiction_source: JurisdictionSource;
+  /** Reuses the vocabulary of EquitySource.evidence_status deliberately: the
+   *  report handles evidence with one mechanism, not two. */
+  jurisdiction_evidence_status: 'unconfirmed' | 'confirmed';
+  /** Effective date of the transaction; selects the band set. Null on migrated
+   *  documents, which then use the current set and say so. */
+  acquisition_date: string | null;
+  /** Set only where a relief, linked transaction or other rule no band table
+   *  models applies. Requires a reason (validation, Task 6). */
+  acquisition_tax_override_pence: number | null;
+  acquisition_tax_override_reason: string;
+}
+
+export interface CalculatorInputsV5 extends Omit<CalculatorInputsV4, 'inputs_version' | 'acquisition'> {
+  inputs_version: 5;
+  acquisition: AcquisitionInputsV5;
+}
+
+export type AnyCalculatorInputs =
+  CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -292,6 +322,18 @@ export interface AppraisalResultV2 {
   lender_gdv_variance_pence: number | null;
   lender_gdv_variance_pct: number | null;
   acquisition_cost_pence: number;
+  /** Spec §14 (R8) — the tax actually charged on the acquisition under the
+   *  document's jurisdiction: SDLT, LBTT or LTT. Equal to
+   *  `acquisition_tax.total_pence`. */
+  acquisition_tax_pence: number;
+  /** Spec §14 (R8) — the full derivation: regime, band breakdown, surcharge,
+   *  band-set effective date, table version, source and override provenance. */
+  acquisition_tax: AcquisitionTaxResult;
+  /**
+   * @deprecated R8 — a jurisdiction-neutral figure under an England/NI-only
+   * name. Carries the identical value to `acquisition_tax_pence`; retained only
+   * so pre-R8 report and export readers keep working. Removed in R16.
+   */
   sdlt_pence: number;
   construction_cost_pence: number;
   professional_fees_pence: number;
@@ -345,4 +387,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.6.0';
+export const CALC_VERSION = '2.7.0';

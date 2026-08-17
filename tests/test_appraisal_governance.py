@@ -22,7 +22,13 @@ FIXTURE_A_INPUTS = json.loads(FIXTURE_A_PATH.read_text())["inputs"]
 
 
 def fixture_a_inputs() -> dict:
-    """A fresh deep copy of fixture A's inputs, safe for a test to mutate."""
+    """A fresh deep copy of fixture A's inputs, safe for a test to mutate.
+
+    Fixture A is a real v5 document (jurisdiction "england_ni", confirmed by
+    a user, acquisition_date "2026-01-15") -- Task 10 moved the appraisal
+    endpoints' normalisation boundary from v4 to v5
+    (app/api/app.py migrate_inputs_to_v5), so this is now posted as-is rather
+    than downgraded first."""
     return copy.deepcopy(FIXTURE_A_INPUTS)
 
 
@@ -129,7 +135,7 @@ async def test_invalid_lender_valuation_rejected_with_422(client, project):
 async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
     response status == 'legacy_unreconciled', outputs recalculated under
-    calc_version 2.6.0, and finance.requires_confirmation True in the stored
+    calc_version 2.7.0, and finance.requires_confirmation True in the stored
     (migrated) snapshot."""
     v1_snapshot = {
         "acquisition": FIXTURE_A_INPUTS["acquisition"],
@@ -156,41 +162,56 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     body = resp.json()
 
     assert body["status"] == "legacy_unreconciled"
-    assert body["calc_version"] == "2.6.0"
-    # Release 3a: the server normalisation chain now runs v1 -> v2 -> v3 -> v4.
-    assert body["inputs_snapshot"]["inputs_version"] == 4
+    assert body["calc_version"] == "2.7.0"
+    # R8 Task 10: the server normalisation chain now runs v1 -> v2 -> v3 -> v4
+    # -> v5.
+    assert body["inputs_snapshot"]["inputs_version"] == 5
     assert body["inputs_snapshot"]["lender_valuation"] is None
     assert body["inputs_snapshot"]["programme"] is None
     assert body["inputs_snapshot"]["sales_phasing"] is None
     assert body["inputs_snapshot"]["refinance"] is None
     assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
+    # A v1 snapshot never recorded a jurisdiction -- migrateV4toV5 stamps the
+    # unconfirmed default rather than inventing evidence the record never had
+    # (intended behaviour, R8 release-level decision: no legacy exemption).
+    acq = body["inputs_snapshot"]["acquisition"]
+    assert acq["jurisdiction"] == "england_ni"
+    assert acq["jurisdiction_source"] == "migrated_default"
+    assert acq["jurisdiction_evidence_status"] == "unconfirmed"
+    assert acq["acquisition_date"] is None
     # Outputs were recalculated by the v2 engine, not just passed through.
-    assert body["outputs"]["metrics"]["calc_version"] == "2.6.0"
+    assert body["outputs"]["metrics"]["calc_version"] == "2.7.0"
 
 
-async def test_partial_v3_snapshot_is_merged_onto_defaults_not_rejected(client, project):
-    """The server's normalisation chain routes v3 snapshots through
-    migrate_inputs_to_v3's merge branch (TS parity: migrateInputsToV4 ->
-    migrateInputsToV3). A stored v3 row that predates a schema addition -- here a
-    missing `scenarios.upside` -- must be default-filled and accepted, not 422'd.
-    Before the merge landed this returned 422 from the CalculatorInputsV4 boundary."""
-    partial_v3 = fixture_a_inputs()
-    del partial_v3["scenarios"]["upside"]
-    del partial_v3["deal_spider"]["weights"]
+async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, project):
+    """The server's normalisation chain routes an already-v5 snapshot through
+    migrate_inputs_to_v5's merge branch (TS parity: migrateInputsToV5's isV5
+    branch). A stored v5 row that predates a schema addition -- here a missing
+    `scenarios.upside` -- must be default-filled and accepted, not 422'd.
+
+    R8 Task 10: this test used to post fixture A downgraded to v3 (before the
+    appraisal endpoints were v5-aware) and so exercised migrate_inputs_to_v3's
+    merge branch instead; now that fixture A is posted as a real v5 document,
+    it exercises the v5 merge branch of the same shared `_merge_saved_onto_
+    defaults` helper -- the v3 branch remains covered directly in
+    test_migrate_v4.py."""
+    partial_v5 = fixture_a_inputs()
+    del partial_v5["scenarios"]["upside"]
+    del partial_v5["deal_spider"]["weights"]
 
     resp = await client.post("/api/v1/appraisals", json={
         "project_id": project["id"],
-        "name": "Partial v3 appraisal",
-        "inputs_snapshot": partial_v3,
+        "name": "Partial v5 appraisal",
+        "inputs_snapshot": partial_v5,
     })
     assert resp.status_code == 201, resp.text
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 4
+    assert snapshot["inputs_version"] == 5
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
-    # A v3 row is not a legacy v1 migration -- it must not be stamped as one.
+    # A v5 row is not a legacy v1 migration -- it must not be stamped as one.
     assert body["status"] != "legacy_unreconciled"
 
 
@@ -308,7 +329,7 @@ async def test_audit_hash_moves_with_governance_status_alone(client, project):
     from app.financial_model.hashing import audit_hash
 
     common = dict(
-        project_id="p", calc_version="2.5.0", inputs_version=4,
+        project_id="p", calc_version="2.5.0", inputs_version=5,
         input_hash_value="ih", outputs_hash_value="oh",
     )
     assert audit_hash(status="draft", **common) != audit_hash(status="reconciled", **common)
@@ -362,7 +383,7 @@ async def test_get_returns_authoritative_outputs(client, project):
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
     assert body["gdv_pence"] == 120_000_000
-    assert body["calc_version"] == "2.6.0"
+    assert body["calc_version"] == "2.7.0"
 
 
 def _programme(construction: dict) -> dict:
