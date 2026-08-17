@@ -18,11 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.eligibility.engine import run_eligibility
-from app.financial_model import CALC_VERSION, run_appraisal, validate_inputs
+from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v4
-from app.financial_model.types import CalculatorInputsV4
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v5
 from app.integrations.http import close_client
+from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
 from app.models import (
     ApiResponse,
@@ -380,27 +380,68 @@ def rec_dict(reconciliation) -> dict:
     return asdict(reconciliation)
 
 
-def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
+def calculate_authoritative(
+    payload: FinancialAppraisalCreate, *, derived_jurisdiction: str | None = None,
+) -> dict:
     """The only path by which appraisal outputs/governance columns are ever
     produced. Client-supplied metrics in `payload` are never persisted --
     they are compared against the server calculation purely to record
-    mismatches for audit purposes (Task 12)."""
+    mismatches for audit purposes (Task 12).
+
+    `derived_jurisdiction`: an R8 postcode-derived proposal (see
+    `derive_jurisdiction`), supplied by the caller only for a genuinely new
+    appraisal (spec Sec 3.6) -- never for an update to an appraisal that
+    already exists. Applied below only when the migrated document has no
+    jurisdiction of its own recording (`jurisdiction_source ==
+    "migrated_default"`), so it can never overwrite a stored value; the
+    evidence status is left exactly as migrate_v4_to_v5 stamped it
+    ("unconfirmed") because derivation proposes, it never confirms.
+    """
     raw = payload.inputs_snapshot
     was_v1 = not is_v2_or_later(raw)
 
     try:
-        # Chain migrations to v4 before validation (v1 -> v2 -> v3 -> v4; an
-        # already-v4 payload is merged onto v4 defaults rather than re-migrated).
-        # Release 3a: the v4 document -- lender_valuation and programme included
-        # -- now drives run_appraisal directly; the engine null-wires every
-        # lender-basis metric when that block is absent (spec Sec 2) and falls
-        # back to the calc 2.1.0 auto windows when `programme` is None (spec
-        # Sec 6), so this is unchanged behaviour for every existing v1/v2/v3
-        # appraisal. This is also what gets persisted as inputs_snapshot.
-        v4_dict = migrate_inputs_to_v4(raw)
-        inputs = CalculatorInputsV4.model_validate(v4_dict)
+        # R8 (Task 10): the server boundary moved from v4 to v5. Chain
+        # migrations to v5 before validation (v1 -> v2 -> v3 -> v4 -> v5; an
+        # already-v5 payload is merged onto v5 defaults rather than
+        # re-migrated). Release 3a: the v4 document -- lender_valuation and
+        # programme included -- now drives run_appraisal directly; the engine
+        # null-wires every lender-basis metric when that block is absent
+        # (spec Sec 2) and falls back to the calc 2.1.0 auto windows when
+        # `programme` is None (spec Sec 6), so this is unchanged behaviour
+        # for every existing v1/v2/v3/v4 appraisal. This is also what gets
+        # persisted as inputs_snapshot. Unlike migrate_inputs_to_v4,
+        # migrate_inputs_to_v5 already returns a validated CalculatorInputsV5
+        # -- no separate .model_validate call is needed here.
+        inputs = migrate_inputs_to_v5(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        # A malformed or unsupported-version inputs_snapshot must 4xx, never
+        # 500 (Task 10 known item #1). migrate_inputs_to_v5 -- like
+        # migrate_inputs_to_v4 before it, and the merge helper both delegate
+        # to -- raises plain Python exceptions, not ValidationError, for
+        # shapes it cannot interpret: e.g. a document already refused by an
+        # inner guard (a raw ValueError), or a structurally wrong field (e.g.
+        # `acquisition` sent as a string merges as `**"a string"` and raises
+        # TypeError). See test_malformed_inputs_snapshot_is_422_not_500.
+        raise HTTPException(
+            status_code=422,
+            detail=f"Malformed or unsupported inputs_snapshot: {exc}",
+        ) from exc
+
+    if (
+        derived_jurisdiction is not None
+        and inputs.acquisition.jurisdiction_source == "migrated_default"
+    ):
+        # Nothing has ever recorded a jurisdiction for this document -- safe
+        # to propose one from the project's postcode. `jurisdiction_source`
+        # becomes "derived" but `jurisdiction_evidence_status` is left
+        # "unconfirmed": a postcode match proposes, only a user confirms
+        # (spec Sec 3.6).
+        inputs.acquisition = inputs.acquisition.model_copy(
+            update={"jurisdiction": derived_jurisdiction, "jurisdiction_source": "derived"}
+        )
 
     # I2 (final R3a review): validate BEFORE running the engine. `validate_inputs`
     # reads the input document only -- it allocates nothing proportional to
@@ -439,7 +480,7 @@ def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
             "client_mismatches": mismatches,
         },
         "calc_version": CALC_VERSION,
-        "inputs_version": 4,
+        "inputs_version": 5,
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
@@ -449,7 +490,7 @@ def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
         "audit_hash": audit_hash(
             project_id=str(payload.project_id),
             calc_version=CALC_VERSION,
-            inputs_version=4,
+            inputs_version=5,
             status=status,
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),
@@ -471,12 +512,25 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     project = await project_repo.get_by_id(body.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    computed = calculate_authoritative(body)
     repo = FinancialAppraisalRepository(db)
     # Upsert: only one appraisal may exist per project (migration 004 adds the
     # unique constraint). Both arms persist the server-authored `computed`
     # payload -- the client never supplies outputs or governance columns (Task 12).
     existing = await repo.get_by_project_id(body.project_id)
+
+    # R8 (Task 10): a postcode-derived jurisdiction proposal is only ever
+    # offered for a genuinely new appraisal -- `existing is None` means this
+    # project has never had a snapshot migrated to v5 before, so there is no
+    # stored jurisdiction to overwrite (spec Sec 3.6). A live lookup is a real
+    # network call, so it is gated on both `existing is None` and the project
+    # actually carrying a postcode, keeping it off the hot re-save path.
+    derived_jurisdiction = None
+    if existing is None and project.address_postcode:
+        pc_result = await lookup_postcode(project.address_postcode)
+        if pc_result is not None:
+            derived_jurisdiction = derive_jurisdiction(pc_result.country)
+
+    computed = calculate_authoritative(body, derived_jurisdiction=derived_jurisdiction)
     payload = {"name": body.name, **computed}
     if existing:
         appraisal = await repo.update(body.project_id, payload)

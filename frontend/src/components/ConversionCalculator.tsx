@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV4 } from '../lib/model';
+import { migrateInputsToV5 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
 import type { AppraisalRun, CalculatorInputsV4 } from '../lib/model';
 import { defaultCalculatorInputsV4 } from '../lib/conversion-defaults';
@@ -101,13 +101,27 @@ export default function ConversionCalculator({ project }: Props) {
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            // Migrate onto v4 defaults so snapshots saved before newer
-            // sections (or v1/v2/v3 snapshots) existed still load cleanly. The
-            // live runAppraisal(inputs) result below is always the display
-            // source -- stored legacy columns are never shown as current,
-            // even when status is 'legacy_unreconciled'; the next save
-            // migrates the stored record.
-            setInputs(migrateInputsToV4(appraisal.inputs_snapshot as Record<string, unknown>, project));
+            // Migrate onto v5 defaults so snapshots saved before newer
+            // sections (or v1/v2/v3/v4 snapshots) existed still load cleanly.
+            // R8 Task 10: migrateInputsToV4 now throws on a v5 document (the
+            // server already normalises to v5, per app/api/app.py), so this
+            // must use migrateInputsToV5 too.
+            //
+            // The cast back to CalculatorInputsV4 is deliberate and narrow:
+            // widening this component's state (and every calculator sub-page
+            // prop it feeds) to CalculatorInputsV5 is Task 11's job, which
+            // also builds the UI that reads/writes the six new acquisition
+            // fields. Until then the runtime object still carries them (a JS
+            // object keeps every property regardless of the TS view of it),
+            // so nothing is lost on save -- only unreadable to this
+            // component's own code, which never branches on inputs_version's
+            // literal value (grep confirms) so the mismatched literal type is
+            // safe to paper over here.
+            setInputs(
+              migrateInputsToV5(
+                appraisal.inputs_snapshot as Record<string, unknown>, project,
+              ) as unknown as CalculatorInputsV4,
+            );
             setSavedId(appraisal.id);
           }
           setAppraisalRecord(appraisal);
