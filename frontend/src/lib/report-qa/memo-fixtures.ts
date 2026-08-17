@@ -39,9 +39,13 @@ export const qaProject: Project = {
   vacancy_date: null,
   source_url: null,
   source_name: null,
+  // Stored verbatim as the live 9 & 9A Stonegate record holds it: the listing's
+  // "Description" heading glued to the first sentence by the scraper's
+  // `get_text(strip=True)`. The fixture keeps the defect so the gate exercises
+  // the repair on the real string rather than a tidied version of it.
   description:
-    'The subject comprises a mid-terrace period building arranged over three floors, '
-    + 'with ground-floor retail accommodation and upper parts in ancillary use.',
+    'DescriptionThe subject comprises a mid-terrace period building arranged over three '
+    + 'floors, with ground-floor retail accommodation and upper parts in ancillary use.',
   image_urls: [],
   stage: 'financial_appraisal',
   created_at: '2026-03-01T00:00:00Z',

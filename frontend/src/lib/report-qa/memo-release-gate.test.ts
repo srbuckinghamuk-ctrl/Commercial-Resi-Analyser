@@ -158,6 +158,17 @@ describe('investment memorandum release gate', () => {
     });
   });
 
+  it('repairs a scraped description whose heading was glued to its first sentence', async () => {
+    const { info } = await report(sellAllInputs());
+    const prose = documentProse(info);
+    // The audit reported this string in the exported memo. The scraper is fixed
+    // (tests/test_adapter_description_spacing.py); this covers the records
+    // already stored with it.
+    expect(qaProject.description).toContain('DescriptionThe'); // fixture sanity check
+    expect(prose).not.toContain('DescriptionThe');
+    expect(prose).toContain('The subject comprises a mid-terrace period building');
+  });
+
   // ── Generated prose says each thing once ─────────────────────────────────
   //
   // R6's lesson, in a new place: `toContain` cannot see a repeat, so a document

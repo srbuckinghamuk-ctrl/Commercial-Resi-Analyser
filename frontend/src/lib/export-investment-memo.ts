@@ -11,6 +11,7 @@ import {
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
+import { repairGluedDescription } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
 import {
@@ -820,7 +821,9 @@ export function generateInvestmentMemo(
     `Tenure is ${project.tenure}${project.lease_years_remaining ? ` with ${project.lease_years_remaining} years remaining` : ''}. EPC rating: ${project.epc_rating ?? 'Unknown'}. Vacancy status: ${project.is_vacant === true ? 'Vacant' : project.is_vacant === false ? 'Occupied' : 'Unknown'}.`,
   );
   if (project.description) {
-    y = bodyText(y, project.description);
+    // Legacy scraped records glued the listing's "Description" heading to the
+    // first sentence; the scraper is fixed, this repairs what is already stored.
+    y = bodyText(y, repairGluedDescription(project.description));
   }
   y = infoRequired(y, 'Market rationale — why this asset, why now, demand drivers');
 

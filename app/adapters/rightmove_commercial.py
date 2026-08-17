@@ -76,7 +76,14 @@ def _parse_listing(html: str, url: str) -> CommercialListing | None:
     description = ""
     desc_el = soup.find("div", class_=re.compile(r"STw8|description", re.IGNORECASE))
     if desc_el:
-        description = desc_el.get_text(strip=True)
+    # The description container holds block children (a heading, then one or more
+    # paragraphs). `get_text(strip=True)` joins every descendant with NO
+    # separator, so <h3>Description</h3><p>The property...</p> comes out as
+    # "DescriptionThe property..." -- which is exactly the string the second
+    # lender-readiness audit found printed in the exported memorandum and
+    # attributed to the report. The report was faithfully printing what was
+    # stored; the gluing happened here, at scrape time.
+        description = desc_el.get_text(" ", strip=True)
     else:
         for p in soup.find_all("p"):
             txt = p.get_text(strip=True)
