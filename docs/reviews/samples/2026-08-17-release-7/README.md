@@ -8,8 +8,8 @@ so re-rendering produces byte-comparable documents.
 | File | Route | Pages | Draft banner |
 |---|---|---:|---|
 | `memo-sell.pdf` | sell all | 13 | NOT APPROVED |
-| `memo-retain.pdf` | retain all | 13 | SENIOR DEBT NOT REPAID |
-| `memo-refinance.pdf` | retain + refinance | 13 | NOT APPROVED |
+| `memo-retain.pdf` | retain all | 14 | SENIOR DEBT NOT REPAID |
+| `memo-refinance.pdf` | retain + refinance | 14 | NOT APPROVED |
 | `memo-blended.pdf` | part sale, phased, part retained | 13 | UNRECONCILED |
 | `memo-legacy-draft.pdf` | migrated v1 snapshot | 12 | UNRECONCILED |
 

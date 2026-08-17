@@ -165,6 +165,42 @@ unavailable rather than a substitute figure.
 
 ---
 
+## 6a. "DescriptionThe…" was a data defect, not a report one
+
+The audit listed this under report defects. It was not one — the report printed
+the stored value faithfully.
+
+BeautifulSoup's `get_text(strip=True)` joins **every** descendant with no
+separator, so a description container shaped as
+`<div class="description"><h3>Description</h3><p>The property…</p></div>`
+is *stored* as `DescriptionThe property…`. The live 9 & 9A Stonegate record still
+holds exactly that string, which is how the cause was found:
+
+```
+$ curl .../projects/da471fca-.../  | jq -r .description
+DescriptionThe property comprises a three storey building arranged as ground
+floor and basement retail accommodation. The upper parts are sold off on long
+lease (999 years from 01.01.2007) and operated as Airbnb accommodation.
+```
+
+Fixed at source in all four adapters (`get_text(" ", strip=True)`). The existing
+45 adapter tests passed both before and after, because they asserted only that
+the description *contained* the body text — so the new tests assert the absence
+of the glued pair, and were checked to fail without the fix.
+
+Records already stored keep the glued value, so `repairGluedDescription` removes
+a known section label at the very start of the text when it is followed
+immediately by a capital. It is deliberately narrow: the tempting general
+"insert a space at every lowercase→uppercase boundary" rule would mangle
+*iPhone*, *PhD*, *GDVs* and *McDonald's*, and those are asserted untouched.
+
+Worth stating for the next audit: **that record's `description` also flatly
+contradicts the appraisal.** It describes retail accommodation with upper parts
+*sold off on 999-year leases and operated as Airbnb*, while the appraisal models
+a vacant office converting to five flats. The audit called for this to raise a
+hard information-required flag rather than sit in narrative text. It still does
+not. That is R15, and it is not closed by this release.
+
 ## 7. The audited York case
 
 `york-audit-case.test.ts` and `test_york_audit_case.py` reconstruct 9 & 9A Stonegate from
@@ -191,6 +227,7 @@ The only figure R7 moved in that case is the one it set out to move: equity mult
 | **P0** | PDF page overflow can make an external report unusable | **Implemented** | layout engine; `overflowingItems` gate over 5 documents; quick reports too |
 | P1 | Report lacks visible provenance | **Implemented** | spec §13.1; provenance panel; migration 005 |
 | P2 | Export wording overstates completeness | **Implemented** | §6 above |
+| P0 | *(audit §9)* "DescriptionThe…" without a separating space | **Implemented** | §6a — fixed at source in the scrapers, plus a narrow repair for stored records |
 | P1 | *(audit §9)* ROE shown without "unrealised"; unsupported return metrics | **Implemented** | spec §3.16.1, calc 2.6.0 |
 | P2 | PDF not tagged; font warning | **Partial** | title/subject/language/`DisplayDocTitle` set; PDF/UA structure tagging deferred — see §10 |
 | P1 | No complete conversion evidence/risk schedule | **Deferred → R15** | — |
@@ -226,12 +263,13 @@ The only figure R7 moved in that case is the one it set out to move: equity mult
 
 | Gate | Result |
 |---|---|
-| Frontend tests | **995 passed / 48 files** (872 before R7) |
-| Backend tests | **831 passed** (767 before R7) |
+| Frontend tests | **1,004 passed / 49 files** (872 before R7) |
+| Backend tests | **839 passed** (767 before R7) |
 | ESLint | passed |
 | `tsc -b` | passed |
 | Production build | passed — 1,385.37 kB / 428.10 kB gzip (Vite's >500 kB advisory stands; R16) |
-| Representative PDFs rendered and inspected | sell, retain, refinance, blended, migrated legacy draft — 12–13 pages each |
+| Representative PDFs rendered and inspected | sell, retain, refinance, blended, migrated legacy draft — 12–14 pages each; committed under `docs/reviews/samples/2026-08-17-release-7/` |
+| Live app | Export page loads with the corrected copy, no app console errors; the dev server confirmed serving the new memo module (provenance, deferred headings, description repair, headline-cost wording) |
 | York appraisal reconciles after migration | exact, both engines |
 | Sources and uses to the penny | asserted per document |
 | Monthly debt ledger roll-forward | unchanged; existing invariant suite |
@@ -264,9 +302,15 @@ work they should be doing.
    means either patching jsPDF's emission or embedding a real font family, which trades
    against the bundle size the same audit asks us to reduce. Deferred with the reason
    recorded rather than closed quietly.
-4. **The last page of a report can end a third of the way down.** Within the gate's
+4. **The in-browser download was not exercised end to end.** Chrome's automation
+   did not fire the anchor-click download in this session, so the memorandum was
+   verified three other ways: the Export page renders and errors cleanly in the
+   live app, the dev server was confirmed to be serving the new module, and the
+   generation path itself is covered by 67 gate assertions over five documents.
+   A manual click-and-open remains worth doing before any external issue.
+5. **The last page of a report can end a third of the way down.** Within the gate's
    thresholds and normal for a document, but it is a judgement, not a proof.
-5. **Sparse-page thresholds are calibrated, not derived.** 40 % / 20 % extent, 6 % ink,
+6. **Sparse-page thresholds are calibrated, not derived.** 40 % / 20 % extent, 6 % ink,
    5 items. They separate every real page from every orphan in the current corpus with a
    wide margin; a very different document could need them revisited.
 
