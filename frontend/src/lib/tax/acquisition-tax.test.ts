@@ -5,7 +5,7 @@ import {
   TAX_TABLES, TAX_TABLE_VERSION, calculateAcquisitionTax, selectBandSet,
   deriveJurisdiction, regimeFor,
 } from './acquisition-tax';
-import type { Jurisdiction, TaxBasis } from './acquisition-tax';
+import type { Jurisdiction } from './acquisition-tax';
 
 // The audited York consideration (R7: 9 & 9A Stonegate, £753,482) and a price
 // above Wales's £1m 6% threshold, so the table is exercised on both sides of
