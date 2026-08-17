@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { safeRunSensitivity } from './safe-sensitivity';
 import { migrateInputsToV4 } from './model';
-import { defaultSensitivityConfig } from './model/sensitivity';
+import * as sensitivityModule from './model/sensitivity';
+import {
+  defaultSensitivityConfig, InvalidBaseDocumentError, InvalidSensitivityConfigError,
+} from './model/sensitivity';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -73,5 +76,38 @@ describe('safeRunSensitivity', () => {
       expect(atMinusOne.validation_errors.length).toBeGreaterThan(0);
       expect(atMinusOne.profit_pence).toBeNull();
     }
+  });
+
+  // R6: the wrapper exists to turn the suite's *documented* failures into values so the
+  // page can keep its editor and state the reason. A defect is not one of those, and
+  // routing it into a panel that says "the suite could not be calculated" asserts a
+  // cause the panel has not established — CalculatorErrorBoundary is where a genuine
+  // fault belongs.
+  it('rethrows a failure that is neither of the suite\'s documented ones', () => {
+    const boom = new TypeError('cannot read properties of undefined (reading "flags")');
+    const spy = vi.spyOn(sensitivityModule, 'runSensitivity').mockImplementation(() => {
+      throw boom;
+    });
+    try {
+      expect(() => safeRunSensitivity(baseInputs())).toThrow(boom);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('returns the invalid-base-document failure as a value (§12.7)', () => {
+    const inputs = baseInputs();
+    inputs.finance.equity_draw_rule = 'pari_passu';
+    const result = safeRunSensitivity(inputs);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeInstanceOf(InvalidBaseDocumentError);
+  });
+
+  it('returns the invalid-config failure as a value (§12.6)', () => {
+    const config = defaultSensitivityConfig();
+    config.rows = { lever: 'gdv', steps: [] };
+    const result = safeRunSensitivity(baseInputs(), config);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeInstanceOf(InvalidSensitivityConfigError);
   });
 });

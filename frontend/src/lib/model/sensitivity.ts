@@ -256,6 +256,19 @@ function measure(inputs: AnyCalculatorInputs, levers: Partial<Record<Sensitivity
 }
 
 /**
+ * The suite's two documented failures, given types so a consumer can catch exactly the
+ * condition it knows how to handle and let anything else through as the defect it is.
+ *
+ * Before R6 both were bare `Error`s separated only by a message prefix, and both
+ * consumers (`export-investment-memo.ts`, `safe-sensitivity.ts`) caught everything —
+ * so an engine defect reached a lender-facing PDF describing itself as an orderly
+ * validation outcome. The type is the contract; the message text is not, and no
+ * consumer may branch on it.
+ */
+export class InvalidSensitivityConfigError extends Error {}   // §12.6
+export class InvalidBaseDocumentError extends Error {}        // §12.7
+
+/**
  * The fixed-facility sensitivity suite (spec §12). Runs `config.rows.steps.length ×
  * config.cols.steps.length` matrix appraisals, two per tornado range, and one base —
  * 34 with the default config, against the 28 the investment memo already ran before
@@ -276,7 +289,10 @@ export function runSensitivity(
 ): SensitivityResult {
   const issues = validateSensitivityConfig(config);
   if (issues.length > 0) {
-    throw new Error(`Invalid sensitivity config: ${issues.map((i) => i.message).join(' ')}`);
+    // Deduplicated: e.g. both axes missing a step raises the identical "An axis needs
+    // at least one step." issue twice, and repeating it says nothing extra.
+    const messages = [...new Set(issues.map((i) => i.message))];
+    throw new InvalidSensitivityConfigError(`Invalid sensitivity config: ${messages.join(' ')}`);
   }
 
   const base = measure(inputs, {});
@@ -284,9 +300,11 @@ export function runSensitivity(
   // an invalid base is meaningless in every position at once — this is an input error
   // (§12.6/§12.7), not twenty-five unmeasured cells.
   if (base.validation_errors.length > 0) {
-    throw new Error(
-      `Invalid base document: ${base.validation_errors.map((e) => e.message).join(' ')}`,
-    );
+    // Deduplicated for the same reason as the config message above: validateInputs
+    // emits one issue per offending element (e.g. one per phased-sales tranche) and
+    // those issues carry an identical message.
+    const messages = [...new Set(base.validation_errors.map((e) => e.message))];
+    throw new InvalidBaseDocumentError(`Invalid base document: ${messages.join(' ')}`);
   }
 
   const matrix: SensitivityCell[][] = config.rows.steps.map((rowStep) =>

@@ -1,4 +1,6 @@
-import { runSensitivity } from './model/sensitivity';
+import {
+  runSensitivity, InvalidBaseDocumentError, InvalidSensitivityConfigError,
+} from './model/sensitivity';
 import type { SensitivityConfig, SensitivityResult } from './model/sensitivity';
 import type { AnyCalculatorInputs } from './model';
 
@@ -12,12 +14,22 @@ export type SafeSensitivityResult =
  * resilience, not part of the calculation contract, so it lives outside
  * `lib/model/` and has no Python counterpart.
  *
- * `runSensitivity` throws on an invalid config (spec §12.6). The investment memo
- * never reaches that — it only ever passes the fixed default config — but the
- * Sensitivity page puts the axes in the user's hands, so the throw becomes
- * reachable. CalculatorErrorBoundary would catch it, at the cost of blanking the
- * page and the axis text that caused it; a value lets the page keep its editor
- * and state the reason.
+ * `runSensitivity` throws on an invalid config (spec §12.6) and on a base document
+ * that fails validation (spec §12.7). The investment memo only ever handles the
+ * latter — it always passes the fixed default config, so §12.6 never reaches it.
+ * The Sensitivity page puts the axes in the user's hands, but it also runs
+ * `validateSensitivityConfig` on the same config itself and early-returns to its
+ * own panel before ever calling this wrapper (SensitivityPage.tsx), so in normal
+ * operation §12.6 does not reach here either — the `InvalidSensitivityConfigError`
+ * branch below is defence-in-depth against that duplicated check drifting, not a
+ * path either caller exercises live. This wrapper catches both documented failures
+ * and returns each as a value, so the page keeps its axis editor and states the
+ * reason instead of unmounting. Anything else thrown is a defect, not a
+ * documented outcome, and is rethrown rather than absorbed: rendering it in a
+ * panel that asserts "the suite could not be calculated" would assert a cause
+ * this wrapper has not established. CalculatorErrorBoundary is where that defect
+ * belongs — it is the surface every other calculator page uses for a genuine
+ * fault.
  *
  * Note what this does NOT cover: a *valid* config whose timeline step drives
  * finance.term_months to zero or below does not throw either. Since R5 (spec
@@ -36,6 +48,17 @@ export function safeRunSensitivity(
   try {
     return { ok: true, result: config ? runSensitivity(inputs, config) : runSensitivity(inputs) };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
+    // R6: only the suite's two documented failures (§12.6 config, §12.7 base document)
+    // become values. Anything else is a defect: absorbing it here would render it in a
+    // panel that says the inputs did not describe a runnable suite — a cause this
+    // wrapper has not established — and would keep it away from
+    // CalculatorErrorBoundary, where every other calculator page sends a genuine fault.
+    if (
+      error instanceof InvalidSensitivityConfigError
+      || error instanceof InvalidBaseDocumentError
+    ) {
+      return { ok: false, error };
+    }
+    throw error;
   }
 }

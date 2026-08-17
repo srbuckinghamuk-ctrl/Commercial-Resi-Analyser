@@ -16,6 +16,8 @@
 - **`frontend/src/lib/sensitivity-format.ts` has no Python counterpart** and must not gain one — it is presentation, deliberately outside `lib/model/`.
 - **Error message text is not a contract; error type is.** No consumer may branch on `err.message` content.
 - **Existing thrown message strings must not change.** `Invalid sensitivity config: …` and `Invalid base document: …` are pinned by tests and printed into the memo.
+
+  **Recorded exception, granted at the final whole-branch review.** The prefixes and every distinct sentence are unchanged, and no pinned test asserts the joined body — every pin matches a prefix or a substring. But the join itself now deduplicates, in both engines, because `validateInputs` emits one issue *per offending element* with an identical message: fixture I's three sale tranches made the memo's §10 degradation paragraph print *"Tranche month must be a whole month between 0 and 11."* three times in one sentence, to a lender. Collapsing a verbatim triplicate is not the drift this constraint exists to prevent — no sentence moved away from the condition it explains, which is the constraint's actual purpose (spec §2.1) — and the release's own rule that no consumer may match on message text is what makes the producer free to correct it. Both engines dedupe first-appearance-order-preserving (`[...new Set()]` / `dict.fromkeys`), verified byte-identical on the multi-message case.
 - Gates before merge: `npx vitest run`, `pytest`, `npx tsc -b`, `npx eslint .`, `npm run build`, plus browser UAT of the Sensitivity page.
 - Ops for UAT: `docker restart commercial-resi-analyser-frontend-1` first.
 
@@ -1102,7 +1104,7 @@ git commit -m "test(ui): pin the two predicates R5 moved into sensitivity-format
 
 **Why the existing assertions cannot be extended.** `sensitivity.test.ts:176` re-sorts with `(b as number) - (a as number)`, which yields `NaN` for a null and silently accepts any ordering. `test_financial_model_sensitivity.py:152` uses `sorted(spans, reverse=True)`, which raises `TypeError: '<' not supported between instances of 'int' and 'NoneType'` the moment a `None` enters. Both are unsound in the presence of a null span, one silently and one loudly.
 
-**The fixture.** `a-all-cash` has `committed_net_facility_pence: 0` and `interest_rate_annual_pct: null`, so the `interest_rate` lever cannot move profit — a genuine 0-pence span. Its term is 12 months, so a `timeline` low of −12 empties the term and gives a null span. Verified against the Python engine before this plan was written, with a tornado of `interest_rate ±1`, `gdv ±10`, `timeline −12/+3`:
+**The fixture.** `a-all-cash` has `funding_source: "cash"` with `committed_net_facility_pence` and `committed_gross_facility_pence` both `0`, so there is no balance for a rate to accrue against and the `interest_rate` lever cannot move profit — a genuine 0-pence span. (The rate field itself is `annual_interest_rate_pct: 8.0`, not null; an earlier draft of this plan named a non-existent field and attributed the 0 span to the wrong cause. The span is real either way — it comes from the absent facility, not an absent rate.) Its term is 12 months, so a `timeline` low of −12 empties the term and gives a null span. Verified against the Python engine before this plan was written, with a tornado of `interest_rate ±1`, `gdv ±10`, `timeline −12/+3`:
 
 ```
 gdv            23640000

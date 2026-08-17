@@ -4,11 +4,11 @@ import type { Project, EligibilityAssessment } from '../types';
 import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
 import { runAppraisal } from './model';
 import { applyScenario } from './model/apply-scenario';
-import { runSensitivity } from './model/sensitivity';
-import type { SensitivityCell, SensitivityLever } from './model/sensitivity';
+import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
+import type { SensitivityCell, SensitivityConfig, SensitivityLever } from './model/sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
-  isMeasuredBar, omittedTornadoNotes,
+  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
 
@@ -172,20 +172,29 @@ export interface MemoSensitivityTables {
    *  shrinking the table. Built by the shared `omittedTornadoNotes` (sensitivity-format.ts),
    *  the same function SensitivityPage.tsx uses, so the two surfaces cannot disagree. */
   omittedTornadoNotes: string[];
-  /** True when at least one `pocRows`/`ltgdvRows` cell is a position the engine could
-   *  not measure (spec §12.7) rather than a metric that is merely null (e.g. a
-   *  zero-denominator ratio) — both print as "n/a", so the caller uses this to decide
-   *  whether the distinguishing footnote is needed. */
-  hasUnmeasuredMatrixCells: boolean;
+  /** The reasons this grid's unmeasured positions exist (spec §12.7), deduplicated and
+   *  in first-appearance order, empty when every position was measured. A cell the
+   *  engine could not measure prints the same "n/a" as a metric that is merely null
+   *  (e.g. a zero-denominator ratio), so §10 prints these beneath the matrices to say
+   *  which positions are which — and why, in the engine's own words rather than a
+   *  rationale reconstructed here. Built by the shared module the Sensitivity page
+   *  reads too. */
+  unmeasuredCellNotes: readonly string[];
 }
 
-export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityTables {
+export function sensitivityTables(
+  inputs: AnyCalculatorInputs,
+  config?: SensitivityConfig,
+): MemoSensitivityTables {
   // R4b: the grid steps, the lever rule and the base-case identity are now the
   // engine's (spec §12.3–§12.5) rather than constants living in this file. The
   // default config *is* the grid this memo has always printed — R4a promoted
   // these very steps into the specification — so the output is unchanged, and
-  // export-investment-memo.test.ts pins that string for string.
-  const result = runSensitivity(inputs);
+  // export-investment-memo.test.ts pins that string for string. generateInvestmentMemo
+  // always calls this with one argument; `config` exists so tests can drive a grid
+  // that actually produces unmeasured cells (spec §12.7), exactly as safeRunSensitivity
+  // does for the Sensitivity page.
+  const result = config ? runSensitivity(inputs, config) : runSensitivity(inputs);
   const { rows, cols } = result.config;
 
   const axisCaption = (lever: SensitivityLever, step: number) =>
@@ -223,11 +232,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     fmt(bar.span_pence),
   ]);
 
-  // §12.7: a matrix cell can be unmeasured too (validation_errors non-empty), and
-  // cellText() prints that identically to a metric that is merely null for an
-  // unrelated reason (fmtPctSafe's default "n/a") — this tells the caller whether
-  // the distinguishing footnote under the matrices is needed.
-  const hasUnmeasuredMatrixCells = result.matrix.some((row) => row.some((cell) => cell.validation_errors.length > 0));
+  const cellNotes = unmeasuredCellNotes(result.matrix);
 
   return {
     head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
@@ -235,7 +240,7 @@ export function sensitivityTables(inputs: AnyCalculatorInputs): MemoSensitivityT
     ltgdvRows: bodyFor('ltgdv_developer_pct'),
     tornadoRows,
     omittedTornadoNotes: tornadoNotes,
-    hasUnmeasuredMatrixCells,
+    unmeasuredCellNotes: cellNotes.notes,
   };
 }
 
@@ -1264,21 +1269,27 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
-  // §12.7/§12.5: runSensitivity (and so sensitivityTables) throws when the *base*
-  // document itself fails validation — a saved appraisal can reach this function in
-  // that state (e.g. `finance.equity_draw_rule: 'pari_passu'`, a migration state
-  // some historical documents still carry), and other error-severity issues besides.
-  // A ten-section memo should not vanish for one section's sake: the DRAFT watermark
-  // already flags a document in this state (`run.reconciliation.report_safe`), so
-  // §10 degrades — states that the analysis was not produced and the engine's own
-  // reason, in the same omission-stated style the rest of this section already uses
-  // for a single dropped bar — rather than the whole export failing.
+  // §12.7/§12.5: runSensitivity throws when the *base* document itself fails validation
+  // — a saved appraisal can reach this function in that state (e.g.
+  // `finance.equity_draw_rule: 'pari_passu'`, a migration state some historical
+  // documents still carry). A ten-section memo should not vanish for one section's
+  // sake: the DRAFT watermark already flags a document in this state
+  // (`run.reconciliation.report_safe`), so §10 degrades rather than the whole export
+  // failing.
+  //
+  // R6: that degradation answers exactly one condition, so it catches exactly one type.
+  // Anything else thrown from the suite is a defect, and rendering a defect as an
+  // orderly §12.7 omission in a lender-facing PDF is how a defect stays unfound —
+  // it propagates instead. `InvalidSensitivityConfigError` (§12.6) is deliberately not
+  // caught either: this memo only ever passes the fixed default config, so reaching it
+  // would itself be a defect.
   let sens: MemoSensitivityTables | null = null;
   let sensitivityFailureMessage: string | null = null;
   try {
     sens = sensitivityTables(inputs);
   } catch (err) {
-    sensitivityFailureMessage = err instanceof Error ? err.message : String(err);
+    if (!(err instanceof InvalidBaseDocumentError)) throw err;
+    sensitivityFailureMessage = err.message;
   }
 
   if (sens) {
@@ -1370,15 +1381,22 @@ export function generateInvestmentMemo(
     y = lastAutoTableFinalY(doc) + 4;
 
     // A matrix cell reads "n/a" for two different reasons that print identically: a
-    // metric that is genuinely undefined (e.g. a zero-denominator ratio), or a
-    // position the engine could not measure at all because its levered document
-    // failed validation (spec §12.7). Printed only when the latter actually occurs
-    // in this grid, so an ordinary deal's matrices carry no extra caption.
-    if (sens.hasUnmeasuredMatrixCells) {
-      y = bodyText(
-        y,
-        '"n/a" above may mean the metric is undefined for that position, or that the position itself could not be measured — its levered document failed validation and no appraisal was run for it (spec §12.7).',
-      );
+    // metric that is genuinely undefined (e.g. a zero-denominator ratio), or a position
+    // the engine could not measure at all because its levered document failed
+    // validation (spec §12.7). Printed only when the latter actually occurs in this
+    // grid, so an ordinary deal's matrices carry no extra caption.
+    //
+    // R6: this used to say only that the ambiguity existed. The engine had already
+    // handed over the exact reason for every unmeasured cell, so it now says which.
+    //
+    // This loop is unreachable through generateInvestmentMemo below: that function
+    // always calls sensitivityTables() with no config argument, so the memo only ever
+    // prints the fixed default grid, and no fixture's default grid produces an
+    // unmeasured matrix cell. `config` exists solely so tests can drive a grid that
+    // does (see the sensitivityTables doc comment above), which is how this loop and
+    // `unmeasuredCellNote` are exercised at all.
+    for (const [i, note] of sens.unmeasuredCellNotes.entries()) {
+      y = bodyText(y, `${i + 1}. ${unmeasuredCellNote(note)}`);
     }
   } else {
     // In place of the tornado and the two matrices: the engine refused to run the

@@ -229,6 +229,24 @@ def _measure(inputs: AnyCalculatorInputs, levers: dict[str, float]) -> Sensitivi
     )
 
 
+class InvalidSensitivityConfigError(ValueError):
+    """Sec 12.6: the axes/tornado config does not describe a runnable grid.
+
+    Mirrors InvalidSensitivityConfigError in frontend/src/lib/model/sensitivity.ts.
+    Subclasses ValueError so existing `except ValueError` sites keep working; the
+    type is the contract, the message text is not.
+    """
+
+
+class InvalidBaseDocumentError(ValueError):
+    """Sec 12.7: the base document itself fails validation, so no position in the
+    suite is meaningful (Sec 12.5 makes the base case an identity with the
+    unadjusted appraisal).
+
+    Mirrors InvalidBaseDocumentError in frontend/src/lib/model/sensitivity.ts.
+    """
+
+
 def run_sensitivity(
     inputs: AnyCalculatorInputs,
     config: SensitivityConfig | None = None,
@@ -245,16 +263,24 @@ def run_sensitivity(
 
     issues = validate_sensitivity_config(config)
     if issues:
-        raise ValueError("Invalid sensitivity config: " + " ".join(i.message for i in issues))
+        # Deduplicated: e.g. both axes missing a step raises the identical "An axis
+        # needs at least one step." issue twice, and repeating it says nothing extra.
+        messages = dict.fromkeys(i.message for i in issues)
+        raise InvalidSensitivityConfigError(
+            "Invalid sensitivity config: " + " ".join(messages)
+        )
 
     base = _measure(inputs, {})
     # Sec 12.5 makes the base case an identity with the unadjusted appraisal, so a suite
     # over an invalid base is meaningless in every position at once -- an input error
     # (Sec 12.6/12.7), not twenty-five unmeasured cells.
     if base.validation_errors:
-        raise ValueError(
-            "Invalid base document: "
-            + " ".join(e.message for e in base.validation_errors)
+        # Deduplicated for the same reason as the config message above: validate_inputs
+        # emits one issue per offending element (e.g. one per phased-sales tranche) and
+        # those issues carry an identical message.
+        messages = dict.fromkeys(e.message for e in base.validation_errors)
+        raise InvalidBaseDocumentError(
+            "Invalid base document: " + " ".join(messages)
         )
 
     matrix: list[list[SensitivityCell]] = []

@@ -10,7 +10,7 @@
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines) — no UI page consumes it yet, which is Release 4b's job, so §12 has no user-visible surface today even though the engine work is complete. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6) carry no such restriction.
 
 ---
 
@@ -630,6 +630,11 @@ with a span, in the fixed lever order.
 If the **base** document yields an error-severity issue, the suite raises an input error
 (§12.6) rather than returning a grid: §12.5 makes the base case an identity with the
 unadjusted appraisal, so no position in the suite is meaningful.
+
+This refusal is a distinct, identifiable condition — an invalid **base document** — and
+is reported separately from §12.6's invalid **configuration**. A consumer distinguishes
+the two by the error the suite raises (`InvalidBaseDocumentError`,
+`InvalidSensitivityConfigError`), never by its message text. [R6]
 
 An unmeasured position is never appraised: the suite validates the levered document and
 does not run the ledger for it at all.

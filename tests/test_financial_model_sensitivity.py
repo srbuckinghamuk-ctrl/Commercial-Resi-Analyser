@@ -14,6 +14,8 @@ from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     LEVER_ORDER,
     MAX_AXIS_STEPS,
+    InvalidBaseDocumentError,
+    InvalidSensitivityConfigError,
     SensitivityAxis,
     SensitivityConfig,
     TornadoRange,
@@ -144,13 +146,24 @@ def test_base_case_also_sits_at_the_zero_zero_grid_position():
     assert result.matrix[ri][ci].profit_pence == result.base.profit_pence
 
 
+def _by_span_descending(spans):
+    """Sec 12.4 extended by Sec 12.7: bars with a span first, widest first; spanless
+    bars last. sorted(spans, reverse=True) cannot express this -- it raises
+    TypeError: '<' not supported between instances of 'int' and 'NoneType' as soon as
+    a None enters the list, so the assertion it backed could never have been run
+    against a grid containing an unmeasured endpoint.
+    """
+    return sorted(spans, key=lambda s: (s is None, -(s or 0)))
+
+
 def test_tornado_is_sorted_by_span_descending():
     """Spec Sec 12.4."""
     bars = run_sensitivity(_inputs()).tornado
     assert len(bars) == 4
     spans = [b.span_pence for b in bars]
-    assert spans == sorted(spans, reverse=True)
-    assert all(s >= 0 for s in spans)
+    assert spans == _by_span_descending(spans)
+    # Sec 12.7: no span is null for Fixture F under the default tornado.
+    assert all(s is not None and s >= 0 for s in spans)
 
 
 def test_tornado_order_is_independent_of_input_order():
@@ -226,6 +239,33 @@ def test_never_resizes_the_facility_whatever_the_cell():
     assert levered.finance.committed_gross_facility_pence == inputs.finance.committed_gross_facility_pence
     assert levered.finance.day_one_advance_pence == inputs.finance.day_one_advance_pence
     assert levered.equity_sources == inputs.equity_sources
+
+
+def test_cost_lever_moves_peak_debt_until_the_facility_stops_it():
+    """Spec Sec 12.2 -- mirror of the TS suite.
+
+    R4 left this open: peak_debt_pence looked unmoved by the cost lever on one project.
+    It is Sec 12.2 working. peak_debt_pence is max(balance) and the committed facility
+    is invariant, so a facility drawn to its ceiling turns extra cost into a funding gap
+    rather than into more debt.
+    """
+    cfg = SensitivityConfig(
+        rows=SensitivityAxis(lever="construction_cost", steps=[0, 5, 10, 15]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    )
+    matrix = run_sensitivity(_inputs(), cfg).matrix
+    peaks = [row[0].peak_debt_pence for row in matrix]
+    flags = [row[0].flags for row in matrix]
+
+    # Half one -- the lever reaches the ledger.
+    assert peaks[1] > peaks[0]
+    assert peaks[2] > peaks[1]
+
+    # Half two -- the ceiling bites, and the shortfall is a funding gap, not more debt.
+    assert peaks[3] - peaks[2] < (peaks[2] - peaks[1]) / 2
+    assert "funding_gap" not in flags[0]
+    assert "funding_gap" in flags[3]
 
 
 def test_invalid_config_raises():
@@ -371,11 +411,99 @@ def test_two_spanless_bars_sort_relative_to_each_other_by_lever_order():
     assert any("estimated_value_pence" in e.field for e in gdv_bar.low.validation_errors)
 
 
+FIXTURE_A = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "a-all-cash.json"
+
+
+def _all_cash_inputs():
+    return parse_calculator_inputs(json.loads(FIXTURE_A.read_text(encoding="utf-8"))["inputs"])
+
+
+def test_genuine_zero_span_sorts_ahead_of_a_null_span():
+    """Sec 12.4/Sec 12.7 at the boundary -- mirror of the TS suite.
+
+    A 0-pence span is a measurement saying this lever does not move the deal; a null
+    span is the absence of a measurement. They compare equal under a null-as-zero sort
+    and mean opposite things. a-all-cash has no facility and no interest rate exposure,
+    so the interest_rate lever produces a real 0; its 12-month term makes timeline -12
+    unmeasurable.
+    """
+    cfg = SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[
+            TornadoRange(lever="interest_rate", low=-1, high=1),
+            TornadoRange(lever="gdv", low=-10, high=10),
+            TornadoRange(lever="timeline", low=-12, high=3),
+        ],
+    )
+    bars = run_sensitivity(_all_cash_inputs(), cfg).tornado
+    spans = {b.lever: b.span_pence for b in bars}
+
+    assert spans["interest_rate"] == 0
+    assert spans["timeline"] is None
+    assert spans["gdv"] > 0
+
+    assert [b.lever for b in bars] == ["gdv", "interest_rate", "timeline"]
+    ordered = [b.span_pence for b in bars]
+    assert ordered == _by_span_descending(ordered)
+
+
 def test_invalid_base_document_raises():
     bad = _inputs()
     bad.finance.term_months = 0
     with pytest.raises(ValueError, match="base document"):
         run_sensitivity(bad)
+
+
+def test_config_failure_is_typed():
+    """Spec Sec 12.6 -- mirror of the TS suite."""
+    cfg = SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[],
+    )
+    with pytest.raises(InvalidSensitivityConfigError) as exc:
+        run_sensitivity(_inputs(), cfg)
+    assert str(exc.value).startswith("Invalid sensitivity config: ")
+
+
+def test_base_document_failure_is_typed():
+    """Spec Sec 12.7 -- mirror of the TS suite."""
+    inputs = _inputs()
+    inputs.finance.equity_draw_rule = "pari_passu"
+    with pytest.raises(InvalidBaseDocumentError) as exc:
+        run_sensitivity(inputs)
+    assert str(exc.value).startswith("Invalid base document: ")
+
+
+def test_base_document_failure_deduplicates_a_repeated_identical_message():
+    """F1 follow-up, mirror of the TS suite: validate_inputs emits one issue per
+    offending element (one per phased-sales tranche here) with an identical message.
+    All three of fixture I's tranches pushed past the term the same way must not
+    repeat the same sentence three times in the thrown message."""
+    inputs = _fixture_i_inputs()
+    for tranche in inputs.sales_phasing.tranches:
+        tranche.month_offset = 999
+    with pytest.raises(InvalidBaseDocumentError) as exc:
+        run_sensitivity(inputs)
+    message = str(exc.value)
+    assert message.count("Tranche month must be a whole month between") == 1
+
+
+def test_the_two_failures_are_distinguishable():
+    """A consumer catching one and re-raising the rest depends on this."""
+    inputs = _inputs()
+    inputs.finance.equity_draw_rule = "pari_passu"
+    with pytest.raises(InvalidBaseDocumentError):
+        run_sensitivity(inputs)
+    assert not issubclass(InvalidBaseDocumentError, InvalidSensitivityConfigError)
+    assert not issubclass(InvalidSensitivityConfigError, InvalidBaseDocumentError)
+
+
+def test_both_failures_remain_value_errors():
+    """Existing `except ValueError` sites and pytest.raises(ValueError) keep working."""
+    assert issubclass(InvalidSensitivityConfigError, ValueError)
+    assert issubclass(InvalidBaseDocumentError, ValueError)
 
 
 def test_does_not_measure_default_tornado_low_endpoint_of_phased_sales_deal():

@@ -190,25 +190,70 @@ describe('SensitivityPage — axis and step editor', () => {
     expect(screen.queryByText(/at least one month of term/i)).not.toBeInTheDocument();
   });
 
-  it('shows the validation reason on an unmeasured cell, and leaves measured cells untitled', () => {
+  // R6: `title` was the only carrier of an unmeasured cell's reason — invisible to a
+  // screen reader, to print, and to touch, while the cell's "—" is indistinguishable
+  // from a genuinely null metric. The reason now appears as visible text beneath the
+  // matrix and is associated with each cell via aria-describedby.
+  it('names an unmeasured cell\'s reason in visible text tied to the cell', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12' } });
+
+    // One reason invalidates the whole row, so it is stated once, not five times.
+    const notes = screen.getAllByRole('listitem');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toHaveTextContent(/whole number of months, at least 1/i);
+
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    const cells = within(matrix).getAllByRole('cell');
+    expect(cells).toHaveLength(5); // the default GDV column axis has 5 steps
+
+    for (const cell of cells) {
+      expect(cell).toHaveTextContent('—');
+      expect(cell).toHaveStyle({ color: 'rgb(148, 163, 184)', fontStyle: 'italic' });
+      // The association is programmatic, not just visual proximity.
+      const describedBy = cell.getAttribute('aria-describedby');
+      expect(describedBy).toBe(notes[0].id);
+    }
+  });
+
+  // The retired carrier must actually be gone: leaving it would put the same sentence
+  // in two places, which is the drift shape R4b and R5 each shipped once.
+  it('no longer carries the reason in a title attribute', () => {
     render(<SensitivityPage inputs={buildInputs()} />);
     fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
     fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12' } });
 
     const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
-    // Every column in the row is unmeasured for the same reason (the row lever alone
-    // drives the term below one month), so the title is repeated across the row —
-    // pinned exactly at the default GDV column axis's step count, so this fails
-    // against an implementation that titled the measured cells too.
-    const titledCells = within(matrix).getAllByTitle(/whole number of months, at least 1/i);
-    expect(titledCells).toHaveLength(5);
-    for (const cell of titledCells) {
-      expect(cell).toHaveTextContent('—');
-      expect(cell).toHaveStyle({ color: 'rgb(148, 163, 184)', fontStyle: 'italic' });
-    }
-    // No other cell in the matrix carries a title.
-    const allCells = within(matrix).getAllByRole('cell');
-    expect(allCells.filter((cell) => cell.hasAttribute('title'))).toHaveLength(5);
+    const titled = within(matrix).getAllByRole('cell').filter((c) => c.hasAttribute('title'));
+    expect(titled).toEqual([]);
+  });
+
+  // A measured grid gets no notes and no markers at all.
+  it('prints no notes when every position in the grid is measured', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  // Distinct reasons must not collapse into one note. A timeline row of -12 empties the
+  // term; a GDV column of -100% zeroes every unit's estimated value (validation's
+  // positive-value rule). The 2x2 grid of those two against a measured step gives
+  // *three* distinct reasons, not two — the corner cell fails for both causes at once
+  // and its note carries both sentences joined. That third note is the case worth
+  // pinning: an implementation keyed on the first validation error alone would produce
+  // two notes here and look correct.
+  it('states each distinct reason as its own note, including a cell failing for two', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12, 0' } });
+    fireEvent.change(screen.getByLabelText(/column steps/i), { target: { value: '-100, 0' } });
+
+    const notes = screen.getAllByRole('listitem');
+    expect(notes).toHaveLength(3);
+    expect(new Set(notes.map((n) => n.textContent)).size).toBe(3);
+    // Row-major order: the corner (-12, -100%) is reached first and carries both causes.
+    expect(notes[0]).toHaveTextContent(/whole number of months, at least 1/i);
+    expect(notes[0].textContent).toMatch(/value/i);
   });
 
   it('restores the spec defaults on reset', () => {
@@ -294,15 +339,19 @@ describe('SensitivityPage — unmeasured tornado endpoint omission', () => {
     for (const cell of within(measuredRow).getAllByRole('cell')) {
       expect(cell.textContent).toMatch(/-?\d+\.\d%/);
       expect(cell).not.toHaveAttribute('title');
+      expect(cell).not.toHaveAttribute('aria-describedby');
     }
 
     const unmeasuredRow = rows[2];
     expect(within(unmeasuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline -3 months');
     const unmeasuredCells = within(unmeasuredRow).getAllByRole('cell');
     expect(unmeasuredCells).toHaveLength(5); // default GDV column axis has 5 steps
+    const note = screen.getByRole('listitem');
+    expect(note).toHaveTextContent('Term must be a whole number of months, at least 1.');
     for (const cell of unmeasuredCells) {
       expect(cell).toHaveTextContent('—');
-      expect(cell).toHaveAttribute('title', 'Term must be a whole number of months, at least 1.');
+      expect(cell).not.toHaveAttribute('title');
+      expect(cell.getAttribute('aria-describedby')).toBe(note.id);
     }
   });
 });

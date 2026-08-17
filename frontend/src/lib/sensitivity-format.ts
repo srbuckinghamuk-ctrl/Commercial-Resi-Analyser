@@ -1,5 +1,5 @@
 import type { FlagCode } from './model';
-import type { MeasuredMetrics, SensitivityLever, TornadoBar } from './model/sensitivity';
+import type { MeasuredMetrics, SensitivityCell, SensitivityLever, TornadoBar } from './model/sensitivity';
 
 /**
  * Presentation for the spec §12 sensitivity suite, shared by the investment
@@ -140,10 +140,88 @@ export function omittedTornadoNotes(tornado: readonly TornadoBar[]): string[] {
   return tornado
     .filter((bar) => bar.span_pence === null)
     .map((bar) => {
-      const reasons = bar.low.validation_errors
+      // Deduplicated within this bar: both endpoints can fail the same rule (e.g. an
+      // emptied term rejects both a low and a high timeline step identically), and the
+      // engine's message is byte-identical each time — repeating it says nothing extra.
+      const messages = bar.low.validation_errors
         .concat(bar.high.validation_errors)
-        .map((e) => e.message)
-        .join(' ');
+        .map((e) => e.message);
+      const reasons = [...new Set(messages)].join(' ');
       return `${LEVER_LABEL[bar.lever]} omitted: one endpoint's levered document fails validation — ${reasons} (spec §12.7).`;
     });
+}
+
+/**
+ * The one sentence a cell's §12.7 reason becomes, shared by the memo
+ * (export-investment-memo.ts) and the calculator's Sensitivity page
+ * (SensitivityPage.tsx) — before R6 each surface hand-wrote this sentence
+ * separately, and nothing enforced that they stayed in step.
+ *
+ * Returned WITHOUT a list ordinal: the page's `<ol>` numbers itself and the
+ * memo prepends its own `${i + 1}. ` — an ordinal belongs to the list the
+ * sentence sits in, not to the sentence.
+ */
+export function unmeasuredCellNote(reason: string): string {
+  return `Not measured — the levered document fails validation: ${reason} (spec §12.7).`;
+}
+
+/** The result of scanning a matrix for positions the engine could not measure. */
+export interface UnmeasuredCellNotes {
+  /** Distinct reasons, in first-appearance order scanning the matrix row-major. */
+  notes: readonly string[];
+  /** Zero-based index into `notes`, or null when the cell is measured. */
+  noteIndexFor(cell: SensitivityCell): number | null;
+}
+
+/**
+ * The reasons a grid's unmeasured positions exist (spec §12.7), deduplicated, for a
+ * caller to print beneath the matrix.
+ *
+ * Single source shared by the memo (export-investment-memo.ts) and the calculator's
+ * Sensitivity page (SensitivityPage.tsx). Sharing it is the point: before R6 the page
+ * put each cell's reason in a `<td title>` — invisible to assistive tech, print and
+ * touch — while the memo printed a caption saying only that the ambiguity existed,
+ * without ever naming which reason applied. Two surfaces, two different failures to
+ * carry information the engine had already handed over.
+ *
+ * A cell's reason is its `validation_errors` messages joined, exactly as
+ * `omittedTornadoNotes` joins a bar's. Deduplication is keyed on the exact message
+ * text, not on the lever position: it collapses a row into one note whenever every
+ * cell in it produces byte-identical text, which is common but not universal — three
+ * `validateInputs` messages interpolate `finance.term_months` (the very quantity the
+ * timeline lever moves), so a set of timeline steps can still surface one distinct
+ * note per step for what is, underneath, a single cause.
+ *
+ * Keyed on the reason string rather than on cell identity: the page rebuilds its cell
+ * objects on every render and the memo holds different objects again, so identity is
+ * not stable across the callers that need this.
+ */
+export function unmeasuredCellNotes(
+  matrix: readonly (readonly SensitivityCell[])[],
+): UnmeasuredCellNotes {
+  const reasonOf = (cell: SensitivityCell): string | null => {
+    if (cell.validation_errors.length === 0) return null;
+    // Deduplicated within this cell: validateInputs emits one issue per offending
+    // element (e.g. one per phased-sales tranche) and those issues carry an
+    // identical message, so joining without dedup repeats the same sentence once
+    // per element rather than saying anything new.
+    const messages = cell.validation_errors.map((e) => e.message);
+    return [...new Set(messages)].join(' ');
+  };
+
+  const index = new Map<string, number>();
+  for (const row of matrix) {
+    for (const cell of row) {
+      const reason = reasonOf(cell);
+      if (reason !== null && !index.has(reason)) index.set(reason, index.size);
+    }
+  }
+
+  return {
+    notes: [...index.keys()],
+    noteIndexFor(cell) {
+      const reason = reasonOf(cell);
+      return reason === null ? null : index.get(reason) ?? null;
+    },
+  };
 }

@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   DEFAULT_SENSITIVITY_CONFIG, LEVER_ORDER, MAX_AXIS_STEPS, validateSensitivityConfig,
+  InvalidSensitivityConfigError, InvalidBaseDocumentError,
 } from './sensitivity';
 import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
-import type { SensitivityConfig } from './sensitivity';
-import type { AnyCalculatorInputs } from './finance-types';
+import type { SensitivityConfig, SensitivityLever } from './sensitivity';
+import type { AnyCalculatorInputs, SalesPhasingInputs } from './finance-types';
 
 /** A deep copy of the defaults, so a test that mutates one field cannot leak into another. */
 function config(overrides: Partial<SensitivityConfig> = {}): SensitivityConfig {
@@ -18,6 +19,25 @@ function config(overrides: Partial<SensitivityConfig> = {}): SensitivityConfig {
     tornado: DEFAULT_SENSITIVITY_CONFIG.tornado.map((r) => ({ ...r })),
     ...overrides,
   };
+}
+
+/**
+ * §12.4 extended by §12.7, as a comparator a test can re-sort spans with: a span comes
+ * before a null, and wider spans come first. A null is not a number and must never
+ * reach arithmetic — the form this replaces, `(b as number) - (a as number)`, yields
+ * NaN against a null span, and a comparator returning NaN accepts whatever order it
+ * was handed. It could not have failed on the case added below.
+ *
+ * The tie-break between two nulls is LEVER_ORDER, which lives in the engine; a
+ * comparator over bare spans cannot express it, so it returns 0 and leaves the
+ * relative order of nulls to the caller's assertion (see the LEVER_ORDER test that
+ * already covers it).
+ */
+function bySpanDescending(a: number | null, b: number | null): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return b - a;
 }
 
 describe('sensitivity defaults (spec §12.3, §12.4)', () => {
@@ -130,6 +150,79 @@ function fixtureFInputs(): AnyCalculatorInputs {
   return JSON.parse(readFileSync(FIXTURE_F, 'utf-8')).inputs as AnyCalculatorInputs;
 }
 
+const FIXTURE_A = resolve(__dirname, '../../../../fixtures/financial-model/a-all-cash.json');
+
+function allCashInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_A, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
+const FIXTURE_I = resolve(__dirname, '../../../../fixtures/financial-model/i-phased-sales.json');
+
+function phasedSalesInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_I, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
+// R6: the suite has exactly two documented failures (§12.6 config, §12.7 base
+// document). Consumers must be able to tell them apart — and tell both apart from a
+// genuine defect — without matching on message text, which is the coupling that let
+// an explanation drift away from its condition three times in R4b/R5.
+describe('runSensitivity — the two documented failures are typed (§12.6, §12.7)', () => {
+  it('raises InvalidSensitivityConfigError for a config that is not a grid', () => {
+    const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
+    // Asserted against the caught value, not through `toThrow`'s matcher: when the
+    // imported class name is unresolved, `toThrow(SomeUndefinedValue)` silently
+    // degrades to a generic "did it throw at all" check and would still pass
+    // against a plain `Error` — `toBeInstanceOf` does not have that failure mode.
+    let caught: unknown;
+    try { runSensitivity(fixtureFInputs(), cfg); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(InvalidSensitivityConfigError);
+    // The message is unchanged — the memo prints it and safe-sensitivity's tests pin it.
+    expect((caught as Error).message).toMatch(/^Invalid sensitivity config: /);
+  });
+
+  it('raises InvalidBaseDocumentError when the base document fails validation', () => {
+    const inputs = fixtureFInputs();
+    inputs.finance.equity_draw_rule = 'pari_passu';
+    let caught: unknown;
+    try { runSensitivity(inputs); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(InvalidBaseDocumentError);
+    expect((caught as Error).message).toMatch(/^Invalid base document: /);
+  });
+
+  // F1 follow-up: validateInputs emits one issue per offending element (one per
+  // phased-sales tranche here), and those issues carry an identical message. All
+  // three of fixture I's tranches pushed past the term the same way must not repeat
+  // the same sentence three times in the thrown message.
+  it('deduplicates a repeated identical message in InvalidBaseDocumentError', () => {
+    const inputs = phasedSalesInputs() as AnyCalculatorInputs & { sales_phasing: SalesPhasingInputs };
+    for (const tranche of inputs.sales_phasing.tranches) tranche.month_offset = 999;
+    let caught: unknown;
+    try { runSensitivity(inputs); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(InvalidBaseDocumentError);
+    const message = (caught as Error).message;
+    const occurrences = message.split('Tranche month must be a whole month between').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  // The two must not be mistakable for each other: a consumer catching one and
+  // rethrowing the rest depends on this.
+  it('keeps the two failures distinguishable', () => {
+    const inputs = fixtureFInputs();
+    inputs.finance.equity_draw_rule = 'pari_passu';
+    expect(() => runSensitivity(inputs)).not.toThrow(InvalidSensitivityConfigError);
+
+    const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
+    expect(() => runSensitivity(fixtureFInputs(), cfg)).not.toThrow(InvalidBaseDocumentError);
+  });
+
+  // Both remain plain Errors, so existing `catch (err)` sites and
+  // `err instanceof Error` narrowing keep working.
+  it('keeps both errors instances of Error', () => {
+    const cfg = { ...DEFAULT_SENSITIVITY_CONFIG, rows: { lever: 'gdv' as const, steps: [] } };
+    expect(() => runSensitivity(fixtureFInputs(), cfg)).toThrow(Error);
+  });
+});
+
 describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
   it('produces a matrix shaped by the config axes', () => {
     const result = runSensitivity(fixtureFInputs());
@@ -173,11 +266,11 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     // §12.7: a span is null only when an endpoint is unmeasured, which cannot happen for
     // Fixture F under the default tornado (its 9-month floor is a legal term) — see the
     // §12.7 cell-validity tests below for the null case, pinned on fixtures I and J.
-    expect([...spans].sort((a, b) => (b as number) - (a as number))).toEqual(spans);
-    // No cast here: `null >= 0` is `true` in JavaScript, so `(s as number) >= 0` would
-    // silently accept a null span. Spelling out the null check keeps this assertion at
-    // its original strength.
     expect(spans.every((s) => s !== null && s >= 0)).toBe(true);
+    // R6: the re-sort is null-aware. The previous form was `(b as number) - (a as
+    // number)`, which produces NaN against a null and so accepts any ordering at all —
+    // it could not have failed on the case Task 8 adds below.
+    expect([...spans].sort(bySpanDescending)).toEqual(spans);
   });
 
   it('orders bars independently of the order the ranges were configured in', () => {
@@ -266,6 +359,43 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
     expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);
     expect(levered.finance.day_one_advance_pence).toBe(inputs.finance.day_one_advance_pence);
     expect(levered.equity_sources).toEqual(inputs.equity_sources);
+  });
+
+  // R4 carried an open question into three releases: peak_debt_pence looked unmoved by
+  // the cost lever on one project while TDC and profit moved, which reads like a lever
+  // that is not reaching the ledger. It is §12.2 working. peak_debt_pence is
+  // max(balance) (monthly-engine.ts:175) and the committed facility is invariant, so a
+  // facility drawn to its ceiling cannot take on the extra cost — it becomes a funding
+  // gap instead. Both halves are asserted here so the question stops being re-opened.
+  it('lets the cost lever move peak debt until the committed facility stops it (§12.2)', () => {
+    const inputs = fixtureFInputs();
+    const { matrix } = runSensitivity(inputs, {
+      ...DEFAULT_SENSITIVITY_CONFIG,
+      rows: { lever: 'construction_cost', steps: [0, 5, 10, 15] },
+      cols: { lever: 'gdv', steps: [0] },
+    });
+    // Asserted, not cast. R5 widened these fields to `number | null` precisely so a
+    // consumer has to handle the unmeasured case; a cast here would put back the
+    // silence that widening removed. Cost and GDV steps never invalidate a document,
+    // so all four are measured — and if that ever stops being true, this line says so.
+    const peaks = matrix.map((row) => {
+      const peak = row[0].peak_debt_pence;
+      expect(peak).not.toBeNull();
+      return peak as number;
+    });
+    const flags = matrix.map((row) => row[0].flags);
+
+    // Half one — the lever reaches the ledger. Strict, because a lever silently stopped
+    // being applied is exactly the regression that produces equality here.
+    expect(peaks[1]).toBeGreaterThan(peaks[0]);
+    expect(peaks[2]).toBeGreaterThan(peaks[1]);
+
+    // Half two — the ceiling bites. The step into +15% adds an order of magnitude less
+    // debt than the two before it, and the shortfall shows up as a funding gap rather
+    // than as more borrowing.
+    expect(peaks[3] - peaks[2]).toBeLessThan((peaks[2] - peaks[1]) / 2);
+    expect(flags[0]).not.toContain('funding_gap');
+    expect(flags[3]).toContain('funding_gap');
   });
 
   it('throws on an invalid config rather than computing a misleading grid', () => {
@@ -417,6 +547,46 @@ describe('runSensitivity — §12.7 cell validity', () => {
     // Confirms *why* gdv is unmeasured, not just that it is.
     const gdvBar = bars.find((b) => b.lever === 'gdv')!;
     expect(gdvBar.low.validation_errors.some((e) => e.field.includes('estimated_value_pence'))).toBe(true);
+  });
+
+  // The boundary §12.4/§12.7 has never been tested at: a *genuine* 0-pence span next to
+  // a null one. Both print as "no movement" to a careless reader and both compare equal
+  // under a null-as-zero sort, but they mean opposite things — one is a measurement
+  // saying this lever does not matter for this deal, the other is the absence of a
+  // measurement. A 0-pence span must sort ahead of every null span.
+  //
+  // `a-all-cash` is the fixture that produces the real 0: with no facility and no
+  // interest rate exposure, the interest_rate lever cannot move profit. Its 12-month
+  // term makes a timeline low of -12 unmeasurable.
+  it('sorts a genuine 0-pence span ahead of a null one', () => {
+    const inputs = allCashInputs();
+    const bars = runSensitivity(inputs, {
+      ...DEFAULT_SENSITIVITY_CONFIG,
+      rows: { lever: 'gdv', steps: [0] },
+      cols: { lever: 'construction_cost', steps: [0] },
+      tornado: [
+        { lever: 'interest_rate', low: -1, high: 1 },
+        { lever: 'gdv', low: -10, high: 10 },
+        { lever: 'timeline', low: -12, high: 3 },
+      ],
+    }).tornado;
+
+    // The premise: this fixture really does produce one of each.
+    const spanOf = (lever: SensitivityLever) =>
+      bars.find((b) => b.lever === lever)!.span_pence;
+    expect(spanOf('interest_rate')).toBe(0);
+    expect(spanOf('timeline')).toBeNull();
+    // Narrowed before comparing: `toBeGreaterThan` on a `number | null` does not
+    // type-check, and a cast here would be the same unsound move this task removes.
+    const gdvSpan = spanOf('gdv');
+    expect(gdvSpan).not.toBeNull();
+    expect(gdvSpan as number).toBeGreaterThan(0);
+
+    // The rule: measured bars first by span, the spanless bar last.
+    expect(bars.map((b) => b.lever)).toEqual(['gdv', 'interest_rate', 'timeline']);
+    // And the comparator agrees, which is what the re-sort assertion above relies on.
+    expect([...bars.map((b) => b.span_pence)].sort(bySpanDescending))
+      .toEqual(bars.map((b) => b.span_pence));
   });
 
   // §12.5 makes the base an identity with the unadjusted appraisal, so a suite
