@@ -11,7 +11,9 @@ import {
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
+import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
+import { drawWatermark, fitWatermark, setDocumentMetadata } from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
 
 // ── This memo consumes the finished AppraisalRun only ─────
@@ -30,14 +32,11 @@ import type { DraftReason, ReportProvenance } from './report-provenance';
 // docs/financial-model/calculation-specification.md §11 for the
 // prohibited-calculations list this file was rewritten to comply with.
 
-const PAGE_W = 210;
-const PAGE_H = 297;
 const MARGIN_L = 20;
 const MARGIN_R = 20;
 const MARGIN_T = 25;
 const CONTENT_W = PAGE_W - MARGIN_L - MARGIN_R;
 const FOOTER_Y = 287;
-const PT_PER_MM = 72 / 25.4;
 
 /** Last baseline the flowing content may occupy; the footer sits below it. */
 const CONTENT_BOTTOM = 272;
@@ -50,12 +49,6 @@ const SUBHEAD_KEEP_MM = 18;
 const TABLE_MIN_BLOCK_MM = 34;
 /** Tables at or below this height are kept whole rather than split (see `table`). */
 const MOVE_WHOLE_MAX_MM = 110;
-
-const WATERMARK_ANGLE = 35;
-const WATERMARK_CX = PAGE_W / 2;
-const WATERMARK_CY = 160;
-/** Clear space the watermark keeps from every page edge. */
-const WATERMARK_MARGIN = 6;
 
 /**
  * Two distinct reasons a document is not a final lender paper, and they must not
@@ -348,17 +341,6 @@ export function generateInvestmentMemo(
     doc.setTextColor(...style.color);
   }
 
-  /** Run `draw` without letting its style settings escape. */
-  function preservingStyle(draw: () => void): void {
-    const size = doc.getFontSize();
-    const { fontName, fontStyle } = doc.getFont();
-    const color = doc.getTextColor();
-    draw();
-    doc.setFontSize(size);
-    doc.setFont(fontName, fontStyle);
-    doc.setTextColor(color);
-  }
-
   // ── Draft watermark (spec: unreconciled appraisals never look lender-ready) ──
 
   /** Measure with a throwaway font state; restores whatever was current. */
@@ -371,74 +353,12 @@ export function generateInvestmentMemo(
     return result;
   }
 
-  /**
-   * Where the watermark lands, and the box it occupies, at a given size.
-   *
-   * The origin is computed here rather than delegated to jsPDF's
-   * `align: 'center'`, which subtracts half the *unrotated* advance width from x
-   * and leaves y untouched — so a rotated banner drawn that way is not centred
-   * on the point it names, and the longer the string the further it drifts. At
-   * the 40 pt this used to draw at, the drift plus the width put the banner's
-   * left edge 15 mm off the page: it was clipped on every page of every report
-   * the second audit looked at.
-   */
-  function watermarkBox(size: number): {
-    xStart: number; yStart: number;
-    left: number; right: number; top: number; bottom: number;
-  } {
-    const rad = (WATERMARK_ANGLE * Math.PI) / 180;
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-    const width = preservingMeasurement(() => {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(size);
-      return doc.getTextWidth(watermarkText);
-    });
-    const ascent = (size * 0.75) / PT_PER_MM;
-    const descent = (size * 0.25) / PT_PER_MM;
-    // Step back along the text's own axis so its midpoint sits on the centre.
-    const xStart = WATERMARK_CX - (width / 2) * cos;
-    const yStart = WATERMARK_CY + (width / 2) * sin;
-    const corners: Array<[number, number]> = [
-      [0, -descent], [width, -descent], [width, ascent], [0, ascent],
-    ];
-    const xs = corners.map(([tx, ty]) => xStart + cos * tx - sin * ty);
-    const ys = corners.map(([tx, ty]) => yStart - (sin * tx + cos * ty));
-    return {
-      xStart, yStart,
-      left: Math.min(...xs), right: Math.max(...xs),
-      top: Math.min(...ys), bottom: Math.max(...ys),
-    };
-  }
-
-  /** The largest size at which the whole banner still sits inside the page. */
-  function fitWatermarkSize(): number {
-    for (let size = 40; size >= 6; size -= 0.5) {
-      const box = watermarkBox(size);
-      if (
-        box.left >= WATERMARK_MARGIN &&
-        box.right <= PAGE_W - WATERMARK_MARGIN &&
-        box.top >= WATERMARK_MARGIN &&
-        box.bottom <= PAGE_H - WATERMARK_MARGIN
-      ) {
-        return size;
-      }
-    }
-    return 6;
-  }
-
-  const watermarkSize = fitWatermarkSize();
-  const watermarkOrigin = watermarkBox(watermarkSize);
+  // Sized once: the fit search measures the string at up to 69 candidate sizes,
+  // and the answer cannot change between pages of the same document.
+  const watermarkGeometry = draft ? fitWatermark(doc, watermarkText) : null;
 
   function watermark(): void {
-    preservingStyle(() => {
-      doc.setTextColor(200);
-      doc.setFontSize(watermarkSize);
-      doc.setFont('helvetica', 'bold');
-      doc.text(watermarkText, watermarkOrigin.xStart, watermarkOrigin.yStart, {
-        angle: WATERMARK_ANGLE,
-      });
-    });
+    if (watermarkGeometry) drawWatermark(doc, watermarkText, watermarkGeometry);
   }
 
   // jspdf-autotable paginates internally via its own doc.addPage() calls when
@@ -1955,6 +1875,12 @@ export function generateInvestmentMemo(
 
   // ── Footer on all pages ──
   addPageFooter();
+
+  setDocumentMetadata(doc, {
+    title: `Investment Memorandum — ${project.address_raw} (${prov.documentStatus})`,
+    subject: `Development appraisal, calculation version ${prov.calcVersion}, scenario ${prov.scenarioName}`,
+    keywords: 'development appraisal, commercial to residential, lender report',
+  });
 
   return doc.output('blob');
 }

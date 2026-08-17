@@ -7,6 +7,7 @@ import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
 import { runAppraisal, migrateInputsToV4 } from '../lib/model';
+import { buildProvenance } from '../lib/report-provenance';
 
 interface ExportPageProps {
   projects: Project[];
@@ -128,7 +129,13 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
         // eligibility is optional for the memo
       }
 
-      const blob = generateInvestmentMemo(selectedProject, run, eligibility);
+      // Provenance comes from the stored record, not from this run: the hashes
+      // are the server's statement about what it computed and persisted (spec
+      // §13.2). buildProvenance compares the two calculation versions and marks
+      // the report as a recomputation when they differ, rather than letting a
+      // stored hash sit beside figures it does not describe.
+      const provenance = buildProvenance(run, appraisal);
+      const blob = generateInvestmentMemo(selectedProject, run, eligibility, provenance);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);
     } catch (err) {
