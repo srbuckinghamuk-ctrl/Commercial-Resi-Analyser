@@ -35,7 +35,14 @@ export function calculateTotalAcquisitionCost(
 ): number {
   const sdlt = calculateAcquisitionTax({
     consideration_pence: acq.purchase_price_pence,
-    jurisdiction: 'jurisdiction' in acq ? acq.jurisdiction : 'england_ni',
+    // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
+    // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
+    // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
+    // guard would then reach selectBandSet and throw "No band sets for
+    // null/non_residential", where the Python engine rejects the same document at
+    // validation. Both engines must degrade the same way. Only `jurisdiction` is
+    // fatal; a null date, override or reason are all absorbed downstream.
+    jurisdiction: 'jurisdiction' in acq ? acq.jurisdiction ?? 'england_ni' : 'england_ni',
     basis: 'non_residential',
     date: 'acquisition_date' in acq ? acq.acquisition_date : null,
     override_pence:

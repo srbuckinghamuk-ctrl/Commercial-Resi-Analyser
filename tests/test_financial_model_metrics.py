@@ -26,6 +26,7 @@ from app.financial_model.schedule import (
 )
 from app.financial_model.types import (
     AcquisitionInputs,
+    AcquisitionInputsV5,
     CalculatorInputsV2,
     CalculatorInputsV4,
     CalculatorInputsV5,
@@ -378,6 +379,19 @@ def _english_base() -> CalculatorInputsV5:
     return inputs
 
 
+def _tax_inside_acquisition_cost(acq, metrics) -> int:
+    """The acquisition tax actually folded into acquisition_cost_pence, recovered
+    by subtracting every other component of spec Sec 3.3's acquisition line."""
+    return (
+        metrics.acquisition_cost_pence
+        - acq.purchase_price_pence
+        - acq.legal_fees_pence
+        - acq.survey_cost_pence
+        - money_round((acq.purchase_price_pence * acq.broker_fee_pct) / 100)
+        - acq.other_acquisition_costs_pence
+    )
+
+
 class TestAcquisitionTaxIsJurisdictionAware:
     def test_taxes_an_english_appraisal_identically_to_the_pre_r8_engine(self):
         m = run_appraisal(_english_base()).metrics
@@ -450,6 +464,14 @@ class TestAcquisitionTaxIsJurisdictionAware:
     # from there into TDC, profit and every ratio). Before this fix the second
     # site was hard-wired to England/NI, so a Welsh appraisal reported LTT while
     # charging SDLT. This asserts the two can never drift apart again.
+    #
+    # COVERAGE LIMIT: this guard varies the jurisdiction and the override, but
+    # not the acquisition *date*. A date mismatch between the two sites is
+    # currently unobservable, because every (jurisdiction, basis) group in
+    # TAX_TABLES holds a single open-ended band set -- any date resolves to the
+    # same set. **The first time a second dated band set is added to a group,
+    # extend this guard with a date case**, or a date read at one site and not
+    # the other will pass silently. Mirrors metrics.test.ts.
     @pytest.mark.parametrize(
         "jurisdiction,regime,expected",
         [("wales", "LTT", 2_542_410), ("scotland", "LBTT", 2_617_410),
@@ -465,16 +487,36 @@ class TestAcquisitionTaxIsJurisdictionAware:
         assert m.acquisition_tax.regime == regime
         assert m.acquisition_tax_pence == expected
 
-        a = inputs.acquisition
-        tax_inside_acquisition_cost = (
-            m.acquisition_cost_pence
-            - a.purchase_price_pence
-            - a.legal_fees_pence
-            - a.survey_cost_pence
-            - money_round((a.purchase_price_pence * a.broker_fee_pct) / 100)
-            - a.other_acquisition_costs_pence
+        assert _tax_inside_acquisition_cost(inputs.acquisition, m) == expected
+
+    # Fix round 2. Pydantic's default revalidate_instances='never' lets a
+    # CalculatorInputsV4 hold an AcquisitionInputsV5 instance, so a gate on the
+    # *container* (isinstance(inputs, CalculatorInputsV5)) and a gate on the
+    # *block* (isinstance(acq, AcquisitionInputsV5)) disagree: derive_metrics
+    # would report SDLT while calculate_total_acquisition_cost charges LTT.
+    # Not reachable from JSON or the migration chain, but it is exactly the
+    # invariant the guard above exists to make unbreakable, and that guard misses
+    # it because it only ever builds v5 containers. Both engines now gate on the
+    # block; the TS mirror of this test pins the same document shape.
+    def test_a_v4_container_carrying_a_v5_acquisition_block_agrees_at_both_sites(self):
+        v5 = _english_base()
+        v5.acquisition.jurisdiction = "wales"
+        v5.acquisition.acquisition_date = "2026-08-17"
+        doc = v5.model_dump(mode="json")
+        acq5 = AcquisitionInputsV5.model_validate(doc["acquisition"])
+        hybrid = CalculatorInputsV4.model_validate(
+            {**doc, "inputs_version": 4, "acquisition": acq5},
         )
-        assert tax_inside_acquisition_cost == expected
+        # The container really is v4 and the block really is v5 -- if Pydantic ever
+        # starts re-validating (revalidate_instances) these two assertions fail
+        # first and say so, rather than the test silently going inert.
+        assert type(hybrid) is CalculatorInputsV4
+        assert isinstance(hybrid.acquisition, AcquisitionInputsV5)
+
+        m = run_appraisal(hybrid).metrics
+        assert m.acquisition_tax.regime == "LTT"
+        assert m.acquisition_tax_pence == 2_542_410
+        assert _tax_inside_acquisition_cost(hybrid.acquisition, m) == m.acquisition_tax_pence
 
     def test_migration_to_v5_adds_the_two_new_metrics_and_changes_no_other_figure(self):
         """The load-bearing property of R8 Task 5, asserted on a document built

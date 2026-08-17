@@ -121,6 +121,48 @@ describe('golden fixtures (shared with the Python engine)', () => {
     });
   }
 
+  // Fix round 2 (R8 Task 5). Every fixture in the corpus is now v5, so the loop
+  // above proves only that "a v5 document merged onto v5 defaults reproduces its
+  // pins". The property that matters for real data is the other one: *an old
+  // stored document still reproduces its pins after normalisation* — every
+  // persisted row in the database is v3 or v4, and nothing writes v5 yet. This
+  // reverses the R8 additions and re-runs the whole corpus through the migration
+  // chain from where it actually was before this release, restoring corpus-wide
+  // coverage of that path (it was previously the `migrated-to-v4` loop's job).
+  const R8_ACQUISITION_KEYS = [
+    'jurisdiction', 'jurisdiction_source', 'jurisdiction_evidence_status',
+    'acquisition_date', 'acquisition_tax_override_pence', 'acquisition_tax_override_reason',
+  ];
+
+  function asPreR8Document(inputs: AnyCalculatorInputs): Record<string, unknown> {
+    const doc = JSON.parse(JSON.stringify(inputs)) as Record<string, unknown>;
+    const acq = doc.acquisition as Record<string, unknown>;
+    for (const key of R8_ACQUISITION_KEYS) delete acq[key];
+    // The pre-R8 version, derived structurally rather than hard-coded per stem:
+    // the three v4 blocks arrived together in Release 3a, so a fixture carrying
+    // `programme` was v4 and one without it was v3.
+    doc.inputs_version = 'programme' in doc ? 4 : 3;
+    return doc;
+  }
+
+  for (const fx of appraisalFixtures) {
+    // Mirrors Python's test_pre_r8_fixture_form_reproduces_its_metrics_after_migration.
+    it(`${fx.name} — reproduces its metrics from its pre-R8 (v3/v4) form`, () => {
+      const pre = asPreR8Document(fx.inputs);
+      expect(pre.inputs_version).not.toBe(5);
+      expect(R8_ACQUISITION_KEYS.some((k) => k in (pre.acquisition as object))).toBe(false);
+      const v5 = migrateInputsToV5(pre);
+      expect(v5.inputs_version).toBe(5);
+      // The migration stamps what a legacy document honestly is: England/NI by
+      // default, unconfirmed, no transaction date (spec §14).
+      expect(v5.acquisition.jurisdiction).toBe('england_ni');
+      expect(v5.acquisition.jurisdiction_source).toBe('migrated_default');
+      expect(v5.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
+      expect(v5.acquisition.acquisition_date).toBeNull();
+      assertExpectedMetrics(runAppraisal(v5), fx, `${fx.name}[pre-R8 → v5]`);
+    });
+  }
+
   // Negative control (fixture H's precedent, Release 3a — a pinned key that no assertion
   // actually reaches is a copy-paste false pass, not coverage). The three redemption keys
   // added in Release 3b reach the run through FLAT_KEYS rather than through

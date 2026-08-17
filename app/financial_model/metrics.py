@@ -21,9 +21,9 @@ from .schedule import Schedule
 from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax
 from .types import (
     CALC_VERSION,
+    AcquisitionInputsV5,
     AnyCalculatorInputs,
     CalculatorInputsV3,
-    CalculatorInputsV5,
 )
 
 # --- irr.ts --------------------------------------------------------------
@@ -251,8 +251,18 @@ def derive_metrics(
     # documents always implicitly were -- the England/NI non-residential band set
     # has been unchanged since 17 March 2016 and is the current set -- so this
     # preserves their figures to the penny.
+    #
+    # Fix round 2: the gate is on the *acquisition block*, not on the container.
+    # schedule.py's calculate_total_acquisition_cost is handed the block alone and
+    # can only gate on it, and the two sites must use the identical predicate or
+    # they can disagree -- Pydantic's default revalidate_instances='never' lets a
+    # CalculatorInputsV4 hold an AcquisitionInputsV5, at which point a
+    # container-level gate here reports SDLT while the schedule charges LTT. Not
+    # reachable from JSON or the migration chain, but this is precisely the
+    # invariant the drift guard exists to make unbreakable. This also mirrors the
+    # TS engine, which is structural on the block at both sites.
     acq = inputs.acquisition
-    is_v5 = isinstance(inputs, CalculatorInputsV5)
+    is_v5 = isinstance(acq, AcquisitionInputsV5)
     acquisition_tax = calculate_acquisition_tax(
         consideration_pence=acq.purchase_price_pence,
         jurisdiction=acq.jurisdiction if is_v5 else "england_ni",

@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 
@@ -130,6 +131,49 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
     v5 = migrate_inputs_to_v5(doc["inputs"])
     assert v5.inputs_version == 5
     _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[migrated-to-v5]")
+
+
+# Fix round 2 (R8 Task 5). Every fixture in the corpus is now v5, so the test above
+# proves only that "a v5 document merged onto v5 defaults reproduces its pins". The
+# property that matters for real data is the other one: *an old stored document still
+# reproduces its pins after normalisation* -- every persisted row in the database is
+# v3 or v4, and nothing writes v5 yet. This reverses the R8 additions and re-runs the
+# whole corpus through the migration chain from where it actually was before this
+# release. Mirrors golden-fixtures.test.ts.
+_R8_ACQUISITION_KEYS = (
+    "jurisdiction", "jurisdiction_source", "jurisdiction_evidence_status",
+    "acquisition_date", "acquisition_tax_override_pence",
+    "acquisition_tax_override_reason",
+)
+
+
+def _as_pre_r8_document(inputs: dict) -> dict:
+    doc = copy.deepcopy(inputs)
+    for key in _R8_ACQUISITION_KEYS:
+        doc["acquisition"].pop(key, None)
+    # The pre-R8 version, derived structurally rather than hard-coded per stem: the
+    # three v4 blocks arrived together in Release 3a, so a fixture carrying
+    # `programme` was v4 and one without it was v3.
+    doc["inputs_version"] = 4 if "programme" in doc else 3
+    return doc
+
+
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+def test_pre_r8_fixture_form_reproduces_its_metrics_after_migration(path: Path) -> None:
+    doc = _load_fixture(path)
+    pre = _as_pre_r8_document(doc["inputs"])
+    assert pre["inputs_version"] != 5
+    assert not any(k in pre["acquisition"] for k in _R8_ACQUISITION_KEYS)
+
+    v5 = migrate_inputs_to_v5(pre)
+    assert v5.inputs_version == 5
+    # The migration stamps what a legacy document honestly is: England/NI by
+    # default, unconfirmed, no transaction date (spec Sec 14).
+    assert v5.acquisition.jurisdiction == "england_ni"
+    assert v5.acquisition.jurisdiction_source == "migrated_default"
+    assert v5.acquisition.jurisdiction_evidence_status == "unconfirmed"
+    assert v5.acquisition.acquisition_date is None
+    _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[pre-R8 -> v5]")
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)

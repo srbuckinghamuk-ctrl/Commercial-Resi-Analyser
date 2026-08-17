@@ -3,7 +3,10 @@ import { deriveMetrics, pct, breakevenFlags } from './metrics';
 import { runLedger } from './monthly-engine';
 import { runAppraisal, migrateInputsToV4, migrateInputsToV5 } from './index';
 import { defaultCalculatorInputsV2, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
-import type { EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule } from './finance-types';
+import type {
+  AcquisitionInputsV5, AnyCalculatorInputs, EquitySource, FacilityTerms,
+  MonthReceipts, MonthUses, Schedule,
+} from './finance-types';
 
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
@@ -501,8 +504,15 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
   // there into TDC, profit and every ratio). Before this fix the second site was
   // hard-wired to England/NI, so a Welsh appraisal reported LTT while charging
   // SDLT. This asserts the two can never drift apart again.
+  //
+  // COVERAGE LIMIT: this guard varies the jurisdiction and the override, but not
+  // the acquisition *date*. A date mismatch between the two sites is currently
+  // unobservable, because every (jurisdiction, basis) group in TAX_TABLES holds a
+  // single open-ended band set — any date resolves to the same set. **The first
+  // time a second dated band set is added to a group, extend this guard with a
+  // date case**, or a date read at one site and not the other will pass silently.
   function taxInsideAcquisitionCost(
-    inputs: ReturnType<typeof englishBase>, m: { acquisition_cost_pence: number },
+    inputs: { acquisition: AcquisitionInputsV5 }, m: { acquisition_cost_pence: number },
   ): number {
     const a = inputs.acquisition;
     return m.acquisition_cost_pence
@@ -529,6 +539,27 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
       expect(taxInsideAcquisitionCost(inputs, m)).toBe(expected);
     },
   );
+
+  // Fix round 2. The Python mirror of this test exists because Pydantic's default
+  // revalidate_instances='never' lets a CalculatorInputsV4 hold an
+  // AcquisitionInputsV5, at which point a gate on the *container* and a gate on
+  // the *block* disagree. The TS engine cannot have that bug — both sites read the
+  // block structurally — and this pins that: a document declaring inputs_version 4
+  // whose acquisition block carries the R8 keys is taxed on those keys at both
+  // sites, consistently. Neither engine may report one regime and charge another.
+  it('a v4 container carrying a v5 acquisition block agrees at both sites', () => {
+    const v5 = englishBase();
+    v5.acquisition.jurisdiction = 'wales';
+    v5.acquisition.acquisition_date = '2026-08-17';
+    const hybrid = { ...JSON.parse(JSON.stringify(v5)), inputs_version: 4 } as
+      unknown as AnyCalculatorInputs & { acquisition: AcquisitionInputsV5 };
+    expect(hybrid.inputs_version).toBe(4);
+
+    const m = runAppraisal(hybrid).metrics;
+    expect(m.acquisition_tax.regime).toBe('LTT');
+    expect(m.acquisition_tax_pence).toBe(2_542_410);
+    expect(taxInsideAcquisitionCost(hybrid, m)).toBe(m.acquisition_tax_pence);
+  });
 
   // The load-bearing property of R8 Task 5, asserted on a document built here
   // rather than read from `fixtures/financial-model/` — the fixture corpus makes
