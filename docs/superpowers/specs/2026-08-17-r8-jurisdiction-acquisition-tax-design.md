@@ -228,13 +228,19 @@ parity tests fail until both engines are updated.
 - **The false assumption at `export-investment-memo.ts:1894` is deleted** and replaced by a
   true statement of the regime actually applied, its band-set date and its source.
 - **Provenance panel (spec §13.1)** gains `tax_table_version` and the applied jurisdiction.
-- **Audit hash (spec §13.2)** includes the table version and jurisdiction, so a memo produced
-  before and after a Budget cannot collide.
+- **Audit hash (spec §13.2)** needs no structural change. `audit_hash()` is a hash of
+  `input_hash` and `outputs_hash`, which already commit to the whole input and output
+  documents — jurisdiction lands in inputs and `table_version` lands in metrics, so both
+  flow in transitively and a memo produced before and after a Budget cannot collide. Adding
+  them as separate hash parts would rewrite every stored hash for no gain.
 - **`[Information Required]`** lines for: unconfirmed jurisdiction; a `date_basis` of
   `assumed_current`; an override in force.
-- **Report-safe gate.** An unconfirmed jurisdiction or an assumed date holds the memo in
-  DRAFT — the treatment R7 already gives unconfirmed equity and facility terms. An
-  unverified tax basis is an underwriting gap of the same kind.
+- **Draft gate.** An unconfirmed jurisdiction or an assumed date holds the memo in DRAFT via
+  a new `DraftReason` of `tax_basis_unconfirmed`, ordered immediately before `not_approved`
+  so it displaces no more fundamental reason. It is deliberately *not* a hard validation
+  error: `report_safe: false` makes the report state that the figures themselves may be
+  wrong, whereas here the arithmetic is sound and the basis is unverified. `report-provenance.ts`
+  is emphatic about not conflating those two, and this respects that line.
 - **Excel export** carries the regime, band-set date and table version alongside the figure.
 
 ---
