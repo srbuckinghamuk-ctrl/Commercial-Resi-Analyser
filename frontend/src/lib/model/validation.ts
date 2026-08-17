@@ -253,6 +253,14 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
 
     if (acq.acquisition_date !== null) {
+      // Known limitation: this checks shape only, not calendar validity, and
+      // selectBandSet compares dates lexicographically rather than parsing
+      // them — so a string like "2026-02-31" passes here and is accepted as
+      // date_basis 'transaction_date'. `<input type="date">` cannot produce
+      // such a value, so this is reachable only via the API, and the effect
+      // is cosmetic (band selection is still monotonic in the lexicographic
+      // ordering). Not tightened here: adding a calendar check would be a
+      // behaviour change, which this comment deliberately is not.
       if (!/^\d{4}-\d{2}-\d{2}$/.test(acq.acquisition_date)) {
         err('acquisition.acquisition_date', 'Acquisition date must be an ISO date (YYYY-MM-DD).');
       } else {

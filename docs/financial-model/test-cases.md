@@ -2864,7 +2864,7 @@ the load-bearing pin:
 LTT non-residential, bands in force from 22 Dec 2020, slice basis:
   0%  on the first £225,000                    =        0p
   1%  on £225,000..£250,000  (£25,000)          =   25,000p
-  5%  on £250,000..£753,482  (£503,482)         2,517,410p
+  5%  on £250,000..£753,482  (£503,482)         =   2,517,410p
                                           total = 2,542,410p
 ```
 

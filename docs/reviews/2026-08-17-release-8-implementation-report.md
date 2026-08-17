@@ -116,7 +116,8 @@ SDLT £89,500, LBTT £88,500, **LTT £97,750** — which is the bidirectionality
 ## 4. The release-day behaviour change
 
 > **Every existing appraisal will show a `DRAFT — TAX BASIS UNCONFIRMED — NOT FOR LENDER
-> RELIANCE` watermark until its jurisdiction is confirmed once.**
+> RELIANCE` watermark until both its jurisdiction is confirmed and an acquisition date is
+> recorded.**
 
 This is the single most visible consequence of the release and it is deliberate.
 
@@ -133,6 +134,14 @@ implemented the decision rather than softening it; the Task 10 reviewer specific
 confirmed that every changed test expectation changed *because behaviour changed*, and
 that the v1-snapshot test gained four assertions rather than losing any.
 
+Recorded plainly, because the final review flagged it: the decision put to the product
+owner was described as "confirm the jurisdiction" — a single action — not as "confirm the
+jurisdiction and enter an acquisition date". §13.3's FINAL condition needs both halves
+(`jurisdiction_evidence_status == 'confirmed'` *and* `date_basis == 'transaction_date'`,
+spec §14.6), and migration leaves the date null, so a migrated document does not reach
+FINAL on jurisdiction confirmation alone. The shipped gate is correct and matches the
+code and the UI; what was recorded against the product owner's sign-off understated it.
+
 What this does and does not mean:
 
 - **No stored figure moves.** Migration is purely additive, legacy documents were all
@@ -141,7 +150,12 @@ What this does and does not mean:
   pre-existing fixtures: byte-identical metrics v4 vs v5.
 - **`report_safe` stays true.** An unconfirmed jurisdiction does not assert the figures
   are wrong — see §7 below on why this is a draft reason and not a validation error.
-- **Confirmation is one action, once per appraisal**, on the acquisition page.
+- **Confirmation is two actions, once per appraisal**, on the acquisition page: confirming
+  the jurisdiction and entering an acquisition date. Migration leaves the date null, so
+  confirming the jurisdiction alone does not clear the watermark — `AcquisitionPage.tsx`'s
+  amber banner names the missing date explicitly, and a migrated fixture walked through the
+  UI stays `DRAFT / tax_basis_unconfirmed` after the jurisdiction is confirmed, only
+  reaching `DRAFT / not_approved` once a date is also entered.
 
 ---
 
@@ -166,7 +180,7 @@ Read by eye, and worth recording:
 - **The three regimes' acquisition costs differ by exactly the tax difference** —
   44,787,500p / 44,687,500p / 44,612,500p against 1,075,000p / 975,000p / 900,000p. The
   100,000p and 175,000p gaps agree to the penny, which is the two-call-site property of
-  §7(a) below observed in the rendered document rather than only in a unit test.
+  §6(a) below observed in the rendered document rather than only in a unit test.
 - **The unconfirmed memo's prose names the reason**, replacing the generic approval
   sentence: *"It is a draft because the acquisition tax jurisdiction has not been
   confirmed."* The confirmed cases instead say *"No lender case has been submitted for
@@ -422,7 +436,7 @@ Carried from the ledger's `minor (deferred)` lines. None blocks the release.
 |---|---|---|
 | 1 | `_REGIME_BY_JURISDICTION` is typed `dict[str, Regime]`, not `dict[Jurisdiction, Regime]`. Inherited from the task brief; no runtime effect. | `app/financial_model/acquisition_tax.py` |
 | 2 | `is_v5` is shape-gated, so `{"inputs_version": 5}` with no finance block still falls to the v1 path. This **mirrors TS `isV5` exactly** — a mirrored limitation, not a new one. | both engines |
-| 3 | v5 symbols not re-exported from `app/financial_model/__init__.py`. | Python |
+| 3 | `app/financial_model/__init__.py` re-exports `migrate_inputs_to_v5`, `calculate_acquisition_tax`, `derive_jurisdiction`, `regime_for`, `AcquisitionTaxResult` and `TAX_TABLE_VERSION`, but not `CalculatorInputsV5`, `AcquisitionInputsV5`, `is_v5` or `migrate_v4_to_v5` — asymmetric with V2/V3/V4, whose `is_v4` and `migrate_v3_to_v4` are both exported. | Python |
 | 4 | `.claude/worktrees/release-3b-exits-ui/.../export-investment-memo.ts:1387` still carries the old false England/NI-only string. Tracked but never compiled (outside `tsconfig.app.json`) and **predates this branch** — repo hygiene, not this release. | worktree |
 | 5 | Task 9's write-up says mutation 3 failed one test; it actually fails two. The write-up **understates** its own coverage. No code change. | doc only |
 | 6 | Residue of §7(7). The original defect — the client displaying and posting English SDLT on a non-English property, 91,388,400 shown against 91,213,400 stored — is **fixed**: `handleSave` now adopts the server snapshot. What remains is that the first such save still writes one audit row recording a `client_mismatch`. That is a spurious audit entry, not a stored wrong figure. Reviewed and accepted. | UI |

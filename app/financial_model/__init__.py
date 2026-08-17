@@ -40,7 +40,8 @@ from .validation import ReconciliationStatus, ValidationIssue, reconcile, valida
 @dataclass
 class AppraisalRun:
     # Widened in Release 3a: consumers read the actual document run_appraisal()
-    # was given -- v2, v3 or v4 -- with no downcast to a narrower shape.
+    # was given -- v2, v3, v4 or v5 (R8, jurisdiction-aware acquisition tax,
+    # spec Sec 14) -- with no downcast to a narrower shape.
     inputs: AnyCalculatorInputs
     schedule: Schedule
     model: MonthlyModel
@@ -52,11 +53,15 @@ class AppraisalRun:
 def run_appraisal(inputs: AnyCalculatorInputs) -> AppraisalRun:
     """The only entry point report/backend-parity code may use. Accepts v2
     (pre-Release-2b), v3 (adds the optional lender_valuation block, spec
-    Sec 3.2) and v4 (adds the optional programme block, spec Sec 6.1)
+    Sec 3.2), v4 (adds the optional programme block, spec Sec 6.1) and v5
+    (adds jurisdiction, acquisition date and tax override, spec Sec 14, R8)
     documents -- v2 callers get lender-basis metrics as None (spec Sec 2:
     unknown lender-critical inputs are never silently defaulted), exactly as
-    they did before the block existed, and a v4 document with
-    `programme: None` produces a byte-identical schedule to its v3 source."""
+    they did before the block existed, a v4 document with `programme: None`
+    produces a byte-identical schedule to its v3 source, and a document on
+    any version before v5 gets acquisition tax computed as England/NI SDLT
+    with an unconfirmed basis (spec Sec 14.6), exactly as it did before the
+    jurisdiction field existed."""
     schedule = build_schedule(inputs)
     model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
     return AppraisalRun(

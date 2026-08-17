@@ -23,11 +23,15 @@ export interface AppraisalRun {
   reconciliation: ReconciliationStatus;
 }
 
-/** The only entry point UI/report/backend-parity code may use. Accepts both
- * v2 (pre-Release-2b) and v3 (adds the optional lender_valuation block, spec
- * §3.2) documents — v2 callers get lender-basis metrics as null (spec §2:
- * unknown lender-critical inputs are never silently defaulted), exactly as
- * they did before the block existed. */
+/** The only entry point UI/report/backend-parity code may use. Accepts v2
+ * (pre-Release-2b), v3 (adds the optional lender_valuation block, spec §3.2),
+ * v4 (adds the optional programme block, spec §6.1) and v5 (adds jurisdiction,
+ * acquisition date and tax override, spec §14, R8) documents — v2 callers get
+ * lender-basis metrics as null (spec §2: unknown lender-critical inputs are
+ * never silently defaulted), exactly as they did before the block existed,
+ * and callers on any version before v5 get acquisition tax computed as
+ * England/NI SDLT with an unconfirmed basis (spec §14.6), exactly as they did
+ * before the jurisdiction field existed. */
 export function runAppraisal(inputs: AnyCalculatorInputs): AppraisalRun {
   const schedule = buildSchedule(inputs);
   const model = runLedger(schedule, inputs.finance, inputs.equity_sources);

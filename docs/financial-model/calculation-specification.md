@@ -5,7 +5,7 @@
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
-- **2.7.0** — jurisdiction-aware acquisition tax: SDLT (England/NI), LBTT (Scotland) and LTT (Wales) computed from a dated, sourced and versioned band table (§14, R8), with inputs v5 carrying the jurisdiction, its evidence status, the acquisition date and a reasoned override. **No existing computed value changed** — §1.6 explains why. §3.3's formula term is renamed from `SDLT` to `acquisition_tax` and its false "other jurisdictions are out of scope" sentence is deleted; §3.18 records that the RLV is invariant to it; §13.1 gains the table version and applied jurisdiction; §13.3 gains a fourth draft condition. What does change in practice is that every pre-R8 document is marked DRAFT until its jurisdiction is confirmed once (§14.6).
+- **2.7.0** — jurisdiction-aware acquisition tax: SDLT (England/NI), LBTT (Scotland) and LTT (Wales) computed from a dated, sourced and versioned band table (§14, R8), with inputs v5 carrying the jurisdiction, its evidence status, the acquisition date and a reasoned override. **No existing computed value changed** — §1.6 explains why. §3.3's formula term is renamed from `SDLT` to `acquisition_tax` and its false "other jurisdictions are out of scope" sentence is deleted; §3.18 records that the RLV is invariant to it; §13.1 gains the table version and applied jurisdiction; §13.3 gains a fourth draft condition. What does change in practice is that every pre-R8 document is marked DRAFT until **both** its jurisdiction is confirmed **and** an acquisition date is recorded — migration leaves the date null, so confirming the jurisdiction alone is not enough (§14.6).
 - **2.4.0** — fixed-facility sensitivity suite: the two-way matrix, the tornado, and their shared lever and validation rules (§12, R4). No existing computed value changed — §12 only composes calls to the existing appraisal engine over levered copies of an inputs document, it does not alter any formula — which is why this is a minor bump, not a major one.
 - **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`. Also corrects §3.12's refinance-profit wording to match §3.11 and the engine (a refinance is a financing event and does not enter profit) — a **specification** correction only, no computed value changed.
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
@@ -757,8 +757,11 @@ A document is **FINAL** only when all four hold, tested in this order:
 1. `reconciliation.report_safe` — hard validations pass.
 2. `reconciliation.senior_repaid` — the ledger clears the senior facility within
    the modelled term.
-3. `jurisdiction_evidence_status == 'confirmed'` — the tax basis has been
-   verified (§14.6). [R8 — calc 2.7.0]
+3. `jurisdiction_evidence_status == 'confirmed'` **and**
+   `metrics.acquisition_tax.date_basis == 'transaction_date'` — the tax basis
+   has been verified: the jurisdiction is evidenced *and* the band set was
+   selected by the transaction's own date rather than assumed to be the
+   current one (§14.6). [R8 — calc 2.7.0]
 4. An approved lender case: status `credit_approved` or `approved_with_conditions`.
 
 Otherwise the document is **DRAFT** and carries the banner for the **first**
@@ -968,9 +971,12 @@ mechanism rather than two.
   `migrated_default` / `unconfirmed`, with a null date. It is purely additive and no
   existing appraisal's computed values move. The consequence is deliberate and was
   accepted by the product owner rather than worked around: **every document that
-  predates this release shows the tax-basis draft banner until its jurisdiction is
-  confirmed once.** There is no grandfathering and no England-first exemption,
-  because a migrated document genuinely is unverified.
+  predates this release shows the tax-basis draft banner until both its
+  jurisdiction is confirmed and an acquisition date is recorded.** Migration
+  leaves the date null, so `date_basis` stays `assumed_current` until a date is
+  entered, and §13.3's third condition needs both halves — confirming the
+  jurisdiction alone is not enough. There is no grandfathering and no
+  England-first exemption, because a migrated document genuinely is unverified.
 
 ### 14.7 The deal spider
 

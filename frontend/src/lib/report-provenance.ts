@@ -151,11 +151,21 @@ export function documentStatus(
 /**
  * Whether the printed acquisition tax rests on an evidenced basis (spec §14).
  *
- * A v2/v3/v4 document carries no jurisdiction field at all, and is treated as
- * confirmed. That is deliberate: every stored record predating R8 would
- * otherwise flip to DRAFT for a governance condition that did not exist when it
- * was saved, which is a change of meaning rather than a new finding. The `in`
- * guard is the established idiom for reading a field a legacy document lacks.
+ * A v2/v3/v4 document carries no jurisdiction field at all, and this function
+ * treats it as confirmed. Note what that is *not* an escape hatch for: the
+ * product owner's accepted flag day is exactly "every pre-R8 document shows
+ * the tax-basis draft banner until it is confirmed" (report §4), so a stored
+ * record that genuinely predates R8 and is genuinely still on v2/v3/v4 *is*
+ * meant to flip to DRAFT under that decision, once it is migrated and its
+ * jurisdiction is examined — this branch does not contradict that. What it
+ * does is describe a case the decision was never about: both production entry
+ * points (`ExportPage.tsx`, `ConversionCalculator.tsx`) migrate every stored
+ * document to v5 before calling `runAppraisal`, so by the time this function
+ * runs in practice, `acq` is already v5-shaped and this `!('jurisdiction' in
+ * acq)` branch is not reachable from stored data at all — only from a caller
+ * that hands `taxBasisConfirmedFor` a raw v2/v3/v4 document directly (as the
+ * unit tests do, deliberately, to pin the pre-migration behaviour). The `in`
+ * guard is the established idiom for reading a field such a document lacks.
  *
  * Do not "tidy" the two halves into one. An undated v5 document is held and an
  * undated v4 document is not, and that asymmetry is not an oversight: the test
@@ -186,6 +196,15 @@ export function taxBasisConfirmedFor(run: AppraisalRun): boolean {
  * defaults, and `metrics.ts` then coalesces it to `england_ni`. Such a document
  * has a jurisdiction field but has recorded nothing in it, and the report must
  * describe it exactly as it describes a pre-R8 document: assumed.
+ *
+ * That false path is not reachable in production by an ordinary route: the
+ * server's v5 inputs model types `jurisdiction` as a non-nullable literal, so
+ * a client cannot legitimately produce a stored v5 document with an explicit
+ * `null` there, and it rejects one that tries with a 422. The only way to
+ * exercise this path today is a hand-crafted v5 snapshot that bypasses that
+ * validation — which is also true of the three `!prov.jurisdictionRecorded`
+ * branches in `export-investment-memo.ts`. The check is still correct to keep:
+ * it is what makes the false path safe *if* that boundary is ever loosened.
  */
 export function jurisdictionRecordedOn(run: AppraisalRun): boolean {
   const acq = run.inputs.acquisition;

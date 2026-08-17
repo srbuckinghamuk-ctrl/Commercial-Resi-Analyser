@@ -325,6 +325,15 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             )
 
         if acq.acquisition_date is not None:
+            # Known limitation, mirrored exactly from validation.ts: this checks
+            # shape only, not calendar validity, and select_band_set compares
+            # dates lexicographically rather than parsing them -- so a string
+            # like "2026-02-31" passes here and is accepted as date_basis
+            # 'transaction_date'. `<input type="date">` cannot produce such a
+            # value, so this is reachable only via the API, and the effect is
+            # cosmetic (band selection is still monotonic in the lexicographic
+            # ordering). Not tightened here: adding a calendar check would be a
+            # behaviour change, which this comment deliberately is not.
             if not _ISO_DATE.match(acq.acquisition_date):
                 err("acquisition.acquisition_date", "Acquisition date must be an ISO date (YYYY-MM-DD).")
             else:
