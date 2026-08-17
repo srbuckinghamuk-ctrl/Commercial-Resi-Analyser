@@ -302,6 +302,13 @@ export interface AppraisalResultV2 {
   total_development_cost_pence: number;
   profit_pence: number;
   profit_is_unrealised: boolean;
+  /** Spec §3.16.1 — the schedule books a disposal or a refinance within the term,
+   *  so distributed-return metrics have something to measure against. */
+  has_realisation_event: boolean;
+  /** Spec §3.16.1 — return on equity is an accounting return here, not a
+   *  distributed one: either profit includes retained value, or nothing has been
+   *  realised at all. Reports must label the figure "unrealised" when true. */
+  return_on_equity_is_unrealised: boolean;
   unrealised_value_pence: number;
   profit_on_cost_pct: number | null;
   profit_on_gdv_pct: number | null;
@@ -338,4 +345,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.5.0';
+export const CALC_VERSION = '2.6.0';

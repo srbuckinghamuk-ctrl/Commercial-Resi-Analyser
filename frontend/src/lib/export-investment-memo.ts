@@ -11,6 +11,13 @@ import {
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
+import { repairGluedDescription } from './format';
+import { PAGE_H, PAGE_W } from './report-layout';
+import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
+import {
+  DARK_PAGE_TONE, LIGHT_PAGE_TONE, drawWatermark, fitWatermark, setDocumentMetadata,
+} from './report-layout';
+import type { DraftReason, ReportProvenance } from './report-provenance';
 
 // ── This memo consumes the finished AppraisalRun only ─────
 //
@@ -28,14 +35,42 @@ import { formatProgrammeMonth } from './programme-months';
 // docs/financial-model/calculation-specification.md §11 for the
 // prohibited-calculations list this file was rewritten to comply with.
 
-const PAGE_W = 210;
 const MARGIN_L = 20;
 const MARGIN_R = 20;
 const MARGIN_T = 25;
 const CONTENT_W = PAGE_W - MARGIN_L - MARGIN_R;
 const FOOTER_Y = 287;
 
-const DRAFT_WATERMARK_TEXT = 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE';
+/** Last baseline the flowing content may occupy; the footer sits below it. */
+const CONTENT_BOTTOM = 272;
+
+/** A table's header row plus roughly three body rows at the memo's 8-9pt sizes. */
+const TABLE_MIN_BLOCK_MM = 34;
+/** Tables at or below this height are kept whole rather than split (see `table`). */
+const MOVE_WHOLE_MAX_MM = 110;
+
+/**
+ * Two distinct reasons a document is not a final lender paper, and they must not
+ * be conflated: a run whose hard validations fail is *unreconciled* and its
+ * figures may be wrong, whereas a run that reconciles cleanly but carries no
+ * approved lender case is arithmetically sound and simply has not been approved.
+ * Printing the first message over the second would state something untrue about
+ * the model; printing no message at all would let an unapproved appraisal leave
+ * the building looking like a credit paper. See spec Sec 13.3.
+ */
+/** The condition each watermark states, in a form that fits mid-sentence.
+ *  Kept beside the banner text so a reason can never drift from its wording. */
+const DRAFT_REASON_SENTENCE: Record<DraftReason, string> = {
+  unreconciled: 'one or more hard validations fail',
+  senior_not_repaid: 'the senior facility is not repaid within the modelled term',
+  not_approved: 'no lender case has been credit approved',
+};
+
+const WATERMARK_TEXT: Record<DraftReason, string> = {
+  unreconciled: 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE',
+  senior_not_repaid: 'DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE',
+  not_approved: 'DRAFT - NOT APPROVED FOR LENDER RELIANCE',
+};
 
 /**
  * jspdf-autotable augments the jsPDF instance with `lastAutoTable` at
@@ -77,10 +112,6 @@ function fmtDate(iso: string | null): string {
     'July','August','September','October','November','December',
   ];
   return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
-}
-
-function todayFormatted(): string {
-  return fmtDate(new Date().toISOString());
 }
 
 function sqmToSqft(sqm: number): number {
@@ -248,10 +279,20 @@ export function generateInvestmentMemo(
   project: Project,
   run: AppraisalRun,
   eligibility?: EligibilityAssessment | null,
+  provenance?: ReportProvenance | null,
 ): Blob {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const { inputs, metrics, model, schedule } = run;
-  const draft = !run.reconciliation.report_safe;
+  // Spec Sec 13. A caller that supplies no provenance still gets a governed
+  // document: with no stored record there are no hashes to print and no lender
+  // case to be approved, so the report says so and stays a DRAFT rather than
+  // silently dropping the panel.
+  const prov = provenance ?? buildProvenance(run, null);
+  // The two conditions are separate (spec Sec 13.3): an unreconciled run's
+  // figures may be wrong; a reconciled but unapproved run's figures are sound
+  // and merely unapproved. Only the first may claim the model is at fault.
+  const draft = prov.draftReason !== null;
+  const watermarkText = prov.draftReason === null ? '' : WATERMARK_TEXT[prov.draftReason];
   // `inputs` may be a pre-Release-2b v2 document with no `lender_valuation` field at all —
   // this mirrors the null it would carry on a v3 document with no block recorded.
   const lenderValuation = 'lender_valuation' in inputs ? inputs.lender_valuation : null;
@@ -269,12 +310,61 @@ export function generateInvestmentMemo(
   const totalSqft = sqmToSqft(totalSqm);
   const unitCount = inputs.unit_mix.units.length;
 
+  // ── Text style: the one place font, weight and colour are set ────────────
+  //
+  // R7. Every layout defect the second audit found on page 8 came from style
+  // state outliving the call that set it. `watermark()` left the document at
+  // 40 pt bold grey and `infoRequired()` set its own 10 pt italic amber *before*
+  // testing whether it needed a page break — so the break repainted the state
+  // and the line was drawn at 40 pt, running 400 mm off a 210 mm page.
+  //
+  // The rule that removes the whole class: style is applied immediately before
+  // each draw, never before a break, and anything that draws out-of-band
+  // restores what it found. `Style` makes both halves cheap enough that there is
+  // no reason to reach past them.
+  interface Style {
+    size: number;
+    weight: 'normal' | 'bold' | 'italic' | 'bolditalic';
+    color: [number, number, number];
+  }
+
+  const BODY: Style = { size: 10, weight: 'normal', color: [51, 65, 85] };
+  const SECTION: Style = { size: 14, weight: 'bold', color: [30, 58, 95] };
+  const SUBHEAD: Style = { size: 11, weight: 'bold', color: [30, 41, 59] };
+  const INFO: Style = { size: 10, weight: 'italic', color: [180, 83, 9] };
+  const CAPTION: Style = { size: 8, weight: 'normal', color: [100, 116, 139] };
+
+  function applyStyle(style: Style): void {
+    doc.setFontSize(style.size);
+    doc.setFont('helvetica', style.weight);
+    doc.setTextColor(...style.color);
+  }
+
   // ── Draft watermark (spec: unreconciled appraisals never look lender-ready) ──
+
+  /** Measure with a throwaway font state; restores whatever was current. */
+  function preservingMeasurement<T>(measure: () => T): T {
+    const size = doc.getFontSize();
+    const { fontName, fontStyle } = doc.getFont();
+    const result = measure();
+    doc.setFontSize(size);
+    doc.setFont(fontName, fontStyle);
+    return result;
+  }
+
+  // Sized once: the fit search measures the string at up to 69 candidate sizes,
+  // and the answer cannot change between pages of the same document.
+  const watermarkGeometry = draft ? fitWatermark(doc, watermarkText) : null;
+
+  // The cover is a full-bleed dark page; every other page is white.
+  let onDarkPage = true;
+
   function watermark(): void {
-    doc.setTextColor(200);
-    doc.setFontSize(40);
-    doc.setFont('helvetica', 'bold');
-    doc.text(DRAFT_WATERMARK_TEXT, PAGE_W / 2, 160, { angle: 35, align: 'center' });
+    if (!watermarkGeometry) return;
+    drawWatermark(
+      doc, watermarkText, watermarkGeometry,
+      onDarkPage ? DARK_PAGE_TONE : LIGHT_PAGE_TONE,
+    );
   }
 
   // jspdf-autotable paginates internally via its own doc.addPage() calls when
@@ -301,20 +391,76 @@ export function generateInvestmentMemo(
   }
 
   /**
+   * The keep-together primitive: return a cursor with at least `neededMm` of
+   * flowing space beneath it, breaking the page first if there is not.
+   *
+   * This replaces the fixed `if (y > 200)` / `if (y > 245)` guards the memo used
+   * to carry. Those numbers were guesses about how tall whatever came next would
+   * be, and they were wrong in both directions — too eager, and a section that
+   * would have fitted was pushed onto a page of its own (the audit's near-blank
+   * page 11); too lax, and a heading was left stranded at the foot of a page.
+   */
+  function ensureSpace(y: number, neededMm: number): number {
+    if (y + neededMm <= CONTENT_BOTTOM) return y;
+    newPage();
+    return MARGIN_T;
+  }
+
+  /**
    * autoTable wrapper — every table call must go through this, not
    * autoTable(doc, ...) directly, so that pages autoTable creates on its own
    * (internal pagination for a table taller than one page) also get the
    * watermark via didDrawPage, which fires once per physical page the table
    * touches, including the first.
+   *
+   * It also owns the table's own keep-together: a table that begins with only
+   * its header and a row or two visible above the page break reads as a
+   * mistake, so the wrapper breaks first and starts the table at the top of the
+   * next page instead.
    */
   function table(options: Parameters<typeof autoTable>[1]): void {
+    const requestedY = typeof options.startY === 'number' ? options.startY : MARGIN_T;
+    const height = measureTableHeight(options);
+    // Heading first, and measured together with the table, so a heading can
+    // never be left on the page the table just moved off.
+    const afterHeadings = flushHeadings(
+      requestedY,
+      Number.isFinite(height) && height <= MOVE_WHOLE_MAX_MM ? height : TABLE_MIN_BLOCK_MM,
+    );
+    // A short table moves whole rather than splitting: splitting one costs more
+    // in legibility than the white space it saves, and a two-row tail on its own
+    // page is the orphan the second audit reported. A long one is allowed to
+    // split — moving a 200 mm schedule off a half-empty page would leave a
+    // worse hole than the split it avoided — and only has to clear the
+    // header-plus-a-few-rows minimum where it starts.
+    const startY = height <= MOVE_WHOLE_MAX_MM
+      ? ensureSpace(afterHeadings, height)
+      : ensureSpace(afterHeadings, TABLE_MIN_BLOCK_MM);
     autoTable(doc, {
       ...options,
+      startY,
       didDrawPage: (data) => {
         ensureWatermark();
         options.didDrawPage?.(data);
       },
     });
+  }
+
+  /**
+   * The height this table would occupy drawn at the top of an empty page, or
+   * Infinity when it is taller than one page.
+   *
+   * Measured by drawing it into a throwaway document rather than estimating
+   * from row counts and font sizes: autoTable decides its own row heights from
+   * wrapped cell content, and a guess that is wrong by one row is exactly what
+   * leaves a single orphaned row — and, once, a three-line closing statement —
+   * alone on a final page.
+   */
+  function measureTableHeight(options: Parameters<typeof autoTable>[1]): number {
+    const probe = new jsPDF({ unit: 'mm', format: 'a4' });
+    autoTable(probe, { ...options, startY: MARGIN_T, didDrawPage: undefined });
+    if (probe.getNumberOfPages() > 1) return Number.POSITIVE_INFINITY;
+    return (probe as JsPdfWithAutoTable).lastAutoTable.finalY - MARGIN_T;
   }
 
   function addPageFooter(): void {
@@ -326,65 +472,133 @@ export function generateInvestmentMemo(
       doc.setTextColor(150);
       doc.text(project.address_raw, MARGIN_L, FOOTER_Y);
       doc.text('CONFIDENTIAL', PAGE_W / 2, FOOTER_Y, { align: 'center' });
-      doc.text(`Page ${i - 1}`, PAGE_W - MARGIN_R, FOOTER_Y, { align: 'right' });
+      doc.text(`Page ${i - 1} of ${pageCount - 1}`, PAGE_W - MARGIN_R, FOOTER_Y, { align: 'right' });
     }
+  }
+
+  /** Wrap to the content width, measured in the style the text will be drawn in. */
+  function wrap(text: string, style: Style, widthMm = CONTENT_W): string[] {
+    return preservingMeasurement(() => {
+      doc.setFont('helvetica', style.weight);
+      doc.setFontSize(style.size);
+      return doc.splitTextToSize(text, widthMm) as string[];
+    });
+  }
+
+  /**
+   * Draw wrapped lines from `y`, breaking pages as needed and re-applying the
+   * style after every break. A block that would fit on a page of its own is
+   * never split: it moves whole, which is what stops three orphaned lines of a
+   * footnote from becoming a page.
+   */
+  function writeLines(y: number, lines: string[], style: Style, lineHeight: number): number {
+    const blockHeight = lines.length * lineHeight;
+    y = flushHeadings(y, blockHeight);
+    for (const line of lines) {
+      y = ensureSpace(y, lineHeight);
+      applyStyle(style);
+      doc.text(line, MARGIN_L, y);
+      y += lineHeight;
+    }
+    return y;
+  }
+
+  // ── Headings are deferred, not drawn where they are asked for ────────────
+  //
+  // A heading cannot decide its own page, because whether it fits depends on
+  // the height of the block that follows it — and that block is measured after
+  // the heading has already been placed. Reserving a guessed 18 mm for "the
+  // heading plus a couple of lines" is not enough when what follows is a 90 mm
+  // table that then moves whole to the next page, leaving the heading stranded
+  // at the foot of the previous one. (Which is exactly what happened to "Two-Way
+  // Sensitivity Matrix: LTGDV, developer basis" on the first pass of this fix.)
+  //
+  // So a heading is queued, and the next block to draw flushes the queue as part
+  // of its own keep-together decision: heading heights are added to the block's
+  // height, the page break is taken once for the lot, and the heading is drawn
+  // on whichever page its content ended up on. A section title followed by a
+  // sub-heading followed by a table travels as one unit.
+  type PendingHeading =
+    | { kind: 'section'; num: number; title: string }
+    | { kind: 'sub'; text: string };
+
+  const SECTION_HEADING_MM = 12;
+  const SUB_HEADING_MM = 6;
+  let pendingHeadings: PendingHeading[] = [];
+
+  function headingHeight(h: PendingHeading): number {
+    return h.kind === 'section' ? SECTION_HEADING_MM : SUB_HEADING_MM;
+  }
+
+  /**
+   * Take the page break for the queued headings plus `contentMm` of the block
+   * about to be drawn, draw the headings, and return the cursor for the content.
+   */
+  function flushHeadings(y: number, contentMm: number): number {
+    const headingsMm = pendingHeadings.reduce((sum, h) => sum + headingHeight(h), 0);
+    y = ensureSpace(y, headingsMm + Math.min(contentMm, CONTENT_BOTTOM - MARGIN_T));
+    for (const heading of pendingHeadings) {
+      if (heading.kind === 'section') {
+        applyStyle(SECTION);
+        doc.text(`${heading.num}. ${heading.title}`, MARGIN_L, y);
+        y += 4;
+        doc.setDrawColor(30, 58, 95);
+        doc.setLineWidth(0.5);
+        doc.line(MARGIN_L, y, MARGIN_L + CONTENT_W, y);
+        y += 8;
+      } else {
+        applyStyle(SUBHEAD);
+        doc.text(heading.text, MARGIN_L, y);
+        y += SUB_HEADING_MM;
+      }
+    }
+    pendingHeadings = [];
+    return y;
   }
 
   function sectionTitle(y: number, num: number, title: string): number {
-    if (y > 245) {
-      newPage();
-      y = MARGIN_T;
-    }
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 58, 95);
-    doc.text(`${num}. ${title}`, MARGIN_L, y);
-    y += 4;
-    doc.setDrawColor(30, 58, 95);
-    doc.setLineWidth(0.5);
-    doc.line(MARGIN_L, y, MARGIN_L + CONTENT_W, y);
-    return y + 8;
+    pendingHeadings.push({ kind: 'section', num, title });
+    return y;
   }
 
   function subHeading(y: number, text: string): number {
-    if (y > 255) {
-      newPage();
-      y = MARGIN_T;
-    }
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 41, 59);
-    doc.text(text, MARGIN_L, y);
-    return y + 6;
+    pendingHeadings.push({ kind: 'sub', text });
+    return y;
   }
 
   function bodyText(y: number, text: string): number {
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(51, 65, 85);
-    const lines = doc.splitTextToSize(text, CONTENT_W);
-    for (const line of lines) {
-      if (y > 270) {
-        newPage();
-        y = MARGIN_T;
-      }
-      doc.text(line, MARGIN_L, y);
-      y += 5;
-    }
-    return y + 2;
+    return writeLines(y, wrap(text, BODY), BODY, 5) + 2;
   }
 
+  /** Small grey note text, used for provenance captions and figure footnotes. */
+  function captionText(y: number, text: string): number {
+    return writeLines(y, wrap(text, CAPTION), CAPTION, 4) + 2;
+  }
+
+  // ── Return metrics: label and suppression (spec §3.16.1) ─────────────────
+  //
+  // The second audit found the memo printing "Return on Equity 64.38%" beside
+  // "Equity Multiple 0.00x" for a retain-all case with no exit modelled. Both
+  // figures were arithmetically right and together they told a non-specialist
+  // reader something false. The engine now says which basis it is on; the memo
+  // says so on the page.
+  const roeLabel = metrics.return_on_equity_is_unrealised
+    ? 'Return on Equity (unrealised)'
+    : 'Return on Equity';
+
+  const equityMultipleValue = metrics.equity_multiple === null
+    ? 'not available — no sale or refinance modelled within the term'
+    : `${metrics.equity_multiple.toFixed(2)}x`;
+
+  const irrValue = fmtPctSafe(
+    metrics.irr_annual_pct,
+    'not available (no sign change in equity flows)',
+  );
+
   function infoRequired(y: number, label: string): number {
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(180, 83, 9);
-    if (y > 270) {
-      newPage();
-      y = MARGIN_T;
-    }
-    doc.text(`[Information Required: ${label}]`, MARGIN_L, y);
-    doc.setFont('helvetica', 'normal');
-    return y + 6;
+    // Wrapped, not drawn as one unbounded line: "[Information Required: Risks
+    // not yet addressed: …]" is routinely wider than the page even at 10 pt.
+    return writeLines(y, wrap(`[Information Required: ${label}]`, INFO), INFO, 5) + 1;
   }
 
   // ── Cover Page ──
@@ -456,7 +670,13 @@ export function generateInvestmentMemo(
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
-  doc.text(`Date: ${todayFormatted()}`, MARGIN_L, ty);
+  doc.text(`Generated: ${formatGeneratedAt(prov.generatedAt, prov.timeZone)}`, MARGIN_L, ty);
+  ty += 5;
+  doc.text(
+    `${prov.documentStatus} | Calc ${prov.calcVersion} | Inputs v${prov.inputsVersion} | Scenario: ${prov.scenarioName}`,
+    MARGIN_L,
+    ty,
+  );
   ty += 5;
   doc.text('PRIVATE & CONFIDENTIAL', MARGIN_L, ty);
   ty += 5;
@@ -472,13 +692,62 @@ export function generateInvestmentMemo(
     ty,
   );
 
-  // ── Section 1: Executive Summary ──
+  // ── Report Provenance ──
   doc.addPage();
   doc.setFillColor(255, 255, 255);
-  doc.rect(0, 0, PAGE_W, 297, 'F');
+  doc.rect(0, 0, PAGE_W, PAGE_H, 'F');
+  onDarkPage = false;
   ensureWatermark();
   let y = MARGIN_T;
 
+  // Spec Sec 13.1. First page of body text, before any figure, because a reader
+  // must be able to tell what this document is before reading what it says: the
+  // second audit found a 13-page memorandum carrying no model version, no
+  // hashes, no scenario identity and no generation time, which left two PDFs of
+  // the same scheme indistinguishable and every printed figure untraceable.
+  y = sectionTitle(y, 0, 'Report Provenance');
+  const hashOrAbsent = (hash: string | null) =>
+    hash ?? 'not recorded — result predates provenance hashing';
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [['Field', 'Value']],
+    body: [
+      ['Appraisal ID', prov.appraisalId ?? 'unsaved — generated from an in-session run'],
+      ['Project ID', prov.projectId || 'not recorded'],
+      ['Scenario', `${prov.scenarioName} (${prov.scenarioId})`],
+      ['Input schema version', `v${prov.inputsVersion}`],
+      ['Calculation version', prov.calcVersion],
+      ['Authoritative result hash', hashOrAbsent(prov.resultHash)],
+      ['Input hash', hashOrAbsent(prov.inputHash)],
+      ['Audit hash', hashOrAbsent(prov.auditHash)],
+      ['Generated', formatGeneratedAt(prov.generatedAt, prov.timeZone)],
+      ['Report-safe status', prov.reportSafe ? 'Report-safe — hard validations pass' : 'NOT report-safe — hard validations fail'],
+      ['Document status', prov.documentStatus],
+      ['Lender case', lenderCaseLabel(prov.lenderCaseStatus)],
+    ],
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    alternateRowStyles: { fillColor: [241, 245, 249] },
+    columnStyles: { 0: { cellWidth: 52, fontStyle: 'bold' } },
+  });
+  y = lastAutoTableFinalY(doc) + 6;
+
+  if (prov.recomputedSinceSave) {
+    y = infoRequired(
+      y,
+      `Recomputed for this export under calculation version ${prov.calcVersion}; the stored result was produced under ${prov.storedCalcVersion}. The hashes above describe the stored result, not the figures printed here — re-save the appraisal to bring them back into agreement.`,
+    );
+  }
+
+  y = captionText(
+    y,
+    'The audit hash is sha256 over project id, calculation version, input schema version, governance status, input hash and authoritative result hash, joined by "|" (spec §13.2). A reviewer holding this page can recompute it from the six fields above and detect any later alteration of them.',
+  );
+  y += 2;
+
+  // ── Section 1: Executive Summary ──
   y = sectionTitle(y, 1, 'Executive Summary');
 
   const fundingLabel =
@@ -529,7 +798,7 @@ export function generateInvestmentMemo(
   y = subHeading(y, 'Headline Returns');
   y = bodyText(
     y,
-    `GDV of ${fmt(metrics.gdv_pence)} against total development cost of ${fmt(metrics.total_development_cost_pence)} generates a profit of ${fmt(metrics.profit_pence)}${metrics.profit_is_unrealised ? ' (unrealised — subject to refinance/valuation)' : ''}, equating to ${fmtPctSafe(metrics.profit_on_cost_pct)} profit on cost and ${fmtPctSafe(metrics.profit_on_gdv_pct)} profit on GDV. Annualised IRR is ${fmtPctSafe(metrics.irr_annual_pct, 'not available (no sign change in equity flows)')}, with return on equity of ${fmtPctSafe(metrics.return_on_equity_pct)} over a ${inputs.finance.term_months}-month programme.`,
+    `GDV of ${fmt(metrics.gdv_pence)} against total development cost of ${fmt(metrics.total_development_cost_pence)} generates a profit of ${fmt(metrics.profit_pence)}${metrics.profit_is_unrealised ? ' (unrealised — subject to refinance/valuation)' : ''}, equating to ${fmtPctSafe(metrics.profit_on_cost_pct)} profit on cost and ${fmtPctSafe(metrics.profit_on_gdv_pct)} profit on GDV. Annualised IRR is ${fmtPctSafe(metrics.irr_annual_pct, 'not available (no sign change in equity flows)')}, with ${metrics.return_on_equity_is_unrealised ? 'an unrealised' : 'a'} return on equity of ${fmtPctSafe(metrics.return_on_equity_pct)} over a ${inputs.finance.term_months}-month programme.${metrics.return_on_equity_is_unrealised ? ' That return on equity is an accounting return on the value created, not cash distributed to equity: it is stated before any realisation event and must not be read as a distributed return.' : ''}`,
   );
 
   y = subHeading(y, 'Exit');
@@ -542,10 +811,6 @@ export function generateInvestmentMemo(
   y = bodyText(y, `Primary exit: ${exitLabel}.`);
 
   // ── Section 2: The Opportunity ──
-  if (y > 220) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 2, 'The Opportunity');
   y = bodyText(
     y,
@@ -556,15 +821,13 @@ export function generateInvestmentMemo(
     `Tenure is ${project.tenure}${project.lease_years_remaining ? ` with ${project.lease_years_remaining} years remaining` : ''}. EPC rating: ${project.epc_rating ?? 'Unknown'}. Vacancy status: ${project.is_vacant === true ? 'Vacant' : project.is_vacant === false ? 'Occupied' : 'Unknown'}.`,
   );
   if (project.description) {
-    y = bodyText(y, project.description);
+    // Legacy scraped records glued the listing's "Description" heading to the
+    // first sentence; the scraper is fixed, this repairs what is already stored.
+    y = bodyText(y, repairGluedDescription(project.description));
   }
   y = infoRequired(y, 'Market rationale — why this asset, why now, demand drivers');
 
   // ── Section 3: The Scheme ──
-  if (y > 200) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 3, 'The Scheme');
 
   y = subHeading(y, 'Description');
@@ -638,10 +901,6 @@ export function generateInvestmentMemo(
   y = infoRequired(y, 'Design and specification status, procurement route, contractor');
 
   // ── Section 4: Market Evidence ──
-  if (y > 220) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 4, 'Market Evidence');
   y = bodyText(
     y,
@@ -666,8 +925,6 @@ export function generateInvestmentMemo(
   y = infoRequired(y, 'Absorption rates, demand drivers, local market commentary');
 
   // ── Section 5: Development Appraisal ──
-  newPage();
-  y = MARGIN_T;
   y = sectionTitle(y, 5, 'Development Appraisal');
 
   y = subHeading(y, 'Revenue');
@@ -726,7 +983,11 @@ export function generateInvestmentMemo(
   );
   y += 2;
 
-  y = subHeading(y, 'Cost Plan');
+  // R7: "Cost Plan" overstated what this section is. Until the detailed QS
+  // package mode lands (R10) the model is a rate x area headline estimate with
+  // named allowances, and a lender reading "cost plan" would reasonably expect
+  // a priced package schedule behind it.
+  y = subHeading(y, 'Headline Cost Estimate');
   // Every row below is either a raw stored input (rate, area, fixed fee) or an
   // engine-computed total from run.metrics / run.model.totals — no cost or fee
   // amount is derived here (spec §11.9).
@@ -812,9 +1073,9 @@ export function generateInvestmentMemo(
       [`Developer Profit${metrics.profit_is_unrealised ? ' (unrealised)' : ''}`, fmt(metrics.profit_pence)],
       ['Profit on Cost', fmtPctSafe(metrics.profit_on_cost_pct)],
       ['Profit on GDV', fmtPctSafe(metrics.profit_on_gdv_pct)],
-      ['Return on Equity', fmtPctSafe(metrics.return_on_equity_pct)],
-      ['Equity Multiple', metrics.equity_multiple === null ? 'n/a' : `${metrics.equity_multiple.toFixed(2)}x`],
-      ['IRR (Annual)', fmtPctSafe(metrics.irr_annual_pct, 'not available (no sign change in equity flows)')],
+      [roeLabel, fmtPctSafe(metrics.return_on_equity_pct)],
+      ['Equity Multiple', equityMultipleValue],
+      ['IRR (Annual)', irrValue],
       [`Residual Land Value (at ${fmtPct(inputs.deal_spider.target_profit_on_cost_pct)} target profit on cost)`, fmt(metrics.rlv_pence)],
     ],
     styles: { fontSize: 9, cellPadding: 2 },
@@ -838,8 +1099,6 @@ export function generateInvestmentMemo(
   );
 
   // ── Section 6: Programme ──
-  newPage();
-  y = MARGIN_T;
   y = sectionTitle(y, 6, 'Programme');
 
   y = subHeading(y, 'Timeline');
@@ -934,10 +1193,6 @@ export function generateInvestmentMemo(
       y,
       `First funding shortfall: ${ctc.first_shortfall_month !== null ? `month ${ctc.first_shortfall_month}` : 'none — fully funded throughout'}. Maximum shortfall: ${fmt(ctc.max_shortfall_pence)}.`,
     );
-    if (y > 220) {
-      newPage();
-      y = MARGIN_T;
-    }
     table({
       startY: y,
       margin: { left: MARGIN_L, right: MARGIN_R },
@@ -969,10 +1224,6 @@ export function generateInvestmentMemo(
   }
 
   // ── Section 7: Funding Request ──
-  if (y > 200) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 7, 'Funding Request');
 
   y = subHeading(y, 'Sources & Uses');
@@ -1095,10 +1346,6 @@ export function generateInvestmentMemo(
   y = infoRequired(y, 'Drawdown profile, priority of repayment');
 
   // ── Section 8: Returns ──
-  if (y > 200) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 8, 'Returns');
 
   y = subHeading(y, 'Investor Returns');
@@ -1106,9 +1353,9 @@ export function generateInvestmentMemo(
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     body: [
-      ['Internal Rate of Return (IRR, annual)', fmtPctSafe(metrics.irr_annual_pct, 'not available (no sign change in equity flows)')],
-      ['Equity Multiple', metrics.equity_multiple === null ? 'n/a' : `${metrics.equity_multiple.toFixed(2)}x`],
-      ['Return on Equity', fmtPctSafe(metrics.return_on_equity_pct)],
+      ['Internal Rate of Return (IRR, annual)', irrValue],
+      ['Equity Multiple', equityMultipleValue],
+      [roeLabel, fmtPctSafe(metrics.return_on_equity_pct)],
       ['Profit on Cost', fmtPctSafe(metrics.profit_on_cost_pct)],
       ['Profit on GDV', fmtPctSafe(metrics.profit_on_gdv_pct)],
       ['Hold Period', `${inputs.finance.term_months} months`],
@@ -1163,8 +1410,6 @@ export function generateInvestmentMemo(
   );
 
   // ── Section 9: Risk Register ──
-  newPage();
-  y = MARGIN_T;
   y = sectionTitle(y, 9, 'Risk Register');
 
   if (inputs.risks.length > 0) {
@@ -1223,10 +1468,6 @@ export function generateInvestmentMemo(
   }
 
   // ── Section 10: Sensitivity & Downside ──
-  if (y > 200) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 10, 'Sensitivity & Downside');
   y = bodyText(
     y,
@@ -1253,7 +1494,7 @@ export function generateInvestmentMemo(
       ['Profit on Cost', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.profit_on_cost_pct))],
       ['Profit on GDV', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.profit_on_gdv_pct))],
       ['IRR (Annual)', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.irr_annual_pct))],
-      ['Return on Equity', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.return_on_equity_pct))],
+      [roeLabel, ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.return_on_equity_pct))],
       ['Flags', ...scenarioRuns.map((s) => flagSummary(s.run.metrics.flags))],
     ],
     styles: { fontSize: 9, cellPadding: 2 },
@@ -1419,10 +1660,6 @@ export function generateInvestmentMemo(
   );
 
   // ── Section 11: Exit Strategy ──
-  if (y > 210) {
-    newPage();
-    y = MARGIN_T;
-  }
   y = sectionTitle(y, 11, 'Exit Strategy');
 
   y = subHeading(y, 'Primary Exit');
@@ -1542,8 +1779,6 @@ export function generateInvestmentMemo(
   );
 
   // ── Section 12: Appendices ──
-  newPage();
-  y = MARGIN_T;
   y = sectionTitle(y, 12, 'Appendices');
 
   y = subHeading(y, 'A. Assumption Schedule');
@@ -1592,6 +1827,11 @@ export function generateInvestmentMemo(
     'Drawdown profile',
     'Contingent exit strategy with evidence',
   ];
+  // The former "C. Additional Appendices Required" block asked for team CVs, a
+  // professional team schedule and an insurance schedule. All three were already
+  // in the list above under slightly different wording (items 8, 9 and 10), so
+  // folding that block in here printed each of them twice. The block is gone;
+  // the items it duplicated stay where they were.
   if (missing.length > 0) {
     infoItems.push(`Risk register gaps: ${missing.join(', ')}`);
   }
@@ -1608,13 +1848,112 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 8;
 
-  y = subHeading(y, 'C. Additional Appendices Required');
-  y = infoRequired(y, 'Team CVs');
-  y = infoRequired(y, 'Professional team schedule and warranties');
-  y = infoRequired(y, 'Insurance schedule');
+  // ── Section 13: Basis of Preparation and Limitations ──
+  //
+  // Two jobs. First, the audit asked that the export stop claiming more than it
+  // has: a headline cost model is not a cost plan, an unapproved appraisal is
+  // not a credit paper, and an accounting return is not a distributed one. That
+  // belongs in the document, not only in the UI that launched it.
+  //
+  // Second, it is what the document ends on. The three "additional appendices
+  // required" lines that used to close the memo have moved into the numbered
+  // schedule above, because a heading and three bracketed lines were all that
+  // remained after the table paginated — the near-blank final page the audit
+  // reported, in a different place from the one it happened to see.
+  y = sectionTitle(y, 13, 'Basis of Preparation and Limitations');
+
+  y = bodyText(
+    y,
+    `This document is a ${prov.documentStatus} development appraisal prepared from the sponsor's own inputs. `
+    + `${prov.reportSafe
+        ? 'It is report-safe: every hard validation in the model passes.'
+        : 'It is NOT report-safe: one or more hard validations fail, and the figures may be wrong.'} `
+    // The lender-case sentence and the draft-reason sentence collapse into one
+    // when they would otherwise state the same fact twice: with no case
+    // submitted, "no lender case has been credit approved" is not a second
+    // reason, it is the same reason reworded.
+    + `${prov.lenderCaseStatus === null && prov.draftReason === 'not_approved'
+        ? 'No lender case has been submitted for credit approval, which is why it remains a draft.'
+        : [
+            prov.lenderCaseStatus === null
+              ? 'No lender case has been submitted for credit approval.'
+              : `The lender case is at "${lenderCaseLabel(prov.lenderCaseStatus)}".`,
+            prov.draftReason === null
+              ? 'It is a final lender report.'
+              : `It is a draft because ${DRAFT_REASON_SENTENCE[prov.draftReason]}.`,
+          ].join(' ')} `
+    + 'It is suitable for sponsor review and for preliminary lender appraisal. It is not a credit paper, '
+    + 'a valuation, a cost plan, a tax opinion or a legal report, and no lender should rely on it for a '
+    + 'credit decision without independently verifying the matters listed below.',
+  );
+
+  y = subHeading(y, 'What the figures rest on');
+  const limitations: string[] = [
+    'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
+    'VAT is not modelled as a cash flow. Conversion VAT treatment is fact-specific and no reduced-rate saving is assumed; purchase VAT and any TOGC treatment are unconfirmed. An adverse VAT position would increase the funding requirement.',
+    'Acquisition tax is calculated on the England and Northern Ireland non-residential SDLT bands. A property in Scotland (LBTT) or Wales (LTT) is not correctly taxed by this version.',
+    'Areas are taken from the unit schedule and the entered construction area. There is no reconciled area bridge between existing GIA, proposed GIA, net internal area and saleable area.',
+    'Technical, title, occupation and planning due diligence is recorded as narrative and as a free-form risk register, not as an evidenced schedule with status, owner and date.',
+  ];
+  if (metrics.lender_gdv_pence === null) {
+    limitations.push('No lender-underwritten valuation has been provided. Every loan-to-value figure on a lender basis is therefore unavailable rather than assumed from the developer GDV.');
+  }
+  if (inputs.finance.requires_confirmation) {
+    limitations.push('The facility terms were migrated from an earlier record and remain unconfirmed. They must be checked against the actual offer before any figure derived from them is relied on.');
+  }
+  // Two different reasons a return can be unrealised, and they must not share a
+  // sentence: nothing realised at all is not the same as a partial retention.
+  if (!metrics.has_realisation_event) {
+    limitations.push('No sale or refinance is modelled within the term, so profit and return on equity are unrealised accounting returns on value created. Equity multiple and IRR are reported as unavailable rather than as zero, because there is no realisation event to measure them against.');
+  } else if (metrics.profit_is_unrealised) {
+    limitations.push('Profit and return on equity include the market value of the retained units, which is unrealised until those units are sold or refinanced. Only the realised element is reflected in the equity multiple and IRR.');
+  }
+  if (!prov.reportSafe) {
+    limitations.push('This appraisal is not report-safe. The reconciliation panel in the application lists the failing validations; they must be cleared before the figures here are quoted.');
+  }
+  if (!prov.seniorRepaid) {
+    limitations.push('The senior facility is not repaid within the modelled term. Whatever the exit route intends, this appraisal does not demonstrate repayment, and no document showing an unrepaid senior balance at maturity can be issued as a final lender report (spec §13.3).');
+  }
+  // The closing statement is the table's foot rather than a paragraph after it.
+  // As a free-standing block it was the last thing in the document, so whenever
+  // the table's final rows happened to land near a page bottom the statement
+  // alone became the next page — the same orphan defect in a new place. A foot
+  // row cannot separate from the table it belongs to.
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [['#', 'Limitation']],
+    body: limitations.map((item, i) => [`${i + 1}`, item]),
+    foot: [[
+      '',
+      `Prepared under calculation version ${prov.calcVersion}, input schema v${prov.inputsVersion}. `
+      + 'Every figure in this document comes from a single server-authoritative run of the appraisal model; '
+      + 'no figure is recalculated by the report generator. See the Report Provenance panel on page 1 for '
+      + 'the hashes that bind these figures to the stored calculation.',
+    ]],
+    showFoot: 'lastPage',
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [180, 83, 9], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    footStyles: { fillColor: [226, 232, 240], textColor: [71, 85, 105], fontStyle: 'normal' },
+    alternateRowStyles: { fillColor: [255, 251, 235] },
+    columnStyles: { 0: { cellWidth: 10, halign: 'center' } },
+  });
+  y = lastAutoTableFinalY(doc) + 8;
+
+  // A heading queued with nothing after it would otherwise never be drawn. It
+  // is a defect if this ever fires, but a silently missing heading is worse
+  // than one sitting alone at the end of the document.
+  y = flushHeadings(y, 0);
 
   // ── Footer on all pages ──
   addPageFooter();
+
+  setDocumentMetadata(doc, {
+    title: `Investment Memorandum — ${project.address_raw} (${prov.documentStatus})`,
+    subject: `Development appraisal, calculation version ${prov.calcVersion}, scenario ${prov.scenarioName}`,
+    keywords: 'development appraisal, commercial to residential, lender report',
+  });
 
   return doc.output('blob');
 }

@@ -191,6 +191,9 @@ export interface FinancialAppraisal {
   status?: AppraisalStatus;
   input_hash?: string | null;
   outputs_hash?: string | null;
+  /** Spec Sec 13.2 -- binds the stored result to its inputs, model version and
+   *  governance status. Null on rows saved before the field existed. */
+  audit_hash?: string | null;
   // legacy columns retained for backward-compat; server-computed even when
   // `outputs` is present -- prefer `outputs.metrics` for display:
   gdv_pence: number | null;

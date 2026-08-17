@@ -23,3 +23,51 @@ export function humanise(value: string): string {
 export function formatUseClass(useClass: UseClass): string {
   return USE_CLASS_OPTIONS.find((o) => o.value === useClass)?.label ?? humanise(useClass);
 }
+
+/**
+ * Section labels that listing pages put in a heading inside the description
+ * container. Longest first, so "Property Description" is matched before
+ * "Description".
+ */
+const GLUED_LEADING_LABELS = [
+  'Full Property Description',
+  'Property Description',
+  'Full Description',
+  'Key Features',
+  'Accommodation',
+  'Description',
+  'Overview',
+  'Summary',
+];
+
+/**
+ * Repair a scraped description whose section heading was glued to its first
+ * sentence — the "DescriptionThe property comprises..." the second
+ * lender-readiness audit found in the exported memorandum.
+ *
+ * The cause was in the scraper (`get_text(strip=True)` joins block children with
+ * no separator) and is fixed there, so anything scraped from now on arrives
+ * clean. This exists for the records already stored — including the live York
+ * appraisal, whose `description` still begins with that exact string.
+ *
+ * It is deliberately narrow. It fires only when a known section label sits at
+ * the very start of the text *and* is followed immediately by a capital letter
+ * with no space, which is the signature of the defect and does not occur in
+ * ordinary prose. It does not attempt the general "insert a space at every
+ * lowercase-uppercase boundary" repair, which would mangle "iPhone", "PhD",
+ * "GDVs" and any legitimately capitalised compound.
+ *
+ * The label is removed rather than spaced: it is a scrape artifact, not part of
+ * the property description, and "Description The property comprises..." reads no
+ * better than the defect it replaces.
+ */
+export function repairGluedDescription(text: string): string {
+  for (const label of GLUED_LEADING_LABELS) {
+    if (text.length <= label.length) continue;
+    if (!text.startsWith(label)) continue;
+    const next = text[label.length];
+    // A capital immediately after the label, with no separator of any kind.
+    if (next >= 'A' && next <= 'Z') return text.slice(label.length);
+  }
+  return text;
+}

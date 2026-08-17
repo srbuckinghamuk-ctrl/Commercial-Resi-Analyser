@@ -165,6 +165,8 @@ class FinancialAppraisalORM(Base):
     )
     input_hash: Mapped[str | None] = mapped_column(String(64))
     outputs_hash: Mapped[str | None] = mapped_column(String(64))
+    # Spec Sec 13.2 -- printed in the report provenance panel.
+    audit_hash: Mapped[str | None] = mapped_column(String(64))
     # --- legacy metric columns, now always server-computed -----------------
     gdv_pence: Mapped[int | None] = mapped_column(BigInteger)
     total_cost_pence: Mapped[int | None] = mapped_column(BigInteger)

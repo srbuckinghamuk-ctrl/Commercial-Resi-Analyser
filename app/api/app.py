@@ -19,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, run_appraisal, validate_inputs
-from app.financial_model.hashing import canonical_hash, input_hash
+from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
 from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v4
 from app.financial_model.types import CalculatorInputsV4
 from app.integrations.http import close_client
@@ -443,6 +443,17 @@ def calculate_authoritative(payload: FinancialAppraisalCreate) -> dict:
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
+        # Spec Sec 13.2: binds this stored result to the inputs, model version
+        # and governance status that produced it, so a printed report's
+        # provenance panel can be verified against the record.
+        "audit_hash": audit_hash(
+            project_id=str(payload.project_id),
+            calc_version=CALC_VERSION,
+            inputs_version=4,
+            status=status,
+            input_hash_value=input_hash(inputs),
+            outputs_hash_value=canonical_hash(outputs),
+        ),
         # legacy columns from the server calculation, never from the client:
         "gdv_pence": run.metrics.gdv_pence,
         "total_cost_pence": run.metrics.total_development_cost_pence,

@@ -84,7 +84,14 @@ export function deriveMetrics(
   const profitIsUnrealised = t.retained_value_pence > 0;
 
   const equityContributed = model.totals.equity_contributed_pence + model.totals.additional_equity_pence;
-  const equityMultiple = equityContributed > 0
+  // Spec §3.16.1 (calc 2.6.0). A distributed-return metric needs a realisation
+  // event to measure against: a disposal that books receipts, or a refinance
+  // that books proceeds. Without one, "0.00x" is not the answer — there is no
+  // answer, and printing a zero beside a positive return on equity read to the
+  // second audit's reviewer as a total loss of capital rather than as a
+  // retain-all case with no exit modelled (spec §1.5: unknown is not zero).
+  const hasRealisationEvent = schedule.totals.gross_sales_pence > 0 || schedule.refinance !== null;
+  const equityMultiple = hasRealisationEvent && equityContributed > 0
     ? Math.round((model.totals.distributions_pence / equityContributed) * 100) / 100
     : null;
 
@@ -228,6 +235,8 @@ export function deriveMetrics(
     total_development_cost_pence: tdc,
     profit_pence: profit,
     profit_is_unrealised: profitIsUnrealised,
+    has_realisation_event: hasRealisationEvent,
+    return_on_equity_is_unrealised: profitIsUnrealised || !hasRealisationEvent,
     unrealised_value_pence: t.retained_value_pence,
     profit_on_cost_pct: pct(profit, tdc),
     profit_on_gdv_pct: pct(profit, t.gdv_pence),

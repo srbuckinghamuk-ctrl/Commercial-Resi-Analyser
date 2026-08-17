@@ -37,7 +37,7 @@ def test_alembic_discovers_migration_chain():
     # walk_revisions yields head-first. 003/004 arrived with the R4
     # reconciliation merge and were renumbered to sit after 002, which the
     # financial-model line had already claimed.
-    assert [s.revision for s in script.walk_revisions()] == ["004", "003", "002", "001"]
+    assert [s.revision for s in script.walk_revisions()] == ["005", "004", "003", "002", "001"]
 
 
 def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):

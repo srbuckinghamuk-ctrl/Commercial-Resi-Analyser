@@ -1,6 +1,21 @@
 import { jsPDF } from 'jspdf';
 import type { Project, EligibilityAssessment, FinancialAppraisal } from '../types';
 import { CLASS_MA_AXES, SCENARIO_COLORS, type SpiderResult } from './deal-spider';
+import { drawWatermark, setDocumentMetadata } from './report-layout';
+
+// -- Page geometry -----------------------------------------------------------
+//
+// R7. These two quick reports used to lay out by writing at a fixed x with no
+// width bound, so any long input -- a full address, a comparable note, a
+// blocked-eligibility reason listing several failing checks -- ran off the
+// right-hand edge. The memo's release gate now covers these documents too, so
+// the same rules apply: text wraps to the content width, and a page break
+// leaves the cursor at the top margin with its style re-applied.
+const MARGIN_L = 15;
+const CONTENT_W = 210 - MARGIN_L - 15;
+/** Last baseline the flowing content may occupy. */
+const CONTENT_BOTTOM = 275;
+const TOP = 20;
 
 function formatPence(pence: number): string {
   return `£${(pence / 100).toLocaleString('en-GB', { minimumFractionDigits: 0 })}`;
@@ -60,25 +75,57 @@ export function buildAppraisalContent(project: Project, appraisal: FinancialAppr
   return lines;
 }
 
-export function generateEligibilityPdf(project: Project, assessment: EligibilityAssessment): Blob {
-  const doc = new jsPDF();
-  const lines = buildEligibilityContent(project, assessment);
-  let y = 20;
-  for (const line of lines) {
-    if (line === '') {
-      y += 6;
-      continue;
-    }
-    const isHeader = line === line.toUpperCase() && line.length > 3 && !line.startsWith(' ');
-    doc.setFontSize(isHeader ? 14 : 11);
+/**
+ * Write one logical line, wrapped to the content width and broken across pages
+ * as needed. A wrapped continuation keeps the indent of the line it continues,
+ * so "  [PASS] ..." still reads as a single criterion.
+ *
+ * `onNewPage` runs immediately after the break and *before* the next draw, and
+ * the style is re-applied after it. That ordering is the whole lesson of the
+ * page-8 defect: the old code set its style, then broke the page, then drew --
+ * so the watermark's 40 pt bold grey was what actually reached the paper.
+ */
+function writeWrapped(doc: jsPDF, line: string, y: number, onNewPage?: () => void): number {
+  if (line === '') return y + 6;
+
+  const isHeader = line === line.toUpperCase() && line.length > 3 && !line.startsWith(' ');
+  const indentChars = line.length - line.trimStart().length;
+  const hangingMm = indentChars * 1.5;
+  const size = isHeader ? 14 : 11;
+  const step = isHeader ? 8 : 6;
+
+  const applyStyle = () => {
+    doc.setFontSize(size);
     doc.setFont('helvetica', isHeader ? 'bold' : 'normal');
-    doc.text(line, 15, y);
-    y += isHeader ? 8 : 6;
-    if (y > 270) {
+    doc.setTextColor(0, 0, 0);
+  };
+
+  applyStyle();
+  const wrapped = doc.splitTextToSize(line.trimStart(), CONTENT_W - hangingMm) as string[];
+
+  for (const part of wrapped) {
+    if (y > CONTENT_BOTTOM) {
       doc.addPage();
-      y = 20;
+      y = TOP;
+      onNewPage?.();
     }
+    applyStyle();
+    doc.text(part, MARGIN_L + hangingMm, y);
+    y += step;
   }
+  return y;
+}
+
+export function generateEligibilityPdf(project: Project, assessment: EligibilityAssessment): Blob {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  let y = TOP;
+  for (const line of buildEligibilityContent(project, assessment)) {
+    y = writeWrapped(doc, line, y);
+  }
+  setDocumentMetadata(doc, {
+    title: `PDR Eligibility Report - ${project.address_raw}`,
+    subject: `Permitted development eligibility, ruleset ${assessment.ruleset_version}`,
+  });
   return doc.output('blob');
 }
 
@@ -116,18 +163,11 @@ export function buildSpiderContent(result: SpiderResult): string[] {
 
 // Last unwatermarked path to pre-correction numbers: a record with status !==
 // 'reconciled' (including undefined/legacy, e.g. a legacy_unreconciled row)
-// must never render lender-ready. Same text/style as export-investment-memo.ts's
-// draft watermark, kept local since this file's manual text layout (no
-// autoTable) doesn't share that module's page-tracking machinery.
+// must never render lender-ready. The banner itself is now report-layout.ts's,
+// shared with the investment memorandum. The local copy this file used to carry
+// drew at a fixed 40 pt, which put it 15 mm off both page edges on every page it
+// was supposed to protect.
 const DRAFT_WATERMARK_TEXT = 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE';
-
-function drawDraftWatermark(doc: jsPDF): void {
-  doc.setTextColor(200);
-  doc.setFontSize(40);
-  doc.setFont('helvetica', 'bold');
-  doc.text(DRAFT_WATERMARK_TEXT, 105, 160, { angle: 35, align: 'center' });
-  doc.setTextColor(0, 0, 0);
-}
 
 function hexToRgb(hex: string): [number, number, number] {
   return [
@@ -208,33 +248,23 @@ export function generateAppraisalPdf(
   appraisal: FinancialAppraisal,
   spider?: SpiderResult,
 ): Blob {
-  const doc = new jsPDF();
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   // Gate: any status other than 'reconciled' — including undefined (pre-status
   // legacy rows) and 'legacy_unreconciled' — is a draft and must never look
   // lender-ready when printed.
   const isDraft = appraisal.status !== 'reconciled';
+  const watermarkPage = (): void => {
+    if (isDraft) drawWatermark(doc, DRAFT_WATERMARK_TEXT);
+  };
   const newPage = (): void => {
     doc.addPage();
-    if (isDraft) drawDraftWatermark(doc);
+    watermarkPage();
   };
-  if (isDraft) drawDraftWatermark(doc);
+  watermarkPage();
 
-  const lines = buildAppraisalContent(project, appraisal);
-  let y = 20;
-  for (const line of lines) {
-    if (line === '') {
-      y += 6;
-      continue;
-    }
-    const isHeader = line === line.toUpperCase() && line.length > 3 && !line.startsWith(' ');
-    doc.setFontSize(isHeader ? 14 : 11);
-    doc.setFont('helvetica', isHeader ? 'bold' : 'normal');
-    doc.text(line, 15, y);
-    y += isHeader ? 8 : 6;
-    if (y > 270) {
-      newPage();
-      y = 20;
-    }
+  let y = TOP;
+  for (const line of buildAppraisalContent(project, appraisal)) {
+    y = writeWrapped(doc, line, y, watermarkPage);
   }
 
   if (spider) {
@@ -304,18 +334,26 @@ export function generateAppraisalPdf(
       y += 5;
       doc.setFont('helvetica', 'normal');
       for (const caveat of spider.caveats) {
-        const wrapped = doc.splitTextToSize(`† ${caveat}`, 175) as string[];
+        const wrapped = doc.splitTextToSize(`† ${caveat}`, CONTENT_W) as string[];
         for (const line of wrapped) {
-          doc.text(line, 15, y);
-          y += 5;
-          if (y > 275) {
+          if (y > CONTENT_BOTTOM) {
             newPage();
-            y = 20;
+            y = TOP;
           }
+          doc.setFontSize(9);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(0, 0, 0);
+          doc.text(line, MARGIN_L, y);
+          y += 5;
         }
       }
     }
   }
+
+  setDocumentMetadata(doc, {
+    title: `Financial Appraisal - ${project.address_raw}${isDraft ? ' (DRAFT)' : ''}`,
+    subject: `Appraisal summary, calculation version ${appraisal.calc_version ?? 'not recorded'}`,
+  });
 
   return doc.output('blob');
 }

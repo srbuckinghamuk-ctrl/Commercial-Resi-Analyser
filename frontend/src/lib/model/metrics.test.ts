@@ -110,6 +110,84 @@ describe('deriveMetrics on Fixture B', () => {
     expect(r.equity_multiple).toBe(Math.round((40_490_776 / 30_000_000) * 100) / 100);
   });
 
+  // ── Realisation basis (spec §3.16.1, calc 2.6.0) ─────────────────────────
+  //
+  // Expected values below are derived from the definition, not from a run: the
+  // discriminator is whether the schedule books a disposal or a refinance, and
+  // "no distributions" is deliberately NOT the discriminator — a sale that
+  // sweeps entirely to senior debt returns 0.00x, which is a real answer, while
+  // a retain-all case has no answer at all.
+  describe('distributed-return basis', () => {
+    it('reports a multiple of zero when a sale happens but no cash reaches equity', () => {
+      // One month of cost, one month of receipts, and a facility large enough
+      // that the whole net receipt is swept to the senior balance.
+      const schedule = mkSchedule(
+        [uses({ acquisition_pence: 50_000_000 }), uses({})],
+        [receipts({}), receipts({ gross_sale_pence: 20_000_000 })],
+      );
+      const equity: EquitySource[] = [{
+        id: 'e1', classification: 'cash', amount_pence: 5_000_000, timing_month: 0,
+        repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+      }];
+      const model = runLedger(schedule, TERMS, equity);
+      const r = deriveMetrics(defaultCalculatorInputsV2(), schedule, model);
+
+      expect(schedule.totals.gross_sales_pence).toBeGreaterThan(0);
+      expect(model.totals.distributions_pence).toBe(0);
+      expect(r.has_realisation_event).toBe(true);
+      expect(r.equity_multiple).toBe(0);
+    });
+
+    it('has no multiple at all when nothing is sold or refinanced', () => {
+      const schedule = mkSchedule([uses({ acquisition_pence: 50_000_000 })], [receipts({})]);
+      const equity: EquitySource[] = [{
+        id: 'e1', classification: 'cash', amount_pence: 50_000_000, timing_month: 0,
+        repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+      }];
+      const model = runLedger(schedule, TERMS, equity);
+      const r = deriveMetrics(defaultCalculatorInputsV2(), schedule, model);
+
+      expect(schedule.totals.gross_sales_pence).toBe(0);
+      expect(schedule.refinance).toBeNull();
+      expect(r.has_realisation_event).toBe(false);
+      expect(r.equity_multiple).toBeNull();
+      expect(r.return_on_equity_is_unrealised).toBe(true);
+    });
+
+    it('counts a refinance as a realisation event even with no sale', () => {
+      const schedule = mkSchedule([uses({ acquisition_pence: 50_000_000 })], [receipts({})]);
+      schedule.refinance = { month: 1, net_proceeds_pence: 30_000_000 };
+      const equity: EquitySource[] = [{
+        id: 'e1', classification: 'cash', amount_pence: 50_000_000, timing_month: 0,
+        repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+      }];
+      const model = runLedger(schedule, TERMS, equity);
+      const r = deriveMetrics(defaultCalculatorInputsV2(), schedule, model);
+
+      expect(schedule.totals.gross_sales_pence).toBe(0);
+      expect(r.has_realisation_event).toBe(true);
+      expect(r.equity_multiple).not.toBeNull();
+    });
+
+    it('marks return on equity unrealised whenever retained value is in the profit', () => {
+      const schedule = mkSchedule(
+        [uses({ acquisition_pence: 50_000_000 })],
+        [receipts({ gross_sale_pence: 30_000_000 })],
+      );
+      schedule.totals.retained_value_pence = 40_000_000;
+      const equity: EquitySource[] = [{
+        id: 'e1', classification: 'cash', amount_pence: 50_000_000, timing_month: 0,
+        repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+      }];
+      const r = deriveMetrics(
+        defaultCalculatorInputsV2(), schedule, runLedger(schedule, TERMS, equity),
+      );
+      expect(r.has_realisation_event).toBe(true);
+      expect(r.profit_is_unrealised).toBe(true);
+      expect(r.return_on_equity_is_unrealised).toBe(true);
+    });
+  });
+
   it('IRR comes from actual equity flows and annualises correctly', () => {
     const r = fixtureB();
     expect(r.irr_monthly_pct).not.toBeNull();

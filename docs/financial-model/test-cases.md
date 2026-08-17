@@ -1,6 +1,6 @@
 # Financial Model — Test Cases
 
-**Status:** Authoritative test-case register for calculation specification `2.5.0` (see
+**Status:** Authoritative test-case register for calculation specification `2.6.0` (see
 `docs/financial-model/calculation-specification.md`). This document enumerates every
 golden fixture, ledger fixture, invariant and regression vector that pins the engine's
 behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
@@ -2759,3 +2759,87 @@ to the explicit `tests/` form.
   defined in `docs/financial-model/model-governance.md` §2: any calculation change edits the spec
   first, then the fixture (with a hand derivation recorded, as above), then both engines in the
   same change — never one language ahead of the other.
+
+---
+
+## 12. Report release gate [R7 — calc 2.6.0]
+
+**Location:** `frontend/src/lib/report-qa/`. TypeScript only, and deliberately so:
+the reports are generated in the browser, and there is no second implementation
+to keep in parity. Nothing in the application imports this directory, so it is
+absent from the production bundle.
+
+| Module | Role |
+|---|---|
+| `pdf-inspect.ts` | Parses jsPDF's uncompressed content streams into positioned, measured text items — page, text, x, baseline, size, base font, rotation, advance width, bounding box. |
+| `pdf-inspect.test.ts` | Calibrates the inspector against documents whose geometry is known by construction, never against the memo it measures. |
+| `report-checks.ts` | The gate's predicates: `overflowingItems`, `sparsePages`, `pageExtentRatio`, `pageFillRatio`, `documentProse`, `watermarkTexts`, `describeLayout`. |
+| `memo-fixtures.ts` | Sell-all, retain-all, refinance, blended and a legacy v1 snapshot, authored separately from `export-investment-memo.test.ts`'s fixtures. |
+| `memo-release-gate.test.ts` | 52 assertions over those five documents (spec §13). |
+| `quick-report-gate.test.ts` | The same page-bounds rule applied to the eligibility and appraisal quick reports. |
+
+### 12.1 Why geometry rather than substring matching
+
+The audit's release blocker was a line of text that was present, correct and
+drawn at 40 pt, 400 mm off the right-hand edge of page 8. Every substring
+assertion in the existing suite passed on that document. A gate that cannot see
+the defect it exists to catch is not a gate, so every layout assertion is made
+against measured position and width.
+
+The corollary bit during this release: `documentText` joins items with newlines,
+so a wrapped sentence straddles a break and `toContain('not a credit paper')`
+fails on a document that says exactly that. Prose assertions use
+`documentProse`, which reflows. (Compare R6's lesson that `toContain` cannot see
+a repeat — the same class of test that is blind to what it claims to check.)
+
+### 12.2 Sparse-page detection
+
+Two measures, because either alone is wrong:
+
+- **Extent** — distance from the first item's top to the last item's bottom, over
+  the content box. The primary measure. A page holding one table is mostly white
+  by construction (row padding, leading); judging it by ink would condemn an
+  ordinary schedule page.
+- **Ink** — covered 1 mm rows. Catches the page whose content technically reaches
+  the bottom but consists of two lines.
+
+Plus an item-count floor, which is what actually catches the orphan: a heading
+and three lines.
+
+Thresholds: extent ≥ 40 % (interior), ≥ 20 % (last page), ink ≥ 6 %, ≥ 5 body
+items. Cover exempt.
+
+### 12.3 New golden fixture
+
+`fixtures/financial-model/l-retain-all.json` — all-cash, retain-all, no
+realisation event. Pins §3.16.1: `has_realisation_event` false,
+`equity_multiple` null, `return_on_equity_is_unrealised` true, alongside the full
+independently derived cost stack. Every expected value was derived by hand from
+the specification before the engine was run, and matched on the first execution.
+
+Registered in both rosters (`EXPECTED_FIXTURE_STEMS` in
+`tests/test_financial_model_fixtures.py` and `golden-fixtures.test.ts`).
+
+### 12.4 Realisation-basis unit tests
+
+`metrics.test.ts` › "distributed-return basis" and
+`test_financial_model_metrics.py` › `TestDistributedReturnBasis`, mirrored
+case-for-case. The boundary that matters is the pair:
+
+- a sale whose receipts sweep entirely to senior debt → multiple `0.00` (a real answer);
+- a retain-all case with no exit → multiple `null` (no answer exists).
+
+A test suite that only covered "no distributions" would pass with either
+behaviour and would not have caught the defect the audit reported.
+
+### 12.5 Not covered
+
+- **Raster visual regression.** Rendering each page to an image needs a PDF
+  rasteriser (pdf.js plus a native canvas) that this project does not depend on.
+  `describeLayout` provides a deterministic layout snapshot instead — the same
+  regression control at the geometry level rather than the pixel level — and
+  `memo-release-gate.test.ts` asserts that two runs of the same inputs produce
+  an identical layout.
+- **PDF/UA structure tagging.** Not expressible through jsPDF's public API. The
+  documents carry title, subject, language and `DisplayDocTitle`; a structure
+  tree, role map and artifact marking remain open.

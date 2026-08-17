@@ -52,6 +52,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'i-phased-sales',
   'j-blended-refinance',
   'k-sensitivity',
+  'l-retain-all',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
