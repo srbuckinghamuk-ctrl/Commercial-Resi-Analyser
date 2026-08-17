@@ -12,6 +12,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from pydantic import BaseModel
+
 from .schedule import (
     calculate_total_acquisition_cost,
     calculate_total_construction_cost,
@@ -578,7 +580,17 @@ def migrate_inputs_to_v4(
     Returns a plain dict, like migrate_v2_to_v3 and unlike migrate_inputs:
     Pydantic validation of the result belongs at the boundary (app.py), which
     is where the 422 is raised.
+
+    A v5 document is refused (R8): see the `is_v5` guard below. Without it, a
+    v5 snapshot fails every is_v2/is_v3/is_v4 check in the chain below and
+    falls through all the way to migrate_inputs' v1 fallback path, which
+    reads the R8 acquisition/jurisdiction fields as noise, rebuilds `finance`
+    and `equity_sources` from scratch via the v1 LTV-based heuristic, and
+    silently destroys the document -- no exception, no flag. Reachable live
+    from app.py's `calculate_authoritative`.
     """
+    if is_v5(snapshot):
+        raise ValueError("migrate_inputs_to_v4: input is a v5 document - use migrate_inputs_to_v5")
     if is_v4(snapshot):
         defaults = migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project)))
         return {
@@ -612,16 +624,20 @@ def migrate_v4_to_v5(v4: dict[str, Any] | CalculatorInputsV4) -> CalculatorInput
     this returns a validated ``CalculatorInputsV5`` model, mirroring
     migrateV4toV5's typed TS return and matching migrate_inputs_to_v5 below.
     The input is accepted as either shape: a plain v4 snapshot dict (what
-    migrate_inputs_to_v4 returns) or an already-validated
-    CalculatorInputsV4/V5 instance -- both appear across call sites and the
-    test suite.
+    migrate_inputs_to_v4 returns) or an already-validated Pydantic model
+    instance (any of CalculatorInputsV2/V3/V4/V5) -- both appear across call
+    sites and the test suite. Any Pydantic model is normalised via
+    ``model_dump`` rather than special-cased to CalculatorInputsV4 alone, so
+    an older/unexpected model shape produces a clear validation error from
+    ``CalculatorInputsV5.model_validate`` below instead of an opaque
+    ``AttributeError`` from treating it as a dict.
 
     Precondition: `v4` must not already be a v5 document -- this guards
     against double-migration (idempotence), same as migrate_v3_to_v4.
     """
     if isinstance(v4, CalculatorInputsV5):
         raise ValueError("migrate_v4_to_v5: input is already a v5 document")
-    if isinstance(v4, CalculatorInputsV4):
+    if isinstance(v4, BaseModel):
         doc = v4.model_dump(mode="json")
     else:
         if is_v5(v4):
@@ -643,12 +659,31 @@ def migrate_v4_to_v5(v4: dict[str, Any] | CalculatorInputsV4) -> CalculatorInput
 def migrate_inputs_to_v5(
     snapshot: dict[str, Any], project: dict[str, Any] | None = None,
 ) -> CalculatorInputsV5:
-    """Normalises any stored snapshot (v1-v5) to v5. Port of
-    migrateInputsToV5: an already-v5 snapshot is re-validated directly (its
-    fields -- all of which carry Pydantic defaults, per AcquisitionInputsV5 --
-    are default-filled the same way a fixture missing a newer field always is
-    at this boundary); anything older routes through the existing
-    migrate_v4_to_v5 + migrate_inputs_to_v4 chain."""
-    if snapshot.get("inputs_version") == 5:
-        return CalculatorInputsV5.model_validate(snapshot)
+    """Normalises any stored snapshot (v1-v5) to v5 -- the shape every R8
+    consumer needs. Port of migrateInputsToV5 (migrate.ts:355-391).
+
+    A v5 snapshot is merged onto v5 defaults field-by-field (mirroring
+    migrate_inputs_to_v4's own v4-merge branch above, migrate.py:582-590, and
+    ultimately migrate_inputs' v2-merge branch the whole chain descends
+    from), so a field added to the schema after the row was saved is
+    default-filled instead of raising a Pydantic ``ValidationError`` at this
+    boundary (e.g. a v5 row saved before ``scenarios.upside`` existed) or
+    silently under-filling (``deal_spider.weights`` collapsing to ``{}``
+    instead of the full nine-axis default) -- neither of which the TS engine
+    does. Bare ``CalculatorInputsV5.model_validate(snapshot)`` would do
+    exactly that wrong thing for any snapshot not already carrying every
+    current field, so it is not used here.
+
+    Every pre-v5 snapshot (v1 through v4) routes through
+    migrate_v4_to_v5(migrate_inputs_to_v4(...)) unchanged, exactly as
+    migrateInputsToV5 does.
+    """
+    if is_v5(snapshot):
+        defaults = migrate_v4_to_v5(
+            migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+        ).model_dump(mode="json")
+        return CalculatorInputsV5.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 5,
+        })
     return migrate_v4_to_v5(migrate_inputs_to_v4(snapshot, project))

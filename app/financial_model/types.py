@@ -363,6 +363,12 @@ class AcquisitionInputsV5(AcquisitionInputs):
     than edits AcquisitionInputs because that base shape is shared with the
     v1-v4 document shapes."""
 
+    # Deliberately re-declared, not imported from acquisition_tax.Jurisdiction:
+    # acquisition_tax.py imports engine.py (for money_round), and engine.py
+    # imports this module for FacilityTerms/etc, so importing acquisition_tax
+    # from types.py would be a cycle (types -> acquisition_tax -> engine ->
+    # types). test_migrate_v5.py asserts the two literal value-sets stay
+    # identical so they cannot silently drift apart.
     jurisdiction: Literal["england_ni", "scotland", "wales"] = "england_ni"
     jurisdiction_source: JurisdictionSource = "migrated_default"
     # Reuses the vocabulary of EquitySource.evidence_status deliberately: the
