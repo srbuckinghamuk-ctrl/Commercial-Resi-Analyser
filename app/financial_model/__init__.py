@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .acquisition_tax import (
+    TAX_TABLE_VERSION,
+    AcquisitionTaxResult,
+    calculate_acquisition_tax,
+    derive_jurisdiction,
+    regime_for,
+)
 from .breakeven import PhasedSeniorBreakevenTerms, phased_replay_redeems, solve_senior_breakeven_phased
 from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
@@ -57,6 +64,7 @@ def run_appraisal(inputs: AnyCalculatorInputs) -> AppraisalRun:
 
 
 __all__ = [
+    "AcquisitionTaxResult",
     "AnyCalculatorInputs",
     "AppraisalResultV2",
     "AppraisalRun",
@@ -68,9 +76,12 @@ __all__ = [
     "PhasedSeniorBreakevenTerms",
     "ReconciliationStatus",
     "Schedule",
+    "TAX_TABLE_VERSION",
     "ValidationIssue",
     "breakeven_flags",
     "build_schedule",
+    "calculate_acquisition_tax",
+    "derive_jurisdiction",
     "derive_metrics",
     "is_v4",
     "migrate_inputs",
@@ -79,6 +90,7 @@ __all__ = [
     "parse_calculator_inputs",
     "phased_replay_redeems",
     "reconcile",
+    "regime_for",
     "run_appraisal",
     "run_ledger",
     "solve_senior_breakeven_phased",
