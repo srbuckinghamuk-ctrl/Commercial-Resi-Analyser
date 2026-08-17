@@ -3,7 +3,7 @@ import type {
 } from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
-import { calculateCommercialSdlt } from '../commercial-sdlt';
+import { calculateAcquisitionTax } from '../tax/acquisition-tax';
 import { computeLenderGdv } from './lender-valuation';
 import { exitFeeAmount } from './monthly-engine';
 import { solveDeveloperBreakeven, solveSeniorBreakeven, solveSeniorBreakevenPhased } from './breakeven';
@@ -75,7 +75,24 @@ export function deriveMetrics(
     }
   }
   const lenderGdvVariance = lenderGdv == null ? null : lenderGdv.lender_gdv_pence - t.gdv_pence;
-  const sdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
+  // Acquisition tax (spec §14, R8). v2–v4 documents carry no jurisdiction at all,
+  // exactly as they carry no `lender_valuation`, so every new field is read through
+  // the same structural `in` guard rather than by assuming a shape. `england_ni`
+  // with a null date is precisely what those documents always implicitly were —
+  // the England/NI non-residential band set has been unchanged since 17 March 2016
+  // and is the current set — so this preserves their figures to the penny.
+  const acq = inputs.acquisition;
+  const acquisitionTax = calculateAcquisitionTax({
+    consideration_pence: acq.purchase_price_pence,
+    jurisdiction: 'jurisdiction' in acq ? acq.jurisdiction : 'england_ni',
+    basis: 'non_residential',
+    date: 'acquisition_date' in acq ? acq.acquisition_date : null,
+    override_pence:
+      'acquisition_tax_override_pence' in acq ? acq.acquisition_tax_override_pence : null,
+    override_reason:
+      'acquisition_tax_override_reason' in acq ? acq.acquisition_tax_override_reason : null,
+  });
+  const sdlt = acquisitionTax.total_pence;
   const costBeforeFinance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence;
   const financeCosts = model.totals.finance_costs_pence;
   const tdc = costBeforeFinance + financeCosts;
@@ -225,6 +242,9 @@ export function deriveMetrics(
     lender_gdv_variance_pence: lenderGdvVariance,
     lender_gdv_variance_pct: lenderGdvVariance == null ? null : pct(lenderGdvVariance, t.gdv_pence),
     acquisition_cost_pence: t.acquisition_pence,
+    acquisition_tax_pence: sdlt,
+    acquisition_tax: acquisitionTax,
+    /** @deprecated R8 — use acquisition_tax_pence. Removed in R16. */
     sdlt_pence: sdlt,
     construction_cost_pence: t.construction_pence,
     professional_fees_pence: t.professional_pence,

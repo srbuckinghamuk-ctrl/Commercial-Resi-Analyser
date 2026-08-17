@@ -11,8 +11,7 @@ import {
 import { defaultCalculatorInputsV2 } from './conversion-defaults';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
-import { calculateCommercialSdlt } from './commercial-sdlt';
-import { calculateResidentialSdlt } from './residential-sdlt';
+import { calculateAcquisitionTax } from './tax/acquisition-tax';
 import type { CalculatorInputsV2 } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
 
@@ -241,8 +240,14 @@ describe('tax advantage axis', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.cil_offset_pence = 1_000_000;
     const metrics = runAppraisal(inputs).metrics;
-    const resSdlt = calculateResidentialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
-    const commSdlt = calculateCommercialSdlt(inputs.acquisition.purchase_price_pence).total_pence;
+    const resSdlt = calculateAcquisitionTax({
+      consideration_pence: inputs.acquisition.purchase_price_pence,
+      jurisdiction: 'england_ni', basis: 'residential_higher', date: null,
+    }).total_pence;
+    const commSdlt = calculateAcquisitionTax({
+      consideration_pence: inputs.acquisition.purchase_price_pence,
+      jurisdiction: 'england_ni', basis: 'non_residential', date: null,
+    }).total_pence;
     const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
     const expected =
       ((resSdlt - commSdlt + vatSaving + 1_000_000) / metrics.gdv_pence) * 100;

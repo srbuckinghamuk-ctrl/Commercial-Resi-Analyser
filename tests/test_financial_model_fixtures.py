@@ -7,7 +7,7 @@ from app.financial_model import AppraisalRun, run_appraisal
 from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v4
+from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v5
 from app.financial_model.schedule import build_schedule
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
@@ -18,7 +18,7 @@ from app.financial_model.sensitivity import (
 )
 from app.financial_model.types import (
     AnyCalculatorInputs,
-    CalculatorInputsV4,
+    CalculatorInputsV5,
     ProgrammeInputs,
     ProgrammePackage,
     ProgrammePackages,
@@ -116,17 +116,20 @@ def test_golden_fixture_parity(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
-def test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4(path: Path) -> None:
-    """Release 3a identity guarantee (spec Sec 6.1 / design Sec 2.4): the v3 -> v4
-    migration is purely additive, so running a pre-v4 fixture's inputs through the full
-    normalisation chain (exactly what app.py now does on every request) must reproduce
-    that fixture's pinned expected_metrics unchanged -- not merely "close", byte-for-byte.
-    Fixture H is already v4; migrating it is a no-op merge onto v4 defaults, which is
-    itself worth asserting (the merge must not drop its programme block)."""
+def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> None:
+    """Release 3a identity guarantee (spec Sec 6.1 / design Sec 2.4), carried to v5
+    by R8: the migration chain is purely additive, so running a fixture's inputs
+    through the full normalisation chain (exactly what app.py does on every request)
+    must reproduce that fixture's pinned expected_metrics unchanged -- not merely
+    "close", byte-for-byte. Every fixture is now v5, so migrating it is a merge onto
+    v5 defaults, which is itself worth asserting (the merge must not drop the
+    programme block, nor the R8 acquisition block)."""
     doc = _load_fixture(path)
-    v4 = parse_calculator_inputs(migrate_inputs_to_v4(doc["inputs"]))
-    assert v4.inputs_version == 4
-    _assert_expected_metrics(run_appraisal(v4), doc, f"{path.stem}[migrated-to-v4]")
+    # migrate_inputs_to_v5 returns a validated CalculatorInputsV5 directly
+    # (unlike migrate_inputs_to_v4, which returns a plain dict).
+    v5 = migrate_inputs_to_v5(doc["inputs"])
+    assert v5.inputs_version == 5
+    _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[migrated-to-v5]")
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
@@ -179,8 +182,8 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     serviced.finance.interest_type = "serviced"
     short_term = inputs.model_copy(deep=True)
     short_term.finance.term_months = 1
-    programmed = parse_calculator_inputs(migrate_inputs_to_v4(inputs.model_dump(mode="json")))
-    assert isinstance(programmed, CalculatorInputsV4)
+    programmed = migrate_inputs_to_v5(inputs.model_dump(mode="json"))
+    assert isinstance(programmed, CalculatorInputsV5)
     programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
@@ -328,23 +331,27 @@ class TestInvariantMatrix:
 # these runs is attributable to the refinance-shortfall branches alone. Mirrors
 # invariants.test.ts's "phased-sale / refinance sweep invariants" describe block
 # field-for-field (same variant labels, same 4 checks, same order).
-def _to_v4_clone(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
-    if not isinstance(inputs, CalculatorInputsV4):
-        raise TypeError("sweep-invariant fixture must be inputs_version 4")
+# R8: the shared corpus moved to inputs v5. The check stays exact (isinstance
+# alone would pass for a v4 document too, since V5 subclasses V4, letting a
+# fixture drift out of this matrix without failing), mirroring
+# invariants.test.ts's toV5Clone.
+def _to_v5_clone(inputs: AnyCalculatorInputs) -> CalculatorInputsV5:
+    if inputs.inputs_version != 5 or not isinstance(inputs, CalculatorInputsV5):
+        raise TypeError("sweep-invariant fixture must be inputs_version 5")
     return inputs.model_copy(deep=True)
 
 
-def _odd_gross_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
+def _odd_gross_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV5:
     """Nudge each unit's value by a distinct odd pence amount so gross sale totals,
     tranche splits and agent-fee rounding all land on awkward (non-round) pence."""
-    v = _to_v4_clone(inputs)
+    v = _to_v5_clone(inputs)
     for i, u in enumerate(v.unit_mix.units):
         u.estimated_value_pence += 2 * i + 1
     return v
 
 
-def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV4:
-    v = _to_v4_clone(inputs)
+def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInputsV5:
+    v = _to_v5_clone(inputs)
     last = max(0, int(v.finance.term_months) - 1)
     v.sales_phasing = SalesPhasingInputs(
         tranches=[
@@ -356,16 +363,16 @@ def _three_tranche_sweep_variant(inputs: AnyCalculatorInputs) -> CalculatorInput
     return v
 
 
-def _sweep_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, CalculatorInputsV4]]:
+def _sweep_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, CalculatorInputsV5]]:
     return [
-        ("base", _to_v4_clone(inputs)),
+        ("base", _to_v5_clone(inputs)),
         ("odd-gross", _odd_gross_sweep_variant(inputs)),
         ("three-tranche", _three_tranche_sweep_variant(inputs)),
     ]
 
 
-def _sweep_fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV4]]:
-    out: list[tuple[str, str, CalculatorInputsV4]] = []
+def _sweep_fixture_variant_matrix() -> list[tuple[str, str, CalculatorInputsV5]]:
+    out: list[tuple[str, str, CalculatorInputsV5]] = []
     for path in APPRAISAL_FIXTURES:
         if path.stem not in ("i-phased-sales", "j-blended-refinance"):
             continue
@@ -390,7 +397,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
     order), so a single invariant's failure doesn't mask the others."""
 
     def test_tranche_conservation_gross_agent_legal(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         run = run_appraisal(inputs)
         sum_gross = sum(r.gross_sale_pence for r in run.schedule.receipts)
@@ -406,7 +413,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
         )
 
     def test_sweep_conservation_every_month(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         """Pinned identity, derived from engine.py's sweep block (repayment/exit_fee/
         distribution split net_receipts exactly: `distribution = net_receipts - repayment -
@@ -424,7 +431,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
             )
 
     def test_interest_never_accrues_on_repaid_principal(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         run = run_appraisal(inputs)
         monthly_rate = inputs.finance.annual_interest_rate_pct / 100 / 12
@@ -437,7 +444,7 @@ class TestPhasedSaleRefinanceSweepInvariants:
             assert months[i + 1].interest_accrued_pence == expected
 
     def test_redemption_schedule_declines(
-        self, stem: str, label: str, inputs: CalculatorInputsV4,
+        self, stem: str, label: str, inputs: CalculatorInputsV5,
     ) -> None:
         run = run_appraisal(inputs)
         sched = run.model.redemption_schedule

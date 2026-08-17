@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import { migrateInputsToV4 } from './migrate';
+import { migrateInputsToV5 } from './migrate';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -107,17 +107,17 @@ describe('golden fixtures (shared with the Python engine)', () => {
   }
 
   for (const fx of appraisalFixtures) {
-    // Mirrors Python's test_pre_v4_fixtures_reproduce_their_metrics_after_migration_to_v4.
-    it(`${fx.name} — reproduces its metrics after migration to v4`, () => {
-      // Release 3a identity guarantee (spec §6.1 / design §2.4): the v3 → v4 migration
-      // is purely additive, so running a fixture's inputs through the full normalisation
-      // chain — exactly what app.py now does on every request — must reproduce that
-      // fixture's pinned expected_metrics unchanged, not merely "close". Fixture H is
-      // already v4; migrating it is a no-op merge onto v4 defaults, which is itself worth
-      // asserting (the merge must not drop its programme block).
-      const v4 = migrateInputsToV4(fx.inputs as unknown as Record<string, unknown>);
-      expect(v4.inputs_version).toBe(4);
-      assertExpectedMetrics(runAppraisal(v4), fx, `${fx.name}[migrated-to-v4]`);
+    // Mirrors Python's test_fixtures_reproduce_their_metrics_after_migration_to_v5.
+    it(`${fx.name} — reproduces its metrics after migration to v5`, () => {
+      // Release 3a identity guarantee (spec §6.1 / design §2.4), carried to v5 by R8
+      // (spec §14): the migration chain is purely additive, so running a fixture's
+      // inputs through the full normalisation chain must reproduce that fixture's
+      // pinned expected_metrics unchanged, not merely "close". Every fixture is now
+      // v5, so this exercises migrateInputsToV5's merge branch — which must drop
+      // neither the programme block nor the R8 acquisition block.
+      const v5 = migrateInputsToV5(fx.inputs as unknown as Record<string, unknown>);
+      expect(v5.inputs_version).toBe(5);
+      assertExpectedMetrics(runAppraisal(v5), fx, `${fx.name}[migrated-to-v5]`);
     });
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { deriveMetrics, pct, breakevenFlags } from './metrics';
 import { runLedger } from './monthly-engine';
-import { runAppraisal, migrateInputsToV4 } from './index';
+import { runAppraisal, migrateInputsToV4, migrateInputsToV5 } from './index';
 import { defaultCalculatorInputsV2, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
 import type { EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule } from './finance-types';
 
@@ -408,5 +408,107 @@ describe('breakevenFlags with a structural reason', () => {
     const out = breakevenFlags(false, false, 2, 'no sale price redeems — test reason');
     expect(out.map((f) => f.code)).toEqual(['senior_breakeven_unsolvable']);
     expect(out[0].message).toBe('no sale price redeems — test reason');
+  });
+});
+
+// ── R8 (spec §14): acquisition tax is jurisdiction-aware ──────────────────────
+
+describe('acquisition tax is jurisdiction-aware (R8)', () => {
+  // £753,482. England/NI non-residential: 0% to £150k, 2% on the next £100k
+  // (£2,000), 5% on the £503,482 above £250k (£25,174.10) = £27,174.10.
+  const PRICE_PENCE = 75_348_200;
+
+  function englishBase() {
+    const inputs = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
+    inputs.acquisition.purchase_price_pence = PRICE_PENCE;
+    return inputs;
+  }
+
+  it('taxes an English appraisal identically to the pre-R8 engine', () => {
+    const m = runAppraisal(englishBase()).metrics;
+    expect(m.acquisition_tax_pence).toBe(2_717_410);
+    // The deprecated alias must carry the same value until R16 removes it.
+    expect(m.sdlt_pence).toBe(m.acquisition_tax_pence);
+    expect(m.acquisition_tax.regime).toBe('SDLT');
+    expect(m.acquisition_tax.jurisdiction).toBe('england_ni');
+    expect(m.acquisition_tax.basis).toBe('non_residential');
+  });
+
+  it('taxes a Welsh appraisal on LTT', () => {
+    const inputs = englishBase();
+    inputs.acquisition.jurisdiction = 'wales';
+    inputs.acquisition.acquisition_date = '2026-08-17';
+    const m = runAppraisal(inputs).metrics;
+    expect(m.acquisition_tax_pence).toBe(2_542_410);
+    expect(m.sdlt_pence).toBe(2_542_410);
+    expect(m.acquisition_tax.regime).toBe('LTT');
+    expect(m.acquisition_tax.date_basis).toBe('transaction_date');
+  });
+
+  it('taxes a Scottish appraisal on LBTT', () => {
+    const inputs = englishBase();
+    inputs.acquisition.jurisdiction = 'scotland';
+    inputs.acquisition.acquisition_date = '2026-08-17';
+    const m = runAppraisal(inputs).metrics;
+    // 0% to £150k; 1% on the next £100k (£1,000); 5% on £503,482 (£25,174.10).
+    expect(m.acquisition_tax_pence).toBe(2_617_410);
+    expect(m.acquisition_tax.regime).toBe('LBTT');
+  });
+
+  it('reports an assumed-current basis when no acquisition date is recorded', () => {
+    const m = runAppraisal(englishBase()).metrics;
+    expect(m.acquisition_tax.date_basis).toBe('assumed_current');
+  });
+
+  it('feeds the override into RLV via cost-excluding-land', () => {
+    const base = englishBase();
+    const withOverride = migrateInputsToV5(
+      JSON.parse(JSON.stringify(base)) as Record<string, unknown>,
+    );
+    withOverride.acquisition.acquisition_tax_override_pence = 0;
+    withOverride.acquisition.acquisition_tax_override_reason = 'Group relief claimed.';
+    const overridden = runAppraisal(withOverride).metrics;
+    expect(overridden.acquisition_tax_pence).toBe(0);
+    expect(overridden.acquisition_tax.is_override).toBe(true);
+    expect(overridden.acquisition_tax.computed_total_pence).toBe(2_717_410);
+    expect(overridden.rlv_pence).not.toBe(runAppraisal(base).metrics.rlv_pence);
+  });
+
+  // The load-bearing property of R8 Task 5, asserted on a document built here
+  // rather than read from `fixtures/financial-model/` — the fixture corpus makes
+  // the same statement through its own pinned `expected` blocks, and this test
+  // must not depend on those files staying at any particular version.
+  //
+  // v2–v4 documents carry no jurisdiction at all. Migrating one to v5 is purely
+  // additive: it must add `acquisition_tax_pence` and `acquisition_tax` and move
+  // nothing else, to the penny — total development cost, profit, every profit
+  // ratio, LTC, LTGDV and the RLV all flow through the figure being rerouted.
+  it('migration to v5 adds the two new metrics and changes no other figure', () => {
+    const v4 = devFinanceV4();
+    expect(v4.inputs_version).toBe(4);
+    const v5 = migrateInputsToV5(JSON.parse(JSON.stringify(v4)) as Record<string, unknown>);
+    expect(v5.inputs_version).toBe(5);
+
+    const before = runAppraisal(v4).metrics;
+    const after = runAppraisal(v5).metrics;
+
+    const {
+      acquisition_tax: _atAfter, acquisition_tax_pence: _atpAfter, ...restAfter
+    } = after;
+    const {
+      acquisition_tax: _atBefore, acquisition_tax_pence: _atpBefore, ...restBefore
+    } = before;
+    expect(restAfter).toEqual(restBefore);
+
+    // Negative control: the comparison above is only meaningful if the metrics
+    // object it strips down is actually populated with the figures at risk.
+    expect(restBefore.total_development_cost_pence).toBeGreaterThan(0);
+    expect(restBefore.profit_pence).not.toBe(0);
+    expect(restBefore.rlv_pence).not.toBe(0);
+    // And the new fields really are new: absent before, present after.
+    expect(_atpBefore).toBe(_atpAfter);
+    expect(_atBefore.jurisdiction).toBe('england_ni');
+    expect(_atAfter.jurisdiction).toBe('england_ni');
+    expect(_atAfter.date_basis).toBe('assumed_current');
   });
 });

@@ -3,16 +3,16 @@ import { render, screen, within, fireEvent } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import SensitivityPage from './SensitivityPage';
-import { runAppraisal, migrateInputsToV4 } from '../../lib/model';
-import type { CalculatorInputsV4 } from '../../lib/model';
+import { runAppraisal, migrateInputsToV5 } from '../../lib/model';
+import type { CalculatorInputsV5 } from '../../lib/model';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'f-dev-finance-12mo.json'), 'utf-8'),
 ) as { inputs: Record<string, unknown> };
 
-function buildInputs(): CalculatorInputsV4 {
-  return migrateInputsToV4(fixtureF.inputs);
+function buildInputs(): CalculatorInputsV5 {
+  return migrateInputsToV5(fixtureF.inputs);
 }
 
 describe('SensitivityPage — two-way matrix', () => {
@@ -286,7 +286,7 @@ describe('SensitivityPage — axis and step editor', () => {
 // has no span — it is dropped from the tornado table with the omission stated,
 // while the two-way matrix and the rest of the tornado render normally.
 describe('SensitivityPage — unmeasured tornado endpoint omission', () => {
-  function buildShortTermInputs(): CalculatorInputsV4 {
+  function buildShortTermInputs(): CalculatorInputsV5 {
     const inputs = buildInputs();
     return { ...inputs, finance: { ...inputs.finance, term_months: 3 } };
   }

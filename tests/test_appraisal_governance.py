@@ -21,9 +21,30 @@ FIXTURE_A_PATH = (
 FIXTURE_A_INPUTS = json.loads(FIXTURE_A_PATH.read_text())["inputs"]
 
 
+# R8 Task 5: the shared corpus moved to inputs v5, but the appraisal endpoints
+# still normalise to v4 (app/api/app.py migrate_inputs_to_v4) -- making that
+# boundary v5-aware is Task 10, which already carries this as an explicit
+# carry-forward. These governance tests are about the server's recalculate /
+# hash / status contract, not about R8, so they keep posting the pre-R8 form of
+# fixture A: the same document the corpus carried before this release, which is
+# exactly what a real stored appraisal contains today (nothing writes v5 yet).
+# DELETE THIS DOWNGRADE IN TASK 10 and post the v5 document as-is.
+_R8_ACQUISITION_FIELDS = (
+    "jurisdiction", "jurisdiction_source", "jurisdiction_evidence_status",
+    "acquisition_date", "acquisition_tax_override_pence",
+    "acquisition_tax_override_reason",
+)
+
+
 def fixture_a_inputs() -> dict:
-    """A fresh deep copy of fixture A's inputs, safe for a test to mutate."""
-    return copy.deepcopy(FIXTURE_A_INPUTS)
+    """A fresh deep copy of fixture A's inputs, safe for a test to mutate,
+    downgraded to the v3 shape the appraisal API accepts until Task 10."""
+    doc = copy.deepcopy(FIXTURE_A_INPUTS)
+    if doc.get("inputs_version") == 5:
+        doc["inputs_version"] = 3
+        for field in _R8_ACQUISITION_FIELDS:
+            doc["acquisition"].pop(field, None)
+    return doc
 
 
 @pytest.fixture

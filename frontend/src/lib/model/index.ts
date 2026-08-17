@@ -39,6 +39,7 @@ export function runAppraisal(inputs: AnyCalculatorInputs): AppraisalRun {
 
 export {
   migrateInputs, migrateV2toV3, migrateInputsToV3, isV3, isV4, migrateV3toV4, migrateInputsToV4,
+  isV5, migrateV4toV5, migrateInputsToV5,
 } from './migrate';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };

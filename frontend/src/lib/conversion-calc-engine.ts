@@ -3,7 +3,7 @@ import type {
   ConversionCostInputs,
   ProposedUnit,
 } from './conversion-types';
-import { calculateCommercialSdlt } from './commercial-sdlt';
+import { calculateAcquisitionTax } from './tax/acquisition-tax';
 
 export function calculateGdv(units: ProposedUnit[]): number {
   return units.reduce((sum, u) => sum + u.estimated_value_pence, 0);
@@ -16,7 +16,21 @@ export function calculateBrokerFee(pricePence: number, pct: number): number {
 }
 
 export function calculateTotalAcquisitionCost(acq: AcquisitionInputs): number {
-  const sdlt = calculateCommercialSdlt(acq.purchase_price_pence).total_pence;
+  // R8: `commercial-sdlt.ts` is gone, but this helper takes only the acquisition
+  // block of a *v1* document (conversion-types' AcquisitionInputs), which carries
+  // no jurisdiction, no date and no override. England/NI non-residential on the
+  // current band set is byte-for-byte what `calculateCommercialSdlt` returned, so
+  // this is a like-for-like substitution and no schedule figure moves.
+  // NOTE (R8 carry-forward): the schedule's acquisition line therefore stays
+  // England/NI even on a Scottish or Welsh document, while metrics.acquisition_tax_pence
+  // is jurisdiction-aware. See the Task 5 report — this is out of Task 5's scope
+  // and must be resolved before a non-English fixture is pinned (Task 12).
+  const sdlt = calculateAcquisitionTax({
+    consideration_pence: acq.purchase_price_pence,
+    jurisdiction: 'england_ni',
+    basis: 'non_residential',
+    date: null,
+  }).total_pence;
   const brokerFee = calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct);
   return (
     acq.purchase_price_pence +

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from .curves import spread_by_curve
 from .engine import money_round
-from .sdlt import calculate_commercial_sdlt
+from .acquisition_tax import calculate_acquisition_tax
 from .types import (
     AcquisitionInputs,
     AnyCalculatorInputs,
@@ -25,7 +25,20 @@ def calculate_gdv(units: list[ProposedUnit]) -> int:
 
 
 def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
-    sdlt = calculate_commercial_sdlt(acq.purchase_price_pence).total_pence
+    # R8: sdlt.py is gone, but this helper takes only the *base* acquisition
+    # block, which carries no jurisdiction, no date and no override. England/NI
+    # non-residential on the current band set is byte-for-byte what
+    # calculate_commercial_sdlt returned, so this is a like-for-like
+    # substitution and no schedule figure moves. Mirrors
+    # conversion-calc-engine.ts, including its carry-forward note: the schedule's
+    # acquisition line therefore stays England/NI even on a Scottish or Welsh
+    # document, while metrics.acquisition_tax_pence is jurisdiction-aware.
+    sdlt = calculate_acquisition_tax(
+        consideration_pence=acq.purchase_price_pence,
+        jurisdiction="england_ni",
+        basis="non_residential",
+        date=None,
+    ).total_pence
     broker_fee = money_round((acq.purchase_price_pence * acq.broker_fee_pct) / 100)
     return (
         acq.purchase_price_pence + sdlt + acq.legal_fees_pence + acq.survey_cost_pence

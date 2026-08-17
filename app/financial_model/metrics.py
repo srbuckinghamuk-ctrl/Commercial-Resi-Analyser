@@ -18,8 +18,13 @@ from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
-from .sdlt import calculate_commercial_sdlt
-from .types import CALC_VERSION, AnyCalculatorInputs, CalculatorInputsV3
+from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax
+from .types import (
+    CALC_VERSION,
+    AnyCalculatorInputs,
+    CalculatorInputsV3,
+    CalculatorInputsV5,
+)
 
 # --- irr.ts --------------------------------------------------------------
 
@@ -106,6 +111,16 @@ class AppraisalResultV2:
     lender_gdv_variance_pence: float | None
     lender_gdv_variance_pct: float | None
     acquisition_cost_pence: int
+    # Spec Sec 14 (R8) -- the tax actually charged on the acquisition under the
+    # document's jurisdiction: SDLT, LBTT or LTT. Equal to
+    # acquisition_tax.total_pence.
+    acquisition_tax_pence: int
+    # Spec Sec 14 (R8) -- the full derivation: regime, band breakdown, surcharge,
+    # band-set effective date, table version, source and override provenance.
+    acquisition_tax: AcquisitionTaxResult
+    # DEPRECATED (R8): a jurisdiction-neutral figure under an England/NI-only
+    # name. Carries the identical value to acquisition_tax_pence; retained only
+    # so pre-R8 report and export readers keep working. Removed in R16.
     sdlt_pence: int
     construction_cost_pence: int
     professional_fees_pence: int
@@ -229,7 +244,24 @@ def derive_metrics(
         except ValueError:
             lender_gdv = None
     lender_gdv_variance = None if lender_gdv is None else lender_gdv.lender_gdv_pence - t.gdv_pence
-    sdlt = calculate_commercial_sdlt(inputs.acquisition.purchase_price_pence).total_pence
+    # Acquisition tax (spec Sec 14, R8). Mirrors metrics.ts. v2-v4 documents carry
+    # no jurisdiction at all, exactly as they carry no lender_valuation, so the
+    # new fields are read behind the same isinstance gate the TS engine spells
+    # `'jurisdiction' in acq`. england_ni with a null date is precisely what those
+    # documents always implicitly were -- the England/NI non-residential band set
+    # has been unchanged since 17 March 2016 and is the current set -- so this
+    # preserves their figures to the penny.
+    acq = inputs.acquisition
+    is_v5 = isinstance(inputs, CalculatorInputsV5)
+    acquisition_tax = calculate_acquisition_tax(
+        consideration_pence=acq.purchase_price_pence,
+        jurisdiction=acq.jurisdiction if is_v5 else "england_ni",
+        basis="non_residential",
+        date=acq.acquisition_date if is_v5 else None,
+        override_pence=acq.acquisition_tax_override_pence if is_v5 else None,
+        override_reason=acq.acquisition_tax_override_reason if is_v5 else None,
+    )
+    sdlt = acquisition_tax.total_pence
     cost_before_finance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence
     finance_costs = model.totals.finance_costs_pence
     tdc = cost_before_finance + finance_costs
@@ -388,6 +420,9 @@ def derive_metrics(
             None if lender_gdv_variance is None else pct(lender_gdv_variance, t.gdv_pence)
         ),
         acquisition_cost_pence=t.acquisition_pence,
+        acquisition_tax_pence=sdlt,
+        acquisition_tax=acquisition_tax,
+        # DEPRECATED (R8) -- use acquisition_tax_pence. Removed in R16.
         sdlt_pence=sdlt,
         construction_cost_pence=t.construction_pence,
         professional_fees_pence=t.professional_pence,

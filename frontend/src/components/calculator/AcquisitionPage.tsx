@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { CalculatorInputsV4, AppraisalRun } from '../../lib/model';
-import { calculateCommercialSdlt } from '../../lib/commercial-sdlt';
+import { calculateAcquisitionTax } from '../../lib/tax/acquisition-tax';
 import { calculateBrokerFee } from '../../lib/conversion-calc-engine';
 import { penceToPounds } from '../../lib/format';
 
@@ -69,7 +69,18 @@ function InputRow({ label, value, onChangeValue, suffix }: {
 
 export default function AcquisitionPage({ inputs, onChange, run }: Props) {
   const acq = inputs.acquisition;
-  const sdlt = useMemo(() => calculateCommercialSdlt(acq.purchase_price_pence), [acq.purchase_price_pence]);
+  // R8 Task 5: like-for-like replacement of the deleted `commercial-sdlt.ts`.
+  // The page still shows England/NI non-residential SDLT and still says so;
+  // making it read the document's own jurisdiction is Task 11.
+  const sdlt = useMemo(
+    () => calculateAcquisitionTax({
+      consideration_pence: acq.purchase_price_pence,
+      jurisdiction: 'england_ni',
+      basis: 'non_residential',
+      date: null,
+    }),
+    [acq.purchase_price_pence],
+  );
 
   const updateAcq = (partial: Partial<typeof acq>) => {
     onChange({ acquisition: { ...acq, ...partial } });

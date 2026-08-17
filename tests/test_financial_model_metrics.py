@@ -4,11 +4,17 @@ existing Python home). Helpers duplicated verbatim from
 tests/test_financial_model_engine.py, matching the "tests must be self-contained"
 convention already used across both languages' test suites.
 """
+from dataclasses import fields
+
 from app.financial_model import run_appraisal
 from app.financial_model.engine import run_ledger
 from app.financial_model.metrics import breakeven_flags, derive_metrics
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
-from app.financial_model.migrate import default_calculator_inputs_v2, migrate_inputs_to_v4
+from app.financial_model.migrate import (
+    default_calculator_inputs_v2,
+    migrate_inputs_to_v4,
+    migrate_inputs_to_v5,
+)
 from app.financial_model.schedule import (
     MonthReceipts,
     MonthUses,
@@ -20,6 +26,7 @@ from app.financial_model.types import (
     AcquisitionInputs,
     CalculatorInputsV2,
     CalculatorInputsV4,
+    CalculatorInputsV5,
     EquitySource,
     ExitStrategyInputs,
     FacilityTerms,
@@ -352,3 +359,101 @@ class TestDistributedReturnBasis:
         assert r.has_realisation_event is True
         assert r.profit_is_unrealised is True
         assert r.return_on_equity_is_unrealised is True
+
+
+# --- R8 (spec Sec 14): acquisition tax is jurisdiction-aware -----------------
+# Mirrors metrics.test.ts's "acquisition tax is jurisdiction-aware (R8)" describe
+# block test for test, with the same figures.
+
+# 753,482 pounds. England/NI non-residential: 0% to 150k, 2% on the next 100k
+# (2,000), 5% on the 503,482 above 250k (25,174.10) = 27,174.10.
+_R8_PRICE_PENCE = 75_348_200
+
+
+def _english_base() -> CalculatorInputsV5:
+    inputs = migrate_inputs_to_v5({"inputs_version": 1})
+    inputs.acquisition.purchase_price_pence = _R8_PRICE_PENCE
+    return inputs
+
+
+class TestAcquisitionTaxIsJurisdictionAware:
+    def test_taxes_an_english_appraisal_identically_to_the_pre_r8_engine(self):
+        m = run_appraisal(_english_base()).metrics
+        assert m.acquisition_tax_pence == 2_717_410
+        # The deprecated alias must carry the same value until R16 removes it.
+        assert m.sdlt_pence == m.acquisition_tax_pence
+        assert m.acquisition_tax.regime == "SDLT"
+        assert m.acquisition_tax.jurisdiction == "england_ni"
+        assert m.acquisition_tax.basis == "non_residential"
+
+    def test_taxes_a_welsh_appraisal_on_ltt(self):
+        inputs = _english_base()
+        inputs.acquisition.jurisdiction = "wales"
+        inputs.acquisition.acquisition_date = "2026-08-17"
+        m = run_appraisal(inputs).metrics
+        assert m.acquisition_tax_pence == 2_542_410
+        assert m.sdlt_pence == 2_542_410
+        assert m.acquisition_tax.regime == "LTT"
+        assert m.acquisition_tax.date_basis == "transaction_date"
+
+    def test_taxes_a_scottish_appraisal_on_lbtt(self):
+        inputs = _english_base()
+        inputs.acquisition.jurisdiction = "scotland"
+        inputs.acquisition.acquisition_date = "2026-08-17"
+        m = run_appraisal(inputs).metrics
+        # 0% to 150k; 1% on the next 100k (1,000); 5% on 503,482 (25,174.10).
+        assert m.acquisition_tax_pence == 2_617_410
+        assert m.acquisition_tax.regime == "LBTT"
+
+    def test_reports_an_assumed_current_basis_when_no_acquisition_date_is_recorded(self):
+        m = run_appraisal(_english_base()).metrics
+        assert m.acquisition_tax.date_basis == "assumed_current"
+
+    def test_feeds_the_override_into_rlv_via_cost_excluding_land(self):
+        base = _english_base()
+        with_override = base.model_copy(deep=True)
+        with_override.acquisition.acquisition_tax_override_pence = 0
+        with_override.acquisition.acquisition_tax_override_reason = "Group relief claimed."
+        overridden = run_appraisal(with_override).metrics
+        assert overridden.acquisition_tax_pence == 0
+        assert overridden.acquisition_tax.is_override is True
+        assert overridden.acquisition_tax.computed_total_pence == 2_717_410
+        assert overridden.rlv_pence != run_appraisal(base).metrics.rlv_pence
+
+    def test_migration_to_v5_adds_the_two_new_metrics_and_changes_no_other_figure(self):
+        """The load-bearing property of R8 Task 5, asserted on a document built
+        here rather than read from fixtures/financial-model/ -- the fixture corpus
+        makes the same statement through its own pinned `expected` blocks, and
+        this test must not depend on those files staying at any particular
+        version. Mirrors metrics.test.ts's test of the same name.
+
+        v2-v4 documents carry no jurisdiction at all. Migrating one to v5 is
+        purely additive: it must add acquisition_tax_pence and acquisition_tax
+        and move nothing else, to the penny -- total development cost, profit,
+        every profit ratio, LTC, LTGDV and the RLV all flow through the figure
+        being rerouted."""
+        v4 = _dev_finance_v4()
+        assert v4.inputs_version == 4
+        v5 = migrate_inputs_to_v5(v4.model_dump(mode="json"))
+        assert v5.inputs_version == 5
+
+        before = run_appraisal(v4).metrics
+        after = run_appraisal(v5).metrics
+
+        new_fields = {"acquisition_tax_pence", "acquisition_tax"}
+        carried = [f.name for f in fields(before) if f.name not in new_fields]
+        assert len(carried) == len(fields(before)) - 2
+        for name in carried:
+            assert getattr(after, name) == getattr(before, name), name
+
+        # Negative control: the comparison above is only meaningful if the
+        # metrics object it strips down is actually populated with the figures
+        # at risk.
+        assert before.total_development_cost_pence > 0
+        assert before.profit_pence != 0
+        assert before.rlv_pence != 0
+        # And the new fields really are new: identical value, England/NI, no date.
+        assert before.acquisition_tax_pence == after.acquisition_tax_pence
+        assert before.acquisition_tax.jurisdiction == "england_ni"
+        assert after.acquisition_tax.jurisdiction == "england_ni"
+        assert after.acquisition_tax.date_basis == "assumed_current"

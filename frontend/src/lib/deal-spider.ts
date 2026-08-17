@@ -1,8 +1,7 @@
 import type { ProposedUnit, UnitType, DealSpiderInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
-import { calculateCommercialSdlt } from './commercial-sdlt';
-import { calculateResidentialSdlt } from './residential-sdlt';
+import { calculateAcquisitionTax } from './tax/acquisition-tax';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
 import type { AnyCalculatorInputs } from './model';
@@ -182,8 +181,18 @@ export function computeSpider(
 
   // Tax advantage
   const price = inputs.acquisition.purchase_price_pence;
-  const residentialSdlt = calculateResidentialSdlt(price).total_pence;
-  const commercialSdlt = calculateCommercialSdlt(price).total_pence;
+  // R8 Task 5: the two legacy SDLT modules are gone; these two calls reproduce
+  // them exactly — England/NI, current band set, no date, no override — so the
+  // tax-advantage axis is unchanged by this task. Making the axis compare within
+  // the document's own regime is Task 7's job, not this one's.
+  const residentialSdlt = calculateAcquisitionTax({
+    consideration_pence: price, jurisdiction: 'england_ni',
+    basis: 'residential_higher', date: null,
+  }).total_pence;
+  const commercialSdlt = calculateAcquisitionTax({
+    consideration_pence: price, jurisdiction: 'england_ni',
+    basis: 'non_residential', date: null,
+  }).total_pence;
   const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
   const taxAdvantagePct =
     metrics.gdv_pence > 0

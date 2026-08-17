@@ -3,7 +3,7 @@ import type {
   RiskItem, ScenarioOverrides, DealSpiderInputs,
 } from '../conversion-types';
 import type { SpendCurve } from './curves';
-import type { Jurisdiction } from '../tax/acquisition-tax';
+import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 
 export type { SpendCurve };
 
@@ -322,6 +322,18 @@ export interface AppraisalResultV2 {
   lender_gdv_variance_pence: number | null;
   lender_gdv_variance_pct: number | null;
   acquisition_cost_pence: number;
+  /** Spec §14 (R8) — the tax actually charged on the acquisition under the
+   *  document's jurisdiction: SDLT, LBTT or LTT. Equal to
+   *  `acquisition_tax.total_pence`. */
+  acquisition_tax_pence: number;
+  /** Spec §14 (R8) — the full derivation: regime, band breakdown, surcharge,
+   *  band-set effective date, table version, source and override provenance. */
+  acquisition_tax: AcquisitionTaxResult;
+  /**
+   * @deprecated R8 — a jurisdiction-neutral figure under an England/NI-only
+   * name. Carries the identical value to `acquisition_tax_pence`; retained only
+   * so pre-R8 report and export readers keep working. Removed in R16.
+   */
   sdlt_pence: number;
   construction_cost_pence: number;
   professional_fees_pence: number;
