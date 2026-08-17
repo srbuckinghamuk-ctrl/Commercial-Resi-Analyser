@@ -17,7 +17,13 @@ from .schedule import (
     calculate_total_construction_cost,
     calculate_total_professional_fees,
 )
-from .types import AcquisitionInputs, CalculatorInputsV2, ConversionCostInputs
+from .types import (
+    AcquisitionInputs,
+    CalculatorInputsV2,
+    CalculatorInputsV4,
+    CalculatorInputsV5,
+    ConversionCostInputs,
+)
 
 # --- conversion-defaults.ts (the slice migrate.py needs) -------------------
 
@@ -250,8 +256,19 @@ def is_v4(snapshot: dict[str, Any]) -> bool:
     )
 
 
+def is_v5(snapshot: dict[str, Any]) -> bool:
+    """A v5 document has the same finance shape as v2-v4, discriminated by
+    inputs_version == 5."""
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 5
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
-    return is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
+    return is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot) or is_v5(snapshot)
 
 
 def migrate_finance_v1(
@@ -572,3 +589,66 @@ def migrate_inputs_to_v4(
             "refinance": snapshot.get("refinance"),
         }
     return migrate_v3_to_v4(migrate_inputs_to_v3(snapshot, project))
+
+
+# --- Release 8 (calc 2.6.0+): jurisdiction, acquisition date, tax override ---
+
+
+def migrate_v4_to_v5(v4: dict[str, Any] | CalculatorInputsV4) -> CalculatorInputsV5:
+    """Upgrades a v4 document to v5 by stamping ``inputs_version: 5`` and
+    adding the acquisition block's six R8 fields. Port of migrateV4toV5.
+
+    Purely additive, and deliberately so: ``england_ni`` with unchanged bands
+    means no existing appraisal's computed values move (spec Sec 14). The
+    jurisdiction is stamped ``migrated_default``/``unconfirmed`` -- a legacy
+    document never told us where the property is, and saying otherwise would
+    be a claim the record does not support. ``acquisition_date`` is left
+    ``None`` rather than stamped to today: inventing a date the transaction
+    did not have would be inventing evidence; a null date is handled
+    explicitly downstream (``date_basis: 'assumed_current'``).
+
+    Unlike migrate_v2_to_v3/migrate_v3_to_v4 (which take and return plain
+    dicts, this module's working convention -- see the module docstring),
+    this returns a validated ``CalculatorInputsV5`` model, mirroring
+    migrateV4toV5's typed TS return and matching migrate_inputs_to_v5 below.
+    The input is accepted as either shape: a plain v4 snapshot dict (what
+    migrate_inputs_to_v4 returns) or an already-validated
+    CalculatorInputsV4/V5 instance -- both appear across call sites and the
+    test suite.
+
+    Precondition: `v4` must not already be a v5 document -- this guards
+    against double-migration (idempotence), same as migrate_v3_to_v4.
+    """
+    if isinstance(v4, CalculatorInputsV5):
+        raise ValueError("migrate_v4_to_v5: input is already a v5 document")
+    if isinstance(v4, CalculatorInputsV4):
+        doc = v4.model_dump(mode="json")
+    else:
+        if is_v5(v4):
+            raise ValueError("migrate_v4_to_v5: input is already a v5 document")
+        doc = dict(v4)
+
+    acq = dict(doc.get("acquisition") or {})
+    acq.setdefault("jurisdiction", "england_ni")
+    acq.setdefault("jurisdiction_source", "migrated_default")
+    acq.setdefault("jurisdiction_evidence_status", "unconfirmed")
+    acq.setdefault("acquisition_date", None)
+    acq.setdefault("acquisition_tax_override_pence", None)
+    acq.setdefault("acquisition_tax_override_reason", "")
+    doc["acquisition"] = acq
+    doc["inputs_version"] = 5
+    return CalculatorInputsV5.model_validate(doc)
+
+
+def migrate_inputs_to_v5(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV5:
+    """Normalises any stored snapshot (v1-v5) to v5. Port of
+    migrateInputsToV5: an already-v5 snapshot is re-validated directly (its
+    fields -- all of which carry Pydantic defaults, per AcquisitionInputsV5 --
+    are default-filled the same way a fixture missing a newer field always is
+    at this boundary); anything older routes through the existing
+    migrate_v4_to_v5 + migrate_inputs_to_v4 chain."""
+    if snapshot.get("inputs_version") == 5:
+        return CalculatorInputsV5.model_validate(snapshot)
+    return migrate_v4_to_v5(migrate_inputs_to_v4(snapshot, project))

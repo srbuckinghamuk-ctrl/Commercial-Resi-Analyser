@@ -353,7 +353,43 @@ class CalculatorInputsV4(CalculatorInputsV3):
     refinance: RefinanceInputs | None = None
 
 
-AnyCalculatorInputs = CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
+# --- Release 8 (calc 2.6.0+): jurisdiction, acquisition date and tax override -
+
+JurisdictionSource = Literal["derived", "user", "migrated_default"]
+
+
+class AcquisitionInputsV5(AcquisitionInputs):
+    """R8 (spec Sec 14). Mirrors frontend AcquisitionInputsV5. Extends rather
+    than edits AcquisitionInputs because that base shape is shared with the
+    v1-v4 document shapes."""
+
+    jurisdiction: Literal["england_ni", "scotland", "wales"] = "england_ni"
+    jurisdiction_source: JurisdictionSource = "migrated_default"
+    # Reuses the vocabulary of EquitySource.evidence_status deliberately: the
+    # report handles evidence with one mechanism, not two.
+    jurisdiction_evidence_status: Literal["unconfirmed", "confirmed"] = "unconfirmed"
+    # Effective date of the transaction; selects the band set. None on migrated
+    # documents, which then use the current set and say so.
+    acquisition_date: str | None = None
+    # Set only where a relief, linked transaction or other rule no band table
+    # models applies. Requires a reason (validation, Task 6).
+    acquisition_tax_override_pence: int | None = Field(default=None, ge=0)
+    acquisition_tax_override_reason: str = ""
+
+
+class CalculatorInputsV5(CalculatorInputsV4):
+    """Mirrors CalculatorInputsV4 with the R8 acquisition block. Subclasses V4
+    for the same reason V4 subclasses V3: the engine dispatches on it, and a
+    flat re-declaration would make those isinstance checks silently False for
+    v5 documents."""
+
+    inputs_version: Literal[5] = 5  # type: ignore[assignment]
+    acquisition: AcquisitionInputsV5  # type: ignore[assignment]
+
+
+AnyCalculatorInputs = (
+    CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5
+)
 
 
 def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
@@ -364,6 +400,8 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    if version == 5:
+        return CalculatorInputsV5.model_validate(doc)
     if version == 4:
         return CalculatorInputsV4.model_validate(doc)
     if version == 3:
