@@ -58,7 +58,7 @@ export default function CashflowPage({ run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>6. Cashflow Projection</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>7. Cashflow Projection</h3>
 
       <ReconciliationStrip run={run} />
 

@@ -32,7 +32,7 @@ const PROJECT: Project = {
  * throw a RangeError building the schedule (`Array.from({length: 1e21})`) —
  * the class of failure that used to unmount the whole calculator. */
 function setFacilityTerm(value: string): void {
-  fireEvent.click(screen.getByRole('button', { name: /4\. Finance/ }));
+  fireEvent.click(screen.getByRole('button', { name: /5\. Finance/ }));
   fireEvent.change(screen.getByDisplayValue('12'), { target: { value } });
 }
 
@@ -51,7 +51,7 @@ describe('ConversionCalculator when the engine cannot compute', () => {
 
     // The chrome survives: the nav is still there, so the component did not
     // unmount and its unsaved state is intact.
-    expect(screen.getByRole('button', { name: /5\. Programme/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /6\. Programme/ })).toBeInTheDocument();
     expect(screen.getByText(/appraisal could not be calculated/i)).toBeInTheDocument();
   });
 
@@ -81,7 +81,7 @@ describe('ConversionCalculator when the engine cannot compute', () => {
 
   it('never shows a stale calculation alongside the failure (spec §2)', () => {
     render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: /7\. Appraisal/ }));
+    fireEvent.click(screen.getByRole('button', { name: /8\. Appraisal/ }));
     // A computable document shows real metric cards.
     expect(screen.getByText('Developer GDV')).toBeInTheDocument();
 
@@ -92,11 +92,11 @@ describe('ConversionCalculator when the engine cannot compute', () => {
   });
 });
 
-describe('ConversionCalculator — Sensitivity is page 9', () => {
-  it('offers thirteen numbered pages with Sensitivity ninth', () => {
+describe('ConversionCalculator — Sensitivity is page 10', () => {
+  it('offers fourteen numbered pages with Sensitivity tenth', () => {
     render(<ConversionCalculator project={PROJECT} />);
     for (const label of [
-      '9. Sensitivity', '10. Exit', '11. Risk', '12. Deal Spider', '13. Investor',
+      '10. Sensitivity', '11. Exit', '12. Risk', '13. Deal Spider', '14. Investor',
     ]) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
@@ -104,8 +104,8 @@ describe('ConversionCalculator — Sensitivity is page 9', () => {
 
   it('renders the Sensitivity page when its tab is selected', () => {
     render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: '9. Sensitivity' }));
-    expect(screen.getByRole('heading', { name: /9\. Sensitivity/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '10. Sensitivity' }));
+    expect(screen.getByRole('heading', { name: /10\. Sensitivity/ })).toBeInTheDocument();
   });
 });
 
@@ -215,7 +215,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v6 (R8 Task 10, R
     // Not a blank screen: the calculator chrome is fully present and usable
     // on the default document the effect seeded before the failed load.
     expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /7\. Appraisal/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /8\. Appraisal/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save appraisal/i })).toBeEnabled();
   });
 

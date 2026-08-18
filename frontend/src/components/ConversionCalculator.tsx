@@ -9,6 +9,7 @@ import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
+import AreasPage from './calculator/AreasPage';
 import UnitMixPage from './calculator/UnitMixPage';
 import ConversionCostsPage from './calculator/ConversionCostsPage';
 import FinancePage from './calculator/FinancePage';
@@ -24,6 +25,7 @@ import InvestorSummaryPage from './calculator/InvestorSummaryPage';
 
 type CalcPage =
   | 'acquisition'
+  | 'areas'
   | 'unit_mix'
   | 'conversion_costs'
   | 'finance'
@@ -37,20 +39,24 @@ type CalcPage =
   | 'deal_spider'
   | 'investor_summary';
 
+// R9 Task 10: 'areas' is inserted second — the building's areas are known
+// before its unit schedule is drawn — pushing every following page's number
+// up by one (Unit Mix 2->3, ... Investor 13->14).
 const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'acquisition', label: 'Acquisition', num: 1 },
-  { key: 'unit_mix', label: 'Unit Mix', num: 2 },
-  { key: 'conversion_costs', label: 'Costs', num: 3 },
-  { key: 'finance', label: 'Finance', num: 4 },
-  { key: 'programme', label: 'Programme', num: 5 },
-  { key: 'cashflow', label: 'Cashflow', num: 6 },
-  { key: 'appraisal', label: 'Appraisal', num: 7 },
-  { key: 'scenarios', label: 'Scenarios', num: 8 },
-  { key: 'sensitivity', label: 'Sensitivity', num: 9 },
-  { key: 'exit_strategy', label: 'Exit', num: 10 },
-  { key: 'risk_register', label: 'Risk', num: 11 },
-  { key: 'deal_spider', label: 'Deal Spider', num: 12 },
-  { key: 'investor_summary', label: 'Investor', num: 13 },
+  { key: 'areas', label: 'Areas', num: 2 },
+  { key: 'unit_mix', label: 'Unit Mix', num: 3 },
+  { key: 'conversion_costs', label: 'Costs', num: 4 },
+  { key: 'finance', label: 'Finance', num: 5 },
+  { key: 'programme', label: 'Programme', num: 6 },
+  { key: 'cashflow', label: 'Cashflow', num: 7 },
+  { key: 'appraisal', label: 'Appraisal', num: 8 },
+  { key: 'scenarios', label: 'Scenarios', num: 9 },
+  { key: 'sensitivity', label: 'Sensitivity', num: 10 },
+  { key: 'exit_strategy', label: 'Exit', num: 11 },
+  { key: 'risk_register', label: 'Risk', num: 12 },
+  { key: 'deal_spider', label: 'Deal Spider', num: 13 },
+  { key: 'investor_summary', label: 'Investor', num: 14 },
 ];
 
 interface Props {
@@ -311,6 +317,9 @@ export default function ConversionCalculator({ project }: Props) {
         <CalculatorErrorBoundary resetKeys={[activePage]}>
         {activePage === 'acquisition' && (
           <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} project={project} />
+        )}
+        {activePage === 'areas' && (
+          <AreasPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'unit_mix' && (
           <UnitMixPage inputs={inputs} onChange={updateInputs} run={run} />
