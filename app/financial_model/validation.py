@@ -226,7 +226,7 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 "range typical of a conversion - check the area basis.",
             )
         if areas.basis == "manual" and bridge.developed_gia_sqm > 0:
-            manual = inputs.conversion_costs.total_construction_sqm
+            manual = bridge.manual_area_sqm
             diff = abs(manual - bridge.developed_gia_sqm)
             if diff > bridge.developed_gia_sqm * 0.05:
                 warn(

@@ -135,6 +135,22 @@ describe('developedAreaSqm — the single cost-area accessor', () => {
   });
 });
 
+// R9 Task 5, binding correction 3: `manual_area_sqm` exposes the raw manual
+// field through the bridge result so that validation.ts never has to read
+// `conversion_costs.total_construction_sqm` directly.
+describe('manual_area_sqm', () => {
+  it('carries the raw manual field verbatim regardless of basis', () => {
+    const bridgeBasis = areaBridge(makeInputs(FULL_BRIDGE, [], { manualSqm: 999 }));
+    expect(bridgeBasis.manual_area_sqm).toBe(999);
+    expect(bridgeBasis.basis).toBe('bridge_derived');
+    expect(bridgeBasis.developed_area_sqm).toBe(520);
+
+    const manualBasis = areaBridge(makeInputs({ ...FULL_BRIDGE, basis: 'manual' }, [], { manualSqm: 480 }));
+    expect(manualBasis.manual_area_sqm).toBe(480);
+    expect(manualBasis.developed_area_sqm).toBe(480);
+  });
+});
+
 describe('unitNiaSqm', () => {
   it('sums internal areas only and never ancillary', () => {
     const units = [

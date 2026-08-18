@@ -52,6 +52,12 @@ class AreaBridgeResult:
     ancillary_balcony_terrace_sqm: float
     ancillary_parking_spaces: float
     developed_area_sqm: float
+    #: The raw manual input (``conversion_costs.total_construction_sqm``),
+    #: carried verbatim so consumers never read the field directly. Only the
+    #: "manual basis differs from the bridge by more than 5%" warning in
+    #: validation.py needs both the manual figure and the derived one side by
+    #: side -- every other consumer wants ``developed_area_sqm`` instead.
+    manual_area_sqm: float
     nia_to_gia_pct: float | None
     nia_to_proposed_gia_pct: float | None
     saleable_to_developed_pct: float | None
@@ -143,6 +149,7 @@ def area_bridge(inputs) -> AreaBridgeResult:
         ancillary_balcony_terrace_sqm=balcony,
         ancillary_parking_spaces=spaces,
         developed_area_sqm=cost_area,
+        manual_area_sqm=inputs.conversion_costs.total_construction_sqm,
         nia_to_gia_pct=pct(nia, developed),
         nia_to_proposed_gia_pct=pct(nia, proposed),
         saleable_to_developed_pct=pct(saleable_nia, developed),

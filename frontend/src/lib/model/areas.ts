@@ -61,6 +61,12 @@ export interface AreaBridgeResult {
   ancillary_parking_spaces: number;
   /** The cost area actually in force, whichever basis produced it. */
   developed_area_sqm: number;
+  /** The raw manual input (`conversion_costs.total_construction_sqm`), carried
+   *  verbatim so consumers never read the field directly. Only the "manual
+   *  basis differs from the bridge by more than 5%" warning in validation.ts
+   *  needs both the manual figure and the derived one side by side — every
+   *  other consumer wants `developed_area_sqm` instead. */
+  manual_area_sqm: number;
   nia_to_gia_pct: number | null;
   nia_to_proposed_gia_pct: number | null;
   saleable_to_developed_pct: number | null;
@@ -150,6 +156,7 @@ export function areaBridge(inputs: AnyCalculatorInputs): AreaBridgeResult {
     ancillary_balcony_terrace_sqm: ancillary.balcony,
     ancillary_parking_spaces: ancillary.spaces,
     developed_area_sqm: costArea,
+    manual_area_sqm: inputs.conversion_costs.total_construction_sqm,
     nia_to_gia_pct: pct(unitNia, developed),
     nia_to_proposed_gia_pct: pct(unitNia, proposed),
     saleable_to_developed_pct: pct(saleableNia, developed),

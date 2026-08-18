@@ -140,6 +140,22 @@ def test_document_with_no_areas_block_falls_back_to_manual():
     assert area_bridge(legacy).basis == "manual"
 
 
+# R9 Task 5, binding correction 3: manual_area_sqm exposes the raw manual
+# field through the bridge result so that validation.py never has to read
+# conversion_costs.total_construction_sqm directly.
+
+
+def test_manual_area_sqm_carries_the_raw_field_verbatim_regardless_of_basis():
+    bridge_basis = area_bridge(make(FULL_BRIDGE, manual_sqm=999.0))
+    assert bridge_basis.manual_area_sqm == 999.0
+    assert bridge_basis.basis == "bridge_derived"
+    assert bridge_basis.developed_area_sqm == 520.0
+
+    manual_basis = area_bridge(make({**FULL_BRIDGE, "basis": "manual"}, manual_sqm=480.0))
+    assert manual_basis.manual_area_sqm == 480.0
+    assert manual_basis.developed_area_sqm == 480.0
+
+
 def test_unit_nia_excludes_ancillary_area():
     anc = type("A", (), {"balcony_terrace_sqm": 8.0, "parking_spaces": 1})()
     assert unit_nia_sqm([_Unit("u1", 50.0, anc)]) == 50.0

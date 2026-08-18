@@ -177,7 +177,7 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
         + 'typical of a conversion — check the area basis.');
     }
     if (areas.basis === 'manual' && bridge.developed_gia_sqm > 0) {
-      const manual = inputs.conversion_costs.total_construction_sqm;
+      const manual = bridge.manual_area_sqm;
       const diff = Math.abs(manual - bridge.developed_gia_sqm);
       if (diff > bridge.developed_gia_sqm * 0.05) {
         warn('areas.basis',
