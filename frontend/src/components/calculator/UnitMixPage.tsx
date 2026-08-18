@@ -1,11 +1,12 @@
 import { useCallback } from 'react';
-import type { ProposedUnit, UnitType } from '../../lib/conversion-types';
-import type { CalculatorInputsV5, AppraisalRun } from '../../lib/model';
+import type { ProposedUnit, ProposedUnitV6, UnitType } from '../../lib/conversion-types';
+import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
+import type { CalculatorInputsV6, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV5;
-  onChange: (partial: Partial<CalculatorInputsV5>) => void;
+  inputs: CalculatorInputsV6;
+  onChange: (partial: Partial<CalculatorInputsV6>) => void;
   run: AppraisalRun;
 }
 
@@ -20,7 +21,7 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
   const units = inputs.unit_mix.units;
 
   const updateUnits = useCallback(
-    (newUnits: ProposedUnit[]) => {
+    (newUnits: ProposedUnitV6[]) => {
       onChange({ unit_mix: { units: newUnits } });
     },
     [onChange],
@@ -35,6 +36,10 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
         floor_area_sqm: 46,
         estimated_value_pence: 25_000_000,
         comparable_notes: '',
+        // R9: a new unit starts with a zeroed ancillary block, exactly as
+        // migration writes on every existing one. The controls that let a user
+        // fill it in are Task 10's — this page does not render them yet.
+        ancillary: { ...DEFAULT_UNIT_ANCILLARY },
       },
     ]);
   }, [units, updateUnits]);

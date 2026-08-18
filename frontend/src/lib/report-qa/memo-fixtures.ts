@@ -12,7 +12,8 @@
  * Test-support only; not imported by the application.
  */
 import type { Project, EligibilityAssessment } from '../../types';
-import type { CalculatorInputsV4, CalculatorInputsV5, AcquisitionInputsV5 } from '../model';
+import type { CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, AcquisitionInputsV5 } from '../model';
+import { migrateV5toV6 } from '../model';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -260,9 +261,12 @@ export function blendedInputs(): CalculatorInputsV4 {
  * the release gate ran was an England/NI SDLT case defaulted by
  * `deriveMetrics`, never a document that actually recorded a jurisdiction.
  */
-function v5AcquisitionInputs(overrides: Partial<AcquisitionInputsV5> = {}): CalculatorInputsV5 {
+function v6AcquisitionInputs(overrides: Partial<AcquisitionInputsV5> = {}): CalculatorInputsV6 {
   const base = sellAllInputs();
-  return {
+  // R9: routed through migrateV5toV6 rather than spelling the v6 blocks out, so
+  // these fixtures are byte-identical to what a migrated document carries and
+  // cannot drift from the migration they stand in for.
+  const v5: CalculatorInputsV5 = {
     ...base,
     inputs_version: 5,
     acquisition: {
@@ -276,6 +280,7 @@ function v5AcquisitionInputs(overrides: Partial<AcquisitionInputsV5> = {}): Calc
       ...overrides,
     },
   };
+  return migrateV5toV6(v5);
 }
 
 /**
@@ -283,16 +288,16 @@ function v5AcquisitionInputs(overrides: Partial<AcquisitionInputsV5> = {}): Calc
  * (10 Feb 2026) inside the current non-residential band set (in force from
  * 22 Dec 2020) — so the tax basis is fully evidenced, not assumed.
  */
-export function welshInputs(): CalculatorInputsV5 {
-  return v5AcquisitionInputs({ jurisdiction: 'wales', acquisition_date: '2026-02-10' });
+export function welshInputs(): CalculatorInputsV6 {
+  return v6AcquisitionInputs({ jurisdiction: 'wales', acquisition_date: '2026-02-10' });
 }
 
 /**
  * A Scottish acquisition: LBTT, likewise a confirmed jurisdiction and a
  * transaction date inside the current band set (in force from 25 Jan 2019).
  */
-export function scottishInputs(): CalculatorInputsV5 {
-  return v5AcquisitionInputs({ jurisdiction: 'scotland', acquisition_date: '2026-02-10' });
+export function scottishInputs(): CalculatorInputsV6 {
+  return v6AcquisitionInputs({ jurisdiction: 'scotland', acquisition_date: '2026-02-10' });
 }
 
 /**
@@ -303,8 +308,8 @@ export function scottishInputs(): CalculatorInputsV5 {
  * the DRAFT - TAX BASIS UNCONFIRMED path rather than the ordinary
  * DRAFT - NOT APPROVED one the other standing fixtures reach.
  */
-export function unconfirmedJurisdictionInputs(): CalculatorInputsV5 {
-  return v5AcquisitionInputs({ jurisdiction_evidence_status: 'unconfirmed' });
+export function unconfirmedJurisdictionInputs(): CalculatorInputsV6 {
+  return v6AcquisitionInputs({ jurisdiction_evidence_status: 'unconfirmed' });
 }
 
 /**

@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
-  defaultCalculatorInputsV5, DEFAULT_SCENARIOS,
+  defaultCalculatorInputsV5, defaultCalculatorInputsV6, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
-import { migrateInputs, migrateV4toV5 } from './model';
+import { migrateInputs, migrateV4toV5, migrateV5toV6 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
 
 describe('defaultCalculatorInputs', () => {
@@ -103,5 +103,35 @@ describe('defaultCalculatorInputsV5 (R8 Task 11)', () => {
 
   it('leaves the acquisition date unknown rather than assuming today (spec §1.5)', () => {
     expect(defaultCalculatorInputsV5().acquisition.acquisition_date).toBeNull();
+  });
+});
+
+describe('defaultCalculatorInputsV6 (R9 Task 3)', () => {
+  // Same guard as the V5 block above, for the same reason: conversion-defaults.ts
+  // cannot import model/migrate.ts (migrate.ts imports it), so the v6 blocks are
+  // spelled out there and this is what stops the fresh document and the migrated
+  // one drifting apart.
+  it('is exactly what migrateV5toV6 makes of the v5 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV6>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV6()))
+      .toEqual(stripIds(migrateV5toV6(defaultCalculatorInputsV5())));
+  });
+
+  it('starts on the manual basis with a zeroed bridge, so no cost area moves', () => {
+    const v6 = defaultCalculatorInputsV6();
+    expect(v6.inputs_version).toBe(6);
+    expect(v6.areas.basis).toBe('manual');
+    expect(v6.areas.existing_gia_sqm).toBe(0);
+    expect(v6.areas.external_amenity_sqm).toBe(0);
+  });
+
+  it('carries the v5 acquisition block through untouched', () => {
+    const v6 = defaultCalculatorInputsV6();
+    expect(v6.acquisition.jurisdiction_source).toBe('migrated_default');
+    expect(v6.acquisition.acquisition_date).toBeNull();
   });
 });

@@ -2,16 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ProgrammePage from './ProgrammePage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV5, ProgrammeInputs } from '../../lib/model';
-import { defaultCalculatorInputsV5 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV6, ProgrammeInputs } from '../../lib/model';
+import { defaultCalculatorInputsV6 } from '../../lib/conversion-defaults';
 import { penceToPounds } from '../../lib/format';
 
-function buildInputs(overrides: Partial<CalculatorInputsV5> = {}): CalculatorInputsV5 {
-  const base = defaultCalculatorInputsV5();
+function buildInputs(overrides: Partial<CalculatorInputsV6> = {}): CalculatorInputsV6 {
+  const base = defaultCalculatorInputsV6();
   return { ...base, ...overrides };
 }
 
-function setup(inputs: CalculatorInputsV5, onChange = vi.fn()) {
+function setup(inputs: CalculatorInputsV6, onChange = vi.fn()) {
   const run = runAppraisal(inputs);
   render(<ProgrammePage inputs={inputs} onChange={onChange} run={run} />);
   return { onChange, run };
@@ -54,7 +54,7 @@ describe('ProgrammePage — auto windows (programme === null)', () => {
   it('disables "Set explicit programme" with a note when term < 3 (sale-tail rule)', () => {
     const inputs = buildInputs({
       programme: null,
-      finance: { ...defaultCalculatorInputsV5().finance, term_months: 2 },
+      finance: { ...defaultCalculatorInputsV6().finance, term_months: 2 },
     });
     setup(inputs);
     const button = screen.getByRole('button', { name: /set explicit programme/i });
@@ -173,7 +173,7 @@ describe('ProgrammePage — spend preview', () => {
     const inputs = buildInputs({
       programme: SPEND_PROGRAMME,
       conversion_costs: {
-        ...defaultCalculatorInputsV5().conversion_costs,
+        ...defaultCalculatorInputsV6().conversion_costs,
         total_construction_sqm: 1000,
         construction_cost_per_sqm_pence: 250_000,
       },
