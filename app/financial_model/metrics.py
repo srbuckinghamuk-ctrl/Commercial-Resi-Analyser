@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .areas import AreaBridgeResult, area_bridge
 from .breakeven import (
     DeveloperBreakevenTerms,
     PhasedSeniorBreakevenTerms,
@@ -17,7 +18,7 @@ from .breakeven import (
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct
 from .lender_valuation import compute_lender_gdv
-from .schedule import Schedule
+from .schedule import Schedule, calculate_gdv_breakdown
 from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax, resolve_acquisition_date
 from .types import (
     CALC_VERSION,
@@ -122,6 +123,20 @@ class AppraisalResultV2:
     # name. Carries the identical value to acquisition_tax_pence; retained only
     # so pre-R8 report and export readers keep working. Removed in R16.
     sdlt_pence: int
+    # R9 spec Sec 15.8 -- the full area reconciliation: every entered line,
+    # every derived line, every efficiency. The UI and the report read areas
+    # from here and never recompute one.
+    area_bridge: AreaBridgeResult
+    # R9 spec Sec 15.8 -- the construction cost area actually used, whichever
+    # basis produced it. Equal to area_bridge.developed_area_sqm.
+    developed_area_sqm: float
+    # R9 spec Sec 3.1 -- GDV excluding ancillary. This is the pre-R9 figure,
+    # kept so a variance against it stays expressible.
+    gdv_internal_pence: int
+    # R9 spec Sec 3.1 -- parking plus balcony/terrace value. gdv_pence remains
+    # the TOTAL of the two, so every existing GDV-denominated ratio is
+    # unchanged.
+    gdv_ancillary_pence: int
     construction_cost_pence: int
     professional_fees_pence: int
     statutory_costs_pence: int
@@ -219,6 +234,10 @@ def derive_metrics(
 ) -> AppraisalResultV2:
     flags: list[ModelFlag] = list(model.flags)
     t = schedule.totals
+    # R9 spec Sec 15.8. Derived once, here, and read by every consumer from
+    # the result -- the UI and the memo never call area_bridge themselves.
+    bridge = area_bridge(inputs)
+    gdv_parts = calculate_gdv_breakdown(inputs.unit_mix.units)
     # Lender-underwritten GDV (spec Sec 3.2, Release 2b Task 3). None for v2
     # inputs (no lender_valuation field at all), v3 inputs with the block
     # absent, or a present-but-invalid block. compute_lender_gdv raises for the
@@ -436,6 +455,10 @@ def derive_metrics(
         acquisition_tax=acquisition_tax,
         # DEPRECATED (R8) -- use acquisition_tax_pence. Removed in R16.
         sdlt_pence=sdlt,
+        area_bridge=bridge,
+        developed_area_sqm=bridge.developed_area_sqm,
+        gdv_internal_pence=gdv_parts.internal_pence,
+        gdv_ancillary_pence=gdv_parts.ancillary_pence,
         construction_cost_pence=t.construction_pence,
         professional_fees_pence=t.professional_pence,
         statutory_costs_pence=t.statutory_pence,

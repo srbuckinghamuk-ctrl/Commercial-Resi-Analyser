@@ -4,7 +4,7 @@ import type {
 } from '../conversion-types';
 import type { UnitMixInputsV6 } from '../conversion-types';
 import type { SpendCurve } from './curves';
-import type { AreaBridgeInputs } from './areas';
+import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 
 export type { SpendCurve };
@@ -350,6 +350,19 @@ export interface AppraisalResultV2 {
    * so pre-R8 report and export readers keep working. Removed in R16.
    */
   sdlt_pence: number;
+  /** R9 spec §15.8 — the full area reconciliation: every entered line, every
+   *  derived line, every efficiency. The UI and the report read areas from here
+   *  and never recompute one. */
+  area_bridge: AreaBridgeResult;
+  /** R9 spec §15.8 — the construction cost area actually used, whichever basis
+   *  produced it. Equal to `area_bridge.developed_area_sqm`. */
+  developed_area_sqm: number;
+  /** R9 spec §3.1 — GDV excluding ancillary. This is the pre-R9 figure, kept so
+   *  a variance against it stays expressible. */
+  gdv_internal_pence: number;
+  /** R9 spec §3.1 — parking plus balcony/terrace value. `gdv_pence` remains the
+   *  TOTAL of the two, so every existing GDV-denominated ratio is unchanged. */
+  gdv_ancillary_pence: number;
   construction_cost_pence: number;
   professional_fees_pence: number;
   statutory_costs_pence: number;
