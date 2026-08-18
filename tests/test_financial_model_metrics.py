@@ -660,8 +660,23 @@ class TestAreaBridgeAndGdvSplitOnResult:
     def test_keeps_every_gdv_denominated_ratio_on_the_total_unamended(self):
         # profit_on_gdv_pct, ltgdv_developer_pct and the break-even percentages
         # all divide by gdv_pence. Because gdv_pence remains the TOTAL, none of
-        # them needed a spec amendment in R9 -- this test is what holds that
-        # true.
+        # them needed a spec amendment in R9.
+        #
+        # Fix round 1 (review): the expected denominator below is written as
+        # the literal sum of this fixture's own internal (25,000,000) and
+        # ancillary (1,600,000) values -- NOT read back off
+        # run.metrics.gdv_pence -- and the expected profit is the literal
+        # figure this exact fixture produces (pinned once via a probe run,
+        # deterministic thereafter: no randomness anywhere in the cost stack
+        # or financing defaults, and identical to the TS twin). Reading both
+        # sides of the assertion off the same result object would be
+        # self-consistent by construction -- if gdv_pence were silently
+        # narrowed to internal-only, both operands would narrow together and
+        # the assertion would still hold. Hard-coding the denominator
+        # independently means a narrowing of gdv_pence moves the actual value
+        # away from this fixed expectation, so this test -- not just the
+        # sibling "splits GDV" test above -- actually discriminates the
+        # total-vs-internal-only regression it claims to guard.
         inputs = _make_v6_inputs(units=[{
             "id": "u1", "floor_area_sqm": 50, "estimated_value_pence": 25_000_000,
             "ancillary": {
@@ -670,4 +685,7 @@ class TestAreaBridgeAndGdvSplitOnResult:
             },
         }])
         run = run_appraisal(inputs)
-        assert run.metrics.profit_on_gdv_pct == pct(run.metrics.profit_pence, run.metrics.gdv_pence)
+        known_profit_pence = 22_156_972
+        known_total_gdv_pence = 25_000_000 + 1_600_000  # internal + ancillary, literal
+        assert run.metrics.profit_pence == known_profit_pence
+        assert run.metrics.profit_on_gdv_pct == pct(known_profit_pence, known_total_gdv_pence)
