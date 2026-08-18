@@ -1136,9 +1136,13 @@ describe('R9 — the memo reports the area bridge', () => {
     },
   });
 
+  // Deliberately distinctive (not round) numbers: unit 1 is otherwise
+  // identical to units 2 and 3 (50 m² / 538 sq ft each), so a plain "5" or
+  // "1" here would collide with plenty of other cells on the page. "7.5" and
+  // "2" do not.
   const ancillaryFixture = v6Inputs({
     ancillary: {
-      0: { balcony_terrace_sqm: 5, balcony_terrace_value_pence: 500_000, parking_spaces: 1, parking_value_pence: 1_000_000 },
+      0: { balcony_terrace_sqm: 7.5, balcony_terrace_value_pence: 500_000, parking_spaces: 2, parking_value_pence: 1_000_000 },
     },
   });
 
@@ -1163,6 +1167,23 @@ describe('R9 — the memo reports the area bridge', () => {
 
   it('discloses an unallocated balance rather than printing a bridge that appears to tie', async () => {
     expect(await memoTextFor(unreconciledFixture)).toContain('300.0 m² of the developed area is unallocated');
+  });
+
+  // Fix round 1 (Important 2). The materiality threshold that decides
+  // whether to disclose belongs to validateInputs (validation.ts:169), not
+  // the memo -- the two must never be able to silently drift apart. Proven
+  // by deleting the issue validateInputs actually raised for this fixture:
+  // if the memo were still recomputing "unallocated > developed * 10%" for
+  // itself rather than reading the issue, this deletion would have no effect
+  // and the disclosure would print regardless.
+  it('reads the unallocated disclosure from validation rather than recomputing the threshold itself', async () => {
+    const run = runAppraisal(unreconciledFixture);
+    const issue = run.validation.find((i) => i.field === 'areas.unallocated_sqm');
+    expect(issue).toBeDefined(); // sanity: this fixture's 30% overage does trip it
+    run.validation = run.validation.filter((i) => i !== issue);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = await pdfText(blob);
+    expect(text).not.toContain('is unallocated');
   });
 
   it('says nothing about an unallocated balance when the schedule genuinely ties', async () => {
@@ -1193,6 +1214,18 @@ describe('R9 — the memo reports the area bridge', () => {
     expect(text).toContain('Parking, balconies and terraces');
   });
 
+  // Fix round 1 (minor). The GDV-split test above only exercises
+  // `metrics.gdv_ancillary_pence`; it does not touch the unit table's own
+  // ancillary columns at all, a different code path (the raw per-unit input,
+  // via `unitAncillaryOf`). Distinct assertion for a distinct read site.
+  it('prints correct per-unit ancillary values in the unit table', async () => {
+    const text = await memoTextFor(ancillaryFixture);
+    // Unit 1's row: 50 m² / 538 sq ft NIA (shared with units 2 and 3, which
+    // is why the ancillary fixture uses non-round 7.5 m² / 2 spaces), then
+    // its ancillary columns, drawn as consecutive cells in the same row.
+    expect(text).toContain('50\n538\n7.5\n2');
+  });
+
   it('no longer claims parking and external space are excluded pending a later release', async () => {
     // Spec §3.1 carried "until valued separately in R3" from R1 to R8. R9 pays
     // it off; the memo must not still be promising it. Zero-count, per the R8
@@ -1200,20 +1233,34 @@ describe('R9 — the memo reports the area bridge', () => {
     expect(await memoTextFor(ancillaryFixture)).not.toContain('valued separately');
   });
 
-  it('never prints a null ratio as 0%', async () => {
-    // A v2-shaped document (baseInputs() itself, unmigrated) has no `areas`
-    // block at all, so `developed_gia_sqm` is 0 and every one of the three
-    // ratios is null.
+  // Fix round 1 (minor). A v2-shaped document (baseInputs() itself,
+  // unmigrated) has no `areas` block at all, so `developed_gia_sqm` is 0 and
+  // every one of the three ratios is null. Before the round-1 fix, the memo
+  // printed the fourteen-row all-zero reconciliation and the three
+  // all-em-dash ratios anyway, above a caption already saying no schedule
+  // was entered — noise on top of the one true statement. It now omits both
+  // tables entirely and prints only the caption.
+  it('omits the area schedule and efficiencies tables (never a null ratio as 0%) when nothing has been entered', async () => {
     const run = runAppraisal(baseInputs());
     expect(run.metrics.area_bridge.nia_to_gia_pct).toBeNull();
     expect(run.metrics.area_bridge.nia_to_proposed_gia_pct).toBeNull();
     expect(run.metrics.area_bridge.saleable_to_developed_pct).toBeNull();
     const text = await memoTextFor(baseInputs());
-    expect(text).toContain('Net to gross');
+    expect(text).toContain('no area schedule has been entered for this appraisal');
+    expect(text).not.toContain('Area Reconciliation');
+    expect(text).not.toContain('Net to gross');
     // documentText is one drawn item per line: other, unrelated percentages
     // in this same document legitimately end in "0.0%" (e.g. "100.0%",
     // "10.0%"), so the check is for a *cell* reading exactly "0.0%", not the
     // substring — which every one of those would also, spuriously, contain.
     expect(text.split('\n')).not.toContain('0.0%');
+  });
+
+  it('prints the area schedule and efficiencies tables once something has been entered', async () => {
+    // The positive control for the test above: `bridgeFixture` has a real,
+    // populated schedule (developed_gia_sqm = 300), so both tables print.
+    const text = await memoTextFor(bridgeFixture);
+    expect(text).toContain('Area Reconciliation');
+    expect(text).toContain('Net to gross');
   });
 });

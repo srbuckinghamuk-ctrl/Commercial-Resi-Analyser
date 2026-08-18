@@ -987,75 +987,102 @@ export function generateInvestmentMemo(
   // caption states which number priced the works in words, because a reader
   // who cannot tell that is a reader who might price the works off the wrong
   // figure (spec §15.3/§15.4).
+  //
+  // Fix round 1 (minor). `developed_gia_sqm > 0` is "something was actually
+  // entered" — the same guard `validateInputs` uses throughout for exactly
+  // this reason (a zeroed bridge is every pre-R9 document, unconditionally).
+  // Below that line, the fourteen-row reconciliation is all zeros and all
+  // three ratios are null by construction (each denominator is zero), so the
+  // table adds noise, not information; the caption alone says what there is
+  // to say. This is also why a null ratio can never reach the Area
+  // Efficiencies table as a printed "0%": whenever that table draws,
+  // `scheduleEntered` guarantees every one of its three denominators is
+  // positive.
+  const scheduleEntered = bridge.developed_gia_sqm > 0;
   y = subHeading(y, 'Area Schedule');
   y = captionText(
     y,
     bridge.basis === 'bridge_derived'
       ? 'Construction area derived from the area schedule.'
-      : 'Construction area entered manually; the area schedule below is recorded but does not price the works.',
+      : scheduleEntered
+        ? 'Construction area entered manually; the area schedule below is recorded but does not price the works.'
+        : 'Construction area entered manually; no area schedule has been entered for this appraisal.',
   );
 
-  const AREA_SCHEDULE_TOTAL_ROWS = new Set([
-    'Proposed GIA', 'Developed area', 'Available for units', 'Unallocated',
-  ]);
-  table({
-    startY: y,
-    margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['Area Reconciliation', 'm²']],
-    body: ([
-      ['Existing GIA', bridge.existing_gia_sqm],
-      ['less demolished', -bridge.demolished_gia_sqm],
-      ['plus extension', bridge.extension_gia_sqm],
-      ['Proposed GIA', bridge.proposed_gia_sqm],
-      ['less retained commercial', -bridge.retained_commercial_gia_sqm],
-      ['less untouched', -bridge.untouched_gia_sqm],
-      ['Developed area', bridge.developed_gia_sqm],
-      ['less circulation', -bridge.circulation_common_sqm],
-      ['less plant', -bridge.plant_riser_sqm],
-      ['less storage', -bridge.store_bin_cycle_sqm],
-      ['less amenity', -bridge.amenity_sqm],
-      ['Available for units', bridge.available_for_units_sqm],
-      ['less unit NIA', -bridge.unit_nia_sqm],
-      ['Unallocated', bridge.unallocated_sqm],
-    ] as Array<[string, number]>).map(([label, value]) => [label, value.toFixed(1)]),
-    styles: { fontSize: 9, cellPadding: 2 },
-    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
-    bodyStyles: { textColor: [51, 65, 85] },
-    columnStyles: { 1: { halign: 'right' } },
-    didParseCell(data) {
-      if (data.section === 'body' && AREA_SCHEDULE_TOTAL_ROWS.has(String(data.cell.raw))) {
-        data.cell.styles.fillColor = [241, 245, 249];
-        data.cell.styles.fontStyle = 'bold';
-      }
-    },
-  });
-  y = lastAutoTableFinalY(doc) + 4;
+  if (scheduleEntered) {
+    const AREA_SCHEDULE_TOTAL_ROWS = new Set([
+      'Proposed GIA', 'Developed area', 'Available for units', 'Unallocated',
+    ]);
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Area Reconciliation', 'm²']],
+      body: ([
+        ['Existing GIA', bridge.existing_gia_sqm],
+        ['less demolished', -bridge.demolished_gia_sqm],
+        ['plus extension', bridge.extension_gia_sqm],
+        ['Proposed GIA', bridge.proposed_gia_sqm],
+        ['less retained commercial', -bridge.retained_commercial_gia_sqm],
+        ['less untouched', -bridge.untouched_gia_sqm],
+        ['Developed area', bridge.developed_gia_sqm],
+        ['less circulation', -bridge.circulation_common_sqm],
+        ['less plant', -bridge.plant_riser_sqm],
+        ['less storage', -bridge.store_bin_cycle_sqm],
+        ['less amenity', -bridge.amenity_sqm],
+        ['Available for units', bridge.available_for_units_sqm],
+        ['less unit NIA', -bridge.unit_nia_sqm],
+        ['Unallocated', bridge.unallocated_sqm],
+      ] as Array<[string, number]>).map(([label, value]) => [label, value.toFixed(1)]),
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      columnStyles: { 1: { halign: 'right' } },
+      didParseCell(data) {
+        if (data.section === 'body' && AREA_SCHEDULE_TOTAL_ROWS.has(String(data.cell.raw))) {
+          data.cell.styles.fillColor = [241, 245, 249];
+          data.cell.styles.fontStyle = 'bold';
+        }
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
 
-  y = subHeading(y, 'Area Efficiencies');
-  table({
-    startY: y,
-    margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['Efficiency', 'Ratio']],
-    // A null ratio (zero denominator) prints as an em dash, never as 0% — a
-    // printed 0% would assert a figure the engine explicitly declined to
-    // produce (spec §15.2).
-    body: [
-      ['Net to gross', fmtPctSafe(bridge.nia_to_gia_pct, '—')],
-      ['NIA to proposed GIA', fmtPctSafe(bridge.nia_to_proposed_gia_pct, '—')],
-      ['Saleable to developed', fmtPctSafe(bridge.saleable_to_developed_pct, '—')],
-    ],
-    styles: { fontSize: 9, cellPadding: 2 },
-    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
-    bodyStyles: { textColor: [51, 65, 85] },
-    columnStyles: { 1: { halign: 'right' } },
-  });
-  y = lastAutoTableFinalY(doc) + 4;
+    y = subHeading(y, 'Area Efficiencies');
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Efficiency', 'Ratio']],
+      // A null ratio (zero denominator) prints as an em dash, never as 0% —
+      // a printed 0% would assert a figure the engine explicitly declined to
+      // produce (spec §15.2). Belt-and-braces: `scheduleEntered` above
+      // already guarantees every ratio here is non-null (see the comment on
+      // it), so `fmtPctSafe`'s fallback is defensive, not load-bearing.
+      body: [
+        ['Net to gross', fmtPctSafe(bridge.nia_to_gia_pct, '—')],
+        ['NIA to proposed GIA', fmtPctSafe(bridge.nia_to_proposed_gia_pct, '—')],
+        ['Saleable to developed', fmtPctSafe(bridge.saleable_to_developed_pct, '—')],
+      ],
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
+  }
 
-  // Disclosure, not a schedule that merely appears to tie (spec §15.7): a
-  // zeroed bridge (basis manual, nothing entered) is guarded out here exactly
-  // as it is in validateInputs — a real unit schedule must not be judged
-  // against a "0 m² building" nobody is reconciling against.
-  if (bridge.developed_gia_sqm > 0 && bridge.unallocated_sqm > bridge.developed_gia_sqm * 0.10) {
+  // Disclosure, not a schedule that merely appears to tie (spec §15.7).
+  //
+  // Fix round 1: the materiality judgement (a zeroed bridge is exempt; over
+  // the 10% threshold is disclosed) belongs to `validateInputs`
+  // (validation.ts) — the memo used to re-derive
+  // `unallocated_sqm > developed_gia_sqm * 0.10` itself, which is exactly the
+  // "two sites silently disagree the moment one threshold moves" defect this
+  // release exists to close. It now reads the issue `validateInputs` already
+  // raised instead of recomputing the condition. That issue is
+  // warning-severity, so it lives on `run.validation` — `run.reconciliation
+  // .issues` is errors-only bar one unrelated `field: 'model'` exception (see
+  // AreasPage.tsx), never area warnings.
+  const unallocatedIssue = run.validation.find((i) => i.field === 'areas.unallocated_sqm');
+  if (unallocatedIssue) {
     y = captionText(
       y,
       `${bridge.unallocated_sqm.toFixed(1)} m² of the developed area is unallocated — `

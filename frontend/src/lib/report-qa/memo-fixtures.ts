@@ -313,45 +313,94 @@ export function unconfirmedJurisdictionInputs(): CalculatorInputsV6 {
 }
 
 /**
- * R9 (Task 11, spec §15). `v6AcquisitionInputs()` with a populated,
- * bridge-derived area schedule carrying a material (>10%) unallocated
- * balance, and ancillary balcony/terrace + parking value on two units — so
- * the release gate exercises the area-schedule table, the three efficiency
- * ratios, the unallocated disclosure line and the GDV internal/ancillary
- * split, not only their zeroed defaults.
+ * R9 (Task 11, spec §15). Layers a populated, bridge-derived area schedule
+ * carrying a material (>10%) unallocated balance, and ancillary
+ * balcony/terrace + parking value on two units, onto whatever v6 document is
+ * passed in — so a caller can combine this content with any jurisdiction /
+ * evidence-status fixture below and exercise the area-schedule table, the
+ * three efficiency ratios, the unallocated disclosure line and the GDV
+ * internal/ancillary split against something other than its own zeroed
+ * defaults.
  *
  * Geometry: existing 400, demolished 20, extension 20 (proposed 400); no
  * retained commercial or untouched area (developed 400); circulation 30,
  * plant 10, store 10, amenity 10 (available 340); the fixture's 290 m² of
  * unit NIA leaves 50 m² (12.5% of the 400 m² developed area) unallocated.
  */
+function withBridgeAndAncillary(inputs: CalculatorInputsV6): CalculatorInputsV6 {
+  return {
+    ...inputs,
+    areas: {
+      basis: 'bridge_derived',
+      existing_gia_sqm: 400,
+      demolished_gia_sqm: 20,
+      extension_gia_sqm: 20,
+      retained_commercial_gia_sqm: 0,
+      untouched_gia_sqm: 0,
+      circulation_common_sqm: 30,
+      plant_riser_sqm: 10,
+      store_bin_cycle_sqm: 10,
+      amenity_sqm: 10,
+      external_amenity_sqm: 15,
+    },
+    unit_mix: {
+      units: inputs.unit_mix.units.map((u, i) => {
+        if (i === 0) {
+          return { ...u, ancillary: { balcony_terrace_sqm: 5, balcony_terrace_value_pence: 800_000, parking_spaces: 1, parking_value_pence: 1_500_000 } };
+        }
+        if (i === 3) {
+          return { ...u, ancillary: { balcony_terrace_sqm: 8, balcony_terrace_value_pence: 1_200_000, parking_spaces: 1, parking_value_pence: 1_500_000 } };
+        }
+        return u;
+      }),
+    },
+  };
+}
+
 export function bridgeAndAncillaryInputs(): CalculatorInputsV6 {
-  const inputs = v6AcquisitionInputs();
-  inputs.areas = {
-    basis: 'bridge_derived',
-    existing_gia_sqm: 400,
-    demolished_gia_sqm: 20,
-    extension_gia_sqm: 20,
-    retained_commercial_gia_sqm: 0,
-    untouched_gia_sqm: 0,
-    circulation_common_sqm: 30,
-    plant_riser_sqm: 10,
-    store_bin_cycle_sqm: 10,
-    amenity_sqm: 10,
-    external_amenity_sqm: 15,
+  return withBridgeAndAncillary(v6AcquisitionInputs());
+}
+
+/**
+ * R9 fix round 1 (Important 1). `bridgeAndAncillaryInputs()`'s populated
+ * schedule, but combined with the tallest jurisdiction strings the standing
+ * corpus has (Scotland: "Scotland"/"LBTT" run longer than "Wales"/"LTT") AND
+ * an unconfirmed evidence status, so the DRAFT - TAX BASIS UNCONFIRMED
+ * banner and its extra evidence-request text are on the document at the same
+ * time as the new Section 3 content.
+ *
+ * Before this fixture, the populated area-schedule/efficiencies/GDV-split
+ * content reached the page-bounds/sparse-page/orphan-heading QA gate through
+ * exactly one route (`bridgeAndAncillaryInputs`, England/NI, fully
+ * evidenced) — never combined with the longer strings and extra banner the
+ * standing `welshInputs`/`scottishInputs`/`unconfirmedJurisdictionInputs`
+ * fixtures exist specifically to stress. That gap matters because "added
+ * content pushes a table past CONTENT_BOTTOM" is exactly the defect class
+ * the round-1 blank-trailing-page fix closed — the taller strings here are
+ * where it would recur if the fix were incomplete.
+ *
+ * The facility is widened over `bridgeAndAncillaryInputs()`'s: the
+ * bridge-derived 400 m² cost area (vs. the 340 m² `sellAllInputs()` was
+ * originally sized for) raises total development cost enough to open a
+ * funding gap against the unwidened committed facility, which would make
+ * `report_safe` false and the watermark read UNRECONCILED — masking the
+ * `tax_basis_unconfirmed` reason this fixture exists to combine with the
+ * populated content.
+ */
+export function bridgeAncillaryScottishUnconfirmedInputs(): CalculatorInputsV6 {
+  const inputs = withBridgeAndAncillary(v6AcquisitionInputs({
+    jurisdiction: 'scotland',
+    acquisition_date: '2026-02-10',
+    jurisdiction_evidence_status: 'unconfirmed',
+  }));
+  return {
+    ...inputs,
+    finance: {
+      ...inputs.finance,
+      committed_net_facility_pence: 150_000_000,
+      committed_gross_facility_pence: 165_000_000,
+    },
   };
-  inputs.unit_mix = {
-    units: inputs.unit_mix.units.map((u, i) => {
-      if (i === 0) {
-        return { ...u, ancillary: { balcony_terrace_sqm: 5, balcony_terrace_value_pence: 800_000, parking_spaces: 1, parking_value_pence: 1_500_000 } };
-      }
-      if (i === 3) {
-        return { ...u, ancillary: { balcony_terrace_sqm: 8, balcony_terrace_value_pence: 1_200_000, parking_spaces: 1, parking_value_pence: 1_500_000 } };
-      }
-      return u;
-    }),
-  };
-  return inputs;
 }
 
 /**

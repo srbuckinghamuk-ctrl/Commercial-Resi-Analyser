@@ -16,7 +16,7 @@ import {
   qaProject, qaEligibility, sellAllInputs, retainAllInputs,
   refinanceInputs, blendedInputs, legacyV1Snapshot,
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
-  bridgeAndAncillaryInputs,
+  bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
 } from './memo-fixtures';
 
 /**
@@ -92,6 +92,13 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   // sweep above never exercised the area-schedule table, the efficiency
   // ratios, the unallocated disclosure or the GDV split before this fixture.
   ['area bridge + ancillary', bridgeAndAncillaryInputs],
+  // R9 fix round 1 (Important 1). The same populated content, stacked with
+  // the tallest jurisdiction strings and the DRAFT - TAX BASIS UNCONFIRMED
+  // banner, so this sweep also stresses the interaction class that produced
+  // the round-1 blank-trailing-page bug — content growth pushing a table
+  // past CONTENT_BOTTOM — under the longest-text route, not only the
+  // shortest (England/NI, fully evidenced) one above.
+  ['area bridge + ancillary, scotland (LBTT), unconfirmed jurisdiction', bridgeAncillaryScottishUnconfirmedInputs],
 ];
 
 describe('investment memorandum release gate', () => {
@@ -596,5 +603,27 @@ describe('investment memorandum release gate', () => {
     // memo containing the *correct* new copy would sail straight past a
     // `toContain` for it while the stale promise sat right beside it.
     expect(text).not.toContain('valued separately');
+  });
+
+  // Fix round 1 (Important 1). This route is already carried through the full
+  // page-bounds/sparse-page/orphan-heading/footer/provenance sweep via
+  // `ROUTES` above; this test only pins that the three things it is meant to
+  // combine are actually present together on the document it produces, so a
+  // future edit cannot quietly drop one of them and still pass the sweep.
+  it('combines the populated area content with the tallest jurisdiction strings and an unconfirmed tax basis', async () => {
+    const run = runAppraisal(bridgeAncillaryScottishUnconfirmedInputs());
+    expect(run.reconciliation.report_safe).toBe(true); // sanity: draft status comes from the tax basis, not a reconciliation failure
+    const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBe('tax_basis_unconfirmed'); // sanity fixture check
+
+    const info = await inspectPdf(generateInvestmentMemo(qaProject, run, qaEligibility, prov));
+    expect(info.pages.flatMap(watermarkTexts)).toContain('DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE');
+    const text = documentText(info);
+    expect(text).toContain('Scotland');
+    expect(text).toContain('LBTT');
+    expect(text).toContain('Area Schedule');
+    expect(text).toContain('Internal saleable value');
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
   });
 });
