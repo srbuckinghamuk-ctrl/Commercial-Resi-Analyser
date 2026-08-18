@@ -1263,4 +1263,99 @@ describe('R9 — the memo reports the area bridge', () => {
     expect(text).toContain('Area Reconciliation');
     expect(text).toContain('Net to gross');
   });
+
+  // ── R9 fix wave ─────────────────────────────────────────────────────────
+  // Three divergences the whole-branch review found in the memo itself. Each
+  // test fails against the pre-fix generator.
+  describe('R9 fix wave', () => {
+    /** The engine's own `fmt` (memo-private), reproduced for the assertions
+     *  below so a currency-format change fails here loudly rather than
+     *  silently loosening a hard-coded literal. */
+    function gbp(pence: number): string {
+      return (pence / 100).toLocaleString('en-GB', {
+        style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+      });
+    }
+
+    /** Unit 1 retained, on the BLENDED route — the one route where the
+     *  engine's retained set is exactly `exit_strategy.retained_units`, so
+     *  `metrics.unrealised_value_pence` and the Retained Portfolio table
+     *  describe the same units and must agree to the penny. Unit 1 carries
+     *  £15,000 of ancillary value, so "internal only" and "internal plus
+     *  ancillary" are genuinely different answers here. */
+    function retainedFixture(): CalculatorInputsV6 {
+      const base = v6Inputs({
+        ancillary: {
+          0: {
+            balcony_terrace_sqm: 7.5, balcony_terrace_value_pence: 500_000,
+            parking_spaces: 2, parking_value_pence: 1_000_000,
+          },
+        },
+      });
+      return {
+        ...base,
+        exit_strategy: {
+          ...base.exit_strategy,
+          route: 'blended',
+          retained_units: [{ unit_id: 'u1', monthly_rent_pence: 100_000 }],
+        },
+      };
+    }
+
+    it("ties the Retained Portfolio's capital value to the engine's retained value", async () => {
+      const inputs = retainedFixture();
+      const run = runAppraisal(inputs);
+      // Sanity, so the assertion below cannot pass by coincidence: the engine's
+      // retained value is the unit's internal value PLUS its ancillary.
+      expect(run.metrics.unrealised_value_pence).toBe(30_000_000 + 1_500_000);
+      expect(gbp(run.metrics.unrealised_value_pence)).toBe('£315,000');
+
+      const text = await memoTextFor(inputs);
+      // Consecutive cells of the single retained row: monthly rent, annual
+      // rent, capital value, gross yield. Pre-fix this row printed £300,000
+      // and 4.0% — the memo's own second opinion on a figure the engine had
+      // already derived.
+      expect(text).toContain(
+        [gbp(100_000), gbp(1_200_000), gbp(run.metrics.unrealised_value_pence), '3.8%'].join('\n'),
+      );
+    });
+
+    it('reads unit NIA off the area bridge instead of re-summing the unit schedule', async () => {
+      const inputs = v6Inputs();
+      const run = runAppraisal(inputs);
+      expect(run.metrics.area_bridge.unit_nia_sqm).toBe(200); // 4 x 50 m²
+
+      // Move ONLY the bridge's figure. A memo that still ran its own
+      // `units.reduce((s, u) => s + u.floor_area_sqm, 0)` would ignore this
+      // and keep printing 200 m² / 2,153 sq ft — numerically identical to the
+      // bridge in every real document, which is exactly how the R8 defect
+      // class stayed invisible to a green suite.
+      run.metrics.area_bridge.unit_nia_sqm = 400;
+      const text = documentText(
+        await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility)),
+      );
+      expect(text).toContain('4,306 sq ft NIA');
+      expect(text).not.toContain('2,153 sq ft NIA');
+    });
+
+    it('survives a unit whose stored ancillary block is explicitly null', async () => {
+      // `unitAncillaryOf`'s engine twin (`unitAncillaryValuePence`) has always
+      // guarded this: `'ancillary' in u` is satisfied by an explicit
+      // `"ancillary": null` in a stored document, so the memo's version
+      // reached `.balcony_terrace_sqm` on null and took the whole export down.
+      const base = v6Inputs();
+      const inputs: CalculatorInputsV6 = {
+        ...base,
+        unit_mix: {
+          units: base.unit_mix.units.map((u, i) => (
+            i === 0 ? { ...u, ancillary: null as unknown as UnitAncillary } : u
+          )),
+        },
+      };
+      const run = runAppraisal(inputs);
+      expect(run.metrics.gdv_ancillary_pence).toBe(0); // the engine already copes
+      const text = await memoTextFor(inputs);
+      expect(text).toContain('Proposed Unit Mix');
+    });
+  });
 });

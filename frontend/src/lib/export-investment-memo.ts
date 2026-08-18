@@ -21,6 +21,7 @@ import type { DraftReason, ReportProvenance } from './report-provenance';
 import type { Jurisdiction } from './tax/acquisition-tax';
 import type { ProposedUnit, ProposedUnitV6, UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
+import { calculateGdv } from './conversion-calc-engine';
 
 // ── This memo consumes the finished AppraisalRun only ─────
 //
@@ -340,18 +341,27 @@ export function generateInvestmentMemo(
   const anchor = programme?.anchor_month ?? null;
   const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
 
-  const totalSqm = inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0);
-  const totalSqft = sqmToSqft(totalSqm);
-  const unitCount = inputs.unit_mix.units.length;
-
   // R9 (spec §15). The one place the memo reads areas from — never
   // `conversion_costs.total_construction_sqm` directly (eslint-enforced, spec
   // §15.4). Every figure below is read off `bridge`/`metrics`, not recomputed.
   const bridge = metrics.area_bridge;
 
-  /** A pre-v6 document has units with no `ancillary` block at all. */
+  // Σ unit NIA. Read off the bridge, not re-summed here: the identical
+  // `units.reduce((s, u) => s + u.floor_area_sqm, 0)` used to sit on this line,
+  // duplicating `areaBridge`'s own `unitNiaSqm` and feeding roughly a dozen
+  // printed £/sq ft figures. It agreed to the penny — which is precisely how
+  // the R8 defect class hides. One derivation, read everywhere (spec §15.8).
+  const totalSqm = bridge.unit_nia_sqm;
+  const totalSqft = sqmToSqft(totalSqm);
+  const unitCount = inputs.unit_mix.units.length;
+
+  /** A pre-v6 document has units with no `ancillary` block at all. The null
+   *  arm matches `unitAncillaryValuePence`'s guard in conversion-calc-engine.ts:
+   *  a stored v6 document can carry an explicit `"ancillary": null`, which
+   *  satisfies `'ancillary' in u` and would otherwise reach a property access
+   *  on null and crash the whole export. */
   function unitAncillaryOf(u: ProposedUnit | ProposedUnitV6): UnitAncillary {
-    return 'ancillary' in u ? u.ancillary : DEFAULT_UNIT_ANCILLARY;
+    return ('ancillary' in u ? u.ancillary : null) ?? DEFAULT_UNIT_ANCILLARY;
   }
 
   // ── Text style: the one place font, weight and colour are set ────────────
@@ -1900,10 +1910,25 @@ export function generateInvestmentMemo(
     inputs.exit_strategy.retained_units.length > 0
   ) {
     y = subHeading(y, 'Retained Portfolio');
+    // R9 fix wave — a unit's capital value is internal saleable value PLUS its
+    // ancillary (parking, balcony, terrace) value, spec §15.5. This column
+    // printed bare `estimated_value_pence`, so for a scheme with retained
+    // parking the rows no longer summed to the engine's own retained value
+    // (`schedule.totals.retained_value_pence`, surfaced as
+    // `metrics.unrealised_value_pence`) — two figures for one fact in one
+    // lender-facing document, the exact class R9 exists to close.
+    //
+    // `calculateGdv` is the engine's single derivation of "the value of this
+    // set of units"; called with a one-unit set it composes nothing here that
+    // the engine does not compose itself. There is no per-unit retained value
+    // on the result to read instead — the result carries only the portfolio
+    // total — so this is the nearest thing to reading the figure off the run.
+    // The tie to `metrics.unrealised_value_pence` is asserted in
+    // export-investment-memo.test.ts.
     const retainedRows = inputs.exit_strategy.retained_units.map((r) => {
       const unit = inputs.unit_mix.units.find((u) => u.id === r.unit_id);
       const annualRent = r.monthly_rent_pence * 12;
-      const cv = unit?.estimated_value_pence ?? 0;
+      const cv = unit ? calculateGdv([unit]) : 0;
       const yieldPct = cv > 0 ? (annualRent / cv) * 100 : 0;
       return [
         unit ? unitLabel(unit.type) : '—',
