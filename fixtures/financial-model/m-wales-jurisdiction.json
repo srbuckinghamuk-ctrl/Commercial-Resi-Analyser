@@ -86,5 +86,14 @@
     "gross_ltc_pct": 0,
     "equity_contributed_pence": 124731692,
     "developer_breakeven_pence": 127037251
+  },
+  "jurisdiction_contrast": {
+    "note": "The same document with `jurisdiction` switched to england_ni. Hand-derived from fixtures/tax/acquisition-tax-tables.json on a 75,348,200p non-residential consideration, slice basis: LTT = 0% x 225,000 + 1% x (250,000-225,000) + 5% x (753,482-250,000) = 25,000p + 2,517,410p; SDLT = 0% x 150,000 + 2% x (250,000-150,000) + 5% x (753,482-250,000) = 200,000p + 2,517,410p. This fixture is all-cash, so the difference reaches total development cost unchanged and never touches peak debt — contrast fixture P, where it compounds.",
+    "regime": "LTT",
+    "england_ni_regime": "SDLT",
+    "england_ni_acquisition_tax_pence": 2717410,
+    "acquisition_cost_delta_pence": 175000,
+    "total_development_cost_delta_pence": 175000,
+    "peak_debt_delta_pence": 0
   }
 }

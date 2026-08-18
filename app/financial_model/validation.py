@@ -1,6 +1,7 @@
 """Port of frontend/src/lib/model/validation.ts."""
 from __future__ import annotations
 
+import datetime
 import math
 import re
 from dataclasses import dataclass, field
@@ -13,7 +14,30 @@ from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .types import AnyCalculatorInputs
 
-_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def is_calendar_date(value: str) -> bool:
+    r"""ISO-8601 calendar date: right shape AND a date that exists (spec Sec 14).
+
+    R9 Task 12 clears an R8 carry-forward. Until this release both engines checked the
+    shape with a bare ``^\d{4}-\d{2}-\d{2}$``, so ``2026-02-31`` validated cleanly and
+    was then accepted as ``date_basis: 'transaction_date'`` -- a date the reader would
+    take as evidence of when the transaction happened. R8 recorded that as a known
+    limitation rather than fixing it; it is fixed here.
+
+    ``datetime.date`` is the calendar, including the leap-year rule, so nothing here
+    re-implements it. Mirrors ``isCalendarDate`` in validation.ts, whose Date round-trip
+    is written to accept exactly the same set of strings this does (including the
+    MINYEAR floor)."""
+    m = _ISO_DATE.match(value)
+    if m is None:
+        return False
+    try:
+        datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass
@@ -413,17 +437,16 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             )
 
         if acq.acquisition_date is not None:
-            # Known limitation, mirrored exactly from validation.ts: this checks
-            # shape only, not calendar validity, and select_band_set compares
-            # dates lexicographically rather than parsing them -- so a string
-            # like "2026-02-31" passes here and is accepted as date_basis
-            # 'transaction_date'. `<input type="date">` cannot produce such a
-            # value, so this is reachable only via the API, and the effect is
-            # cosmetic (band selection is still monotonic in the lexicographic
-            # ordering). Not tightened here: adding a calendar check would be a
-            # behaviour change, which this comment deliberately is not.
-            if not _ISO_DATE.match(acq.acquisition_date):
-                err("acquisition.acquisition_date", "Acquisition date must be an ISO date (YYYY-MM-DD).")
+            # R9 Task 12: shape AND calendar validity (see is_calendar_date above).
+            # The shape-only regex this replaces let "2026-02-31" through, and
+            # select_band_set compares dates lexicographically rather than parsing
+            # them, so the appraisal then reported date_basis 'transaction_date' on a
+            # date that does not exist. Mirrors validation.ts.
+            if not is_calendar_date(acq.acquisition_date):
+                err(
+                    "acquisition.acquisition_date",
+                    "Acquisition date must be a real ISO calendar date (YYYY-MM-DD).",
+                )
             else:
                 try:
                     select_band_set(acq.jurisdiction, "non_residential", acq.acquisition_date)

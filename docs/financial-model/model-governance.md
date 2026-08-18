@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.7.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.8.0`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -258,6 +258,113 @@ to pages reached via the module's own pagination.
   file for v1→v2 migration (`migrate.test.ts`, 4 cases) with no direct Python counterpart (Python's
   migration coverage is a narrow floors-zero regression plus an end-to-end API test, not a
   case-for-case port). Both are recorded as Release 2 scope in `test-cases.md` §7.
+
+---
+
+## 9. Single-accessor rules [R9 — calc 2.8.0]
+
+### 9.1 Why the rule exists
+
+R8 ended with a recorded pattern: the same "moved the computation, missed a
+consumer" defect occurred **three times in one release**. When acquisition tax
+became jurisdiction-aware, `calculateTotalAcquisitionCost` was updated;
+`deal-spider.ts` and `AcquisitionPage.tsx` were not. Each site was individually
+self-consistent, so each site's tests passed, and the whole suite stayed green
+while the deal spider scored a Welsh acquisition on English SDLT and the
+acquisition page displayed a figure the server did not store.
+
+A test cannot catch that class of defect, because the defect is *the absence of a
+call*. Nothing in a test file names a call site that does not exist. The only
+thing that catches it is a rule that makes the raw read itself illegal.
+
+### 9.2 What is covered
+
+Two values are derived once and consumed everywhere. Each has exactly one
+accessor, and reading its underlying data any other way is a build failure:
+
+| Value | The one accessor | The raw thing that is off-limits |
+|---|---|---|
+| Construction cost area (spec §15.3/§15.4) | `developedAreaSqm(inputs)` / `developed_area_sqm(inputs)` in `areas.ts` / `areas.py` | the `total_construction_sqm` field |
+| Acquisition tax (spec §14) | `calculateAcquisitionTax()` / `calculate_acquisition_tax()` in `acquisition-tax.ts` / `acquisition_tax.py` | the `TAX_TABLES` band table |
+
+The cost area is the harder of the two, and the reason the rule was written for
+R9 rather than left as convention: after §15.3 the answer to "what area is
+construction charged on?" depends on `areas.basis`, so a site that reads
+`conversion_costs.total_construction_sqm` directly is not merely inelegant — it
+is **wrong for every document on the `bridge_derived` basis**, and wrong
+silently, because the field it read still holds a plausible number.
+
+### 9.3 How each language enforces it
+
+**TypeScript — eslint, at build time.** `frontend/eslint.config.js` carries two
+`no-restricted-syntax` selectors. `npm run lint` runs with `--max-warnings 0`, so
+a violation fails the build, not just a test run.
+
+The two selectors are deliberately *different shapes*, and that difference is the
+point. The cost area is read as a property, so it is matched as
+`MemberExpression[property.name='total_construction_sqm']`. `TAX_TABLES` is an
+exported top-level const imported by name, so it appears as a bare `Identifier`,
+not a `MemberExpression` — matching it with the selector that is correct for the
+other rule would have linted cleanly and never fired. A guard that cannot fire is
+the same defect as a wrong number: it reports success it has not earned. Both
+selectors were verified against the real symbols before being written.
+
+**Python — an AST scan, as a test.** Python has no eslint, so
+`tests/test_accessor_guard.py` walks every module under `app/` with the `ast`
+module and flags only the two node shapes that are an actual read:
+`ast.Attribute` nodes whose `.attr` is `total_construction_sqm` (catching
+`inputs.conversion_costs.total_construction_sqm` and `cc.total_construction_sqm`
+at any depth), and `ast.Name`/`ast.Attribute` references to `TAX_TABLES`.
+
+The AST walk rather than a substring search is load-bearing. This tree already
+contains three shapes a substring scan would flag and must not: a doc comment in
+`app/api/app.py` naming the field, the module docstrings in `areas.py` and
+`migrate.py`, and `validation.py` passing `"conversion_costs.total_construction_sqm"`
+as an issue's *field name* — data, not a read. A guard that cries wolf gets
+weakened until it is useless, so the scan is written to be precise, and two of its
+tests assert that it stays silent on exactly those shapes.
+
+**Both guards have been watched to fail.** `test_the_guard_itself_detects_a_planted_attribute_read`
+and `test_the_guard_itself_detects_a_planted_tax_table_reference` write a probe
+module containing a real violation, assert the scan flags it, and delete it in a
+`finally`. The TypeScript rules were likewise confirmed against a planted
+violation before the allowlist was finalised. A guard nobody has watched fail is
+not a guard.
+
+### 9.4 The allowlist, and what it means
+
+A short list of files may read the raw values: the modules that **own** them
+(`areas.ts`/`areas.py`, `acquisition-tax.ts`/`acquisition_tax.py`), the modules
+that **declare** them (`conversion-types.ts`, `finance-types.ts`, `types.py`),
+the migration and defaults modules that **construct documents where no accessor
+yet applies** (`migrate.ts`/`migrate.py`, `conversion-defaults.ts`), and
+`ConversionCostsPage.tsx`, which is the editor that **captures** the manual field
+as the user's own input.
+
+Adding a file to the allowlist is a governance decision, not a convenience: it
+should be accompanied by a reason in the config, and the list should be read as
+the complete answer to "who is allowed to know how this value is stored".
+
+### 9.5 Recorded limitation — test files are exempt
+
+**Test files are excluded from both guards**, and this is a real gap, recorded
+rather than glossed.
+
+`**/*.test.ts`, `**/*.test.tsx` and `src/lib/report-qa/memo-fixtures.ts` are on
+the TypeScript allowlist, and the Python scan covers `app/` only, not `tests/`.
+The exemption is necessary — a fixture must construct the raw `conversion_costs`
+block, and a tax parity test must read the band table it is testing against — but
+it means **a consumer defect written inside a test file is not caught by this
+rule**. A test helper that computed a cost area from `total_construction_sqm` and
+then asserted against it would lint cleanly and pass, pinning the wrong behaviour.
+
+Nothing currently does this. The mitigation is that the golden fixtures
+(`fixtures/financial-model/*.json`) are pure data consumed by both engines and
+contain no computation at all, so the one place where a wrong area would do the
+most damage cannot express one. Widening the Python scan to `tests/` with a
+narrower allowlist is a candidate for a future release; it is not done here
+because the exemption list would need to be large enough that the guard's meaning
+would be unclear.
 
 ---
 

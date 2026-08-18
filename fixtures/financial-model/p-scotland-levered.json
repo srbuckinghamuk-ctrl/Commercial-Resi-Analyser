@@ -1,0 +1,129 @@
+{
+  "name": "P — Scottish acquisition, LBTT non-residential, development finance",
+  "kind": "pipeline",
+  "note": "R8's own open carry-forward: every non-English fixture was all-cash, so the jurisdiction-aware tax → total development cost → peak debt interaction was unpinned. Here the LBTT figure is debt-funded, so the England/NI counterfactual differs by MORE than the 100,000p tax difference — 106,161p — because the extra tax exhausts committed equity a month earlier and the difference then compounds at 8% for nine months. That gap is the whole point of the fixture and is pinned in `jurisdiction_contrast` below.",
+  "inputs": {
+    "inputs_version": 6,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 60000000, "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000, "broker_fee_pct": 1.0, "other_acquisition_costs_pence": 0,
+      "jurisdiction": "scotland",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-04-15",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": { "units": [
+      { "id": "u1", "type": "1bed", "floor_area_sqm": 50, "estimated_value_pence": 36000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u2", "type": "1bed", "floor_area_sqm": 50, "estimated_value_pence": 36000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u3", "type": "1bed", "floor_area_sqm": 50, "estimated_value_pence": 36000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u4", "type": "1bed", "floor_area_sqm": 50, "estimated_value_pence": 36000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } }
+    ] },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 9600, "cil_s106_pence": 0,
+      "architect_pence": 1500000, "structural_engineer_pence": 500000, "mande_pence": 500000,
+      "planning_consultant_pence": 300000, "building_control_pence": 200000,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 100000,
+      "total_construction_sqm": 400, "contingency_pct": 10.0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "finance": {
+      "funding_source": "development_finance", "day_one_advance_pence": 30000000,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 70000000,
+      "committed_gross_facility_pence": 78000000, "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 12, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 45000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "sell_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 400000, "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2 }
+    },
+    "deal_spider": {
+      "storeys": 2, "building_height_m": 7, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 9, "exit_sell": true, "exit_refinance": true, "exit_hold": false,
+      "exit_part_sale": false, "prior_approval_window_months": 2, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 144000000,
+    "gdv_internal_pence": 144000000,
+    "gdv_ancillary_pence": 0,
+    "gross_sales_pence": 144000000,
+    "acquisition_tax_pence": 1850000,
+    "sdlt_pence": 1850000,
+    "acquisition_cost_pence": 63250000,
+    "construction_cost_pence": 44000000,
+    "professional_fees_pence": 2800000,
+    "statutory_costs_pence": 238400,
+    "selling_costs_pence": 2560000,
+    "cost_before_finance_pence": 112848400,
+    "finance_costs_pence": 6093416,
+    "total_development_cost_pence": 118941816,
+    "profit_pence": 25058184,
+    "profit_is_unrealised": false,
+    "profit_on_cost_pct": 21.07,
+    "profit_on_gdv_pct": 17.4,
+    "peak_debt_pence": 70601816,
+    "peak_debt_month": 11,
+    "redemption_balance_at_disposal_pence": 70601816,
+    "day_one_advance_pence": 30000000,
+    "gross_ltc_pct": 59.36,
+    "net_ltc_pct": 60.47,
+    "ltgdv_developer_pct": 49.03,
+    "equity_contributed_pence": 45000000,
+    "funding_gap_pence": 0,
+    "developed_area_sqm": 400,
+    "area_bridge.developed_area_sqm": 400,
+    "area_bridge.manual_area_sqm": 400,
+    "area_bridge.unit_nia_sqm": 200,
+    "area_bridge.developed_gia_sqm": 0,
+    "area_bridge.nia_to_gia_pct": null
+  },
+  "jurisdiction_contrast": {
+    "note": "The same document with `jurisdiction` switched to england_ni. Hand-derived from fixtures/tax/acquisition-tax-tables.json on a 60,000,000p non-residential consideration: LBTT = 0% x 150,000 + 1% x (250,000-150,000) + 5% x (600,000-250,000) = 0 + 100,000p + 1,750,000p; SDLT = 0% x 150,000 + 2% x (250,000-150,000) + 5% x (600,000-250,000) = 0 + 200,000p + 1,750,000p.",
+    "regime": "LBTT",
+    "england_ni_regime": "SDLT",
+    "england_ni_acquisition_tax_pence": 1950000,
+    "acquisition_cost_delta_pence": 100000,
+    "total_development_cost_delta_pence": 106161,
+    "peak_debt_delta_pence": 106161
+  }
+}

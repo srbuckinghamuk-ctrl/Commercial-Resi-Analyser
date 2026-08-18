@@ -10,6 +10,35 @@ export interface ValidationIssue {
   message: string;
 }
 
+/**
+ * ISO-8601 calendar date: right shape AND a date that exists (spec §14).
+ *
+ * R9 Task 12 clears an R8 carry-forward. Until this release both engines checked the
+ * shape with a bare `/^\d{4}-\d{2}-\d{2}$/`, so `2026-02-31` validated cleanly and was
+ * then accepted as `date_basis: 'transaction_date'` — a date the reader would take as
+ * evidence of when the transaction happened. R8 recorded that as a known limitation
+ * rather than fixing it; it is fixed here.
+ *
+ * The month/day round-trip is the check: constructing the date and reading the three
+ * components back is the only way to get February and the leap-year rule right without
+ * re-implementing the calendar. Two details keep it byte-identical to Python's
+ * `datetime.date(y, m, d)` twin in validation.py:
+ *   - `setUTCFullYear` after construction, because `Date.UTC` maps years 0–99 onto
+ *     1900–1999 and would otherwise reject a 4-digit year Python accepts;
+ *   - the explicit `y < 1` rejection, mirroring Python's `MINYEAR`.
+ */
+export function isCalendarDate(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (m === null) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (y < 1) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  dt.setUTCFullYear(y);
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
 export interface ReconciliationStatus {
   sources_equal_uses: boolean;
   debt_rollforward_ok: boolean;
@@ -335,16 +364,13 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
 
     if (acq.acquisition_date !== null) {
-      // Known limitation: this checks shape only, not calendar validity, and
-      // selectBandSet compares dates lexicographically rather than parsing
-      // them — so a string like "2026-02-31" passes here and is accepted as
-      // date_basis 'transaction_date'. `<input type="date">` cannot produce
-      // such a value, so this is reachable only via the API, and the effect
-      // is cosmetic (band selection is still monotonic in the lexicographic
-      // ordering). Not tightened here: adding a calendar check would be a
-      // behaviour change, which this comment deliberately is not.
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(acq.acquisition_date)) {
-        err('acquisition.acquisition_date', 'Acquisition date must be an ISO date (YYYY-MM-DD).');
+      // R9 Task 12: shape AND calendar validity (see isCalendarDate above). The
+      // shape-only regex this replaces let `2026-02-31` through, and selectBandSet
+      // compares dates lexicographically rather than parsing them, so the appraisal
+      // then reported `date_basis: 'transaction_date'` on a date that does not exist.
+      if (!isCalendarDate(acq.acquisition_date)) {
+        err('acquisition.acquisition_date',
+          'Acquisition date must be a real ISO calendar date (YYYY-MM-DD).');
       } else {
         try {
           selectBandSet(acq.jurisdiction, 'non_residential', acq.acquisition_date);

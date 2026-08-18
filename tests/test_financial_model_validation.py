@@ -523,6 +523,26 @@ class TestAcquisitionTaxValidation:
         assert issue is not None
         assert issue.severity == "error"
 
+    # R9 Task 12 -- the R8 carry-forward. The shape-only regex that stood here until
+    # this release accepted any four-two-two digit string, so "2026-02-31" validated
+    # and was then reported as date_basis 'transaction_date'. Both halves are asserted:
+    # the impossible date is rejected, and a real leap day is still accepted -- a check
+    # that rejected every February date would satisfy the first alone. Mirrors
+    # validation.test.ts.
+    @pytest.mark.parametrize("bad_date", [
+        "2026-02-31", "2026-13-01", "2026-00-15", "2026-01-00", "2026-04-31", "2027-02-29",
+    ])
+    def test_rejects_a_date_that_matches_the_pattern_but_does_not_exist(self, bad_date):
+        issues = validate_inputs(make_v6_inputs(acquisition={"acquisition_date": bad_date}))
+        assert any(
+            i.severity == "error" and i.field == "acquisition.acquisition_date"
+            for i in issues
+        )
+
+    def test_accepts_29_february_in_a_leap_year(self):
+        issues = validate_inputs(make_v6_inputs(acquisition={"acquisition_date": "2028-02-29"}))
+        assert [i for i in issues if i.field == "acquisition.acquisition_date"] == []
+
     def test_warns_but_does_not_error_on_an_unconfirmed_jurisdiction(self):
         inputs = self.v5()
         issues = validate_inputs(inputs)
@@ -561,12 +581,15 @@ def make_v6_inputs(
     areas: dict | None = None,
     units: list[dict] | None = None,
     conversion_costs: dict | None = None,
+    acquisition: dict | None = None,
 ) -> CalculatorInputsV6:
     """R9 (Task 8). A structurally-valid v6 document built off the migration
     chain's own defaults -- the Python twin of validation.test.ts's
-    makeV6Inputs. Only `areas`/`units`/`conversion_costs` are accepted since
-    that is all the area-bridge suite needs."""
+    makeV6Inputs. Only `areas`/`units`/`conversion_costs`/`acquisition` are
+    accepted since that is all the area-bridge and calendar-date suites need."""
     v6 = migrate_inputs_to_v6({"inputs_version": 1})
+    if acquisition is not None:
+        v6.acquisition = v6.acquisition.model_copy(update=acquisition)
     if areas is not None:
         v6.areas = AreaBridgeInputs(**areas)
     if conversion_costs is not None:

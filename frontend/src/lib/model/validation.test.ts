@@ -28,10 +28,13 @@ function makeV6Inputs(overrides: {
   areas?: Partial<typeof DEFAULT_AREA_BRIDGE>;
   units?: MinimalUnit[];
   conversion_costs?: Partial<CalculatorInputsV6['conversion_costs']>;
+  /** R9 Task 12: the calendar-date suite needs to set `acquisition_date`. */
+  acquisition?: Partial<CalculatorInputsV6['acquisition']>;
 } = {}): CalculatorInputsV6 {
   const base = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
   return {
     ...base,
+    acquisition: { ...base.acquisition, ...(overrides.acquisition ?? {}) },
     areas: { ...base.areas, ...(overrides.areas ?? {}) },
     conversion_costs: { ...base.conversion_costs, ...(overrides.conversion_costs ?? {}) },
     unit_mix: overrides.units
@@ -511,6 +514,36 @@ describe('v4 programme validation', () => {
       inputs.acquisition.acquisition_date = '17/08/2026';
       const issue = validateInputs(inputs).find((i) => i.field === 'acquisition.acquisition_date');
       expect(issue?.severity).toBe('error');
+    });
+
+    // R9 Task 12 — the R8 carry-forward. The shape-only regex that stood here until this
+    // release accepted any four-two-two digit string, so `2026-02-31` validated and was
+    // then reported as `date_basis: 'transaction_date'`. Both halves are asserted: the
+    // impossible date is rejected, and a real leap day is still accepted — a check that
+    // rejected every February date would satisfy the first alone.
+    it('rejects a date that matches the pattern but does not exist', () => {
+      const issues = validateInputs(makeV6Inputs({ acquisition: { acquisition_date: '2026-02-31' } }));
+      expect(issues.some(
+        (i) => i.severity === 'error' && i.field === 'acquisition.acquisition_date',
+      )).toBe(true);
+    });
+
+    it('accepts 29 February in a leap year', () => {
+      const issues = validateInputs(makeV6Inputs({ acquisition: { acquisition_date: '2028-02-29' } }));
+      expect(issues.filter((i) => i.field === 'acquisition.acquisition_date')).toEqual([]);
+    });
+
+    it.each([
+      ['a 13th month', '2026-13-01'],
+      ['a zero month', '2026-00-15'],
+      ['a zero day', '2026-01-00'],
+      ['a 31st of April', '2026-04-31'],
+      ['29 February in a common year', '2027-02-29'],
+    ])('rejects %s', (_label, badDate) => {
+      const issues = validateInputs(makeV6Inputs({ acquisition: { acquisition_date: badDate } }));
+      expect(issues.some(
+        (i) => i.severity === 'error' && i.field === 'acquisition.acquisition_date',
+      )).toBe(true);
     });
 
     it('warns — but does not error — on an unconfirmed jurisdiction', () => {

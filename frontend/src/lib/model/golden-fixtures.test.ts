@@ -33,7 +33,28 @@ interface Fixture {
   // fixture-authoring convenience mapped onto other parts of the run by FLAT_KEYS below
   // (the two cost_to_complete_* summary keys, spec §5.10; and funding_gap_pence, which
   // lives on the ledger totals rather than on the metrics object, spec §4.2).
+  // R9: a key may also be a dotted path into a nested metrics object —
+  // `area_bridge.nia_to_gia_pct` (spec §15.2). AreaBridgeResult has 23 fields; pinning
+  // them individually keeps the JSON language-neutral (the Python mirror holds a
+  // dataclass here, not a dict, so pinning the whole object would compare a dataclass
+  // against a dict and never pass).
   expected_metrics: Partial<AppraisalResultV2> & Record<string, unknown>;
+  /** R9 (spec §12.1 / §15.5): the same pin table, asserted against the appraisal
+   *  produced by applying one of the document's OWN named scenarios. Fixture O uses
+   *  it to carry the ancillary split through a −10% GDV stress end-to-end. */
+  expected_scenarios?: Record<string, Record<string, unknown>>;
+  /** R8/R9 (spec §14): the England/NI counterfactual for a non-English fixture —
+   *  what the same document would cost under SDLT, and how far that difference
+   *  travels. Hand-derived from fixtures/tax/acquisition-tax-tables.json. */
+  jurisdiction_contrast?: {
+    note: string;
+    regime: string;
+    england_ni_regime: string;
+    england_ni_acquisition_tax_pence: number;
+    acquisition_cost_delta_pence: number;
+    total_development_cost_delta_pence: number;
+    peak_debt_delta_pence: number;
+  };
 }
 
 const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
@@ -54,6 +75,9 @@ const EXPECTED_FIXTURE_STEMS = [
   'k-sensitivity',
   'l-retain-all',
   'm-wales-jurisdiction',
+  'n-area-bridge',
+  'o-ancillary-value',
+  'p-scotland-levered',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -86,19 +110,40 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   redemption_balance_at_disposal_pence: (r) => r.model.redemption_balance_at_disposal_pence,
   redemption_schedule_months: (r) => r.model.redemption_schedule.map((e) => e.month),
   redemption_schedule_balances_pence: (r) => r.model.redemption_schedule.map((e) => e.balance_pence),
+  // R9 spec §15.5, fixture O: gross sale receipts. GDV counts every unit's ancillary,
+  // receipts count only the SOLD units' — under a blended exit the two figures must
+  // differ by exactly the retained units' ancillary, and neither number alone can
+  // prove that. A schedule total rather than a summary metric, hence the mapper.
+  gross_sales_pence: (r) => r.schedule.totals.gross_sales_pence,
 };
+
+/** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
+ *  metrics object. A plain key is just a one-segment path. */
+function resolvePath(root: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>(
+    (acc, part) => (acc == null ? acc : (acc as Record<string, unknown>)[part]),
+    root,
+  );
+}
+
+const versionOf = (fx: Fixture): number =>
+  (fx.inputs as unknown as { inputs_version?: number }).inputs_version ?? 2;
 
 describe('golden fixtures (shared with the Python engine)', () => {
   it('every expected fixture file is present in the shared corpus', () => {
     expect(fixtureFiles).toEqual(EXPECTED_FIXTURE_STEMS.map((s) => `${s}.json`));
   });
 
-  function assertExpectedMetrics(run: AppraisalRun, fx: Fixture, label: string) {
-    for (const [key, expected] of Object.entries(fx.expected_metrics)) {
+  function assertPins(run: AppraisalRun, pins: Record<string, unknown>, label: string) {
+    for (const [key, expected] of Object.entries(pins)) {
       const mapper = FLAT_KEYS[key];
-      const actual = mapper ? mapper(run) : run.metrics[key as keyof AppraisalResultV2];
+      const actual = mapper ? mapper(run) : resolvePath(run.metrics, key);
       expect(actual, `${label}: ${key}`).toEqual(expected);
     }
+  }
+
+  function assertExpectedMetrics(run: AppraisalRun, fx: Fixture, label: string) {
+    assertPins(run, fx.expected_metrics, label);
   }
 
   for (const fx of appraisalFixtures) {
@@ -107,18 +152,72 @@ describe('golden fixtures (shared with the Python engine)', () => {
     });
   }
 
-  for (const fx of appraisalFixtures) {
+  // R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named
+  // scenarios (spec §12.1). Fixture O uses this to carry the ancillary split all the
+  // way through a −10% GDV stress: the stressed ancillary values are hand-derived, so
+  // a scenario binding that stressed internal value alone — the pre-Task-7 behaviour —
+  // fails here rather than passing on the internal figures.
+  const scenarioFixtures = appraisalFixtures.filter((f) => f.expected_scenarios != null);
+
+  it('at least one fixture pins a scenario appraisal', () => {
+    // Non-vacuity: an `expected_scenarios` block dropped by an edit would otherwise
+    // shrink the loop below to nothing rather than fail.
+    expect(scenarioFixtures.map((f) => f.name)).toEqual(['O — ancillary value, blended exit, one unit sold and one retained']);
+  });
+
+  for (const fx of scenarioFixtures) {
+    for (const [name, pins] of Object.entries(fx.expected_scenarios!)) {
+      it(`${fx.name} — reproduces its hand-derived "${name}" scenario`, () => {
+        const overrides = fx.inputs.scenarios[name as keyof typeof fx.inputs.scenarios];
+        expect(overrides, `scenario ${name} must exist on the document`).toBeDefined();
+        assertPins(runAppraisal(applyScenario(fx.inputs, overrides)), pins, `${fx.name}[${name}]`);
+      });
+    }
+  }
+
+  // R9: only the v5 fixtures. migrateInputsToV5 refuses a v6 document by design
+  // (it would have to drop `areas` and every unit's `ancillary` block to produce
+  // one), so a v6 fixture asserts the v6 property below instead of this one.
+  const v5Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 5);
+  const v6Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 6);
+
+  it('every fixture is v5 or v6, and both groups are non-empty', () => {
+    expect(v5Fixtures.length + v6Fixtures.length).toBe(appraisalFixtures.length);
+    expect(v5Fixtures.length).toBeGreaterThan(0);
+    expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
+      'N — full area bridge, bridge-derived construction area, all-cash',
+      'O — ancillary value, blended exit, one unit sold and one retained',
+      'P — Scottish acquisition, LBTT non-residential, development finance',
+    ]);
+  });
+
+  for (const fx of v5Fixtures) {
     // Mirrors Python's test_fixtures_reproduce_their_metrics_after_migration_to_v5.
     it(`${fx.name} — reproduces its metrics after migration to v5`, () => {
       // Release 3a identity guarantee (spec §6.1 / design §2.4), carried to v5 by R8
       // (spec §14): the migration chain is purely additive, so running a fixture's
       // inputs through the full normalisation chain must reproduce that fixture's
-      // pinned expected_metrics unchanged, not merely "close". Every fixture is now
-      // v5, so this exercises migrateInputsToV5's merge branch — which must drop
-      // neither the programme block nor the R8 acquisition block.
+      // pinned expected_metrics unchanged, not merely "close". These fixtures are
+      // already v5, so this exercises migrateInputsToV5's merge branch — which must
+      // drop neither the programme block nor the R8 acquisition block.
       const v5 = migrateInputsToV5(fx.inputs as unknown as Record<string, unknown>);
       expect(v5.inputs_version).toBe(5);
       assertExpectedMetrics(runAppraisal(v5), fx, `${fx.name}[migrated-to-v5]`);
+    });
+  }
+
+  for (const fx of appraisalFixtures) {
+    // R9: the same identity guarantee at the head of the chain, and the one that now
+    // covers the WHOLE corpus — migrateInputsToV6 accepts a v5 document (upgrade path)
+    // and a v6 one (merge branch) alike. The merge branch is the one that matters for
+    // the new fixtures: it must carry `areas` and every unit's `ancillary` through
+    // untouched, and a merge that silently reset either to the zeroed default would
+    // move fixture N's construction cost by 16,170,000p and fixture O's GDV by
+    // 4,500,000p rather than pass.
+    it(`${fx.name} — reproduces its metrics after migration to v6`, () => {
+      const v6 = migrateInputsToV6(fx.inputs as unknown as Record<string, unknown>);
+      expect(v6.inputs_version).toBe(6);
+      assertExpectedMetrics(runAppraisal(v6), fx, `${fx.name}[migrated-to-v6]`);
     });
   }
 
@@ -153,18 +252,36 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // does not recover an older document, it asserts a different property. So the loop
   // runs over the England/NI fixtures, and the excluded ones are covered by the
   // stronger assertion below rather than by silence.
+  //
+  // R9 narrows it further: a v6 fixture has no pre-R8 form either. `asPreR8Document`
+  // stamps v3/v4, and migrating that back up would leave the R9 `areas` and `ancillary`
+  // blocks at their zeroed defaults — a different document, not an older one.
   const jurisdictionOf = (fx: Fixture): string =>
     (fx.inputs.acquisition as unknown as Record<string, unknown>).jurisdiction as string
     ?? 'england_ni';
-  const preR8Fixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) === 'england_ni');
+  const preR8Fixtures = appraisalFixtures.filter(
+    (fx) => jurisdictionOf(fx) === 'england_ni' && versionOf(fx) === 5,
+  );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI fixture and excludes only non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
-    expect(preR8Fixtures.length + nonEnglishFixtures.length).toBe(appraisalFixtures.length);
-    expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales']);
-    expect(preR8Fixtures.length).toBe(appraisalFixtures.length - 1);
+    expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
+    const excluded = appraisalFixtures.filter((fx) => !preR8Fixtures.includes(fx));
+    expect(excluded.map((f) => f.name).sort()).toEqual([
+      'M — Welsh acquisition, LTT non-residential, all-cash',
+      'N — full area bridge, bridge-derived construction area, all-cash',
+      'O — ancillary value, blended exit, one unit sold and one retained',
+      'P — Scottish acquisition, LBTT non-residential, development finance',
+    ]);
+    // Every exclusion is justified by one of the two stated reasons, not by silence.
+    for (const fx of excluded) {
+      expect(
+        jurisdictionOf(fx) !== 'england_ni' || versionOf(fx) === 6,
+        `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
+      ).toBe(true);
+    }
   });
 
   for (const fx of preR8Fixtures) {
@@ -185,43 +302,81 @@ describe('golden fixtures (shared with the Python engine)', () => {
     });
   }
 
-  for (const fx of nonEnglishFixtures) {
-    // The excluded fixtures get the *stronger* statement: stripping the R8 fields must
-    // change the acquisition tax, and change it to precisely the England/NI figure on
-    // the same consideration. That is what makes the fixture's jurisdiction load-bearing
-    // — a table edit, or a mis-wired call site that quietly reverted to SDLT, fails here
-    // rather than passing because the two regimes happened to agree.
-    //
-    // MAINTENANCE: the figures below are hard-coded for fixture M's consideration, inside
-    // a loop over every non-English fixture. Adding a second non-English fixture therefore
-    // means *rewriting this assertion* (drive the expected pair off the fixture, or split
-    // the loop) — not just adding a roster line. It fails loudly rather than silently if
-    // you forget, but the failure will look like a wrong figure rather than a missing
-    // case, so read this comment before "fixing" the number.
-    it(`${fx.name} — its pre-R8 form is a different, England/NI, appraisal`, () => {
-      const pre = asPreR8Document(fx.inputs);
-      const v5 = migrateInputsToV5(pre);
-      expect(v5.acquisition.jurisdiction).toBe('england_ni');
-      const englishRun = runAppraisal(v5);
-      const welshRun = runAppraisal(fx.inputs);
+  // R9 Task 12. The non-English fixtures get the *stronger* statement: switching the
+  // document's jurisdiction to England/NI must change the acquisition tax, and change it
+  // to precisely the England/NI figure on the same consideration. That is what makes the
+  // fixture's jurisdiction load-bearing — a table edit, or a mis-wired call site that
+  // quietly reverted to SDLT, fails here rather than passing because the two regimes
+  // happened to agree.
+  //
+  // R8 wrote this with fixture M's figures hard-coded inside a loop over every non-English
+  // fixture, and left a MAINTENANCE note saying that adding a second one meant rewriting
+  // it. Fixture P is that second one, so it is rewritten: the expected pair and the three
+  // deltas now come from each fixture's own hand-derived `jurisdiction_contrast` block.
+  //
+  // It also matters that the deltas are pinned SEPARATELY rather than asserted equal to
+  // each other. Fixture M is all-cash, so its tax difference reaches TDC unchanged and
+  // never touches peak debt. Fixture P is levered, so the extra tax exhausts committed
+  // equity a month earlier and then compounds: its TDC delta (106,161p) is strictly
+  // larger than its acquisition delta (100,000p). An engine that computed the right tax
+  // but funded it wrongly would satisfy the first and fail the second — the interaction
+  // R8's implementation report recorded as unpinned.
+  function asEnglandNiDocument(inputs: AnyCalculatorInputs): AnyCalculatorInputs {
+    const doc = JSON.parse(JSON.stringify(inputs)) as Record<string, unknown>;
+    (doc.acquisition as Record<string, unknown>).jurisdiction = 'england_ni';
+    return doc as unknown as AnyCalculatorInputs;
+  }
 
-      const consideration = fx.inputs.acquisition.purchase_price_pence;
-      expect(consideration).toBe(75_348_200);
-      // Hand-verified against the band tables (spec §14), slice basis:
-      //   SDLT  = 2% x (250k-150k) + 5% x (753,482-250,000) = 200,000p + 2,517,410p
-      //   LTT   = 1% x (250k-225k) + 5% x (753,482-250,000) =  25,000p + 2,517,410p
-      expect(englishRun.metrics.acquisition_tax_pence).toBe(2_717_410);
-      expect(welshRun.metrics.acquisition_tax_pence).toBe(2_542_410);
-      expect(englishRun.metrics.acquisition_tax.regime).toBe('SDLT');
-      expect(welshRun.metrics.acquisition_tax.regime).toBe('LTT');
-      // The 175,000p difference must reach the headline cost stack, not stop at the
-      // metrics object — this is the two-call-site defect Task 5 found, pinned.
-      expect(englishRun.metrics.acquisition_cost_pence - welshRun.metrics.acquisition_cost_pence)
-        .toBe(175_000);
+  for (const fx of nonEnglishFixtures) {
+    it(`${fx.name} — its England/NI twin is a different appraisal`, () => {
+      const contrast = fx.jurisdiction_contrast;
+      expect(contrast, `${fx.name} must carry a jurisdiction_contrast block`).toBeDefined();
+      const nativeRun = runAppraisal(fx.inputs);
+      const englishRun = runAppraisal(asEnglandNiDocument(fx.inputs));
+
+      expect(nativeRun.metrics.acquisition_tax.regime).toBe(contrast!.regime);
+      expect(englishRun.metrics.acquisition_tax.regime).toBe(contrast!.england_ni_regime);
+      expect(englishRun.metrics.acquisition_tax_pence)
+        .toBe(contrast!.england_ni_acquisition_tax_pence);
+      // Non-vacuity: the two regimes must actually disagree on this consideration.
+      expect(contrast!.acquisition_cost_delta_pence).toBeGreaterThan(0);
+      // The difference must reach the headline cost stack, not stop at the metrics
+      // object — this is the two-call-site defect R8 Task 5 found, pinned.
+      expect(englishRun.metrics.acquisition_cost_pence - nativeRun.metrics.acquisition_cost_pence)
+        .toBe(contrast!.acquisition_cost_delta_pence);
       expect(
         englishRun.metrics.total_development_cost_pence
-        - welshRun.metrics.total_development_cost_pence,
-      ).toBe(175_000);
+        - nativeRun.metrics.total_development_cost_pence,
+      ).toBe(contrast!.total_development_cost_delta_pence);
+      expect(englishRun.metrics.peak_debt_pence - nativeRun.metrics.peak_debt_pence)
+        .toBe(contrast!.peak_debt_delta_pence);
+    });
+  }
+
+  for (const fx of nonEnglishFixtures.filter((f) => versionOf(f) === 5)) {
+    // R8's original route to the same statement, kept for the v5 non-English fixtures
+    // because it additionally proves the migration stamps `england_ni` on a document
+    // that never said otherwise. Now driven off the contrast block rather than
+    // hard-coded, so it survives the next non-English fixture unchanged.
+    it(`${fx.name} — its pre-R8 form is a different, England/NI, appraisal`, () => {
+      const contrast = fx.jurisdiction_contrast!;
+      const v5 = migrateInputsToV5(asPreR8Document(fx.inputs));
+      expect(v5.acquisition.jurisdiction).toBe('england_ni');
+      const englishRun = runAppraisal(v5);
+      const nativeRun = runAppraisal(fx.inputs);
+
+      expect(englishRun.metrics.acquisition_tax_pence)
+        .toBe(contrast.england_ni_acquisition_tax_pence);
+      expect(nativeRun.metrics.acquisition_tax_pence)
+        .toBe(fx.expected_metrics.acquisition_tax_pence);
+      expect(englishRun.metrics.acquisition_tax.regime).toBe(contrast.england_ni_regime);
+      expect(nativeRun.metrics.acquisition_tax.regime).toBe(contrast.regime);
+      expect(englishRun.metrics.acquisition_cost_pence - nativeRun.metrics.acquisition_cost_pence)
+        .toBe(contrast.acquisition_cost_delta_pence);
+      expect(
+        englishRun.metrics.total_development_cost_pence
+        - nativeRun.metrics.total_development_cost_pence,
+      ).toBe(contrast.total_development_cost_delta_pence);
     });
   }
 
@@ -308,14 +463,29 @@ describe('golden fixtures (shared with the Python engine)', () => {
       // constant it was built from could not catch that constant itself
       // becoming non-zero. Mirrors _assert_zeroed_r9_blocks in
       // tests/test_migrate_v6.py.
-      const { basis, ...areaFigures } = migrated.areas;
-      expect(basis).toBe('manual');
-      for (const [field, value] of Object.entries(areaFigures)) {
-        expect(value, `areas.${field} must migrate zeroed, not synthesised`).toBe(0);
-      }
-      for (const unit of migrated.unit_mix.units) {
-        for (const [field, value] of Object.entries(unit.ancillary)) {
-          expect(value, `unit ${unit.id} ancillary.${field} must migrate zeroed`).toBe(0);
+      //
+      // R9 Task 12: this half applies to a document that is being UPGRADED. A fixture
+      // that is already v6 goes through migrateInputsToV6's merge branch instead, where
+      // the claim is the mirror image — the blocks it carries must survive untouched.
+      // Zeroing them there would be just as wrong, and the numeric gate below would not
+      // see it for fixture P (a zeroed bridge on the manual basis computes the same
+      // figures), so it is asserted structurally too.
+      if (versionOf(fx) === 6) {
+        expect(migrated.areas).toEqual((fx.inputs as unknown as { areas: unknown }).areas);
+        expect(migrated.unit_mix.units.map((u) => u.ancillary)).toEqual(
+          (fx.inputs.unit_mix.units as unknown as Array<{ ancillary: unknown }>)
+            .map((u) => u.ancillary),
+        );
+      } else {
+        const { basis, ...areaFigures } = migrated.areas;
+        expect(basis).toBe('manual');
+        for (const [field, value] of Object.entries(areaFigures)) {
+          expect(value, `areas.${field} must migrate zeroed, not synthesised`).toBe(0);
+        }
+        for (const unit of migrated.unit_mix.units) {
+          for (const [field, value] of Object.entries(unit.ancillary)) {
+            expect(value, `unit ${unit.id} ancillary.${field} must migrate zeroed`).toBe(0);
+          }
         }
       }
 
@@ -327,12 +497,12 @@ describe('golden fixtures (shared with the Python engine)', () => {
     },
   );
 
-  // Non-vacuity guard, mirroring the Python gate's `len(names) == 8`. The
+  // Non-vacuity guard, mirroring the Python gate's `len(names) == 11`. The
   // corpus is loaded by directory scan, so a fixture that is deleted, renamed
   // or never committed would silently shrink the it.each table above to
   // nothing rather than failing.
   it('runs the v6 identity gate over the whole pipeline corpus, not an empty one', () => {
-    expect(appraisalFixtures).toHaveLength(8);
+    expect(appraisalFixtures).toHaveLength(11);
   });
 });
 

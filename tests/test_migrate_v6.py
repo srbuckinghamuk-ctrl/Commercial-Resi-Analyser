@@ -295,6 +295,18 @@ def _assert_zeroed_r9_blocks(migrated, name):
             )
 
 
+def _assert_r9_blocks_survive(migrated, source: dict, name: str):
+    """The merge-branch mirror of ``_assert_zeroed_r9_blocks``: a stored v6 document's
+    own area bridge and per-unit ancillary must come back out of the migration
+    unchanged. Mirrors golden-fixtures.test.ts's v6 branch of the same gate."""
+    assert migrated.areas.model_dump() == source["areas"], (
+        f"{name}: the merge branch altered the stored area bridge"
+    )
+    assert [u.ancillary.model_dump() for u in migrated.unit_mix.units] == [
+        u["ancillary"] for u in source["unit_mix"]["units"]
+    ], f"{name}: the merge branch altered a stored unit's ancillary block"
+
+
 def test_v6_migration_moves_no_existing_figure():
     """The acceptance gate for R9's migration: every existing fixture, run
     before and after migration to v6, must produce identical output.
@@ -306,7 +318,16 @@ def test_v6_migration_moves_no_existing_figure():
     for name, doc in _pipeline_fixtures():
         names.append(name)
         migrated = migrate_inputs_to_v6(doc["inputs"])
-        _assert_zeroed_r9_blocks(migrated, name)
+        # R9 Task 12: the zeroed-blocks half applies to a document that is being
+        # UPGRADED. A fixture that is already v6 goes through migrate_inputs_to_v6's
+        # merge branch instead, where the claim is the mirror image -- the blocks it
+        # carries must survive untouched. Zeroing them there would be just as wrong, and
+        # the numeric gate below would not see it for fixture P (a zeroed bridge on the
+        # manual basis computes the same figures), so it is asserted structurally too.
+        if doc["inputs"].get("inputs_version") == 6:
+            _assert_r9_blocks_survive(migrated, doc["inputs"], name)
+        else:
+            _assert_zeroed_r9_blocks(migrated, name)
         before = run_appraisal(parse_calculator_inputs(doc["inputs"]))
         after = run_appraisal(migrated)
         # asdict, not model_dump: AppraisalResultV2 is a dataclass on the
@@ -324,4 +345,4 @@ def test_v6_migration_moves_no_existing_figure():
         )
     # The corpus is loaded by directory scan, so an empty glob would make the
     # loop above vacuously pass.
-    assert len(names) == 8, names
+    assert len(names) == 11, names

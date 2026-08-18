@@ -8,7 +8,11 @@ from app.financial_model import AppraisalRun, run_appraisal
 from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.migrate import migrate_inputs, migrate_inputs_to_v5
+from app.financial_model.migrate import (
+    migrate_inputs,
+    migrate_inputs_to_v5,
+    migrate_inputs_to_v6,
+)
 from app.financial_model.schedule import build_schedule
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
@@ -20,6 +24,7 @@ from app.financial_model.sensitivity import (
 from app.financial_model.types import (
     AnyCalculatorInputs,
     CalculatorInputsV5,
+    CalculatorInputsV6,
     ProgrammeInputs,
     ProgrammePackage,
     ProgrammePackages,
@@ -47,6 +52,9 @@ EXPECTED_FIXTURE_STEMS = [
     "k-sensitivity",
     "l-retain-all",
     "m-wales-jurisdiction",
+    "n-area-bridge",
+    "o-ancillary-value",
+    "p-scotland-levered",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -91,18 +99,43 @@ _FLAT_KEYS = {
     "redemption_schedule_balances_pence": (
         lambda r: [e.balance_pence for e in r.model.redemption_schedule]
     ),
+    # R9 spec Sec 15.5, fixture O: gross sale receipts. GDV counts every unit's
+    # ancillary, receipts count only the SOLD units' -- under a blended exit the two
+    # figures must differ by exactly the retained units' ancillary, and neither number
+    # alone can prove that. A schedule total rather than a summary metric, hence the
+    # mapper. Mirrors golden-fixtures.test.ts's FLAT_KEYS.
+    "gross_sales_pence": lambda r: r.schedule.totals.gross_sales_pence,
 }
+
+
+def _resolve_path(root, path: str):
+    """Resolves a dotted expected_metrics key (R9: ``area_bridge.<field>``) against the
+    metrics object. A plain key is just a one-segment path. Mirrors
+    golden-fixtures.test.ts's ``resolvePath``: AreaBridgeResult has 23 fields, and
+    pinning them individually keeps the fixture JSON language-neutral -- pinning the
+    whole object would compare this dataclass against a JSON dict and never pass."""
+    for part in path.split("."):
+        root = getattr(root, part)
+    return root
+
+
+def _version_of(doc: dict) -> int:
+    return doc["inputs"].get("inputs_version", 2)
 
 
 def _load_fixture(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _assert_expected_metrics(run: AppraisalRun, doc: dict, label: str) -> None:
-    for key, expected in doc["expected_metrics"].items():
+def _assert_pins(run: AppraisalRun, pins: dict, label: str) -> None:
+    for key, expected in pins.items():
         mapper = _FLAT_KEYS.get(key)
-        actual = mapper(run) if mapper else getattr(run.metrics, key)
+        actual = mapper(run) if mapper else _resolve_path(run.metrics, key)
         assert actual == expected, f"{label}.{key}: {actual} != {expected}"
+
+
+def _assert_expected_metrics(run: AppraisalRun, doc: dict, label: str) -> None:
+    _assert_pins(run, doc["expected_metrics"], label)
 
 
 def test_every_expected_fixture_file_is_present_in_the_shared_corpus() -> None:
@@ -117,14 +150,32 @@ def test_golden_fixture_parity(path: Path) -> None:
     _assert_expected_metrics(run, doc, path.stem)
 
 
-@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+# R9: the corpus now mixes v5 and v6 documents. migrate_inputs_to_v5 refuses a v6 one by
+# design -- producing a v5 document would mean dropping ``areas`` and every unit's
+# ``ancillary`` block -- so the migration-to-v5 identity is asserted over the v5 fixtures
+# and the (stronger, corpus-wide) migration-to-v6 identity below covers everything.
+_V5_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 5]
+_V6_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 6]
+
+
+def test_every_fixture_is_v5_or_v6_and_both_groups_are_non_empty() -> None:
+    """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
+    was mistyped would drop out of both parametrisations rather than fail."""
+    assert len(_V5_FIXTURES) + len(_V6_FIXTURES) == len(APPRAISAL_FIXTURES)
+    assert len(_V5_FIXTURES) > 0
+    assert [p.stem for p in _V6_FIXTURES] == [
+        "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
+    ]
+
+
+@pytest.mark.parametrize("path", _V5_FIXTURES, ids=lambda p: p.stem)
 def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> None:
     """Release 3a identity guarantee (spec Sec 6.1 / design Sec 2.4), carried to v5
     by R8: the migration chain is purely additive, so running a fixture's inputs
     through the full normalisation chain (exactly what app.py does on every request)
     must reproduce that fixture's pinned expected_metrics unchanged -- not merely
-    "close", byte-for-byte. Every fixture is now v5, so migrating it is a merge onto
-    v5 defaults, which is itself worth asserting (the merge must not drop the
+    "close", byte-for-byte. These fixtures are already v5, so migrating one is a merge
+    onto v5 defaults, which is itself worth asserting (the merge must not drop the
     programme block, nor the R8 acquisition block)."""
     doc = _load_fixture(path)
     # migrate_inputs_to_v5 returns a validated CalculatorInputsV5 directly
@@ -132,6 +183,50 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
     v5 = migrate_inputs_to_v5(doc["inputs"])
     assert v5.inputs_version == 5
     _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[migrated-to-v5]")
+
+
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> None:
+    """R9: the same identity guarantee at the head of the chain, and the one that now
+    covers the WHOLE corpus -- migrate_inputs_to_v6 accepts a v5 document (upgrade path)
+    and a v6 one (merge branch) alike. The merge branch is the one that matters for the
+    new fixtures: it must carry ``areas`` and every unit's ``ancillary`` through
+    untouched, and a merge that silently reset either to the zeroed default would move
+    fixture N's construction cost by 16,170,000p and fixture O's GDV by 4,500,000p
+    rather than pass."""
+    doc = _load_fixture(path)
+    v6 = migrate_inputs_to_v6(doc["inputs"])
+    assert v6.inputs_version == 6
+    _assert_expected_metrics(run_appraisal(v6), doc, f"{path.stem}[migrated-to-v6]")
+
+
+# R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named scenarios
+# (spec Sec 12.1). Fixture O uses this to carry the ancillary split all the way through a
+# -10% GDV stress: the stressed ancillary values are hand-derived, so a scenario binding
+# that stressed internal value alone -- the pre-Task-7 behaviour -- fails here rather than
+# passing on the internal figures. Mirrors golden-fixtures.test.ts's scenario loop.
+_SCENARIO_CASES = [
+    (path, name)
+    for path in APPRAISAL_FIXTURES
+    for name in _load_fixture(path).get("expected_scenarios", {})
+]
+
+
+def test_at_least_one_fixture_pins_a_scenario_appraisal() -> None:
+    """Non-vacuity: an ``expected_scenarios`` block dropped by an edit would otherwise
+    shrink the parametrisation below to nothing rather than fail."""
+    assert [(p.stem, n) for p, n in _SCENARIO_CASES] == [("o-ancillary-value", "downside")]
+
+
+@pytest.mark.parametrize(
+    "path,scenario", _SCENARIO_CASES, ids=lambda x: x if isinstance(x, str) else x.stem,
+)
+def test_fixture_reproduces_its_hand_derived_scenario(path: Path, scenario: str) -> None:
+    doc = _load_fixture(path)
+    inputs = parse_calculator_inputs(doc["inputs"])
+    overrides = getattr(inputs.scenarios, scenario)
+    run = run_appraisal(apply_scenario(inputs, overrides))
+    _assert_pins(run, doc["expected_scenarios"][scenario], f"{path.stem}[{scenario}]")
 
 
 # Fix round 2 (R8 Task 5). Every fixture in the corpus is now v5, so the test above
@@ -171,17 +266,31 @@ def _jurisdiction_of(path: Path) -> str:
     return _load_fixture(path)["inputs"]["acquisition"].get("jurisdiction", "england_ni")
 
 
-_PRE_R8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _jurisdiction_of(p) == "england_ni"]
+# R9 narrows it further: a v6 fixture has no pre-R8 form either. ``_as_pre_r8_document``
+# stamps v3/v4, and migrating that back up would leave the R9 ``areas`` and ``ancillary``
+# blocks at their zeroed defaults -- a different document, not an older one.
+_PRE_R8_FIXTURES = [
+    p for p in APPRAISAL_FIXTURES
+    if _jurisdiction_of(p) == "england_ni" and _version_of(_load_fixture(p)) == 5
+]
 _NON_ENGLISH_FIXTURES = [p for p in APPRAISAL_FIXTURES if _jurisdiction_of(p) != "england_ni"]
 
 
-def test_the_pre_r8_parametrisation_covers_every_england_ni_fixture() -> None:
+def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None:
     """Without this, deleting a fixture's `jurisdiction` field -- or mistyping it --
     would quietly move it out of the parametrisation below and reduce coverage
-    without failing."""
-    assert len(_PRE_R8_FIXTURES) + len(_NON_ENGLISH_FIXTURES) == len(APPRAISAL_FIXTURES)
-    assert [_jurisdiction_of(p) for p in _NON_ENGLISH_FIXTURES] == ["wales"]
-    assert len(_PRE_R8_FIXTURES) == len(APPRAISAL_FIXTURES) - 1
+    without failing. Mirrors golden-fixtures.test.ts."""
+    assert [_jurisdiction_of(p) for p in _NON_ENGLISH_FIXTURES] == ["wales", "scotland"]
+    excluded = [p for p in APPRAISAL_FIXTURES if p not in _PRE_R8_FIXTURES]
+    assert [p.stem for p in excluded] == [
+        "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
+    ]
+    # Every exclusion is justified by one of the two stated reasons, not by silence.
+    for path in excluded:
+        assert (
+            _jurisdiction_of(path) != "england_ni"
+            or _version_of(_load_fixture(path)) == 6
+        ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
 @pytest.mark.parametrize("path", _PRE_R8_FIXTURES, ids=lambda p: p.stem)
@@ -202,46 +311,87 @@ def test_pre_r8_fixture_form_reproduces_its_metrics_after_migration(path: Path) 
     _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[pre-R8 -> v5]")
 
 
+def _as_england_ni_document(inputs: dict) -> dict:
+    doc = copy.deepcopy(inputs)
+    doc["acquisition"]["jurisdiction"] = "england_ni"
+    return doc
+
+
 @pytest.mark.parametrize("path", _NON_ENGLISH_FIXTURES, ids=lambda p: p.stem)
+def test_a_non_english_fixtures_england_ni_twin_is_a_different_appraisal(path: Path) -> None:
+    """R9 Task 12. The non-English fixtures get the *stronger* statement: switching the
+    document's jurisdiction to England/NI must change the acquisition tax, and change it
+    to precisely the England/NI figure on the same consideration. That is what makes the
+    fixture's jurisdiction load-bearing -- a table edit, or a mis-wired call site that
+    quietly reverted to SDLT, fails here rather than passing because the two regimes
+    happened to agree. Mirrors golden-fixtures.test.ts.
+
+    R8 wrote this with fixture M's figures hard-coded inside a parametrisation over every
+    non-English fixture, and left a MAINTENANCE note saying that adding a second one meant
+    rewriting it. Fixture P is that second one, so it is rewritten: the expected pair and
+    the three deltas now come from each fixture's own hand-derived
+    ``jurisdiction_contrast`` block.
+
+    It also matters that the deltas are pinned SEPARATELY rather than asserted equal to
+    each other. Fixture M is all-cash, so its tax difference reaches TDC unchanged and
+    never touches peak debt. Fixture P is levered, so the extra tax exhausts committed
+    equity a month earlier and then compounds: its TDC delta (106,161p) is strictly larger
+    than its acquisition delta (100,000p). An engine that computed the right tax but
+    funded it wrongly would satisfy the first and fail the second -- the interaction R8's
+    implementation report recorded as unpinned."""
+    doc = _load_fixture(path)
+    contrast = doc["jurisdiction_contrast"]
+    native = run_appraisal(parse_calculator_inputs(doc["inputs"]))
+    english = run_appraisal(parse_calculator_inputs(_as_england_ni_document(doc["inputs"])))
+
+    assert native.metrics.acquisition_tax.regime == contrast["regime"]
+    assert english.metrics.acquisition_tax.regime == contrast["england_ni_regime"]
+    assert english.metrics.acquisition_tax_pence == contrast["england_ni_acquisition_tax_pence"]
+    # Non-vacuity: the two regimes must actually disagree on this consideration.
+    assert contrast["acquisition_cost_delta_pence"] > 0
+    # The difference must reach the headline cost stack, not stop at the metrics object --
+    # this is the two-call-site defect R8 Task 5 found, pinned.
+    assert (
+        english.metrics.acquisition_cost_pence - native.metrics.acquisition_cost_pence
+    ) == contrast["acquisition_cost_delta_pence"]
+    assert (
+        english.metrics.total_development_cost_pence
+        - native.metrics.total_development_cost_pence
+    ) == contrast["total_development_cost_delta_pence"]
+    assert (
+        english.metrics.peak_debt_pence - native.metrics.peak_debt_pence
+    ) == contrast["peak_debt_delta_pence"]
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _NON_ENGLISH_FIXTURES if _version_of(_load_fixture(p)) == 5],
+    ids=lambda p: p.stem,
+)
 def test_a_non_english_fixtures_pre_r8_form_is_a_different_england_ni_appraisal(
     path: Path,
 ) -> None:
-    """The excluded fixtures get the *stronger* statement: stripping the R8 fields must
-    change the acquisition tax, and change it to precisely the England/NI figure on the
-    same consideration. That is what makes the fixture's jurisdiction load-bearing -- a
-    table edit, or a mis-wired call site that quietly reverted to SDLT, fails here rather
-    than passing because the two regimes happened to agree. Mirrors
-    golden-fixtures.test.ts's "its pre-R8 form is a different, England/NI, appraisal".
-
-    MAINTENANCE: the figures below are hard-coded for fixture M's consideration, inside a
-    parametrisation over every non-English fixture. Adding a second non-English fixture
-    therefore means *rewriting this assertion* (drive the expected pair off the fixture, or
-    split the parametrisation) -- not just adding a roster line. It fails loudly rather
-    than silently if you forget, but the failure will look like a wrong figure rather than
-    a missing case, so read this before "fixing" the number."""
+    """R8's original route to the same statement, kept for the v5 non-English fixtures
+    because it additionally proves the migration stamps ``england_ni`` on a document that
+    never said otherwise. Now driven off the contrast block rather than hard-coded, so it
+    survives the next non-English fixture unchanged."""
     doc = _load_fixture(path)
+    contrast = doc["jurisdiction_contrast"]
     v5 = migrate_inputs_to_v5(_as_pre_r8_document(doc["inputs"]))
     assert v5.acquisition.jurisdiction == "england_ni"
     english = run_appraisal(v5)
-    welsh = run_appraisal(parse_calculator_inputs(doc["inputs"]))
+    native = run_appraisal(parse_calculator_inputs(doc["inputs"]))
 
-    assert doc["inputs"]["acquisition"]["purchase_price_pence"] == 75_348_200
-    # Hand-verified against the band tables (spec Sec 14), slice basis:
-    #   SDLT = 2% x (250k-150k) + 5% x (753,482-250,000) = 200,000p + 2,517,410p
-    #   LTT  = 1% x (250k-225k) + 5% x (753,482-250,000) =  25,000p + 2,517,410p
-    assert english.metrics.acquisition_tax_pence == 2_717_410
-    assert welsh.metrics.acquisition_tax_pence == 2_542_410
-    assert english.metrics.acquisition_tax.regime == "SDLT"
-    assert welsh.metrics.acquisition_tax.regime == "LTT"
-    # The 175,000p difference must reach the headline cost stack, not stop at the metrics
-    # object -- this is the two-call-site defect Task 5 found, pinned.
+    assert english.metrics.acquisition_tax_pence == contrast["england_ni_acquisition_tax_pence"]
+    assert native.metrics.acquisition_tax_pence == doc["expected_metrics"]["acquisition_tax_pence"]
+    assert english.metrics.acquisition_tax.regime == contrast["england_ni_regime"]
+    assert native.metrics.acquisition_tax.regime == contrast["regime"]
     assert (
-        english.metrics.acquisition_cost_pence - welsh.metrics.acquisition_cost_pence
-    ) == 175_000
+        english.metrics.acquisition_cost_pence - native.metrics.acquisition_cost_pence
+    ) == contrast["acquisition_cost_delta_pence"]
     assert (
         english.metrics.total_development_cost_pence
-        - welsh.metrics.total_development_cost_pence
-    ) == 175_000
+        - native.metrics.total_development_cost_pence
+    ) == contrast["total_development_cost_delta_pence"]
 
 
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
@@ -294,8 +444,12 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     serviced.finance.interest_type = "serviced"
     short_term = inputs.model_copy(deep=True)
     short_term.finance.term_months = 1
-    programmed = migrate_inputs_to_v5(inputs.model_dump(mode="json"))
-    assert isinstance(programmed, CalculatorInputsV5)
+    # R9: normalised to v6, not v5. The corpus now mixes v5 and v6 documents, and
+    # migrate_inputs_to_v5 refuses a v6 one by design -- producing a v5 document would
+    # mean dropping ``areas`` and every unit's ``ancillary`` block, which is exactly the
+    # silent downgrade that guard exists to prevent.
+    programmed = migrate_inputs_to_v6(inputs.model_dump(mode="json"))
+    assert isinstance(programmed, CalculatorInputsV6)
     programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
