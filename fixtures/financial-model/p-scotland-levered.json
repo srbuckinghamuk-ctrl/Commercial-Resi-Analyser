@@ -1,7 +1,7 @@
 {
   "name": "P — Scottish acquisition, LBTT non-residential, development finance",
   "kind": "pipeline",
-  "note": "R8's own open carry-forward: every non-English fixture was all-cash, so the jurisdiction-aware tax → total development cost → peak debt interaction was unpinned. Here the LBTT figure is debt-funded, so the England/NI counterfactual differs by MORE than the 100,000p tax difference — 106,161p — because the extra tax exhausts committed equity a month earlier and the difference then compounds at 8% for nine months. That gap is the whole point of the fixture and is pinned in `jurisdiction_contrast` below.",
+  "note": "R8's own open carry-forward: every non-English fixture was all-cash, so the jurisdiction-aware tax → total development cost → peak debt interaction was unpinned. Here the LBTT figure is debt-funded, so the England/NI counterfactual differs by MORE than the 100,000p tax difference — 106,161p — because the extra tax exhausts committed equity a month earlier and the difference then compounds at 8% for nine months. That gap is the whole point of the fixture and is pinned in `jurisdiction_contrast` below. This fixture is ALSO the corpus's counter-example to spec §5.10's shortfall-implies-funding-gap implication, and the two cost_to_complete_* pins below hold that defect's figures: §5.10 charges rolled-up interest against the NET facility while the ledger capitalises it against the GROSS, so a facility sized the way this one is (net 70,000,000p against 66,688,400p of draws and fees, interest reserve carved out of the 8,000,000p of gross headroom) reports a 392,483p shortfall at m=1 against a ledger whose funding gap is 0. The correction is deferred to its own release; pinning the number here is what makes the deferral self-policing, so the figure fails loudly the moment the behaviour changes rather than drifting away from the spec text that cites it.",
   "inputs": {
     "inputs_version": 6,
     "project_id": null,
@@ -110,6 +110,8 @@
     "ltgdv_developer_pct": 49.03,
     "equity_contributed_pence": 45000000,
     "funding_gap_pence": 0,
+    "cost_to_complete_first_shortfall_month": 1,
+    "cost_to_complete_max_shortfall_pence": 392483,
     "developed_area_sqm": 400,
     "area_bridge.developed_area_sqm": 400,
     "area_bridge.manual_area_sqm": 400,

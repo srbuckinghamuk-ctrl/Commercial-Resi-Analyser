@@ -394,6 +394,75 @@ def test_a_non_english_fixtures_pre_r8_form_is_a_different_england_ni_appraisal(
     ) == contrast["total_development_cost_delta_pence"]
 
 
+# R9 Task 12 fix round 1. Python twin of golden-fixtures.test.ts's negative-control block,
+# which had no mirror here -- an asymmetry that predates R9 but that R9 widened by adding
+# three mapped pins (`gross_sales_pence` and the two `cost_to_complete_*` keys on fixture P).
+#
+# The point is the one fixture H established in Release 3a: a pinned key that no assertion
+# actually reaches is a copy-paste false pass, not coverage. Every key in _FLAT_KEYS reaches
+# the run through a mapper rather than through getattr, so a typo in a mapper -- or a key
+# silently absent from the mapper table -- could compare None against None and pass. This
+# flips each mapped key to a deliberately wrong value and asserts _assert_pins RAISES.
+#
+# THE CONVENTION: every key in _FLAT_KEYS is negative-controlled by at least one fixture
+# here. Adding a mapper means adding an entry below.
+_NEGATIVE_CONTROLS = [
+    # Fixtures I and J exercise opposite sides of the same redemption mappers: I's
+    # redemption balance is 0 and its three-entry schedule ends at 0, while J's is non-zero
+    # and its two-entry schedule ends non-zero. A mapper that returned a constant, or
+    # dropped the final entry, could satisfy one fixture's control while failing the other's.
+    ("i-phased-sales", {
+        "redemption_balance_at_disposal_pence": 1,
+        "redemption_schedule_months": [9, 10],
+        "redemption_schedule_balances_pence": [53431299, 10782708, 1],
+        "funding_gap_pence": 1,
+    }),
+    ("j-blended-refinance", {
+        "redemption_balance_at_disposal_pence": 4946601,
+        "redemption_schedule_months": [9, 10],
+        "redemption_schedule_balances_pence": [53431299, 4946601],
+        "funding_gap_pence": 1,
+    }),
+    # Fixture O is the one that matters for `gross_sales_pence`: under a blended exit GDV
+    # and receipts are DIFFERENT numbers (74,500,000 vs 32,000,000), so a mapper wired to
+    # the wrong total is caught. A control on a sell_all fixture could not tell them apart.
+    ("o-ancillary-value", {"gross_sales_pence": 74_500_000}),
+    # Fixture P holds spec Sec 5.10's deferred-defect figures. They are documented in the
+    # spec and in test-cases Sec 14.9, so they must be pinned by something that fails when
+    # the behaviour changes -- otherwise the deferral relies on someone remembering to
+    # re-read the prose.
+    ("p-scotland-levered", {
+        "gross_sales_pence": 143_999_999,
+        "cost_to_complete_first_shortfall_month": 2,
+        "cost_to_complete_max_shortfall_pence": 392_484,
+        "funding_gap_pence": 1,
+    }),
+]
+
+
+def test_every_flat_key_is_negative_controlled() -> None:
+    """The convention above, asserted rather than trusted."""
+    controlled = {key for _, wrong in _NEGATIVE_CONTROLS for key in wrong}
+    assert set(_FLAT_KEYS) - controlled == set(), (
+        "these _FLAT_KEYS mappers have no negative control: "
+        f"{sorted(set(_FLAT_KEYS) - controlled)}"
+    )
+
+
+@pytest.mark.parametrize("stem,wrong_values", _NEGATIVE_CONTROLS, ids=[c[0] for c in _NEGATIVE_CONTROLS])
+def test_negative_control_a_wrong_value_for_each_mapped_key_fails(
+    stem: str, wrong_values: dict,
+) -> None:
+    path = next(p for p in APPRAISAL_FIXTURES if p.stem == stem)
+    doc = _load_fixture(path)
+    run = run_appraisal(parse_calculator_inputs(doc["inputs"]))
+    # The run itself must be correct first, or "the poisoned pin failed" would prove nothing.
+    _assert_expected_metrics(run, doc, stem)
+    for key, wrong in wrong_values.items():
+        with pytest.raises(AssertionError):
+            _assert_pins(run, {key: wrong}, f"negative-control[{stem}]")
+
+
 @pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
 def test_invariants(path: Path) -> None:
     doc = _load_fixture(path)

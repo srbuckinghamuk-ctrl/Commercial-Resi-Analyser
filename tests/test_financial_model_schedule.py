@@ -4,6 +4,7 @@ describe blocks (Release 3a Task 4 / Release 3b Task 4, spec Sec 6.1 / Sec
 4.4.1, calc 2.2.0 / calc 2.3.0). Same scenarios, same expected arrays as the
 TS side.
 """
+from app.financial_model.areas import developed_area_sqm
 from app.financial_model.engine import money_round
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
@@ -199,6 +200,37 @@ class TestBuildScheduleResolvesItsCostAreaThroughTheAccessor:
             }),
         })
         assert build_schedule(inputs).totals.construction_pence == 22_000_000
+
+    def test_carries_a_fractional_bridge_derived_area_into_the_half_up_rounding_site(self):
+        """R9 Task 12 fix round 1. Spec Sec 3.4's round_half_up(rate x area) is pinned
+        in test_financial_model_engine.py, including the odd-half case -- but every case
+        there passes the area in directly. Nothing proved a *derived* area could reach
+        that rounding site fractionally at all.
+
+        No golden fixture closes this cheaply: fixture N's rate is 105,000p/m2, and
+        105,000 x any plausible area fraction is an integer, so exercising the rounding
+        through a fixture would mean changing the rate too and re-deriving its whole cost
+        stack. This asserts the same property at the seam where it actually lives.
+        Mirrors conversion-calc-engine.test.ts."""
+        inputs = _v6().model_copy(update={
+            # 120.5 - 20 = 100.5 m2 developed, entered nowhere as 100.5
+            "areas": AreaBridgeInputs(
+                basis="bridge_derived", existing_gia_sqm=120.5,
+                retained_commercial_gia_sqm=20,
+            ),
+            "conversion_costs": _v6().conversion_costs.model_copy(update={
+                "construction_cost_per_sqm_pence": 333,
+                "total_construction_sqm": 9999,
+                "contingency_pct": 0,
+                "fire_safety_pence": 0,
+                "sound_insulation_pence": 0,
+                "part_l_compliance_pence": 0,
+            }),
+        })
+        assert developed_area_sqm(inputs) == 100.5
+        # 333 x 100.5 = 33,466.5 -> round_half_up = 33,467. Python's round() (banker's)
+        # would give 33,466, and truncation 33,466 -- so this pin distinguishes all three.
+        assert build_schedule(inputs).totals.construction_pence == 33_467
 
 
 # R9 Task 6 -- mirror of conversion-calc-engine.test.ts's

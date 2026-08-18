@@ -381,8 +381,14 @@ describe('golden fixtures (shared with the Python engine)', () => {
   }
 
   // Negative control (fixture H's precedent, Release 3a — a pinned key that no assertion
-  // actually reaches is a copy-paste false pass, not coverage). The three redemption keys
-  // added in Release 3b reach the run through FLAT_KEYS rather than through
+  // actually reaches is a copy-paste false pass, not coverage).
+  //
+  // THE CONVENTION THIS BLOCK KEEPS: every key in FLAT_KEYS is negative-controlled by at
+  // least one fixture here. Adding a mapper means adding an entry below. Nothing enforces
+  // that mechanically, so it is stated here rather than left to be inferred — R9 added
+  // three mapped pins and had to be told to come back for this.
+  //
+  // The three redemption keys added in Release 3b reach the run through FLAT_KEYS rather than through
   // AppraisalResultV2, so a typo in a mapper (or a key silently absent from the mapper
   // table) would compare `undefined` against `undefined` for a fixture that happened not to
   // pin it, and pass. This flips each mapped key to a deliberately wrong value and asserts
@@ -412,6 +418,38 @@ describe('golden fixtures (shared with the Python engine)', () => {
         redemption_schedule_balances_pence: [53431299, 4946601],    // truly [..., 4946600]
         funding_gap_pence: 1,                                       // truly 0
         peak_debt_pence: 53431300,                                  // truly 53431299 (direct key)
+      },
+    },
+    // R9 Task 12 fix round 1. The block above states its own convention — every FLAT_KEYS
+    // mapper is negative-controlled — and R9 added mappers without extending it, which
+    // quietly breaks that convention for the next person who trusts it. Both new fixtures
+    // that exercise a new mapper get a control.
+    //
+    // Fixture O is the one that matters for `gross_sales_pence`: under a blended exit GDV
+    // and receipts are DIFFERENT numbers (74,500,000 vs 32,000,000), so a mapper wired to
+    // the wrong total would be caught. A control on a sell_all fixture could not tell the
+    // two apart.
+    {
+      namePrefix: 'O — ancillary value',
+      wrongValues: {
+        gross_sales_pence: 74500000,   // truly 32000000 — and 74500000 is this fixture's
+                                       // GDV, i.e. precisely the wrong total a mis-wired
+                                       // mapper would return
+      },
+    },
+    // Fixture P holds spec §5.10's deferred-defect figures. They are documented in the
+    // spec and in test-cases §14.9, so they must be pinned by something that fails when
+    // the behaviour changes — otherwise the deferral relies on someone remembering to
+    // re-check the prose.
+    {
+      namePrefix: 'P — Scottish acquisition',
+      wrongValues: {
+        gross_sales_pence: 143999999,                  // truly 144000000
+        cost_to_complete_first_shortfall_month: 2,     // truly 1
+        cost_to_complete_max_shortfall_pence: 392484,  // truly 392483
+        funding_gap_pence: 1,                          // truly 0 — the counter-example's
+                                                       // other half: a shortfall WITH no gap
+        peak_debt_pence: 70601817,                     // truly 70601816 (direct key)
       },
     },
   ];

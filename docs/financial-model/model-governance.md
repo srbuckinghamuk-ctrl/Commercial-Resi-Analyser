@@ -279,12 +279,12 @@ thing that catches it is a rule that makes the raw read itself illegal.
 
 ### 9.2 What is covered
 
-Two values are derived once and consumed everywhere. Each has exactly one
-accessor, and reading its underlying data any other way is a build failure:
+Two values are derived once and consumed everywhere. Each has exactly one **owning
+module**, and reading its underlying data outside that module is a build failure:
 
 | Value | The one accessor | The raw thing that is off-limits |
 |---|---|---|
-| Construction cost area (spec §15.3/§15.4) | `developedAreaSqm(inputs)` / `developed_area_sqm(inputs)` in `areas.ts` / `areas.py` | the `total_construction_sqm` field |
+| Construction cost area (spec §15.3/§15.4) | `developedAreaSqm(inputs)` / `developed_area_sqm(inputs)` in `areas.ts` / `areas.py` — or `areaBridge`/`area_bridge` from the same module where the caller needs the whole reconciliation rather than the scalar (only `derive_metrics` and `validate_inputs` do; see spec §15.4) | the `total_construction_sqm` field |
 | Acquisition tax (spec §14) | `calculateAcquisitionTax()` / `calculate_acquisition_tax()` in `acquisition-tax.ts` / `acquisition_tax.py` | the `TAX_TABLES` band table |
 
 The cost area is the harder of the two, and the reason the rule was written for

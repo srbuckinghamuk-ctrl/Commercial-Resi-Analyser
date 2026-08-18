@@ -2960,6 +2960,21 @@ The `unallocated_sqm: 40` is inside §15.6's 10%-of-developed-area warning
 threshold (52 m2) and `nia_to_gia_pct: 73.08` is inside the 65–90% band, so the
 fixture is a clean document, not one that ships with warnings.
 
+**Why the fractional-area rounding is *not* pinned by this fixture.** §3.4 rounds
+the construction base half-up, and that is pinned in both engines at the
+`calculateTotalConstructionCost` / `calculate_total_construction_cost` level
+including the odd-half case (`333 × 100.5 = 33,466.5 → 33,467`). What no fixture
+could cheaply add is the *derived* area reaching that rounding site fractionally:
+fixture N's rate is 105,000p/m2, and 105,000 × any plausible area fraction is an
+integer, so exercising the rounding through the fixture would mean changing the
+rate as well and re-deriving its entire cost stack. The property is instead
+asserted at the seam where it lives —
+`conversion-calc-engine.test.ts`'s "carries a FRACTIONAL bridge-derived area into
+the half-up rounding site" and
+`test_financial_model_schedule.py::test_carries_a_fractional_bridge_derived_area_into_the_half_up_rounding_site`,
+which build a bridge whose `developed_gia_sqm` is 100.5 (entered nowhere as
+100.5) and pin the resulting 33,467p.
+
 ### 14.2 Fixture O — ancillary value across a blended exit
 
 `fixtures/financial-model/o-ancillary-value.json`. England/NI, all-cash, two
@@ -3178,4 +3193,13 @@ corpus tests now name `p-scotland-levered` as a counter-example and **assert**
 its shape (a shortfall present, a funding gap of zero), so it cannot drift off
 the list in silence, and both tests assert they still saw a positive case as well
 — the implication is not allowed to become vacuous. Spec §5.10 records the
-counter-example and defers the correction to its own release.
+counter-example and defers the correction to its own release, tracked as **C1** in
+`docs/superpowers/plans/2026-08-17-second-audit-release-plan.md` and owned by R14.
+
+The defect's figures are **pinned, not merely documented**: fixture P carries
+`cost_to_complete_first_shortfall_month: 1` and
+`cost_to_complete_max_shortfall_pence: 392483`, both reached through `FLAT_KEYS`
+mappers and both negative-controlled in each engine. A documented number with no
+assertion behind it drifts silently; whoever picks up C1 needs a figure that fails
+the moment the behaviour changes, which is what makes the deferral
+self-policing rather than something someone has to remember to re-check.

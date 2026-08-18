@@ -10,7 +10,7 @@ import {
 } from './conversion-calc-engine';
 import type { ProposedUnit, ProposedUnitV6, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
 import { DEFAULT_CONVERSION_COSTS } from './conversion-defaults';
-import { DEFAULT_AREA_BRIDGE } from './model/areas';
+import { DEFAULT_AREA_BRIDGE, developedAreaSqm } from './model/areas';
 import type { CalculatorInputsV6 } from './model/finance-types';
 import { migrateInputsToV6 } from './model/migrate';
 import { buildSchedule } from './model/schedule';
@@ -248,6 +248,34 @@ describe('R9 — the schedule resolves its cost area through the accessor', () =
       conversion_costs: { ...DEFAULT_CONVERSION_COSTS, construction_cost_per_sqm_pence: 50_000, total_construction_sqm: 400 },
     });
     expect(buildSchedule(inputs).totals.construction_pence).toBe(22_000_000);
+  });
+
+  // R9 Task 12 fix round 1. Spec §3.4's `round_half_up(rate × area)` is pinned above at
+  // the `calculateTotalConstructionCost` level, including the odd-half case — but every
+  // case there passes the area in directly. Nothing proved a *derived* area could reach
+  // that rounding site fractionally at all.
+  //
+  // No golden fixture can close this cheaply: fixture N's rate is 105,000p/m², and
+  // 105,000 × any plausible area fraction is an integer, so exercising the rounding
+  // through a fixture would mean changing the rate too and re-deriving its whole cost
+  // stack. This asserts the same property at the seam where it actually lives.
+  it('carries a FRACTIONAL bridge-derived area into the half-up rounding site (spec §3.4/§15.3)', () => {
+    const inputs = makeV6Inputs({
+      // 120.5 − 20 = 100.5 m² developed, entered nowhere as 100.5
+      areas: {
+        ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived',
+        existing_gia_sqm: 120.5, retained_commercial_gia_sqm: 20,
+      },
+      conversion_costs: {
+        ...DEFAULT_CONVERSION_COSTS, construction_cost_per_sqm_pence: 333,
+        total_construction_sqm: 9999, contingency_pct: 0,
+        fire_safety_pence: 0, sound_insulation_pence: 0, part_l_compliance_pence: 0,
+      },
+    });
+    expect(developedAreaSqm(inputs)).toBe(100.5);
+    // 333 × 100.5 = 33,466.5 → round_half_up = 33,467. Banker's rounding would give
+    // 33,466, and truncation 33,466 — so this pin distinguishes all three.
+    expect(buildSchedule(inputs).totals.construction_pence).toBe(33_467);
   });
 });
 
