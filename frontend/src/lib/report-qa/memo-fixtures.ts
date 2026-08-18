@@ -313,6 +313,48 @@ export function unconfirmedJurisdictionInputs(): CalculatorInputsV6 {
 }
 
 /**
+ * R9 (Task 11, spec §15). `v6AcquisitionInputs()` with a populated,
+ * bridge-derived area schedule carrying a material (>10%) unallocated
+ * balance, and ancillary balcony/terrace + parking value on two units — so
+ * the release gate exercises the area-schedule table, the three efficiency
+ * ratios, the unallocated disclosure line and the GDV internal/ancillary
+ * split, not only their zeroed defaults.
+ *
+ * Geometry: existing 400, demolished 20, extension 20 (proposed 400); no
+ * retained commercial or untouched area (developed 400); circulation 30,
+ * plant 10, store 10, amenity 10 (available 340); the fixture's 290 m² of
+ * unit NIA leaves 50 m² (12.5% of the 400 m² developed area) unallocated.
+ */
+export function bridgeAndAncillaryInputs(): CalculatorInputsV6 {
+  const inputs = v6AcquisitionInputs();
+  inputs.areas = {
+    basis: 'bridge_derived',
+    existing_gia_sqm: 400,
+    demolished_gia_sqm: 20,
+    extension_gia_sqm: 20,
+    retained_commercial_gia_sqm: 0,
+    untouched_gia_sqm: 0,
+    circulation_common_sqm: 30,
+    plant_riser_sqm: 10,
+    store_bin_cycle_sqm: 10,
+    amenity_sqm: 10,
+    external_amenity_sqm: 15,
+  };
+  inputs.unit_mix = {
+    units: inputs.unit_mix.units.map((u, i) => {
+      if (i === 0) {
+        return { ...u, ancillary: { balcony_terrace_sqm: 5, balcony_terrace_value_pence: 800_000, parking_spaces: 1, parking_value_pence: 1_500_000 } };
+      }
+      if (i === 3) {
+        return { ...u, ancillary: { balcony_terrace_sqm: 8, balcony_terrace_value_pence: 1_200_000, parking_spaces: 1, parking_value_pence: 1_500_000 } };
+      }
+      return u;
+    }),
+  };
+  return inputs;
+}
+
+/**
  * The legacy v1 snapshot shape. Migrating it forces
  * `finance.requires_confirmation`, which is what makes a run not report-safe —
  * the state every DRAFT-watermark assertion needs.

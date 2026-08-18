@@ -3,8 +3,14 @@ import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
-import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './model';
-import { runAppraisal, migrateInputs } from './model';
+import type {
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, AreaBridgeInputs,
+} from './model';
+import { runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE } from './model';
+import type { UnitAncillary } from './conversion-types';
+import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
+import { inspectPdf } from './report-qa/pdf-inspect';
+import { documentText } from './report-qa/report-checks';
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity';
 import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
@@ -1031,5 +1037,183 @@ describe('generateInvestmentMemo — base document fails validation (spec §12.7
     const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
     expect(text).toContain('sensitivity analysis was not produced');
     expect(text).toContain('Senior Debt Position');
+  });
+});
+
+// R9 (spec §15, Task 11). The area bridge and the GDV internal/ancillary
+// split are computed and validated (Tasks 1-9) and reachable in the UI
+// (Task 10), but until this task the memo never mentioned either. These pin
+// the report content, read straight off `run.metrics.area_bridge` and
+// `run.metrics.gdv_internal_pence`/`gdv_ancillary_pence` — the memo performs
+// no arithmetic of its own on either.
+describe('R9 — the memo reports the area bridge', () => {
+  /** `baseInputs()` (v2) promoted to a v6 document: a confirmed, dated
+   *  England/NI jurisdiction (so no tax-basis draft/limitation text
+   *  interferes with the assertions below), a zeroed area bridge by default,
+   *  and every unit given a zeroed `ancillary` block — exactly what
+   *  `migrateV5toV6` would write for a document that had never recorded one,
+   *  built by hand here so each fixture can set only the area/ancillary
+   *  fields it actually needs. */
+  function v6Inputs(overrides: {
+    areas?: Partial<AreaBridgeInputs>;
+    ancillary?: Record<number, Partial<UnitAncillary>>;
+  } = {}): CalculatorInputsV6 {
+    const v2 = baseInputs();
+    return {
+      ...v2,
+      inputs_version: 6,
+      acquisition: {
+        ...v2.acquisition,
+        jurisdiction: 'england_ni',
+        jurisdiction_source: 'user',
+        jurisdiction_evidence_status: 'confirmed',
+        acquisition_date: '2026-01-15',
+        acquisition_tax_override_pence: null,
+        acquisition_tax_override_reason: '',
+      },
+      unit_mix: {
+        units: v2.unit_mix.units.map((u, i) => ({
+          ...u,
+          ancillary: { ...DEFAULT_UNIT_ANCILLARY, ...(overrides.ancillary?.[i] ?? {}) },
+        })),
+      },
+      lender_valuation: null,
+      programme: null,
+      sales_phasing: null,
+      refinance: null,
+      areas: { ...DEFAULT_AREA_BRIDGE, ...(overrides.areas ?? {}) },
+    };
+  }
+
+  // Routed through the real PDF inspector (report-qa/pdf-inspect.ts), not the
+  // raw-latin1 `pdfText()` helper the rest of this file uses: `pdfText()`
+  // cannot decode jsPDF's WinAnsi em dash (0x97), and the null-ratio
+  // assertion below depends on telling "0.0%" apart from the em dash the
+  // memo is supposed to print instead.
+  async function memoTextFor(inputs: CalculatorInputsV2 | CalculatorInputsV6): Promise<string> {
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    return documentText(await inspectPdf(blob));
+  }
+
+  // baseInputs() carries 4 x 50 m² units = 200 m² unit NIA (unchanged by any
+  // fixture below, since none of them touch unit_mix areas).
+
+  const bridgeFixture = v6Inputs({
+    areas: {
+      basis: 'bridge_derived',
+      existing_gia_sqm: 300,
+      demolished_gia_sqm: 10,
+      extension_gia_sqm: 10,
+      retained_commercial_gia_sqm: 0,
+      untouched_gia_sqm: 0,
+      circulation_common_sqm: 20,
+      plant_riser_sqm: 10,
+      store_bin_cycle_sqm: 10,
+      amenity_sqm: 10,
+      external_amenity_sqm: 5,
+    },
+  });
+
+  const manualFixture = v6Inputs({ areas: { basis: 'manual' } });
+
+  // developed = 1000 (existing only); available = 1000 - 500 = 500;
+  // unallocated = 500 - 200 (unit NIA) = 300 -- exactly 300.0 m², 30% of the
+  // 1000 m² developed area, comfortably over the 10% materiality line.
+  const unreconciledFixture = v6Inputs({
+    areas: {
+      basis: 'bridge_derived',
+      existing_gia_sqm: 1000,
+      demolished_gia_sqm: 0,
+      extension_gia_sqm: 0,
+      retained_commercial_gia_sqm: 0,
+      untouched_gia_sqm: 0,
+      circulation_common_sqm: 200,
+      plant_riser_sqm: 100,
+      store_bin_cycle_sqm: 100,
+      amenity_sqm: 100,
+      external_amenity_sqm: 0,
+    },
+  });
+
+  const ancillaryFixture = v6Inputs({
+    ancillary: {
+      0: { balcony_terrace_sqm: 5, balcony_terrace_value_pence: 500_000, parking_spaces: 1, parking_value_pence: 1_000_000 },
+    },
+  });
+
+  it('prints the reconciliation with its derived lines', async () => {
+    const text = await memoTextFor(bridgeFixture);
+    expect(text).toContain('Area Schedule');
+    expect(text).toContain('Proposed GIA');
+    expect(text).toContain('Developed area');
+    expect(text).toContain('Unallocated');
+  });
+
+  it('prints all three efficiencies', async () => {
+    const text = await memoTextFor(bridgeFixture);
+    expect(text).toContain('Net to gross');
+    expect(text).toContain('Saleable to developed');
+  });
+
+  it('states the cost-area basis in words, so the reader knows which number priced the works', async () => {
+    expect(await memoTextFor(bridgeFixture)).toContain('Construction area derived from the area schedule');
+    expect(await memoTextFor(manualFixture)).toContain('Construction area entered manually');
+  });
+
+  it('discloses an unallocated balance rather than printing a bridge that appears to tie', async () => {
+    expect(await memoTextFor(unreconciledFixture)).toContain('300.0 m² of the developed area is unallocated');
+  });
+
+  it('says nothing about an unallocated balance when the schedule genuinely ties', async () => {
+    // available exactly matches unit NIA (200 m²), so unallocated is 0 -- the
+    // negative control for the disclosure test above.
+    const tiedFixture = v6Inputs({
+      areas: {
+        basis: 'bridge_derived',
+        existing_gia_sqm: 200,
+        demolished_gia_sqm: 0,
+        extension_gia_sqm: 0,
+        retained_commercial_gia_sqm: 0,
+        untouched_gia_sqm: 0,
+        circulation_common_sqm: 0,
+        plant_riser_sqm: 0,
+        store_bin_cycle_sqm: 0,
+        amenity_sqm: 0,
+        external_amenity_sqm: 0,
+      },
+    });
+    const text = await memoTextFor(tiedFixture);
+    expect(text).not.toContain('is unallocated');
+  });
+
+  it('splits GDV into internal saleable and ancillary', async () => {
+    const text = await memoTextFor(ancillaryFixture);
+    expect(text).toContain('Internal saleable value');
+    expect(text).toContain('Parking, balconies and terraces');
+  });
+
+  it('no longer claims parking and external space are excluded pending a later release', async () => {
+    // Spec §3.1 carried "until valued separately in R3" from R1 to R8. R9 pays
+    // it off; the memo must not still be promising it. Zero-count, per the R8
+    // memo-release-gate lesson.
+    expect(await memoTextFor(ancillaryFixture)).not.toContain('valued separately');
+  });
+
+  it('never prints a null ratio as 0%', async () => {
+    // A v2-shaped document (baseInputs() itself, unmigrated) has no `areas`
+    // block at all, so `developed_gia_sqm` is 0 and every one of the three
+    // ratios is null.
+    const run = runAppraisal(baseInputs());
+    expect(run.metrics.area_bridge.nia_to_gia_pct).toBeNull();
+    expect(run.metrics.area_bridge.nia_to_proposed_gia_pct).toBeNull();
+    expect(run.metrics.area_bridge.saleable_to_developed_pct).toBeNull();
+    const text = await memoTextFor(baseInputs());
+    expect(text).toContain('Net to gross');
+    // documentText is one drawn item per line: other, unrelated percentages
+    // in this same document legitimately end in "0.0%" (e.g. "100.0%",
+    // "10.0%"), so the check is for a *cell* reading exactly "0.0%", not the
+    // substring — which every one of those would also, spuriously, contain.
+    expect(text.split('\n')).not.toContain('0.0%');
   });
 });

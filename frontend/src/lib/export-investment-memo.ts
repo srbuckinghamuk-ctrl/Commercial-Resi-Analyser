@@ -19,6 +19,8 @@ import {
 } from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
 import type { Jurisdiction } from './tax/acquisition-tax';
+import type { ProposedUnit, ProposedUnitV6, UnitAncillary } from './conversion-types';
+import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 
 // ── This memo consumes the finished AppraisalRun only ─────
 //
@@ -341,6 +343,16 @@ export function generateInvestmentMemo(
   const totalSqm = inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0);
   const totalSqft = sqmToSqft(totalSqm);
   const unitCount = inputs.unit_mix.units.length;
+
+  // R9 (spec §15). The one place the memo reads areas from — never
+  // `conversion_costs.total_construction_sqm` directly (eslint-enforced, spec
+  // §15.4). Every figure below is read off `bridge`/`metrics`, not recomputed.
+  const bridge = metrics.area_bridge;
+
+  /** A pre-v6 document has units with no `ancillary` block at all. */
+  function unitAncillaryOf(u: ProposedUnit | ProposedUnitV6): UnitAncillary {
+    return 'ancillary' in u ? u.ancillary : DEFAULT_UNIT_ANCILLARY;
+  }
 
   // ── Text style: the one place font, weight and colour are set ────────────
   //
@@ -928,12 +940,14 @@ export function generateInvestmentMemo(
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['Unit', 'Type', 'NIA (m²)', 'NIA (sq ft)', 'Est. Value', '£/sq ft', 'Notes']],
+    head: [['Unit', 'Type', 'NIA (m²)', 'NIA (sq ft)', 'Balcony/Terrace (m²)', 'Parking (spaces)', 'Est. Value', '£/sq ft', 'Notes']],
     body: inputs.unit_mix.units.map((u, i) => [
       `${i + 1}`,
       unitLabel(u.type),
       u.floor_area_sqm.toLocaleString(),
       sqmToSqft(u.floor_area_sqm).toLocaleString(),
+      unitAncillaryOf(u).balcony_terrace_sqm.toLocaleString(),
+      unitAncillaryOf(u).parking_spaces.toLocaleString(),
       fmt(u.estimated_value_pence),
       perSqftPence(u.estimated_value_pence, u.floor_area_sqm),
       u.comparable_notes || '—',
@@ -943,6 +957,8 @@ export function generateInvestmentMemo(
       `${unitCount} units`,
       totalSqm.toLocaleString(),
       totalSqft.toLocaleString(),
+      '',
+      '',
       fmt(metrics.gdv_pence),
       perSqftPence(metrics.gdv_pence, totalSqm),
       '',
@@ -958,9 +974,94 @@ export function generateInvestmentMemo(
       3: { halign: 'right' },
       4: { halign: 'right' },
       5: { halign: 'right' },
+      6: { halign: 'right' },
+      7: { halign: 'right' },
     },
   });
   y = lastAutoTableFinalY(doc) + 6;
+
+  // ── Area Schedule (R9, spec §15) ──────────────────────────────────────────
+  //
+  // Rows mirror AreasPage's own reconciliation table exactly (same labels,
+  // same sign convention: a "less X" row is passed in already negative). The
+  // caption states which number priced the works in words, because a reader
+  // who cannot tell that is a reader who might price the works off the wrong
+  // figure (spec §15.3/§15.4).
+  y = subHeading(y, 'Area Schedule');
+  y = captionText(
+    y,
+    bridge.basis === 'bridge_derived'
+      ? 'Construction area derived from the area schedule.'
+      : 'Construction area entered manually; the area schedule below is recorded but does not price the works.',
+  );
+
+  const AREA_SCHEDULE_TOTAL_ROWS = new Set([
+    'Proposed GIA', 'Developed area', 'Available for units', 'Unallocated',
+  ]);
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [['Area Reconciliation', 'm²']],
+    body: ([
+      ['Existing GIA', bridge.existing_gia_sqm],
+      ['less demolished', -bridge.demolished_gia_sqm],
+      ['plus extension', bridge.extension_gia_sqm],
+      ['Proposed GIA', bridge.proposed_gia_sqm],
+      ['less retained commercial', -bridge.retained_commercial_gia_sqm],
+      ['less untouched', -bridge.untouched_gia_sqm],
+      ['Developed area', bridge.developed_gia_sqm],
+      ['less circulation', -bridge.circulation_common_sqm],
+      ['less plant', -bridge.plant_riser_sqm],
+      ['less storage', -bridge.store_bin_cycle_sqm],
+      ['less amenity', -bridge.amenity_sqm],
+      ['Available for units', bridge.available_for_units_sqm],
+      ['less unit NIA', -bridge.unit_nia_sqm],
+      ['Unallocated', bridge.unallocated_sqm],
+    ] as Array<[string, number]>).map(([label, value]) => [label, value.toFixed(1)]),
+    styles: { fontSize: 9, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    columnStyles: { 1: { halign: 'right' } },
+    didParseCell(data) {
+      if (data.section === 'body' && AREA_SCHEDULE_TOTAL_ROWS.has(String(data.cell.raw))) {
+        data.cell.styles.fillColor = [241, 245, 249];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+  });
+  y = lastAutoTableFinalY(doc) + 4;
+
+  y = subHeading(y, 'Area Efficiencies');
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [['Efficiency', 'Ratio']],
+    // A null ratio (zero denominator) prints as an em dash, never as 0% — a
+    // printed 0% would assert a figure the engine explicitly declined to
+    // produce (spec §15.2).
+    body: [
+      ['Net to gross', fmtPctSafe(bridge.nia_to_gia_pct, '—')],
+      ['NIA to proposed GIA', fmtPctSafe(bridge.nia_to_proposed_gia_pct, '—')],
+      ['Saleable to developed', fmtPctSafe(bridge.saleable_to_developed_pct, '—')],
+    ],
+    styles: { fontSize: 9, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    columnStyles: { 1: { halign: 'right' } },
+  });
+  y = lastAutoTableFinalY(doc) + 4;
+
+  // Disclosure, not a schedule that merely appears to tie (spec §15.7): a
+  // zeroed bridge (basis manual, nothing entered) is guarded out here exactly
+  // as it is in validateInputs — a real unit schedule must not be judged
+  // against a "0 m² building" nobody is reconciling against.
+  if (bridge.developed_gia_sqm > 0 && bridge.unallocated_sqm > bridge.developed_gia_sqm * 0.10) {
+    y = captionText(
+      y,
+      `${bridge.unallocated_sqm.toFixed(1)} m² of the developed area is unallocated — `
+      + 'see the area schedule above.',
+    );
+  }
 
   y = subHeading(y, 'Planning Position');
   if (eligibility) {
@@ -1022,6 +1123,11 @@ export function generateInvestmentMemo(
     head: [['Item', 'Amount']],
     body: [
       ['Gross Development Value (GDV)', fmt(metrics.gdv_pence)],
+      // R9 (spec §3.1): the total split into its two components. `gdv_pence`
+      // above remains the sum of both — neither figure below is computed
+      // here, both are read straight off the run.
+      ['  Internal saleable value', fmt(metrics.gdv_internal_pence)],
+      ['  Parking, balconies and terraces', fmt(metrics.gdv_ancillary_pence)],
       ['Blended £/sq ft', perSqftPence(metrics.gdv_pence, totalSqm)],
       [
         'Lender-Underwritten GDV',
@@ -2002,7 +2108,14 @@ export function generateInvestmentMemo(
       : `This document records no jurisdiction, so ${JURISDICTION_LABEL[tax.jurisdiction]} `
         + 'has been assumed rather than evidenced, and the regime above is an assumption not a finding. ')
     + 'Reliefs, linked transactions and multiple dwellings relief are not modelled.',
-    'Areas are taken from the unit schedule and the entered construction area. There is no reconciled area bridge between existing GIA, proposed GIA, net internal area and saleable area.',
+    // R9 (spec §15). This line used to say there was no reconciled area
+    // bridge at all — true before R9, false once one is entered, and a false
+    // limitation is the same fault the acquisition-tax sentence above was
+    // fixed for. A document that has not entered one is still exactly the
+    // pre-R9 case, so it keeps (a corrected version of) the old wording.
+    bridge.developed_gia_sqm > 0
+      ? 'Areas rest on the entered area schedule (Section 3), reconciled from existing GIA through to net internal area; see that schedule for every entered and derived line and the stated basis of the construction cost area.'
+      : 'No area schedule has been entered for this appraisal. Areas are taken from the unit schedule and the entered construction area only, with no existing-to-developed reconciliation to check them against.',
     'Technical, title, occupation and planning due diligence is recorded as narrative and as a free-form risk register, not as an evidenced schedule with status, owner and date.',
   ];
   if (metrics.lender_gdv_pence === null) {
@@ -2053,8 +2166,17 @@ export function generateInvestmentMemo(
 
   // A heading queued with nothing after it would otherwise never be drawn. It
   // is a defect if this ever fires, but a silently missing heading is worse
-  // than one sitting alone at the end of the document.
-  y = flushHeadings(y, 0);
+  // than one sitting alone at the end of the document. Guarded on there being
+  // one at all (R9 fix): `flushHeadings` always re-runs its own page-break
+  // check, even with nothing to place, and running that check here -- after
+  // the very last block has already been drawn, with nothing left to keep
+  // together -- produced a genuinely blank trailing page whenever the
+  // Limitations table's foot happened to end past CONTENT_BOTTOM. Nothing
+  // pending means nothing to flush, so there is nothing here that should ever
+  // force a page break.
+  if (pendingHeadings.length > 0) {
+    y = flushHeadings(y, 0);
+  }
 
   // ── Footer on all pages ──
   addPageFooter();

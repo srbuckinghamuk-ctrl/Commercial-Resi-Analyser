@@ -79,7 +79,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 ### 3.1 Developer GDV [R1]
 
 - **Formula:** Σ `unit.estimated_value_pence` over all proposed units (developer values).
-- **Included:** internal saleable unit values only. **Excluded:** parking/external space (until valued separately in R3), retained-commercial value, rental income.
+- **Included:** internal saleable unit values, plus ancillary value (parking, balconies and terraces) reported as a separate component. **Excluded:** retained-commercial value, rental income. [R9 — calc 2.8.0. Before it, this line excluded parking and external space "until valued separately in R3". R3 shipped without it and the pointer stood unpaid through R8; the exclusion is now removed rather than repointed, because the values are modelled.]
 - **Timing:** point value at practical completion; not indexed.
 - **Gross/net:** gross of selling costs.
 - **Assumptions:** unit values are the developer's own estimates; comparable basis recorded per unit.

@@ -16,6 +16,7 @@ import {
   qaProject, qaEligibility, sellAllInputs, retainAllInputs,
   refinanceInputs, blendedInputs, legacyV1Snapshot,
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
+  bridgeAndAncillaryInputs,
 } from './memo-fixtures';
 
 /**
@@ -86,6 +87,11 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   ['wales (LTT)', welshInputs],
   ['scotland (LBTT)', scottishInputs],
   ['unconfirmed jurisdiction', unconfirmedJurisdictionInputs],
+  // R9 (Task 11, spec §15). A populated, bridge-derived area schedule with a
+  // material unallocated balance and per-unit ancillary value — the layout
+  // sweep above never exercised the area-schedule table, the efficiency
+  // ratios, the unallocated disclosure or the GDV split before this fixture.
+  ['area bridge + ancillary', bridgeAndAncillaryInputs],
 ];
 
 describe('investment memorandum release gate', () => {
@@ -557,5 +563,38 @@ describe('investment memorandum release gate', () => {
     const first = await report(sellAllInputs());
     const second = await report(sellAllInputs());
     expect(describeLayout(second.info)).toBe(describeLayout(first.info));
+  });
+
+  // ── R9: the area bridge and the GDV split (Task 11, spec §15) ────────────
+
+  it('states the manual cost-area basis in words for a document with no area schedule', async () => {
+    // sellAllInputs() carries no `areas` block at all (every standing route
+    // fixture above predates R9), which resolves to the manual basis with a
+    // zeroed bridge — exactly what migration writes for every pre-R9 document.
+    const { info, run } = await report(sellAllInputs());
+    expect(run.metrics.area_bridge.basis).toBe('manual');
+    expect(documentText(info)).toContain('Construction area entered manually');
+  });
+
+  it('prints the reconciliation, the efficiencies and the GDV split for a populated bridge', async () => {
+    const { info, run } = await report(bridgeAndAncillaryInputs());
+    expect(run.metrics.area_bridge.basis).toBe('bridge_derived');
+    const text = documentText(info);
+    expect(text).toContain('Construction area derived from the area schedule');
+    expect(text).toContain('Proposed GIA');
+    expect(text).toContain('Developed area');
+    expect(text).toContain('Net to gross');
+    expect(text).toContain('Saleable to developed');
+    expect(text).toContain('Internal saleable value');
+    expect(text).toContain('Parking, balconies and terraces');
+    // Fixture geometry (see memo-fixtures.ts doc comment): 50 m² of the 400 m²
+    // developed area, 12.5%, comfortably over the 10% materiality line.
+    expect(run.metrics.area_bridge.unallocated_sqm).toBe(50);
+    expect(text).toContain('50.0 m² of the developed area is unallocated');
+    // R9 pays off the stale "until valued separately in R3" promise (spec
+    // §3.1) — a zero-count assertion, not a substring check, because the
+    // memo containing the *correct* new copy would sail straight past a
+    // `toContain` for it while the stale promise sat right beside it.
+    expect(text).not.toContain('valued separately');
   });
 });
