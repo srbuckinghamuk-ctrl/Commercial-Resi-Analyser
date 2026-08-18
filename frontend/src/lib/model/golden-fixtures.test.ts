@@ -297,7 +297,28 @@ describe('golden fixtures (shared with the Python engine)', () => {
       const after = runAppraisal(migrated);
 
       expect(migrated.inputs_version).toBe(6);
-      expect(migrated.areas.basis).toBe('manual');
+
+      // Fix round 2. The before/after comparison below cannot see this yet: no
+      // engine module reads `areas` until Task 4 wires it into the cost stack,
+      // so a migration that wrongly SYNTHESISED a bridge (e.g. from
+      // `conversion_costs.total_construction_sqm`) would move no figure today
+      // and would sail through a purely numeric gate — then silently change
+      // every appraisal the moment Task 4 lands. Asserted by value rather than
+      // against DEFAULT_AREA_BRIDGE: comparing the migration's output to the
+      // constant it was built from could not catch that constant itself
+      // becoming non-zero. Mirrors _assert_zeroed_r9_blocks in
+      // tests/test_migrate_v6.py.
+      const { basis, ...areaFigures } = migrated.areas;
+      expect(basis).toBe('manual');
+      for (const [field, value] of Object.entries(areaFigures)) {
+        expect(value, `areas.${field} must migrate zeroed, not synthesised`).toBe(0);
+      }
+      for (const unit of migrated.unit_mix.units) {
+        for (const [field, value] of Object.entries(unit.ancillary)) {
+          expect(value, `unit ${unit.id} ancillary.${field} must migrate zeroed`).toBe(0);
+        }
+      }
+
       expect(after.metrics).toEqual(before.metrics);
       // The metrics object is the headline, but a migration defect could
       // equally move a ledger or schedule figure the metrics never surface.
@@ -305,6 +326,14 @@ describe('golden fixtures (shared with the Python engine)', () => {
       expect(after.schedule).toEqual(before.schedule);
     },
   );
+
+  // Non-vacuity guard, mirroring the Python gate's `len(names) == 8`. The
+  // corpus is loaded by directory scan, so a fixture that is deleted, renamed
+  // or never committed would silently shrink the it.each table above to
+  // nothing rather than failing.
+  it('runs the v6 identity gate over the whole pipeline corpus, not an empty one', () => {
+    expect(appraisalFixtures).toHaveLength(8);
+  });
 });
 
 describe('Fixture K — sensitivity suite (spec §12)', () => {

@@ -1,4 +1,6 @@
-import type { CalculatorInputs, FinanceInputs, ProposedUnitV6 } from '../conversion-types';
+import type {
+  CalculatorInputs, FinanceInputs, ProposedUnit, ProposedUnitV6, UnitMixInputsV6,
+} from '../conversion-types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6,
@@ -461,6 +463,31 @@ export function migrateInputsToV5(
  * existing GIA the record never stated would be inventing evidence, the same
  * reasoning that leaves R8's `acquisition_date` null rather than stamping today.
  */
+/**
+ * Gives every unit a zeroed `ancillary` block, keeping any values a unit
+ * already carries. Extracted because BOTH v6 write paths need it — the
+ * migration below and `migrateInputsToV6`'s already-v6 merge branch — and
+ * fix round 2 found the merge branch had been taking `saved.unit_mix` verbatim,
+ * so a stored v6 unit missing `ancillary` kept a type-required field absent.
+ * Python's twin default-fills it through `CalculatorInputsV6.model_validate`,
+ * so the two engines disagreed on that document. One helper, both call sites.
+ *
+ * `unitMix` is optional for the same parity reason: `migrate_v5_to_v6` reads
+ * `doc.get("unit_mix") or {}` and yields empty units for a document that has
+ * none, where this used to throw on `unit_mix.units`.
+ */
+function unitsWithAncillary(unitMix: { units?: readonly ProposedUnit[] } | null | undefined): UnitMixInputsV6 {
+  return {
+    units: (unitMix?.units ?? []).map((u) => ({
+      ...u,
+      ancillary: {
+        ...DEFAULT_UNIT_ANCILLARY,
+        ...((u as Partial<ProposedUnitV6>).ancillary ?? {}),
+      },
+    })),
+  };
+}
+
 export function migrateV5toV6(v5: CalculatorInputsV5): CalculatorInputsV6 {
   if (isV6(v5 as unknown as Record<string, unknown>)) {
     throw new Error('migrateV5toV6: input is already a v6 document');
@@ -471,15 +498,7 @@ export function migrateV5toV6(v5: CalculatorInputsV5): CalculatorInputsV6 {
     ...rest,
     inputs_version: 6,
     areas: { ...DEFAULT_AREA_BRIDGE, ...(existingAreas ?? {}) },
-    unit_mix: {
-      units: unit_mix.units.map((u) => ({
-        ...u,
-        ancillary: {
-          ...DEFAULT_UNIT_ANCILLARY,
-          ...((u as Partial<ProposedUnitV6>).ancillary ?? {}),
-        },
-      })),
-    },
+    unit_mix: unitsWithAncillary(unit_mix),
   };
 }
 
@@ -528,7 +547,11 @@ export function migrateInputsToV6(
       inputs_version: 6,
       areas: { ...defaults.areas, ...(saved.areas ?? {}) },
       acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
-      unit_mix: saved.unit_mix ?? defaults.unit_mix,
+      // Fix round 2: default-filled per unit, not taken verbatim. A stored v6
+      // unit that predates the ancillary block (or a hand-edited row) would
+      // otherwise keep a type-required field absent here, where Python's
+      // model_validate fills it — a silent cross-engine divergence.
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
       conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
       finance: { ...defaults.finance, ...(saved.finance ?? {}) },
       equity_sources: saved.equity_sources ?? defaults.equity_sources,

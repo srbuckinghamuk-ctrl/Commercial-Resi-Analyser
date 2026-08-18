@@ -5,7 +5,9 @@ import {
   migrateV4toV5, migrateInputsToV5,
   migrateV5toV6, migrateInputsToV6,
 } from './migrate';
-import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4 } from './finance-types';
+import type {
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
+} from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 const V1_SNAPSHOT = {
@@ -378,6 +380,58 @@ describe('R9 — v5 to v6 migration', () => {
   it('merges an already-v6 document onto v6 defaults rather than re-migrating', () => {
     const saved = { ...migrateV5toV6(v5), project_id: 'kept' };
     expect(migrateInputsToV6(saved as never).project_id).toBe('kept');
+  });
+
+  // Fix round 2, Important 2. Both engines must agree on these two shapes, or
+  // the parity rules this codebase runs on are decorative. Python's twins are
+  // test_v6_merge_branch_default_fills_a_unit_missing_its_ancillary_block and
+  // test_v5_document_with_no_unit_mix_migrates_to_empty_units.
+  it('default-fills ancillary on a saved v6 unit that has none, as Python does', () => {
+    const v6 = migrateV5toV6(v5);
+    const saved = {
+      ...v6,
+      unit_mix: { units: [
+        { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '' },
+      ] },
+    } as unknown as Record<string, unknown>;
+
+    const merged = migrateInputsToV6(saved);
+
+    expect(merged.unit_mix.units[0].ancillary).toEqual({
+      balcony_terrace_sqm: 0,
+      balcony_terrace_value_pence: 0,
+      parking_spaces: 0,
+      parking_value_pence: 0,
+    });
+  });
+
+  it('keeps the ancillary values a saved v6 unit already carries', () => {
+    const v6 = migrateV5toV6(v5);
+    const saved = {
+      ...v6,
+      unit_mix: { units: [
+        {
+          id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000,
+          comparable_notes: '', ancillary: { balcony_terrace_sqm: 8, parking_spaces: 2 },
+        },
+      ] },
+    } as unknown as Record<string, unknown>;
+
+    const merged = migrateInputsToV6(saved);
+
+    expect(merged.unit_mix.units[0].ancillary).toEqual({
+      balcony_terrace_sqm: 8,
+      balcony_terrace_value_pence: 0,
+      parking_spaces: 2,
+      parking_value_pence: 0,
+    });
+  });
+
+  it('migrates a v5 document with no unit_mix to empty units rather than throwing', () => {
+    // migrate_v5_to_v6 reads `doc.get("unit_mix") or {}` and yields [];
+    // this used to throw on `unit_mix.units`.
+    const noUnitMix = { ...v5, unit_mix: undefined } as unknown as CalculatorInputsV5;
+    expect(migrateV5toV6(noUnitMix).unit_mix.units).toEqual([]);
   });
 
   it('refuses a v6 document through the v5 entry point', () => {

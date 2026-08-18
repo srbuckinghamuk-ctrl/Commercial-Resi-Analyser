@@ -168,6 +168,53 @@ def test_v5_to_v6_preserves_pre_existing_areas_and_ancillary(v1_doc):
     assert v6.unit_mix.units[0].ancillary.parking_value_pence == 0
 
 
+def test_v6_merge_branch_default_fills_a_unit_missing_its_ancillary_block(v1_doc):
+    """Fix round 2, Important 2. Python default-fills this through
+    CalculatorInputsV6.model_validate; the TS merge branch took saved.unit_mix
+    verbatim and left the field absent. This pins the Python half of the
+    agreement -- its TS twin is 'default-fills ancillary on a saved v6 unit
+    that has none, as Python does' in migrate.test.ts."""
+    saved = migrate_v5_to_v6(_v5(v1_doc)).model_dump(mode="json")
+    saved["unit_mix"] = {"units": [{
+        "id": "u1", "type": "1bed", "floor_area_sqm": 50.0,
+        "estimated_value_pence": 25_000_000, "comparable_notes": "",
+    }]}
+
+    merged = migrate_inputs_to_v6(saved)
+
+    assert merged.unit_mix.units[0].ancillary.model_dump() == {
+        "balcony_terrace_sqm": 0.0,
+        "balcony_terrace_value_pence": 0,
+        "parking_spaces": 0,
+        "parking_value_pence": 0,
+    }
+
+
+def test_v6_merge_branch_keeps_ancillary_a_unit_already_carries(v1_doc):
+    saved = migrate_v5_to_v6(_v5(v1_doc)).model_dump(mode="json")
+    saved["unit_mix"] = {"units": [{
+        "id": "u1", "type": "1bed", "floor_area_sqm": 50.0,
+        "estimated_value_pence": 25_000_000, "comparable_notes": "",
+        "ancillary": {"balcony_terrace_sqm": 8.0, "parking_spaces": 2},
+    }]}
+
+    merged = migrate_inputs_to_v6(saved)
+
+    anc = merged.unit_mix.units[0].ancillary
+    assert anc.balcony_terrace_sqm == 8.0
+    assert anc.parking_spaces == 2
+    assert anc.parking_value_pence == 0
+
+
+def test_v5_document_with_no_unit_mix_migrates_to_empty_units(v1_doc):
+    """The other half of the fix-round-2 parity pair: TS's migrateV5toV6 threw
+    on `unit_mix.units` for a document carrying no unit_mix, where this returns
+    empty units. Both now return empty units."""
+    doc = _v5(v1_doc).model_dump(mode="json")
+    del doc["unit_mix"]
+    assert migrate_v5_to_v6(doc).unit_mix.units == []
+
+
 def test_migrate_inputs_to_v5_refuses_a_v6_document(v1_doc):
     """The v6 half of migrate_inputs_to_v4's is_v5 refusal. The unrecognised-
     version roster fires first (6 is not in (1,2,3,4,5)), which is itself the
@@ -219,6 +266,35 @@ def _pipeline_fixtures():
         yield path.name, doc
 
 
+def _assert_zeroed_r9_blocks(migrated, name):
+    """Fix round 2, Important 1. The before/after comparison below cannot see
+    this yet: no engine module reads ``areas`` until Task 4 wires it into the
+    cost stack, so a migration that wrongly SYNTHESISED a bridge (e.g. from
+    ``conversion_costs.total_construction_sqm``) would move no figure today and
+    would sail through a purely numeric gate -- then silently change every
+    appraisal the moment Task 4 lands.
+
+    So the structural half of the claim is asserted directly, and by value
+    rather than against DEFAULT_AREA_BRIDGE: comparing the migration's output
+    to the same constant it was built from could not catch that constant
+    itself becoming non-zero.
+    """
+    areas = migrated.areas.model_dump()
+    assert areas.pop("basis") == "manual", (
+        f"{name}: migration must leave the manual basis in force, so the cost "
+        f"area stays conversion_costs.total_construction_sqm"
+    )
+    for field, value in areas.items():
+        assert value == 0, f"{name}: migration synthesised areas.{field} = {value!r}, expected 0"
+
+    for unit in migrated.unit_mix.units:
+        anc = unit.ancillary.model_dump()
+        for field, value in anc.items():
+            assert value == 0, (
+                f"{name}: unit {unit.id} migrated with ancillary.{field} = {value!r}, expected 0"
+            )
+
+
 def test_v6_migration_moves_no_existing_figure():
     """The acceptance gate for R9's migration: every existing fixture, run
     before and after migration to v6, must produce identical output.
@@ -229,8 +305,10 @@ def test_v6_migration_moves_no_existing_figure():
     names = []
     for name, doc in _pipeline_fixtures():
         names.append(name)
+        migrated = migrate_inputs_to_v6(doc["inputs"])
+        _assert_zeroed_r9_blocks(migrated, name)
         before = run_appraisal(parse_calculator_inputs(doc["inputs"]))
-        after = run_appraisal(migrate_inputs_to_v6(doc["inputs"]))
+        after = run_appraisal(migrated)
         # asdict, not model_dump: AppraisalResultV2 is a dataclass on the
         # Python side, not a Pydantic model.
         assert asdict(before.metrics) == asdict(after.metrics), (
