@@ -22,8 +22,37 @@ from .types import (
 )
 
 
+def unit_ancillary_value_pence(u: ProposedUnit) -> int:
+    """R9 spec Sec 15.5 -- a unit's ancillary value. A pre-v6 unit carries no
+    ``ancillary`` attribute at all, read structurally with getattr (matching
+    areas.py's version-dispatch idiom) and resolving to zero."""
+    anc = getattr(u, "ancillary", None)
+    if anc is None:
+        return 0
+    return anc.parking_value_pence + anc.balcony_terrace_value_pence
+
+
+@dataclass(frozen=True)
+class GdvBreakdown:
+    # Internal saleable unit values -- the pre-R9 figure, unchanged.
+    internal_pence: int
+    # Parking plus balcony/terrace. Reported separately, never folded into
+    # internal saleable value (spec Sec 3.1, which this release rewrites).
+    ancillary_pence: int
+    total_pence: int
+
+
+def calculate_gdv_breakdown(units: list[ProposedUnit]) -> GdvBreakdown:
+    internal = sum(u.estimated_value_pence for u in units)
+    ancillary = sum(unit_ancillary_value_pence(u) for u in units)
+    return GdvBreakdown(internal_pence=internal, ancillary_pence=ancillary, total_pence=internal + ancillary)
+
+
 def calculate_gdv(units: list[ProposedUnit]) -> int:
-    return sum(u.estimated_value_pence for u in units)
+    """Total developer GDV. Retained as the total so every existing caller is
+    unaffected by the R9 split; use calculate_gdv_breakdown where the parts
+    matter."""
+    return calculate_gdv_breakdown(units).total_pence
 
 
 def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
@@ -234,7 +263,10 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         sold_units = list(units)
     else:
         sold_units = [u for u in units if u.id not in retained_ids]
-    gross_sales = sum(u.estimated_value_pence for u in sold_units)
+    # R9 spec Sec 15.5: ancillary sells with its unit. Summing internal value
+    # alone here would make GDV and gross receipts disagree by the ancillary
+    # total.
+    gross_sales = sum(u.estimated_value_pence + unit_ancillary_value_pence(u) for u in sold_units)
     gdv = calculate_gdv(units)
     retained_value = gdv - gross_sales
 

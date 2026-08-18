@@ -12,13 +12,23 @@ from app.financial_model.migrate import (
     migrate_v2_to_v3,
     migrate_v3_to_v4,
 )
-from app.financial_model.schedule import build_schedule
+from app.financial_model.schedule import (
+    calculate_gdv,
+    calculate_gdv_breakdown,
+    build_schedule,
+    unit_ancillary_value_pence,
+)
 from app.financial_model.types import (
     AreaBridgeInputs,
     CalculatorInputsV3,
     CalculatorInputsV4,
+    ProposedUnit,
+    ProposedUnitV6,
+    RetainedUnit,
     SalesPhasingInputs,
     SalesPhasingTranche,
+    UnitAncillary,
+    UnitMixInputsV6,
 )
 
 PROGRAMME = {
@@ -189,3 +199,80 @@ class TestBuildScheduleResolvesItsCostAreaThroughTheAccessor:
             }),
         })
         assert build_schedule(inputs).totals.construction_pence == 22_000_000
+
+
+# R9 Task 6 -- mirror of conversion-calc-engine.test.ts's
+# 'R9 -- GDV splits internal saleable from ancillary' describe block.
+_ANCILLARY_UNITS = [
+    ProposedUnitV6(
+        id="u1", type="1bed", floor_area_sqm=50, estimated_value_pence=25_000_000,
+        comparable_notes="",
+        ancillary=UnitAncillary(
+            balcony_terrace_sqm=6, balcony_terrace_value_pence=400_000,
+            parking_spaces=1, parking_value_pence=1_200_000,
+        ),
+    ),
+    ProposedUnitV6(
+        id="u2", type="1bed", floor_area_sqm=50, estimated_value_pence=24_500_000,
+        comparable_notes="",
+        ancillary=UnitAncillary(
+            balcony_terrace_sqm=0, balcony_terrace_value_pence=0,
+            parking_spaces=1, parking_value_pence=1_200_000,
+        ),
+    ),
+]
+
+
+class TestGdvSplitsInternalSaleableFromAncillary:
+    def test_reports_internal_and_ancillary_separately(self):
+        b = calculate_gdv_breakdown(_ANCILLARY_UNITS)
+        assert b.internal_pence == 49_500_000
+        assert b.ancillary_pence == 2_800_000
+        assert b.total_pence == 52_300_000
+
+    def test_keeps_calculate_gdv_as_the_total_so_existing_callers_are_unaffected(self):
+        assert calculate_gdv(_ANCILLARY_UNITS) == 52_300_000
+
+    def test_treats_a_pre_v6_unit_with_no_ancillary_block_as_zero_ancillary(self):
+        legacy = [ProposedUnit(
+            id="u1", type="1bed", floor_area_sqm=50, estimated_value_pence=25_000_000,
+            comparable_notes="",
+        )]
+        b = calculate_gdv_breakdown(legacy)
+        assert b.ancillary_pence == 0
+        assert b.total_pence == 25_000_000
+        assert unit_ancillary_value_pence(legacy[0]) == 0
+
+    def test_sums_parking_and_balcony_terrace_value_for_a_single_unit(self):
+        assert unit_ancillary_value_pence(_ANCILLARY_UNITS[0]) == 1_600_000
+        assert unit_ancillary_value_pence(_ANCILLARY_UNITS[1]) == 1_200_000
+
+
+class TestAncillaryValueFlowsIntoSaleReceipts:
+    """Mirror of schedule.test.ts's 'R9 -- ancillary value flows into sale
+    receipts' describe block."""
+
+    @staticmethod
+    def _make_v6_inputs(route: str, retained_ids: list[str] | None = None):
+        inputs = _v6()
+        return inputs.model_copy(update={
+            "unit_mix": UnitMixInputsV6(units=_ANCILLARY_UNITS),
+            "exit_strategy": inputs.exit_strategy.model_copy(update={
+                "route": route,
+                "retained_units": [
+                    RetainedUnit(unit_id=uid, monthly_rent_pence=0) for uid in (retained_ids or [])
+                ],
+            }),
+        })
+
+    def test_sells_a_unit_with_its_parking_and_balcony_value_attached(self):
+        # Without this, GDV and gross sale receipts disagree by the ancillary
+        # total and the appraisal no longer reconciles.
+        s = build_schedule(self._make_v6_inputs("sell_all"))
+        assert s.totals.gross_sales_pence == 52_300_000
+        assert s.totals.gdv_pence == 52_300_000
+
+    def test_leaves_a_retained_units_ancillary_out_of_receipts_but_inside_gdv(self):
+        s = build_schedule(self._make_v6_inputs("blended", ["u2"]))
+        assert s.totals.gross_sales_pence == 26_600_000  # u1 internal + u1 ancillary
+        assert s.totals.gdv_pence == 52_300_000

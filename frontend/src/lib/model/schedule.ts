@@ -1,6 +1,6 @@
 import type { AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, Schedule } from './finance-types';
 import {
-  calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost,
+  calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost, unitAncillaryValuePence,
 } from '../conversion-calc-engine';
 import { developedAreaSqm } from './areas';
 import { spreadByCurve } from './curves';
@@ -91,7 +91,11 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     route === 'retain_all' ? [] :
     route === 'sell_all' ? units :
     units.filter((u) => !retainedIds.has(u.id));
-  const grossSales = soldUnits.reduce((s, u) => s + u.estimated_value_pence, 0);
+  // R9 spec §15.5: ancillary sells with its unit. Summing internal value alone
+  // here would make GDV and gross receipts disagree by the ancillary total.
+  const grossSales = soldUnits.reduce(
+    (s, u) => s + u.estimated_value_pence + unitAncillaryValuePence(u), 0,
+  );
   const gdv = calculateGdv(units);
   const retainedValue = gdv - grossSales;
 

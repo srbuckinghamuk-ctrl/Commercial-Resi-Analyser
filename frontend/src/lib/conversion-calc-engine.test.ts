@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   calculateGdv,
+  calculateGdvBreakdown,
+  unitAncillaryValuePence,
   calculateBrokerFee,
   calculateTotalAcquisitionCost,
   calculateTotalConstructionCost,
   calculateTotalProfessionalFees,
 } from './conversion-calc-engine';
-import type { ProposedUnit, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
+import type { ProposedUnit, ProposedUnitV6, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
 import { DEFAULT_CONVERSION_COSTS } from './conversion-defaults';
 import { DEFAULT_AREA_BRIDGE } from './model/areas';
 import type { CalculatorInputsV6 } from './model/finance-types';
@@ -184,6 +186,41 @@ describe('R9 — construction cost takes an explicit area', () => {
   it('rounds the fractional-area product once, before contingency (spec §1.1)', () => {
     // 520.5 x 50,000 = 26,025,000 exactly; +10% = 28,627,500; +300
     expect(calculateTotalConstructionCost(costs, 520.5)).toBe(28_627_800);
+  });
+});
+
+describe('R9 — GDV splits internal saleable from ancillary', () => {
+  const units: ProposedUnitV6[] = [
+    { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '',
+      ancillary: { balcony_terrace_sqm: 6, balcony_terrace_value_pence: 400_000, parking_spaces: 1, parking_value_pence: 1_200_000 } },
+    { id: 'u2', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 24_500_000, comparable_notes: '',
+      ancillary: { balcony_terrace_sqm: 0, balcony_terrace_value_pence: 0, parking_spaces: 1, parking_value_pence: 1_200_000 } },
+  ];
+
+  it('reports internal and ancillary separately', () => {
+    const b = calculateGdvBreakdown(units);
+    expect(b.internal_pence).toBe(49_500_000);
+    expect(b.ancillary_pence).toBe(2_800_000);
+    expect(b.total_pence).toBe(52_300_000);
+  });
+
+  it('keeps calculateGdv as the total, so existing callers are unaffected', () => {
+    expect(calculateGdv(units)).toBe(52_300_000);
+  });
+
+  it('treats a pre-v6 unit with no ancillary block as zero ancillary', () => {
+    const legacy: ProposedUnit[] = [
+      { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '' },
+    ];
+    const b = calculateGdvBreakdown(legacy);
+    expect(b.ancillary_pence).toBe(0);
+    expect(b.total_pence).toBe(25_000_000);
+    expect(unitAncillaryValuePence(legacy[0])).toBe(0);
+  });
+
+  it('sums parking and balcony/terrace value for a single unit', () => {
+    expect(unitAncillaryValuePence(units[0])).toBe(1_600_000);
+    expect(unitAncillaryValuePence(units[1])).toBe(1_200_000);
   });
 });
 

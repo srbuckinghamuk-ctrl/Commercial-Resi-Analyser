@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { buildSchedule, spreadStraightLine } from './schedule';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
-import type { CalculatorInputsV2 } from './finance-types';
-import { migrateInputsToV3, migrateInputsToV4, migrateV3toV4 } from './migrate';
+import type { CalculatorInputsV2, CalculatorInputsV6 } from './finance-types';
+import { migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4 } from './migrate';
+import type { ProposedUnitV6 } from '../conversion-types';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -174,6 +175,42 @@ describe('buildSchedule with a v4 programme', () => {
     // conservation: total construction spend (400 sqm × 150,000p, 0% contingency)
     // is unaffected by the clamp — relocated in-range, never dropped.
     expect(constructionByMonth.reduce((a, b) => a + b, 0)).toBe(60_000_000);
+  });
+});
+
+describe('R9 — ancillary value flows into sale receipts', () => {
+  // The two units from conversion-calc-engine.test.ts's
+  // 'R9 — GDV splits internal saleable from ancillary' describe block.
+  const units: ProposedUnitV6[] = [
+    { id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 25_000_000, comparable_notes: '',
+      ancillary: { balcony_terrace_sqm: 6, balcony_terrace_value_pence: 400_000, parking_spaces: 1, parking_value_pence: 1_200_000 } },
+    { id: 'u2', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 24_500_000, comparable_notes: '',
+      ancillary: { balcony_terrace_sqm: 0, balcony_terrace_value_pence: 0, parking_spaces: 1, parking_value_pence: 1_200_000 } },
+  ];
+
+  function makeV6Inputs(route: 'sell_all' | 'retain_all' | 'blended', retainedIds: string[] = []): CalculatorInputsV6 {
+    const inputs = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+    inputs.unit_mix = { units };
+    inputs.exit_strategy = {
+      ...inputs.exit_strategy,
+      route,
+      retained_units: retainedIds.map((id) => ({ unit_id: id, monthly_rent_pence: 0 })),
+    };
+    return inputs;
+  }
+
+  it('sells a unit with its parking and balcony value attached', () => {
+    // Without this, GDV and gross sale receipts disagree by the ancillary total
+    // and the appraisal no longer reconciles.
+    const s = buildSchedule(makeV6Inputs('sell_all'));
+    expect(s.totals.gross_sales_pence).toBe(52_300_000);
+    expect(s.totals.gdv_pence).toBe(52_300_000);
+  });
+
+  it('leaves a retained unit\'s ancillary out of receipts but inside GDV', () => {
+    const s = buildSchedule(makeV6Inputs('blended', ['u2']));
+    expect(s.totals.gross_sales_pence).toBe(26_600_000); // u1 internal + u1 ancillary
+    expect(s.totals.gdv_pence).toBe(52_300_000);
   });
 });
 
