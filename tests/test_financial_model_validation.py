@@ -4,26 +4,34 @@ frontend/src/lib/model/validation.test.ts (spec Sec 2, C1 -- round-2 review).
 Both implementations must agree with the spec, not merely with each other. If
 Python disagrees, the Python port is wrong -- never adjust these to make peace.
 """
+import pathlib
+
 import pydantic
 import pytest
 
 from app.financial_model import run_appraisal
+from app.financial_model.areas import DEFAULT_AREA_BRIDGE
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
     migrate_inputs_to_v5,
+    migrate_inputs_to_v6,
     migrate_v2_to_v3,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
+    AreaBridgeInputs,
     CalculatorInputsV2,
     CalculatorInputsV3,
     CalculatorInputsV4,
+    CalculatorInputsV6,
     EquitySource,
     LenderValuation,
     ProposedUnit,
+    ProposedUnitV6,
     RefinanceInputs,
+    UnitMixInputsV6,
 )
 from app.financial_model.validation import reconcile, validate_inputs
 
@@ -546,3 +554,315 @@ class TestAcquisitionTaxValidation:
         assert issue is not None
         assert issue.severity == "error"
         assert run.reconciliation.report_safe is False
+
+
+def make_v6_inputs(
+    *,
+    areas: dict | None = None,
+    units: list[dict] | None = None,
+    conversion_costs: dict | None = None,
+) -> CalculatorInputsV6:
+    """R9 (Task 8). A structurally-valid v6 document built off the migration
+    chain's own defaults -- the Python twin of validation.test.ts's
+    makeV6Inputs. Only `areas`/`units`/`conversion_costs` are accepted since
+    that is all the area-bridge suite needs."""
+    v6 = migrate_inputs_to_v6({"inputs_version": 1})
+    if areas is not None:
+        v6.areas = AreaBridgeInputs(**areas)
+    if conversion_costs is not None:
+        v6.conversion_costs = v6.conversion_costs.model_copy(update=conversion_costs)
+    if units is not None:
+        v6.unit_mix = UnitMixInputsV6(units=[
+            ProposedUnitV6(
+                id=u["id"],
+                type=u.get("type", "1bed"),
+                floor_area_sqm=u["floor_area_sqm"],
+                estimated_value_pence=u["estimated_value_pence"],
+                comparable_notes=u.get("comparable_notes", ""),
+            )
+            for u in units
+        ])
+    return v6
+
+
+def _negative_area(field_name: str) -> AreaBridgeInputs:
+    """AreaBridgeInputs fields all carry `Field(ge=0)`, so a negative value is
+    unreachable through the ordinary Pydantic boundary -- `model_construct`
+    bypasses validation, the same established idiom
+    TestValidateInputsLenderValuationHardErrors uses for LenderValuation, to
+    pin validate_inputs's defense-in-depth check as correct anyway."""
+    data = {**DEFAULT_AREA_BRIDGE, field_name: -1.0}
+    return AreaBridgeInputs.model_construct(**data)
+
+
+class TestAreaBridgeValidation:
+    """R9 (Task 8, spec Sec 15.6). Python twin of the 'R9 - area bridge
+    validation' describe block in validation.test.ts -- same fields,
+    severities and gating logic."""
+
+    AREA_FIELDS = [
+        "existing_gia_sqm", "demolished_gia_sqm", "extension_gia_sqm",
+        "retained_commercial_gia_sqm", "untouched_gia_sqm", "circulation_common_sqm",
+        "plant_riser_sqm", "store_bin_cycle_sqm", "amenity_sqm", "external_amenity_sqm",
+    ]
+
+    def test_hard_errors_on_a_negative_entered_area_for_every_bridge_field(self):
+        for field_name in self.AREA_FIELDS:
+            inputs = make_v6_inputs()
+            inputs.areas = _negative_area(field_name)
+            issues = validate_inputs(inputs)
+            assert any(
+                i.severity == "error" and i.field == f"areas.{field_name}" for i in issues
+            ), field_name
+
+    def test_does_not_hard_error_on_an_all_zero_bridge(self):
+        inputs = make_v6_inputs(areas={**DEFAULT_AREA_BRIDGE, "basis": "manual"})
+        issues = validate_inputs(inputs)
+        assert [i for i in issues if i.field.startswith("areas.")] == []
+
+    def test_hard_errors_when_the_bridge_basis_is_selected_with_no_bridge(self):
+        inputs = make_v6_inputs(areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived"})
+        issues = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "areas.existing_gia_sqm" for i in issues
+        ), issues
+
+    def test_no_error_once_the_bridge_produces_area(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1},
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.existing_gia_sqm" for i in issues)
+
+    def test_hard_errors_when_demolition_exceeds_the_existing_building(self):
+        inputs = make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived",
+            "existing_gia_sqm": 100, "demolished_gia_sqm": 150,
+        })
+        issues = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "areas.demolished_gia_sqm" for i in issues
+        )
+
+    def test_no_error_when_demolition_exactly_consumes_the_existing_building(self):
+        inputs = make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived",
+            "existing_gia_sqm": 100, "demolished_gia_sqm": 100,
+        })
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.demolished_gia_sqm" for i in issues)
+
+    def test_hard_errors_when_retained_and_untouched_exceed_proposed_gia(self):
+        inputs = make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 500,
+            "retained_commercial_gia_sqm": 400, "untouched_gia_sqm": 200,
+        })
+        issues = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "areas.retained_commercial_gia_sqm"
+            for i in issues
+        )
+
+    def test_no_error_when_retained_and_untouched_exactly_consume_proposed_gia(self):
+        inputs = make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 500,
+            "retained_commercial_gia_sqm": 300, "untouched_gia_sqm": 200,
+        })
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.retained_commercial_gia_sqm" for i in issues)
+
+    def test_hard_errors_when_non_saleable_deductions_exceed_developed_gia(self):
+        inputs = make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived",
+            "existing_gia_sqm": 100, "circulation_common_sqm": 200,
+        })
+        issues = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "areas.circulation_common_sqm" for i in issues
+        )
+
+    def test_no_error_when_deductions_exactly_consume_developed_gia(self):
+        inputs = make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived",
+            "existing_gia_sqm": 100, "circulation_common_sqm": 100,
+        })
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.circulation_common_sqm" for i in issues)
+
+    def test_hard_errors_when_units_over_fill_the_space_available(self):
+        # Over-allocating the building is impossible, not questionable.
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 200},
+            units=[{"id": "u1", "floor_area_sqm": 300, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "unit_mix.units" for i in issues)
+
+    def test_no_error_when_the_schedule_exactly_fills_the_space_available(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 200},
+            units=[{"id": "u1", "floor_area_sqm": 200, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "unit_mix.units" for i in issues)
+
+    def test_warns_when_more_than_10pct_of_developed_area_is_unallocated(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1000},
+            units=[{"id": "u1", "floor_area_sqm": 100, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == "areas.unallocated_sqm" for i in issues)
+
+    def test_no_warning_at_exactly_the_10pct_unallocated_boundary(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1000},
+            units=[{"id": "u1", "floor_area_sqm": 900, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.unallocated_sqm" for i in issues)
+
+    def test_warning_just_past_the_10pct_unallocated_boundary(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1000},
+            units=[{"id": "u1", "floor_area_sqm": 899, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == "areas.unallocated_sqm" for i in issues)
+
+    def test_warns_when_net_to_gross_efficiency_falls_outside_65_90pct(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1000},
+            units=[{"id": "u1", "floor_area_sqm": 100, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == "areas.nia_to_gia_pct" for i in issues)
+
+    @pytest.mark.parametrize("floor_area", [650, 900])  # pct(650,1000)=65.00, pct(900,1000)=90.00
+    def test_no_warning_at_exactly_the_65_and_90pct_boundaries(self, floor_area):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1000},
+            units=[{"id": "u1", "floor_area_sqm": floor_area, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.nia_to_gia_pct" for i in issues)
+
+    @pytest.mark.parametrize("floor_area", [649, 901])
+    def test_warning_just_past_the_65_and_90pct_boundaries(self, floor_area):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 1000},
+            units=[{"id": "u1", "floor_area_sqm": floor_area, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == "areas.nia_to_gia_pct" for i in issues)
+
+    def test_warns_when_manual_basis_disagrees_with_a_populated_bridge_by_over_5pct(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual", "existing_gia_sqm": 1000},
+            conversion_costs={"total_construction_sqm": 500},
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == "areas.basis" for i in issues)
+
+    def test_no_warning_at_exactly_the_5pct_manual_vs_bridge_boundary(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual", "existing_gia_sqm": 1000},
+            conversion_costs={"total_construction_sqm": 950},
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.basis" for i in issues)
+
+    def test_warning_just_past_the_5pct_manual_vs_bridge_boundary(self):
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual", "existing_gia_sqm": 1000},
+            conversion_costs={"total_construction_sqm": 949},
+        )
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == "areas.basis" for i in issues)
+
+    def test_no_warning_when_the_bridge_itself_is_zeroed(self):
+        # Every migrated pre-v6 fixture lands here: basis manual, bridge all zero.
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual"},
+            conversion_costs={"total_construction_sqm": 500},
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "areas.basis" for i in issues)
+
+    def test_gates_the_negative_construction_area_error_on_the_manual_basis(self):
+        """Binding correction to the brief: developed_area_sqm is DERIVED under
+        the bridge basis, so a negative value there must not be blamed on the
+        manual field the bridge-basis user cannot see -- the derived-negative
+        rules above already cover it."""
+        bridge_negative = validate_inputs(make_v6_inputs(areas={
+            **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 500,
+            "retained_commercial_gia_sqm": 400, "untouched_gia_sqm": 200,
+        }))
+        assert not any(i.field == "conversion_costs.total_construction_sqm" for i in bridge_negative)
+        assert any(
+            i.severity == "error" and i.field == "areas.retained_commercial_gia_sqm"
+            for i in bridge_negative
+        )
+
+        manual_negative_inputs = make_v6_inputs(areas={**DEFAULT_AREA_BRIDGE, "basis": "manual"})
+        manual_negative_inputs.conversion_costs = manual_negative_inputs.conversion_costs.model_copy(
+            update={"total_construction_sqm": -1},
+        )
+        manual_negative = validate_inputs(manual_negative_inputs)
+        assert any(
+            i.severity == "error" and i.field == "conversion_costs.total_construction_sqm"
+            for i in manual_negative
+        )
+
+    def test_still_hard_errors_a_negative_construction_area_on_a_pre_v6_document(self):
+        inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+        inputs.conversion_costs.total_construction_sqm = -1
+        issues = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "conversion_costs.total_construction_sqm"
+            for i in issues
+        )
+
+    def test_stays_silent_on_a_bridge_that_ties_within_policy(self):
+        inputs = make_v6_inputs(
+            areas={
+                **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived",
+                "existing_gia_sqm": 500, "circulation_common_sqm": 50,
+            },
+            units=[{"id": "u1", "floor_area_sqm": 450, "estimated_value_pence": 1}],
+        )
+        issues = validate_inputs(inputs)
+        assert [i for i in issues if i.field.startswith("areas.")] == []
+
+
+class TestThe25PctWarningIsRetiredNotSoftened:
+    """Python twin of validation.test.ts's 'R9 - the +/-25% warning is
+    retired, not softened' describe block."""
+
+    RETIRED_25PCT = "differ by more than 25%"
+
+    def test_is_emitted_by_no_input_at_all(self):
+        # R8 lesson: a positive `in` check sails straight past an old sentence
+        # being re-added ALONGSIDE the true one. Zero-counts on retired
+        # strings are load-bearing.
+        manual = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual"},
+            conversion_costs={"total_construction_sqm": 500},
+            units=[{"id": "u1", "floor_area_sqm": 252, "estimated_value_pence": 1}],
+        )
+        bridge = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived", "existing_gia_sqm": 500},
+            units=[{"id": "u1", "floor_area_sqm": 252, "estimated_value_pence": 1}],
+        )
+        for inputs in (manual, bridge):
+            issues = validate_inputs(inputs)
+            assert [i for i in issues if self.RETIRED_25PCT in i.message] == []
+
+    def test_is_absent_from_the_source_of_both_engines(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[1]
+        py_src = (repo_root / "app" / "financial_model" / "validation.py").read_text()
+        ts_src = (repo_root / "frontend" / "src" / "lib" / "model" / "validation.ts").read_text(
+            encoding="utf-8",
+        )
+        assert self.RETIRED_25PCT not in py_src
+        assert self.RETIRED_25PCT not in ts_src

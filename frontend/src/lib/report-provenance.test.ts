@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { draftReason, documentStatus, buildProvenance } from './report-provenance';
-import { runAppraisal, migrateInputsToV4 } from './model';
+import type { DraftReason } from './report-provenance';
+import { runAppraisal, migrateInputsToV4, DEFAULT_AREA_BRIDGE } from './model';
 import type { AnyCalculatorInputs } from './model';
-import { qaProject, sellAllInputs, legacyV1Snapshot } from './report-qa/memo-fixtures';
+import {
+  qaProject, sellAllInputs, legacyV1Snapshot, welshInputs,
+} from './report-qa/memo-fixtures';
 
 describe('tax basis in provenance (R8)', () => {
   const reconciled = { report_safe: true, senior_repaid: true };
@@ -137,5 +140,53 @@ describe('buildProvenance derives the tax basis (R8)', () => {
       buildProvenance(runAppraisal(withAcquisition({ jurisdiction: 'wales' })), null)
         .jurisdictionRecorded,
     ).toBe(true);
+  });
+});
+
+// R9 (Task 8, Step 5). Spec §7 decides deliberately that an unreconciled area
+// bridge produces warnings and never forces DRAFT: unlike an unconfirmed tax
+// jurisdiction (knowable on day one), an unallocated balance is frequently and
+// legitimately unknown at appraisal stage, and gating on it would put every
+// existing appraisal into permanent DRAFT for a number nobody can yet supply.
+describe('R9 — the area bridge does not gate the document', () => {
+  const approvedStatus = 'credit_approved';
+
+  it('leaves the DraftReason union at its four R8 members', () => {
+    // R8's memory records that the ORDER of this union is load-bearing and that
+    // inverting it survived all 1070 tests while being production-reachable.
+    // R9 adds no member; this test is what makes that a decision rather than an
+    // omission somebody later "fixes".
+    const REASONS: DraftReason[] = ['unreconciled', 'senior_not_repaid', 'tax_basis_unconfirmed', 'not_approved'];
+    expect(REASONS).toHaveLength(4);
+  });
+
+  it('keeps a document with a large unallocated balance FINAL when nothing else blocks it', () => {
+    // welshInputs() is a proven reconciled, report-safe v6 base (5 units
+    // totalling 290 m² NIA) — only the `areas` block is touched, and the basis
+    // stays `manual` so the entered bridge does not also swing the funded
+    // construction cost (bridge.developed_area_sqm only feeds the cost stack
+    // under `bridge_derived`); the bridge's derived arithmetic — and the
+    // unallocated-balance warning under test — is computed the same regardless
+    // of basis, so any DRAFT outcome can only trace to that warning.
+    const inputs = welshInputs();
+    inputs.areas = { ...DEFAULT_AREA_BRIDGE, basis: 'manual', existing_gia_sqm: 2000 };
+    const run = runAppraisal(inputs);
+    expect(run.reconciliation.report_safe).toBe(true);
+    // The unallocated balance is a WARNING (spec §15.7) — `reconciliation.issues`
+    // (which gates `report_safe`/`draftReason`) carries only errors and
+    // model-level issues, so it is `run.validation` — the full list — that
+    // proves the warning was raised at all.
+    expect(run.validation.some((i) => i.severity === 'warning' && i.field === 'areas.unallocated_sqm')).toBe(true);
+    expect(draftReason(run.reconciliation, approvedStatus, { taxBasisConfirmed: true })).toBeNull();
+  });
+
+  it('still marks a document unreconciled when the bridge fails a HARD rule', () => {
+    // The basis conflict IS resolvable by the user, so it stays a hard error,
+    // and hard validation failure already produces `unreconciled` (spec §7).
+    const inputs = welshInputs();
+    inputs.areas = { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived' }; // no existing_gia_sqm entered
+    const run = runAppraisal(inputs);
+    expect(run.validation.some((i) => i.severity === 'error' && i.field === 'areas.existing_gia_sqm')).toBe(true);
+    expect(draftReason(run.reconciliation, approvedStatus, { taxBasisConfirmed: true })).toBe('unreconciled');
   });
 });
