@@ -61,7 +61,9 @@ export default defineConfig([
           message:
             'Do not read the acquisition-tax band table directly — call calculateAcquisitionTax() '
             + 'from tax/acquisition-tax.ts, which selects the jurisdiction and date-effective band '
-            + 'set (spec §14). Only test files may import TAX_TABLES, to assert the table itself.',
+            + 'set (spec §14). Only the files on the allowlist below (acquisition-tax.ts itself, '
+            + 'test files, and the fixture builders that construct raw input documents) may '
+            + 'reference TAX_TABLES directly.',
         },
       ],
     },

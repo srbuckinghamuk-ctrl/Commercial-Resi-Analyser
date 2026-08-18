@@ -1,17 +1,72 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { ESLint } from 'eslint';
 
 /**
  * R9 spec §15.4. The eslint rule is the enforcement; this test is what stops
  * the enforcement being silently removed or hollowed out.
  *
- * Task 5 verified by hand (twice — the two selectors have different AST
- * shapes) that the rule actually fires on a planted violation. That check is
- * manual and one-off; this test is the standing guard on the guard's own
- * configuration.
+ * Fix round 1 review finding: the first version of this file only pattern-
+ * matched substrings in the config source (`property.name='...'` etc.). That
+ * proved the *selectors* exist, but never asserted their *severity* — a future
+ * edit changing `'no-restricted-syntax': ['error', ...]` to `'warn'` would
+ * leave every one of those assertions green while `npm run lint` kept exiting
+ * 0, i.e. the guard would go inert while looking healthy. That is exactly the
+ * class of defect this whole task exists to prevent.
+ *
+ * So the enforcement checks below run the real linter (ESLint's Node API)
+ * against synthetic in-memory source and assert on the reported message's
+ * `severity` (2 = error, 1 = warning, absent = not reported at all) — the
+ * guard now has to prove itself on every test run, not just pattern-match its
+ * own configuration text.
  */
-const CONFIG = readFileSync(resolve(__dirname, '../../../eslint.config.js'), 'utf-8');
+const FRONTEND_ROOT = resolve(__dirname, '../../..');
+const CONFIG_PATH = resolve(FRONTEND_ROOT, 'eslint.config.js');
+const CONFIG = readFileSync(CONFIG_PATH, 'utf-8');
+
+async function lint(code: string, filePath: string) {
+  const eslint = new ESLint({ cwd: FRONTEND_ROOT, overrideConfigFile: CONFIG_PATH });
+  const [result] = await eslint.lintText(code, { filePath });
+  return result.messages;
+}
+
+describe('single-accessor guard enforcement (runs the real linter)', () => {
+  it('reports a direct read of total_construction_sqm as an ERROR, not a warning', async () => {
+    const messages = await lint(
+      'export function illegal(x: any) { return x.total_construction_sqm; }\n',
+      // Deliberately not on the allowlist. The path need not exist on disk —
+      // ESLint only uses it to select which config block applies.
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /total_construction_sqm/.test(m.message));
+    expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2); // 2 = error, 1 = warning. `npm run lint --max-warnings 0` (package.json) would also
+    // now fail on a downgrade to 'warn', but that is a second, independent belt — this assertion is the direct one.
+  });
+
+  it('reports a reference to TAX_TABLES as an ERROR, not a warning', async () => {
+    const messages = await lint(
+      "import { TAX_TABLES } from '../tax/acquisition-tax';\nexport const illegal = TAX_TABLES;\n",
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /TAX_TABLES/.test(m.message));
+    expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('does not flag the same source when the path is on the allowlist', async () => {
+    // Pins that the allowlist actually suppresses the rule, not merely that
+    // the rule fires elsewhere — the same synthetic source that trips the
+    // rule above must lint clean under areas.ts's own path.
+    const messages = await lint(
+      'export function legal(x: any) { return x.total_construction_sqm; }\n',
+      'src/lib/model/areas.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
+    expect(hit, `expected no hit on the allowlisted path; got: ${JSON.stringify(messages)}`).toBeUndefined();
+  });
+});
 
 describe('single-accessor guard configuration', () => {
   it('restricts direct reads of the cost-area field', () => {
