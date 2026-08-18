@@ -1,5 +1,13 @@
 import type { AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule } from './finance-types';
 import { computeLenderGdv } from './lender-valuation';
+// R9 fix wave: `selectBandSet` is restricted by the single-accessor guard
+// (eslint.config.js) because it returns the raw band array. Validation's use is
+// legitimate and narrow — it asks "can this date be placed in a band set at
+// all?" and reports the answer as a ValidationIssue; it never reads `.bands`
+// and never computes tax. Disabled at the call site rather than by adding
+// validation.ts to the file allowlist, which would switch the cost-area
+// selectors off for this file too.
+// eslint-disable-next-line no-restricted-syntax -- see above; validation reports the date, it does not compute tax
 import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
 import { areaBridge } from './areas';
 import { pct } from './pct';
@@ -373,6 +381,7 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
           'Acquisition date must be a real ISO calendar date (YYYY-MM-DD).');
       } else {
         try {
+          // eslint-disable-next-line no-restricted-syntax -- single-accessor guard: validation may ask whether a date is placeable; it never reads .bands
           selectBandSet(acq.jurisdiction, 'non_residential', acq.acquisition_date);
         } catch (e) {
           err('acquisition.acquisition_date', (e as Error).message);

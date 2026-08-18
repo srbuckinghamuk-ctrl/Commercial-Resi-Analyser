@@ -45,6 +45,55 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     // now fail on a downgrade to 'warn', but that is a second, independent belt — this assertion is the direct one.
   });
 
+  // R9 fix wave — three read paths the guard could not see. Each is asserted
+  // through the real linter, and each asserts that the message is the NEW
+  // rule's, so a proof cannot be satisfied by a pre-existing selector.
+  it('reports a DESTRUCTURED read of total_construction_sqm as an ERROR', async () => {
+    const messages = await lint(
+      'export function illegal(costs: { total_construction_sqm: number }) {\n'
+      + '  const { total_construction_sqm } = costs;\n'
+      + '  return total_construction_sqm;\n'
+      + '}\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure/.test(m.message));
+    expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('reports a COMPUTED read of total_construction_sqm as an ERROR', async () => {
+    const messages = await lint(
+      "export function illegal(costs: Record<string, number>) { return costs['total_construction_sqm']; }\n",
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /computed member access/.test(m.message));
+    expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('does NOT flag an object-literal write of total_construction_sqm', async () => {
+    // The counter-example the destructuring selector needs. `ObjectExpression >
+    // Property` is a write — the cost page's own editor does exactly this —
+    // and the rule has never restricted writes. Scoping the selector to
+    // ObjectPattern is what keeps that true.
+    const messages = await lint(
+      'export const write = (v: number) => ({ total_construction_sqm: v });\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
+  });
+
+  it('reports a reference to selectBandSet as an ERROR', async () => {
+    const messages = await lint(
+      "import { selectBandSet } from '../tax/acquisition-tax';\n"
+      + "export const bands = selectBandSet('england_ni', 'non_residential', null).set;\n",
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /selectBandSet/.test(m.message));
+    expect(hit, `expected a selectBandSet hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
   it('reports a reference to TAX_TABLES as an ERROR, not a warning', async () => {
     const messages = await lint(
       "import { TAX_TABLES } from '../tax/acquisition-tax';\nexport const illegal = TAX_TABLES;\n",
@@ -78,6 +127,17 @@ describe('single-accessor guard configuration', () => {
     expect(CONFIG).toContain("Identifier[name='TAX_TABLES']");
   });
 
+  it('restricts the destructured and computed spellings of the cost-area read', () => {
+    // R9 fix wave. Each is a distinct AST shape the original MemberExpression
+    // selector cannot match, so each needs its own selector.
+    expect(CONFIG).toContain("ObjectPattern > Property[key.name='total_construction_sqm']");
+    expect(CONFIG).toContain("MemberExpression[computed=true][property.value='total_construction_sqm']");
+  });
+
+  it('restricts selectBandSet, the other route to the raw band list', () => {
+    expect(CONFIG).toContain("Identifier[name='selectBandSet']");
+  });
+
   it('keeps the allowlist to the modules that own, declare, write or build fixtures for the values', () => {
     for (const allowed of [
       'src/lib/model/areas.ts',
@@ -108,5 +168,22 @@ describe('single-accessor guard configuration', () => {
     // because it now reads the manual figure through the bridge accessor
     // (`bridge.manual_area_sqm`), not the raw field.
     expect(CONFIG).not.toContain('src/lib/model/validation.ts');
+  });
+
+  it("exempts validation.ts's selectBandSet use at the call sites, never file-wide", () => {
+    // R9 fix wave. validation.ts legitimately calls selectBandSet — to report
+    // an unplaceable acquisition date as a ValidationIssue, never to compute
+    // tax. eslint's file allowlist is all-or-nothing per rule, so putting
+    // validation.ts on it would also switch off the cost-area selectors for
+    // the one module most likely to grow a raw read. Two line-scoped disables
+    // instead: the import and the call.
+    const source = readFileSync(
+      resolve(FRONTEND_ROOT, 'src/lib/model/validation.ts'), 'utf-8',
+    );
+    const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
+    expect(scoped).toHaveLength(2);
+    // A file-wide `/* eslint-disable no-restricted-syntax */` would satisfy the
+    // linter and defeat the guard silently.
+    expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
   });
 });

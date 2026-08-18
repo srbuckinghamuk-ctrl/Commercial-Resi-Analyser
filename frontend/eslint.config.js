@@ -50,6 +50,30 @@ export default defineConfig([
             + 'cost-page editor, add this file to the allowlist in eslint.config.js.',
         },
         {
+          // Same field, destructured: `const { total_construction_sqm } = costs`.
+          // The MemberExpression selector above cannot see this shape at all —
+          // there is no member access to match — so a consumer could have
+          // destructured its way straight past the guard. Scoped to
+          // `ObjectPattern` deliberately: an ObjectExpression property of the
+          // same name is a WRITE (`updateCosts({ total_construction_sqm: v })`,
+          // migration output, defaults), which this rule has never restricted.
+          selector: "ObjectPattern > Property[key.name='total_construction_sqm']",
+          message:
+            'Do not destructure total_construction_sqm out of the cost block — call '
+            + 'developedAreaSqm(inputs) from model/areas.ts. It resolves the bridge-derived vs '
+            + 'manual basis (spec §15.3).',
+        },
+        {
+          // Same field, computed: `costs['total_construction_sqm']`. A computed
+          // MemberExpression carries the name on `property.value` (a Literal),
+          // not `property.name` (an Identifier), so the first selector misses it.
+          selector: "MemberExpression[computed=true][property.value='total_construction_sqm']",
+          message:
+            'Do not read total_construction_sqm through a computed member access — call '
+            + 'developedAreaSqm(inputs) from model/areas.ts. It resolves the bridge-derived vs '
+            + 'manual basis (spec §15.3).',
+        },
+        {
           // `TAX_TABLES` is an exported top-level const, imported by name — so it
           // appears as a bare Identifier, NOT a MemberExpression. Matching it with
           // a MemberExpression selector (the shape that is correct for
@@ -64,6 +88,29 @@ export default defineConfig([
             + 'set (spec §14). Only the files on the allowlist below (acquisition-tax.ts itself, '
             + 'test files, and the fixture builders that construct raw input documents) may '
             + 'reference TAX_TABLES directly.',
+        },
+        {
+          // The hole the TAX_TABLES rule left open: `selectBandSet` is an
+          // exported function that hands back the very `.bands` array TAX_TABLES
+          // holds, so a consumer could evaluate its own acquisition tax through
+          // it and trip neither half of the guard. Restricted on the same
+          // Identifier shape and for the same reason.
+          //
+          // model/validation.ts legitimately calls it — to surface an
+          // out-of-range acquisition date as a ValidationIssue, not to compute
+          // tax — and is allowlisted at its two CALL SITES with
+          // `eslint-disable-next-line` comments rather than by being added to
+          // the file allowlist below. A file-level exemption would switch the
+          // whole rule off for validation.ts, including the cost-area
+          // selectors; accessor-guard.test.ts pins that validation.ts never
+          // appears in this config.
+          selector: "Identifier[name='selectBandSet']",
+          message:
+            'Do not select acquisition-tax band sets directly — call calculateAcquisitionTax() '
+            + 'from tax/acquisition-tax.ts (spec §14). selectBandSet returns the raw band array, '
+            + 'so computing tax through it bypasses the single accessor exactly as reading '
+            + 'TAX_TABLES would. Only acquisition-tax.ts itself, test files, and validation.ts\'s '
+            + 'two explicitly disabled date-check call sites may reference it.',
         },
       ],
     },
