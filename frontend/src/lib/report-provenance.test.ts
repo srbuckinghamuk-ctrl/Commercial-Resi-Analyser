@@ -156,8 +156,20 @@ describe('R9 — the area bridge does not gate the document', () => {
     // inverting it survived all 1070 tests while being production-reachable.
     // R9 adds no member; this test is what makes that a decision rather than an
     // omission somebody later "fixes".
-    const REASONS: DraftReason[] = ['unreconciled', 'senior_not_repaid', 'tax_basis_unconfirmed', 'not_approved'];
-    expect(REASONS).toHaveLength(4);
+    //
+    // Review fix round 1 (Important 2): a `DraftReason[]` array only checks
+    // that the listed literals are ASSIGNABLE to the union, not that they
+    // EXHAUST it — a fifth member added elsewhere would not fail that version
+    // of this test. A `Record` over the union requires every member as a key:
+    // a missing (or, symmetrically, an extra-but-unlisted) member becomes a
+    // compile error, which is what actually pins the deliberate non-change.
+    const ALL_DRAFT_REASONS: Record<DraftReason, true> = {
+      unreconciled: true,
+      senior_not_repaid: true,
+      tax_basis_unconfirmed: true,
+      not_approved: true,
+    };
+    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(4);
   });
 
   it('keeps a document with a large unallocated balance FINAL when nothing else blocks it', () => {

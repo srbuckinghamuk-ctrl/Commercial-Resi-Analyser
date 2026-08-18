@@ -568,6 +568,27 @@ describe('R9 — area bridge validation', () => {
     expect(issues.filter((i) => i.field.startsWith('areas.'))).toEqual([]);
   });
 
+  // Review fix round 1 (Important 1): the case above passes no units, so it
+  // never exercises `bridge.developed_gia_sqm > 0` — the guard that keeps the
+  // units-over-fill hard error inert for a zeroed bridge. A zeroed bridge WITH
+  // a real unit schedule is exactly the state every migrated legacy document
+  // is in, and is the single highest-value scenario for that guard. Confirmed
+  // by hand: removing `bridge.developed_gia_sqm > 0 &&` from validation.ts's
+  // `unit_mix.units` check makes this test fail (available_for_units_sqm is 0,
+  // unitNia is 300, unallocated is -300 < 0).
+  it('does not hard-error on an all-zero bridge with a real unit schedule (migrated legacy document)', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' },
+      units: [
+        { id: 'u1', floor_area_sqm: 100, estimated_value_pence: 1 },
+        { id: 'u2', floor_area_sqm: 100, estimated_value_pence: 1 },
+        { id: 'u3', floor_area_sqm: 100, estimated_value_pence: 1 },
+      ],
+    }));
+    expect(issues.filter((i) => i.field.startsWith('areas.'))).toEqual([]);
+    expect(issues.some((i) => i.severity === 'error' && i.field === 'unit_mix.units')).toBe(false);
+  });
+
   it('hard-errors when the bridge basis is selected with no bridge', () => {
     const issues = validateInputs(makeV6Inputs({ areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived' } }));
     expect(issues).toContainEqual(expect.objectContaining({

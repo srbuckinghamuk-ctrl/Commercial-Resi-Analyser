@@ -620,6 +620,28 @@ class TestAreaBridgeValidation:
         issues = validate_inputs(inputs)
         assert [i for i in issues if i.field.startswith("areas.")] == []
 
+    def test_does_not_hard_error_on_an_all_zero_bridge_with_a_real_unit_schedule(self):
+        """Review fix round 1 (Important 1): the case above passes no units,
+        so it never exercises `bridge.developed_gia_sqm > 0` -- the guard that
+        keeps the units-over-fill hard error inert for a zeroed bridge. A
+        zeroed bridge WITH a real unit schedule is exactly the state every
+        migrated legacy document is in, and is the single highest-value
+        scenario for that guard. Confirmed by hand: removing
+        `bridge.developed_gia_sqm > 0 and` from validation.py's
+        `unit_mix.units` check makes this test fail (available_for_units_sqm
+        is 0, unit_nia_sqm is 300, unallocated_sqm is -300 < 0)."""
+        inputs = make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual"},
+            units=[
+                {"id": "u1", "floor_area_sqm": 100, "estimated_value_pence": 1},
+                {"id": "u2", "floor_area_sqm": 100, "estimated_value_pence": 1},
+                {"id": "u3", "floor_area_sqm": 100, "estimated_value_pence": 1},
+            ],
+        )
+        issues = validate_inputs(inputs)
+        assert [i for i in issues if i.field.startswith("areas.")] == []
+        assert not any(i.severity == "error" and i.field == "unit_mix.units" for i in issues)
+
     def test_hard_errors_when_the_bridge_basis_is_selected_with_no_bridge(self):
         inputs = make_v6_inputs(areas={**DEFAULT_AREA_BRIDGE, "basis": "bridge_derived"})
         issues = validate_inputs(inputs)
