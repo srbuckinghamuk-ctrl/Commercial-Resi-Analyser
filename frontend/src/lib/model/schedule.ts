@@ -2,6 +2,7 @@ import type { AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, S
 import {
   calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost,
 } from '../conversion-calc-engine';
+import { developedAreaSqm } from './areas';
 import { spreadByCurve } from './curves';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
@@ -30,7 +31,7 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const units = inputs.unit_mix.units;
 
   const acquisitionTotal = calculateTotalAcquisitionCost(inputs.acquisition);
-  const constructionTotal = calculateTotalConstructionCost(cc);
+  const constructionTotal = calculateTotalConstructionCost(cc, developedAreaSqm(inputs));
   // Reclassification per spec §3.5/§3.6: professional excludes statutory items.
   const professionalTotal =
     cc.architect_pence + cc.structural_engineer_pence + cc.mande_pence +

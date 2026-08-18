@@ -7,6 +7,11 @@ import {
   calculateTotalProfessionalFees,
 } from './conversion-calc-engine';
 import type { ProposedUnit, AcquisitionInputs, ConversionCostInputs } from './conversion-types';
+import { DEFAULT_CONVERSION_COSTS } from './conversion-defaults';
+import { DEFAULT_AREA_BRIDGE } from './model/areas';
+import type { CalculatorInputsV6 } from './model/finance-types';
+import { migrateInputsToV6 } from './model/migrate';
+import { buildSchedule } from './model/schedule';
 
 // M1 (spec §11.9): calculateBrokerFee is the single source of truth for the
 // broker fee formula — AcquisitionPage's inline display and
@@ -86,7 +91,7 @@ describe('calculateTotalConstructionCost', () => {
     // Contingency: 10% of 10,000,000 = 1,000,000
     // Compliance: 100,000 + 50,000 + 50,000 = 200,000
     // Total: 11,200,000
-    expect(calculateTotalConstructionCost(costs)).toBe(11_200_000);
+    expect(calculateTotalConstructionCost(costs, costs.total_construction_sqm)).toBe(11_200_000);
   });
 
   // Spec §1.1 (amended, Release 2b Task 7): fractional-area products round once, at
@@ -112,7 +117,7 @@ describe('calculateTotalConstructionCost', () => {
     };
     // 50,000 × 500.5 = 25,025,000.0 exactly -- already an integer, but proves the
     // rounding site handles a fractional sqm input without disturbing an exact result.
-    expect(calculateTotalConstructionCost(costs)).toBe(25_025_000);
+    expect(calculateTotalConstructionCost(costs, costs.total_construction_sqm)).toBe(25_025_000);
   });
 
   it('rounds an odd-half fractional base cost up, not down (round_half_up, not banker\'s rounding)', () => {
@@ -134,7 +139,7 @@ describe('calculateTotalConstructionCost', () => {
     };
     // 333 × 100.5 = 33,466.5 -- round_half_up(33,466.5) = 33,467 (banker's rounding, which
     // rounds .5 to the nearest even integer, would wrongly give 33,466).
-    expect(calculateTotalConstructionCost(costs)).toBe(33_467);
+    expect(calculateTotalConstructionCost(costs, costs.total_construction_sqm)).toBe(33_467);
   });
 });
 
@@ -157,6 +162,55 @@ describe('calculateTotalProfessionalFees', () => {
       part_l_compliance_pence: 0,
     };
     expect(calculateTotalProfessionalFees(costs, 1)).toBe(3_609_600);
+  });
+});
+
+describe('R9 — construction cost takes an explicit area', () => {
+  const costs = {
+    ...DEFAULT_CONVERSION_COSTS,
+    construction_cost_per_sqm_pence: 50_000,
+    contingency_pct: 10,
+    fire_safety_pence: 100,
+    sound_insulation_pence: 100,
+    part_l_compliance_pence: 100,
+  };
+
+  it('multiplies the supplied area, not the stored field', () => {
+    // 500 x 50,000 = 25,000,000; +10% = 27,500,000; +300 compliance
+    expect(calculateTotalConstructionCost({ ...costs, total_construction_sqm: 9999 }, 500))
+      .toBe(27_500_300);
+  });
+
+  it('rounds the fractional-area product once, before contingency (spec §1.1)', () => {
+    // 520.5 x 50,000 = 26,025,000 exactly; +10% = 28,627,500; +300
+    expect(calculateTotalConstructionCost(costs, 520.5)).toBe(28_627_800);
+  });
+});
+
+describe('R9 — the schedule resolves its cost area through the accessor', () => {
+  function makeV6Inputs(overrides: Partial<CalculatorInputsV6> = {}): CalculatorInputsV6 {
+    return {
+      ...migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 }),
+      ...overrides,
+    };
+  }
+
+  it('uses the bridge-derived area when the bridge basis is selected', () => {
+    const inputs = makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 520 },
+      conversion_costs: { ...DEFAULT_CONVERSION_COSTS, construction_cost_per_sqm_pence: 50_000, total_construction_sqm: 9999 },
+    });
+    const s = buildSchedule(inputs);
+    // 520 x 50,000 x 1.10
+    expect(s.totals.construction_pence).toBe(28_600_000);
+  });
+
+  it('uses the manual field when the manual basis is selected', () => {
+    const inputs = makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual', existing_gia_sqm: 520 },
+      conversion_costs: { ...DEFAULT_CONVERSION_COSTS, construction_cost_per_sqm_pence: 50_000, total_construction_sqm: 400 },
+    });
+    expect(buildSchedule(inputs).totals.construction_pence).toBe(22_000_000);
   });
 });
 

@@ -132,7 +132,9 @@ export function migrateInputs(
   };
   const costBeforeFinance =
     calculateTotalAcquisitionCost(acquisition) +
-    calculateTotalConstructionCost(conversion_costs) +
+    // v1 migration runs before the areas block exists, so the manual field IS
+    // the area here — passed explicitly rather than read inside the callee.
+    calculateTotalConstructionCost(conversion_costs, conversion_costs.total_construction_sqm) +
     calculateTotalProfessionalFees(conversion_costs, unit_mix.units.length);
   const { finance, equity } = migrateFinanceV1(v1Finance, costBeforeFinance);
 

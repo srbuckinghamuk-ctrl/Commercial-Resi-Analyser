@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .areas import developed_area_sqm
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
@@ -67,12 +68,15 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     )
 
 
-def calculate_total_construction_cost(costs: ConversionCostInputs) -> int:
-    # Spec Sec 1.1: fractional-area products round once, at source, in one step before
-    # contingency -- base = round_half_up(construction_cost_per_sqm_pence x
-    # total_construction_sqm). Integer-sqm inputs are unaffected (rounding an
-    # already-integer product is identity). Matches conversion-calc-engine.ts exactly.
-    base_cost = money_round(costs.construction_cost_per_sqm_pence * costs.total_construction_sqm)
+def calculate_total_construction_cost(costs: ConversionCostInputs, area_sqm: float) -> int:
+    # Spec Sec 1.1: fractional-area products round once, at source, in one step
+    # before contingency -- base = money_round(construction_cost_per_sqm_pence x
+    # area). Integer-sqm inputs are unaffected. Matches conversion-calc-engine.ts.
+    #
+    # R9: the area is an explicit parameter. Callers resolve it once through
+    # developed_area_sqm (spec Sec 15.4); tests/test_accessor_guard.py makes
+    # reading the raw field here a test failure.
+    base_cost = money_round(costs.construction_cost_per_sqm_pence * area_sqm)
     contingency = money_round((base_cost * costs.contingency_pct) / 100)
     compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence
     return base_cost + contingency + compliance
@@ -163,7 +167,7 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     units = inputs.unit_mix.units
 
     acquisition_total = calculate_total_acquisition_cost(inputs.acquisition)
-    construction_total = calculate_total_construction_cost(cc)
+    construction_total = calculate_total_construction_cost(cc, developed_area_sqm(inputs))
     # Reclassification per spec Sec 3.5/3.6: professional excludes statutory items.
     professional_total = (
         cc.architect_pence + cc.structural_engineer_pence + cc.mande_pence

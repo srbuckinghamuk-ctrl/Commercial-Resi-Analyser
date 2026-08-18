@@ -67,11 +67,23 @@ export function calculateTotalAcquisitionCost(
   );
 }
 
-export function calculateTotalConstructionCost(costs: ConversionCostInputs): number {
+/**
+ * Spec §3.4 — the construction line of the cost stack.
+ *
+ * R9: the area is an explicit parameter. It used to read
+ * `costs.total_construction_sqm` directly, which made this one of several sites
+ * that each independently decided what "the construction area" meant. Callers
+ * now resolve it once through `developedAreaSqm` (spec §15.4), and the eslint
+ * guard makes reading the raw field here a build failure.
+ */
+export function calculateTotalConstructionCost(
+  costs: ConversionCostInputs,
+  areaSqm: number,
+): number {
   // Spec §1.1: fractional-area products round once, at source, in one step before
-  // contingency -- base = round_half_up(construction_cost_per_sqm_pence × total_construction_sqm).
+  // contingency -- base = round_half_up(construction_cost_per_sqm_pence × area).
   // Integer-sqm inputs are unaffected (rounding an already-integer product is identity).
-  const baseCost = Math.round(costs.construction_cost_per_sqm_pence * costs.total_construction_sqm);
+  const baseCost = Math.round(costs.construction_cost_per_sqm_pence * areaSqm);
   const contingency = Math.round((baseCost * costs.contingency_pct) / 100);
   const compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence;
   return baseCost + contingency + compliance;

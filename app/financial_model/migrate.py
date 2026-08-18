@@ -429,7 +429,9 @@ def migrate_inputs(
     cc_obj = ConversionCostInputs.model_validate(conversion_costs)
     cost_before_finance = (
         calculate_total_acquisition_cost(acq_obj)
-        + calculate_total_construction_cost(cc_obj)
+        # v1 migration runs before the areas block exists, so the manual field IS
+        # the area here -- passed explicitly rather than read inside the callee.
+        + calculate_total_construction_cost(cc_obj, cc_obj.total_construction_sqm)
         + calculate_total_professional_fees(cc_obj, len(unit_mix["units"]))
     )
     finance, equity = migrate_finance_v1(v1_finance, cost_before_finance)

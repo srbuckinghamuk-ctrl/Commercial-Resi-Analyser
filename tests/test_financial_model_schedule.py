@@ -8,11 +8,13 @@ from app.financial_model.engine import money_round
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
+    migrate_inputs_to_v6,
     migrate_v2_to_v3,
     migrate_v3_to_v4,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
+    AreaBridgeInputs,
     CalculatorInputsV3,
     CalculatorInputsV4,
     SalesPhasingInputs,
@@ -154,3 +156,36 @@ class TestBuildScheduleWithSalesPhasing:
         assert legal_sum == 400_000  # conservation
         assert s.totals.selling_costs_pence == agent + 400_000  # totals unchanged
         assert s.refinance is None
+
+
+def _v6() -> "CalculatorInputsV6":
+    return migrate_inputs_to_v6({}, {"id": "p", "price_pence": 0, "floor_area_sqm": 0})
+
+
+class TestBuildScheduleResolvesItsCostAreaThroughTheAccessor:
+    """R9 Task 4 -- mirror of conversion-calc-engine.test.ts's
+    'R9 -- the schedule resolves its cost area through the accessor' describe
+    block. Both engines must resolve calculate_total_construction_cost's area
+    parameter the same way, whichever basis the areas block selects."""
+
+    def test_uses_the_bridge_derived_area_when_the_bridge_basis_is_selected(self):
+        inputs = _v6().model_copy(update={
+            "areas": AreaBridgeInputs(basis="bridge_derived", existing_gia_sqm=520),
+            "conversion_costs": _v6().conversion_costs.model_copy(update={
+                "construction_cost_per_sqm_pence": 50_000,
+                "total_construction_sqm": 9999,
+            }),
+        })
+        s = build_schedule(inputs)
+        # 520 x 50,000 x 1.10
+        assert s.totals.construction_pence == 28_600_000
+
+    def test_uses_the_manual_field_when_the_manual_basis_is_selected(self):
+        inputs = _v6().model_copy(update={
+            "areas": AreaBridgeInputs(basis="manual", existing_gia_sqm=520),
+            "conversion_costs": _v6().conversion_costs.model_copy(update={
+                "construction_cost_per_sqm_pence": 50_000,
+                "total_construction_sqm": 400,
+            }),
+        })
+        assert build_schedule(inputs).totals.construction_pence == 22_000_000
