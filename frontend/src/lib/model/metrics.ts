@@ -9,12 +9,12 @@ import { exitFeeAmount } from './monthly-engine';
 import { solveDeveloperBreakeven, solveSeniorBreakeven, solveSeniorBreakevenPhased } from './breakeven';
 import type { DeveloperBreakevenTerms, SeniorBreakevenTerms, PhasedSeniorBreakevenTerms } from './breakeven';
 import { computeCostToComplete } from './cost-to-complete';
+import { pct } from './pct';
 
-/** Percentage to 2 dp; null when the denominator is zero (spec §1.5). */
-export function pct(numerator: number, denominator: number): number | null {
-  if (denominator === 0) return null;
-  return Math.round((numerator / denominator) * 10000) / 100;
-}
+/** Re-exported from './pct' (R9). Many modules and tests import `pct` from
+ *  metrics; the definition moved to break an import cycle, not to move the
+ *  public name. */
+export { pct };
 
 /** Pure flag construction for the two break-even solvers (spec §5.11/§5.12).
  * A null solve with fee < 100% means the integer bisection exhausted its
