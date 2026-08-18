@@ -203,12 +203,19 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
       </button>
 
       <div style={{ marginTop: 24, padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
+        {/* Fix round 1. This used to sum `floor_area_sqm`/`ancillary.*` across
+            `units` in JSX — a second, local computation of the exact figures
+            the area bridge already derives once (spec §15.4). Read from
+            `run.metrics.area_bridge` instead: `unit_nia_sqm` IS
+            `unitNiaSqm(units)` (areas.ts), and the two ancillary totals are
+            summed there too, so this footer cannot drift from the Areas page
+            or the reconciliation table. */}
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
           <span>Units: {units.length}</span>
-          <span>Total NIA: {units.reduce((s, u) => s + u.floor_area_sqm, 0).toLocaleString()} m²</span>
+          <span>Total NIA: {run.metrics.area_bridge.unit_nia_sqm.toLocaleString()} m²</span>
           <span style={{ color: '#64748b' }}>
-            Ancillary: {units.reduce((s, u) => s + (u.ancillary?.balcony_terrace_sqm ?? 0), 0).toLocaleString()} m²
-            balcony/terrace · {units.reduce((s, u) => s + (u.ancillary?.parking_spaces ?? 0), 0)} parking
+            Ancillary: {run.metrics.area_bridge.ancillary_balcony_terrace_sqm.toLocaleString()} m²
+            balcony/terrace · {run.metrics.area_bridge.ancillary_parking_spaces} parking
           </span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>

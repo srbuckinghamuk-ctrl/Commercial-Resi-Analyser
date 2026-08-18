@@ -95,6 +95,17 @@ describe('AreasPage', () => {
     expect(screen.getByText('Unallocated').closest('tr')).toHaveTextContent('-80');
   });
 
+  // Fix round 1. `validateInputs` files this over-fill error under
+  // `field: 'unit_mix.units'`, not `areas.*` (validation.ts) — the schedule is
+  // what does not fit, not an area line. A prefix-only filter dropped it, so a
+  // user reading "Unallocated: -80.0 m²" on this exact page got the signed
+  // number with no explanation anywhere on it. Both must be present together.
+  it('explains a negative unallocated balance on the same page that shows it', () => {
+    render(<AreasPage inputs={overfilledInputsFixture} onChange={vi.fn()} run={overfilledRunFixture} />);
+    expect(screen.getByText('Unallocated').closest('tr')).toHaveTextContent('-80');
+    expect(screen.getByText(/schedule does not fit the building/i)).toBeInTheDocument();
+  });
+
   it('shows all three efficiencies, and an em dash where the ratio is unavailable', () => {
     render(<AreasPage inputs={zeroGiaInputsFixture} onChange={vi.fn()} run={zeroGiaRunFixture} />);
     expect(screen.getByLabelText('Net to gross')).toHaveTextContent('—');
@@ -117,15 +128,15 @@ describe('AreasPage', () => {
     );
   });
 
-  it('surfaces areas-scoped validation errors and warnings, ignoring unrelated ones', () => {
-    // The overfilled fixture trips the "schedule does not fit the building"
-    // error (field unit_mix.units, not areas.* — this page's issues panel is
-    // scoped to areas.* per the brief, so that one is NOT expected here) and,
-    // separately, the >10% unallocated-balance warning does not apply since
-    // the balance is negative, not a large positive unallocated slice. Use the
-    // base fixture instead, which trips the 65-90% net-to-gross warning
-    // (120/520 = 23%, well outside the range).
+  it('surfaces areas-scoped validation warnings, ignoring unrelated ones', () => {
+    // The base fixture trips the 65-90% net-to-gross warning
+    // (120/520 = 23%, well outside the range) — field `areas.nia_to_gia_pct`.
     render(<AreasPage inputs={inputsFixture} onChange={vi.fn()} run={runFixture} />);
     expect(screen.getByText(/net-to-gross efficiency/i)).toBeInTheDocument();
+  });
+
+  it('does not surface the over-fill error when the schedule fits (no false positive)', () => {
+    render(<AreasPage inputs={inputsFixture} onChange={vi.fn()} run={runFixture} />);
+    expect(screen.queryByText(/schedule does not fit the building/i)).not.toBeInTheDocument();
   });
 });

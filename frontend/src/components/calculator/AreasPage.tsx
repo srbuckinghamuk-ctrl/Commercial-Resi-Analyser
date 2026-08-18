@@ -75,13 +75,26 @@ export default function AreasPage({ inputs, onChange, run }: Props) {
   };
 
   // R9 spec §15.6/§15.7. Errors gate the document and live on
-  // `run.reconciliation.issues` (ERROR-severity input issues only); warnings
-  // are advisory and live on `run.validation` alongside every other severity.
-  // Both are surfaced here, scoped to this page's own fields — the same
-  // `field.startsWith(...)` pattern `LenderValuationCard` already uses for its
-  // own fields.
-  const areaErrors = run.reconciliation.issues.filter((i) => i.field.startsWith('areas.'));
-  const areaWarnings = run.validation.filter((i) => i.severity === 'warning' && i.field.startsWith('areas.'));
+  // `run.reconciliation.issues` (ERROR-severity input issues, though not
+  // exclusively — validation.ts:422 also pushes a `severity: 'warning'` entry
+  // there under field `'model'`; harmless to this filter, but not an
+  // "errors-only" list); warnings are advisory and live on `run.validation`
+  // alongside every other severity. Both are surfaced here, scoped to this
+  // page's own fields — the same `field.startsWith(...)` pattern
+  // `LenderValuationCard` already uses for its own fields.
+  //
+  // Fix round 1. `validateInputs` files the "schedule does not fit the
+  // building" over-fill error under `field: 'unit_mix.units'` (validation.ts),
+  // not `areas.*` — the schedule is what does not fit, not an area line — so
+  // the `areas.` prefix alone silently drops it and this page's Unallocated
+  // row could show -80.0 m² with no explanation anywhere on it. It IS an
+  // area-reconciliation failure regardless of which input caused it, so it is
+  // matched explicitly by name (not by widening the prefix, which would start
+  // pulling in unrelated `unit_mix.units[n].*` per-unit issues too).
+  const AREA_ISSUE_FIELDS = new Set(['unit_mix.units']);
+  const isAreaIssue = (field: string) => field.startsWith('areas.') || AREA_ISSUE_FIELDS.has(field);
+  const areaErrors = run.reconciliation.issues.filter((i) => isAreaIssue(i.field));
+  const areaWarnings = run.validation.filter((i) => i.severity === 'warning' && isAreaIssue(i.field));
 
   return (
     <div>
