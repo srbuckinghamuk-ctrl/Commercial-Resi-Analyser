@@ -9,10 +9,12 @@ import type {
   DealSpiderInputs,
   CalculatorInputs,
 } from './conversion-types';
+import { DEFAULT_AREA_BRIDGE } from './model/areas';
+import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  EquitySource, FacilityTerms,
+  CalculatorInputsV6, EquitySource, FacilityTerms,
 } from './model/finance-types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
@@ -312,6 +314,37 @@ export function defaultCalculatorInputsV5(project?: {
       acquisition_date: null,
       acquisition_tax_override_pence: null,
       acquisition_tax_override_reason: '',
+    },
+  };
+}
+
+/** R9: a v6 document created fresh starts on the manual basis with a zeroed
+ *  bridge — identical behaviour to every pre-R9 document until the user fills
+ *  the bridge in and selects it. */
+export const DEFAULT_AREAS = { ...DEFAULT_AREA_BRIDGE };
+
+/**
+ * v6 defaults (R9 Task 3): the document a freshly opened calculator starts on.
+ *
+ * Deliberately identical to what `migrateV5toV6` stamps on a v5 document — the
+ * manual basis with a zeroed bridge, and a zeroed ancillary block on every unit
+ * — so a brand-new appraisal and a migrated one behave the same and neither
+ * computes a different cost area from `conversion_costs.total_construction_sqm`.
+ * `conversion-defaults.test.ts` pins the two against each other field for field.
+ *
+ * The unit map is not dead code even though `DEFAULT_UNIT_MIX` ships empty: it
+ * is what keeps this function honest if that default ever gains a starter unit.
+ */
+export function defaultCalculatorInputsV6(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV6 {
+  const v5 = defaultCalculatorInputsV5(project);
+  return {
+    ...v5,
+    inputs_version: 6,
+    areas: { ...DEFAULT_AREAS },
+    unit_mix: {
+      units: v5.unit_mix.units.map((u) => ({ ...u, ancillary: { ...DEFAULT_UNIT_ANCILLARY } })),
     },
   };
 }

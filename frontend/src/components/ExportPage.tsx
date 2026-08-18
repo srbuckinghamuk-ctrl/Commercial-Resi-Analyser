@@ -6,7 +6,7 @@ import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
-import { runAppraisal, migrateInputsToV5 } from '../lib/model';
+import { runAppraisal, migrateInputsToV6 } from '../lib/model';
 import { buildProvenance } from '../lib/report-provenance';
 
 interface ExportPageProps {
@@ -93,11 +93,11 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
         }
         // R3b: hydrate to v4 like the authoritative appraisal path below, and
         // apply the same legacy sq-ft normalisation the memo path already does
-        // (closes a pre-existing spider/memo inconsistency). R8 Task 10: the
-        // server now normalises to v5, so this must too -- migrateInputsToV4
-        // throws on a v5 document (spec §3.5's guard against the v1-fallback
-        // corruption path).
-        spider = computeSpider(migrateInputsToV5(normaliseUnitAreas(raw), selectedProject), eligibility);
+        // (closes a pre-existing spider/memo inconsistency). R9 Task 3: the
+        // server now normalises to v6, so this must too -- each vN entry point
+        // throws on a v(N+1) document (spec §3.5's guard against the
+        // v1-fallback corruption path).
+        spider = computeSpider(migrateInputsToV6(normaliseUnitAreas(raw), selectedProject), eligibility);
       }
 
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
@@ -122,9 +122,9 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       }
 
       // Single authoritative run — the memo consumes it directly and performs
-      // zero recalculation (spec §11.9). R8 Task 10: normalise to v5, matching
+      // zero recalculation (spec §11.9). R9 Task 3: normalise to v6, matching
       // the server boundary.
-      const run = runAppraisal(migrateInputsToV5(normaliseUnitAreas(raw), selectedProject));
+      const run = runAppraisal(migrateInputsToV6(normaliseUnitAreas(raw), selectedProject));
 
       let eligibility: EligibilityAssessment | null = null;
       try {

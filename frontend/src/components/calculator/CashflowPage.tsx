@@ -1,11 +1,11 @@
-import type { AppraisalRun, CalculatorInputsV5 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV6 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 
 interface Props {
-  inputs: CalculatorInputsV5;
-  onChange: (partial: Partial<CalculatorInputsV5>) => void;
+  inputs: CalculatorInputsV6;
+  onChange: (partial: Partial<CalculatorInputsV6>) => void;
   run: AppraisalRun;
 }
 
@@ -58,7 +58,7 @@ export default function CashflowPage({ run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>6. Cashflow Projection</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>7. Cashflow Projection</h3>
 
       <ReconciliationStrip run={run} />
 

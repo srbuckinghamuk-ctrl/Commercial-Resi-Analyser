@@ -31,6 +31,18 @@ describe('checkSpaceStandards', () => {
   it('ignores zero-area (not yet entered) units', () => {
     expect(checkSpaceStandards([unit({ floor_area_sqm: 0 })])).toHaveLength(0);
   });
+
+  it('tests NDSS against internal NIA only, never ancillary area', () => {
+    // A 45 m² 1-bed with a 10 m² balcony is still below the 50 m² NDSS minimum
+    // and still undeliverable. Letting balcony area into this check would turn
+    // failing units into passing ones.
+    const issues = checkSpaceStandards([{
+      id: 'u1', type: '1bed', floor_area_sqm: 45, estimated_value_pence: 1, comparable_notes: '',
+      ancillary: { balcony_terrace_sqm: 10, balcony_terrace_value_pence: 0, parking_spaces: 0, parking_value_pence: 0 },
+    } as never]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].unitId).toBe('u1');
+  });
 });
 
 describe('suggestUnitMix', () => {

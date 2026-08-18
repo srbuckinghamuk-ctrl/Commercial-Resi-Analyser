@@ -1,6 +1,6 @@
 # Financial Model — Test Cases
 
-**Status:** Authoritative test-case register for calculation specification `2.6.0` (see
+**Status:** Authoritative test-case register for calculation specification `2.8.0` (see
 `docs/financial-model/calculation-specification.md`). This document enumerates every
 golden fixture, ledger fixture, invariant and regression vector that pins the engine's
 behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
@@ -2909,3 +2909,297 @@ The gate and the rendered page catch different defects (R7's lesson), so all thr
 regimes plus an unconfirmed case were rendered and read, not merely asserted. See
 §5 of `docs/reviews/2026-08-17-release-8-implementation-report.md` for what was
 seen.
+
+---
+
+## 14. Area bridge and ancillary [R9 — calc 2.8.0]
+
+Three new golden fixtures, taking the shared corpus from 9 files to 12 (11 of
+which carry their own `inputs`; fixture K names a `base_fixture` instead). All
+three are `inputs_version: 6`. As with fixture M, **every expected value was
+derived by hand from the specification before either engine was run**, and — as
+recorded in the R9 Task 12 report — every one matched in both engines on the
+first execution.
+
+### 14.1 Fixture N — the full bridge on the derived basis
+
+`fixtures/financial-model/n-area-bridge.json`. England/NI, all-cash, six units,
+`areas.basis: 'bridge_derived'`. The geometry is Task 1's `FULL_BRIDGE`, so the
+reconciliation is independently asserted in `areas.test.ts` / `test_areas.py` as
+well as here.
+
+```
+proposed_gia        = 600 - 20 + 40                    = 620 m2
+developed_gia       = 620 - 100 - 0                    = 520 m2
+available_for_units = 520 - 62 - 18 - 14 - 6           = 420 m2
+unit_nia            = 4x60 + 2x70                      = 380 m2
+unallocated         = 420 - 380                        =  40 m2
+
+nia_to_gia_pct          = 380/520 = 0.7307692... -> 73.08%
+nia_to_proposed_gia_pct = 380/620 = 0.6129032... -> 61.29%
+saleable_to_developed   = 380/520 (sell_all)     -> 73.08%
+```
+
+The load-bearing pin is the construction cost, because it is what makes the
+basis switch (spec §15.3) observable:
+
+```
+base        = round(105,000p/m2 x 520 m2)  = 54,600,000p
+contingency = round(54,600,000 x 10%)      =  5,460,000p
+compliance  =                                        0p
+                            construction   = 60,060,000p
+```
+
+`conversion_costs.total_construction_sqm` is deliberately **380**, not 520. A
+regression that read the manual field would produce 43,890,000p — a
+16,170,000p miss — rather than pass silently. The fixture pins
+`area_bridge.manual_area_sqm: 380` alongside `area_bridge.developed_area_sqm: 520`
+so both halves of the switch are visible in the same file.
+
+The `unallocated_sqm: 40` is inside §15.6's 10%-of-developed-area warning
+threshold (52 m2) and `nia_to_gia_pct: 73.08` is inside the 65–90% band, so the
+fixture is a clean document, not one that ships with warnings.
+
+**Why the fractional-area rounding is *not* pinned by this fixture.** §3.4 rounds
+the construction base half-up, and that is pinned in both engines at the
+`calculateTotalConstructionCost` / `calculate_total_construction_cost` level
+including the odd-half case (`333 × 100.5 = 33,466.5 → 33,467`). What no fixture
+could cheaply add is the *derived* area reaching that rounding site fractionally:
+fixture N's rate is 105,000p/m2, and 105,000 × any plausible area fraction is an
+integer, so exercising the rounding through the fixture would mean changing the
+rate as well and re-deriving its entire cost stack. The property is instead
+asserted at the seam where it lives —
+`conversion-calc-engine.test.ts`'s "carries a FRACTIONAL bridge-derived area into
+the half-up rounding site" and
+`test_financial_model_schedule.py::test_carries_a_fractional_bridge_derived_area_into_the_half_up_rounding_site`,
+which build a bridge whose `developed_gia_sqm` is 100.5 (entered nowhere as
+100.5) and pin the resulting 33,467p.
+
+### 14.2 Fixture O — ancillary value across a blended exit
+
+`fixtures/financial-model/o-ancillary-value.json`. England/NI, all-cash, two
+units, `route: 'blended'` with `u2` retained. Both units carry a balcony and a
+parking space, so the ancillary split is exercised on **both** sides of the exit
+— which is the whole point: a fixture where only the sold unit had ancillary
+would pass against an engine that folded all ancillary into receipts.
+
+```
+gdv_internal  = 30,000,000 + 40,000,000                        = 70,000,000p
+gdv_ancillary = (500,000 + 1,500,000) + (800,000 + 1,700,000)  =  4,500,000p
+gdv           = 70,000,000 + 4,500,000                         = 74,500,000p
+
+gross_sales (u1 only)   = 30,000,000 + 2,000,000               = 32,000,000p
+unrealised (u2 only)    = 40,000,000 + 2,500,000               = 42,500,000p
+```
+
+`gross_sales_pence` reaches the harness through a new `FLAT_KEYS` mapper in both
+engines (it is a schedule total, not a summary metric). Pinning it matters
+because neither GDV nor receipts alone can prove the split: the two must differ
+by exactly the retained unit's internal **plus** ancillary value.
+
+The fixture also carries an `expected_scenarios` block — a new fixture facility
+in both harnesses — pinning the appraisal produced by applying the document's own
+`downside` scenario. That scenario is a **pure −10% GDV stress** (every other
+lever is 0) so the stressed figures are hand-derivable in one step, each value
+rounded half-up independently (spec §12.1 / §15.5):
+
+```
+u1: 30,000,000 -> 27,000,000   balcony 500,000 -> 450,000   parking 1,500,000 -> 1,350,000
+u2: 40,000,000 -> 36,000,000   balcony 800,000 -> 720,000   parking 1,700,000 -> 1,530,000
+
+stressed gdv_internal  = 63,000,000p
+stressed gdv_ancillary =  4,050,000p
+stressed gdv           = 67,050,000p
+stressed gross_sales   = 27,000,000 + 1,800,000 = 28,800,000p
+stressed unrealised    = 67,050,000 - 28,800,000 = 38,250,000p
+```
+
+`area_bridge.ancillary_balcony_terrace_sqm` (20 m2) and `ancillary_parking_spaces`
+(2) are pinned identically in the base and the stressed run, which is the tested
+form of "a price stress is not an area stress".
+
+### 14.3 Fixture P — Scotland, levered
+
+`fixtures/financial-model/p-scotland-levered.json`. This closes R8's own open
+item: every non-English fixture was all-cash, so the jurisdiction-aware
+tax → TDC → `peak_debt` interaction was unpinned.
+
+The tax was read from `fixtures/tax/acquisition-tax-tables.json` — the normative
+record — not recalled:
+
+```
+LBTT non-residential, bands in force from 25 Jan 2019, slice basis,
+consideration 60,000,000p (GBP 600,000):
+  0%  on the first GBP 150,000                    =         0p
+  1%  on GBP 150,000..250,000  (GBP 100,000)      =   100,000p
+  5%  on GBP 250,000..600,000  (GBP 350,000)      = 1,750,000p
+                                          total   = 1,850,000p
+
+SDLT on the same consideration:
+  2%  on GBP 150,000..250,000                     =   200,000p
+  5%  on GBP 250,000..600,000                     = 1,750,000p
+                                          total   = 1,950,000p     (+100,000p)
+```
+
+The facility is a committed net of 70,000,000p inside a gross of 78,000,000p,
+rolled-up at 8% (monthly rate 1/150 exactly), day-one advance 30,000,000p,
+`equity_first` against 45,000,000p of committed cash equity, 12-month term. The
+ledger was worked month by month by hand; the closing balance identity is the
+cross-check that ties it:
+
+```
+draws          = 30,000,000 (m0) + 3,288,400 (m3) + 5,000,000 (m4)
+               + 5,000,000 (m5) + 4,400,000 x 5 (m6..m10)   = 65,288,400p
+arrangement fee (capitalised, m0)                           =  1,400,000p
+rolled-up interest, m0..m11                                 =  3,913,416p
+                                     peak debt (month 11)   = 70,601,816p
+```
+
+and `65,288,400 + 1,400,000 + 3,913,416 = 70,601,816` exactly, which is what
+makes the interest total independently verifiable rather than merely asserted.
+Finance costs are `3,913,416 + 1,400,000 + 780,000 (exit fee on the gross
+facility) = 6,093,416p`; TDC is `112,848,400 + 6,093,416 = 118,941,816p`.
+
+**Why peak debt is the point.** With `equity_first`, the extra 100,000p of SDLT
+exhausts committed equity one month earlier, so month 3 draws 100,000p more and
+that difference then compounds for nine months. The England/NI counterfactual
+was worked through by hand in full:
+
+| | Scotland (LBTT) | England/NI (SDLT) | Difference |
+|---|---|---|---|
+| Acquisition tax | 1,850,000p | 1,950,000p | +100,000p |
+| Acquisition cost | 63,250,000p | 63,350,000p | +100,000p |
+| Rolled-up interest | 3,913,416p | 3,919,577p | +6,161p |
+| **Peak debt** | 70,601,816p | 70,707,977p | **+106,161p** |
+| **TDC** | 118,941,816p | 119,047,977p | **+106,161p** |
+
+That the TDC difference is 106,161p and **not** 100,000p is exactly the
+interaction R8 left unpinned, and it is why the three deltas are pinned
+separately in `jurisdiction_contrast` rather than asserted equal to one another.
+An engine that computed the right tax but funded it wrongly would satisfy the
+acquisition-cost assertion and fail the other two.
+
+### 14.4 The jurisdiction-contrast harness, rewritten
+
+R8's non-English assertion hard-coded fixture M's figures inside a loop over
+every non-English fixture, with a `MAINTENANCE` note saying that adding a second
+one meant rewriting it. Fixture P is that second one, so it was rewritten rather
+than patched: each non-English fixture now carries its own hand-derived
+`jurisdiction_contrast` block (the England/NI regime and tax figure, and the
+acquisition-cost, TDC and peak-debt deltas), and the test reads it.
+
+Two assertions now cover the property, in both engines:
+
+1. **The England/NI twin** — the same document with `jurisdiction` switched,
+   run over every non-English fixture at any inputs version. Pins the regime
+   names, the English tax figure, and all three deltas.
+2. **The pre-R8 form** — R8's original route, kept for the **v5** non-English
+   fixtures because it additionally proves the migration stamps `england_ni` on a
+   document that never said otherwise. Now driven off the same contrast block.
+
+### 14.5 Version partitioning of the migration loops
+
+The corpus now mixes v5 and v6 documents, and `migrate_inputs_to_v5` refuses a v6
+one by design — producing a v5 document would mean dropping `areas` and every
+unit's `ancillary` block, the exact silent downgrade that guard exists to
+prevent. The loops were partitioned accordingly, and the partition is asserted,
+not assumed:
+
+- **migrated-to-v5** runs over the v5 fixtures only.
+- **migrated-to-v6** is new and runs over the **whole** corpus — it covers both
+  the upgrade path (v5 → v6) and the merge branch (v6 → v6). The merge branch is
+  the one that matters for the new fixtures: it must carry `areas` and every
+  unit's `ancillary` through untouched, and a merge that reset either to the
+  zeroed default would move fixture N's construction cost by 16,170,000p and
+  fixture O's GDV by 4,500,000p rather than pass.
+- **pre-R8 form** runs over the England/NI **v5** fixtures. A v6 fixture has no
+  pre-R8 form either: stamping it v3/v4 and migrating back up would leave the R9
+  blocks zeroed — a different document, not an older one. A roster guard asserts
+  the excluded set is exactly `{M, N, O, P}` and that each exclusion is justified
+  by one of the two stated reasons.
+
+### 14.6 The v6 numerical-identity gate
+
+`test_v6_migration_moves_no_existing_figure` (and its `it.each` twin) is what
+makes "purely additive" a tested claim rather than an assertion: every fixture is
+run before and after migration to v6 and the whole `metrics`, `model` and
+`schedule` objects must be identical, not merely close.
+
+It carries two structural halves, because the numeric comparison alone cannot see
+either:
+
+- For a **pre-v6** document, the migration must write the manual basis with a
+  zeroed bridge and zeroed ancillary — asserted **by value**, not against
+  `DEFAULT_AREA_BRIDGE`, since comparing the migration's output to the constant it
+  was built from could not catch that constant becoming non-zero.
+- For an **already-v6** document, the mirror image: the blocks it carries must
+  survive the merge untouched. Zeroing them there would be equally wrong and the
+  numeric gate would not see it for fixture P, whose zeroed bridge on the manual
+  basis computes the same figures either way.
+
+A non-vacuity guard pins the corpus size at 11 in both languages.
+
+### 14.7 The single-accessor guard tests
+
+Spec §15.4, governance §9. Both guards are asserted to fire, not merely to be
+present:
+
+- **TypeScript** — two `no-restricted-syntax` selectors in
+  `frontend/eslint.config.js`, run by `npm run lint --max-warnings 0`, so a
+  violation fails the build.
+- **Python** — `tests/test_accessor_guard.py`, an `ast` walk over every module
+  under `app/`. Two of its tests assert the scan stays **silent** on the three
+  shapes a substring search would wrongly flag (a doc comment naming the field,
+  the module docstrings, and a field-name string literal passed to `err()`), and
+  two more plant a real violation in a probe module, assert it is caught, and
+  delete it in a `finally`.
+
+### 14.8 Calendar-date validation (an R8 carry-forward)
+
+R8 recorded, and did not fix, that acquisition-date validation was a shape-only
+regex, so `2026-02-31` validated and was then reported as
+`date_basis: 'transaction_date'`. Both engines now perform a real calendar check
+(`datetime.date(y, m, d)` in Python; a UTC `Date` round-trip preserving all three
+components in TypeScript, with the year-0–99 and `MINYEAR` edges handled so the
+two accept exactly the same set of strings).
+
+Both halves are asserted, in both engines: `2026-02-31`, `2026-13-01`,
+`2026-00-15`, `2026-01-00`, `2026-04-31` and `2027-02-29` are rejected, and
+`2028-02-29` — a real leap day — is accepted with no issue on the field at all.
+The second half is what stops a check that rejected every February date from
+passing.
+
+Band selection remains lexicographic, so a calendar-invalid date still resolves
+to a band set; what has changed is that the document no longer validates, so the
+report is gated.
+
+### 14.9 A new cost-to-complete counter-example, recorded not tuned away
+
+Fixture P made the corpus-wide cost-to-complete assertion ("a shortfall implies
+the ledger recorded a funding gap somewhere") fail, and the failure is a genuine
+finding about §5.10 rather than a defect in the fixture.
+
+§5.10's remaining-funding term counts the undrawn **net** facility, while its
+remaining-cost term counts future rolled-up interest — but rolled-up interest
+never consumes the net facility; it capitalises against the **gross** facility's
+headroom. Fixture P is the first fixture in the corpus to structure its facility
+the way a real one is structured (net sized to the costs, interest reserve carved
+out of the gross), so it reports a 392,483p shortfall at `m = 1` against a ledger
+whose `funding_gap_pence` is 0. Fixture F did not surface this only because its
+net facility carries roughly 16,000,000p of slack.
+
+The fixture was **not** widened until the metric agreed. Instead both engines'
+corpus tests now name `p-scotland-levered` as a counter-example and **assert**
+its shape (a shortfall present, a funding gap of zero), so it cannot drift off
+the list in silence, and both tests assert they still saw a positive case as well
+— the implication is not allowed to become vacuous. Spec §5.10 records the
+counter-example and defers the correction to its own release, tracked as **C1** in
+`docs/superpowers/plans/2026-08-17-second-audit-release-plan.md` and owned by R14.
+
+The defect's figures are **pinned, not merely documented**: fixture P carries
+`cost_to_complete_first_shortfall_month: 1` and
+`cost_to_complete_max_shortfall_pence: 392483`, both reached through `FLAT_KEYS`
+mappers and both negative-controlled in each engine. A documented number with no
+assertion behind it drifts silently; whoever picks up C1 needs a figure that fails
+the moment the behaviour changes, which is what makes the deferral
+self-policing rather than something someone has to remember to re-check.

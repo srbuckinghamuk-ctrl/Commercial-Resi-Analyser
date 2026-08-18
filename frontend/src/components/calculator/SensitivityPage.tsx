@@ -174,7 +174,7 @@ export default function SensitivityPage({ inputs }: Props) {
 
   const heading = (
     <>
-      <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 8 }}>9. Sensitivity</h3>
+      <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 8 }}>10. Sensitivity</h3>
       <p style={{ color: MUTED, fontSize: 13, marginBottom: 24, maxWidth: 780 }}>
         Every cell and every bar re-runs the full appraisal with the committed facility and
         equity sources held at their base values (spec §12.2). A position needing more debt

@@ -243,6 +243,22 @@ class TestShortfallDirectionAgainstFundingGap:
         assert ctc.first_shortfall_month is None
         assert ctc.max_shortfall_pence == 0
 
+    # R9 Task 12. Fixture P is a natural counter-example to the remaining direction, and
+    # it is named here rather than tuned away. Spec Sec 5.10 already says the implication
+    # is verified across the current corpus, not proved as a law; fixture P is the first
+    # fixture that structures its facility the way a real rolled-up development facility
+    # is structured -- a net facility sized to the COSTS (70,000,000p against 66,688,400p
+    # of draws and fees) with the interest reserve carved out of the gross facility
+    # (8,000,000p of headroom against 3,913,416p of rolled-up interest). Sec 5.10's
+    # snapshot charges that interest against the NET facility, so it reports a
+    # 392,483p shortfall in month 1 while the ledger records no funding gap at all,
+    # because the interest capitalised into gross headroom exactly as intended.
+    #
+    # That is a real, reportable limitation of Sec 5.10 for rolled-up facilities (see the
+    # R9 Task 12 report and spec Sec 5.10's Known limitation) -- not a defect in the
+    # fixture, and not something to hide by widening the facility until the metric agrees.
+    _SHORTFALL_WITHOUT_GAP_STEMS = {"p-scotland-levered"}
+
     def test_holds_across_every_golden_fixture(self):
         # Release 3a Task 8: the whole corpus is in scope again -- `parse_calculator_inputs`
         # dispatches on inputs_version, so the inputs_version 4 documents (fixture H, spec
@@ -250,6 +266,7 @@ class TestShortfallDirectionAgainstFundingGap:
         # for this implication (shortfall AND funding gap both present), so it strengthens
         # this test rather than just widening it.
         saw_positive_case = False
+        saw_counter_example = False
         for path in sorted(FIXTURE_DIR.glob("*.json")):
             doc = json.loads(path.read_text())
             # Release 4a: Fixture K (kind "sensitivity", spec Sec 12) carries no `inputs`
@@ -261,8 +278,17 @@ class TestShortfallDirectionAgainstFundingGap:
             schedule = build_schedule(inputs)
             model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
             ctc = compute_cost_to_complete(schedule, model, inputs)
+            if path.stem in self._SHORTFALL_WITHOUT_GAP_STEMS:
+                # Asserted, not merely skipped: if a future change made the metric agree
+                # with the ledger here, this fixture must be taken off the list
+                # deliberately rather than drift off it in silence.
+                assert ctc.first_shortfall_month is not None, path.stem
+                assert model.totals.funding_gap_pence == 0, path.stem
+                saw_counter_example = True
+                continue
             if ctc.first_shortfall_month is not None:
                 assert model.totals.funding_gap_pence > 0, path.stem
                 saw_positive_case = True
         # Guards against the implication holding only vacuously across the corpus.
         assert saw_positive_case
+        assert saw_counter_example

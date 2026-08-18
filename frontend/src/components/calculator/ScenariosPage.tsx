@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import type { ScenarioOverrides } from '../../lib/conversion-types';
-import type { AppraisalRun, CalculatorInputsV5 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV6 } from '../../lib/model';
 import { runAppraisal } from '../../lib/model';
 import { applyScenario } from '../../lib/model/apply-scenario';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV5;
-  onChange: (partial: Partial<CalculatorInputsV5>) => void;
+  inputs: CalculatorInputsV6;
+  onChange: (partial: Partial<CalculatorInputsV6>) => void;
 }
 
 type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';
@@ -48,7 +48,7 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>8. Scenario Comparison</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>9. Scenario Comparison</h3>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
         {scenarioKeys.map((key) => (

@@ -16,9 +16,62 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R11** | Line-level VAT and TOGC cash flow | P1 | inputs v8, calc minor |
 | **R12** | Dated, dependent programme phases | P1 | inputs v9, calc minor |
 | **R13** | Exit/refinance depth: unit sales, NOI, DSCR/ICR, constraint binding | P1 | inputs v10, calc minor |
-| **R14** | Lender case governance + monitoring cost-to-complete | P1 | new records, calc none |
+| **R14** | Lender case governance + monitoring cost-to-complete **+ the §5.10 rolled-up-interest defect carried from R9 (see “Carried defects” below)** | P1 | new records, calc **minor** — §5.10's remaining-funding term moves |
 | **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags | P1 | inputs v11 |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
+
+---
+
+## Carried defects — found in one release, to be corrected in another
+
+A defect found mid-release is not always safe to fix in that release. Where the fix
+is a behaviour change to a **reported** metric, it needs its own hand-derived
+fixtures and its own gate, and bolting it onto an unrelated release would ship an
+unreviewed change to a number a lender reads. Those defects are listed here so they
+are picked up deliberately rather than rediscovered.
+
+Each entry must state the defect in one line, name **where the counter-example is
+asserted** (a deferral with no failing assertion behind it is a note someone has to
+remember to check), and name the release that owns the correction.
+
+### C1 — §5.10 charges rolled-up interest against the net facility [found R9, owned by R14]
+
+**The defect, in one line:** spec §5.10's cost-to-complete series counts future
+rolled-up interest in *remaining cost* while counting only the undrawn **net**
+facility in *remaining funding* — but rolled-up interest never consumes the net
+facility (§4.2), it capitalises against the **gross** facility's headroom — so any
+facility structured the normal way (net sized to the costs, interest reserve carved
+out of the gross) reports a phantom shortfall.
+
+**Where the counter-example is asserted.**
+`fixtures/financial-model/p-scotland-levered.json` pins
+`cost_to_complete_first_shortfall_month: 1` and
+`cost_to_complete_max_shortfall_pence: 392483` against a ledger whose
+`funding_gap_pence` is `0`. Both engines' corpus tests
+(`TestShortfallDirectionAgainstFundingGap::test_holds_across_every_golden_fixture`
+and its vitest twin) name that fixture explicitly and **assert its shape** — a
+shortfall present, a funding gap of zero — so it cannot drift off the exclusion
+list in silence, and both assert they still saw a positive case so the implication
+cannot go vacuous. The pins are negative-controlled in both engines.
+
+**Why it was not fixed in R9.** R9 is an area release. Correcting §5.10 changes a
+figure the lender-facing report prints, on every levered rolled-up appraisal. It
+needs its own hand-derived fixtures covering the rolled-up and serviced cases
+separately, which is a release's worth of work, not a fix round's.
+
+**What the correction has to decide** (recorded so R14 does not have to re-derive
+it): whether remaining funding should credit gross-facility headroom for a
+rolled-up facility, or whether remaining cost should stop counting rolled-up
+interest — these are not equivalent once the gross facility is exhausted, and the
+serviced-interest case (where interest genuinely is funded, from equity, §4.3)
+must not be broken by whichever is chosen. Spec §5.10's "Known limitation"
+paragraph carries the full statement and the arithmetic.
+
+**Not to be closed by widening fixture P's facility.** That was considered and
+rejected in R9: tuning the input until the metric agrees hides a systematic
+misstatement behind a fixture nobody would question again.
+
+---
 
 ## R7 — Report repair and governance (this release)
 

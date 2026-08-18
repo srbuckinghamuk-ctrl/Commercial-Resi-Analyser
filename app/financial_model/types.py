@@ -393,8 +393,71 @@ class CalculatorInputsV5(CalculatorInputsV4):
     acquisition: AcquisitionInputsV5  # type: ignore[assignment]
 
 
+# --- Release 9 (calc 2.8.0): area bridge and per-unit ancillary ---
+
+# Deliberately re-declared, not imported from areas.AreaBasis: areas.py imports
+# engine.py (for pct), and engine.py imports this module, so importing areas
+# from types.py would be a cycle (types -> areas -> engine -> types). This is
+# the same trade-off AcquisitionInputsV5.jurisdiction makes above, and
+# test_migrate_v6.py asserts the two literal value-sets stay identical so they
+# cannot silently drift apart.
+AreaBasis = Literal["bridge_derived", "manual"]
+
+
+class AreaBridgeInputs(Model):
+    """R9 (spec Sec 15.1). Every field is ENTERED; nothing derived is stored.
+    Mirrors AreaBridgeInputs in areas.ts."""
+
+    basis: AreaBasis = "manual"
+    existing_gia_sqm: float = Field(default=0.0, ge=0)
+    demolished_gia_sqm: float = Field(default=0.0, ge=0)
+    extension_gia_sqm: float = Field(default=0.0, ge=0)
+    retained_commercial_gia_sqm: float = Field(default=0.0, ge=0)
+    untouched_gia_sqm: float = Field(default=0.0, ge=0)
+    circulation_common_sqm: float = Field(default=0.0, ge=0)
+    plant_riser_sqm: float = Field(default=0.0, ge=0)
+    store_bin_cycle_sqm: float = Field(default=0.0, ge=0)
+    amenity_sqm: float = Field(default=0.0, ge=0)
+    # External amenity and landscape. NOT gross internal area -- carried for
+    # display but never deducted from the reconciliation.
+    external_amenity_sqm: float = Field(default=0.0, ge=0)
+
+
+class UnitAncillary(Model):
+    """R9 (spec Sec 15.5). Areas here sit outside NIA; values sit outside
+    internal saleable GDV. Mirrors UnitAncillary in conversion-types.ts."""
+
+    balcony_terrace_sqm: float = Field(default=0.0, ge=0)
+    balcony_terrace_value_pence: int = Field(default=0, ge=0)
+    parking_spaces: int = Field(default=0, ge=0)
+    parking_value_pence: int = Field(default=0, ge=0)
+
+
+class ProposedUnitV6(ProposedUnit):
+    """Extended rather than edited: ProposedUnit is shared with the v1-v5
+    document shapes, the same reasoning R8 applied to AcquisitionInputsV5."""
+
+    ancillary: UnitAncillary = Field(default_factory=UnitAncillary)
+
+
+class UnitMixInputsV6(Model):
+    units: list[ProposedUnitV6] = Field(default_factory=list)
+
+
+class CalculatorInputsV6(CalculatorInputsV5):
+    """Mirrors CalculatorInputsV5 with the R9 area bridge and ancillary blocks.
+    Subclasses V5 for the same reason V5 subclasses V4: the engine dispatches on
+    it, and a flat re-declaration would make those isinstance checks silently
+    False for v6 documents."""
+
+    inputs_version: Literal[6] = 6  # type: ignore[assignment]
+    unit_mix: UnitMixInputsV6  # type: ignore[assignment]
+    areas: AreaBridgeInputs = Field(default_factory=AreaBridgeInputs)
+
+
 AnyCalculatorInputs = (
-    CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5
+    CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
+    | CalculatorInputsV5 | CalculatorInputsV6
 )
 
 
@@ -406,6 +469,8 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    if version == 6:
+        return CalculatorInputsV6.model_validate(doc)
     if version == 5:
         return CalculatorInputsV5.model_validate(doc)
     if version == 4:
@@ -424,4 +489,4 @@ FlagCode = Literal[
     "breakeven_cap_exhausted", "facility_redrawn_after_redemption",
 ]
 
-CALC_VERSION = "2.7.0"
+CALC_VERSION = "2.8.0"

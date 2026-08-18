@@ -135,7 +135,7 @@ async def test_invalid_lender_valuation_rejected_with_422(client, project):
 async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
     response status == 'legacy_unreconciled', outputs recalculated under
-    calc_version 2.7.0, and finance.requires_confirmation True in the stored
+    calc_version 2.8.0, and finance.requires_confirmation True in the stored
     (migrated) snapshot."""
     v1_snapshot = {
         "acquisition": FIXTURE_A_INPUTS["acquisition"],
@@ -162,10 +162,10 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     body = resp.json()
 
     assert body["status"] == "legacy_unreconciled"
-    assert body["calc_version"] == "2.7.0"
+    assert body["calc_version"] == "2.8.0"
     # R8 Task 10: the server normalisation chain now runs v1 -> v2 -> v3 -> v4
-    # -> v5.
-    assert body["inputs_snapshot"]["inputs_version"] == 5
+    # -> v5. R9 Task 3 extends it to v6.
+    assert body["inputs_snapshot"]["inputs_version"] == 6
     assert body["inputs_snapshot"]["lender_valuation"] is None
     assert body["inputs_snapshot"]["programme"] is None
     assert body["inputs_snapshot"]["sales_phasing"] is None
@@ -180,7 +180,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert acq["jurisdiction_evidence_status"] == "unconfirmed"
     assert acq["acquisition_date"] is None
     # Outputs were recalculated by the v2 engine, not just passed through.
-    assert body["outputs"]["metrics"]["calc_version"] == "2.7.0"
+    assert body["outputs"]["metrics"]["calc_version"] == "2.8.0"
 
 
 async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, project):
@@ -208,7 +208,7 @@ async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, 
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 5
+    assert snapshot["inputs_version"] == 6
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
     # A v5 row is not a legacy v1 migration -- it must not be stamped as one.
@@ -335,6 +335,79 @@ async def test_audit_hash_moves_with_governance_status_alone(client, project):
     assert audit_hash(status="draft", **common) != audit_hash(status="reconciled", **common)
 
 
+def _zeroed_areas(**overrides) -> dict:
+    """Every entered R9 area-bridge field, zeroed, with `overrides` applied.
+    Mirrors DEFAULT_AREA_BRIDGE / areas.DEFAULT_AREA_BRIDGE."""
+    return {
+        "basis": "manual",
+        "existing_gia_sqm": 0, "demolished_gia_sqm": 0, "extension_gia_sqm": 0,
+        "retained_commercial_gia_sqm": 0, "untouched_gia_sqm": 0,
+        "circulation_common_sqm": 0, "plant_riser_sqm": 0,
+        "store_bin_cycle_sqm": 0, "amenity_sqm": 0, "external_amenity_sqm": 0,
+        **overrides,
+    }
+
+
+async def test_area_bridge_large_unallocated_balance_stays_reconciled(client, project):
+    """R9 (Task 8, Step 5). Spec Sec 7/Sec 15.7: an unreconciled area bridge
+    produces a warning and never gates the document -- unlike an unconfirmed
+    tax jurisdiction (knowable on day one), an unallocated balance is
+    frequently and legitimately unknown at appraisal stage.
+
+    Python has no DraftReason union -- that governance (spec Sec 13/Sec 14)
+    lives entirely in report-provenance.ts on the frontend. The Python-
+    observable mirror of "does not gate the document" is that the persisted
+    `status` stays 'reconciled' (report_safe True) with the warning still
+    recorded in `validation.issues`, exactly as
+    test_status_reconciled_only_when_report_safe below pins for the general
+    reconciled/draft split.
+
+    `basis: "manual"` keeps `conversion_costs.total_construction_sqm`
+    (fixture A's funded 400 m2) as the cost area, so entering a much larger
+    `existing_gia_sqm` swings only the bridge's own arithmetic -- not the
+    facility -- which is what isolates the warning as the only thing under
+    test (see the equivalent TS isolation note in report-provenance.test.ts).
+    """
+    inputs = fixture_a_inputs()
+    inputs["inputs_version"] = 6
+    inputs["areas"] = _zeroed_areas(basis="manual", existing_gia_sqm=2000)  # units total 200 m2
+
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Area bridge unallocated appraisal",
+        "inputs_snapshot": inputs,
+    })
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "reconciled"
+    assert any(
+        i["severity"] == "warning" and i["field"] == "areas.unallocated_sqm"
+        for i in body["validation"]["issues"]
+    ), body["validation"]["issues"]
+
+
+async def test_area_bridge_hard_rule_failure_is_rejected_before_persistence(client, project):
+    """The basis conflict IS resolvable by the user, so it stays a hard error.
+    validate_inputs runs before run_appraisal (I2, final R3a review) so a hard
+    area-bridge failure -- here, the bridge-derived basis selected with no
+    bridge entered -- 422s before a record is ever persisted, the same guard
+    test_negative_costs_rejected pins for a negative cost. This is the
+    Python-observable analogue of the TS suite's 'still marks a document
+    unreconciled when the bridge fails a HARD rule'."""
+    inputs = fixture_a_inputs()
+    inputs["inputs_version"] = 6
+    inputs["areas"] = _zeroed_areas(basis="bridge_derived")  # existing_gia_sqm left at 0
+
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Area bridge hard-error appraisal",
+        "inputs_snapshot": inputs,
+    })
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert any(d.get("field") == "areas.existing_gia_sqm" for d in detail), detail
+
+
 async def test_status_reconciled_only_when_report_safe(client, project):
     """Fixture A (clean) -> status 'reconciled'. A case with a funding gap
     (tiny net facility, tiny equity) -> status 'draft' with issues listed."""
@@ -383,7 +456,7 @@ async def test_get_returns_authoritative_outputs(client, project):
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
     assert body["gdv_pence"] == 120_000_000
-    assert body["calc_version"] == "2.7.0"
+    assert body["calc_version"] == "2.8.0"
 
 
 def _programme(construction: dict) -> dict:

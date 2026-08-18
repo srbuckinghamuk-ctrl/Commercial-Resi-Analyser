@@ -190,9 +190,27 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
     expect(ctc.max_shortfall_pence).toBe(0);
   });
 
+  // R9 Task 12. Fixture P is a natural counter-example to the remaining direction, and it
+  // is named here rather than tuned away. Spec §5.10 already says the implication is
+  // verified across the current corpus, not proved as a law; fixture P is the first
+  // fixture that structures its facility the way a real rolled-up development facility is
+  // structured — a net facility sized to the COSTS (70,000,000p against 66,688,400p of
+  // draws and fees) with the interest reserve carved out of the gross facility
+  // (8,000,000p of headroom against 3,913,416p of rolled-up interest). §5.10's snapshot
+  // charges that interest against the NET facility, so it reports a 392,483p shortfall in
+  // month 1 while the ledger records no funding gap at all, because the interest
+  // capitalised into gross headroom exactly as intended.
+  //
+  // That is a real, reportable limitation of §5.10 for rolled-up facilities (see spec
+  // §5.10's Known limitation) — not a defect in the fixture, and not something to hide by
+  // widening the facility until the metric agrees. Mirrors the Python twin.
+  const SHORTFALL_WITHOUT_GAP_STEMS = ['p-scotland-levered.json'];
+
   it('holds across every golden fixture: shortfall ⇒ some ledger month has funding_gap_pence > 0', () => {
     const fixtureDir = resolve(__dirname, '../../../../fixtures/financial-model');
     const files = readdirSync(fixtureDir).filter((f) => f.endsWith('.json'));
+    let sawPositiveCase = false;
+    let sawCounterExample = false;
     for (const f of files) {
       const fx = JSON.parse(readFileSync(join(fixtureDir, f), 'utf-8')) as {
         kind: string; inputs: CalculatorInputsV3;
@@ -204,9 +222,22 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
       const schedule = buildSchedule(fx.inputs);
       const model = runLedger(schedule, fx.inputs.finance, fx.inputs.equity_sources);
       const ctc = computeCostToComplete(schedule, model, fx.inputs);
+      if (SHORTFALL_WITHOUT_GAP_STEMS.includes(f)) {
+        // Asserted, not merely skipped: if a future change made the metric agree with the
+        // ledger here, this fixture must be taken off the list deliberately rather than
+        // drift off it in silence.
+        expect(ctc.first_shortfall_month, f).not.toBeNull();
+        expect(model.totals.funding_gap_pence, f).toBe(0);
+        sawCounterExample = true;
+        continue;
+      }
       if (ctc.first_shortfall_month !== null) {
         expect(model.totals.funding_gap_pence, f).toBeGreaterThan(0);
+        sawPositiveCase = true;
       }
     }
+    // Guards against the implication holding only vacuously across the corpus.
+    expect(sawPositiveCase).toBe(true);
+    expect(sawCounterExample).toBe(true);
   });
 });

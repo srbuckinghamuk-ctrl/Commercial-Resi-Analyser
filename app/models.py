@@ -351,13 +351,15 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v5, not by this schema) -- may be any of v1 through
-    # v5. A v5 document's `acquisition` block carries the R8 fields
+    # migrate_inputs_to_v6, not by this schema) -- may be any of v1 through
+    # v6. A v5+ document's `acquisition` block carries the R8 fields
     # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
     # `acquisition_date`, `acquisition_tax_override_pence`,
     # `acquisition_tax_override_reason`) defined on
-    # `app.financial_model.types.AcquisitionInputsV5`, which is the typed
-    # schema those fields are actually enforced against.
+    # `app.financial_model.types.AcquisitionInputsV5`; a v6 document adds the R9
+    # `areas` block and a per-unit `ancillary` block, defined on
+    # `AreaBridgeInputs` / `UnitAncillary` in the same module. Those are the
+    # typed schemas the fields are actually enforced against.
     inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the
     # server always recalculates and never trusts these for persistence:

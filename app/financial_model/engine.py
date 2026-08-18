@@ -20,6 +20,23 @@ def money_round(x: float) -> int:
     return math.floor(x + 0.5)
 
 
+def pct(numerator: float, denominator: float) -> float | None:
+    """Percentage to 2 dp; None when the denominator is zero (spec Sec 1.5).
+
+    Moved here from metrics.py in R9 so areas.py can use it without an import
+    cycle (metrics.py imports areas.py for the area-bridge output block).
+    metrics.py re-exports it, so every existing importer is unaffected.
+
+    Uses money_round (half-up toward +inf, matching JS Math.round), not the
+    Python builtin round() (round-half-to-even) -- this is the same rounding
+    the pre-move implementation in metrics.py used, so the move is behaviour-
+    neutral, and it mirrors pct.ts's Math.round exactly.
+    """
+    if denominator == 0:
+        return None
+    return money_round((numerator / denominator) * 10000) / 100
+
+
 @dataclass
 class ModelFlag:
     code: str

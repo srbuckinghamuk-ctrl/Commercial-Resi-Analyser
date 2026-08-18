@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { deriveMetrics, pct, breakevenFlags } from './metrics';
 import { runLedger } from './monthly-engine';
-import { runAppraisal, migrateInputsToV4, migrateInputsToV5 } from './index';
+import { runAppraisal, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6 } from './index';
 import { defaultCalculatorInputsV2, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
+import { DEFAULT_AREA_BRIDGE } from './areas';
+import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
+import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  AcquisitionInputsV5, AnyCalculatorInputs, EquitySource, FacilityTerms,
+  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, EquitySource, FacilityTerms,
   MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
 
@@ -617,5 +620,108 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
     expect(_atBefore.jurisdiction).toBe('england_ni');
     expect(_atAfter.jurisdiction).toBe('england_ni');
     expect(_atAfter.date_basis).toBe('assumed_current');
+  });
+});
+
+// --- R9 Task 9 — area bridge and GDV split on the appraisal result ---
+
+type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
+  & Partial<ProposedUnitV6>;
+
+/** R9 (Task 9). A v6 document built from the migration chain's own defaults —
+ *  see validation.test.ts's identical helper. `units`/`conversion_costs`/`areas`
+ *  are the only overrides this suite needs, each merged onto the defaults so a
+ *  partial override does not blank out required sibling fields. */
+function makeV6Inputs(overrides: {
+  areas?: Partial<typeof DEFAULT_AREA_BRIDGE>;
+  units?: MinimalUnit[];
+  conversion_costs?: Partial<CalculatorInputsV6['conversion_costs']>;
+} = {}): CalculatorInputsV6 {
+  const base = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+  return {
+    ...base,
+    areas: { ...base.areas, ...(overrides.areas ?? {}) },
+    conversion_costs: { ...base.conversion_costs, ...(overrides.conversion_costs ?? {}) },
+    unit_mix: overrides.units
+      ? {
+        units: overrides.units.map((u) => ({
+          type: '1bed', comparable_notes: '', ancillary: DEFAULT_UNIT_ANCILLARY, ...u,
+        })),
+      }
+      : base.unit_mix,
+  };
+}
+
+describe('R9 — the appraisal result carries the area bridge', () => {
+  it('emits every derived line and ratio', () => {
+    const run = runAppraisal(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 520, circulation_common_sqm: 60 },
+      units: [{ id: 'u1', floor_area_sqm: 380, estimated_value_pence: 50_000_000 }],
+    }));
+    expect(run.metrics.area_bridge.developed_gia_sqm).toBe(520);
+    expect(run.metrics.area_bridge.available_for_units_sqm).toBe(460);
+    expect(run.metrics.area_bridge.unallocated_sqm).toBe(80);
+    expect(run.metrics.area_bridge.nia_to_gia_pct).toBe(73.08);
+  });
+
+  it('reports the cost area actually used', () => {
+    const run = runAppraisal(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' },
+      conversion_costs: { total_construction_sqm: 480 },
+    }));
+    expect(run.metrics.developed_area_sqm).toBe(480);
+  });
+
+  it('splits GDV while keeping gdv_pence as the total', () => {
+    const run = runAppraisal(makeV6Inputs({
+      units: [{
+        id: 'u1',
+        floor_area_sqm: 50,
+        estimated_value_pence: 25_000_000,
+        ancillary: {
+          balcony_terrace_sqm: 6, balcony_terrace_value_pence: 400_000,
+          parking_spaces: 1, parking_value_pence: 1_200_000,
+        },
+      }],
+    }));
+    expect(run.metrics.gdv_internal_pence).toBe(25_000_000);
+    expect(run.metrics.gdv_ancillary_pence).toBe(1_600_000);
+    expect(run.metrics.gdv_pence).toBe(26_600_000);
+  });
+
+  it('keeps every GDV-denominated ratio on the total, unamended', () => {
+    // profit_on_gdv_pct, ltgdv_developer_pct and the break-even percentages all
+    // divide by gdv_pence. Because gdv_pence remains the TOTAL, none of them
+    // needed a spec amendment in R9.
+    //
+    // Fix round 1 (review): the expected denominator below is written as the
+    // literal sum of this fixture's own internal (25,000,000) and ancillary
+    // (1,600,000) values — NOT read back off `run.metrics.gdv_pence` — and the
+    // expected profit is the literal figure this exact fixture produces
+    // (pinned once via a probe run, deterministic thereafter: no randomness
+    // anywhere in the cost stack or financing defaults). Reading both sides of
+    // the assertion off the same result object would be self-consistent by
+    // construction — if `gdv_pence` were silently narrowed to internal-only,
+    // both operands would narrow together and the assertion would still hold.
+    // Hard-coding the denominator independently means a narrowing of
+    // `gdv_pence` moves the actual value away from this fixed expectation, so
+    // this test — not just the sibling "splits GDV" test above — actually
+    // discriminates the total-vs-internal-only regression it claims to guard.
+    const run = runAppraisal(makeV6Inputs({
+      units: [{
+        id: 'u1',
+        floor_area_sqm: 50,
+        estimated_value_pence: 25_000_000,
+        ancillary: {
+          balcony_terrace_sqm: 6, balcony_terrace_value_pence: 400_000,
+          parking_spaces: 1, parking_value_pence: 1_200_000,
+        },
+      }],
+    }));
+    const knownProfitPence = 22_156_972;
+    const knownTotalGdvPence = 25_000_000 + 1_600_000; // internal + ancillary, literal
+    expect(run.metrics.profit_pence).toBe(knownProfitPence);
+    expect(run.metrics.profit_on_gdv_pct)
+      .toBe(pct(knownProfitPence, knownTotalGdvPence));
   });
 });

@@ -1,4 +1,4 @@
-import type { CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5 } from './finance-types';
+import type { CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6 } from './finance-types';
 
 /** Sq ft per sq m (spec §3.2 `global_per_sqft` basis). No shared constant existed
  * for this anywhere the financial model could import from without creating a new
@@ -31,7 +31,13 @@ export interface LenderGdvResult {
  * `runAppraisal` outright (metrics runs before validation in the pipeline, so
  * validation hasn't had a chance to report anything yet at that point).
  */
-export function computeLenderGdv(inputs: CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5): LenderGdvResult | null {
+// R9: `CalculatorInputsV6` added to the union. Python's twin gates on
+// `isinstance(inputs, CalculatorInputsV3)`, and V6 subclasses V5 -> V4 -> V3,
+// so it already accepted a v6 document; without this the two engines would
+// have disagreed about which documents have lender metrics at all.
+export function computeLenderGdv(
+  inputs: CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5 | CalculatorInputsV6,
+): LenderGdvResult | null {
   const lv = inputs.lender_valuation;
   if (lv == null) return null;
 
@@ -56,6 +62,11 @@ export function computeLenderGdv(inputs: CalculatorInputsV3 | CalculatorInputsV4
         value = Math.round(u.estimated_value_pence * (1 + (lv.global_value as number) / 100));
         break;
       case 'global_per_sqft':
+        // R9 (spec §3.2, amended): bound explicitly to INTERNAL net internal
+        // area. `u.floor_area_sqm` is internal NIA and ancillary areas live in
+        // `u.ancillary`, so this is already correct — the binding is stated and
+        // tested so that it stays correct, rather than being an accident of
+        // which field happened to exist when the basis was written.
         value = Math.round((lv.global_value as number) * u.floor_area_sqm * SQFT_PER_SQM);
         break;
       case 'unit_type': {

@@ -9,13 +9,15 @@ from dataclasses import fields
 import pytest
 
 from app.financial_model import run_appraisal
-from app.financial_model.engine import money_round, run_ledger
+from app.financial_model.areas import DEFAULT_AREA_BRIDGE
+from app.financial_model.engine import money_round, pct, run_ledger
 from app.financial_model.metrics import breakeven_flags, derive_metrics
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
     migrate_inputs_to_v5,
+    migrate_inputs_to_v6,
 )
 from app.financial_model.schedule import (
     MonthReceipts,
@@ -27,16 +29,21 @@ from app.financial_model.schedule import (
 from app.financial_model.types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
+    AreaBridgeInputs,
     CalculatorInputsV2,
     CalculatorInputsV4,
     CalculatorInputsV5,
+    CalculatorInputsV6,
     EquitySource,
     ExitStrategyInputs,
     FacilityTerms,
     ProposedUnit,
+    ProposedUnitV6,
     SalesPhasingInputs,
     SalesPhasingTranche,
+    UnitAncillary,
     UnitMixInputs,
+    UnitMixInputsV6,
 )
 
 # --- helpers copied verbatim from test_financial_model_engine.py ---
@@ -572,3 +579,113 @@ class TestAcquisitionTaxIsJurisdictionAware:
         assert before.acquisition_tax.jurisdiction == "england_ni"
         assert after.acquisition_tax.jurisdiction == "england_ni"
         assert after.acquisition_tax.date_basis == "assumed_current"
+
+
+# --- R9 Task 9 — area bridge and GDV split on the appraisal result ---
+
+
+def _make_v6_inputs(
+    *,
+    areas: dict | None = None,
+    units: list[dict] | None = None,
+    conversion_costs: dict | None = None,
+) -> CalculatorInputsV6:
+    """Python twin of metrics.test.ts's makeV6Inputs (Task 9), matching the
+    identical helper already established in test_financial_model_validation.py.
+    A v6 document built off the migration chain's own defaults; only
+    `areas`/`units`/`conversion_costs` are accepted since that is all this
+    suite needs. Each unit dict may carry an `ancillary` sub-dict (R9 spec
+    Sec 15.5); omitted, it defaults to zero via UnitAncillary()."""
+    v6 = migrate_inputs_to_v6({"inputs_version": 1})
+    if areas is not None:
+        v6.areas = AreaBridgeInputs(**areas)
+    if conversion_costs is not None:
+        v6.conversion_costs = v6.conversion_costs.model_copy(update=conversion_costs)
+    if units is not None:
+        v6.unit_mix = UnitMixInputsV6(units=[
+            ProposedUnitV6(
+                id=u["id"],
+                type=u.get("type", "1bed"),
+                floor_area_sqm=u["floor_area_sqm"],
+                estimated_value_pence=u["estimated_value_pence"],
+                comparable_notes=u.get("comparable_notes", ""),
+                ancillary=UnitAncillary(**u["ancillary"]) if "ancillary" in u else UnitAncillary(),
+            )
+            for u in units
+        ])
+    return v6
+
+
+class TestAreaBridgeAndGdvSplitOnResult:
+    """Python twin of 'R9 — the appraisal result carries the area bridge' in
+    metrics.test.ts. Puts area_bridge, developed_area_sqm, gdv_internal_pence
+    and gdv_ancillary_pence on the result so the UI (Task 10) and the report
+    (Task 11) read them rather than recomputing."""
+
+    def test_emits_every_derived_line_and_ratio(self):
+        inputs = _make_v6_inputs(
+            areas={
+                **DEFAULT_AREA_BRIDGE, "basis": "bridge_derived",
+                "existing_gia_sqm": 520, "circulation_common_sqm": 60,
+            },
+            units=[{"id": "u1", "floor_area_sqm": 380, "estimated_value_pence": 50_000_000}],
+        )
+        run = run_appraisal(inputs)
+        assert run.metrics.area_bridge.developed_gia_sqm == 520
+        assert run.metrics.area_bridge.available_for_units_sqm == 460
+        assert run.metrics.area_bridge.unallocated_sqm == 80
+        assert run.metrics.area_bridge.nia_to_gia_pct == 73.08
+
+    def test_reports_the_cost_area_actually_used(self):
+        inputs = _make_v6_inputs(
+            areas={**DEFAULT_AREA_BRIDGE, "basis": "manual"},
+            conversion_costs={"total_construction_sqm": 480},
+        )
+        run = run_appraisal(inputs)
+        assert run.metrics.developed_area_sqm == 480
+
+    def test_splits_gdv_while_keeping_gdv_pence_as_the_total(self):
+        inputs = _make_v6_inputs(units=[{
+            "id": "u1", "floor_area_sqm": 50, "estimated_value_pence": 25_000_000,
+            "ancillary": {
+                "balcony_terrace_sqm": 6, "balcony_terrace_value_pence": 400_000,
+                "parking_spaces": 1, "parking_value_pence": 1_200_000,
+            },
+        }])
+        run = run_appraisal(inputs)
+        assert run.metrics.gdv_internal_pence == 25_000_000
+        assert run.metrics.gdv_ancillary_pence == 1_600_000
+        assert run.metrics.gdv_pence == 26_600_000
+
+    def test_keeps_every_gdv_denominated_ratio_on_the_total_unamended(self):
+        # profit_on_gdv_pct, ltgdv_developer_pct and the break-even percentages
+        # all divide by gdv_pence. Because gdv_pence remains the TOTAL, none of
+        # them needed a spec amendment in R9.
+        #
+        # Fix round 1 (review): the expected denominator below is written as
+        # the literal sum of this fixture's own internal (25,000,000) and
+        # ancillary (1,600,000) values -- NOT read back off
+        # run.metrics.gdv_pence -- and the expected profit is the literal
+        # figure this exact fixture produces (pinned once via a probe run,
+        # deterministic thereafter: no randomness anywhere in the cost stack
+        # or financing defaults, and identical to the TS twin). Reading both
+        # sides of the assertion off the same result object would be
+        # self-consistent by construction -- if gdv_pence were silently
+        # narrowed to internal-only, both operands would narrow together and
+        # the assertion would still hold. Hard-coding the denominator
+        # independently means a narrowing of gdv_pence moves the actual value
+        # away from this fixed expectation, so this test -- not just the
+        # sibling "splits GDV" test above -- actually discriminates the
+        # total-vs-internal-only regression it claims to guard.
+        inputs = _make_v6_inputs(units=[{
+            "id": "u1", "floor_area_sqm": 50, "estimated_value_pence": 25_000_000,
+            "ancillary": {
+                "balcony_terrace_sqm": 6, "balcony_terrace_value_pence": 400_000,
+                "parking_spaces": 1, "parking_value_pence": 1_200_000,
+            },
+        }])
+        run = run_appraisal(inputs)
+        known_profit_pence = 22_156_972
+        known_total_gdv_pence = 25_000_000 + 1_600_000  # internal + ancillary, literal
+        assert run.metrics.profit_pence == known_profit_pence
+        assert run.metrics.profit_on_gdv_pct == pct(known_profit_pence, known_total_gdv_pence)

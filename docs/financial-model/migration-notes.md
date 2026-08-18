@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v6)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -320,3 +320,131 @@ it has no realisation event.
 
 The audit's independently reconciled figures for this case therefore remain
 reproducible line for line.
+
+---
+
+## 9. v5 → v6 (Release 9, calc `2.8.0`)
+
+**Note on this document's coverage.** §5 records v2 → v3; the v3 → v4 (R3a
+programme/phasing/refinance) and v4 → v5 (R8 jurisdiction) steps were never
+written up here, and are recorded in their release reports and in spec §6.1/§14
+instead. That gap is pre-existing and is noted rather than silently continued.
+
+**What's added.** `CalculatorInputsV6` is `CalculatorInputsV5` plus exactly two
+things:
+
+- an `areas` block — the entered area bridge (spec §15.1): `basis`, and the ten
+  entered area lines;
+- an `ancillary` block on **every** unit (`ProposedUnitV6`): `balcony_terrace_sqm`,
+  `balcony_terrace_value_pence`, `parking_spaces`, `parking_value_pence`
+  (spec §15.5).
+
+Plus the version stamp itself. No existing field changes shape, name or
+semantics. `ProposedUnitV6` **extends** `ProposedUnit` rather than replacing it,
+and `CalculatorInputsV6` subclasses `CalculatorInputsV5`, for the same reason R8
+extended `AcquisitionInputsV5`: the engine dispatches on those types, and a flat
+re-declaration would make every `isinstance` check silently false for a v6
+document.
+
+**Defaults, and the one thing the migration deliberately will not do.** A v5
+document migrated to v6 gets `basis: 'manual'` with **every** area line at `0`,
+and a zeroed `ancillary` block on every unit.
+
+`basis: 'manual'` means the construction cost area stays
+`conversion_costs.total_construction_sqm` — the exact number the document already
+used — so no migrated appraisal's computed values move. What the migration
+refuses to do is **synthesise a bridge**: it could have written
+`existing_gia_sqm = total_construction_sqm` and produced a document that looked
+reconciled, and that would have been inventing evidence the record never
+contained. It is the same reasoning that leaves R8's `acquisition_date` null
+rather than stamping today's date, and the same reasoning behind spec §1.5's rule
+that an unknown is never a plausible substitute value. A zeroed bridge is
+self-describing: spec §15.6's warnings and §15.2's efficiencies are all guarded on
+`developed_gia_sqm > 0`, so a document with no entered geometry is treated as one
+that is not using the bridge, not as a 0 m² building.
+
+**Implementation** (`migrateV5toV6` / `migrate_v5_to_v6`,
+`migrateInputsToV6` / `migrate_inputs_to_v6`). The entry point mirrors
+`migrateInputsToV5`'s shape exactly, including its two refusals — an unrecognised
+`inputs_version` throws, and a document declaring version 6 that fails the v6
+structural check throws rather than falling through to the permissive v1 path.
+That guard is R8's hardest-won lesson carried forward: R8 shipped
+`migrateInputsToV4` without a v5 guard, and a v5 document satisfied none of the
+`isVN` checks, fell all the way to the v1 fallback, and was silently corrupted —
+fields dropped, a *confirmed* equity source replaced by an unconfirmed stub with a
+different amount, the facility rebuilt from `ltv_pct` — while the API returned
+201.
+
+`migrateInputsToV5` correspondingly **refuses a v6 document** ("use
+migrateInputsToV6"). Downgrading would mean dropping `areas` and every unit's
+`ancillary` block; a silent downgrade is precisely the failure mode above, in the
+other direction.
+
+Two details in the already-v6 **merge** branch are worth naming because both were
+found in review rather than by construction:
+
+1. The merge default-fills `ancillary` **per unit**, not by taking
+   `saved.unit_mix` verbatim. A stored v6 unit that predates the ancillary block,
+   or a hand-edited row, would otherwise keep a type-required field absent in
+   TypeScript where Python's `model_validate` fills it — a silent cross-engine
+   divergence on the same document.
+2. `areas` is merged onto the defaults field by field, so a partial stored block
+   cannot blank out a sibling line.
+
+### 9.1 The numerical-identity claim, and where it is tested
+
+**Claim: the v5 → v6 migration is purely additive. Every existing appraisal
+produces byte-identical output either side of it — not "close", identical.**
+
+This is a *tested* claim, not an assertion in a document. It is asserted three
+ways, in both languages:
+
+| What | TypeScript | Python |
+|---|---|---|
+| Whole-corpus numeric identity | `golden-fixtures.test.ts`, `migrating %s to v6 moves no computed figure` | `tests/test_migrate_v6.py::test_v6_migration_moves_no_existing_figure` |
+| Pins reproduce after migration | `golden-fixtures.test.ts`, `reproduces its metrics after migration to v6` | `tests/test_financial_model_fixtures.py::test_fixtures_reproduce_their_metrics_after_migration_to_v6` |
+| Structural: nothing synthesised | same test, the zeroed-blocks branch | `_assert_zeroed_r9_blocks` |
+
+The numeric gate compares the **whole** `metrics`, `model` and `schedule` objects
+before and after, not just the pinned headline figures — a migration defect could
+move a ledger or schedule figure that no metric surfaces.
+
+The structural half exists because the numeric half could not see the defect it
+guards against. Until the cost stack read `areas`, a migration that wrongly
+synthesised a bridge would have moved no figure at all and sailed through a purely
+numeric gate — then silently changed every appraisal the moment the wiring landed.
+So the zeroed blocks are asserted directly, and **by value** rather than against
+`DEFAULT_AREA_BRIDGE`: comparing the migration's output to the same constant it
+was built from could not catch that constant itself becoming non-zero.
+
+Since R9 Task 12 the corpus contains v6 fixtures as well, so the same gate carries
+the mirror-image assertion for the merge branch: an already-v6 document's `areas`
+and per-unit `ancillary` must come back out **unchanged**. Zeroing them there
+would be equally wrong, and the numeric comparison would not catch it for a
+fixture on the manual basis, whose figures are the same either way. Non-vacuity
+guards pin the corpus size at 11 in both languages.
+
+**Hash consequence.** As with every previous additive step, `input_hash` is
+computed over the full validated document, so it changes for every row the next
+time it is saved — every migrated document now carries an `areas` block and a
+per-unit `ancillary` block it did not before. This is the ordinary
+re-hash-on-any-change behaviour; `status` is preserved by the existing rule and is
+not reset by the version bump itself. No `expected_metrics` value in any golden
+fixture moved.
+
+### 9.2 The York appraisal after R9
+
+The saved Stonegate record is a migrated v1 snapshot. After R9 it carries a
+`manual` basis with a zeroed bridge and zeroed ancillary on every unit.
+
+| Field | Before R9 | After R9 | Why |
+|---|---|---|---|
+| `construction_cost_pence` | unchanged | unchanged | `manual` basis — the cost area is still `total_construction_sqm` |
+| `gdv_pence` | unchanged | unchanged | zeroed ancillary contributes nothing |
+| `gdv_internal_pence` | — | equal to `gdv_pence` | new field, §3.1 |
+| `gdv_ancillary_pence` | — | `0` | no ancillary recorded |
+| `area_bridge.nia_to_gia_pct` | — | `null` | §1.5 — not computable, not `0%` |
+| every cost, finance and profit figure | unchanged | unchanged | no formula moved |
+
+The audit's independently reconciled figures for this case therefore remain
+reproducible line for line, as they did through R7 and R8.

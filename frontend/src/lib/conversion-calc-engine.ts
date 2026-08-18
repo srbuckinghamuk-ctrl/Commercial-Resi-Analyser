@@ -2,12 +2,40 @@ import type {
   AcquisitionInputs,
   ConversionCostInputs,
   ProposedUnit,
+  ProposedUnitV6,
 } from './conversion-types';
 import type { AcquisitionInputsV5 } from './model/finance-types';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 
-export function calculateGdv(units: ProposedUnit[]): number {
-  return units.reduce((sum, u) => sum + u.estimated_value_pence, 0);
+/** R9 spec §15.5 — a unit's ancillary value. A pre-v6 unit carries no
+ *  `ancillary` block at all, read structurally (the codebase's version-dispatch
+ *  idiom) and resolving to zero. */
+export function unitAncillaryValuePence(u: ProposedUnit | ProposedUnitV6): number {
+  if (!('ancillary' in u) || u.ancillary == null) return 0;
+  return u.ancillary.parking_value_pence + u.ancillary.balcony_terrace_value_pence;
+}
+
+export interface GdvBreakdown {
+  /** Internal saleable unit values — the pre-R9 figure, unchanged. */
+  internal_pence: number;
+  /** Parking plus balcony/terrace. Reported separately, never folded into
+   *  internal saleable value (spec §3.1, which this release rewrites). */
+  ancillary_pence: number;
+  total_pence: number;
+}
+
+export function calculateGdvBreakdown(
+  units: readonly (ProposedUnit | ProposedUnitV6)[],
+): GdvBreakdown {
+  const internal = units.reduce((s, u) => s + u.estimated_value_pence, 0);
+  const ancillary = units.reduce((s, u) => s + unitAncillaryValuePence(u), 0);
+  return { internal_pence: internal, ancillary_pence: ancillary, total_pence: internal + ancillary };
+}
+
+/** Total developer GDV. Retained as the total so every existing caller is
+ *  unaffected by the R9 split; use `calculateGdvBreakdown` where the parts matter. */
+export function calculateGdv(units: readonly (ProposedUnit | ProposedUnitV6)[]): number {
+  return calculateGdvBreakdown(units).total_pence;
 }
 
 /** Spec §11.9: broker fee = round(purchase price × broker_fee_pct / 100). Single source
@@ -67,11 +95,23 @@ export function calculateTotalAcquisitionCost(
   );
 }
 
-export function calculateTotalConstructionCost(costs: ConversionCostInputs): number {
+/**
+ * Spec §3.4 — the construction line of the cost stack.
+ *
+ * R9: the area is an explicit parameter. It used to read
+ * `costs.total_construction_sqm` directly, which made this one of several sites
+ * that each independently decided what "the construction area" meant. Callers
+ * now resolve it once through `developedAreaSqm` (spec §15.4), and the eslint
+ * guard makes reading the raw field here a build failure.
+ */
+export function calculateTotalConstructionCost(
+  costs: ConversionCostInputs,
+  areaSqm: number,
+): number {
   // Spec §1.1: fractional-area products round once, at source, in one step before
-  // contingency -- base = round_half_up(construction_cost_per_sqm_pence × total_construction_sqm).
+  // contingency -- base = round_half_up(construction_cost_per_sqm_pence × area).
   // Integer-sqm inputs are unaffected (rounding an already-integer product is identity).
-  const baseCost = Math.round(costs.construction_cost_per_sqm_pence * costs.total_construction_sqm);
+  const baseCost = Math.round(costs.construction_cost_per_sqm_pence * areaSqm);
   const contingency = Math.round((baseCost * costs.contingency_pct) / 100);
   const compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence;
   return baseCost + contingency + compliance;

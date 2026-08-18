@@ -1,11 +1,51 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { validateInputs, reconcile } from './validation';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
-import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5 } from './migrate';
+import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6 } from './migrate';
 import { runAppraisal } from './index';
-import type { CalculatorInputsV3, CalculatorInputsV4, ProgrammePackage, RefinanceInputs } from './finance-types';
+import { DEFAULT_AREA_BRIDGE } from './areas';
+import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
+import type { ProposedUnitV6 } from '../conversion-types';
+import type {
+  CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, ProgrammePackage, RefinanceInputs,
+} from './finance-types';
+
+type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
+  & Partial<ProposedUnitV6>;
+
+/** R9 (Task 8). A v6 document built from the migration chain's own defaults —
+ *  the only way to get a structurally-valid v6 document without hand-rolling
+ *  every unrelated block. `units`/`conversion_costs`/`areas` are the only
+ *  overrides the area-bridge suite needs, so that is all this accepts; each is
+ *  merged onto the defaults rather than replacing them wholesale, so a partial
+ *  override (e.g. `{ total_construction_sqm: 500 }`) does not blank out
+ *  required sibling fields the schedule/metrics arms still read. */
+function makeV6Inputs(overrides: {
+  areas?: Partial<typeof DEFAULT_AREA_BRIDGE>;
+  units?: MinimalUnit[];
+  conversion_costs?: Partial<CalculatorInputsV6['conversion_costs']>;
+  /** R9 Task 12: the calendar-date suite needs to set `acquisition_date`. */
+  acquisition?: Partial<CalculatorInputsV6['acquisition']>;
+} = {}): CalculatorInputsV6 {
+  const base = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+  return {
+    ...base,
+    acquisition: { ...base.acquisition, ...(overrides.acquisition ?? {}) },
+    areas: { ...base.areas, ...(overrides.areas ?? {}) },
+    conversion_costs: { ...base.conversion_costs, ...(overrides.conversion_costs ?? {}) },
+    unit_mix: overrides.units
+      ? {
+        units: overrides.units.map((u) => ({
+          type: '1bed', comparable_notes: '', ancillary: DEFAULT_UNIT_ANCILLARY, ...u,
+        })),
+      }
+      : base.unit_mix,
+  };
+}
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
   const inputs = defaultCalculatorInputsV2();
@@ -73,12 +113,15 @@ describe('validateInputs — hard errors', () => {
       .some((x) => x.severity === 'error' && x.field === 'finance.sales_sweep_pct')).toBe(true);
   });
 
-  it('warns (not errors) on unreconciled construction area vs unit areas', () => {
+  // R9 retires the ±25% unit-NIA vs construction-area warning that used to
+  // live here (see the 'R9 — the ±25% warning is retired' describe block
+  // below) — a v2 document has no `areas` block, so the replacement area-
+  // bridge rules are inert for it too, and no issue is raised at all now.
+  it('raises no area issue for a v2 document regardless of the area mismatch', () => {
     const issues = errorsFor((i) => {
       i.conversion_costs.total_construction_sqm = 500; // units total 50 sqm
     });
-    const area = issues.find((x) => x.field === 'conversion_costs.total_construction_sqm');
-    expect(area?.severity).toBe('warning');
+    expect(issues.some((x) => x.field === 'conversion_costs.total_construction_sqm')).toBe(false);
   });
 
   it('warns on blended exit with no retained units', () => {
@@ -473,6 +516,36 @@ describe('v4 programme validation', () => {
       expect(issue?.severity).toBe('error');
     });
 
+    // R9 Task 12 — the R8 carry-forward. The shape-only regex that stood here until this
+    // release accepted any four-two-two digit string, so `2026-02-31` validated and was
+    // then reported as `date_basis: 'transaction_date'`. Both halves are asserted: the
+    // impossible date is rejected, and a real leap day is still accepted — a check that
+    // rejected every February date would satisfy the first alone.
+    it('rejects a date that matches the pattern but does not exist', () => {
+      const issues = validateInputs(makeV6Inputs({ acquisition: { acquisition_date: '2026-02-31' } }));
+      expect(issues.some(
+        (i) => i.severity === 'error' && i.field === 'acquisition.acquisition_date',
+      )).toBe(true);
+    });
+
+    it('accepts 29 February in a leap year', () => {
+      const issues = validateInputs(makeV6Inputs({ acquisition: { acquisition_date: '2028-02-29' } }));
+      expect(issues.filter((i) => i.field === 'acquisition.acquisition_date')).toEqual([]);
+    });
+
+    it.each([
+      ['a 13th month', '2026-13-01'],
+      ['a zero month', '2026-00-15'],
+      ['a zero day', '2026-01-00'],
+      ['a 31st of April', '2026-04-31'],
+      ['29 February in a common year', '2027-02-29'],
+    ])('rejects %s', (_label, badDate) => {
+      const issues = validateInputs(makeV6Inputs({ acquisition: { acquisition_date: badDate } }));
+      expect(issues.some(
+        (i) => i.severity === 'error' && i.field === 'acquisition.acquisition_date',
+      )).toBe(true);
+    });
+
     it('warns — but does not error — on an unconfirmed jurisdiction', () => {
       const inputs = v5();
       const issue = validateInputs(inputs).find(
@@ -502,5 +575,283 @@ describe('v4 programme validation', () => {
       expect(issue?.severity).toBe('error');
       expect(run.reconciliation.report_safe).toBe(false);
     });
+  });
+});
+
+// R9 (Task 8, spec §15.6). New area-bridge rules, and the retirement of the
+// ±25% unit-NIA vs construction-area warning they replace.
+describe('R9 — area bridge validation', () => {
+  const AREA_FIELDS = [
+    'existing_gia_sqm', 'demolished_gia_sqm', 'extension_gia_sqm',
+    'retained_commercial_gia_sqm', 'untouched_gia_sqm', 'circulation_common_sqm',
+    'plant_riser_sqm', 'store_bin_cycle_sqm', 'amenity_sqm', 'external_amenity_sqm',
+  ] as const;
+
+  it('hard-errors on a negative entered area, for every bridge field', () => {
+    for (const field of AREA_FIELDS) {
+      const issues = validateInputs(makeV6Inputs({
+        areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual', [field]: -1 },
+      }));
+      expect(issues.some((i) => i.severity === 'error' && i.field === `areas.${field}`), field).toBe(true);
+    }
+  });
+
+  it('does not hard-error on an all-zero bridge (the migrated default)', () => {
+    const issues = validateInputs(makeV6Inputs({ areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' } }));
+    expect(issues.filter((i) => i.field.startsWith('areas.'))).toEqual([]);
+  });
+
+  // Review fix round 1 (Important 1): the case above passes no units, so it
+  // never exercises `bridge.developed_gia_sqm > 0` — the guard that keeps the
+  // units-over-fill hard error inert for a zeroed bridge. A zeroed bridge WITH
+  // a real unit schedule is exactly the state every migrated legacy document
+  // is in, and is the single highest-value scenario for that guard. Confirmed
+  // by hand: removing `bridge.developed_gia_sqm > 0 &&` from validation.ts's
+  // `unit_mix.units` check makes this test fail (available_for_units_sqm is 0,
+  // unitNia is 300, unallocated is -300 < 0).
+  it('does not hard-error on an all-zero bridge with a real unit schedule (migrated legacy document)', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' },
+      units: [
+        { id: 'u1', floor_area_sqm: 100, estimated_value_pence: 1 },
+        { id: 'u2', floor_area_sqm: 100, estimated_value_pence: 1 },
+        { id: 'u3', floor_area_sqm: 100, estimated_value_pence: 1 },
+      ],
+    }));
+    expect(issues.filter((i) => i.field.startsWith('areas.'))).toEqual([]);
+    expect(issues.some((i) => i.severity === 'error' && i.field === 'unit_mix.units')).toBe(false);
+  });
+
+  it('hard-errors when the bridge basis is selected with no bridge', () => {
+    const issues = validateInputs(makeV6Inputs({ areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived' } }));
+    expect(issues).toContainEqual(expect.objectContaining({
+      severity: 'error', field: 'areas.existing_gia_sqm',
+    }));
+  });
+
+  it('does not hard-error the bridge-basis-no-bridge rule once the bridge produces area', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1 },
+    }));
+    expect(issues.some((i) => i.field === 'areas.existing_gia_sqm')).toBe(false);
+  });
+
+  it('hard-errors when demolition exceeds the existing building', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 100, demolished_gia_sqm: 150 },
+    }));
+    expect(issues.some((i) => i.severity === 'error' && i.field === 'areas.demolished_gia_sqm')).toBe(true);
+  });
+
+  it('does not hard-error when demolition exactly consumes the existing building', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 100, demolished_gia_sqm: 100 },
+    }));
+    expect(issues.some((i) => i.field === 'areas.demolished_gia_sqm')).toBe(false);
+  });
+
+  it('hard-errors when retained and untouched area exceed proposed GIA', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: {
+        ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived',
+        existing_gia_sqm: 500, retained_commercial_gia_sqm: 400, untouched_gia_sqm: 200,
+      },
+    }));
+    expect(issues.some((i) => i.severity === 'error' && i.field === 'areas.retained_commercial_gia_sqm')).toBe(true);
+  });
+
+  it('does not hard-error that rule when retained and untouched exactly consume proposed GIA', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: {
+        ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived',
+        existing_gia_sqm: 500, retained_commercial_gia_sqm: 300, untouched_gia_sqm: 200,
+      },
+    }));
+    expect(issues.some((i) => i.field === 'areas.retained_commercial_gia_sqm')).toBe(false);
+  });
+
+  it('hard-errors when non-saleable deductions exceed developed GIA', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 100, circulation_common_sqm: 200 },
+    }));
+    expect(issues.some((i) => i.severity === 'error' && i.field === 'areas.circulation_common_sqm')).toBe(true);
+  });
+
+  it('does not hard-error that rule when deductions exactly consume developed GIA', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 100, circulation_common_sqm: 100 },
+    }));
+    expect(issues.some((i) => i.field === 'areas.circulation_common_sqm')).toBe(false);
+  });
+
+  it('hard-errors when the units over-fill the space available for them', () => {
+    // Over-allocating the building is impossible, not questionable.
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 200 },
+      units: [{ id: 'u1', floor_area_sqm: 300, estimated_value_pence: 1 }],
+    }));
+    expect(issues.some((i) => i.severity === 'error' && i.field === 'unit_mix.units')).toBe(true);
+  });
+
+  it('does not hard-error that rule when the schedule exactly fills the space available', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 200 },
+      units: [{ id: 'u1', floor_area_sqm: 200, estimated_value_pence: 1 }],
+    }));
+    expect(issues.some((i) => i.field === 'unit_mix.units')).toBe(false);
+  });
+
+  it('warns when more than 10% of the developed area is unallocated', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1000 },
+      units: [{ id: 'u1', floor_area_sqm: 100, estimated_value_pence: 1 }],
+    }));
+    expect(issues.some((i) => i.severity === 'warning' && i.field === 'areas.unallocated_sqm')).toBe(true);
+  });
+
+  it('does not warn at exactly the 10% unallocated boundary', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1000 },
+      units: [{ id: 'u1', floor_area_sqm: 900, estimated_value_pence: 1 }], // unallocated = 100 = exactly 10%
+    }));
+    expect(issues.some((i) => i.field === 'areas.unallocated_sqm')).toBe(false);
+  });
+
+  it('warns just past the 10% unallocated boundary', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1000 },
+      units: [{ id: 'u1', floor_area_sqm: 899, estimated_value_pence: 1 }], // unallocated = 101 > 10%
+    }));
+    expect(issues.some((i) => i.severity === 'warning' && i.field === 'areas.unallocated_sqm')).toBe(true);
+  });
+
+  it('warns when net-to-gross efficiency falls outside 65-90%', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1000 },
+      units: [{ id: 'u1', floor_area_sqm: 100, estimated_value_pence: 1 }],
+    }));
+    expect(issues.some((i) => i.severity === 'warning' && i.field === 'areas.nia_to_gia_pct')).toBe(true);
+  });
+
+  it('does not warn at exactly the 65% and 90% net-to-gross boundaries', () => {
+    for (const floorArea of [650, 900]) { // pct(650,1000)=65.00, pct(900,1000)=90.00
+      const issues = validateInputs(makeV6Inputs({
+        areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1000 },
+        units: [{ id: 'u1', floor_area_sqm: floorArea, estimated_value_pence: 1 }],
+      }));
+      expect(issues.some((i) => i.field === 'areas.nia_to_gia_pct'), String(floorArea)).toBe(false);
+    }
+  });
+
+  it('warns just past the 65% and 90% net-to-gross boundaries', () => {
+    for (const floorArea of [649, 901]) {
+      const issues = validateInputs(makeV6Inputs({
+        areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 1000 },
+        units: [{ id: 'u1', floor_area_sqm: floorArea, estimated_value_pence: 1 }],
+      }));
+      expect(issues.some((i) => i.severity === 'warning' && i.field === 'areas.nia_to_gia_pct'), String(floorArea)).toBe(true);
+    }
+  });
+
+  it('warns when the manual basis disagrees with a populated bridge by over 5%', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual', existing_gia_sqm: 1000 },
+      conversion_costs: { total_construction_sqm: 500 },
+    }));
+    expect(issues.some((i) => i.severity === 'warning' && i.field === 'areas.basis')).toBe(true);
+  });
+
+  it('does not warn at exactly the 5% manual-vs-bridge boundary', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual', existing_gia_sqm: 1000 },
+      conversion_costs: { total_construction_sqm: 950 }, // diff = 50 = exactly 5%
+    }));
+    expect(issues.some((i) => i.field === 'areas.basis')).toBe(false);
+  });
+
+  it('warns just past the 5% manual-vs-bridge boundary', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual', existing_gia_sqm: 1000 },
+      conversion_costs: { total_construction_sqm: 949 }, // diff = 51 > 5%
+    }));
+    expect(issues.some((i) => i.severity === 'warning' && i.field === 'areas.basis')).toBe(true);
+  });
+
+  it('does not warn the manual-vs-bridge rule when the bridge itself is zeroed', () => {
+    // Every migrated pre-v6 fixture lands here: basis manual, bridge all zero.
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' },
+      conversion_costs: { total_construction_sqm: 500 },
+    }));
+    expect(issues.some((i) => i.field === 'areas.basis')).toBe(false);
+  });
+
+  it('gates the negative-construction-area error on the manual basis, not the bridge-derived one', () => {
+    // Binding correction to the brief: developed_area_sqm is DERIVED under the
+    // bridge basis, so a negative value there must not be blamed on the manual
+    // field the bridge-basis user cannot see — the three derived-negative
+    // rules above already cover it (here: retained_commercial_gia_sqm, since
+    // 500 existing − 400 retained − 200 untouched < 0).
+    const bridgeNegative = validateInputs(makeV6Inputs({
+      areas: {
+        ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived',
+        existing_gia_sqm: 500, retained_commercial_gia_sqm: 400, untouched_gia_sqm: 200,
+      },
+    }));
+    expect(bridgeNegative.some((i) => i.field === 'conversion_costs.total_construction_sqm')).toBe(false);
+    expect(bridgeNegative.some((i) => i.severity === 'error' && i.field === 'areas.retained_commercial_gia_sqm')).toBe(true);
+
+    const manualNegative = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' },
+      conversion_costs: { total_construction_sqm: -1 },
+    }));
+    expect(manualNegative.some((i) => i.severity === 'error'
+      && i.field === 'conversion_costs.total_construction_sqm')).toBe(true);
+  });
+
+  it('still hard-errors a negative construction area on a pre-v6 document (no areas block at all)', () => {
+    const inputs = defaultCalculatorInputsV2();
+    inputs.conversion_costs.total_construction_sqm = -1;
+    expect(validateInputs(inputs).some((i) => i.severity === 'error'
+      && i.field === 'conversion_costs.total_construction_sqm')).toBe(true);
+  });
+
+  it('stays silent on a bridge that ties within policy', () => {
+    const issues = validateInputs(makeV6Inputs({
+      areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 500, circulation_common_sqm: 50 },
+      units: [{ id: 'u1', floor_area_sqm: 450, estimated_value_pence: 1 }],
+    }));
+    expect(issues.filter((i) => i.field.startsWith('areas.'))).toEqual([]);
+  });
+});
+
+describe('R9 — the ±25% warning is retired, not softened', () => {
+  const RETIRED_25PCT = 'differ by more than 25%';
+
+  it('is emitted by no input at all', () => {
+    // R8 lesson: a positive `toContain` sails straight past an old sentence
+    // being re-added ALONGSIDE the true one. Zero-counts on retired strings are
+    // load-bearing. `memo-release-gate.test.ts` spent a release asserting the
+    // memo CONTAINED a false statement.
+    for (const inputs of [
+      makeV6Inputs({
+        areas: { ...DEFAULT_AREA_BRIDGE, basis: 'manual' },
+        conversion_costs: { total_construction_sqm: 500 },
+        units: [{ id: 'u1', floor_area_sqm: 252, estimated_value_pence: 1 }],
+      }),
+      makeV6Inputs({
+        areas: { ...DEFAULT_AREA_BRIDGE, basis: 'bridge_derived', existing_gia_sqm: 500 },
+        units: [{ id: 'u1', floor_area_sqm: 252, estimated_value_pence: 1 }],
+      }),
+    ]) {
+      expect(validateInputs(inputs).filter((i) => i.message.includes(RETIRED_25PCT))).toEqual([]);
+    }
+  });
+
+  it('is absent from the source of both engines', () => {
+    const ts = readFileSync(resolve(__dirname, './validation.ts'), 'utf-8');
+    const py = readFileSync(resolve(__dirname, '../../../../app/financial_model/validation.py'), 'utf-8');
+    expect(ts).not.toContain(RETIRED_25PCT);
+    expect(py).not.toContain(RETIRED_25PCT);
   });
 });

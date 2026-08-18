@@ -1,12 +1,12 @@
-import type { AppraisalRun, CalculatorInputsV5 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV6 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import CostToCompleteCard from './CostToCompleteCard';
 
 interface Props {
-  inputs: CalculatorInputsV5;
-  onChange: (partial: Partial<CalculatorInputsV5>) => void;
+  inputs: CalculatorInputsV6;
+  onChange: (partial: Partial<CalculatorInputsV6>) => void;
   run: AppraisalRun;
 }
 
@@ -46,7 +46,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * null, whether because no lender valuation was recorded or because a recorded one could not
  * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
  * surfaces the distinction via its own validation messages). */
-function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV5; run: AppraisalRun }) {
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV6; run: AppraisalRun }) {
   const { metrics } = run;
   const lv = inputs.lender_valuation;
 
@@ -106,7 +106,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>7. Appraisal Summary</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>8. Appraisal Summary</h3>
 
       <ReconciliationStrip run={run} />
 

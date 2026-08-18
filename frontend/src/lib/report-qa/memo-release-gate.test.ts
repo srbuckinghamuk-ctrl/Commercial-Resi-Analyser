@@ -16,6 +16,7 @@ import {
   qaProject, qaEligibility, sellAllInputs, retainAllInputs,
   refinanceInputs, blendedInputs, legacyV1Snapshot,
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
+  bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
 } from './memo-fixtures';
 
 /**
@@ -35,7 +36,7 @@ const savedRecord: FinancialAppraisal = {
   project_id: qaProject.id,
   name: 'Stonegate appraisal',
   inputs_snapshot: {},
-  calc_version: '2.7.0',
+  calc_version: '2.8.0',
   inputs_version: 4,
   status: 'reconciled',
   input_hash: 'a'.repeat(64),
@@ -86,6 +87,18 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   ['wales (LTT)', welshInputs],
   ['scotland (LBTT)', scottishInputs],
   ['unconfirmed jurisdiction', unconfirmedJurisdictionInputs],
+  // R9 (Task 11, spec §15). A populated, bridge-derived area schedule with a
+  // material unallocated balance and per-unit ancillary value — the layout
+  // sweep above never exercised the area-schedule table, the efficiency
+  // ratios, the unallocated disclosure or the GDV split before this fixture.
+  ['area bridge + ancillary', bridgeAndAncillaryInputs],
+  // R9 fix round 1 (Important 1). The same populated content, stacked with
+  // the tallest jurisdiction strings and the DRAFT - TAX BASIS UNCONFIRMED
+  // banner, so this sweep also stresses the interaction class that produced
+  // the round-1 blank-trailing-page bug — content growth pushing a table
+  // past CONTENT_BOTTOM — under the longest-text route, not only the
+  // shortest (England/NI, fully evidenced) one above.
+  ['area bridge + ancillary, scotland (LBTT), unconfirmed jurisdiction', bridgeAncillaryScottishUnconfirmedInputs],
 ];
 
 describe('investment memorandum release gate', () => {
@@ -149,7 +162,7 @@ describe('investment memorandum release gate', () => {
       expect(text).toContain(savedRecord.id);
       expect(text).toContain(savedRecord.outputs_hash!);
       expect(text).toContain(savedRecord.audit_hash!);
-      expect(text).toContain('2.7.0');
+      expect(text).toContain('2.8.0');
       expect(text).toContain('Europe/London');
       // Fix round 1 (item 4): the row's value, which survived being replaced by
       // 'n/a'. Asserted adjacent to its own label so it cannot be satisfied by
@@ -557,5 +570,60 @@ describe('investment memorandum release gate', () => {
     const first = await report(sellAllInputs());
     const second = await report(sellAllInputs());
     expect(describeLayout(second.info)).toBe(describeLayout(first.info));
+  });
+
+  // ── R9: the area bridge and the GDV split (Task 11, spec §15) ────────────
+
+  it('states the manual cost-area basis in words for a document with no area schedule', async () => {
+    // sellAllInputs() carries no `areas` block at all (every standing route
+    // fixture above predates R9), which resolves to the manual basis with a
+    // zeroed bridge — exactly what migration writes for every pre-R9 document.
+    const { info, run } = await report(sellAllInputs());
+    expect(run.metrics.area_bridge.basis).toBe('manual');
+    expect(documentText(info)).toContain('Construction area entered manually');
+  });
+
+  it('prints the reconciliation, the efficiencies and the GDV split for a populated bridge', async () => {
+    const { info, run } = await report(bridgeAndAncillaryInputs());
+    expect(run.metrics.area_bridge.basis).toBe('bridge_derived');
+    const text = documentText(info);
+    expect(text).toContain('Construction area derived from the area schedule');
+    expect(text).toContain('Proposed GIA');
+    expect(text).toContain('Developed area');
+    expect(text).toContain('Net to gross');
+    expect(text).toContain('Saleable to developed');
+    expect(text).toContain('Internal saleable value');
+    expect(text).toContain('Parking, balconies and terraces');
+    // Fixture geometry (see memo-fixtures.ts doc comment): 50 m² of the 400 m²
+    // developed area, 12.5%, comfortably over the 10% materiality line.
+    expect(run.metrics.area_bridge.unallocated_sqm).toBe(50);
+    expect(text).toContain('50.0 m² of the developed area is unallocated');
+    // R9 pays off the stale "until valued separately in R3" promise (spec
+    // §3.1) — a zero-count assertion, not a substring check, because the
+    // memo containing the *correct* new copy would sail straight past a
+    // `toContain` for it while the stale promise sat right beside it.
+    expect(text).not.toContain('valued separately');
+  });
+
+  // Fix round 1 (Important 1). This route is already carried through the full
+  // page-bounds/sparse-page/orphan-heading/footer/provenance sweep via
+  // `ROUTES` above; this test only pins that the three things it is meant to
+  // combine are actually present together on the document it produces, so a
+  // future edit cannot quietly drop one of them and still pass the sweep.
+  it('combines the populated area content with the tallest jurisdiction strings and an unconfirmed tax basis', async () => {
+    const run = runAppraisal(bridgeAncillaryScottishUnconfirmedInputs());
+    expect(run.reconciliation.report_safe).toBe(true); // sanity: draft status comes from the tax basis, not a reconciliation failure
+    const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBe('tax_basis_unconfirmed'); // sanity fixture check
+
+    const info = await inspectPdf(generateInvestmentMemo(qaProject, run, qaEligibility, prov));
+    expect(info.pages.flatMap(watermarkTexts)).toContain('DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE');
+    const text = documentText(info);
+    expect(text).toContain('Scotland');
+    expect(text).toContain('LBTT');
+    expect(text).toContain('Area Schedule');
+    expect(text).toContain('Internal saleable value');
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
   });
 });

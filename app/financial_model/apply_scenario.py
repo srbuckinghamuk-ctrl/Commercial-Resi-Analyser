@@ -2,7 +2,7 @@
 
 The lever-application rule of spec Sec 12.1, shared by the named scenarios and the
 sensitivity suite (sensitivity.py). Applies a scenario's GDV / cost / timeline / rate
-adjustments to a v2, v3 or v4 inputs document and returns a new document of the same
+adjustments to a v2 through v6 inputs document and returns a new document of the same
 version -- every field the levers do not name is carried through untouched, including
 the committed facility and equity sources, which spec Sec 12.2 holds invariant.
 
@@ -24,6 +24,17 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
 
     for unit in out.unit_mix.units:
         unit.estimated_value_pence = money_round(unit.estimated_value_pence * gdv_multiplier)
+        # R9 spec Sec 15.5: ancillary is part of GDV, so a GDV stress moves it.
+        # Ancillary AREAS are deliberately untouched -- a price stress is not an
+        # area stress; area reduction is its own R16 lever. A pre-v6 unit
+        # carries no ancillary attribute at all (matching unit_ancillary_value_pence
+        # in schedule.py), hence the getattr guard rather than a plain attribute check.
+        ancillary = getattr(unit, "ancillary", None)
+        if ancillary is not None:
+            ancillary.parking_value_pence = money_round(ancillary.parking_value_pence * gdv_multiplier)
+            ancillary.balcony_terrace_value_pence = money_round(
+                ancillary.balcony_terrace_value_pence * gdv_multiplier
+            )
 
     out.conversion_costs.construction_cost_per_sqm_pence = money_round(
         out.conversion_costs.construction_cost_per_sqm_pence * cost_multiplier

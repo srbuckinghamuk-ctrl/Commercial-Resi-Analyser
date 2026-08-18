@@ -2,7 +2,9 @@ import type {
   AcquisitionInputs, UnitMixInputs, ConversionCostInputs, ExitStrategyInputs,
   RiskItem, ScenarioOverrides, DealSpiderInputs,
 } from '../conversion-types';
+import type { UnitMixInputsV6 } from '../conversion-types';
 import type { SpendCurve } from './curves';
+import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 
 export type { SpendCurve };
@@ -193,8 +195,21 @@ export interface CalculatorInputsV5 extends Omit<CalculatorInputsV4, 'inputs_ver
   acquisition: AcquisitionInputsV5;
 }
 
+/**
+ * R9 (spec §15). Adds the area bridge and per-unit ancillary. Purely additive:
+ * migration writes `basis: 'manual'` with a zeroed bridge and zeroed ancillary,
+ * so **no existing appraisal's computed values move**.
+ */
+export interface CalculatorInputsV6
+  extends Omit<CalculatorInputsV5, 'inputs_version' | 'unit_mix'> {
+  inputs_version: 6;
+  unit_mix: UnitMixInputsV6;
+  areas: AreaBridgeInputs;
+}
+
 export type AnyCalculatorInputs =
-  CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5;
+  CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
+  | CalculatorInputsV5 | CalculatorInputsV6;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -335,6 +350,19 @@ export interface AppraisalResultV2 {
    * so pre-R8 report and export readers keep working. Removed in R16.
    */
   sdlt_pence: number;
+  /** R9 spec §15.8 — the full area reconciliation: every entered line, every
+   *  derived line, every efficiency. The UI and the report read areas from here
+   *  and never recompute one. */
+  area_bridge: AreaBridgeResult;
+  /** R9 spec §15.8 — the construction cost area actually used, whichever basis
+   *  produced it. Equal to `area_bridge.developed_area_sqm`. */
+  developed_area_sqm: number;
+  /** R9 spec §3.1 — GDV excluding ancillary. This is the pre-R9 figure, kept so
+   *  a variance against it stays expressible. */
+  gdv_internal_pence: number;
+  /** R9 spec §3.1 — parking plus balcony/terrace value. `gdv_pence` remains the
+   *  TOTAL of the two, so every existing GDV-denominated ratio is unchanged. */
+  gdv_ancillary_pence: number;
   construction_cost_pence: number;
   professional_fees_pence: number;
   statutory_costs_pence: number;
@@ -387,4 +415,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.7.0';
+export const CALC_VERSION = '2.8.0';

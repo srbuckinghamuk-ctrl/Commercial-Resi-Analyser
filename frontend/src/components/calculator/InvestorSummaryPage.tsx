@@ -1,10 +1,10 @@
 import type { Project } from '../../types';
-import type { CalculatorInputsV5, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV6, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 
 interface Props {
-  inputs: CalculatorInputsV5;
+  inputs: CalculatorInputsV6;
   run: AppraisalRun;
   project: Project;
 }
@@ -19,7 +19,7 @@ export default function InvestorSummaryPage({ inputs, run, project }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 4 }}>13. Investor Summary</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 4 }}>14. Investor Summary</h3>
       <p style={{ color: '#64748b', fontSize: 13, marginBottom: 24 }}>One-page deal overview for investors and JV partners</p>
 
       <div style={{ padding: 24, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>

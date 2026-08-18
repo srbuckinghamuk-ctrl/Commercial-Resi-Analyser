@@ -16,7 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 const { default: ConversionCalculator } = await import('./ConversionCalculator');
 const { getAppraisal, saveAppraisal } = await import('../lib/api');
-const { defaultCalculatorInputsV4, defaultCalculatorInputsV5 } = await import('../lib/conversion-defaults');
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV6 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -32,7 +32,7 @@ const PROJECT: Project = {
  * throw a RangeError building the schedule (`Array.from({length: 1e21})`) —
  * the class of failure that used to unmount the whole calculator. */
 function setFacilityTerm(value: string): void {
-  fireEvent.click(screen.getByRole('button', { name: /4\. Finance/ }));
+  fireEvent.click(screen.getByRole('button', { name: /5\. Finance/ }));
   fireEvent.change(screen.getByDisplayValue('12'), { target: { value } });
 }
 
@@ -51,7 +51,7 @@ describe('ConversionCalculator when the engine cannot compute', () => {
 
     // The chrome survives: the nav is still there, so the component did not
     // unmount and its unsaved state is intact.
-    expect(screen.getByRole('button', { name: /5\. Programme/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /6\. Programme/ })).toBeInTheDocument();
     expect(screen.getByText(/appraisal could not be calculated/i)).toBeInTheDocument();
   });
 
@@ -81,7 +81,7 @@ describe('ConversionCalculator when the engine cannot compute', () => {
 
   it('never shows a stale calculation alongside the failure (spec §2)', () => {
     render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: /7\. Appraisal/ }));
+    fireEvent.click(screen.getByRole('button', { name: /8\. Appraisal/ }));
     // A computable document shows real metric cards.
     expect(screen.getByText('Developer GDV')).toBeInTheDocument();
 
@@ -92,11 +92,11 @@ describe('ConversionCalculator when the engine cannot compute', () => {
   });
 });
 
-describe('ConversionCalculator — Sensitivity is page 9', () => {
-  it('offers thirteen numbered pages with Sensitivity ninth', () => {
+describe('ConversionCalculator — Sensitivity is page 10', () => {
+  it('offers fourteen numbered pages with Sensitivity tenth', () => {
     render(<ConversionCalculator project={PROJECT} />);
     for (const label of [
-      '9. Sensitivity', '10. Exit', '11. Risk', '12. Deal Spider', '13. Investor',
+      '10. Sensitivity', '11. Exit', '12. Risk', '13. Deal Spider', '14. Investor',
     ]) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
@@ -104,17 +104,17 @@ describe('ConversionCalculator — Sensitivity is page 9', () => {
 
   it('renders the Sensitivity page when its tab is selected', () => {
     render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: '9. Sensitivity' }));
-    expect(screen.getByRole('heading', { name: /9\. Sensitivity/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '10. Sensitivity' }));
+    expect(screen.getByRole('heading', { name: /10\. Sensitivity/ })).toBeInTheDocument();
   });
 });
 
 // R8 Task 10 fix round 1: this is the flag-day load path every existing
-// appraisal goes through -- a stored v4 snapshot, migrated to v5 on load
+// appraisal goes through -- a stored v4 snapshot, migrated to v6 on load
 // (ConversionCalculator.tsx's getAppraisal(...).then(...) handler). It had
 // zero coverage: the module-level mock above always rejects getAppraisal
 // with 404, so this branch never ran in any prior test.
-describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)', () => {
+describe('ConversionCalculator loads a stored v4 snapshot onto v6 (R8 Task 10, R9 Task 3)', () => {
   function storedV4Appraisal(): FinancialAppraisal {
     const v4Snapshot = defaultCalculatorInputsV4(PROJECT);
     return {
@@ -134,16 +134,17 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
     };
   }
 
-  it('migrates the snapshot to v5 and renders it without an error, not a load failure', async () => {
+  it('migrates the snapshot to v6 and renders it without an error, not a load failure', async () => {
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
 
     render(<ConversionCalculator project={PROJECT} />);
 
-    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV5(...))
+    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV6(...))
     // succeeds -- if that call threw (as migrateInputsToV4 would on a v5
-    // document), the promise chain's .catch() would run instead and the
-    // button would stay "Save Appraisal". Finding "Update Appraisal" is
-    // proof the v4->v5 migration executed cleanly on load.
+    // document, or migrateInputsToV5 now would on a v6 one), the promise
+    // chain's .catch() would run instead and the button would stay "Save
+    // Appraisal". Finding "Update Appraisal" is proof the v4->v6 migration
+    // executed cleanly on load.
     expect(
       await screen.findByRole('button', { name: /update appraisal/i }),
     ).toBeInTheDocument();
@@ -160,9 +161,8 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
     // handleSave spreads the current `inputs` state as-is into inputs_snapshot
     // (ConversionCalculator.tsx: `inputs_snapshot: inputs as unknown as Record<string,
     // unknown>`) -- it is not rebuilt from the v4 type the component declares for
-    // its own state, so the six fields migrateInputsToV5 added are still on the
-    // runtime object even though this component's state type doesn't model them
-    // yet (Task 11 widens it). Inspecting the real payload sent to saveAppraisal
+    // its own state, so the six fields migrateV4toV5 added are still on the
+    // runtime object. Inspecting the real payload sent to saveAppraisal
     // is therefore the direct way to prove they made it through the load, not a
     // rendered string (nothing in the UI shows them until Task 11).
     fireEvent.click(screen.getByRole('button', { name: /update appraisal/i }));
@@ -181,7 +181,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
         };
       };
 
-    expect(sentSnapshot.inputs_version).toBe(5);
+    expect(sentSnapshot.inputs_version).toBe(6);
     expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
     expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
@@ -203,8 +203,10 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
     // already ran synchronously before this async load even started
     // (ConversionCalculator.tsx's effect, first line), so there is always a
     // fresh, computable document on screen regardless of how the load goes.
+    // R9 Task 3 moved the stand-in from 6 to 7: 6 is a version the client now
+    // implements, so it no longer stands in for one it does not.
     const badAppraisal = storedV4Appraisal();
-    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 6 };
+    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 7 };
     vi.mocked(getAppraisal).mockResolvedValueOnce(badAppraisal);
 
     render(<ConversionCalculator project={PROJECT} />);
@@ -213,14 +215,48 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v5 (R8 Task 10)',
     // Not a blank screen: the calculator chrome is fully present and usable
     // on the default document the effect seeded before the failed load.
     expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /7\. Appraisal/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /8\. Appraisal/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save appraisal/i })).toBeEnabled();
+  });
+
+  // R9 Task 3 fix round 1. THE regression this fix exists to stop: once the
+  // server boundary moved to v6, every snapshot it stores is a v6 document.
+  // The client was still calling migrateInputsToV5, which refuses a v6
+  // document by design -- so the throw landed in the .catch() above and every
+  // saved appraisal came back as "Failed to load the saved appraisal" on a
+  // blank default document. Nothing was corrupted, but nothing was reachable
+  // either. This is the round-trip the server actually produces.
+  it('loads the v6 snapshot the server now stores, rather than failing on it', async () => {
+    const storedV6 = storedV4Appraisal();
+    storedV6.inputs_snapshot = defaultCalculatorInputsV6(PROJECT) as unknown as Record<string, unknown>;
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV6);
+    vi.mocked(saveAppraisal).mockResolvedValueOnce(storedV6);
+
+    render(<ConversionCalculator project={PROJECT} />);
+
+    expect(
+      await screen.findByRole('button', { name: /update appraisal/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/failed to load the saved appraisal/i)).not.toBeInTheDocument();
+
+    // And the document held in state is still v6 with its R9 blocks intact --
+    // proof the load merged rather than silently downgrading.
+    fireEvent.click(screen.getByRole('button', { name: /update appraisal/i }));
+    await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
+    const sent = vi.mocked(saveAppraisal).mock.calls.at(-1)![1]
+      .inputs_snapshot as unknown as {
+        inputs_version: number;
+        areas: { basis: string; existing_gia_sqm: number };
+      };
+    expect(sent.inputs_version).toBe(6);
+    expect(sent.areas.basis).toBe('manual');
+    expect(sent.areas.existing_gia_sqm).toBe(0);
   });
 });
 
 // R8 Task 11 (defect B). The calculator posts the document it is holding, but
 // the server is authoritative over that document: it normalises the snapshot to
-// v5 and, on a project's first appraisal, derives the tax jurisdiction from the
+// v6 and, on a project's first appraisal, derives the tax jurisdiction from the
 // postcode. Before this, `handleSave` set `appraisalRecord` and dropped the
 // returned snapshot on the floor, so the screen kept charging England/NI SDLT
 // on a Welsh deal while the store held LTT -- measured on one fixture as
@@ -245,16 +281,17 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     } as unknown as FinancialAppraisal;
   }
 
-  /** What app/api/app.py stores for a Welsh postcode on a first save. */
+  /** What app/api/app.py stores for a Welsh postcode on a first save. R9: the
+   *  server boundary is v6, so this is a v6 document. */
   function serverDerivedWelshSnapshot(): Record<string, unknown> {
-    const v5 = defaultCalculatorInputsV5(PROJECT);
+    const v6 = defaultCalculatorInputsV6(PROJECT);
     return {
-      ...v5,
-      acquisition: { ...v5.acquisition, jurisdiction: 'wales', jurisdiction_source: 'derived' },
+      ...v6,
+      acquisition: { ...v6.acquisition, jurisdiction: 'wales', jurisdiction_source: 'derived' },
     } as unknown as Record<string, unknown>;
   }
 
-  it('posts a v5 document whose jurisdiction the server is still free to derive', async () => {
+  it('posts a v6 document whose jurisdiction the server is still free to derive', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
     render(<ConversionCalculator project={PROJECT} />);
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
@@ -264,7 +301,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
       inputs_version: number;
       acquisition: { jurisdiction_source: string; acquisition_date: string | null };
     };
-    expect(sent.inputs_version).toBe(5);
+    expect(sent.inputs_version).toBe(6);
     expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sent.acquisition.acquisition_date).toBeNull();
   });

@@ -1,11 +1,11 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
-import type { CalculatorInputsV5, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
+import type { CalculatorInputsV6, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV5;
-  onChange: (partial: Partial<CalculatorInputsV5>) => void;
+  inputs: CalculatorInputsV6;
+  onChange: (partial: Partial<CalculatorInputsV6>) => void;
   run: AppraisalRun;
 }
 
@@ -36,14 +36,27 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
     [exit.retained_units],
   );
 
-  const retainedCapitalValue = useMemo(
-    () =>
-      exit.retained_units.reduce((s, r) => {
-        const unit = units.find((u) => u.id === r.unit_id);
-        return s + (unit?.estimated_value_pence ?? 0);
-      }, 0),
-    [exit.retained_units, units],
-  );
+  // R9 fix wave: read, never recompute. This figure seeds
+  // `refinance.investment_value_pence`, so it is not display-only — a scheme
+  // with retained parking or balconies refinanced against an understated
+  // investment value.
+  //
+  // The component used to sum bare `estimated_value_pence` over
+  // `exit.retained_units`, which excluded the ancillary value that spec §15.5
+  // makes part of a unit's worth and that the engine's
+  // `schedule.totals.retained_value_pence` (surfaced as
+  // `metrics.unrealised_value_pence`) has always included. Rather than adding
+  // ancillary to a second, component-local derivation, the whole figure now
+  // comes off the run.
+  //
+  // Note the scope this deliberately adopts: `unrealised_value_pence` is
+  // GDV minus the units the engine actually sells, so under `retain_all` it
+  // covers EVERY unit, not merely the ones the user has typed a rent against.
+  // That is the right basis for both consumers here — the refinance is secured
+  // on the whole retained portfolio, and a portfolio gross yield is measured
+  // against the whole portfolio's value. Under `blended` the engine's retained
+  // set is exactly `exit.retained_units`, so the two definitions coincide.
+  const retainedCapitalValue = run.metrics.unrealised_value_pence;
 
   const grossYield = retainedCapitalValue > 0 ? (totalAnnualRent / retainedCapitalValue) * 100 : 0;
 
@@ -79,7 +92,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   // a block valid (e.g. blended for both, or retain_all for refinance) leaves
   // it untouched.
   const selectRoute = (route: ExitRoute) => {
-    const partial: Partial<CalculatorInputsV5> = { exit_strategy: { ...exit, route } };
+    const partial: Partial<CalculatorInputsV6> = { exit_strategy: { ...exit, route } };
     if (route === 'retain_all') partial.sales_phasing = null;
     if (route === 'sell_all') partial.refinance = null;
     onChange(partial);
@@ -108,7 +121,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>10. Exit Strategy</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>11. Exit Strategy</h3>
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
         {(['sell_all', 'retain_all', 'blended'] as ExitRoute[]).map((route) => (

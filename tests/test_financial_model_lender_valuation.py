@@ -6,8 +6,16 @@ import pytest
 
 from app.financial_model import run_appraisal
 from app.financial_model.lender_valuation import SQFT_PER_SQM, compute_lender_gdv
-from app.financial_model.migrate import default_calculator_inputs_v2, migrate_v2_to_v3
-from app.financial_model.types import CalculatorInputsV3, LenderValuation, ProposedUnit
+from app.financial_model.migrate import default_calculator_inputs_v2, migrate_inputs_to_v6, migrate_v2_to_v3
+from app.financial_model.types import (
+    CalculatorInputsV3,
+    CalculatorInputsV6,
+    LenderValuation,
+    ProposedUnit,
+    ProposedUnitV6,
+    UnitAncillary,
+    UnitMixInputsV6,
+)
 
 PROVENANCE = {"reason": "Test haircut", "author": "test-author", "date": "2026-08-13"}
 
@@ -173,3 +181,36 @@ class TestRunAppraisalContainsAnInvalidLenderValuation:
             i.severity == "error" and i.field == "lender_valuation" and message_contains in i.message
             for i in run.validation
         ), run.validation
+
+
+def _v6_inputs_with_balcony(balcony_terrace_sqm: float) -> CalculatorInputsV6:
+    inputs = migrate_inputs_to_v6({}, {"id": "p", "price_pence": 0, "floor_area_sqm": 0})
+    inputs.lender_valuation = LenderValuation(
+        basis="global_per_sqft", global_value=40_000, per_key_values=None,
+        reason="r", author="a", date="2026-08-18",
+    )
+    inputs.unit_mix = UnitMixInputsV6(units=[ProposedUnitV6(
+        id="u1", type="1bed", floor_area_sqm=50, estimated_value_pence=10_000_000, comparable_notes="",
+        ancillary=UnitAncillary(
+            balcony_terrace_sqm=balcony_terrace_sqm, balcony_terrace_value_pence=0,
+            parking_spaces=0, parking_value_pence=0,
+        ),
+    )])
+    return inputs
+
+
+class TestGlobalPerSqftIsBoundToInternalNia:
+    """R9 (Task 7 -- Defect 1): a v6 unit now carries an internal area
+    (floor_area_sqm) AND a separate balcony/terrace area
+    (ancillary.balcony_terrace_sqm). Spec Sec 3.2's "pence per sq ft applied
+    to every unit's area" is ambiguous once a unit has two areas, and the
+    ambiguity silently moves lender GDV. This pins the basis to internal NIA
+    only, so a future change that folds balcony area into the per-sq-ft
+    calculation is caught here rather than discovered in a live valuation."""
+
+    def test_ignores_balcony_and_terrace_area_when_applying_a_per_sqft_rate(self):
+        with_balcony = compute_lender_gdv(_v6_inputs_with_balcony(20))
+        without_balcony = compute_lender_gdv(_v6_inputs_with_balcony(0))
+        assert with_balcony.lender_gdv_pence == without_balcony.lender_gdv_pence
+        # 40,000p/sq ft x 50 m^2 x 10.7639
+        assert with_balcony.lender_gdv_pence == 21_527_800

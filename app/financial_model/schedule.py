@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .areas import developed_area_sqm
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
@@ -21,8 +22,37 @@ from .types import (
 )
 
 
+def unit_ancillary_value_pence(u: ProposedUnit) -> int:
+    """R9 spec Sec 15.5 -- a unit's ancillary value. A pre-v6 unit carries no
+    ``ancillary`` attribute at all, read structurally with getattr (matching
+    areas.py's version-dispatch idiom) and resolving to zero."""
+    anc = getattr(u, "ancillary", None)
+    if anc is None:
+        return 0
+    return anc.parking_value_pence + anc.balcony_terrace_value_pence
+
+
+@dataclass(frozen=True)
+class GdvBreakdown:
+    # Internal saleable unit values -- the pre-R9 figure, unchanged.
+    internal_pence: int
+    # Parking plus balcony/terrace. Reported separately, never folded into
+    # internal saleable value (spec Sec 3.1, which this release rewrites).
+    ancillary_pence: int
+    total_pence: int
+
+
+def calculate_gdv_breakdown(units: list[ProposedUnit]) -> GdvBreakdown:
+    internal = sum(u.estimated_value_pence for u in units)
+    ancillary = sum(unit_ancillary_value_pence(u) for u in units)
+    return GdvBreakdown(internal_pence=internal, ancillary_pence=ancillary, total_pence=internal + ancillary)
+
+
 def calculate_gdv(units: list[ProposedUnit]) -> int:
-    return sum(u.estimated_value_pence for u in units)
+    """Total developer GDV. Retained as the total so every existing caller is
+    unaffected by the R9 split; use calculate_gdv_breakdown where the parts
+    matter."""
+    return calculate_gdv_breakdown(units).total_pence
 
 
 def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
@@ -67,12 +97,15 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     )
 
 
-def calculate_total_construction_cost(costs: ConversionCostInputs) -> int:
-    # Spec Sec 1.1: fractional-area products round once, at source, in one step before
-    # contingency -- base = round_half_up(construction_cost_per_sqm_pence x
-    # total_construction_sqm). Integer-sqm inputs are unaffected (rounding an
-    # already-integer product is identity). Matches conversion-calc-engine.ts exactly.
-    base_cost = money_round(costs.construction_cost_per_sqm_pence * costs.total_construction_sqm)
+def calculate_total_construction_cost(costs: ConversionCostInputs, area_sqm: float) -> int:
+    # Spec Sec 1.1: fractional-area products round once, at source, in one step
+    # before contingency -- base = money_round(construction_cost_per_sqm_pence x
+    # area). Integer-sqm inputs are unaffected. Matches conversion-calc-engine.ts.
+    #
+    # R9: the area is an explicit parameter. Callers resolve it once through
+    # developed_area_sqm (spec Sec 15.4); tests/test_accessor_guard.py makes
+    # reading the raw field here a test failure.
+    base_cost = money_round(costs.construction_cost_per_sqm_pence * area_sqm)
     contingency = money_round((base_cost * costs.contingency_pct) / 100)
     compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence
     return base_cost + contingency + compliance
@@ -163,7 +196,7 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     units = inputs.unit_mix.units
 
     acquisition_total = calculate_total_acquisition_cost(inputs.acquisition)
-    construction_total = calculate_total_construction_cost(cc)
+    construction_total = calculate_total_construction_cost(cc, developed_area_sqm(inputs))
     # Reclassification per spec Sec 3.5/3.6: professional excludes statutory items.
     professional_total = (
         cc.architect_pence + cc.structural_engineer_pence + cc.mande_pence
@@ -230,7 +263,10 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         sold_units = list(units)
     else:
         sold_units = [u for u in units if u.id not in retained_ids]
-    gross_sales = sum(u.estimated_value_pence for u in sold_units)
+    # R9 spec Sec 15.5: ancillary sells with its unit. Summing internal value
+    # alone here would make GDV and gross receipts disagree by the ancillary
+    # total.
+    gross_sales = sum(u.estimated_value_pence + unit_ancillary_value_pence(u) for u in sold_units)
     gdv = calculate_gdv(units)
     retained_value = gdv - gross_sales
 

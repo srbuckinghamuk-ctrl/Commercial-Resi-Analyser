@@ -1,11 +1,50 @@
 import type { AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule } from './finance-types';
 import { computeLenderGdv } from './lender-valuation';
+// R9 fix wave: `selectBandSet` is restricted by the single-accessor guard
+// (eslint.config.js) because it returns the raw band array. Validation's use is
+// legitimate and narrow — it asks "can this date be placed in a band set at
+// all?" and reports the answer as a ValidationIssue; it never reads `.bands`
+// and never computes tax. Disabled at the call site rather than by adding
+// validation.ts to the file allowlist, which would switch the cost-area
+// selectors off for this file too.
+// eslint-disable-next-line no-restricted-syntax -- see above; validation reports the date, it does not compute tax
 import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
+import { areaBridge } from './areas';
+import { pct } from './pct';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
   field: string;
   message: string;
+}
+
+/**
+ * ISO-8601 calendar date: right shape AND a date that exists (spec §14).
+ *
+ * R9 Task 12 clears an R8 carry-forward. Until this release both engines checked the
+ * shape with a bare `/^\d{4}-\d{2}-\d{2}$/`, so `2026-02-31` validated cleanly and was
+ * then accepted as `date_basis: 'transaction_date'` — a date the reader would take as
+ * evidence of when the transaction happened. R8 recorded that as a known limitation
+ * rather than fixing it; it is fixed here.
+ *
+ * The month/day round-trip is the check: constructing the date and reading the three
+ * components back is the only way to get February and the leap-year rule right without
+ * re-implementing the calendar. Two details keep it byte-identical to Python's
+ * `datetime.date(y, m, d)` twin in validation.py:
+ *   - `setUTCFullYear` after construction, because `Date.UTC` maps years 0–99 onto
+ *     1900–1999 and would otherwise reject a 4-digit year Python accepts;
+ *   - the explicit `y < 1` rejection, mirroring Python's `MINYEAR`.
+ */
+export function isCalendarDate(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (m === null) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (y < 1) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  dt.setUTCFullYear(y);
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
 }
 
 export interface ReconciliationStatus {
@@ -44,10 +83,24 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
   const warn = (field: string, message: string) => issues.push({ severity: 'warning', field, message });
 
+  // R9 spec §15.6 — the area bridge, computed once and reused below. `areas`
+  // is null for a pre-v6 document (no `areas` block at all), read structurally
+  // exactly like the codebase's other version-dispatch checks (see
+  // `'lender_valuation' in inputs` further down).
+  const bridge = areaBridge(inputs);
+  const areas = 'areas' in inputs ? inputs.areas : null;
+
   for (const [field, get] of NON_NEGATIVE_MONEY) {
     if (get(inputs) < 0) err(field, 'Monetary values cannot be negative.');
   }
-  if (inputs.conversion_costs.total_construction_sqm < 0) {
+  // Task-8 review correction: `developed_area_sqm` is the DERIVED cost area
+  // under the bridge basis, so a negative value there is already reported by
+  // the three derived-negative rules below against the field that actually
+  // caused it. Reporting it again here, against a manual field the bridge-basis
+  // user cannot even see, is gated out — this check is the manual basis's own
+  // negative-input guard (and the legacy pre-v6 guard, where there is no
+  // `areas` block to have a basis at all).
+  if ((areas == null || areas.basis === 'manual') && bridge.developed_area_sqm < 0) {
     err('conversion_costs.total_construction_sqm', 'Area cannot be negative.');
   }
   if (inputs.conversion_costs.contingency_pct < 0) {
@@ -96,13 +149,79 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
   }
 
-  const unitArea = inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0);
-  const constArea = inputs.conversion_costs.total_construction_sqm;
-  if (unitArea > 0 && constArea > 0) {
-    const ratio = unitArea / constArea;
-    if (ratio < 0.75 || ratio > 1.25) {
-      warn('conversion_costs.total_construction_sqm',
-        `Unit NIA (${unitArea} m²) and construction area (${constArea} m²) differ by more than 25% — check the area basis.`);
+  // R9 spec §15.6 — the area bridge. This block REPLACES the ±25% unit-NIA vs
+  // construction-area warning that stood here until R9. That warning was a
+  // proxy for a reconciliation the schema could not express; now that it can,
+  // the proxy is deleted rather than kept alongside — a retired message left in
+  // place is a second, quieter source of truth.
+  if (areas != null) {
+    for (const [field, value] of [
+      ['existing_gia_sqm', areas.existing_gia_sqm],
+      ['demolished_gia_sqm', areas.demolished_gia_sqm],
+      ['extension_gia_sqm', areas.extension_gia_sqm],
+      ['retained_commercial_gia_sqm', areas.retained_commercial_gia_sqm],
+      ['untouched_gia_sqm', areas.untouched_gia_sqm],
+      ['circulation_common_sqm', areas.circulation_common_sqm],
+      ['plant_riser_sqm', areas.plant_riser_sqm],
+      ['store_bin_cycle_sqm', areas.store_bin_cycle_sqm],
+      ['amenity_sqm', areas.amenity_sqm],
+      ['external_amenity_sqm', areas.external_amenity_sqm],
+    ] as const) {
+      if (value < 0) err(`areas.${field}`, 'Area cannot be negative.');
+    }
+
+    if (bridge.proposed_gia_sqm < 0) {
+      err('areas.demolished_gia_sqm',
+        `Demolished area (${areas.demolished_gia_sqm} m²) exceeds the existing building `
+        + `(${areas.existing_gia_sqm} m²) — proposed GIA cannot be negative.`);
+    }
+    if (bridge.developed_gia_sqm < 0) {
+      err('areas.retained_commercial_gia_sqm',
+        `Retained commercial and untouched area together exceed proposed GIA `
+        + `(${bridge.proposed_gia_sqm} m²) — developed area cannot be negative.`);
+    }
+    if (bridge.available_for_units_sqm < 0) {
+      err('areas.circulation_common_sqm',
+        `Circulation, plant, storage and amenity together exceed the developed area `
+        + `(${bridge.developed_gia_sqm} m²) — no space remains for units.`);
+    }
+    if (areas.basis === 'bridge_derived' && bridge.developed_gia_sqm <= 0) {
+      err('areas.existing_gia_sqm',
+        'The bridge-derived cost basis is selected but the bridge produces no developed area — '
+        + 'enter the building’s existing GIA, or switch the basis to manual.');
+    }
+    // Guarded on a positive developed area for the same reason the two
+    // warnings below are: a zeroed bridge (basis manual, nothing entered —
+    // exactly what migration writes for every pre-R9 document) means the
+    // bridge is not in use at all, so a real unit schedule must not be judged
+    // against a "0 m² building" nobody is reconciling against.
+    if (bridge.developed_gia_sqm > 0 && bridge.unallocated_sqm < 0) {
+      err('unit_mix.units',
+        `Unit NIA (${bridge.unit_nia_sqm} m²) exceeds the area available for units `
+        + `(${bridge.available_for_units_sqm} m²) — the schedule does not fit the building.`);
+    }
+
+    // Warnings only. An unallocated balance is frequently and legitimately
+    // unknown at appraisal stage, so it never gates the document (spec §15.7).
+    if (bridge.developed_gia_sqm > 0 && bridge.unallocated_sqm > bridge.developed_gia_sqm * 0.10) {
+      warn('areas.unallocated_sqm',
+        `${bridge.unallocated_sqm} m² of the developed area is unallocated `
+        + `(${pct(bridge.unallocated_sqm, bridge.developed_gia_sqm)}%) — the bridge does not yet tie.`);
+    }
+    if (bridge.nia_to_gia_pct != null && (bridge.nia_to_gia_pct < 65 || bridge.nia_to_gia_pct > 90)) {
+      warn('areas.nia_to_gia_pct',
+        `Net-to-gross efficiency of ${bridge.nia_to_gia_pct}% is outside the 65–90% range `
+        + 'typical of a conversion — check the area basis.');
+    }
+    if (areas.basis === 'manual' && bridge.developed_gia_sqm > 0) {
+      const manual = bridge.manual_area_sqm;
+      const diff = Math.abs(manual - bridge.developed_gia_sqm);
+      if (diff > bridge.developed_gia_sqm * 0.05) {
+        warn('areas.basis',
+          `The manual construction area (${manual} m²) differs from the bridge's developed area `
+          + `(${bridge.developed_gia_sqm} m²) by more than 5% — one of them is wrong, or the `
+          + 'manual basis needs a reason.');
+      }
     }
   }
   if (inputs.exit_strategy.route === 'blended' && inputs.exit_strategy.retained_units.length === 0) {
@@ -253,18 +372,16 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
 
     if (acq.acquisition_date !== null) {
-      // Known limitation: this checks shape only, not calendar validity, and
-      // selectBandSet compares dates lexicographically rather than parsing
-      // them — so a string like "2026-02-31" passes here and is accepted as
-      // date_basis 'transaction_date'. `<input type="date">` cannot produce
-      // such a value, so this is reachable only via the API, and the effect
-      // is cosmetic (band selection is still monotonic in the lexicographic
-      // ordering). Not tightened here: adding a calendar check would be a
-      // behaviour change, which this comment deliberately is not.
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(acq.acquisition_date)) {
-        err('acquisition.acquisition_date', 'Acquisition date must be an ISO date (YYYY-MM-DD).');
+      // R9 Task 12: shape AND calendar validity (see isCalendarDate above). The
+      // shape-only regex this replaces let `2026-02-31` through, and selectBandSet
+      // compares dates lexicographically rather than parsing them, so the appraisal
+      // then reported `date_basis: 'transaction_date'` on a date that does not exist.
+      if (!isCalendarDate(acq.acquisition_date)) {
+        err('acquisition.acquisition_date',
+          'Acquisition date must be a real ISO calendar date (YYYY-MM-DD).');
       } else {
         try {
+          // eslint-disable-next-line no-restricted-syntax -- single-accessor guard: validation may ask whether a date is placeable; it never reads .bands
           selectBandSet(acq.jurisdiction, 'non_residential', acq.acquisition_date);
         } catch (e) {
           err('acquisition.acquisition_date', (e as Error).message);

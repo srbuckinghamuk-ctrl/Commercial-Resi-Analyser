@@ -1,9 +1,9 @@
-import type { CalculatorInputsV5, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV6, AppraisalRun, AreaBasis } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV5;
-  onChange: (partial: Partial<CalculatorInputsV5>) => void;
+  inputs: CalculatorInputsV6;
+  onChange: (partial: Partial<CalculatorInputsV6>) => void;
   run: AppraisalRun;
 }
 
@@ -55,7 +55,7 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>3. Conversion Costs</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>4. Conversion Costs</h3>
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Statutory Fees</h4>
       <PenceCostRow label="Prior approval fee / dwelling (£)" penceValue={costs.prior_approval_fee_per_dwelling_pence} onChangePence={(v) => updateCosts({ prior_approval_fee_per_dwelling_pence: v })} />
@@ -71,7 +71,44 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Construction</h4>
       <PenceCostRow label="Cost per m² (£)" penceValue={costs.construction_cost_per_sqm_pence} onChangePence={(v) => updateCosts({ construction_cost_per_sqm_pence: v })} />
-      <CostRow label="Total construction m²" value={costs.total_construction_sqm} onChangeValue={(v) => updateCosts({ total_construction_sqm: v })} />
+
+      {/* R9 Task 10 (spec §15.3/§15.4). The construction cost area used to be
+          this one bare, user-typed field. It is now basis-aware: under the
+          bridge-derived basis the figure comes from `run.metrics.developed_area_sqm`
+          (the single accessor `areas.ts` exposes, enforced by the eslint guard
+          below) and this field becomes read-only; under the manual basis this
+          component stays the legitimate editor of `total_construction_sqm`,
+          which is why it is on the guard's allowlist. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+        <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Construction area basis</label>
+        <select
+          value={inputs.areas.basis}
+          onChange={(e) => onChange({ areas: { ...inputs.areas, basis: e.target.value as AreaBasis } })}
+          style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+        >
+          <option value="bridge_derived">Derived from the area bridge</option>
+          <option value="manual">Entered manually</option>
+        </select>
+      </div>
+      {inputs.areas.basis === 'bridge_derived' ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+          <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Total construction m²</label>
+          <span style={{ color: '#e2e8f0', fontSize: 14 }}>
+            {run.metrics.developed_area_sqm.toLocaleString()} m²
+          </span>
+          <span style={{ color: '#64748b', fontSize: 12 }}>
+            derived: proposed GIA {run.metrics.area_bridge.proposed_gia_sqm.toLocaleString()} m²
+            less retained and untouched area
+          </span>
+        </div>
+      ) : (
+        <CostRow
+          label="Total construction m²"
+          value={costs.total_construction_sqm}
+          onChangeValue={(v) => updateCosts({ total_construction_sqm: v })}
+        />
+      )}
+
       <CostRow label="Contingency (%)" value={costs.contingency_pct} onChangeValue={(v) => updateCosts({ contingency_pct: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Building Regs Compliance</h4>

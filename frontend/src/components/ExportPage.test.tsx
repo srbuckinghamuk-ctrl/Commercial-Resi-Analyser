@@ -3,12 +3,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { Project, FinancialAppraisal } from '../types';
 
 // R8 Task 10 fix round 1: ExportPage.tsx had no test file at all, so the two
-// migrateInputsToV5 call sites this task introduced (the deal-spider
+// snapshot-migration call sites that task introduced (the deal-spider
 // computation inside handleAppraisalPdf, and the engine run inside
 // handleInvestmentMemo) were entirely uncovered. Only the network boundary
 // and the PDF-rendering libraries are stubbed here; `runAppraisal` and
 // `computeSpider` are the real engine, so a successful call proves the
-// migrated v5 document is genuinely computable, not just structurally valid.
+// migrated v6 document is genuinely computable, not just structurally valid.
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
   return {
@@ -29,7 +29,7 @@ const { default: ExportPage } = await import('./ExportPage');
 const { getAppraisal } = await import('../lib/api');
 const { generateAppraisalPdf } = await import('../lib/export-pdf');
 const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
-const { defaultCalculatorInputsV4 } = await import('../lib/conversion-defaults');
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV6 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -66,7 +66,7 @@ function selectProject() {
   fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
 }
 
-describe('ExportPage migrates a stored v4 snapshot to v5 (R8 Task 10)', () => {
+describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)', () => {
   beforeEach(() => {
     // jsdom does not implement these; downloadBlob() calls them unconditionally.
     URL.createObjectURL = vi.fn(() => 'blob:mock');
@@ -86,13 +86,14 @@ describe('ExportPage migrates a stored v4 snapshot to v5 (R8 Task 10)', () => {
     ).not.toBeInTheDocument();
 
     // The old migrateInputsToV4 call would throw building this on a v5
-    // document; a defined spider argument is only reached if migration to v5
-    // succeeded and the real engine (computeSpider -> runAppraisal) accepted it.
+    // document, and migrateInputsToV5 would now throw on a v6 one; a defined
+    // spider argument is only reached if migration to v6 succeeded and the
+    // real engine (computeSpider -> runAppraisal) accepted it.
     const spiderArg = vi.mocked(generateAppraisalPdf).mock.calls[0][2];
     expect(spiderArg).toBeDefined();
   });
 
-  it('Investment Memorandum: migrates before running the engine, and the real computed acquisition tax reflects the v5 defaults', async () => {
+  it('Investment Memorandum: migrates before running the engine, and the real computed acquisition tax reflects the migrated defaults', async () => {
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
 
     render(<ExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
@@ -105,12 +106,37 @@ describe('ExportPage migrates a stored v4 snapshot to v5 (R8 Task 10)', () => {
     ).not.toBeInTheDocument();
 
     // Second argument is the real `AppraisalRun` computed by the real engine
-    // off the migrated v5 inputs (only `generateInvestmentMemo` is mocked
+    // off the migrated v6 inputs (only `generateInvestmentMemo` is mocked
     // here) -- its acquisition_tax carries the migrated defaults through to a
     // real computed result: england_ni with no date on record, i.e. the
     // current (assumed) band set.
     const run = vi.mocked(generateInvestmentMemo).mock.calls[0][1];
     expect(run.metrics.acquisition_tax.jurisdiction).toBe('england_ni');
     expect(run.metrics.acquisition_tax.date_basis).toBe('assumed_current');
+  });
+
+  // R9 Task 3 fix round 1. Same regression as the ConversionCalculator one:
+  // once the server stores v6, every export path reading a saved snapshot
+  // through migrateInputsToV5 would have thrown, and both PDFs would have
+  // failed for every saved appraisal with only a generic "Could not
+  // generate..." banner to show for it.
+  it('exports from the v6 snapshot the server now stores, rather than failing on it', async () => {
+    const storedV6 = storedV4Appraisal();
+    storedV6.inputs_snapshot = defaultCalculatorInputsV6({
+      id: PROJECT.id, price_pence: PROJECT.price_pence, floor_area_sqm: PROJECT.floor_area_sqm,
+    }) as unknown as Record<string, unknown>;
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV6);
+
+    render(<ExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
+    selectProject();
+    fireEvent.click(screen.getByRole('button', { name: /download investment memorandum/i }));
+
+    await waitFor(() => expect(generateInvestmentMemo).toHaveBeenCalled());
+    expect(
+      screen.queryByText(/could not generate investment memorandum/i),
+    ).not.toBeInTheDocument();
+
+    const run = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![1];
+    expect(run.inputs.inputs_version).toBe(6);
   });
 });

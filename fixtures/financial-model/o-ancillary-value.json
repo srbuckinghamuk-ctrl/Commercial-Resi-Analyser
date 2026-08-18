@@ -1,0 +1,129 @@
+{
+  "name": "O — ancillary value, blended exit, one unit sold and one retained",
+  "kind": "pipeline",
+  "note": "R9 spec §15.5. Both units carry a balcony and a parking space, but only u1 sells. The split therefore has to be right on BOTH sides: gross sale receipts must carry u1's 2,000,000p of ancillary and none of u2's, and the retained (unrealised) value must carry u2's 2,500,000p. A regression that summed only internal value into receipts would leave GDV and receipts disagreeing by exactly the ancillary total. The `downside` scenario is a pure −10% GDV stress (every other lever is 0) so the stressed ancillary values are hand-derivable in one step — spec §12.1 moves ancillary VALUE with GDV, and leaves ancillary AREA alone.",
+  "inputs": {
+    "inputs_version": 6,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 20000000, "legal_fees_pence": 300000,
+      "survey_cost_pence": 200000, "broker_fee_pct": 1.0, "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-05-20",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": { "units": [
+      { "id": "u1", "type": "1bed", "floor_area_sqm": 55, "estimated_value_pence": 30000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 8, "balcony_terrace_value_pence": 500000, "parking_spaces": 1, "parking_value_pence": 1500000 } },
+      { "id": "u2", "type": "2bed", "floor_area_sqm": 75, "estimated_value_pence": 40000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 12, "balcony_terrace_value_pence": 800000, "parking_spaces": 1, "parking_value_pence": 1700000 } }
+    ] },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 9600, "cil_s106_pence": 0,
+      "architect_pence": 800000, "structural_engineer_pence": 300000, "mande_pence": 250000,
+      "planning_consultant_pence": 150000, "building_control_pence": 120000,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 120000,
+      "total_construction_sqm": 150, "contingency_pct": 10.0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "finance": {
+      "funding_source": "cash", "day_one_advance_pence": null, "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 0,
+      "committed_gross_facility_pence": 0, "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 12, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 45000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "blended", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 400000,
+      "retained_units": [{ "unit_id": "u2", "monthly_rent_pence": 150000 }]
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 }
+    },
+    "deal_spider": {
+      "storeys": 2, "building_height_m": 7, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 9, "exit_sell": false, "exit_refinance": false, "exit_hold": false,
+      "exit_part_sale": true, "prior_approval_window_months": 2, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_internal_pence": 70000000,
+    "gdv_ancillary_pence": 4500000,
+    "gdv_pence": 74500000,
+    "gross_sales_pence": 32000000,
+    "unrealised_value_pence": 42500000,
+    "area_bridge.ancillary_balcony_terrace_sqm": 20,
+    "area_bridge.ancillary_parking_spaces": 2,
+    "area_bridge.unit_nia_sqm": 130,
+    "area_bridge.developed_area_sqm": 150,
+    "area_bridge.nia_to_gia_pct": null,
+    "area_bridge.saleable_to_developed_pct": null,
+    "developed_area_sqm": 150,
+    "acquisition_tax_pence": 100000,
+    "sdlt_pence": 100000,
+    "acquisition_cost_pence": 20800000,
+    "construction_cost_pence": 19800000,
+    "professional_fees_pence": 1500000,
+    "statutory_costs_pence": 139200,
+    "selling_costs_pence": 880000,
+    "cost_before_finance_pence": 43119200,
+    "finance_costs_pence": 0,
+    "total_development_cost_pence": 43119200,
+    "profit_pence": 31380800,
+    "profit_is_unrealised": true,
+    "has_realisation_event": true,
+    "profit_on_cost_pct": 72.78,
+    "profit_on_gdv_pct": 42.12,
+    "peak_debt_pence": 0,
+    "equity_contributed_pence": 42239200
+  },
+  "expected_scenarios": {
+    "downside": {
+      "gdv_internal_pence": 63000000,
+      "gdv_ancillary_pence": 4050000,
+      "gdv_pence": 67050000,
+      "gross_sales_pence": 28800000,
+      "unrealised_value_pence": 38250000,
+      "area_bridge.ancillary_balcony_terrace_sqm": 20,
+      "area_bridge.ancillary_parking_spaces": 2,
+      "construction_cost_pence": 19800000,
+      "selling_costs_pence": 832000,
+      "total_development_cost_pence": 43071200,
+      "profit_pence": 23978800,
+      "profit_on_cost_pct": 55.67,
+      "profit_on_gdv_pct": 35.76
+    }
+  }
+}

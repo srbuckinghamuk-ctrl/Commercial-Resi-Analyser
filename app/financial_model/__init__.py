@@ -14,24 +14,42 @@ from .acquisition_tax import (
     derive_jurisdiction,
     regime_for,
 )
+from .areas import (
+    AreaBridgeResult,
+    area_bridge,
+    developed_area_sqm,
+    unit_nia_sqm,
+)
 from .breakeven import PhasedSeniorBreakevenTerms, phased_replay_redeems, solve_senior_breakeven_phased
 from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, breakeven_flags, derive_metrics
 from .migrate import (
     is_v4,
+    is_v5,
+    is_v6,
     migrate_inputs,
     migrate_inputs_to_v4,
     migrate_inputs_to_v5,
+    migrate_inputs_to_v6,
     migrate_v3_to_v4,
+    migrate_v4_to_v5,
+    migrate_v5_to_v6,
 )
 from .schedule import Schedule, build_schedule
 from .types import (
     CALC_VERSION,
+    AcquisitionInputsV5,
     AnyCalculatorInputs,
+    AreaBridgeInputs,
     CalculatorInputsV2,
     CalculatorInputsV3,
     CalculatorInputsV4,
+    CalculatorInputsV5,
+    CalculatorInputsV6,
+    ProposedUnitV6,
+    UnitAncillary,
+    UnitMixInputsV6,
     parse_calculator_inputs,
 )
 from .validation import ReconciliationStatus, ValidationIssue, reconcile, validate_inputs
@@ -75,30 +93,45 @@ def run_appraisal(inputs: AnyCalculatorInputs) -> AppraisalRun:
 
 
 __all__ = [
+    "AcquisitionInputsV5",
     "AcquisitionTaxResult",
     "AnyCalculatorInputs",
     "AppraisalResultV2",
     "AppraisalRun",
+    "AreaBridgeInputs",
+    "AreaBridgeResult",
     "CALC_VERSION",
     "CalculatorInputsV2",
     "CalculatorInputsV3",
     "CalculatorInputsV4",
+    "CalculatorInputsV5",
+    "CalculatorInputsV6",
     "MonthlyModel",
     "PhasedSeniorBreakevenTerms",
+    "ProposedUnitV6",
     "ReconciliationStatus",
     "Schedule",
     "TAX_TABLE_VERSION",
+    "UnitAncillary",
+    "UnitMixInputsV6",
     "ValidationIssue",
+    "area_bridge",
     "breakeven_flags",
     "build_schedule",
     "calculate_acquisition_tax",
     "derive_jurisdiction",
     "derive_metrics",
+    "developed_area_sqm",
     "is_v4",
+    "is_v5",
+    "is_v6",
     "migrate_inputs",
     "migrate_inputs_to_v4",
     "migrate_inputs_to_v5",
+    "migrate_inputs_to_v6",
     "migrate_v3_to_v4",
+    "migrate_v4_to_v5",
+    "migrate_v5_to_v6",
     "parse_calculator_inputs",
     "phased_replay_redeems",
     "reconcile",
@@ -110,5 +143,6 @@ __all__ = [
     "spread_by_curve",
     "spread_s_curve",
     "spread_user_defined",
+    "unit_nia_sqm",
     "validate_inputs",
 ]

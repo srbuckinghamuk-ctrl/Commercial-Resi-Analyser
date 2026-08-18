@@ -1,18 +1,43 @@
 """Port of frontend/src/lib/model/validation.ts."""
 from __future__ import annotations
 
+import datetime
 import math
 import re
 from dataclasses import dataclass, field
 from typing import Callable
 
 from .acquisition_tax import regime_for, select_band_set
-from .engine import MonthlyModel
+from .areas import area_bridge
+from .engine import MonthlyModel, pct
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .types import AnyCalculatorInputs
 
-_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def is_calendar_date(value: str) -> bool:
+    r"""ISO-8601 calendar date: right shape AND a date that exists (spec Sec 14).
+
+    R9 Task 12 clears an R8 carry-forward. Until this release both engines checked the
+    shape with a bare ``^\d{4}-\d{2}-\d{2}$``, so ``2026-02-31`` validated cleanly and
+    was then accepted as ``date_basis: 'transaction_date'`` -- a date the reader would
+    take as evidence of when the transaction happened. R8 recorded that as a known
+    limitation rather than fixing it; it is fixed here.
+
+    ``datetime.date`` is the calendar, including the leap-year rule, so nothing here
+    re-implements it. Mirrors ``isCalendarDate`` in validation.ts, whose Date round-trip
+    is written to accept exactly the same set of strings this does (including the
+    MINYEAR floor)."""
+    m = _ISO_DATE.match(value)
+    if m is None:
+        return False
+    try:
+        datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass
@@ -67,10 +92,24 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     def warn(field_: str, message: str) -> None:
         issues.append(ValidationIssue(severity="warning", field=field_, message=message))
 
+    # R9 spec Sec 15.6 -- the area bridge, computed once and reused below.
+    # `areas` is None for a pre-v6 document (no `areas` attribute at all), read
+    # structurally exactly like this module's other version-dispatch checks
+    # (see the `getattr(inputs, "lender_valuation", None)` guard further down).
+    bridge = area_bridge(inputs)
+    areas = getattr(inputs, "areas", None)
+
     for field_name, get in NON_NEGATIVE_MONEY:
         if get(inputs) < 0:
             err(field_name, "Monetary values cannot be negative.")
-    if inputs.conversion_costs.total_construction_sqm < 0:
+    # Task-8 review correction: developed_area_sqm is the DERIVED cost area
+    # under the bridge basis, so a negative value there is already reported by
+    # the three derived-negative rules below against the field that actually
+    # caused it. Reporting it again here, against a manual field the
+    # bridge-basis user cannot even see, is gated out -- this check is the
+    # manual basis's own negative-input guard (and the legacy pre-v6 guard,
+    # where there is no `areas` attribute to have a basis at all).
+    if (areas is None or areas.basis == "manual") and bridge.developed_area_sqm < 0:
         err("conversion_costs.total_construction_sqm", "Area cannot be negative.")
     if inputs.conversion_costs.contingency_pct < 0:
         err("conversion_costs.contingency_pct", "Contingency cannot be negative.")
@@ -138,16 +177,89 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 "modelled as funding - Release 2; it does not fund monthly costs.",
             )
 
-    unit_area = sum(u.floor_area_sqm for u in inputs.unit_mix.units)
-    const_area = inputs.conversion_costs.total_construction_sqm
-    if unit_area > 0 and const_area > 0:
-        ratio = unit_area / const_area
-        if ratio < 0.75 or ratio > 1.25:
-            warn(
-                "conversion_costs.total_construction_sqm",
-                f"Unit NIA ({unit_area} m2) and construction area ({const_area} m2) differ by "
-                "more than 25% - check the area basis.",
+    # R9 spec Sec 15.6 -- the area bridge. This block REPLACES the +/-25%
+    # unit-NIA vs construction-area warning that stood here until R9. That
+    # warning was a proxy for a reconciliation the schema could not express;
+    # now that it can, the proxy is deleted rather than kept alongside -- a
+    # retired message left in place is a second, quieter source of truth.
+    if areas is not None:
+        for field_name, value in (
+            ("existing_gia_sqm", areas.existing_gia_sqm),
+            ("demolished_gia_sqm", areas.demolished_gia_sqm),
+            ("extension_gia_sqm", areas.extension_gia_sqm),
+            ("retained_commercial_gia_sqm", areas.retained_commercial_gia_sqm),
+            ("untouched_gia_sqm", areas.untouched_gia_sqm),
+            ("circulation_common_sqm", areas.circulation_common_sqm),
+            ("plant_riser_sqm", areas.plant_riser_sqm),
+            ("store_bin_cycle_sqm", areas.store_bin_cycle_sqm),
+            ("amenity_sqm", areas.amenity_sqm),
+            ("external_amenity_sqm", areas.external_amenity_sqm),
+        ):
+            if value < 0:
+                err(f"areas.{field_name}", "Area cannot be negative.")
+
+        if bridge.proposed_gia_sqm < 0:
+            err(
+                "areas.demolished_gia_sqm",
+                f"Demolished area ({areas.demolished_gia_sqm} m2) exceeds the existing building "
+                f"({areas.existing_gia_sqm} m2) - proposed GIA cannot be negative.",
             )
+        if bridge.developed_gia_sqm < 0:
+            err(
+                "areas.retained_commercial_gia_sqm",
+                "Retained commercial and untouched area together exceed proposed GIA "
+                f"({bridge.proposed_gia_sqm} m2) - developed area cannot be negative.",
+            )
+        if bridge.available_for_units_sqm < 0:
+            err(
+                "areas.circulation_common_sqm",
+                "Circulation, plant, storage and amenity together exceed the developed area "
+                f"({bridge.developed_gia_sqm} m2) - no space remains for units.",
+            )
+        if areas.basis == "bridge_derived" and bridge.developed_gia_sqm <= 0:
+            err(
+                "areas.existing_gia_sqm",
+                "The bridge-derived cost basis is selected but the bridge produces no developed "
+                "area - enter the building's existing GIA, or switch the basis to manual.",
+            )
+        # Guarded on a positive developed area for the same reason the two
+        # warnings below are: a zeroed bridge (basis manual, nothing entered --
+        # exactly what migration writes for every pre-R9 document) means the
+        # bridge is not in use at all, so a real unit schedule must not be
+        # judged against a "0 m2 building" nobody is reconciling against.
+        if bridge.developed_gia_sqm > 0 and bridge.unallocated_sqm < 0:
+            err(
+                "unit_mix.units",
+                f"Unit NIA ({bridge.unit_nia_sqm} m2) exceeds the area available for units "
+                f"({bridge.available_for_units_sqm} m2) - the schedule does not fit the building.",
+            )
+
+        # Warnings only. An unallocated balance is frequently and legitimately
+        # unknown at appraisal stage, so it never gates the document (spec Sec 15.7).
+        if bridge.developed_gia_sqm > 0 and bridge.unallocated_sqm > bridge.developed_gia_sqm * 0.10:
+            warn(
+                "areas.unallocated_sqm",
+                f"{bridge.unallocated_sqm} m2 of the developed area is unallocated "
+                f"({pct(bridge.unallocated_sqm, bridge.developed_gia_sqm)}%) - the bridge does "
+                "not yet tie.",
+            )
+        if bridge.nia_to_gia_pct is not None and (bridge.nia_to_gia_pct < 65 or bridge.nia_to_gia_pct > 90):
+            warn(
+                "areas.nia_to_gia_pct",
+                f"Net-to-gross efficiency of {bridge.nia_to_gia_pct}% is outside the 65-90% "
+                "range typical of a conversion - check the area basis.",
+            )
+        if areas.basis == "manual" and bridge.developed_gia_sqm > 0:
+            manual = bridge.manual_area_sqm
+            diff = abs(manual - bridge.developed_gia_sqm)
+            if diff > bridge.developed_gia_sqm * 0.05:
+                warn(
+                    "areas.basis",
+                    f"The manual construction area ({manual} m2) differs from the bridge's "
+                    f"developed area ({bridge.developed_gia_sqm} m2) by more than 5% - one of "
+                    "them is wrong, or the manual basis needs a reason.",
+                )
+
     if inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) == 0:
         warn("exit_strategy.retained_units", "Blended exit selected but no units are marked as retained.")
     if f.requires_confirmation:
@@ -325,17 +437,16 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             )
 
         if acq.acquisition_date is not None:
-            # Known limitation, mirrored exactly from validation.ts: this checks
-            # shape only, not calendar validity, and select_band_set compares
-            # dates lexicographically rather than parsing them -- so a string
-            # like "2026-02-31" passes here and is accepted as date_basis
-            # 'transaction_date'. `<input type="date">` cannot produce such a
-            # value, so this is reachable only via the API, and the effect is
-            # cosmetic (band selection is still monotonic in the lexicographic
-            # ordering). Not tightened here: adding a calendar check would be a
-            # behaviour change, which this comment deliberately is not.
-            if not _ISO_DATE.match(acq.acquisition_date):
-                err("acquisition.acquisition_date", "Acquisition date must be an ISO date (YYYY-MM-DD).")
+            # R9 Task 12: shape AND calendar validity (see is_calendar_date above).
+            # The shape-only regex this replaces let "2026-02-31" through, and
+            # select_band_set compares dates lexicographically rather than parsing
+            # them, so the appraisal then reported date_basis 'transaction_date' on a
+            # date that does not exist. Mirrors validation.ts.
+            if not is_calendar_date(acq.acquisition_date):
+                err(
+                    "acquisition.acquisition_date",
+                    "Acquisition date must be a real ISO calendar date (YYYY-MM-DD).",
+                )
             else:
                 try:
                     select_band_set(acq.jurisdiction, "non_residential", acq.acquisition_date)

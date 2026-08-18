@@ -136,7 +136,7 @@ class TestCalculateTotalConstructionCostFractionalSqmRounding:
         )
         # 50,000 x 500.5 = 25,025,000.0 exactly -- already an integer, but proves the
         # rounding site handles a fractional sqm input without disturbing an exact result.
-        assert calculate_total_construction_cost(costs) == 25_025_000
+        assert calculate_total_construction_cost(costs, costs.total_construction_sqm) == 25_025_000
 
     def test_rounds_an_odd_half_fractional_base_cost_up_not_down(self):
         costs = _construction_costs(
@@ -144,7 +144,7 @@ class TestCalculateTotalConstructionCostFractionalSqmRounding:
         )
         # 333 x 100.5 = 33,466.5 -- round_half_up(33,466.5) = 33,467 (Python's banker's
         # round() would wrongly give 33,466 -- must use money_round, never round()).
-        assert calculate_total_construction_cost(costs) == 33_467
+        assert calculate_total_construction_cost(costs, costs.total_construction_sqm) == 33_467
 
 
 class TestFixtureBRolledUpInterest:

@@ -1,17 +1,18 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.7.0`.
-**Date:** 17 August 2026
+**Status:** Authoritative. Calculation version `2.8.0`.
+**Date:** 18 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.8.0** — the area bridge (§15, R9), with inputs v6 carrying an entered `areas` block and per-unit `ancillary`. The scheme now has one area statement that ties, and the construction-cost area is **derived** from it rather than asserted independently: §15.3's basis switch chooses between the derived developed GIA and the pre-R9 manual field, and §15.4 makes reading that field outside one accessor a build failure. Ancillary parking, balconies and terraces are valued as a separate GDV component (§3.1, §15.5) that sells with its unit and moves with a §12.1 GDV stress. **No existing computed value changed** — migration writes the manual basis with a zeroed bridge and zeroed ancillary, which is a tested claim, not an assertion (see `migration-notes.md`). §3.1's formula and Included lines are corrected to state GDV as internal plus ancillary value, and the unpaid R3 pointer that excluded parking "until valued separately" is removed rather than repointed; §3.2's `global_per_sqft` lender basis is bound explicitly to internal net internal area; §2 gains four derived-area definitions. §15.6's rules replace the ±25% unit-NIA-vs-construction-area warning, which is deleted rather than retuned. R9 also clears an R8 carry-forward: acquisition-date validation is now a real calendar check in both engines, so `2026-02-31` no longer validates (§14).
 - **2.7.0** — jurisdiction-aware acquisition tax: SDLT (England/NI), LBTT (Scotland) and LTT (Wales) computed from a dated, sourced and versioned band table (§14, R8), with inputs v5 carrying the jurisdiction, its evidence status, the acquisition date and a reasoned override. **No existing computed value changed** — §1.6 explains why. §3.3's formula term is renamed from `SDLT` to `acquisition_tax` and its false "other jurisdictions are out of scope" sentence is deleted; §3.18 records that the RLV is invariant to it; §13.1 gains the table version and applied jurisdiction; §13.3 gains a fourth draft condition. What does change in practice is that every pre-R8 document is marked DRAFT until **both** its jurisdiction is confirmed **and** an acquisition date is recorded — migration leaves the date null, so confirming the jurisdiction alone is not enough (§14.6).
 - **2.4.0** — fixed-facility sensitivity suite: the two-way matrix, the tornado, and their shared lever and validation rules (§12, R4). No existing computed value changed — §12 only composes calls to the existing appraisal engine over levered copies of an inputs document, it does not alter any formula — which is why this is a minor bump, not a major one.
 - **2.3.0** — phased-sales sweep (§4.4.1), refinance event (§4.5), §5.11 phased regime, declining redemption schedule, `facility_redrawn_after_redemption` flag (R3b); no numeric change for inputs with null `sales_phasing`/`refinance`. Also corrects §3.12's refinance-profit wording to match §3.11 and the engine (a refinance is a financing event and does not enter profit) — a **specification** correction only, no computed value changed.
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9) carry no such restriction.
 
 ---
 
@@ -65,10 +66,14 @@ Calc 2.7.0 (R8) adds §14's jurisdiction-aware acquisition tax. **It changes no 
 | **Committed gross facility** | `committed_gross_facility_pence` if provided; otherwise `committed_net_facility_pence + interest_reserve_pence`. Caps the closing senior balance including rolled-up interest. |
 | **Eligible development costs** | Construction, professional and statutory costs (not acquisition, not selling costs, not finance costs) — the base against which `development_cost_advance_pct` caps monthly senior draws. |
 | **Legacy leverage** | A migrated v1 `ltv_pct`. It is stored as `legacy_leverage_pct` with `requires_confirmation: true` and is used only to propose an unconfirmed committed net facility during migration (§10). It is never presented as an approved lender metric. |
-| **Lender valuation** | Optional `lender_valuation` block (`inputs_version 3`) recording a lender-adjusted GDV (§3.2): `basis` — one of `global_pct` (% adjustment applied to every unit's developer value, e.g. `-10`), `global_per_sqft` (pence per sq ft applied to every unit's area, replacing its developer value), `unit_type` (`per_key_values` maps unit type → % adjustment), `per_unit` (`per_key_values` maps unit id → lender value pence), `fixed_amount` (`global_value` is the total lender GDV in pence, replacing the summed value). Required provenance `reason`, `author`, `date` (ISO `yyyy-mm-dd`) travel with the block and are displayed with any variance it produces. `null`/absent = no lender valuation recorded. |
+| **Lender valuation** | Optional `lender_valuation` block (`inputs_version 3`) recording a lender-adjusted GDV (§3.2): `basis` — one of `global_pct` (% adjustment applied to every unit's developer value, e.g. `-10`), `global_per_sqft` (pence per sq ft applied to every unit's **internal net internal area** (`floor_area_sqm`), never its ancillary areas, replacing its developer value — [R9 — calc 2.8.0]: balconies, terraces and parking sit outside NIA (§15.5), so a lender rate per square foot of accommodation must not be levied on them), `unit_type` (`per_key_values` maps unit type → % adjustment), `per_unit` (`per_key_values` maps unit id → lender value pence), `fixed_amount` (`global_value` is the total lender GDV in pence, replacing the summed value). Required provenance `reason`, `author`, `date` (ISO `yyyy-mm-dd`) travel with the block and are displayed with any variance it produces. `null`/absent = no lender valuation recorded. |
 | **Enforcement cost assumption** | `finance.enforcement_cost_assumption_pence`: integer pence, `>= 0`, default `0`. A disclosed assumption for the lender's cost of enforcement, used in senior repayment break-even (§5.11) and reported as an assumption wherever that metric is shown. |
 | **Tranche gross-receipts share** | `sales_phasing.tranches[].pct_of_gross_receipts`: percentage of the sold portion's gross receipts allocated to that tranche (§4.4.1). `null` `sales_phasing` = a single 100% tranche in the final month. |
 | **Refinance investment value** | `refinance.investment_value_pence`: explicit lender/valuer investment value of the retained portion at the refinance date (§4.5). Never derived from rents or yields. |
+| **Developed area** | `areas.developed_gia_sqm`, derived: proposed GIA less retained-commercial GIA less untouched GIA (§15.2). The gross internal area actually being developed — the area the construction cost is incurred on when `areas.basis` is `bridge_derived` (§15.3). Never entered directly; entering it would be the second place the same fact lived. [R9 — calc 2.8.0] |
+| **Available for units** | `areas.available_for_units_sqm`, derived: developed area less circulation/common, plant/riser, store/bin/cycle and internal amenity area (§15.2). The internal area that can become saleable unit NIA. [R9 — calc 2.8.0] |
+| **Unallocated balance** | `areas.unallocated_sqm`, derived: available-for-units less Σ `unit.floor_area_sqm`. Reported rather than hidden, and **signed**: positive means the schedule does not yet fill the building, negative means the units over-fill it (a hard error, §15.6). Frequently and legitimately non-zero at appraisal stage, so a positive balance never gates the document. [R9 — calc 2.8.0] |
+| **Ancillary value** | Σ (`unit.ancillary.parking_value_pence` + `unit.ancillary.balcony_terrace_value_pence`) over all proposed units. Part of GDV, reported as a separate component (§3.1, §15.5), and sold with its unit — never a scheme-level disposal of its own (§15.9). A pre-v6 unit carries no `ancillary` block, so its ancillary value is 0. [R9 — calc 2.8.0] |
 
 ---
 
@@ -78,8 +83,8 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 ### 3.1 Developer GDV [R1]
 
-- **Formula:** Σ `unit.estimated_value_pence` over all proposed units (developer values).
-- **Included:** internal saleable unit values only. **Excluded:** parking/external space (until valued separately in R3), retained-commercial value, rental income.
+- **Formula:** `gdv_internal + gdv_ancillary`, where `gdv_internal` = Σ `unit.estimated_value_pence` over all proposed units (developer values) and `gdv_ancillary` = Σ (`unit.ancillary.parking_value_pence` + `unit.ancillary.balcony_terrace_value_pence`). Both components are reported, and their sum is the GDV every downstream metric uses (`calculateGdvBreakdown` / `calculate_gdv_breakdown` → `total_pence`). [R9 — calc 2.8.0. Before it this line read “Σ `unit.estimated_value_pence` over all proposed units”, which contradicted the Included line beneath it the moment ancillary value entered GDV. A pre-v6 unit carries no `ancillary` block at all, so `gdv_ancillary` is 0 for it and the figure is unchanged — §15.5.]
+- **Included:** internal saleable unit values, plus ancillary value (parking, balconies and terraces) reported as a separate component. **Excluded:** retained-commercial value, rental income. [R9 — calc 2.8.0. Before it, this line excluded parking and external space "until valued separately in R3". R3 shipped without it and the pointer stood unpaid through R8; the exclusion is now removed rather than repointed, because the values are modelled.]
 - **Timing:** point value at practical completion; not indexed.
 - **Gross/net:** gross of selling costs.
 - **Assumptions:** unit values are the developer's own estimates; comparable basis recorded per unit.
@@ -105,11 +110,11 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 ### 3.4 Construction cost [R1]
 
-- **Formula (headline mode, the only R1 mode):** `base = construction_cost_per_sqm_pence × total_construction_sqm`; `contingency = round(base × contingency_pct/100)`; `compliance = fire_safety + sound_insulation + part_l`; total = `base + contingency + compliance`.
+- **Formula (headline mode, the only R1 mode):** `base = round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)`; `contingency = round(base × contingency_pct/100)`; `compliance = fire_safety + sound_insulation + part_l`; total = `base + contingency + compliance`. [R9 — calc 2.8.0. Before it this line read `construction_cost_per_sqm_pence × total_construction_sqm`. The **area** is now resolved through the single accessor `developed_area_sqm(inputs)` (§15.3/§15.4), which returns the derived developed GIA on the `bridge_derived` basis and `total_construction_sqm` verbatim on the `manual` basis — so a migrated document's figure is unchanged to the penny. Reading `total_construction_sqm` anywhere else is a build failure.]
 - **Contingency base:** the headline base build only — explicitly excludes compliance allowances, professional fees and acquisition. This base is displayed wherever contingency appears.
 - **Timing:** spread per the spend profile (§6). R1 default: straight-line over the construction window, disclosed as an assumption.
 - **Gross/net:** entered figures are treated as net of recoverable VAT; VAT modelling is R3 and the report carries "construction VAT treatment unconfirmed — no reduced-rate saving is assumed in the appraisal".
-- **Edge cases:** negative rate/area/contingency are hard errors; `total_construction_sqm` differing from Σ unit areas by >25% raises a warning (unreconciled areas).
+- **Edge cases:** negative rate/area/contingency are hard errors. [R9 — calc 2.8.0. This line also said “`total_construction_sqm` differing from Σ unit areas by >25% raises a warning (unreconciled areas)”. **That warning is deleted, not retuned.** It compared two quantities that *should* differ — by exactly the circulation, plant, storage and amenity the model had nowhere to record — so it fired on correct schemes and stayed silent on wrong ones; the tolerance was a proxy for a reconciliation that did not exist. §15.6's rules replace it, including a narrower manual-basis warning that compares the manual area against the **derived** developed area rather than against unit NIA.]
 
 ### 3.5 Professional fees [R1]
 
@@ -425,7 +430,9 @@ Ledger column §4. Exhaustion (cumulative capitalised interest > reserve) is an 
 
 For each month `m` in `1..term` (`m` labels the state as of completion of ledger month `m−1`; `m = term` is the terminal "nothing left to spend" checkpoint): **remaining cost** = future development costs from ledger month `m` onward (acquisition/construction/professional/statutory — contingency is already inside the construction cost line, §3.4/§6, never a separate additive term) + future lender ancillary fees + forecast finance to completion (future interest accrued + future capitalised fees, read straight off the already-computed ledger horizon). **Remaining funding** = undrawn committed net facility as of ledger month `m−1` (0 for cash deals, where no facility exists) + committed cash equity not yet contributed (only cash-classified equity sources count as committed funding, per §2 — land/planning-uplift/vendor-finance/deferred-consideration equity is not, and Release 2b models no other committed-funding category). Reports remaining cost, remaining funding, surplus (`funding − cost`), first shortfall month (first `m` with surplus `< 0`, else none), maximum shortfall (largest deficit across the series, floored at 0). The series is derived from the already-computed ledger, which carries the dated programme when `programme` is set and the calc-2.1.0 auto windows otherwise (calc 2.2.0, [R3a]).
 
-**Known limitation (calc 2.1.0):** this series is a static snapshot of committed sources against forecast cost, not a re-simulation of the ledger's own month-by-month throttling (gross-facility headroom cap, §4.2(c); the development-cost advance-percentage cap, §4.2; uncommitted "additional equity" silently absorbing a serviced-interest shortfall, §4.3). Neither direction of "no cost-to-complete shortfall ⇔ the ledger never flagged `funding_gap`" is a general property of the engine — a headroom-capped fixture proves a real `funding_gap` can exist with no cost-to-complete shortfall, and a constructed high-rate serviced-interest scenario proves the reverse (a cost-to-complete shortfall with zero `funding_gap`, absorbed instead by uncommitted additional equity). Only "the series reports a shortfall ⇒ the ledger recorded a `funding_gap` somewhere" is asserted as a test, and it is verified across the fixtures in the current test corpus, not proved as a universal law — see `docs/financial-model/test-cases.md`'s cost-to-complete section for both counter-examples and the scope of what is and isn't tested.
+**Known limitation (calc 2.1.0):** this series is a static snapshot of committed sources against forecast cost, not a re-simulation of the ledger's own month-by-month throttling (gross-facility headroom cap, §4.2(c); the development-cost advance-percentage cap, §4.2; uncommitted "additional equity" silently absorbing a serviced-interest shortfall, §4.3). Neither direction of "no cost-to-complete shortfall ⇔ the ledger never flagged `funding_gap`" is a general property of the engine — a headroom-capped fixture proves a real `funding_gap` can exist with no cost-to-complete shortfall, and a constructed high-rate serviced-interest scenario proves the reverse (a cost-to-complete shortfall with zero `funding_gap`, absorbed instead by uncommitted additional equity). Only "the series reports a shortfall ⇒ the ledger recorded a `funding_gap` somewhere" is asserted as a test, and it is verified across the fixtures in the current test corpus, not proved as a universal law — see `docs/financial-model/test-cases.md`'s cost-to-complete section for the counter-examples and the scope of what is and isn't tested.
+
+**Third counter-example, found by fixture P [R9 — calc 2.8.0].** The remaining direction now has a *natural* counter-example in the corpus, not just a constructed one. Remaining funding above counts the undrawn **net** facility, while remaining cost counts future rolled-up interest — but rolled-up interest never consumes the net facility in §4.2; it capitalises against the **gross** facility's headroom. So a facility structured the way a real development facility is structured — a net facility sized to the costs, with the interest reserve carved out of the gross — systematically reports a phantom shortfall. `fixtures/financial-model/p-scotland-levered.json` reports a 392,483p shortfall at `m = 1` against a ledger whose `funding_gap_pence` is 0, because its 3,913,416p of rolled-up interest capitalised into 8,000,000p of gross headroom exactly as intended. Fixture F did not surface this only because its net facility carries ~16,000,000p of slack. The fixture is not tuned to hide it and the corpus test names it explicitly. **Correcting §5.10 to credit gross-facility headroom for a rolled-up facility is deferred**, because it is a behaviour change to a reported metric and belongs in its own release with its own hand-derived fixtures. The deferral is tracked as **C1** in `docs/superpowers/plans/2026-08-17-second-audit-release-plan.md` (owned by R14, which is the cost-to-complete release), and the figures above are **pinned** on fixture P — `cost_to_complete_first_shortfall_month: 1` and `cost_to_complete_max_shortfall_pence: 392483` — so this paragraph cannot drift away from the engine while the correction waits.
 
 ### 5.11 Senior repayment break-even [R2 — implemented in calc 2.1.0]
 
@@ -999,3 +1006,132 @@ Recorded so they are not read as oversights. None of the following is modelled;
   unmodelled and are disclosed separately.
 
 A report states that it is not a tax opinion (§13.4).
+
+---
+
+## 15. Area bridge and efficiency [R9 — calc 2.8.0]
+
+Before this release the appraisal held two unrelated area numbers — `conversion_costs.total_construction_sqm` (what construction cost is charged on) and Σ `unit.floor_area_sqm` (what is sold) — with nothing reconciling them and a ±25% warning standing in for a reconciliation. Nobody could answer "where did the other 140 m² go?", because the model had no place to put circulation, plant, stores, amenity, retained commercial or an unallocated balance. §15 gives the scheme one area statement that ties, and makes the construction-cost area a *derived* consequence of it rather than a second, independent assertion.
+
+### 15.1 Entered lines, and the one-fact-one-line rule
+
+The `areas` block (inputs v6) holds **only entered facts**. Nothing derived is stored:
+
+| Field | Meaning |
+|---|---|
+| `basis` | `bridge_derived` or `manual` — which number is the construction cost area (§15.3). |
+| `existing_gia_sqm` | Gross internal area of the existing building. |
+| `demolished_gia_sqm` | GIA removed. |
+| `extension_gia_sqm` | GIA added. |
+| `retained_commercial_gia_sqm` | Proposed GIA retained in commercial use, not developed. |
+| `untouched_gia_sqm` | Proposed GIA left untouched by the works. |
+| `circulation_common_sqm` | Circulation and common parts inside the developed area. |
+| `plant_riser_sqm` | Plant and risers. |
+| `store_bin_cycle_sqm` | Stores, bin and cycle provision. |
+| `amenity_sqm` | Internal amenity space. |
+| `external_amenity_sqm` | External amenity and landscape. **Not gross internal area** — carried through for display and never deducted from the reconciliation. |
+
+**One fact, one line.** A quantity is entered in exactly one place or derived in exactly one place, never both. Developed area, available-for-units area, the unallocated balance and the three efficiencies are all derived (§15.2) and are never inputs: a scheme that could state its developed GIA *and* its existing/demolished/extension lines would have two records of the same fact, free to disagree, and the model would have no principled way to say which one is the building. This is the same discipline §3.3 applies to acquisition tax, and for the same reason.
+
+Areas are floating-point m² — §1.1's integer-pence rounding governs money, not area. Every entered field is `>= 0`.
+
+### 15.2 The derivation
+
+The arithmetic order below is **normative**. Both engines mirror it operation for operation (`frontend/src/lib/model/areas.ts`, `app/financial_model/areas.py`) so they produce bit-identical IEEE-754 results and the golden-fixture parity assertions can be exact rather than tolerant.
+
+```
+proposed_gia        = existing_gia - demolished_gia + extension_gia
+developed_gia       = proposed_gia - retained_commercial_gia - untouched_gia
+available_for_units = developed_gia - circulation_common - plant_riser
+                                    - store_bin_cycle - amenity
+unit_nia            = SUM(unit.floor_area_sqm)
+unallocated         = available_for_units - unit_nia
+```
+
+`unallocated` is **signed**. A positive balance means the unit schedule does not yet fill the building; a negative one means the units over-fill it. It is reported either way (§15.7) — never clamped to zero, and never quietly absorbed into another line.
+
+**The three efficiencies**, each a percentage to 2 dp under §1.5's rule that a zero denominator yields `null`, never `0`:
+
+| Ratio | Formula | Answers |
+|---|---|---|
+| `nia_to_gia_pct` | `unit_nia / developed_gia` | Net-to-gross of the part being developed. The headline conversion efficiency. |
+| `nia_to_proposed_gia_pct` | `unit_nia / proposed_gia` | Net-to-gross of the whole proposed building, including retained commercial and untouched area. |
+| `saleable_to_developed_pct` | `saleable_nia / developed_gia` | What proportion of the area being funded is being sold. |
+
+`null` here means *not computable*, and is the correct answer for a document with a zeroed bridge — every pre-v6 document, and every v6 document on the manual basis that has entered no geometry. Printing `0%` would assert that the building has no usable area, which is a different and false statement (§1.5).
+
+`saleable_nia` is the NIA of the units the exit strategy actually sells: all units for `sell_all`, none for `retain_all`, and the non-retained units for `blended`. **The saleable ratio is therefore exit-coupled by design.** A retain-all scheme correctly reports `0.00%` — not because the building is inefficient, but because none of the area being funded is being sold, which is exactly what the ratio is asked to measure. That coupling is deliberate and is why this ratio is kept separate from `nia_to_gia_pct`, which is exit-independent: the two answer different questions, and a reader comparing them can see the retention.
+
+### 15.3 The construction-area basis switch
+
+`areas.basis` selects **the** area construction cost is charged on:
+
+- `bridge_derived` — `developed_gia_sqm` from §15.2. The bridge is the record, and the cost follows the building.
+- `manual` — `conversion_costs.total_construction_sqm`, the pre-R9 field, carried verbatim.
+
+`manual` is the migrated default and remains a legitimate choice: an appraiser holding a measured schedule of areas from a cost consultant should be able to use it without first reconstructing a bridge. What the model refuses to do is guess. Migration writes `basis: 'manual'` with a **zeroed** bridge rather than synthesising `existing_gia_sqm` from `total_construction_sqm`, because inventing an existing GIA the record never stated would be inventing evidence — the same reasoning that leaves R8's `acquisition_date` null rather than stamping today's date. See `migration-notes.md` for the v5 → v6 statement and where the numerical-identity claim is tested.
+
+§3.4's construction cost is unchanged in form; only its area argument is now resolved rather than read: `base = round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)`, then contingency, then the compliance items.
+
+### 15.4 The single-accessor rule
+
+`areas.ts` / `areas.py` is the **only** module that may read `conversion_costs.total_construction_sqm`. Reading it anywhere else is a **build failure**, outside a short allowlist of files that own, declare, migrate or capture the raw field.
+
+The module exposes two accessors, and which one a consumer wants is not a matter of taste:
+
+- **`developed_area_sqm(inputs)`** (`developedAreaSqm`) returns the construction cost area and nothing else. This is what the cost stack, the deal spider, the UI's cost page and the investment memo call.
+- **`area_bridge(inputs)`** (`areaBridge`) returns the whole `AreaBridgeResult`. Two callers legitimately need it rather than the scalar: `derive_metrics`, which lifts the reconciliation onto the result (§15.8), and `validate_inputs`, whose §15.6 rules are about the *reconciliation* — the unallocated balance, the efficiencies, and the manual figure held against the derived one (which is why `manual_area_sqm` is carried on the result at all). Both read the raw field through this module, not around it.
+
+[R9 — calc 2.8.0 fix round 1. This paragraph previously said validation "calls `developed_area_sqm` and nothing else", which misdescribed the code: `validation.ts:82` / `validation.py:99` call `area_bridge` directly, as `areas.ts`'s own `manual_area_sqm` doc comment sanctions. A specification that misdescribes the engine is a defect in the specification.]
+
+This is enforced, not merely stated, because R8 proved convention alone does not hold it: the same "moved the computation, missed a consumer" defect recurred three times in one release (`calculateTotalAcquisitionCost`, `deal-spider.ts`, `AcquisitionPage.tsx`), each site individually self-consistent and therefore invisible to a green test suite. `model-governance.md` records how each language enforces the rule, and what it does not reach.
+
+### 15.5 Ancillary areas and ancillary value
+
+Every unit (inputs v6) carries an `ancillary` block: `balcony_terrace_sqm`, `balcony_terrace_value_pence`, `parking_spaces`, `parking_value_pence`.
+
+- **Ancillary area sits outside NIA.** `unit_nia_sqm` sums `floor_area_sqm` only. A balcony is not net internal area, and folding it in would inflate every efficiency in §15.2 and every £/sq ft in §3.2.
+- **Ancillary value sits outside internal saleable value, and inside GDV.** §3.1's GDV is `gdv_internal + gdv_ancillary`, with the two reported separately so a reader can see how much of the scheme's value is parking.
+- **Ancillary sells with its unit.** Gross sale receipts (§4.4) carry the sold units' ancillary value, and the retained (unrealised) value carries the retained units'. Under a blended exit, GDV and gross receipts therefore differ by exactly the retained units' internal **plus** ancillary value — never by the internal value alone.
+- **A GDV stress moves ancillary value.** §12.1's `gdv_adjustment_pct` scales `parking_value_pence` and `balcony_terrace_value_pence` alongside `estimated_value_pence`, each rounded half-up independently. Ancillary **areas** are deliberately untouched: a price stress is not an area stress.
+- **A pre-v6 unit carries no `ancillary` block at all**, read structurally and resolving to zero, so every pre-R9 figure is unchanged to the penny.
+
+The bridge also reports `ancillary_balcony_terrace_sqm` and `ancillary_parking_spaces` as scheme totals — disclosure beside the reconciliation, never deducted from it.
+
+### 15.6 Validation
+
+Hard **errors** (they gate the document):
+
+- any entered area `< 0`;
+- `demolished_gia_sqm > existing_gia_sqm` — proposed GIA cannot be negative;
+- `retained_commercial_gia_sqm + untouched_gia_sqm > proposed_gia_sqm` — developed area cannot be negative;
+- circulation + plant + store + amenity greater than the developed area;
+- `basis: 'bridge_derived'` with a developed area of `0` or less — the selected basis produces no cost area at all;
+- `unallocated_sqm < 0` — the unit schedule does not fit the building.
+
+**Warnings** (they never gate):
+
+- `unallocated_sqm` exceeds 10% of the developed area — the bridge does not yet tie;
+- `nia_to_gia_pct` outside the 65–90% range typical of a conversion;
+- `basis: 'manual'` where the manual area differs from the derived developed area by more than 5% — one of them is wrong, or the manual basis needs a reason.
+
+The last three warnings, and the `unallocated_sqm < 0` error, are all guarded on `developed_gia_sqm > 0`. A zeroed bridge means the bridge is not in use, and a real unit schedule must not be judged against a 0 m² building nobody is reconciling against.
+
+**The ±25% warning this block replaces is deleted, not repointed.** It compared unit NIA against the construction area — two quantities that *should* differ, by exactly the circulation, plant, storage and amenity the model previously had nowhere to record — so it fired on correct schemes and stayed silent on wrong ones. The tolerance was a proxy for a reconciliation that did not exist. It now exists, so the proxy goes: the ±25% figure must appear nowhere in either engine's source or output.
+
+### 15.7 Reporting the balance
+
+The unallocated balance is **disclosed**, not hidden and not silently absorbed. An area statement that appears to tie because the residue was folded into another line is worse than one that visibly does not tie: the reader loses the ability to ask the question. A positive unallocated balance is frequently and legitimately unknown at appraisal stage, which is why it is a warning rather than an error — the appraisal is honest about what is not yet known (§1.5) rather than claiming a precision it does not have.
+
+### 15.8 The result block
+
+`AppraisalResultV2.area_bridge` carries the whole reconciliation — every entered line, every derived line, every ratio — and is derived **once**, in `derive_metrics`. The UI and the investment memo read it off the result and never call `area_bridge` themselves. `developed_area_sqm`, `gdv_internal_pence` and `gdv_ancillary_pence` are lifted onto the result alongside it for the consumers that need only those.
+
+### 15.9 Stated limitations
+
+Recorded so they are not read as oversights.
+
+- **Scheme-level ancillary is out of scope.** Surplus parking sold separately from any unit — a residual car-park disposal, a bank of spaces sold to a neighbouring scheme — is not modelled. Ancillary recorded here attaches to a unit and sells with it. Modelling scheme-level ancillary needs its own disposal routing in the exit engine, not another value field.
+- **Retained-commercial value is deferred to R13.** `retained_commercial_gia_sqm` correctly removes the retained commercial area from the developed area, so it is neither built nor charged construction cost. Its **value** is not in GDV: §3.1 still excludes retained-commercial value, so a scheme retaining commercial space understates its total value until R13 models the investment arm. A stated exclusion, not an error in the bridge.
+- **No measurement standard is enforced.** The model does not check that entered areas follow RICS IPMS, the RICS Code of Measuring Practice, or any other convention, and it cannot tell GIA entered as GEA from GIA entered correctly. It reconciles whatever is entered. The standard used is the appraiser's responsibility and travels with the appraisal as an assumption, not as a validated field.
+- **Areas carry no evidence status.** Unlike the acquisition jurisdiction (§14.6), an area line records no source and no confidence. There is no "measured survey" versus "scaled off a floor plan" distinction in the record.

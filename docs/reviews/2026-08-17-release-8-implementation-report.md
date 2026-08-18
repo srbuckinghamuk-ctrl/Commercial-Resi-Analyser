@@ -149,7 +149,7 @@ What this does and does not mean:
   17 March 2016. The additive property was confirmed empirically across all seven
   pre-existing fixtures: byte-identical metrics v4 vs v5.
 - **`report_safe` stays true.** An unconfirmed jurisdiction does not assert the figures
-  are wrong — see §7 below on why this is a draft reason and not a validation error.
+  are wrong — see §8 below on why this is a draft reason and not a validation error.
 - **Confirmation is two actions, once per appraisal**, on the acquisition page: confirming
   the jurisdiction and entering an acquisition date. Migration leaves the date null, so
   confirming the jurisdiction alone does not clear the watermark — `AcquisitionPage.tsx`'s
