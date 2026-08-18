@@ -36,14 +36,27 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
     [exit.retained_units],
   );
 
-  const retainedCapitalValue = useMemo(
-    () =>
-      exit.retained_units.reduce((s, r) => {
-        const unit = units.find((u) => u.id === r.unit_id);
-        return s + (unit?.estimated_value_pence ?? 0);
-      }, 0),
-    [exit.retained_units, units],
-  );
+  // R9 fix wave: read, never recompute. This figure seeds
+  // `refinance.investment_value_pence`, so it is not display-only — a scheme
+  // with retained parking or balconies refinanced against an understated
+  // investment value.
+  //
+  // The component used to sum bare `estimated_value_pence` over
+  // `exit.retained_units`, which excluded the ancillary value that spec §15.5
+  // makes part of a unit's worth and that the engine's
+  // `schedule.totals.retained_value_pence` (surfaced as
+  // `metrics.unrealised_value_pence`) has always included. Rather than adding
+  // ancillary to a second, component-local derivation, the whole figure now
+  // comes off the run.
+  //
+  // Note the scope this deliberately adopts: `unrealised_value_pence` is
+  // GDV minus the units the engine actually sells, so under `retain_all` it
+  // covers EVERY unit, not merely the ones the user has typed a rent against.
+  // That is the right basis for both consumers here — the refinance is secured
+  // on the whole retained portfolio, and a portfolio gross yield is measured
+  // against the whole portfolio's value. Under `blended` the engine's retained
+  // set is exactly `exit.retained_units`, so the two definitions coincide.
+  const retainedCapitalValue = run.metrics.unrealised_value_pence;
 
   const grossYield = retainedCapitalValue > 0 ? (totalAnnualRent / retainedCapitalValue) * 100 : 0;
 

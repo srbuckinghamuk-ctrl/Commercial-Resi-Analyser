@@ -241,6 +241,72 @@ describe('ExitStrategyPage — refinance toggle', () => {
     });
   });
 
+  // ── R9 fix wave ────────────────────────────────────────────────────────
+  // The seeded `investment_value_pence` used to sum bare `estimated_value_pence`
+  // over the retained units, so a scheme with retained parking or balconies
+  // refinanced against an understated investment value. It now comes off the
+  // run — `metrics.unrealised_value_pence`, which is the engine's own
+  // `schedule.totals.retained_value_pence`.
+  const UNIT_WITH_ANCILLARY = {
+    id: 'u2', type: '1bed' as const, floor_area_sqm: 45, estimated_value_pence: 20_000_000,
+    comparable_notes: '',
+    ancillary: {
+      balcony_terrace_sqm: 6, balcony_terrace_value_pence: 500_000,
+      parking_spaces: 1, parking_value_pence: 1_500_000,
+    },
+  };
+
+  it('seeds the refinance investment value INCLUDING retained ancillary value', () => {
+    // Blended: the engine's retained set is exactly `retained_units`, so the
+    // component's figure and `metrics.unrealised_value_pence` describe the
+    // same units and must agree to the penny.
+    const inputs = buildInputs({
+      exit_strategy: {
+        ...defaultCalculatorInputsV6().exit_strategy,
+        route: 'blended',
+        retained_units: [{ unit_id: 'u2', monthly_rent_pence: 100_000 }],
+      },
+      unit_mix: { units: [UNIT_A, UNIT_WITH_ANCILLARY] },
+      refinance: null,
+    });
+    const { onChange, run } = setup(inputs);
+    // Sanity, so the assertion cannot pass by coincidence: internal-only would
+    // be £200,000 and the ancillary adds £20,000 on top.
+    expect(run.metrics.unrealised_value_pence).toBe(22_000_000);
+    fireEvent.click(screen.getByRole('button', { name: /add refinance/i }));
+    expect(onChange).toHaveBeenCalledWith({
+      refinance: {
+        month_offset: 11,
+        investment_value_pence: run.metrics.unrealised_value_pence,
+        ltv_pct: 65,
+        arrangement_fee_pence: 0,
+        legal_costs_pence: 0,
+      },
+    });
+    // The pre-fix figure, pinned so a regression to it fails loudly.
+    expect(onChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ refinance: expect.objectContaining({ investment_value_pence: 20_000_000 }) }),
+    );
+  });
+
+  it('bases the gross yield on the engine\'s retained value, ancillary included', () => {
+    const inputs = buildInputs({
+      exit_strategy: {
+        ...defaultCalculatorInputsV6().exit_strategy,
+        route: 'blended',
+        retained_units: [{ unit_id: 'u2', monthly_rent_pence: 100_000 }],
+      },
+      unit_mix: { units: [UNIT_A, UNIT_WITH_ANCILLARY] },
+    });
+    const { run } = setup(inputs);
+    const expected = ((100_000 * 12) / run.metrics.unrealised_value_pence) * 100;
+    expect(screen.getByText(`${expected.toFixed(1)}%`)).toBeInTheDocument();
+    expect(expected.toFixed(1)).toBe('5.5'); // sanity: £12,000 / £220,000
+    // 6.0% is the pre-fix answer (rent ÷ internal value only, £12,000 /
+    // £200,000) — pinned so a regression to it fails loudly.
+    expect(screen.queryByText('6.0%')).not.toBeInTheDocument();
+  });
+
   it('disabling refinance clears the block', () => {
     const inputs = buildInputs({
       exit_strategy: { ...defaultCalculatorInputsV6().exit_strategy, route: 'retain_all' },
