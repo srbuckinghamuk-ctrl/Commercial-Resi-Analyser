@@ -44,7 +44,10 @@ export function runAppraisal(inputs: AnyCalculatorInputs): AppraisalRun {
 export {
   migrateInputs, migrateV2toV3, migrateInputsToV3, isV3, isV4, migrateV3toV4, migrateInputsToV4,
   isV5, migrateV4toV5, migrateInputsToV5,
+  isV6, migrateV5toV6, migrateInputsToV6,
 } from './migrate';
+export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
+export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';

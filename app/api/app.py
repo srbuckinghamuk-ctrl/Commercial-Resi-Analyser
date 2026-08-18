@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v5
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v6
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
@@ -402,26 +402,33 @@ def calculate_authoritative(
     was_v1 = not is_v2_or_later(raw)
 
     try:
-        # R8 (Task 10): the server boundary moved from v4 to v5. Chain
-        # migrations to v5 before validation (v1 -> v2 -> v3 -> v4 -> v5; an
-        # already-v5 payload is merged onto v5 defaults rather than
-        # re-migrated). Release 3a: the v4 document -- lender_valuation and
-        # programme included -- now drives run_appraisal directly; the engine
-        # null-wires every lender-basis metric when that block is absent
-        # (spec Sec 2) and falls back to the calc 2.1.0 auto windows when
-        # `programme` is None (spec Sec 6), so this is unchanged behaviour
-        # for every existing v1/v2/v3/v4 appraisal. This is also what gets
-        # persisted as inputs_snapshot. Unlike migrate_inputs_to_v4,
-        # migrate_inputs_to_v5 already returns a validated CalculatorInputsV5
-        # -- no separate .model_validate call is needed here.
-        inputs = migrate_inputs_to_v5(raw)
+        # R9 (Task 3): the server boundary moved from v5 to v6. Chain
+        # migrations to v6 before validation (v1 -> v2 -> ... -> v5 -> v6; an
+        # already-v6 payload is merged onto v6 defaults rather than
+        # re-migrated). The v6 step is purely additive -- it writes the area
+        # bridge on the `manual` basis with every figure zeroed, and a zeroed
+        # ancillary block on every unit -- so the cost area stays
+        # `conversion_costs.total_construction_sqm` and every stored appraisal
+        # reproduces its figures exactly (pinned by
+        # tests/test_migrate_v6.py::test_v6_migration_moves_no_existing_figure
+        # and its TS twin in golden-fixtures.test.ts). R8 (Task 10) moved this
+        # boundary from v4 to v5; Release 3a made the v4 document --
+        # lender_valuation and programme included -- drive run_appraisal
+        # directly, and the engine still null-wires every lender-basis metric
+        # when that block is absent (spec Sec 2) and falls back to the calc
+        # 2.1.0 auto windows when `programme` is None (spec Sec 6). This is
+        # also what gets persisted as inputs_snapshot. Like
+        # migrate_inputs_to_v5, migrate_inputs_to_v6 already returns a
+        # validated model -- no separate .model_validate call is needed here.
+        inputs = migrate_inputs_to_v6(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # A malformed or unsupported-version inputs_snapshot must 4xx, never
-        # 500 (Task 10 known item #1). migrate_inputs_to_v5 -- like
-        # migrate_inputs_to_v4 before it, and the merge helper both delegate
-        # to -- raises plain Python exceptions, not ValidationError, for
+        # 500 (Task 10 known item #1). migrate_inputs_to_v6 -- like
+        # migrate_inputs_to_v5 and migrate_inputs_to_v4 before it, and the
+        # merge helper all three delegate to -- raises plain Python
+        # exceptions, not ValidationError, for
         # shapes it cannot interpret: e.g. a document already refused by an
         # inner guard (a raw ValueError), or a structurally wrong field (e.g.
         # `acquisition` sent as a string merges as `**"a string"` and raises
@@ -481,7 +488,7 @@ def calculate_authoritative(
             "client_mismatches": mismatches,
         },
         "calc_version": CALC_VERSION,
-        "inputs_version": 5,
+        "inputs_version": 6,
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
@@ -491,7 +498,7 @@ def calculate_authoritative(
         "audit_hash": audit_hash(
             project_id=str(payload.project_id),
             calc_version=CALC_VERSION,
-            inputs_version=5,
+            inputs_version=6,
             status=status,
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),

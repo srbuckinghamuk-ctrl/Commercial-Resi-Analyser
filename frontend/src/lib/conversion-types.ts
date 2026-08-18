@@ -153,3 +153,36 @@ export interface CashflowResult {
   peak_funding_pence: number;
   total_interest_pence: number;
 }
+
+/**
+ * R9 (spec §15.5). Ancillary areas and values that are NOT internal saleable
+ * area. Areas here sit outside NIA and outside the GIA reconciliation; values
+ * here sit outside internal saleable GDV and are reported separately.
+ *
+ * Scheme-level ancillary — surplus parking sold separately from any unit — is
+ * deliberately out of scope (spec §2): it needs its own disposal routing in the
+ * exit engine. Ancillary recorded here attaches to a unit and sells with it.
+ */
+export interface UnitAncillary {
+  balcony_terrace_sqm: number;
+  balcony_terrace_value_pence: number;
+  parking_spaces: number;
+  parking_value_pence: number;
+}
+
+export const DEFAULT_UNIT_ANCILLARY: UnitAncillary = {
+  balcony_terrace_sqm: 0,
+  balcony_terrace_value_pence: 0,
+  parking_spaces: 0,
+  parking_value_pence: 0,
+};
+
+/** Extended rather than edited, because `ProposedUnit` is shared with the v1–v5
+ *  document shapes — the same reasoning R8 applied to `AcquisitionInputsV5`. */
+export interface ProposedUnitV6 extends ProposedUnit {
+  ancillary: UnitAncillary;
+}
+
+export interface UnitMixInputsV6 {
+  units: ProposedUnitV6[];
+}

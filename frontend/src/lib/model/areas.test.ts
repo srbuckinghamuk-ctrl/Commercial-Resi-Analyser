@@ -4,13 +4,14 @@ import {
 } from './areas';
 import type { AreaBridgeInputs } from './areas';
 import type { AnyCalculatorInputs } from './finance-types';
+import type { UnitAncillary } from '../conversion-types';
 
 /** Minimal inputs shaped just enough for the areas module. The areas module
  *  reads only `areas`, `conversion_costs.total_construction_sqm`, `unit_mix`
  *  and `exit_strategy`, so nothing else needs to be real. */
 function makeInputs(
   areas: Partial<AreaBridgeInputs>,
-  units: Array<{ id: string; floor_area_sqm: number }> = [],
+  units: Array<{ id: string; floor_area_sqm: number; ancillary?: Partial<UnitAncillary> }> = [],
   opts: { manualSqm?: number; route?: string; retainedIds?: string[] } = {},
 ): AnyCalculatorInputs {
   return {
@@ -141,5 +142,46 @@ describe('unitNiaSqm', () => {
         ancillary: { balcony_terrace_sqm: 8, balcony_terrace_value_pence: 0, parking_spaces: 1, parking_value_pence: 0 } },
     ];
     expect(unitNiaSqm(units as never)).toBe(50);
+  });
+});
+
+// R9 Task 3: the ancillary tally, now that `ProposedUnitV6` exists. `areaBridge`
+// already computed these two fields, but no unit type carried an `ancillary`
+// block until inputs v6, so both code paths were unreachable and untested.
+// Python twin: tests/test_areas.py.
+describe('ancillary tally', () => {
+  const v6Units = [
+    { id: 'u1', floor_area_sqm: 50, ancillary: { balcony_terrace_sqm: 8, parking_spaces: 1 } },
+    { id: 'u2', floor_area_sqm: 60, ancillary: { balcony_terrace_sqm: 4.5, parking_spaces: 2 } },
+    { id: 'u3', floor_area_sqm: 40, ancillary: {} }, // zeroed block: contributes nothing
+  ];
+
+  it('sums balcony/terrace area and parking spaces across units', () => {
+    const b = areaBridge(makeInputs(FULL_BRIDGE, v6Units));
+    expect(b.ancillary_balcony_terrace_sqm).toBe(12.5);
+    expect(b.ancillary_parking_spaces).toBe(3);
+  });
+
+  it('keeps ancillary out of NIA and out of the reconciliation entirely', () => {
+    // Spec §15.5: ancillary can neither inflate the unit area total nor shrink
+    // the unallocated balance.
+    const withAncillary = areaBridge(makeInputs(FULL_BRIDGE, v6Units));
+    const without = areaBridge(makeInputs(FULL_BRIDGE, [
+      { id: 'u1', floor_area_sqm: 50 },
+      { id: 'u2', floor_area_sqm: 60 },
+      { id: 'u3', floor_area_sqm: 40 },
+    ]));
+    expect(withAncillary.unit_nia_sqm).toBe(150);
+    expect(without.unit_nia_sqm).toBe(150);
+    expect(withAncillary.unallocated_sqm).toBe(without.unallocated_sqm);
+    expect(withAncillary.available_for_units_sqm).toBe(without.available_for_units_sqm);
+  });
+
+  it('tallies zero for a pre-v6 unit carrying no ancillary block', () => {
+    const b = areaBridge(makeInputs(FULL_BRIDGE, [
+      { id: 'u1', floor_area_sqm: 50 }, { id: 'u2', floor_area_sqm: 60 },
+    ]));
+    expect(b.ancillary_balcony_terrace_sqm).toBe(0);
+    expect(b.ancillary_parking_spaces).toBe(0);
   });
 });

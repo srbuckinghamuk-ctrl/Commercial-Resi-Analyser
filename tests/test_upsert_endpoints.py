@@ -200,10 +200,15 @@ class TestAppraisalUpsert:
 
 class TestAppraisalV5Normalisation:
     """R8 Task 10: the appraisal endpoints normalise every stored/submitted
-    snapshot (v1-v5) to v5 (app/api/app.py migrate_inputs_to_v5), not v4."""
+    snapshot to the current schema version (app/api/app.py), not v4.
+
+    R9 Task 3 moved that boundary on again, from v5 to v6
+    (migrate_inputs_to_v6). The class name is left alone deliberately -- these
+    cases are about the jurisdiction fields v5 introduced, which v6 carries
+    forward untouched, and renaming them would obscure what they pin."""
 
     @pytest.mark.asyncio
-    async def test_v4_snapshot_normalises_to_v5_with_default_jurisdiction(
+    async def test_v4_snapshot_normalises_to_v6_with_default_jurisdiction(
         self, client, monkeypatch,
     ):
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
@@ -217,11 +222,11 @@ class TestAppraisalV5Normalisation:
         assert resp.status_code == 201, resp.text
         body = resp.json()
         # The governance column (drives audit_hash), not just the snapshot's
-        # own inputs_version.
-        assert body["inputs_version"] == 5
+        # own inputs_version. R9 Task 3: the boundary is v6.
+        assert body["inputs_version"] == 6
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 5
+        assert snapshot["inputs_version"] == 6
         acq = snapshot["acquisition"]
         assert acq["jurisdiction"] == "england_ni"
         assert acq["jurisdiction_source"] == "migrated_default"
@@ -297,17 +302,20 @@ class TestAppraisalV5Normalisation:
         self, client, monkeypatch,
     ):
         """Fix round 1, review item 1: an inputs_version this module doesn't
-        implement (here 6, a stand-in for a future/unknown client version)
+        implement (here 7, a stand-in for a future/unknown client version)
         satisfies none of the is_vN structural checks and used to fall
         through, undetected, all the way to migrate_inputs' v1 fallback --
         reading a real, fully-formed document as noise and rebuilding
         finance/equity_sources from an LTV-based heuristic. That must now be
-        a 422, not a 201 carrying a silently corrupted snapshot."""
+        a 422, not a 201 carrying a silently corrupted snapshot.
+
+        R9 Task 3 moved the stand-in from 6 to 7: 6 is now a version this
+        server implements, so it no longer stands in for one it does not."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         unknown_version_doc = copy.deepcopy(FIXTURE_A_INPUTS)
-        unknown_version_doc["inputs_version"] = 6
+        unknown_version_doc["inputs_version"] = 7
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
@@ -316,6 +324,29 @@ class TestAppraisalV5Normalisation:
         })
         assert resp.status_code == 422, resp.text
         assert "inputs_snapshot" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_future_inputs_version_is_422_not_silent_corruption(
+        self, client, monkeypatch,
+    ):
+        """R9 Task 3. R8's silent-corruption bug, guarded forward: an
+        inputs_version this server does not implement must be refused, never
+        rebuilt from the v1 LTV heuristic and returned as 201.
+
+        Distinct from the case above: this one carries nothing but the version
+        tag, and pins that the migration's own refusal *message* reaches the
+        caller rather than being flattened into a generic 422 -- a reader
+        needs to know it was the version that was rejected."""
+        monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
+        project_id = await _create_project(client)
+
+        resp = await client.post("/api/v1/appraisals", json={
+            "project_id": project_id,
+            "name": "Future version appraisal",
+            "inputs_snapshot": {"inputs_version": 7},
+        })
+        assert resp.status_code == 422, resp.text
+        assert "unrecognised inputs_version" in resp.text
 
     @pytest.mark.asyncio
     async def test_structurally_invalid_v5_is_422_not_silently_rebuilt_as_v1(

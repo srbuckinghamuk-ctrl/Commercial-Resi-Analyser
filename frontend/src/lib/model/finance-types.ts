@@ -2,7 +2,9 @@ import type {
   AcquisitionInputs, UnitMixInputs, ConversionCostInputs, ExitStrategyInputs,
   RiskItem, ScenarioOverrides, DealSpiderInputs,
 } from '../conversion-types';
+import type { UnitMixInputsV6 } from '../conversion-types';
 import type { SpendCurve } from './curves';
+import type { AreaBridgeInputs } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 
 export type { SpendCurve };
@@ -193,8 +195,21 @@ export interface CalculatorInputsV5 extends Omit<CalculatorInputsV4, 'inputs_ver
   acquisition: AcquisitionInputsV5;
 }
 
+/**
+ * R9 (spec §15). Adds the area bridge and per-unit ancillary. Purely additive:
+ * migration writes `basis: 'manual'` with a zeroed bridge and zeroed ancillary,
+ * so **no existing appraisal's computed values move**.
+ */
+export interface CalculatorInputsV6
+  extends Omit<CalculatorInputsV5, 'inputs_version' | 'unit_mix'> {
+  inputs_version: 6;
+  unit_mix: UnitMixInputsV6;
+  areas: AreaBridgeInputs;
+}
+
 export type AnyCalculatorInputs =
-  CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5;
+  CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
+  | CalculatorInputsV5 | CalculatorInputsV6;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -387,4 +402,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.7.0';
+export const CALC_VERSION = '2.8.0';

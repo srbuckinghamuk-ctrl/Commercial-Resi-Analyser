@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import { migrateInputsToV5 } from './migrate';
+import { migrateInputsToV5, migrateInputsToV6 } from './migrate';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -279,6 +279,32 @@ describe('golden fixtures (shared with the Python engine)', () => {
       }
     });
   }
+
+  // R9 Task 3 — the acceptance gate for the v5→v6 migration, mirrored in
+  // tests/test_migrate_v6.py::test_v6_migration_moves_no_existing_figure.
+  //
+  // "Purely additive" has to be a tested claim, not an assertion: migration
+  // writes the manual basis with a zeroed bridge, so the cost area stays
+  // `conversion_costs.total_construction_sqm` and every figure must be
+  // byte-identical either side of it. If one moves, the migration is wrong —
+  // not the fixture.
+  it.each(appraisalFixtures.map((f) => f.name))(
+    'migrating %s to v6 moves no computed figure',
+    (name) => {
+      const fx = appraisalFixtures.find((f) => f.name === name)!;
+      const before = runAppraisal(fx.inputs);
+      const migrated = migrateInputsToV6(fx.inputs as unknown as Record<string, unknown>);
+      const after = runAppraisal(migrated);
+
+      expect(migrated.inputs_version).toBe(6);
+      expect(migrated.areas.basis).toBe('manual');
+      expect(after.metrics).toEqual(before.metrics);
+      // The metrics object is the headline, but a migration defect could
+      // equally move a ledger or schedule figure the metrics never surface.
+      expect(after.model).toEqual(before.model);
+      expect(after.schedule).toEqual(before.schedule);
+    },
+  );
 });
 
 describe('Fixture K — sensitivity suite (spec §12)', () => {

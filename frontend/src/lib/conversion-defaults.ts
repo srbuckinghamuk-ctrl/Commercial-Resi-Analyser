@@ -9,6 +9,7 @@ import type {
   DealSpiderInputs,
   CalculatorInputs,
 } from './conversion-types';
+import { DEFAULT_AREA_BRIDGE } from './model/areas';
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
@@ -315,3 +316,8 @@ export function defaultCalculatorInputsV5(project?: {
     },
   };
 }
+
+/** R9: a v6 document created fresh starts on the manual basis with a zeroed
+ *  bridge — identical behaviour to every pre-R9 document until the user fills
+ *  the bridge in and selects it. */
+export const DEFAULT_AREAS = { ...DEFAULT_AREA_BRIDGE };

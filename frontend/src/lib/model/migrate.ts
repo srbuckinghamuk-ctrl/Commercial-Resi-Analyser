@@ -1,12 +1,15 @@
-import type { CalculatorInputs, FinanceInputs } from '../conversion-types';
+import type { CalculatorInputs, FinanceInputs, ProposedUnitV6 } from '../conversion-types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
+  CalculatorInputsV6,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs,
 } from './finance-types';
 import {
   calculateTotalAcquisitionCost, calculateTotalConstructionCost, calculateTotalProfessionalFees,
 } from '../conversion-calc-engine';
+import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
+import { DEFAULT_AREA_BRIDGE } from './areas';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 
 function isV2(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV2 {
@@ -29,6 +32,14 @@ export function isV4(snapshot: Record<string, unknown>): snapshot is Record<stri
 /** A v5 document has the same finance shape as v2–v4, discriminated by inputs_version === 5. */
 export function isV5(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV5 {
   return snapshot.inputs_version === 5 && typeof snapshot.finance === 'object' && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/** A v6 document has the same finance shape as v2–v5, discriminated by
+ *  inputs_version === 6. */
+export function isV6(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV6 {
+  return snapshot.inputs_version === 6
+    && typeof snapshot.finance === 'object' && snapshot.finance !== null
     && 'committed_net_facility_pence' in (snapshot.finance as object);
 }
 
@@ -395,6 +406,15 @@ export function migrateInputsToV5(
       + 'silently reinterpret it via the v1 fallback path',
     );
   }
+  // Belt-and-braces, mirroring migrateInputsToV4's isV5 refusal (and the
+  // Python twin). It is currently unreachable — RECOGNISED_INPUTS_VERSIONS
+  // stops at 5, so a document tagged 6 has already thrown above — and it is
+  // kept deliberately so that widening the roster can never quietly turn this
+  // entry point into a v6 downgrader that drops `areas` and every unit's
+  // `ancillary` block.
+  if (isV6(snapshot)) {
+    throw new Error('migrateInputsToV5: input is a v6 document — use migrateInputsToV6');
+  }
   if (isV5(snapshot)) {
     const defaults = migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project))));
     const saved = snapshot as unknown as Partial<CalculatorInputsV5>;
@@ -427,4 +447,109 @@ export function migrateInputsToV5(
     };
   }
   return migrateV4toV5(migrateInputsToV4(snapshot, project));
+}
+
+/**
+ * Upgrades a v5 document to v6 by stamping `inputs_version: 6`, adding a zeroed
+ * area bridge on the **manual** basis, and giving every unit a zeroed ancillary
+ * block.
+ *
+ * Purely additive, and deliberately so. `basis: 'manual'` means the cost area
+ * stays `conversion_costs.total_construction_sqm` — the exact number the
+ * document already used — so no migrated appraisal's computed values move. A
+ * bridge is not synthesised from `total_construction_sqm`: inventing an
+ * existing GIA the record never stated would be inventing evidence, the same
+ * reasoning that leaves R8's `acquisition_date` null rather than stamping today.
+ */
+export function migrateV5toV6(v5: CalculatorInputsV5): CalculatorInputsV6 {
+  if (isV6(v5 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV5toV6: input is already a v6 document');
+  }
+  const { inputs_version: _v5Version, unit_mix, ...rest } = v5;
+  const existingAreas = (v5 as unknown as Partial<CalculatorInputsV6>).areas;
+  return {
+    ...rest,
+    inputs_version: 6,
+    areas: { ...DEFAULT_AREA_BRIDGE, ...(existingAreas ?? {}) },
+    unit_mix: {
+      units: unit_mix.units.map((u) => ({
+        ...u,
+        ancillary: {
+          ...DEFAULT_UNIT_ANCILLARY,
+          ...((u as Partial<ProposedUnitV6>).ancillary ?? {}),
+        },
+      })),
+    },
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V6: readonly number[] = [1, 2, 3, 4, 5, 6];
+
+/**
+ * Normalises any stored snapshot (v1–v6) to v6. Mirrors migrateInputsToV5's
+ * shape exactly.
+ *
+ * The two refusals below are R8's hardest-won guard, carried forward. R8
+ * shipped `migrateInputsToV4` without a v5 guard; a v5 document satisfied none
+ * of the isVN checks, fell all the way through to the v1 fallback, and was
+ * silently corrupted — fields dropped, a *confirmed* equity source replaced by
+ * an unconfirmed stub with a different amount, the facility rebuilt from
+ * `ltv_pct` — while returning 201. An unrecognised version must fail loudly.
+ */
+export function migrateInputsToV6(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV6 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V6.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV6: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V6.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 6 && !isV6(snapshot)) {
+    throw new Error(
+      'migrateInputsToV6: inputs_version is 6 but the document fails the v6 structural check '
+      + '(finance is not an object, or is missing committed_net_facility_pence) -- refusing to '
+      + 'silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV6(snapshot)) {
+    const defaults = migrateV5toV6(
+      migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)))),
+    );
+    const saved = snapshot as unknown as Partial<CalculatorInputsV6>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 6,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: saved.unit_mix ?? defaults.unit_mix,
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+    };
+  }
+  return migrateV5toV6(migrateInputsToV5(snapshot, project));
 }

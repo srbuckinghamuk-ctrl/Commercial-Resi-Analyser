@@ -24,8 +24,35 @@ from .types import (
     CalculatorInputsV2,
     CalculatorInputsV4,
     CalculatorInputsV5,
+    CalculatorInputsV6,
     ConversionCostInputs,
 )
+
+# Mirrors DEFAULT_AREA_BRIDGE in areas.py / DEFAULT_UNIT_ANCILLARY in
+# conversion-types.ts. Re-declared here rather than imported from areas.py for
+# the same reason types.py re-declares AreaBasis: areas.py -> engine.py ->
+# types.py, and migrate.py is a dict-level module that must not depend on the
+# calculation side. test_migrate_v6.py pins the two dicts equal.
+DEFAULT_AREA_BRIDGE_DICT: dict[str, Any] = {
+    "basis": "manual",
+    "existing_gia_sqm": 0.0,
+    "demolished_gia_sqm": 0.0,
+    "extension_gia_sqm": 0.0,
+    "retained_commercial_gia_sqm": 0.0,
+    "untouched_gia_sqm": 0.0,
+    "circulation_common_sqm": 0.0,
+    "plant_riser_sqm": 0.0,
+    "store_bin_cycle_sqm": 0.0,
+    "amenity_sqm": 0.0,
+    "external_amenity_sqm": 0.0,
+}
+
+DEFAULT_UNIT_ANCILLARY: dict[str, Any] = {
+    "balcony_terrace_sqm": 0.0,
+    "balcony_terrace_value_pence": 0,
+    "parking_spaces": 0,
+    "parking_value_pence": 0,
+}
 
 # --- conversion-defaults.ts (the slice migrate.py needs) -------------------
 
@@ -269,8 +296,22 @@ def is_v5(snapshot: dict[str, Any]) -> bool:
     )
 
 
+def is_v6(snapshot: dict[str, Any]) -> bool:
+    """A v6 document has the same finance shape as v2-v5, discriminated by
+    inputs_version == 6."""
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 6
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
-    return is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot) or is_v5(snapshot)
+    return (
+        is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
+        or is_v5(snapshot) or is_v6(snapshot)
+    )
 
 
 def migrate_finance_v1(
@@ -722,6 +763,16 @@ def migrate_inputs_to_v5(
             "committed_net_facility_pence) -- refusing to silently reinterpret "
             "it via the v1 fallback path"
         )
+    # Belt-and-braces, mirroring migrate_inputs_to_v4's is_v5 refusal (and
+    # migrateInputsToV5's isV6 guard in the TS twin). Currently unreachable --
+    # _RECOGNISED_VERSIONS stops at 5, so a document tagged 6 has already
+    # raised above -- and kept deliberately, so that widening that tuple can
+    # never quietly turn this entry point into a v6 downgrader that drops
+    # `areas` and every unit's `ancillary` block.
+    if is_v6(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v5: input is a v6 document - use migrate_inputs_to_v6"
+        )
     if is_v5(snapshot):
         defaults = migrate_v4_to_v5(
             migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
@@ -731,3 +782,107 @@ def migrate_inputs_to_v5(
             "inputs_version": 5,
         })
     return migrate_v4_to_v5(migrate_inputs_to_v4(snapshot, project))
+
+
+# --- Release 9 (calc 2.8.0): area bridge and per-unit ancillary -------------
+
+
+def migrate_v5_to_v6(v5: dict[str, Any] | CalculatorInputsV5) -> CalculatorInputsV6:
+    """Upgrades a v5 document to v6 by stamping ``inputs_version: 6``, adding a
+    zeroed area bridge on the **manual** basis, and giving every unit a zeroed
+    ancillary block. Port of migrateV5toV6.
+
+    Purely additive, and deliberately so. ``basis: "manual"`` means the cost
+    area stays ``conversion_costs.total_construction_sqm`` -- the exact number
+    the document already used -- so no migrated appraisal's computed values
+    move. A bridge is NOT synthesised from ``total_construction_sqm``:
+    inventing an existing GIA the record never stated would be inventing
+    evidence, the same reasoning that leaves R8's ``acquisition_date`` None
+    rather than stamping today.
+
+    Input is accepted as either a plain dict or an already-validated Pydantic
+    model, exactly as migrate_v4_to_v5 accepts both.
+
+    Precondition: `v5` must not already be a v6 document -- this guards against
+    double-migration (idempotence), same as migrate_v4_to_v5.
+    """
+    if isinstance(v5, CalculatorInputsV6):
+        raise ValueError("migrate_v5_to_v6: input is already a v6 document")
+    if isinstance(v5, BaseModel):
+        doc = v5.model_dump(mode="json")
+    else:
+        if is_v6(v5):
+            raise ValueError("migrate_v5_to_v6: input is already a v6 document")
+        doc = dict(v5)
+
+    # Pre-existing values win over the zeroed defaults, mirroring TS's
+    # `{...DEFAULT_AREA_BRIDGE, ...(existingAreas ?? {})}` -- a hand-edited or
+    # partially-migrated row keeps what it already carries rather than being
+    # clobbered back to zero (the R8 `setdefault` lesson, finding 3).
+    doc["areas"] = {**DEFAULT_AREA_BRIDGE_DICT, **(doc.get("areas") or {})}
+
+    unit_mix = dict(doc.get("unit_mix") or {})
+    units = []
+    for raw_unit in unit_mix.get("units") or []:
+        unit = dict(raw_unit)
+        unit["ancillary"] = {**DEFAULT_UNIT_ANCILLARY, **(unit.get("ancillary") or {})}
+        units.append(unit)
+    unit_mix["units"] = units
+    doc["unit_mix"] = unit_mix
+
+    doc["inputs_version"] = 6
+    return CalculatorInputsV6.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V6 = (1, 2, 3, 4, 5, 6)
+
+
+def migrate_inputs_to_v6(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV6:
+    """Normalises any stored snapshot (v1-v6) to v6. Port of migrateInputsToV6,
+    and structurally identical to migrate_inputs_to_v5 above: an already-v6
+    document is merged field-by-field onto v6 defaults so a field added to the
+    schema after the row was saved is default-filled rather than raising at
+    this boundary or under-filling; anything older routes through the existing
+    chain.
+
+    The two refusals below are R8's hardest-won guard, carried forward. R8
+    shipped ``migrate_inputs_to_v4`` without a v5 guard; a v5 document
+    satisfied none of the is_vN checks, fell all the way through to
+    ``migrate_inputs``'s v1 fallback, and was silently corrupted -- fields
+    dropped, a *confirmed* equity source replaced by an unconfirmed stub with
+    a different amount, the facility rebuilt from ``ltv_pct`` -- while the API
+    returned 201. An unrecognised version must fail loudly.
+
+    As in migrate_inputs_to_v5, a document declaring ``inputs_version``
+    2/3/4/5 that fails ITS OWN structural check is deliberately NOT refused:
+    that stays the existing, tested, permissive v1-fallback behaviour. Only an
+    entirely unplaceable version number, or a version-6 tag that is not
+    structurally v6, is refused here.
+    """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V6:
+        raise ValueError(
+            f"migrate_inputs_to_v6: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V6}, or absent for a v1 document)"
+        )
+    if version == 6 and not is_v6(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v6: inputs_version is 6 but the document fails "
+            "the v6 structural check (finance is not a dict, or is missing "
+            "committed_net_facility_pence) -- refusing to silently reinterpret "
+            "it via the v1 fallback path"
+        )
+    if is_v6(snapshot):
+        defaults = migrate_v5_to_v6(
+            migrate_v4_to_v5(
+                migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV6.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 6,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+        })
+    return migrate_v5_to_v6(migrate_inputs_to_v5(snapshot, project))
