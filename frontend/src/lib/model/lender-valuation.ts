@@ -62,6 +62,11 @@ export function computeLenderGdv(
         value = Math.round(u.estimated_value_pence * (1 + (lv.global_value as number) / 100));
         break;
       case 'global_per_sqft':
+        // R9 (spec §3.2, amended): bound explicitly to INTERNAL net internal
+        // area. `u.floor_area_sqm` is internal NIA and ancillary areas live in
+        // `u.ancillary`, so this is already correct — the binding is stated and
+        // tested so that it stays correct, rather than being an accident of
+        // which field happened to exist when the basis was written.
         value = Math.round((lv.global_value as number) * u.floor_area_sqm * SQFT_PER_SQM);
         break;
       case 'unit_type': {

@@ -11,7 +11,15 @@ import json
 from pathlib import Path
 
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.types import ScenarioOverrides, parse_calculator_inputs
+from app.financial_model.migrate import migrate_inputs_to_v6
+from app.financial_model.types import (
+    CalculatorInputsV6,
+    ProposedUnitV6,
+    ScenarioOverrides,
+    UnitAncillary,
+    UnitMixInputsV6,
+    parse_calculator_inputs,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 
@@ -91,3 +99,46 @@ def test_timeline_adjustment_as_integral_float_is_cast_safely():
     out = apply_scenario(_base(), _overrides(timeline_adjustment_months=3.0))
     assert out.finance.term_months == 15
     assert isinstance(out.finance.term_months, int)
+
+
+def _v6_inputs_with_unit(ancillary: UnitAncillary) -> CalculatorInputsV6:
+    inputs = migrate_inputs_to_v6({}, {"id": "p", "price_pence": 0, "floor_area_sqm": 0})
+    inputs.unit_mix = UnitMixInputsV6(units=[ProposedUnitV6(
+        id="u1", type="2bed", floor_area_sqm=65, estimated_value_pence=25_000_000, comparable_notes="",
+        ancillary=ancillary,
+    )])
+    return inputs
+
+
+class TestAGdvScenarioStressesAncillaryValueToo:
+    """R9 (Task 7 -- Defect 2): GDV now has two components -- internal
+    saleable value (estimated_value_pence) and ancillary value
+    (ancillary.parking_value_pence, ancillary.balcony_terrace_value_pence).
+    Left unmoved, every GDV sensitivity, every named scenario and the whole
+    tornado chart understate the stress by the ancillary share."""
+
+    def test_applies_the_gdv_adjustment_to_parking_and_balcony_value(self):
+        stressed = apply_scenario(
+            _v6_inputs_with_unit(UnitAncillary(
+                balcony_terrace_sqm=0, balcony_terrace_value_pence=400_000,
+                parking_spaces=1, parking_value_pence=1_200_000,
+            )),
+            _overrides(gdv_adjustment_pct=-10.0),
+        )
+        u = stressed.unit_mix.units[0]
+        assert u.estimated_value_pence == 22_500_000
+        assert u.ancillary.parking_value_pence == 1_080_000
+        assert u.ancillary.balcony_terrace_value_pence == 360_000
+
+    def test_leaves_ancillary_areas_untouched(self):
+        """A price stress is not an area stress."""
+        stressed = apply_scenario(
+            _v6_inputs_with_unit(UnitAncillary(
+                balcony_terrace_sqm=8, balcony_terrace_value_pence=0,
+                parking_spaces=2, parking_value_pence=0,
+            )),
+            _overrides(gdv_adjustment_pct=-10.0),
+        )
+        u = stressed.unit_mix.units[0]
+        assert u.ancillary.balcony_terrace_sqm == 8
+        assert u.ancillary.parking_spaces == 2

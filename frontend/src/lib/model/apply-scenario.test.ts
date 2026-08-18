@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { applyScenario } from './apply-scenario';
+import { migrateInputsToV6 } from './migrate';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV3, LenderValuation } from './';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6, LenderValuation } from './';
 
 function fixtureInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -156,5 +157,59 @@ describe('applyScenario', () => {
     );
     expect(out.finance.term_months).toBe(v3Inputs.finance.term_months + 3);
     expect(out.finance.annual_interest_rate_pct).toBe(v3Inputs.finance.annual_interest_rate_pct + 1);
+  });
+});
+
+// R9 (Task 7 — Defect 2): GDV now has two components — internal saleable value
+// (`estimated_value_pence`) and ancillary value (`ancillary.parking_value_pence`,
+// `ancillary.balcony_terrace_value_pence`). Left unmoved, every GDV sensitivity,
+// every named scenario and the whole tornado chart understate the stress by the
+// ancillary share.
+describe('R9 — a GDV scenario stresses ancillary value too', () => {
+  function v6InputsWithUnit(ancillary: {
+    balcony_terrace_sqm: number; balcony_terrace_value_pence: number;
+    parking_spaces: number; parking_value_pence: number;
+  }): CalculatorInputsV6 {
+    const inputs = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+    inputs.unit_mix = {
+      units: [{
+        id: 'u1', type: '2bed', floor_area_sqm: 65, estimated_value_pence: 25_000_000, comparable_notes: '',
+        ancillary,
+      }],
+    };
+    return inputs;
+  }
+
+  it('applies the GDV adjustment to parking and balcony value, not just internal', () => {
+    const stressed = applyScenario(
+      v6InputsWithUnit({
+        balcony_terrace_sqm: 0, balcony_terrace_value_pence: 400_000,
+        parking_spaces: 1, parking_value_pence: 1_200_000,
+      }),
+      {
+        label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
+        timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+      },
+    );
+
+    const u = stressed.unit_mix.units[0];
+    expect(u.estimated_value_pence).toBe(22_500_000);
+    expect(u.ancillary.parking_value_pence).toBe(1_080_000);
+    expect(u.ancillary.balcony_terrace_value_pence).toBe(360_000);
+  });
+
+  it('leaves ancillary AREAS untouched — a price stress is not an area stress', () => {
+    const stressed = applyScenario(
+      v6InputsWithUnit({
+        balcony_terrace_sqm: 8, balcony_terrace_value_pence: 0,
+        parking_spaces: 2, parking_value_pence: 0,
+      }),
+      {
+        label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
+        timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+      },
+    );
+    expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
+    expect(stressed.unit_mix.units[0].ancillary.parking_spaces).toBe(2);
   });
 });

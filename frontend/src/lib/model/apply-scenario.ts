@@ -36,6 +36,16 @@ export function applyScenario<T extends AnyCalculatorInputs>(
       units: inputs.unit_mix.units.map((u) => ({
         ...u,
         estimated_value_pence: Math.round(u.estimated_value_pence * gdvMultiplier),
+        // R9 spec §15.5: ancillary is part of GDV, so a GDV stress moves it.
+        // Ancillary AREAS are deliberately untouched — a price stress is not an
+        // area stress; area reduction is its own R16 lever.
+        ...('ancillary' in u && u.ancillary != null ? {
+          ancillary: {
+            ...u.ancillary,
+            parking_value_pence: Math.round(u.ancillary.parking_value_pence * gdvMultiplier),
+            balcony_terrace_value_pence: Math.round(u.ancillary.balcony_terrace_value_pence * gdvMultiplier),
+          },
+        } : {}),
       })),
     },
     conversion_costs: {

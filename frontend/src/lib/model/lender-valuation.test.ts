@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { computeLenderGdv, SQFT_PER_SQM } from './lender-valuation';
-import { migrateV2toV3 } from './migrate';
+import { migrateV2toV3, migrateInputsToV6 } from './migrate';
 import { runAppraisal } from './index';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
-import type { CalculatorInputsV3, LenderValuation } from './finance-types';
+import type { CalculatorInputsV3, CalculatorInputsV6, LenderValuation } from './finance-types';
 
 function baseInputs(lenderValuation: LenderValuation | null): CalculatorInputsV3 {
   const v3 = migrateV2toV3(defaultCalculatorInputsV2());
@@ -132,4 +132,38 @@ describe('runAppraisal — an invalid lender_valuation degrades to null metrics 
         && i.message.includes(messageIncludes))).toBe(true);
     });
   }
+});
+
+// R9 (Task 7 — Defect 1): a v6 unit now carries an internal area
+// (`floor_area_sqm`) AND a separate balcony/terrace area (`ancillary.balcony_terrace_sqm`).
+// Spec §3.2's "pence per sq ft applied to every unit's area" is ambiguous once a
+// unit has two areas, and the ambiguity silently moves lender GDV. This pins the
+// basis to internal NIA only, so a future change that folds balcony area into the
+// per-sq-ft calculation is caught here rather than discovered in a live valuation.
+describe('R9 — global_per_sqft is bound to internal NIA', () => {
+  function v6InputsWithBalcony(balconyTerraceSqm: number): CalculatorInputsV6 {
+    const inputs = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+    inputs.lender_valuation = {
+      basis: 'global_per_sqft', global_value: 40_000, per_key_values: null,
+      reason: 'r', author: 'a', date: '2026-08-18',
+    };
+    inputs.unit_mix = {
+      units: [{
+        id: 'u1', type: '1bed', floor_area_sqm: 50, estimated_value_pence: 10_000_000, comparable_notes: '',
+        ancillary: {
+          balcony_terrace_sqm: balconyTerraceSqm, balcony_terrace_value_pence: 0,
+          parking_spaces: 0, parking_value_pence: 0,
+        },
+      }],
+    };
+    return inputs;
+  }
+
+  it('ignores balcony and terrace area when applying a per-sq-ft lender rate', () => {
+    const withBalcony = computeLenderGdv(v6InputsWithBalcony(20));
+    const withoutBalcony = computeLenderGdv(v6InputsWithBalcony(0));
+    expect(withBalcony!.lender_gdv_pence).toBe(withoutBalcony!.lender_gdv_pence);
+    // 40,000p/sq ft x 50 m² x 10.7639
+    expect(withBalcony!.lender_gdv_pence).toBe(21_527_800);
+  });
 });
