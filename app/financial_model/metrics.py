@@ -15,7 +15,7 @@ from .breakeven import (
     solve_senior_breakeven_phased,
 )
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
-from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round
+from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax, resolve_acquisition_date
@@ -170,13 +170,6 @@ class AppraisalResultV2:
     # Wired in Release 3a Task 6 -- derive_metrics is pure and no longer mutates
     # model.flags; this is now the single read site for the full flag set.
     flags: list[ModelFlag]
-
-
-def pct(numerator: float, denominator: float) -> float | None:
-    """Percentage to 2 dp; None when the denominator is zero (spec Sec 1.5)."""
-    if denominator == 0:
-        return None
-    return money_round((numerator / denominator) * 10000) / 100
 
 
 def breakeven_flags(
