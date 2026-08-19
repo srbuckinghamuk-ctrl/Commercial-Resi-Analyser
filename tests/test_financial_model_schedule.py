@@ -24,6 +24,10 @@ from app.financial_model.types import (
     AreaBridgeInputs,
     CalculatorInputsV3,
     CalculatorInputsV4,
+    ContingencyClass,
+    CostPackage,
+    CostPlanInputs,
+    FeeLine,
     ProposedUnit,
     ProposedUnitV6,
     RetainedUnit,
@@ -348,3 +352,81 @@ class TestBuildScheduleStatutoryTiming:
         # only" would pass vacuously on a document whose spread total happened
         # to be 0.
         assert sum(u.statutory_pence for u in s.uses[1:]) == 900_000
+
+
+class TestBuildScheduleFollowsCostPlanOverLegacyFields:
+    """Fix round 1, I1. Port of schedule.test.ts's 'buildSchedule follows the
+    cost plan, not legacy fields, when they disagree' test.
+
+    Every other schedule-level test either uses a v6 document (where the
+    legacy fallback derives cost_plan FROM these same fields, so the two
+    paths necessarily agree) or rebuilds cost_plan from conversion_costs (same
+    again). None of those would catch a revert to reading conversion_costs
+    directly. Here the two are deliberately set to give wildly different
+    answers, so only a schedule that genuinely reads cost_plan can pass."""
+
+    def test_reads_totals_from_cost_plan_even_though_conversion_costs_disagrees(self):
+        base = migrate_inputs_to_v7({})
+        units = [
+            ProposedUnitV6(
+                id=uid, type="1bed", floor_area_sqm=50,
+                estimated_value_pence=20_000_000, comparable_notes="",
+            )
+            for uid in ["u1", "u2", "u3", "u4"]
+        ]
+        # The legacy fields: if the schedule ever read these directly again,
+        # construction would be ~750m, professional ~45m, statutory ~22m --
+        # nothing close to the cost-plan-derived literals asserted below.
+        conversion_costs = base.conversion_costs.model_copy(update={
+            "construction_cost_per_sqm_pence": 999_999,
+            "total_construction_sqm": 500,
+            "contingency_pct": 50,
+            "fire_safety_pence": 100_000,
+            "sound_insulation_pence": 50_000,
+            "part_l_compliance_pence": 25_000,
+            "architect_pence": 9_000_000,
+            "structural_engineer_pence": 9_000_000,
+            "mande_pence": 9_000_000,
+            "planning_consultant_pence": 9_000_000,
+            "other_professional_fees_pence": 9_000_000,
+            "prior_approval_fee_per_dwelling_pence": 999_999,
+            "cil_s106_pence": 9_000_000,
+            "building_control_pence": 9_000_000,
+        })
+        # The cost plan the schedule must actually follow: detailed mode, so
+        # base build and compliance come from the packages, not from cc.
+        cost_plan = CostPlanInputs(
+            mode="detailed",
+            packages=[CostPackage(
+                id="p1", code="structure", label="Structure", amount_pence=10_000_000,
+                contingency_class="general", lender_eligible=True, notes="",
+            )],
+            contingency=[
+                ContingencyClass(name="general", pct=10, basis="all_packages", package_ids=[]),
+                ContingencyClass(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
+                ContingencyClass(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+            ],
+            fee_lines=[
+                FeeLine(id="f1", code="architect", category="professional", label="Architect",
+                        basis="fixed", amount_pence=2_000_000, pct=0, per_dwelling=False),
+                FeeLine(id="f2", code="prior_approval", category="statutory", label="Prior approval",
+                        basis="fixed", amount_pence=5_000, pct=0, per_dwelling=True),
+                FeeLine(id="f3", code="cil_s106", category="statutory", label="CIL / S106",
+                        basis="fixed", amount_pence=300_000, pct=0, per_dwelling=False),
+            ],
+        )
+        inputs = base.model_copy(update={
+            "finance": base.finance.model_copy(update={"term_months": 12}),
+            "unit_mix": UnitMixInputsV6(units=units),
+            "conversion_costs": conversion_costs,
+            "cost_plan": cost_plan,
+        })
+        s = build_schedule(inputs)
+        # Cost plan: base build 10,000,000 + 10% general contingency 1,000,000
+        # + 0 compliance (detailed mode prices compliance inside packages).
+        assert s.totals.construction_pence == 11_000_000
+        # Cost plan: architect only (2,000,000) -- every other legacy
+        # professional field above is absent from the fee lines.
+        assert s.totals.professional_pence == 2_000_000
+        # Cost plan: prior approval 5,000 x 4 units (20,000) + CIL/S106 (300,000).
+        assert s.totals.statutory_pence == 320_000

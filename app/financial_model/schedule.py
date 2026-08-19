@@ -1,8 +1,16 @@
 """Port of frontend/src/lib/model/schedule.ts, plus the cost-helper functions it
-imports from frontend/src/lib/conversion-calc-engine.ts (calculateGdv,
-calculateTotalAcquisitionCost, calculateTotalConstructionCost;
-calculateTotalProfessionalFees is also ported here so migrate.py can share it,
-mirroring the TS module that houses all four)."""
+imports from frontend/src/lib/conversion-calc-engine.ts (calculate_gdv,
+calculate_total_acquisition_cost).
+
+R10 (spec Sec 16): build_schedule no longer sums conversion_costs fields
+itself for construction/professional/statutory -- it calls compute_cost_plan
+once and reads the three totals from the result, the same engine
+compute_cost_plan.ts serves to the UI and the memo. calculate_total_
+construction_cost and calculate_total_professional_fees stay defined here,
+unused by build_schedule, because migrate.py's v1 facility-sizing path still
+calls them directly: that path runs before a document has a cost_plan block
+at all, so it legitimately needs the legacy field-summing arithmetic rather
+than the cost engine."""
 from __future__ import annotations
 
 import math

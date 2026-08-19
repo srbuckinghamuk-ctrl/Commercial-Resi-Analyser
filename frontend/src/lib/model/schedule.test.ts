@@ -289,3 +289,74 @@ describe('buildSchedule statutory timing (R10 §3.4)', () => {
     expect(s.uses.slice(1).reduce((t, u) => t + u.statutory_pence, 0)).toBe(900_000);
   });
 });
+
+describe('buildSchedule follows the cost plan, not legacy fields, when they disagree (R10 fix round 1, I1)', () => {
+  it('reads construction/professional/statutory totals from cost_plan even though conversion_costs disagrees', () => {
+    // Every schedule-level test elsewhere either uses a v6 document (where the
+    // legacy fallback derives cost_plan FROM these same fields, so the two
+    // paths necessarily agree) or rebuilds cost_plan from conversion_costs
+    // (same again). None of those would catch a revert to reading
+    // conversion_costs directly. Here the two are deliberately set to give
+    // wildly different answers, so only a schedule that genuinely reads
+    // cost_plan can pass.
+    const base = defaultCalculatorInputsV7();
+    const inputs: CalculatorInputsV7 = {
+      ...base,
+      finance: { ...base.finance, term_months: 12 },
+      unit_mix: { units: ['u1', 'u2', 'u3', 'u4'].map((id) => ({
+        ...base.unit_mix.units[0], id, estimated_value_pence: 20_000_000,
+      })) },
+      // The legacy fields: if the schedule ever read these directly again,
+      // construction would be ~750m, professional ~45m, statutory ~22m —
+      // nothing close to the cost-plan-derived literals asserted below.
+      conversion_costs: {
+        ...base.conversion_costs,
+        construction_cost_per_sqm_pence: 999_999,
+        total_construction_sqm: 500,
+        contingency_pct: 50,
+        fire_safety_pence: 100_000,
+        sound_insulation_pence: 50_000,
+        part_l_compliance_pence: 25_000,
+        architect_pence: 9_000_000,
+        structural_engineer_pence: 9_000_000,
+        mande_pence: 9_000_000,
+        planning_consultant_pence: 9_000_000,
+        other_professional_fees_pence: 9_000_000,
+        prior_approval_fee_per_dwelling_pence: 999_999,
+        cil_s106_pence: 9_000_000,
+        building_control_pence: 9_000_000,
+      },
+      // The cost plan the schedule must actually follow: detailed mode, so
+      // base build and compliance come from the packages, not from cc.
+      cost_plan: {
+        mode: 'detailed',
+        packages: [{
+          id: 'p1', code: 'structure', label: 'Structure', amount_pence: 10_000_000,
+          contingency_class: 'general', lender_eligible: true, notes: '',
+        }],
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+        fee_lines: [
+          { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
+            basis: 'fixed', amount_pence: 2_000_000, pct: 0, per_dwelling: false },
+          { id: 'f2', code: 'prior_approval', category: 'statutory', label: 'Prior approval',
+            basis: 'fixed', amount_pence: 5_000, pct: 0, per_dwelling: true },
+          { id: 'f3', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
+            basis: 'fixed', amount_pence: 300_000, pct: 0, per_dwelling: false },
+        ],
+      },
+    };
+    const s = buildSchedule(inputs);
+    // Cost plan: base build 10,000,000 + 10% general contingency 1,000,000 +
+    // 0 compliance (detailed mode prices compliance inside packages).
+    expect(s.totals.construction_pence).toBe(11_000_000);
+    // Cost plan: architect only (2,000,000) — every other legacy professional
+    // field above is absent from the fee lines.
+    expect(s.totals.professional_pence).toBe(2_000_000);
+    // Cost plan: prior approval 5,000 x 4 units (20,000) + CIL/S106 (300,000).
+    expect(s.totals.statutory_pence).toBe(320_000);
+  });
+});
