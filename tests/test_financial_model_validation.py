@@ -1143,6 +1143,38 @@ class TestCostPlanValidation:
         ))
         assert not any(i.field == "conversion_costs.fire_safety_pence" for i in valid)
 
+    def test_hard_errors_when_detailed_mode_carries_a_non_zero_flat_sound_insulation_figure(self):
+        """Spec Sec 3.2.1."""
+        invalid = validate_inputs(make_v7_inputs(
+            cost_plan={"mode": "detailed", "packages": [_pkg()]},
+            conversion_costs={"sound_insulation_pence": 100},
+        ))
+        assert any(
+            i.severity == "error" and i.field == "conversion_costs.sound_insulation_pence" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(
+            cost_plan={"mode": "detailed", "packages": [_pkg()]},
+            conversion_costs={"sound_insulation_pence": 0},
+        ))
+        assert not any(i.field == "conversion_costs.sound_insulation_pence" for i in valid)
+
+    def test_hard_errors_when_detailed_mode_carries_a_non_zero_flat_part_l_compliance_figure(self):
+        """Spec Sec 3.2.1."""
+        invalid = validate_inputs(make_v7_inputs(
+            cost_plan={"mode": "detailed", "packages": [_pkg()]},
+            conversion_costs={"part_l_compliance_pence": 100},
+        ))
+        assert any(
+            i.severity == "error" and i.field == "conversion_costs.part_l_compliance_pence" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(
+            cost_plan={"mode": "detailed", "packages": [_pkg()]},
+            conversion_costs={"part_l_compliance_pence": 0},
+        ))
+        assert not any(i.field == "conversion_costs.part_l_compliance_pence" for i in valid)
+
     def test_hard_errors_when_a_fixed_basis_fee_line_carries_a_non_zero_percentage(self):
         invalid = validate_inputs(make_v7_inputs(cost_plan={
             "fee_lines": [_fee_line(basis="fixed", pct=5)],

@@ -1091,6 +1091,34 @@ describe('R10 — cost plan validation', () => {
     expect(valid.some((i) => i.field === 'conversion_costs.fire_safety_pence')).toBe(false);
   });
 
+  it('hard-errors when detailed mode carries a non-zero flat sound-insulation figure (spec §3.2.1)', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg()] },
+      conversion_costs: { sound_insulation_pence: 100 },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'conversion_costs.sound_insulation_pence')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg()] },
+      conversion_costs: { sound_insulation_pence: 0 },
+    }));
+    expect(valid.some((i) => i.field === 'conversion_costs.sound_insulation_pence')).toBe(false);
+  });
+
+  it('hard-errors when detailed mode carries a non-zero flat Part L compliance figure (spec §3.2.1)', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg()] },
+      conversion_costs: { part_l_compliance_pence: 100 },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'conversion_costs.part_l_compliance_pence')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg()] },
+      conversion_costs: { part_l_compliance_pence: 0 },
+    }));
+    expect(valid.some((i) => i.field === 'conversion_costs.part_l_compliance_pence')).toBe(false);
+  });
+
   it('hard-errors when a fixed-basis fee line carries a non-zero percentage', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: { fee_lines: [feeLine({ basis: 'fixed', pct: 5 })] },
