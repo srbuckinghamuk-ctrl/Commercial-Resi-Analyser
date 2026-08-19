@@ -87,24 +87,15 @@ CONTINGENCY_ALLOWLIST = {
     # cost_plan_from_legacy_costs -- the one correct reader (spec Sec 4): folds
     # the raw field into a cost_plan's general contingency class.
     "app/financial_model/types.py",
-    # Constructs pre-v7 documents where no cost_plan accessor exists yet. No
-    # direct read today (only a dict-literal default, an ast.Dict key rather
-    # than a read), allowlisted for symmetry with the TS guard and to stay
-    # inert if a future default construction reads the field back.
-    "app/financial_model/migrate.py",
     # calculate_total_construction_cost -- compute_cost_plan's predecessor,
     # same reasoning as cost_plan_from_legacy_costs above, still the live cost
     # estimate migrate.py's v1->v2 bootstrap uses (there is no cost_plan yet
-    # that early in the migration chain). Known limitation, recorded rather
-    # than glossed: unlike the TS guard, which isolates this function in its
-    # own file (conversion-calc-engine.ts) and leaves schedule.ts fully
-    # policed, Python keeps the legacy calculator inside schedule.py itself,
-    # so this allowlist entry also stops the guard seeing a NEW illegitimate
-    # contingency_pct read anywhere else in schedule.py (e.g. inside
-    # build_schedule). build_schedule currently reads cost only through
-    # compute_cost_plan, so the current tree is clean; a future regression
-    # there would not be caught by this scan.
-    "app/financial_model/schedule.py",
+    # that early in the migration chain). R10 Task 9 fix round 1 (I3): split
+    # out of schedule.py into its own module specifically so this allowlist
+    # entry does not also un-guard schedule.py's build_schedule -- mirrors the
+    # TS guard, which isolates the same calculator in
+    # conversion-calc-engine.ts and leaves schedule.ts fully policed.
+    "app/financial_model/legacy_costs.py",
     # The raw field's own negative-value validation (mirrors the
     # total_construction_sqm/manual-basis check immediately above it in
     # validation.py) -- validates the pre-v7/manual-basis raw input, which
@@ -114,6 +105,13 @@ CONTINGENCY_ALLOWLIST = {
     # has no line-scoped equivalent, so this is file-scoped -- but scoped to
     # THIS field's allowlist only, not the area/tax allowlists above.
     "app/financial_model/validation.py",
+    # NOT allowlisted: migrate.py. It constructs a dict-literal default
+    # ({"contingency_pct": 10.0}, an ast.Dict key, not a read) but has no
+    # actual read of this field -- unlike total_construction_sqm, where
+    # migrate.py genuinely does read the raw field to bootstrap v1 documents.
+    # R10 Task 9 fix round 1 (I2): allowlisting it anyway was YAGNI; if a
+    # future read needs it, the guard firing is the correct prompt to add it
+    # back deliberately.
 }
 
 

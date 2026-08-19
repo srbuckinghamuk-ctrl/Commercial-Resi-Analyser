@@ -5,12 +5,16 @@ calculate_total_acquisition_cost).
 R10 (spec Sec 16): build_schedule no longer sums conversion_costs fields
 itself for construction/professional/statutory -- it calls compute_cost_plan
 once and reads the three totals from the result, the same engine
-compute_cost_plan.ts serves to the UI and the memo. calculate_total_
-construction_cost and calculate_total_professional_fees stay defined here,
-unused by build_schedule, because migrate.py's v1 facility-sizing path still
-calls them directly: that path runs before a document has a cost_plan block
-at all, so it legitimately needs the legacy field-summing arithmetic rather
-than the cost engine."""
+compute_cost_plan.ts serves to the UI and the memo.
+
+R10 Task 9 fix round 1 (I3): calculate_total_construction_cost and
+calculate_total_professional_fees -- unused by build_schedule, kept only for
+migrate.py's v1 facility-sizing path, which runs before a document has a
+cost_plan block at all -- moved to legacy_costs.py. That isolates their one
+legitimate raw contingency_pct read in its own module, so
+tests/test_accessor_guard.py can allowlist it without also un-guarding this
+module (mirrors frontend/src/lib/conversion-calc-engine.ts, which isolates
+the same calculator away from schedule.ts)."""
 from __future__ import annotations
 
 import math
@@ -25,7 +29,6 @@ from .types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
     AnyCalculatorInputs,
-    ConversionCostInputs,
     ProgrammePackage,
     ProposedUnit,
 )
@@ -103,29 +106,6 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     return (
         acq.purchase_price_pence + sdlt + acq.legal_fees_pence + acq.survey_cost_pence
         + broker_fee + acq.other_acquisition_costs_pence
-    )
-
-
-def calculate_total_construction_cost(costs: ConversionCostInputs, area_sqm: float) -> int:
-    # Spec Sec 1.1: fractional-area products round once, at source, in one step
-    # before contingency -- base = money_round(construction_cost_per_sqm_pence x
-    # area). Integer-sqm inputs are unaffected. Matches conversion-calc-engine.ts.
-    #
-    # R9: the area is an explicit parameter. Callers resolve it once through
-    # developed_area_sqm (spec Sec 15.4); tests/test_accessor_guard.py makes
-    # reading the raw field here a test failure.
-    base_cost = money_round(costs.construction_cost_per_sqm_pence * area_sqm)
-    contingency = money_round((base_cost * costs.contingency_pct) / 100)
-    compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence
-    return base_cost + contingency + compliance
-
-
-def calculate_total_professional_fees(costs: ConversionCostInputs, unit_count: int = 1) -> int:
-    return (
-        costs.prior_approval_fee_per_dwelling_pence * max(1, unit_count)
-        + costs.cil_s106_pence + costs.architect_pence + costs.structural_engineer_pence
-        + costs.mande_pence + costs.planning_consultant_pence + costs.building_control_pence
-        + costs.other_professional_fees_pence
     )
 
 

@@ -14,11 +14,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .schedule import (
-    calculate_total_acquisition_cost,
+from .legacy_costs import (
     calculate_total_construction_cost,
     calculate_total_professional_fees,
 )
+from .schedule import calculate_total_acquisition_cost
 from .types import (
     AcquisitionInputs,
     CalculatorInputsV2,

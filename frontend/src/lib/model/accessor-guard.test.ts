@@ -209,7 +209,6 @@ describe('single-accessor guard configuration', () => {
       'src/lib/model/areas.ts',
       'src/lib/tax/acquisition-tax.ts',
       'src/lib/model/cost-plan.ts',
-      'src/lib/conversion-calc-engine.ts',
       'src/lib/report-qa/memo-fixtures.ts',
     ]) {
       expect(CONFIG).toContain(allowed);
@@ -270,5 +269,33 @@ describe('single-accessor guard configuration', () => {
     const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
     expect(scoped).toHaveLength(2);
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
+  });
+
+  it('does not exempt conversion-calc-engine.ts file-wide (R10 Task 9 fix round 1, C1)', () => {
+    // A file-wide exemption for calculateTotalConstructionCost's one
+    // legitimate contingency_pct read would also have un-guarded
+    // total_construction_sqm, TAX_TABLES and selectBandSet in this file —
+    // which also holds calculateTotalAcquisitionCost, R8's first defect site.
+    // One line-scoped disable instead.
+    expect(CONFIG).not.toContain('src/lib/conversion-calc-engine.ts');
+    const source = readFileSync(
+      resolve(FRONTEND_ROOT, 'src/lib/conversion-calc-engine.ts'), 'utf-8',
+    );
+    const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
+    expect(scoped).toHaveLength(1);
+    expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
+  });
+
+  it('the guard now bites a planted total_construction_sqm read in conversion-calc-engine.ts (C1 restoration proof)', async () => {
+    // Before the fix, this file was on the file-wide allowlist, so this same
+    // read would have linted clean. Proves the guard is actually restored,
+    // not merely that the allowlist entry text is gone.
+    const messages = await lint(
+      'export function illegal(x: any) { return x.total_construction_sqm; }\n',
+      'src/lib/conversion-calc-engine.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /total_construction_sqm/.test(m.message));
+    expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
   });
 });

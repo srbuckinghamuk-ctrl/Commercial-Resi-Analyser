@@ -46,8 +46,10 @@ export default defineConfig([
           message:
             'Do not read total_construction_sqm directly — call developedAreaSqm(inputs) '
             + 'from model/areas.ts. It resolves the bridge-derived vs manual basis (spec §15.3). '
-            + 'If you are the areas module, the type definitions, migration, defaults or the '
-            + 'cost-page editor, add this file to the allowlist in eslint.config.js.',
+            + 'If you are the areas module, the type definitions, migration or defaults, add this '
+            + 'file to the allowlist in eslint.config.js. ConversionCostsPage.tsx\'s own '
+            + 'legitimate read is an eslint-disable-next-line at the call site instead (R10 Task 9) '
+            + '— see the allowlist comment below for why.',
         },
         {
           // Same field, destructured: `const { total_construction_sqm } = costs`.
@@ -123,9 +125,11 @@ export default defineConfig([
           message:
             'Do not read contingency_pct directly — read run.metrics.cost_plan.contingency '
             + '(model/cost-plan.ts). It resolves the detailed-mode package classes vs the '
-            + 'legacy headline percentage (spec §16). If you are the cost-plan module, the type '
-            + 'definitions, migration, defaults or the cost-page editor, add this file to the '
-            + 'allowlist in eslint.config.js.',
+            + 'legacy headline percentage (spec §16). If you are the cost-plan module or the '
+            + 'type/migration/defaults modules that construct a raw document, add this file to '
+            + 'the allowlist in eslint.config.js. Any other genuinely legitimate raw read (e.g. '
+            + 'validating pre-cost_plan input) should be an eslint-disable-next-line at the call '
+            + 'site, not a file-wide exemption — see the allowlist comment below for why.',
         },
         {
           // Same field, destructured: `const { contingency_pct } = costs`. See
@@ -166,6 +170,14 @@ export default defineConfig([
     // The legitimate total_construction_sqm read is exempted at its own call
     // site instead, exactly as validation.ts's selectBandSet calls are below.
     //
+    // conversion-calc-engine.ts is deliberately NOT here either (R10 Task 9 fix
+    // round 1, C1). calculateTotalConstructionCost has one legitimate
+    // contingency_pct read, but this file also holds calculateTotalAcquisitionCost
+    // (R8's first defect site) and calculateTotalConstructionCost's own docstring
+    // claims a raw total_construction_sqm read here is a build failure — a
+    // file-wide exemption would have made that claim false while looking
+    // unrelated. Exempted at the one call site instead.
+    //
     // Known limitation, recorded rather than glossed (spec §3.4): test files are
     // exempt because fixtures must construct the raw field, so a consumer defect
     // written inside a test file is not caught by this rule.
@@ -173,12 +185,6 @@ export default defineConfig([
       'src/lib/model/areas.ts',
       'src/lib/tax/acquisition-tax.ts',
       'src/lib/model/cost-plan.ts',
-      // R10 Task 9: calculateTotalConstructionCost is the pre-cost-plan legacy
-      // per-field calculator — computeCostPlan's predecessor, same reasoning as
-      // costPlanFromLegacyCosts above — and is still the live cost estimate
-      // migrate.ts's v1→v2 bootstrap uses (there is no cost_plan yet that early
-      // in the migration chain).
-      'src/lib/conversion-calc-engine.ts',
       'src/lib/conversion-types.ts',
       'src/lib/model/finance-types.ts',
       'src/lib/model/migrate.ts',
