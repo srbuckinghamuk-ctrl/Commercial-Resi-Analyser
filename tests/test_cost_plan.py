@@ -1,6 +1,6 @@
 """R10 spec §16. Python mirror of frontend/src/lib/model/cost-plan.test.ts."""
 from app.financial_model.cost_plan import compute_cost_plan
-from app.financial_model.migrate import migrate_inputs_to_v6
+from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7
 from app.financial_model.types import (
     CONTINGENCY_CLASS_NAMES,
     COST_PACKAGE_CODES,
@@ -100,15 +100,16 @@ def test_default_contingency_classes_put_the_percentage_on_general_only():
 
 
 def _default_v7() -> CalculatorInputsV7:
-    """Python has no defaultCalculatorInputsV7() yet (that migration helper is
-    a later task) so this rebuilds what it will produce: v6 defaults promoted
-    to v7, with cost_plan left to CalculatorInputsV7's own default factory
-    (DEFAULT_COST_PLAN, deep-copied) -- exactly what defaultCalculatorInputsV7
-    does in conversion-defaults.ts."""
-    v6 = migrate_inputs_to_v6({})
-    data = v6.model_dump(mode="json")
-    data["inputs_version"] = 7
-    return CalculatorInputsV7.model_validate(data)
+    """Task 6 repoint: now that migrate_inputs_to_v7 exists, this defers to it
+    rather than hand-rebuilding a v7 document. The cost_plan this produces
+    differs from CalculatorInputsV7's bare default factory (DEFAULT_COST_PLAN
+    has no fee lines; migrate_inputs_to_v7 derives eight non-zero fee lines
+    from DEFAULT_CONVERSION_COSTS via cost_plan_from_legacy_costs) -- every
+    test below that uses the `doc()` helper without overriding `fee_lines`
+    only asserts on base_build/contingency/construction_total/lender_eligible/
+    implied_rate, never on fees, so this substitution changes no expectation
+    in this file."""
+    return migrate_inputs_to_v7({})
 
 
 def doc(over: dict, costs: dict | None = None) -> CalculatorInputsV7:

@@ -25,7 +25,9 @@ from .types import (
     CalculatorInputsV4,
     CalculatorInputsV5,
     CalculatorInputsV6,
+    CalculatorInputsV7,
     ConversionCostInputs,
+    cost_plan_from_legacy_costs,
 )
 
 # Mirrors DEFAULT_AREA_BRIDGE in areas.py / DEFAULT_UNIT_ANCILLARY in
@@ -310,7 +312,7 @@ def is_v6(snapshot: dict[str, Any]) -> bool:
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
-        or is_v5(snapshot) or is_v6(snapshot)
+        or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
     )
 
 
@@ -888,3 +890,116 @@ def migrate_inputs_to_v6(
             "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
         })
     return migrate_v5_to_v6(migrate_inputs_to_v5(snapshot, project))
+
+
+# --- Release 10 (calc 2.8.0 -> next): the cost plan (spec Sec 16) -----------
+
+
+def is_v7(snapshot: dict[str, Any]) -> bool:
+    """A v7 document has the same finance shape as v2-v6, discriminated by
+    inputs_version == 7."""
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 7
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
+def migrate_v6_to_v7(v6: dict[str, Any] | CalculatorInputsV6) -> CalculatorInputsV7:
+    """Upgrades a v6 document to v7 by stamping ``inputs_version: 7`` and
+    adding the cost plan. Port of migrateV6toV7.
+
+    Purely additive, and deliberately so. An existing v6 document's
+    ``conversion_costs`` is left untouched, and the plan built from it via
+    ``cost_plan_from_legacy_costs`` reproduces the same eight fee figures and
+    the same contingency percentage the document already had -- so no
+    migrated appraisal's computed values move. That construction is the SAME
+    function the engine's pre-v7 fallback uses (``cost_plan.py``'s
+    ``_cost_plan_of``) -- see ``cost_plan_from_legacy_costs``'s docstring in
+    types.py for why a second, divergent copy would be unsafe.
+
+    Input is accepted as either a plain dict or an already-validated Pydantic
+    model, exactly as migrate_v5_to_v6 accepts both.
+
+    Precondition: `v6` must not already be a v7 document -- this guards
+    against double-migration (idempotence), same as migrate_v5_to_v6.
+    """
+    if isinstance(v6, CalculatorInputsV7):
+        raise ValueError("migrate_v6_to_v7: input is already a v7 document")
+    if isinstance(v6, BaseModel):
+        doc = v6.model_dump(mode="json")
+        conversion_costs = v6.conversion_costs
+    else:
+        if is_v7(v6):
+            raise ValueError("migrate_v6_to_v7: input is already a v7 document")
+        doc = dict(v6)
+        conversion_costs = ConversionCostInputs.model_validate(
+            doc.get("conversion_costs") or {}
+        )
+
+    existing_plan = doc.get("cost_plan")
+    doc["cost_plan"] = (
+        existing_plan
+        if existing_plan is not None
+        else cost_plan_from_legacy_costs(conversion_costs).model_dump(mode="json")
+    )
+    doc["inputs_version"] = 7
+    return CalculatorInputsV7.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V7 = (1, 2, 3, 4, 5, 6, 7)
+
+
+def migrate_inputs_to_v7(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV7:
+    """Normalises any stored snapshot (v1-v7) to v7. Port of migrateInputsToV7,
+    and structurally identical to migrate_inputs_to_v6 above: an already-v7
+    document is merged field-by-field onto v7 defaults so a field added to the
+    schema after the row was saved is default-filled rather than raising at
+    this boundary or under-filling; anything older routes through the existing
+    chain.
+
+    The two refusals below are R8's hardest-won guard, carried forward. R8
+    shipped ``migrate_inputs_to_v4`` without a v5 guard; a v5 document
+    satisfied none of the is_vN checks, fell all the way through to
+    ``migrate_inputs``'s v1 fallback, and was silently corrupted -- fields
+    dropped, a *confirmed* equity source replaced by an unconfirmed stub with
+    a different amount, the facility rebuilt from ``ltv_pct`` -- while the API
+    returned 201. An unrecognised version must fail loudly.
+
+    As in migrate_inputs_to_v6, a document declaring ``inputs_version``
+    2/3/4/5/6 that fails ITS OWN structural check is deliberately NOT
+    refused: that stays the existing, tested, permissive v1-fallback
+    behaviour. Only an entirely unplaceable version number, or a version-7
+    tag that is not structurally v7, is refused here.
+    """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V7:
+        raise ValueError(
+            f"migrate_inputs_to_v7: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V7}, or absent for a v1 document)"
+        )
+    if version == 7 and not is_v7(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v7: inputs_version is 7 but the document fails "
+            "the v7 structural check (finance is not a dict, or is missing "
+            "committed_net_facility_pence) -- refusing to silently reinterpret "
+            "it via the v1 fallback path"
+        )
+    if is_v7(snapshot):
+        defaults = migrate_v6_to_v7(
+            migrate_v5_to_v6(
+                migrate_v4_to_v5(
+                    migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV7.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 7,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+        })
+    return migrate_v6_to_v7(migrate_inputs_to_v6(snapshot, project))
