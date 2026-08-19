@@ -12,8 +12,8 @@
  * Test-support only; not imported by the application.
  */
 import type { Project, EligibilityAssessment } from '../../types';
-import type { CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, AcquisitionInputsV5 } from '../model';
-import { migrateV5toV6 } from '../model';
+import type { CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, CalculatorInputsV7, AcquisitionInputsV5 } from '../model';
+import { migrateV5toV6, migrateV6toV7 } from '../model';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -426,5 +426,61 @@ export function legacyV1Snapshot(): Record<string, unknown> {
     },
     exit_strategy: { route: 'retain_all', selling_agent_fee_pct: 1.5, selling_legal_fee_pence: 150_000, retained_units: [] },
     risks: [],
+  };
+}
+
+/**
+ * R10 (Task 13, spec §16). The standing corpus above is entirely v4/v5/v6
+ * (headline-mode) documents — none exercises the detailed cost-plan mode's
+ * package schedule, mode-dependent memo heading, or the three contingency
+ * classes' resolved bases. Built from `v6AcquisitionInputs()` (the same
+ * England/NI, evidenced base every other v6+ fixture shares) migrated to v7,
+ * then given a genuine three-package cost plan whose three contingency
+ * classes resolve against three DIFFERENT bases (all_packages vs. two
+ * different selected_packages subsets) — so a report-QA assertion that the
+ * base differs by class is actually exercised, not vacuously true of one
+ * shared figure. Two fee lines are switched from fixed to percentage bases
+ * (one of each: pct_of_base_build, pct_of_construction_total) so both fee
+ * bases are on the page too. The three flat compliance fields are zeroed —
+ * detailed mode prices compliance inside a package, and a non-zero flat
+ * figure alongside is a hard validation error (spec §3.2.1).
+ */
+export function detailedCostPlanInputs(): CalculatorInputsV7 {
+  const v7 = migrateV6toV7(v6AcquisitionInputs());
+  return {
+    ...v7,
+    conversion_costs: {
+      ...v7.conversion_costs,
+      fire_safety_pence: 0,
+      sound_insulation_pence: 0,
+      part_l_compliance_pence: 0,
+    },
+    cost_plan: {
+      mode: 'detailed',
+      packages: [
+        {
+          id: 'pkg-structure', code: 'structure', label: 'Structural repairs',
+          amount_pence: 20_000_000, contingency_class: 'general', lender_eligible: true, notes: '',
+        },
+        {
+          id: 'pkg-envelope', code: 'envelope', label: 'Envelope — windows, cladding, roof',
+          amount_pence: 10_000_000, contingency_class: 'existing_building', lender_eligible: true, notes: '',
+        },
+        {
+          id: 'pkg-externals', code: 'externals', label: 'Externals and landscaping',
+          amount_pence: 5_000_000, contingency_class: 'abnormal', lender_eligible: false, notes: '',
+        },
+      ],
+      contingency: [
+        { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
+        { name: 'existing_building', pct: 12, basis: 'selected_packages', package_ids: ['pkg-envelope'] },
+        { name: 'abnormal', pct: 8, basis: 'selected_packages', package_ids: ['pkg-externals'] },
+      ],
+      fee_lines: v7.cost_plan.fee_lines.map((f) => {
+        if (f.code === 'architect') return { ...f, basis: 'pct_of_base_build' as const, amount_pence: 0, pct: 5 };
+        if (f.code === 'planning_consultant') return { ...f, basis: 'pct_of_construction_total' as const, amount_pence: 0, pct: 1.5 };
+        return f;
+      }),
+    },
   };
 }

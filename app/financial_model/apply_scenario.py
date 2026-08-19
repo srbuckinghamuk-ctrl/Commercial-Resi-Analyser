@@ -2,7 +2,7 @@
 
 The lever-application rule of spec Sec 12.1, shared by the named scenarios and the
 sensitivity suite (sensitivity.py). Applies a scenario's GDV / cost / timeline / rate
-adjustments to a v2 through v6 inputs document and returns a new document of the same
+adjustments to a v2 through v7 inputs document and returns a new document of the same
 version -- every field the levers do not name is carried through untouched, including
 the committed facility and equity sources, which spec Sec 12.2 holds invariant.
 

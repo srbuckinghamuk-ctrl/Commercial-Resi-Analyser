@@ -3203,3 +3203,182 @@ mappers and both negative-controlled in each engine. A documented number with no
 assertion behind it drifts silently; whoever picks up C1 needs a figure that fails
 the moment the behaviour changes, which is what makes the deferral
 self-policing rather than something someone has to remember to re-check.
+
+---
+
+## 16. Cost plan modes [R10 — calc 2.9.0]
+
+Spec §16. `frontend/src/lib/model/cost-plan.test.ts` / `tests/test_cost_plan.py`
+(the engine, Tasks 3/4), `schedule.test.ts` / `tests/test_financial_model_schedule.py`
+(wiring, Task 7), `apply-scenario.test.ts` / `tests/test_financial_model_apply_scenario.py`
+(the cost lever, Task 8), `validation.test.ts` / `tests/test_financial_model_validation.py`
+(Task 10), and golden fixture Q (`fixtures/financial-model/q-detailed-cost-plan.json`, Task
+11) — all pinned in both engines unless stated otherwise.
+
+### 16.1 Contingency sums three rounded figures, never rounds the sum (Task 3)
+
+Base build chosen so each 5% class lands on an exact half-penny: `1,000,010 ×
+5% = 50,000.5`, half-up `50,001`. Three classes at 5% each therefore pin
+`contingency.map(amount_pence) == [50_001, 50_001, 50_001]` and
+`contingency_total_pence == 150_003` — **not** `150_002`, which is what one
+class at the blended 15% would give (`1,000,010 × 15% = 150,001.5`, half-up
+`150,002`). The 1p gap between the two is real and exactly representable, so
+this test fails outright — not by a rounding tolerance — the moment the three
+classes are ever collapsed into one rounding.
+
+A second case pins `selected_packages` resolving against only its named
+subset: two packages of 1,000,000 and 2,000,000; `existing_building` at 20% of
+the second package alone gives `base_pence 2,000,000`, `amount_pence 400,000`;
+`general` at 10% of the whole 3,000,000 base build gives `300,000`;
+`contingency_total_pence 700,000`. A regression that resolved
+`existing_building` against the whole base build instead of its named subset
+would move its amount from 400,000 to 600,000 — a discriminator large enough
+that no rounding could mask it.
+
+### 16.2 Fee base isolation — a base cannot include another fee (Task 3)
+
+Base build 2,000,000; 10% general contingency 200,000; detailed mode
+(compliance 0) gives `construction_total_pence 2,200,000`. An architect fee at
+6% of `pct_of_construction_total` resolves to `base_pence 2,200,000`,
+`amount_pence 132,000` — pinned **alongside** a large fixed fee of 9,000,000,
+so that a defect which folded fees into a percentage fee's base would produce
+672,000 instead of 132,000 (`professional_total_pence` pinned at 9,132,000, not
+9,672,000). A companion case pins the other basis on the same document:
+`pct_of_base_build` resolves against 2,000,000 (excluding the 200,000
+contingency), giving `amount_pence 120,000` against the other basis's 132,000
+on the identical inputs — the two bases are proven to differ by construction,
+not merely asserted to.
+
+A third case pins the per-dwelling multiplication and the professional/
+statutory split together: a `prior_approval` fee at 9,600 fixed/`per_dwelling`
+over 4 units gives `statutory_total_pence 38,400`, alongside a fixed architect
+fee of 1,500,000 giving `professional_total_pence 1,500,000` on the same
+document — proving the per-dwelling multiplication and the category split are
+independent, not coupled.
+
+### 16.3 The pre-v7 fallback derives from legacy fields, never `DEFAULT_COST_PLAN` (Task 3)
+
+A v6 document with `contingency_pct: 15` (not the 10% default),
+`architect_pence: 1,500,000` and `building_control_pence: 200,000` (every
+other fee field zeroed so the totals below mention only what the test sets)
+run through `computeCostPlan` directly (no `cost_plan` block present) pins
+`base_build_pence 4,000,000`, `contingency[0].pct 15`,
+`contingency_total_pence 600,000`, `professional_total_pence 1,500,000`,
+`statutory_total_pence 200,000`. `DEFAULT_COST_PLAN` has no fee lines and a
+hardcoded 10% contingency, so the wrong fallback would report
+`contingency_total_pence 400,000` (10% not 15%) and zero professional/statutory
+totals — both visibly wrong against these literals, which is why the 15%/
+1,500,000/200,000 figures were chosen rather than values that could coincide
+with the wrong fallback's output.
+
+### 16.4 Statutory month-0 timing survives the move to fee lines (Task 7)
+
+Four dwellings, `prior_approval_fee_per_dwelling_pence 9,600`, `cil_s106_pence
+700,000`, `building_control_pence 200,000`, cost plan rebuilt via
+`costPlanFromLegacyCosts` so the schedule reads fee lines rather than the flat
+fields. Pins `uses[0].statutory_pence 38,400` (4 × 9,600, month 0 only),
+`totals.statutory_pence 938,400`, and — so that "month 0 only" cannot pass
+vacuously on a document whose spread half happens to be zero —
+`uses.slice(1)` summing to `900,000` (the CIL/S106 and building-control total,
+confirmed non-zero after month 0). The rule is keyed on `code:
+'prior_approval'`, not a hard-coded field name, so it survives the move from
+three flat fields to fee lines unchanged.
+
+### 16.5 The schedule follows `cost_plan`, not legacy fields, when they disagree (Task 7 fix round 1, I1)
+
+Every other schedule-level test either uses a v6 document (where the fallback
+derives `cost_plan` from the same fields the schedule would otherwise read, so
+the two paths necessarily agree) or rebuilds `cost_plan` from
+`conversion_costs` directly (same again) — none of those could catch a revert
+to reading `conversion_costs` in the schedule. This case sets the legacy
+fields to values that would give `construction_pence` ≈ 750,174,250,
+`professional_pence` ≈ 45,000,000, `statutory_pence` ≈ 21,999,996 if the
+schedule ever read them, on a document whose `cost_plan` is deliberately
+different: one detailed-mode package of 10,000,000 with 10% general
+contingency, an architect fee of 2,000,000, a per-dwelling prior-approval fee
+of 5,000 over 4 units, and a CIL/S106 fee of 300,000. Pins
+`totals.construction_pence 11,000,000`, `totals.professional_pence 2,000,000`,
+`totals.statutory_pence 320,000` — each of the three totals has its own
+assertion, so a construction-only, professional-only or statutory-only revert
+is each independently caught, not only a combined figure a partial regression
+could dodge. The guard was watched failing before being trusted: with the
+pre-fix code reading `conversion_costs` directly, the construction assertion
+reported `750174250` where `11000000` was expected.
+
+### 16.6 The cost lever: headline and detailed modes respond identically to a stress (Task 8)
+
+**At rest**, a headline document (rate × area) and a detailed document (two
+packages summing to the same base build) both report
+`construction_cost_pence 4,400,000` — the release's principal hazard closed:
+without the package-scaling wiring, a detailed-mode document is immune to
+every scenario, tornado bar and sensitivity cell while still rendering them.
+**Under a ±10% cost stress**, both modes move to `3,960,000` (−10%) and
+`4,840,000` (+10%) — pinned as absolute literals, both of which differ from
+the 4,400,000 at-rest figure, so the pair is genuinely falsifiable rather than
+merely self-consistent. The detailed-mode pair uses **two** packages (not
+one), so a regression that scaled only the first package (leaving the second
+at 3,700,000 unscaled) fails distinguishably at `4,070,000 ≠ 3,960,000`.
+
+**Compliance and fixed fees must not double-apply the stress**, and this is
+pinned separately because the cross-mode pair above deliberately carries zero
+compliance and no fee lines (they would diverge by mode, which is not what
+that pair tests). At rest: base build 4,000,000 + 10% contingency 400,000 +
+500,000 compliance = `construction_total_pence 4,900,000`, and a 5%
+percentage fee on that base gives `amount_pence 245,000`. Under a −10% cost
+stress: base build scales to 3,600,000, contingency to 360,000, **compliance
+stays 500,000 (unscaled)** — `construction_total_pence 4,460,000`, and the
+percentage fee, moving only because its base moved, resolves to `223,000`. A
+regression that applied the stress to the fee a second time would give `245,000
+× 0.9 = 220,500` — a deterministic 2,500p gap the test asserts against
+explicitly (`amount_pence 223,000` **and** `!= 220,500`), not merely a
+different-looking number.
+
+### 16.7 Validation — 15 hard errors and 2 warnings, each present-and-absent (Task 10)
+
+Every rule in spec §16.5 carries a document that trips it and a document that
+does not, differing in exactly the field under test, asserted in both engines:
+the mode/package mutual exclusion (3 forms — headline-with-packages,
+detailed-empty, detailed-summing-to-zero), negative amounts/percentages,
+duplicate package or fee-line ids, a `selected_packages` class naming an
+unknown or empty `package_ids` set, not-exactly-three or a repeated
+contingency class name, a detailed-mode document carrying any of the three
+non-zero compliance fields (fire safety, sound insulation, Part L — each with
+its own dedicated test after a fix round found only one of the three was
+originally covered, the exact "guard nobody has watched fail" pattern), a
+fixed fee line with non-zero `pct` or a percentage fee line with non-zero
+`amount_pence`, `per_dwelling` on a percentage basis, and a fee `code`/
+`category` mismatch against the §16.4 table. The two warnings (contingency
+over 50% of base build; a percentage fee resolving against a zero base) reuse
+`computeCostPlan` rather than re-deriving the base-build arithmetic, so
+validation and the engine cannot disagree about what a document's base
+actually is.
+
+### 16.8 Golden fixture Q — detailed cost plan, three contingency classes, levered facility (Task 11)
+
+`fixtures/financial-model/q-detailed-cost-plan.json` — the corpus's first
+v7-tagged fixture, and the first to exercise a genuine multi-package detailed
+cost plan through the full monthly ledger. Five packages across five codes
+(base build 47,000,000p); all three contingency classes non-zero and on
+**different** bases — `general` 5% of `all_packages` (2,350,000p),
+`existing_building` 15% of a named two-package subset (base 23,000,000p,
+amount 3,450,000p), `abnormal` 8% of a named one-package subset (base
+3,000,000p, amount 240,000p) — contingency total 6,040,000p,
+`construction_total_pence 53,040,000`. Two fee lines are percentage-based on
+different bases (architect 6% of `pct_of_base_build`, planning consultant
+1.5% of `pct_of_construction_total`) alongside six fixed lines —
+`professional_total_pence 5,015,600`, `statutory_total_pence 448,000`. Task
+13 adds `cost_plan.conversion_total_pence 58,503,600` (construction +
+professional + statutory, CARRIED-2).
+
+Every cost-stack figure is **hand-derived independently of both engines**
+before either ran (worksheet in `task-11-report.md`), and matched both
+engines to the penny on the first run — no fixture tuning was needed. The
+finance-dependent figures downstream of the cost stack (finance costs, peak
+debt, TDC and its ratios) are not hand-replayed against the rolled-up monthly
+ledger; they are instead constrained by cross-engine agreement to the penny,
+`sources_equal_uses`, and the corpus-wide TDC-identity invariant, and the
+fixture's own note states explicitly which figures belong to which list, so a
+reader cannot mistake an invariant-checked figure for a hand-derived one.
+Fixture Q deliberately exercises no rounding boundary (every product in it is
+an exact whole-pence figure) — that discriminator is pinned separately by
+§16.1's `cost-plan.test.ts` case, not duplicated here.

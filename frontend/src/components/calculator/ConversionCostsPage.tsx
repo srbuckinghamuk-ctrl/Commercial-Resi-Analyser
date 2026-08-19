@@ -485,6 +485,16 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
           <span>Statutory costs</span>
           <span>{penceToPounds(result.statutory_total_pence)}</span>
         </div>
+        {/* R10 Task 13 (CARRIED-2). The bottom-line total Task 12 had to drop
+            (summing the three totals above in JSX would have breached the
+            no-arithmetic-in-JSX rule) is restored here as a bare read of
+            result.conversion_total_pence -- construction + professional +
+            statutory, computed once in the engine (cost-plan.ts /
+            cost_plan.py), not summed on this page. */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e2e8f0', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e3a5f', fontWeight: 600 }}>
+          <span>Total Conversion Costs</span>
+          <span>{penceToPounds(result.conversion_total_pence)}</span>
+        </div>
       </div>
     </div>
   );

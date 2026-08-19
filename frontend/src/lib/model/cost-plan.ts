@@ -202,6 +202,10 @@ export interface CostPlanResult {
   fees: FeeLineResult[];
   professional_total_pence: number;
   statutory_total_pence: number;
+  /** R10 Task 13 (CARRIED-2). construction_total_pence + professional_total_pence +
+   *  statutory_total_pence, computed once here so no component or memo has to sum
+   *  three already-computed totals itself. Purely additive — moves no other figure. */
+  conversion_total_pence: number;
   lender_eligible_base_pence: number;
   /** Display only; enters no calculation. null when the area is 0. */
   implied_rate_pence_per_sqm: number | null;
@@ -281,6 +285,8 @@ export function computeCostPlan(
 
   const totalFor = (category: FeeCategory) =>
     fees.reduce((s, f) => s + (f.category === category ? f.amount_pence : 0), 0);
+  const professionalTotal = totalFor('professional');
+  const statutoryTotal = totalFor('statutory');
 
   return {
     mode: plan.mode,
@@ -291,8 +297,9 @@ export function computeCostPlan(
     compliance_pence: compliance,
     construction_total_pence: constructionTotal,
     fees,
-    professional_total_pence: totalFor('professional'),
-    statutory_total_pence: totalFor('statutory'),
+    professional_total_pence: professionalTotal,
+    statutory_total_pence: statutoryTotal,
+    conversion_total_pence: constructionTotal + professionalTotal + statutoryTotal,
     lender_eligible_base_pence: packages.reduce(
       (s, p) => s + (p.lender_eligible ? p.amount_pence : 0), 0,
     ),

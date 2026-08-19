@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v6)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v7)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -448,3 +448,109 @@ The saved Stonegate record is a migrated v1 snapshot. After R9 it carries a
 
 The audit's independently reconciled figures for this case therefore remain
 reproducible line for line, as they did through R7 and R8.
+
+---
+
+## 10. v6 → v7 (Release 10, calc `2.9.0`)
+
+**What's added.** `CalculatorInputsV7` is `CalculatorInputsV6` plus exactly one
+thing: a `cost_plan` block (spec §16) — `mode` (`'headline'` or `'detailed'`), a
+package schedule, exactly three named contingency classes, and professional/
+statutory fee lines each carrying a fixed or percentage basis. Plus the version
+stamp itself. No existing field changes shape, name or semantics.
+`CalculatorInputsV7` subclasses `CalculatorInputsV6`, for the same reason R8 and
+R9 extended rather than replaced: the engine dispatches on those types, and a
+flat re-declaration would make every `isinstance` check silently false for a v7
+document.
+
+**Defaults, and the one thing the migration deliberately will not do.** A v6
+document migrated to v7 gets:
+
+- `mode: 'headline'`, `packages: []`;
+- `contingency`: the `general` class at the source `conversion_costs.contingency_pct`
+  on the `all_packages` basis; `existing_building` and `abnormal` both at `0`;
+- `fee_lines`: the eight existing flat fee fields (`architect_pence`,
+  `structural_engineer_pence`, `mande_pence`, `planning_consultant_pence`,
+  `other_professional_fees_pence`, `prior_approval_fee_per_dwelling_pence`,
+  `cil_s106_pence`, `building_control_pence`) as `fixed` lines, `prior_approval`
+  carrying `per_dwelling: true` — the same construction `costPlanFromLegacyCosts`
+  / `cost_plan_from_legacy_costs` uses for a pre-v7 document that has no
+  `cost_plan` at all, so the migration and the engine's own fallback cannot
+  diverge (spec §16.7).
+
+**No package schedule is synthesised.** The migration could have split the
+headline base build into a single invented package and produced a document that
+looked like a detailed cost plan — that would have been inventing evidence the
+record never contained, the same reasoning that left R8's `acquisition_date`
+null and R9's bridge zeroed rather than back-derived. A migrated document stays
+in `headline` mode, exactly as it was before this release, in substance if not
+in name.
+
+**Implementation** (`migrateV6toV7` / `migrate_v6_to_v7`,
+`migrateInputsToV7` / `migrate_inputs_to_v7`). The entry point mirrors
+`migrateInputsToV6`'s shape exactly, including its two refusals — an
+unrecognised `inputs_version` throws, and a document declaring version 7 that
+fails the v7 structural check throws rather than falling through to the
+permissive v1 path. `migrateInputsToV6` correspondingly **refuses a v7
+document** ("use migrateInputsToV7"). Downgrading would mean dropping
+`cost_plan`; a silent downgrade is R8's silent-corruption failure mode in the
+other direction.
+
+The already-v7 **merge** branch carries `cost_plan` through untouched — a merge
+that silently reset it to the empty-headline default would move a detailed-mode
+document's construction cost by its whole contingency total, since only the base
+build survives via the legacy fallback's arithmetic.
+
+### 10.1 The numerical-identity claim, and where it is tested
+
+**Claim: the v6 → v7 migration is purely additive. Every existing appraisal
+produces byte-identical output either side of it — not "close", identical.**
+
+This is a *tested* claim, mirroring §9.1's pattern one version on:
+
+| What | TypeScript | Python |
+|---|---|---|
+| Whole-corpus numeric identity | `golden-fixtures.test.ts`, `migrating %s to v7 moves no computed figure` | `tests/test_migrate_v7.py::test_v7_migration_moves_no_existing_figure` — the same before/after comparison over `metrics`, `model` and `schedule` |
+| Pins reproduce after migration | `golden-fixtures.test.ts`, `reproduces its metrics after migration to v7` | `tests/test_financial_model_fixtures.py::test_fixtures_reproduce_their_metrics_after_migration_to_v7` |
+| Structural: nothing synthesised | same test, the empty-packages / three-class / eight-fee-line branch | mirror assertion |
+
+**This gate is numeric *and* structural, for the same reason §9.1's R9 gate had
+to be both.** A migration that wrongly derived the general contingency class
+against the wrong base, or miscategorised a fee line's professional/statutory
+split, could move no figure at all for a document whose extra classes and
+non-migrated fee categories happen to be zero or agree by coincidence — the
+structural assertion (mode, empty packages, exactly three classes, eight fee
+lines, the general class carrying the source percentage) is what a purely
+numeric gate cannot see.
+
+**Hash consequence.** As with every previous additive step, `input_hash` is
+computed over the full validated document, so it changes for every row the next
+time it is saved — every migrated document now carries a `cost_plan` block it
+did not before. This is the ordinary re-hash-on-any-change behaviour; `status`
+is preserved by the existing rule and is not reset by the version bump itself.
+No `expected_metrics` value in any golden fixture moved. **This boundary move
+is also where spec §13.2's audit-hash disclosure applies for the first time in
+practice**: a row saved before this release and not yet re-saved prints
+`inputs_version: 6` (or earlier) in its stored snapshot but the *client's*
+current schema is 7, so a reader must not assume the printed `inputs_version`
+on a freshly-generated report is the one the stored `audit_hash` was computed
+over unless the row has actually been re-saved since.
+
+### 10.2 The York appraisal after R10
+
+The saved Stonegate record is a migrated v1 snapshot, headline mode throughout
+(it has never carried a `cost_plan` block). After R10 it carries `mode:
+'headline'`, no packages, `general` contingency at its existing
+`contingency_pct`, and its eight existing fee fields as `fixed` fee lines.
+
+| Field | Before R10 | After R10 | Why |
+|---|---|---|---|
+| `cost_plan.mode` | — | `'headline'` | new field, §16.7 |
+| `cost_plan.construction_total_pence` | — | equal to `construction_cost_pence` | headline arithmetic is unchanged, only re-expressed |
+| `cost_plan.conversion_total_pence` | — | `construction_total + professional_total + statutory_total` | new field, §16.8 (Task 13) — no prior figure to compare against |
+| `construction_cost_pence` | unchanged | unchanged | one contingency class carrying the old percentage on the old base reproduces the old formula exactly |
+| `professional_fees_pence`, `statutory_costs_pence` | unchanged | unchanged | eight fixed fee lines reproduce the eight flat fields exactly |
+| every cost, finance and profit figure | unchanged | unchanged | no formula moved |
+
+The audit's independently reconciled figures for this case therefore remain
+reproducible line for line, as they did through R7, R8 and R9.

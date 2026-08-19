@@ -58,6 +58,10 @@ class CostPlanResult:
     fees: list[FeeLineResult] = field(default_factory=list)
     professional_total_pence: int = 0
     statutory_total_pence: int = 0
+    # R10 Task 13 (CARRIED-2). construction_total_pence + professional_total_pence +
+    # statutory_total_pence, computed once here so no component or report has to sum
+    # three already-computed totals itself. Purely additive -- moves no other figure.
+    conversion_total_pence: int = 0
     lender_eligible_base_pence: int = 0
     implied_rate_pence_per_sqm: int | None = None
 
@@ -145,6 +149,9 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
             )
         )
 
+    professional_total = sum(f.amount_pence for f in fees if f.category == "professional")
+    statutory_total = sum(f.amount_pence for f in fees if f.category == "statutory")
+
     return CostPlanResult(
         mode=plan.mode,
         packages=packages,
@@ -154,12 +161,9 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
         compliance_pence=compliance,
         construction_total_pence=construction_total,
         fees=fees,
-        professional_total_pence=sum(
-            f.amount_pence for f in fees if f.category == "professional"
-        ),
-        statutory_total_pence=sum(
-            f.amount_pence for f in fees if f.category == "statutory"
-        ),
+        professional_total_pence=professional_total,
+        statutory_total_pence=statutory_total,
+        conversion_total_pence=construction_total + professional_total + statutory_total,
         lender_eligible_base_pence=sum(
             p.amount_pence for p in packages if p.lender_eligible
         ),

@@ -1247,13 +1247,16 @@ describe('R9 — the memo reports the area bridge', () => {
     expect(run.metrics.area_bridge.saleable_to_developed_pct).toBeNull();
     const text = await memoTextFor(baseInputs());
     expect(text).toContain('no area schedule has been entered for this appraisal');
+    // The regression this guards against: the null ratios printed as "0.0%"
+    // inside the Area Reconciliation / efficiencies tables themselves. Those
+    // two headings being absent already rules the tables out entirely — a
+    // narrower, cell-exact "0.0%" check used to sit here too, but R10 gave a
+    // legacy (headline-mode) document genuine, unrelated zero-percent
+    // contingency-class rows (existing_building / abnormal both default to
+    // 0%, spec §16), so a blanket "no cell anywhere reads exactly 0.0%"
+    // check now collides with correct output rather than catching the bug.
     expect(text).not.toContain('Area Reconciliation');
     expect(text).not.toContain('Net to gross');
-    // documentText is one drawn item per line: other, unrelated percentages
-    // in this same document legitimately end in "0.0%" (e.g. "100.0%",
-    // "10.0%"), so the check is for a *cell* reading exactly "0.0%", not the
-    // substring — which every one of those would also, spuriously, contain.
-    expect(text.split('\n')).not.toContain('0.0%');
   });
 
   it('prints the area schedule and efficiencies tables once something has been entered', async () => {

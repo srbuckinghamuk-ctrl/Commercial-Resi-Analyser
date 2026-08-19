@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.8.0`.
-**Date:** 18 August 2026
+**Status:** Authoritative. Calculation version `2.9.0`.
+**Date:** 19 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.9.0** — cost plan modes (§16, R10), with inputs v7 carrying a `cost_plan` block: a `headline` mode (rate × area, unchanged) and a mutually exclusive `detailed` mode (a priced package schedule), three named contingency classes each rounding independently against its own resolved base, and professional/statutory fee lines carrying a fixed or percentage basis. **No existing computed value changed** — migration copies `contingency_pct` into the `general` class on the `all_packages` basis and the eight legacy fee fields into `fixed` fee lines, and both engines route every document, pre- and post-migration, through the same `cost_plan` engine, so "all twelve golden fixtures identical to the penny" is an assertion that could fail rather than one that is structurally blind (§16, following R9's precedent). §3.4's contingency term is replaced with the three-class formula; §3.5/§3.6 are replaced with the fee-line formulation and its two base definitions; §1.6 records inputs v7. §13.2 gains a stated limitation: a stored appraisal not yet re-saved across this boundary prints an `inputs_version` beside an `audit_hash` computed under the prior version, so the hash cannot be recomputed from the printed fields for that row.
 - **2.8.0** — the area bridge (§15, R9), with inputs v6 carrying an entered `areas` block and per-unit `ancillary`. The scheme now has one area statement that ties, and the construction-cost area is **derived** from it rather than asserted independently: §15.3's basis switch chooses between the derived developed GIA and the pre-R9 manual field, and §15.4 makes reading that field outside one accessor a build failure. Ancillary parking, balconies and terraces are valued as a separate GDV component (§3.1, §15.5) that sells with its unit and moves with a §12.1 GDV stress. **No existing computed value changed** — migration writes the manual basis with a zeroed bridge and zeroed ancillary, which is a tested claim, not an assertion (see `migration-notes.md`). §3.1's formula and Included lines are corrected to state GDV as internal plus ancillary value, and the unpaid R3 pointer that excluded parking "until valued separately" is removed rather than repointed; §3.2's `global_per_sqft` lender basis is bound explicitly to internal net internal area; §2 gains four derived-area definitions. §15.6's rules replace the ±25% unit-NIA-vs-construction-area warning, which is deleted rather than retuned. R9 also clears an R8 carry-forward: acquisition-date validation is now a real calendar check in both engines, so `2026-02-31` no longer validates (§14).
 - **2.7.0** — jurisdiction-aware acquisition tax: SDLT (England/NI), LBTT (Scotland) and LTT (Wales) computed from a dated, sourced and versioned band table (§14, R8), with inputs v5 carrying the jurisdiction, its evidence status, the acquisition date and a reasoned override. **No existing computed value changed** — §1.6 explains why. §3.3's formula term is renamed from `SDLT` to `acquisition_tax` and its false "other jurisdictions are out of scope" sentence is deleted; §3.18 records that the RLV is invariant to it; §13.1 gains the table version and applied jurisdiction; §13.3 gains a fourth draft condition. What does change in practice is that every pre-R8 document is marked DRAFT until **both** its jurisdiction is confirmed **and** an acquisition date is recorded — migration leaves the date null, so confirming the jurisdiction alone is not enough (§14.6).
 - **2.4.0** — fixed-facility sensitivity suite: the two-way matrix, the tornado, and their shared lever and validation rules (§12, R4). No existing computed value changed — §12 only composes calls to the existing appraisal engine over levered copies of an inputs document, it does not alter any formula — which is why this is a minor bump, not a major one.
@@ -12,7 +13,7 @@
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9, R10) carry no such restriction.
 
 ---
 
@@ -51,9 +52,11 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
 
 Calc 2.7.0 (R8) adds §14's jurisdiction-aware acquisition tax. **It changes no existing computed value.** Every document that existed before it was implicitly an England/NI one, the migration to inputs v5 stamps exactly that, and the England/NI non-residential bands have not moved since 17 March 2016 — so every stored appraisal reproduces its figures to the penny. What 2.7.0 changes is what a *non*-English appraisal computes (previously wrong) and what every report *says* about its own tax basis (§14.6).
+
+Calc 2.9.0 (R10) adds §16's cost plan modes, inputs v7. **It changes no existing computed value** — every pre-v7 document is implicitly `headline` mode with its `general` contingency class carrying the old `contingency_pct` and its eight fee fields carried as `fixed` fee lines (§16.7), and both engines compute every document's cost stack, migrated or not, through the same `cost_plan` engine, so the identity is a tested claim rather than a code path only new documents reach. What 2.9.0 changes is what a *detailed*-mode document computes (previously not expressible at all) and what a report can honestly call the construction cost section once one is entered (§16.6). Every `inputs_version` boundary bump carries the same disclosure obligation §13.2 now states explicitly: a stored appraisal not re-saved since the bump prints a version beside a hash computed under the prior one.
 
 ---
 
@@ -110,23 +113,23 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 ### 3.4 Construction cost [R1]
 
-- **Formula (headline mode, the only R1 mode):** `base = round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)`; `contingency = round(base × contingency_pct/100)`; `compliance = fire_safety + sound_insulation + part_l`; total = `base + contingency + compliance`. [R9 — calc 2.8.0. Before it this line read `construction_cost_per_sqm_pence × total_construction_sqm`. The **area** is now resolved through the single accessor `developed_area_sqm(inputs)` (§15.3/§15.4), which returns the derived developed GIA on the `bridge_derived` basis and `total_construction_sqm` verbatim on the `manual` basis — so a migrated document's figure is unchanged to the penny. Reading `total_construction_sqm` anywhere else is a build failure.]
-- **Contingency base:** the headline base build only — explicitly excludes compliance allowances, professional fees and acquisition. This base is displayed wherever contingency appears.
+- **Formula:** `base_build = Σ packages[].amount_pence` in `detailed` mode, or `round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)` in `headline` mode; `contingency_total = Σ` over the three named classes of `round_half_up(class_base × class.pct/100)` — each class rounds independently, so three classes at 5% on the same base is not one class at 15% (§16.3); `compliance = fire_safety + sound_insulation + part_l` in headline mode, or `0` in detailed mode (§16.2 — priced inside a package instead); `total = base_build + contingency_total + compliance`. [R10 — calc 2.9.0. Before it this line read `base = round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)`; `contingency = round(base × contingency_pct/100)`; `compliance = fire_safety + sound_insulation + part_l`; `total = base + contingency + compliance` — a single blended contingency percentage on an implicit base, which could not separate general design development from existing-building risk from abnormal risk, the three things a conversion lender most wants apart (§16). Headline mode's arithmetic is unchanged to the penny: migration copies `contingency_pct` into the `general` class on the `all_packages` basis and leaves the other two at 0 (§16.7), so `base_build`/`contingency_total`/`compliance` reproduce the pre-R10 `base`/`contingency`/`compliance` exactly.] [R9 — calc 2.8.0. Before it this line read `construction_cost_per_sqm_pence × total_construction_sqm`. The **area** is now resolved through the single accessor `developed_area_sqm(inputs)` (§15.3/§15.4), which returns the derived developed GIA on the `bridge_derived` basis and `total_construction_sqm` verbatim on the `manual` basis — so a migrated document's figure is unchanged to the penny. Reading `total_construction_sqm` anywhere else is a build failure.]
+- **Contingency base:** each of the three classes carries its **own** named, resolved base — `all_packages` (the whole base build) or `selected_packages` (a named subset) — and that base is displayed beside the class, not asserted in prose (§16.3). [R10 — calc 2.9.0. Before it this line read "the headline base build only — explicitly excludes compliance allowances, professional fees and acquisition. This base is displayed wherever contingency appears", true of the single blended percentage that no longer exists. Every class's base still excludes compliance, fees and acquisition — only the base build itself can be named, on either basis.]
 - **Timing:** spread per the spend profile (§6). R1 default: straight-line over the construction window, disclosed as an assumption.
-- **Gross/net:** entered figures are treated as net of recoverable VAT; VAT modelling is R3 and the report carries "construction VAT treatment unconfirmed — no reduced-rate saving is assumed in the appraisal".
-- **Edge cases:** negative rate/area/contingency are hard errors. [R9 — calc 2.8.0. This line also said “`total_construction_sqm` differing from Σ unit areas by >25% raises a warning (unreconciled areas)”. **That warning is deleted, not retuned.** It compared two quantities that *should* differ — by exactly the circulation, plant, storage and amenity the model had nowhere to record — so it fired on correct schemes and stayed silent on wrong ones; the tolerance was a proxy for a reconciliation that did not exist. §15.6's rules replace it, including a narrower manual-basis warning that compares the manual area against the **derived** developed area rather than against unit NIA.]
+- **Gross/net:** entered figures are treated as net of recoverable VAT; VAT modelling is R11 and the report carries "construction VAT treatment unconfirmed — no reduced-rate saving is assumed in the appraisal".
+- **Edge cases:** negative rate/area/package amount/contingency `pct` are hard errors; a `detailed`-mode document carrying any non-zero flat compliance field is also a hard error, §16.2. [R9 — calc 2.8.0. This line also said “`total_construction_sqm` differing from Σ unit areas by >25% raises a warning (unreconciled areas)”. **That warning is deleted, not retuned.** It compared two quantities that *should* differ — by exactly the circulation, plant, storage and amenity the model had nowhere to record — so it fired on correct schemes and stayed silent on wrong ones; the tolerance was a proxy for a reconciliation that did not exist. §15.6's rules replace it, including a narrower manual-basis warning that compares the manual area against the **derived** developed area rather than against unit NIA.]
 
 ### 3.5 Professional fees [R1]
 
-- **Formula:** `architect + structural_engineer + mande + planning_consultant + other_professional_fees`.
-- **Excluded:** statutory costs (§3.6) — note this is a reclassification of the v1 grouping, values unchanged in total.
+- **Formula:** Σ `cost_plan.fees[]` where `category == 'professional'` — each line's `amount_pence` is either its stored fixed figure (`per_dwelling` multiplied by `max(1, unit_count)` where set) or `round_half_up(base × pct/100)` on the line's own basis (§16.4). [R10 — calc 2.9.0. Before it this line read `architect + structural_engineer + mande + planning_consultant + other_professional_fees` — five flat pence fields, fixed amounts only. Migration converts all five into `fixed` fee lines carrying the same figures, so a migrated document's total is unchanged to the penny; what changes is that a fee can now also be entered as a percentage of a named base (§16.4).]
+- **Excluded:** statutory costs (§3.6) — note this is a reclassification of the v1 grouping, values unchanged in total. **No fee basis includes fees** (§16.4) — a percentage fee resolves against the base build or the construction total, never against another fee, so no ordering or cycle applies.
 - **Timing:** spread per profile; R1 default straight-line over the first half of the construction window (disclosed).
 - **Edge cases:** negatives are hard errors.
 
 ### 3.6 Statutory costs [R1]
 
-- **Formula:** `prior_approval_fee_per_dwelling × max(1, unit_count) + cil_s106 + building_control`.
-- **Timing:** month 0 (prior approval), with CIL/S106 and building control spread with professional fees in R1 (disclosed simplification; dated programme refines this in R2).
+- **Formula:** Σ `cost_plan.fees[]` where `category == 'statutory'`, resolved the same way as §3.5 (fixed, optionally per-dwelling, or percentage of a named base). [R10 — calc 2.9.0. Before it this line read `prior_approval_fee_per_dwelling × max(1, unit_count) + cil_s106 + building_control` — three flat pence fields. Migration converts all three into `fixed` fee lines (`prior_approval` carrying `per_dwelling: true`), so a migrated document's total is unchanged to the penny. `building_control` keeps its category despite sitting in the professional-fee block of the legacy input shape (§16.4) — reclassifying it would move money between two separately-reported, separately-spread totals while leaving every grand total correct, invisible to any totals-based check.]
+- **Timing:** month 0 in full for the fee line with `code: 'prior_approval'`; every other statutory line spreads with professional fees in R1 (disclosed simplification; dated programme refines this in R2). [R10 — calc 2.9.0. The timing rule is now keyed on `code`, not on a hard-coded field name, so it survives the move from three flat fields to fee lines unchanged — pinned by a month-0 statutory figure that a totals-only test cannot see moving (§16.8).]
 - **Edge cases:** negatives are hard errors.
 
 ### 3.7 Selling and exit costs [R1]
@@ -756,6 +759,22 @@ joined by the literal `|`, over UTF-8, lower-case hex.
   prints "not recorded". They are not backfilled: a row that has not been
   recalculated is a pre-provenance result, and stamping it would assert a binding
   no run produced.
+- **Stated limitation: a boundary bump breaks recomputability for an unsaved
+  row, and this is inherent, not a defect.** [R10 — calc 2.9.0.] The "a reviewer
+  can recompute the audit hash from the six printed fields" claim above assumes
+  the printed `inputs_version` is the one `audit_hash` was actually computed
+  over. It is not, for a row whose `inputs_version` moved server-side (e.g. R10's
+  v6 → v7 persistence boundary, §16.7) but which has not been re-saved since: the
+  memo prints the client's current `inputs_version` beside a stored `audit_hash`
+  computed under the version the row was last saved at, and the six-field
+  recomputation does not reproduce it. This holds for **every** `inputs_version`
+  boundary a stored row crosses without a re-save, not only R10's — it is a
+  structural consequence of hashing a version number that can move independently
+  of the row, and no migration release closes it, because the next boundary bump
+  reopens it. Disclosed here rather than left for a lender to trip over; not
+  fixed, because fixing it would mean either hashing a version the row was never
+  actually computed under (false binding) or re-hashing every stored row on every
+  migration release (defeats the point of a hash — see "Absent rows" above).
 
 ### 13.3 Document status and draft marking
 
@@ -1135,3 +1154,137 @@ Recorded so they are not read as oversights.
 - **Retained-commercial value is deferred to R13.** `retained_commercial_gia_sqm` correctly removes the retained commercial area from the developed area, so it is neither built nor charged construction cost. Its **value** is not in GDV: §3.1 still excludes retained-commercial value, so a scheme retaining commercial space understates its total value until R13 models the investment arm. A stated exclusion, not an error in the bridge.
 - **No measurement standard is enforced.** The model does not check that entered areas follow RICS IPMS, the RICS Code of Measuring Practice, or any other convention, and it cannot tell GIA entered as GEA from GIA entered correctly. It reconciles whatever is entered. The standard used is the appraiser's responsibility and travels with the appraisal as an assumption, not as a validated field.
 - **Areas carry no evidence status.** Unlike the acquisition jurisdiction (§14.6), an area line records no source and no confidence. There is no "measured survey" versus "scaled off a floor plan" distinction in the record.
+
+---
+
+## 16. Cost plan modes [R10 — calc 2.9.0]
+
+Before this release the whole construction cost stack was one rate, one percentage and three flat compliance fields, and professional/statutory fees were eight further flat pence fields on the same block. There was nowhere to record a priced QS package schedule, general design-development contingency shared a single percentage with existing-building risk and abnormal risk — the three things a *conversion* lender most wants separated, because they carry different probabilities and different evidence — and the memo printed the string `'On base build cost only'` beside the contingency rate, because nothing computed or displayed the base that sentence described. §16 gives the appraisal a `cost_plan` block (inputs v7) that fixes all three.
+
+### 16.1 The two modes, and their mutual exclusion
+
+```
+CostPlanMode = 'headline' | 'detailed'
+```
+
+**Headline stays rate × area; detailed is priced lump sums.** The two modes are mutually exclusive, and it is enforced rather than assumed: `headline` mode carrying a non-empty package schedule is a hard validation error, and so is `detailed` mode carrying none (§16.5). Packages deliberately do not each carry their own rate and area — a QS prices a package; the rate is the QS's working, not the appraisal's input. Reintroducing per-package rate × area would recreate the two-numbers-one-fact condition the §15 area bridge exists to remove.
+
+### 16.2 Packages, and the compliance double-count they would otherwise cause
+
+```
+CostPackage: id, code, label, amount_pence, contingency_class, lender_eligible, notes
+```
+
+`code` is one of the audit's own twelve package types — `enabling_strip_out_asbestos`, `structure`, `envelope`, `roof_windows`, `fire_acoustic_thermal`, `mech_elec_public_health`, `drainage_utilities`, `lift`, `partitions`, `finishes`, `common_parts`, `externals` — plus `other`. A fixed enum plus a free `label` makes the schedule groupable and comparable across appraisals while still admitting the line a particular scheme has that the enum does not. Duplicate `code`s are allowed (two externals lines, three finishes lines); duplicate `id`s are not — ids are the identity the three contingency classes reference (§16.3).
+
+`lender_eligible` and the derived `lender_eligible_base_pence` (Σ `amount_pence` of every package where `lender_eligible` is true) are **recorded and displayed only in R10**. The ledger's draw cap does not read it — wiring it to `development_cost_advance_pct` is R14. A recorded-but-inert eligibility flag that looks live is worse than none, so this is stated at the point of definition rather than left to be discovered.
+
+**`fire_safety_pence`, `sound_insulation_pence` and `part_l_compliance_pence` are the same money as the `fire_acoustic_thermal` package code.** A document carrying both would double-count it invisibly, because both figures are legitimate in isolation. The resolution:
+
+- **Headline mode** keeps the three compliance fields exactly as before. `compliance_pence` is their sum, added after contingency, unchanged.
+- **Detailed mode** expects compliance to be priced inside a package. `compliance_pence` is **0**, and a detailed-mode document carrying any non-zero compliance field is a hard validation error (§16.5) — a hard error rather than a silent zeroing, because dropping money the user entered without saying so is the worse failure. The UI's mode switch offers a one-click conversion of the three figures into a single `fire_acoustic_thermal` package; declining leaves the figures in place, which validation then rejects.
+
+**Compliance responds differently to a cost stress in the two modes, and must — this is a stated limitation (§16.9), not an inconsistency to engineer away.** In headline mode `compliance_pence` is a fixed allowance the cost lever (§12.1's `construction_cost_adjustment_pct`) does not scale — pre-R10 behaviour, unchanged. In detailed mode the same money sits inside a package, and packages *are* scaled with every other package amount. The two modes agree on the construction total at rest and diverge under stress once compliance is non-zero. Scaling headline compliance too would move every existing document's scenario figures, which this release forbids; exempting a compliance package from the stress would make it the one package the cost lever cannot reach, recreating §1's pre-R10 defect in miniature.
+
+### 16.3 Contingency — one engine, three classes, a named base
+
+```
+ContingencyClassName = 'general' | 'existing_building' | 'abnormal'
+ContingencyClass: name, pct, basis ('all_packages' | 'selected_packages'), package_ids
+```
+
+Each class rounds **half-up independently** (§1.1); the contingency total is the sum of the three rounded figures, **not a rounding of the sum**. Three classes at 5% each on the same base is deliberately not identical to one class at 15% — they are three separate allowances, each computed and each reportable, and collapsing them for rounding would obscure which one moved. `all_packages` is the whole base build, and the only meaningful basis in headline mode, where there are no packages to name. `selected_packages` names a subset by package `id` — the audit's "allow eligibility bases per package and show the base": existing-building contingency belongs on enabling/strip-out/structure, not on externals, and the base it lands on has to be visible to be arguable.
+
+**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: retained so pre-R10 readers keep working, removed in R16, and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail.
+
+### 16.4 Fee bases, and why double counting is impossible by construction
+
+```
+FeeBasis = 'fixed' | 'pct_of_base_build' | 'pct_of_construction_total'
+FeeLine: id, code, category, label, basis, amount_pence, pct, per_dwelling
+```
+
+`amount_pence` is meaningful (and hard-validated to 0 otherwise) only on `basis: 'fixed'`; `pct` only on a `pct_*` basis; `per_dwelling` only on `basis: 'fixed'` (a percentage per dwelling is not a meaningful quantity) — a basis change cannot silently resurrect a stale figure in the field it just made meaningless.
+
+**The `category` mapping is fixed, not a user choice, and it is not what the field names suggest:**
+
+| `code` | `category` | Migrated from |
+|---|---|---|
+| `architect` | professional | `architect_pence` |
+| `structural_engineer` | professional | `structural_engineer_pence` |
+| `mande` | professional | `mande_pence` |
+| `planning_consultant` | professional | `planning_consultant_pence` |
+| `other_professional` | professional | `other_professional_fees_pence` |
+| `prior_approval` | **statutory** | `prior_approval_fee_per_dwelling_pence`, `per_dwelling: true` |
+| `cil_s106` | **statutory** | `cil_s106_pence` |
+| `building_control` | **statutory** | `building_control_pence` |
+
+`building_control` is the one to get wrong: it sits in the middle of the professional-fee block of the legacy `ConversionCostInputs` shape and reads like a consultant fee, but it has always counted in the **statutory** total (§3.6). A migration that classified it as professional would move money between two separately-reported, separately-spread lines while leaving every grand total correct — invisible to any totals-based test. `other` is available for user-added lines and must carry an explicit category.
+
+**No fee basis includes fees, which is what makes double counting impossible by construction rather than something a check detects:**
+
+- `pct_of_base_build` — the base build alone: Σ packages in detailed mode, or `rate × developed_area_sqm` in headline mode. Excludes contingency, compliance and all fees.
+- `pct_of_construction_total` — base build + contingency + compliance. Excludes all fees.
+
+Neither base can name a fee, so no fee can feed its own base or another fee's, and resolving every fee line needs no ordering, no iteration and no cycle detection. A check that *detected* double counting would be strictly worse than a base definition that cannot express it.
+
+**Statutory timing is keyed on `code`, not on a hard-coded field.** §3.6's month-0 rule for prior approval survives the move to fee lines as: the fee line with `code: 'prior_approval'` lands in month 0 in full; every other statutory line spreads with the professional curve. R12 generalises fee timing; R10 does not change this behaviour, only its representation.
+
+### 16.5 Validation
+
+**Hard errors:**
+
+- `mode: 'headline'` with a non-empty `packages`, or `mode: 'detailed'` with an empty `packages`, or with `packages` summing to zero (§16.1).
+- Any negative `amount_pence` or `pct` on a package, contingency class or fee line.
+- A duplicate package `id`, or a duplicate fee-line `id`.
+- A `selected_packages` contingency class naming a `package_id` no package carries, or naming none while carrying a non-zero `pct`.
+- Not exactly three contingency classes, or a repeated class `name` — the three classes are schema, not a user-managed list.
+- `mode: 'detailed'` with any non-zero `fire_safety_pence`, `sound_insulation_pence` or `part_l_compliance_pence` (§16.2).
+- A fee line with `basis: 'fixed'` and non-zero `pct`, or a `pct_*` basis with non-zero `amount_pence`, or `per_dwelling: true` on a `pct_*` basis.
+- A fee line whose `code` is one of the eight migrated codes but whose `category` contradicts §16.4's mapping.
+
+**Warnings:** contingency total above 50% of the base build; a `pct_of_*` fee line resolving against a zero base. `mode: 'headline'` on a document that also carries `pct_of_*` fee lines is **not** a warning — percentage fees are legitimate in both modes.
+
+### 16.6 What a report may claim
+
+§13.4's "a report may not describe [the construction model] as a cost plan until a detailed package mode is the active basis" is discharged here. R7's "headline cost estimate" copy is mode-dependent: it stays, verbatim, for headline mode, and becomes **"detailed cost plan — QS evidence not recorded"** for detailed mode — accurate on both counts (it is a priced package schedule in shape; it carries no QS source, date or status, §16.9) and conservative rather than overclaiming a document a monitoring surveyor could rely on unread. The memo's cost section prints the package schedule (detailed mode only), the three contingency lines with their own resolved bases, and the fee lines with their bases — all read from `cost_plan`, none recomputed.
+
+### 16.7 Migration
+
+`migrateV6toV7` / `migrate_v6_to_v7` mirrors `migrateV5toV6` exactly, including the already-v7 merge branch and the two refusals carried forward from R8 (unrecognised version; version-7-but-fails-structural-check). A migrated document gets `mode: 'headline'`, `packages: []`, the `general` contingency class at the source `contingency_pct` on `all_packages` with `existing_building` and `abnormal` at 0, and the eight legacy fee fields as `fixed` fee lines (`prior_approval` carrying `per_dwelling: true`). No package schedule is synthesised — splitting a headline figure into invented packages would be inventing evidence, the same reasoning that left R8's `acquisition_date` null and R9's bridge zeroed rather than back-derived.
+
+The migration gate is numeric **and** structural: all twelve golden fixtures reproduce every reported metric to the penny (a gate that can now fail, per §16.3, rather than one that is structurally blind to whether the new engine is even wired in), and the migration's structural output is asserted directly — mode, empty packages, exactly three contingency classes, eight fee lines, the general class carrying the source percentage.
+
+### 16.8 Outputs
+
+`AppraisalResultV2.metrics.cost_plan` (`CostPlanResult`) is the **only** shape the UI and the memo may read cost from; neither recomputes a figure from it (§15's precedent — the reason the cost page carries no arithmetic in JSX):
+
+```
+mode
+packages[]                  id, code, label, amount_pence, contingency_class, lender_eligible
+base_build_pence
+contingency[]               name, pct, basis, base_pence, amount_pence
+contingency_total_pence
+compliance_pence
+construction_total_pence    = base_build + contingency_total + compliance
+fees[]                      id, code, category, basis, base_pence, amount_pence
+professional_total_pence
+statutory_total_pence
+conversion_total_pence      = construction_total + professional_total + statutory_total [Task 13]
+lender_eligible_base_pence
+implied_rate_pence_per_sqm  base_build ÷ developed_area_sqm; null when the area is 0
+```
+
+Every contingency and fee line reports **its base as well as its amount** — the audit's "show the base" discharged as data rather than prose. `implied_rate_pence_per_sqm` exists so the rate does not simply vanish from the appraisal when the mode changes: in headline mode it is the entered rate recovered by division (a check on the arithmetic, not an echo of the input); in detailed mode it is the figure a reader compares against a benchmark they hold themselves. It is display-only and enters no calculation. `conversion_total_pence` is the bottom-line figure the cost page and the memo both print — computed once here, purely additive, and moves no other figure.
+
+`Schedule.totals.construction_pence`, `professional_pence` and `statutory_pence` remain the single point the monthly ledger sees, so sources-and-uses (§7) and reconciliation are structurally untouched by this release.
+
+### 16.9 Stated limitations
+
+Recorded so they are not read as oversights.
+
+- **No VAT.** Neither mode models VAT as a cash flow — deferred to R11, alongside VAT on the rest of the appraisal (§3.4, §14.8).
+- **No per-package programme.** Every package spreads with the construction curve (§6); there is no per-package start offset, duration or curve. Deferred to R12, the same release that generalises fee timing (§16.4).
+- **`lender_eligible` is recorded but not wired to the draw cap.** §16.2 states this at the point of definition; R14 is where `lender_eligible_base_pence` starts constraining `development_cost_advance_pct`. Until then it is disclosure, not a live figure.
+- **No QS provenance.** A package or a percentage fee carries no source, date or status — no "priced by [firm], RIBA Stage 4, dated [x]" distinction in the record, unlike the acquisition jurisdiction's evidence status (§14.6). Deferred to R15, alongside fixed-price coverage, provisional sums and inflation (§7.5 of the second audit).
+- **Compliance's stress behaviour is mode-dependent, by necessity rather than oversight (§16.2).** A fixed unscaled allowance in headline mode; inside a scaled package in detailed mode. The two modes agree at rest and diverge under a cost stress once compliance is non-zero.
