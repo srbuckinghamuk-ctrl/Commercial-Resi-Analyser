@@ -251,6 +251,16 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     cp.contingency.forEach((c, idx) => {
       if (c.pct < 0) err(`cost_plan.contingency[${idx}].pct`, 'Contingency percentage cannot be negative.');
     });
+    // Final review I3 (spec §16.5: "Any negative amount_pence or pct on a
+    // package, contingency class OR fee line"). This third leg was missing --
+    // Python enforces it at the schema (types.py FeeLine, Field(ge=0)), so a
+    // negative fee was accepted by the client, computed into a total and shown
+    // on screen, then rejected server-side with a raw pydantic 422 instead of
+    // this module's own ValidationIssue message.
+    cp.fee_lines.forEach((fl, idx) => {
+      if (fl.amount_pence < 0) err(`cost_plan.fee_lines[${idx}].amount_pence`, 'Fee line amount cannot be negative.');
+      if (fl.pct < 0) err(`cost_plan.fee_lines[${idx}].pct`, 'Fee line percentage cannot be negative.');
+    });
 
     if (new Set(cp.packages.map((p) => p.id)).size !== cp.packages.length) {
       err('cost_plan.packages', 'Package ids must be unique.');

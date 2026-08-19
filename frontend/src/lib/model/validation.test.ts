@@ -962,6 +962,30 @@ describe('R10 — cost plan validation', () => {
     expect(valid.some((i) => i.field === 'cost_plan.contingency[1].pct')).toBe(false);
   });
 
+  it('hard-errors on a negative fee line amount or percentage', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        fee_lines: [
+          feeLine({ id: 'fee-a', basis: 'fixed', amount_pence: -1000, pct: 0 }),
+          feeLine({ id: 'fee-b', basis: 'pct_of_base_build', amount_pence: 0, pct: -5 }),
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].amount_pence')).toBe(true);
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[1].pct')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        fee_lines: [
+          feeLine({ id: 'fee-a', basis: 'fixed', amount_pence: 1000, pct: 0 }),
+          feeLine({ id: 'fee-b', basis: 'pct_of_base_build', amount_pence: 0, pct: 5 }),
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].amount_pence')).toBe(false);
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines[1].pct')).toBe(false);
+  });
+
   it('hard-errors on a duplicate package id', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {

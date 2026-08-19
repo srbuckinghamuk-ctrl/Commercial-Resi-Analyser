@@ -508,6 +508,12 @@ class CostPackage(Model):
     code: CostPackageCode
     label: str = ""
     amount_pence: int = Field(default=0, ge=0)
+    # Recorded but NOT live in R10 (spec Sec 16.9): neither engine reads this
+    # field when resolving a contingency class's base. Scoping is driven solely
+    # by each ContingencyClass's own basis / package_ids -- set nowhere in the
+    # product today, so every class currently applies to all_packages. Do not
+    # wire this in without reading Sec 16.9 first; it changes contingency base
+    # resolution.
     contingency_class: ContingencyClassName = "general"
     # R10 records this; the ledger's draw cap does NOT read it. R14 wires it.
     lender_eligible: bool = True

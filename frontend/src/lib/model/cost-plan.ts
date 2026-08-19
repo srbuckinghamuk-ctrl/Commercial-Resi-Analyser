@@ -30,6 +30,11 @@ export interface CostPackage {
   code: CostPackageCode;
   label: string;
   amount_pence: number;
+  /** Recorded but NOT live in R10 (spec §16.9): neither engine reads this field
+   *  when resolving a contingency class's base. Scoping is driven solely by each
+   *  ContingencyClass's own `basis` / `package_ids` — set nowhere in the product
+   *  today, so every class currently applies to `all_packages`. Do not wire this
+   *  in without reading §16.9 first; it changes contingency base resolution. */
   contingency_class: ContingencyClassName;
   /** R10 records this and computes `lender_eligible_base_pence` from it, but the
    *  ledger's draw cap does NOT read it. Wiring it to

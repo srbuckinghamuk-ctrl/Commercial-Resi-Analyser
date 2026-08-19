@@ -409,12 +409,11 @@ def calculate_authoritative(
         # plan, deriving it from the document's own flat cost fields via
         # cost_plan_from_legacy_costs, which is intended to leave every
         # migrated appraisal's computed values unchanged. tests/test_migrate_v7.py
-        # pins the migration's shape and both refusals, but NOT yet the
-        # numeric-identity gate test_migrate_v6.py's
-        # test_v6_migration_moves_no_existing_figure runs for v6 (a v7 twin
-        # over the fixture corpus, plus its TS equivalent in
-        # golden-fixtures.test.ts) -- that gate is a later task's, not shipped
-        # here.
+        # pins the migration's shape and both refusals, AND the numeric-identity
+        # gate: test_v7_migration_moves_no_existing_figure is the v7 twin of
+        # test_migrate_v6.py's test_v6_migration_moves_no_existing_figure, run
+        # corpus-wide over every fixture, with its TS equivalent in
+        # golden-fixtures.test.ts -- shipped in both engines (R10 Task 11).
         # R9 (Task 3) moved this boundary from v5 to v6, writing the area
         # bridge on the `manual` basis with every figure zeroed, and a zeroed
         # ancillary block on every unit, so the cost area stays

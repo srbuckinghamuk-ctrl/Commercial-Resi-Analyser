@@ -2111,7 +2111,16 @@ export function generateInvestmentMemo(
         `${tax.regime} — ${JURISDICTION_LABEL[tax.jurisdiction]}, non-residential, `
         + `bands in force from ${formatBandDate(tax.band_set_effective_from)} `
         + `(table ${tax.table_version})`],
-      ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
+      // Final review I2. This row used to print the entered rate unconditionally,
+      // three rows above the contingency rows that ARE mode-gated (§16.9/CARRIED-1
+      // below) -- in detailed mode the entered rate drives nothing, so the memo
+      // showed a lender a build rate the model did not use. Gated the same way:
+      // headline keeps the entered rate (unchanged); detailed reads the bare
+      // cp.implied_rate_pence_per_sqm (spec §16.8, base build ÷ developed area),
+      // labelled as implied so it reads as derived, not entered.
+      cp.mode === 'detailed'
+        ? ['Build rate £/m²', cp.implied_rate_pence_per_sqm === null ? 'n/a — zero area' : fmt(cp.implied_rate_pence_per_sqm), 'Implied — base build ÷ developed area (spec §16.8), not an entered figure']
+        : ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
       // R10 Task 13 (CARRIED-1, spec §16): one row per contingency class, each
       // with its own NAMED, resolved base — the static "On base build cost
       // only" string is retired because the base now differs by class and is

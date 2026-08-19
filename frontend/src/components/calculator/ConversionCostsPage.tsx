@@ -408,16 +408,29 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                     style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                   />
                 </div>
-                <select
-                  aria-label="Package contingency class"
-                  value={pkg.contingency_class}
-                  onChange={(e) => updatePackage(pkg.id, { contingency_class: e.target.value as ContingencyClassName })}
-                  style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                >
-                  {CONTINGENCY_CLASS_NAMES.map((name) => (
-                    <option key={name} value={name}>{humanise(name)}</option>
-                  ))}
-                </select>
+                {/* Final review I1 (spec §16.9). This field is recorded but NOT
+                    live: neither engine reads it when resolving a contingency
+                    class's base -- scoping runs entirely off each class's
+                    basis / package_ids below, which nothing in this page
+                    writes, so every class currently applies to all packages
+                    regardless of what is selected here. Labelled "(recorded)"
+                    plus a title tooltip so a user cannot reasonably infer the
+                    figure is live -- do not wire this control without reading
+                    §16.9 first. */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ color: '#64748b', fontSize: 11 }}>Contingency class (recorded)</span>
+                  <select
+                    aria-label="Package contingency class (recorded only — does not narrow the contingency base in R10)"
+                    title="Recorded only in R10: this does not narrow which packages a contingency class's percentage applies to. Scoping is driven solely by each class's basis / package_ids, below, not by this selection."
+                    value={pkg.contingency_class}
+                    onChange={(e) => updatePackage(pkg.id, { contingency_class: e.target.value as ContingencyClassName })}
+                    style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                  >
+                    {CONTINGENCY_CLASS_NAMES.map((name) => (
+                      <option key={name} value={name}>{humanise(name)}</option>
+                    ))}
+                  </select>
+                </div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94a3b8', fontSize: 13 }}>
                   <input
                     type="checkbox"
