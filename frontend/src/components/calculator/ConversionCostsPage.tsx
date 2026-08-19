@@ -78,7 +78,8 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
           (the single accessor `areas.ts` exposes, enforced by the eslint guard
           below) and this field becomes read-only; under the manual basis this
           component stays the legitimate editor of `total_construction_sqm`,
-          which is why it is on the guard's allowlist. */}
+          exempted at the read below (R10 Task 9 took this file OFF the
+          guard's file-wide allowlist, so the exemption is now line-scoped). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
         <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Construction area basis</label>
         <select
@@ -104,12 +105,21 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
       ) : (
         <CostRow
           label="Total construction m²"
+          // eslint-disable-next-line no-restricted-syntax -- legitimate manual-basis area editor (spec §15.3); see the comment above
           value={costs.total_construction_sqm}
           onChangeValue={(v) => updateCosts({ total_construction_sqm: v })}
         />
       )}
 
-      <CostRow label="Contingency (%)" value={costs.contingency_pct} onChangeValue={(v) => updateCosts({ contingency_pct: v })} />
+      {/* R10 Task 9. contingency_pct is now legacy: run.metrics.cost_plan.contingency
+          is the resolved figure. Left reading the raw field for now — Task 12 rebuilds
+          this whole page around the cost plan. */}
+      <CostRow
+        label="Contingency (%)"
+        // eslint-disable-next-line no-restricted-syntax -- R10 Task 12 replaces this read
+        value={costs.contingency_pct}
+        onChangeValue={(v) => updateCosts({ contingency_pct: v })}
+      />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Building Regs Compliance</h4>
       <PenceCostRow label="Fire safety (£)" penceValue={costs.fire_safety_pence} onChangePence={(v) => updateCosts({ fire_safety_pence: v })} />

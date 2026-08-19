@@ -34,6 +34,11 @@ and flags only the node shapes that are an actual read:
   exported function handing back the very ``.bands`` list ``TAX_TABLES``
   holds, so a consumer could evaluate its own acquisition tax through it and
   trip neither half of the guard.
+* ``ast.Attribute``/``getattr``/subscript nodes for ``contingency_pct`` (R10
+  Task 9) -- the same three shapes as the cost-area field above, applied to
+  the now-legacy conversion-cost field ``compute_cost_plan`` superseded.
+  ``run.metrics.cost_plan.contingency`` is the resolved figure once a
+  document carries a ``cost_plan`` block.
 """
 from __future__ import annotations
 
@@ -69,6 +74,45 @@ TAX_ALLOWLIST = {"app/financial_model/acquisition_tax.py"}
 BAND_SELECTOR = "select_band_set"
 BAND_SELECTOR_ALLOWLIST = {
     "app/financial_model/acquisition_tax.py",
+    "app/financial_model/validation.py",
+}
+
+# R10 Task 9. contingency_pct is now legacy: a document with a `cost_plan`
+# block (every v7 document) ignores it entirely -- compute_cost_plan reads the
+# resolved figure from cost_plan.contingency, not from this field. It survives
+# on ConversionCostInputs only because a pre-v7 document, and the manual/
+# headline-mode editor, still carry it as raw user input.
+CONTINGENCY_FIELD = "contingency_pct"
+CONTINGENCY_ALLOWLIST = {
+    # cost_plan_from_legacy_costs -- the one correct reader (spec Sec 4): folds
+    # the raw field into a cost_plan's general contingency class.
+    "app/financial_model/types.py",
+    # Constructs pre-v7 documents where no cost_plan accessor exists yet. No
+    # direct read today (only a dict-literal default, an ast.Dict key rather
+    # than a read), allowlisted for symmetry with the TS guard and to stay
+    # inert if a future default construction reads the field back.
+    "app/financial_model/migrate.py",
+    # calculate_total_construction_cost -- compute_cost_plan's predecessor,
+    # same reasoning as cost_plan_from_legacy_costs above, still the live cost
+    # estimate migrate.py's v1->v2 bootstrap uses (there is no cost_plan yet
+    # that early in the migration chain). Known limitation, recorded rather
+    # than glossed: unlike the TS guard, which isolates this function in its
+    # own file (conversion-calc-engine.ts) and leaves schedule.ts fully
+    # policed, Python keeps the legacy calculator inside schedule.py itself,
+    # so this allowlist entry also stops the guard seeing a NEW illegitimate
+    # contingency_pct read anywhere else in schedule.py (e.g. inside
+    # build_schedule). build_schedule currently reads cost only through
+    # compute_cost_plan, so the current tree is clean; a future regression
+    # there would not be caught by this scan.
+    "app/financial_model/schedule.py",
+    # The raw field's own negative-value validation (mirrors the
+    # total_construction_sqm/manual-basis check immediately above it in
+    # validation.py) -- validates the pre-v7/manual-basis raw input, which
+    # still exists and is still user-editable until R10 Task 12 rebuilds the
+    # cost page. TS's twin (model/validation.ts) is exempted at the call site
+    # instead (eslint's file allowlist is per-rule, not per-selector); Python
+    # has no line-scoped equivalent, so this is file-scoped -- but scoped to
+    # THIS field's allowlist only, not the area/tax allowlists above.
     "app/financial_model/validation.py",
 }
 
@@ -149,6 +193,16 @@ def _area_reads(tree: ast.AST) -> list[int]:
     )
 
 
+def _contingency_reads(tree: ast.AST) -> list[int]:
+    """Every shape that is an actual read of contingency_pct -- the same three
+    shapes _area_reads checks, applied to the now-legacy field (R10 Task 9)."""
+    return sorted(
+        _attribute_reads(tree, CONTINGENCY_FIELD)
+        + _getattr_reads(tree, CONTINGENCY_FIELD)
+        + _subscript_reads(tree, CONTINGENCY_FIELD)
+    )
+
+
 def _name_references(tree: ast.AST, name: str) -> list[int]:
     """Line numbers of every ast.Name or ast.Attribute node referencing `name`
     -- covers both the bare identifier and a qualified `module.NAME` access."""
@@ -213,6 +267,18 @@ def test_the_guard_ignores_a_comment_naming_the_field():
     flagged_files = {o.split(":", 1)[0] for o in offenders}
     assert "app/api/app.py" not in flagged_files
     assert "app/financial_model/validation.py" not in flagged_files
+
+
+def test_no_unauthorised_reader_of_contingency_pct():
+    """R10 Task 9 (spec Sec 16): contingency_pct is superseded by cost_plan.
+    Resolve it through run.metrics.cost_plan.contingency (compute_cost_plan),
+    never by reading the raw ConversionCostInputs field."""
+    offenders = _offenders(_contingency_reads, CONTINGENCY_ALLOWLIST)
+    assert offenders == [], (
+        "These files read the raw contingency_pct field instead of reading "
+        "cost_plan.contingency from app/financial_model/cost_plan.py "
+        "(compute_cost_plan):\n  " + "\n  ".join(offenders)
+    )
 
 
 def test_no_unauthorised_selector_of_the_tax_band_sets():
@@ -326,3 +392,50 @@ def test_the_guard_itself_detects_a_planted_band_set_selection():
         source, lambda t: _name_references(t, BAND_SELECTOR), BAND_SELECTOR_ALLOWLIST
     )
     assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_contingency_guard_itself_detects_a_planted_attribute_read():
+    """A guard nobody has watched fail is not a guard (R10 Task 9)."""
+    offenders = _probe_offenders(
+        "x = inputs.conversion_costs.contingency_pct\n",
+        _contingency_reads,
+        CONTINGENCY_ALLOWLIST,
+    )
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_contingency_guard_itself_detects_a_planted_getattr_read():
+    source = 'x = getattr(inputs.conversion_costs, "contingency_pct")\n'
+    attr_only = _probe_offenders(
+        source, lambda t: _attribute_reads(t, CONTINGENCY_FIELD), CONTINGENCY_ALLOWLIST
+    )
+    assert not any("__guard_probe.py" in o for o in attr_only), (
+        "the attribute-only finder must NOT see the getattr shape -- if it does, "
+        "this proof is testing the old rule, not the new one"
+    )
+    offenders = _probe_offenders(source, _contingency_reads, CONTINGENCY_ALLOWLIST)
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_contingency_guard_itself_detects_a_planted_dict_key_read():
+    source = 'x = snapshot["conversion_costs"]["contingency_pct"]\n'
+    attr_only = _probe_offenders(
+        source, lambda t: _attribute_reads(t, CONTINGENCY_FIELD), CONTINGENCY_ALLOWLIST
+    )
+    assert not any("__guard_probe.py" in o for o in attr_only), (
+        "the attribute-only finder must NOT see the dict-key shape"
+    )
+    offenders = _probe_offenders(source, _contingency_reads, CONTINGENCY_ALLOWLIST)
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_contingency_guard_does_not_flag_a_dict_literal_key():
+    """The counter-example the dict-key shape needs: constructing a document
+    with `{"contingency_pct": 0}` is a write, not a read -- migrate.py's own
+    default dict does exactly that (line 82)."""
+    offenders = _probe_offenders(
+        'doc = {"conversion_costs": {"contingency_pct": 0}}\n',
+        _contingency_reads,
+        CONTINGENCY_ALLOWLIST,
+    )
+    assert not any("__guard_probe.py" in o for o in offenders)

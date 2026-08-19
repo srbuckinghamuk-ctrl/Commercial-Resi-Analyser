@@ -11,6 +11,7 @@ import type { DeveloperBreakevenTerms, SeniorBreakevenTerms, PhasedSeniorBreakev
 import { computeCostToComplete } from './cost-to-complete';
 import { pct } from './pct';
 import { areaBridge } from './areas';
+import { computeCostPlan } from './cost-plan';
 import { calculateGdvBreakdown } from '../conversion-calc-engine';
 
 /** Re-exported from './pct' (R9). Many modules and tests import `pct` from
@@ -61,6 +62,8 @@ export function deriveMetrics(
   // R9 spec §15.8. Derived once, here, and read by every consumer from the
   // result — the UI and the memo never call areaBridge themselves.
   const bridge = areaBridge(inputs);
+  // R10 spec §16. Derived once, here, and read by every consumer from the result.
+  const costPlan = computeCostPlan(inputs, bridge.developed_area_sqm, inputs.unit_mix.units.length);
   const gdvParts = calculateGdvBreakdown(inputs.unit_mix.units);
   // Lender-underwritten GDV (spec §3.2, Release 2b Task 3). null for v2 inputs
   // (no lender_valuation field at all), v3 inputs with the block absent, or a
@@ -269,6 +272,7 @@ export function deriveMetrics(
     sdlt_pence: sdlt,
     area_bridge: bridge,
     developed_area_sqm: bridge.developed_area_sqm,
+    cost_plan: costPlan,
     gdv_internal_pence: gdvParts.internal_pence,
     gdv_ancillary_pence: gdvParts.ancillary_pence,
     construction_cost_pence: t.construction_pence,

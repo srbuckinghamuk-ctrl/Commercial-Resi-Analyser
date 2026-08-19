@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { deriveMetrics, pct, breakevenFlags } from './metrics';
 import { runLedger } from './monthly-engine';
 import { runAppraisal, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6 } from './index';
-import { defaultCalculatorInputsV2, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
+import { defaultCalculatorInputsV2, defaultCalculatorInputsV7, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
 import { DEFAULT_AREA_BRIDGE } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
@@ -723,5 +723,44 @@ describe('R9 — the appraisal result carries the area bridge', () => {
     expect(run.metrics.profit_pence).toBe(knownProfitPence);
     expect(run.metrics.profit_on_gdv_pct)
       .toBe(pct(knownProfitPence, knownTotalGdvPence));
+  });
+
+  it('the cost plan on the result agrees with the schedule totals (cross-site)', () => {
+    // R10 spec §3.3, applying the acquisition-tax cross-site check's reasoning
+    // to cost: the schedule and deriveMetrics each compute the cost plan
+    // independently (schedule.ts, metrics.ts), so a defect that moves one and
+    // not the other is invisible to any test that only reads one side.
+    const base = defaultCalculatorInputsV7();
+    const run = runAppraisal({
+      ...base,
+      conversion_costs: {
+        ...base.conversion_costs,
+        fire_safety_pence: 0, sound_insulation_pence: 0, part_l_compliance_pence: 0,
+      },
+      cost_plan: {
+        mode: 'detailed',
+        packages: [
+          { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
+            amount_pence: 1_000_000, contingency_class: 'existing_building',
+            lender_eligible: true, notes: '' },
+          { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
+            contingency_class: 'general', lender_eligible: true, notes: '' },
+        ],
+        contingency: [
+          { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 15, basis: 'selected_packages', package_ids: ['p1'] },
+          { name: 'abnormal', pct: 2.5, basis: 'all_packages', package_ids: [] },
+        ],
+        fee_lines: [
+          { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false },
+          { id: 'f2', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
+            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false },
+        ],
+      },
+    });
+    expect(run.metrics.cost_plan.construction_total_pence).toBe(run.schedule.totals.construction_pence);
+    expect(run.metrics.cost_plan.professional_total_pence).toBe(run.schedule.totals.professional_pence);
+    expect(run.metrics.cost_plan.statutory_total_pence).toBe(run.schedule.totals.statutory_pence);
   });
 });

@@ -112,16 +112,59 @@ export default defineConfig([
             + 'TAX_TABLES would. Only acquisition-tax.ts itself, test files, and validation.ts\'s '
             + 'two explicitly disabled date-check call sites may reference it.',
         },
+        {
+          // R10 spec §16 — single-accessor enforcement for the cost plan. Once
+          // Task 5 shipped `cost_plan`, `conversion_costs.contingency_pct` is a
+          // legacy field: still on the type (a pre-v7 document and the engine's
+          // legacy fallback both use it), but no longer the live figure for a
+          // document that carries a `cost_plan` block. Read the resolved
+          // contingency through `run.metrics.cost_plan.contingency` instead.
+          selector: "MemberExpression[property.name='contingency_pct']",
+          message:
+            'Do not read contingency_pct directly — read run.metrics.cost_plan.contingency '
+            + '(model/cost-plan.ts). It resolves the detailed-mode package classes vs the '
+            + 'legacy headline percentage (spec §16). If you are the cost-plan module, the type '
+            + 'definitions, migration, defaults or the cost-page editor, add this file to the '
+            + 'allowlist in eslint.config.js.',
+        },
+        {
+          // Same field, destructured: `const { contingency_pct } = costs`. See
+          // the total_construction_sqm destructuring selector above for why this
+          // needs its own selector and why it is scoped to ObjectPattern only.
+          selector: "ObjectPattern > Property[key.name='contingency_pct']",
+          message:
+            'Do not destructure contingency_pct out of the cost block — read '
+            + 'run.metrics.cost_plan.contingency (model/cost-plan.ts). It resolves the '
+            + 'detailed-mode package classes vs the legacy headline percentage (spec §16).',
+        },
+        {
+          // Same field, computed: `costs['contingency_pct']`. See the
+          // total_construction_sqm computed-access selector above for why the
+          // property name lands on `property.value`, not `property.name`, here.
+          selector: "MemberExpression[computed=true][property.value='contingency_pct']",
+          message:
+            'Do not read contingency_pct through a computed member access — read '
+            + 'run.metrics.cost_plan.contingency (model/cost-plan.ts). It resolves the '
+            + 'detailed-mode package classes vs the legacy headline percentage (spec §16).',
+        },
       ],
     },
   },
   {
     // The allowlist for the single-accessor rule above. These files either OWN
-    // the value (areas.ts, acquisition-tax.ts), DECLARE it (the type modules),
-    // WRITE it as the user's manual input (ConversionCostsPage), construct
-    // documents where no accessor exists yet (migration, defaults), or build
-    // fixture input documents (memo-fixtures.ts — same category as the
-    // `*.test.*` files below, but its filename does not match that glob).
+    // the value (areas.ts, acquisition-tax.ts, cost-plan.ts), DECLARE it (the
+    // type modules), construct documents where no accessor exists yet
+    // (migration, defaults), or build fixture input documents
+    // (memo-fixtures.ts — same category as the `*.test.*` files below, but its
+    // filename does not match that glob).
+    //
+    // ConversionCostsPage.tsx is deliberately NOT here (R10 Task 9). It still
+    // legitimately reads total_construction_sqm as the manual-basis area
+    // editor, but that is now the ONLY field this file may read raw — a
+    // file-wide exemption would also switch off the new contingency_pct
+    // selectors for its (illegitimate, pending Task 12) contingency_pct read.
+    // The legitimate total_construction_sqm read is exempted at its own call
+    // site instead, exactly as validation.ts's selectBandSet calls are below.
     //
     // Known limitation, recorded rather than glossed (spec §3.4): test files are
     // exempt because fixtures must construct the raw field, so a consumer defect
@@ -129,11 +172,17 @@ export default defineConfig([
     files: [
       'src/lib/model/areas.ts',
       'src/lib/tax/acquisition-tax.ts',
+      'src/lib/model/cost-plan.ts',
+      // R10 Task 9: calculateTotalConstructionCost is the pre-cost-plan legacy
+      // per-field calculator — computeCostPlan's predecessor, same reasoning as
+      // costPlanFromLegacyCosts above — and is still the live cost estimate
+      // migrate.ts's v1→v2 bootstrap uses (there is no cost_plan yet that early
+      // in the migration chain).
+      'src/lib/conversion-calc-engine.ts',
       'src/lib/conversion-types.ts',
       'src/lib/model/finance-types.ts',
       'src/lib/model/migrate.ts',
       'src/lib/conversion-defaults.ts',
-      'src/components/calculator/ConversionCostsPage.tsx',
       'src/lib/report-qa/memo-fixtures.ts',
       '**/*.test.ts',
       '**/*.test.tsx',

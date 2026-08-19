@@ -103,6 +103,10 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   if ((areas == null || areas.basis === 'manual') && bridge.developed_area_sqm < 0) {
     err('conversion_costs.total_construction_sqm', 'Area cannot be negative.');
   }
+  // R10 Task 9: contingency_pct is now legacy (run.metrics.cost_plan.contingency
+  // is the resolved figure), but this validates the raw manual/pre-v7 input, which
+  // still exists and is still user-editable until Task 12 rebuilds the cost page.
+  // eslint-disable-next-line no-restricted-syntax -- R10 Task 12 replaces this read
   if (inputs.conversion_costs.contingency_pct < 0) {
     err('conversion_costs.contingency_pct', 'Contingency cannot be negative.');
   }

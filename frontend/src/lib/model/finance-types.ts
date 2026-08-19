@@ -6,7 +6,7 @@ import type { UnitMixInputsV6 } from '../conversion-types';
 import type { SpendCurve } from './curves';
 import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
-import type { CostPlanInputs } from './cost-plan';
+import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 
 export type { SpendCurve };
 
@@ -370,6 +370,10 @@ export interface AppraisalResultV2 {
   /** R9 spec §15.8 — the construction cost area actually used, whichever basis
    *  produced it. Equal to `area_bridge.developed_area_sqm`. */
   developed_area_sqm: number;
+  /** R10 spec §16 — the full cost derivation: every package, every contingency
+   *  class with its base, every fee line with its base. The UI and the report
+   *  read cost from here and never recompute one. */
+  cost_plan: CostPlanResult;
   /** R9 spec §3.1 — GDV excluding ancillary. This is the pre-R9 figure, kept so
    *  a variance against it stays expressible. */
   gdv_internal_pence: number;

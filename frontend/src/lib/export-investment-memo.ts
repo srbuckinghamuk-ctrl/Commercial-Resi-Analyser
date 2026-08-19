@@ -1238,6 +1238,7 @@ export function generateInvestmentMemo(
       ['', '', ''],
       ['CONSTRUCTION', '', ''],
       ['  Build rate', `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`, ''],
+      // eslint-disable-next-line no-restricted-syntax -- R10 Task 13 replaces this read
       [`  Contingency rate`, fmtPct(inputs.conversion_costs.contingency_pct), ''],
       ['  Fire safety', fmt(inputs.conversion_costs.fire_safety_pence), ''],
       ['  Sound insulation', fmt(inputs.conversion_costs.sound_insulation_pence), ''],
@@ -2043,6 +2044,7 @@ export function generateInvestmentMemo(
         + `bands in force from ${formatBandDate(tax.band_set_effective_from)} `
         + `(table ${tax.table_version})`],
       ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
+      // eslint-disable-next-line no-restricted-syntax -- R10 Task 13 replaces this read
       ['Contingency', fmtPct(inputs.conversion_costs.contingency_pct), 'On base build cost only'],
       ['Blended GDV £/sq ft', perSqftPence(metrics.gdv_pence, totalSqm), 'Comparable evidence — verify'],
       ['Committed net facility', inputs.finance.committed_net_facility_pence === null ? 'Not entered' : fmt(inputs.finance.committed_net_facility_pence), inputs.finance.requires_confirmation ? 'Requires confirmation' : 'Confirmed'],
