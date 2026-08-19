@@ -40,6 +40,17 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
         out.conversion_costs.construction_cost_per_sqm_pence * cost_multiplier
     )
 
+    # R10 spec Sec 3.5. In detailed mode the rate above drives nothing -- the
+    # cost lives in the packages -- so a stress that only scaled the rate would
+    # leave every scenario, tornado bar and sensitivity cell inert while still
+    # rendering as though it had moved. Compliance allowances and fee lines are
+    # deliberately NOT scaled: a percentage fee moves because its base moved,
+    # and scaling it too would apply the stress twice.
+    cost_plan = getattr(out, "cost_plan", None)
+    if cost_plan is not None:
+        for package in cost_plan.packages:
+            package.amount_pence = money_round(package.amount_pence * cost_multiplier)
+
     # ScenarioOverrides types this float, but a term is a whole month count and spec Sec 12.6
     # rejects a fractional timeline step at input, so this cast only ever narrows a value that
     # is already integral. The TS twin adds directly — this cast is the one deliberate divergence,

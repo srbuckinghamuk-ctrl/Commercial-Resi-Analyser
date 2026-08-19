@@ -54,6 +54,21 @@ export function applyScenario<T extends AnyCalculatorInputs>(
         inputs.conversion_costs.construction_cost_per_sqm_pence * costMultiplier,
       ),
     },
+    // R10 spec §3.5. In detailed mode the rate above drives nothing — the cost
+    // lives in the packages — so a stress that only scaled the rate would leave
+    // every scenario, tornado bar and sensitivity cell inert while still
+    // rendering as though it had moved. Compliance allowances and fee lines are
+    // deliberately NOT scaled: a percentage fee moves because its base moved,
+    // and scaling it too would apply the stress twice.
+    ...('cost_plan' in inputs && inputs.cost_plan != null ? {
+      cost_plan: {
+        ...inputs.cost_plan,
+        packages: inputs.cost_plan.packages.map((p) => ({
+          ...p,
+          amount_pence: Math.round(p.amount_pence * costMultiplier),
+        })),
+      },
+    } : {}),
     finance: {
       ...inputs.finance,
       term_months: inputs.finance.term_months + overrides.timeline_adjustment_months,

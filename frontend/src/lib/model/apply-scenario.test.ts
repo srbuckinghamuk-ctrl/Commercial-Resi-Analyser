@@ -1,8 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { applyScenario } from './apply-scenario';
 import { migrateInputsToV6 } from './migrate';
-import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6, LenderValuation } from './';
+import { runAppraisal } from './index';
+import {
+  defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
+} from '../conversion-defaults';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6, CalculatorInputsV7, LenderValuation } from './';
+import type { ScenarioOverrides } from '../conversion-types';
+
+// Neutral overrides — every lever at 0. Not defined elsewhere in this file, so
+// built here per the R10 Task 8 brief rather than reusing DEFAULT_SCENARIOS.base
+// (which is not guaranteed to be all-zero).
+const BASE_OVERRIDES: ScenarioOverrides = {
+  label: 'Base',
+  gdv_adjustment_pct: 0,
+  construction_cost_adjustment_pct: 0,
+  timeline_adjustment_months: 0,
+  interest_rate_adjustment_pct: 0,
+};
 
 function fixtureInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -211,5 +226,73 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
     expect(stressed.unit_mix.units[0].ancillary.parking_spaces).toBe(2);
+  });
+});
+
+// R10 Task 8 — spec §3.5. `applyScenario` scaled only `conversion_costs`, which
+// drives nothing in detailed mode: the cost lives in `cost_plan.packages`. Left
+// unfixed, a detailed-mode appraisal is immune to every scenario, tornado bar
+// and sensitivity cell while still rendering as though it responded.
+describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
+  // Two documents with the SAME construction total, built to DIFFERENT shapes.
+  //   headline: rate 10,000 p/m2 x 400 m2 = 4,000,000 base
+  //             + 10% general contingency  =   400,000  -> 4,400,000
+  //   detailed: one 4,000,000 structure package
+  //             + 10% general contingency  =   400,000  -> 4,400,000
+  // Compliance is zero in both (see the note above).
+  function pair(): { headline: CalculatorInputsV7; detailed: CalculatorInputsV7 } {
+    const base = defaultCalculatorInputsV7();
+    const common = {
+      ...base,
+      finance: { ...base.finance, funding_source: 'cash' as const, term_months: 12 },
+      conversion_costs: {
+        ...base.conversion_costs,
+        construction_cost_per_sqm_pence: 10_000,
+        total_construction_sqm: 400,
+        fire_safety_pence: 0, sound_insulation_pence: 0, part_l_compliance_pence: 0,
+      },
+      // 'manual' basis so developedAreaSqm returns total_construction_sqm (400)
+      // rather than a derived bridge figure — the headline base must be a number
+      // this test controls, not one another block decides.
+      areas: { ...base.areas, basis: 'manual' as const },
+    };
+    const contingency = [
+      { name: 'general' as const, pct: 10, basis: 'all_packages' as const, package_ids: [] },
+      { name: 'existing_building' as const, pct: 0, basis: 'all_packages' as const, package_ids: [] },
+      { name: 'abnormal' as const, pct: 0, basis: 'all_packages' as const, package_ids: [] },
+    ];
+    return {
+      headline: { ...common, cost_plan: { mode: 'headline', packages: [], contingency, fee_lines: [] } },
+      detailed: { ...common, cost_plan: {
+        mode: 'detailed',
+        packages: [{ id: 'p1', code: 'structure', label: 'Structure',
+          amount_pence: 4_000_000, contingency_class: 'general',
+          lender_eligible: true, notes: '' }],
+        contingency,
+        fee_lines: [],
+      } },
+    };
+  }
+
+  it('the two documents describe the same construction total', () => {
+    const { headline, detailed } = pair();
+    expect(runAppraisal(headline).metrics.construction_cost_pence).toBe(4_400_000);
+    expect(runAppraisal(detailed).metrics.construction_cost_pence).toBe(4_400_000);
+  });
+
+  it('and respond identically to a -10% and a +10% cost stress', () => {
+    const { headline, detailed } = pair();
+    // -10%: base 3,600,000 + 10% = 3,960,000.  +10%: 4,400,000 + 10% = 4,840,000.
+    const expected: Record<number, number> = { [-10]: 3_960_000, [10]: 4_840_000 };
+    for (const adj of [-10, 10]) {
+      const overrides = { ...BASE_OVERRIDES, construction_cost_adjustment_pct: adj };
+      const h = runAppraisal(applyScenario(headline, overrides)).metrics.construction_cost_pence;
+      const d = runAppraisal(applyScenario(detailed, overrides)).metrics.construction_cost_pence;
+      expect(h).toBe(expected[adj]);
+      expect(d).toBe(expected[adj]);
+      // The literals above are what make this falsifiable. Asserting only
+      // `d === h` would pass with BOTH modes inert, which is the exact defect
+      // this test exists to catch.
+    }
   });
 });

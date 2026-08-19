@@ -10,10 +10,15 @@ term 12 months, rate 8.0%.
 import json
 from pathlib import Path
 
+from app.financial_model import run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.migrate import migrate_inputs_to_v6
+from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7
 from app.financial_model.types import (
     CalculatorInputsV6,
+    CalculatorInputsV7,
+    ContingencyClass,
+    CostPackage,
+    CostPlanInputs,
     ProposedUnitV6,
     ScenarioOverrides,
     UnitAncillary,
@@ -142,3 +147,83 @@ class TestAGdvScenarioStressesAncillaryValueToo:
         u = stressed.unit_mix.units[0]
         assert u.ancillary.balcony_terrace_sqm == 8
         assert u.ancillary.parking_spaces == 2
+
+
+class TestTheCostLeverReachesBothModes:
+    """R10 Task 8 -- spec Sec 3.5. Port of the equivalent describe block in
+    apply-scenario.test.ts. apply_scenario scaled only conversion_costs, which
+    drives nothing in detailed mode: the cost lives in cost_plan.packages. Left
+    unfixed, a detailed-mode appraisal is immune to every scenario, tornado bar
+    and sensitivity cell while still rendering as though it responded.
+
+    The pair carries zero compliance allowances deliberately -- compliance is a
+    fixed allowance in headline mode (the lever does not scale it, pre-R10
+    behaviour R10 must not change) but sits inside a scaled package in detailed
+    mode, so a pair carrying compliance would diverge under a stress for a
+    reason that is not a defect (see the brief's worked example: 4,460,000
+    headline against 4,410,000 detailed at -10% with 500,000 of compliance)."""
+
+    @staticmethod
+    def _pair() -> tuple[CalculatorInputsV7, CalculatorInputsV7]:
+        # Two documents with the SAME construction total, built to DIFFERENT shapes.
+        #   headline: rate 10,000 p/m2 x 400 m2 = 4,000,000 base
+        #             + 10% general contingency  =   400,000  -> 4,400,000
+        #   detailed: one 4,000,000 structure package
+        #             + 10% general contingency  =   400,000  -> 4,400,000
+        # Compliance is zero in both (see the class docstring).
+        project = {"id": "p", "price_pence": 0, "floor_area_sqm": 0}
+        base = migrate_inputs_to_v7({}, project)
+        base.finance.funding_source = "cash"
+        base.finance.term_months = 12
+        base.conversion_costs.construction_cost_per_sqm_pence = 10_000
+        base.conversion_costs.total_construction_sqm = 400
+        base.conversion_costs.fire_safety_pence = 0
+        base.conversion_costs.sound_insulation_pence = 0
+        base.conversion_costs.part_l_compliance_pence = 0
+        # 'manual' basis so developed_area_sqm returns total_construction_sqm (400)
+        # rather than a derived bridge figure -- the headline base must be a
+        # number this test controls, not one another block decides.
+        base.areas.basis = "manual"
+
+        contingency = [
+            ContingencyClass(name="general", pct=10, basis="all_packages", package_ids=[]),
+            ContingencyClass(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
+            ContingencyClass(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+        ]
+
+        headline = base.model_copy(deep=True)
+        headline.cost_plan = CostPlanInputs(
+            mode="headline", packages=[], contingency=contingency, fee_lines=[],
+        )
+
+        detailed = base.model_copy(deep=True)
+        detailed.cost_plan = CostPlanInputs(
+            mode="detailed",
+            packages=[CostPackage(
+                id="p1", code="structure", label="Structure", amount_pence=4_000_000,
+                contingency_class="general", lender_eligible=True, notes="",
+            )],
+            contingency=contingency,
+            fee_lines=[],
+        )
+        return headline, detailed
+
+    def test_the_two_documents_describe_the_same_construction_total(self):
+        headline, detailed = self._pair()
+        assert run_appraisal(headline).metrics.construction_cost_pence == 4_400_000
+        assert run_appraisal(detailed).metrics.construction_cost_pence == 4_400_000
+
+    def test_and_respond_identically_to_a_minus10_and_a_plus10_cost_stress(self):
+        headline, detailed = self._pair()
+        # -10%: base 3,600,000 + 10% = 3,960,000.  +10%: 4,400,000 + 10% = 4,840,000.
+        expected = {-10: 3_960_000, 10: 4_840_000}
+        for adj in (-10, 10):
+            overrides = _overrides(construction_cost_adjustment_pct=float(adj))
+            h = run_appraisal(apply_scenario(headline, overrides)).metrics.construction_cost_pence
+            d = run_appraisal(apply_scenario(detailed, overrides)).metrics.construction_cost_pence
+            assert h == expected[adj]
+            assert d == expected[adj]
+            # The literals above are what make this falsifiable. Asserting only
+            # d == h would pass with BOTH modes inert, which is the exact defect
+            # this test exists to catch. (4,900,000 is not a value either mode
+            # can legitimately reach here, so it is not asserted against.)
