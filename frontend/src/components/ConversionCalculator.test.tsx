@@ -111,11 +111,13 @@ describe('ConversionCalculator — Sensitivity is page 10', () => {
 });
 
 // R8 Task 10 fix round 1: this is the flag-day load path every existing
-// appraisal goes through -- a stored v4 snapshot, migrated to v6 on load
-// (ConversionCalculator.tsx's getAppraisal(...).then(...) handler). It had
-// zero coverage: the module-level mock above always rejects getAppraisal
-// with 404, so this branch never ran in any prior test.
-describe('ConversionCalculator loads a stored v4 snapshot onto v6 (R8 Task 10, R9 Task 3)', () => {
+// appraisal goes through -- a stored v4 snapshot, migrated to v7 on load
+// (ConversionCalculator.tsx's getAppraisal(...).then(...) handler; the
+// migration target moved v6 -> v7 in R10 Task 6, M4 fix round 1 corrects
+// this block's stale "v6" text to match). It had zero coverage: the
+// module-level mock above always rejects getAppraisal with 404, so this
+// branch never ran in any prior test.
+describe('ConversionCalculator loads a stored v4 snapshot onto v7 (R8 Task 10, R9 Task 3, R10 Task 6)', () => {
   function storedV4Appraisal(): FinancialAppraisal {
     const v4Snapshot = defaultCalculatorInputsV4(PROJECT);
     return {
@@ -135,17 +137,17 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v6 (R8 Task 10, R
     };
   }
 
-  it('migrates the snapshot to v6 and renders it without an error, not a load failure', async () => {
+  it('migrates the snapshot to v7 and renders it without an error, not a load failure', async () => {
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
 
     render(<ConversionCalculator project={PROJECT} />);
 
     // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV7(...))
-    // succeeds -- if that call threw (as migrateInputsToV4 would on a v5
-    // document, or migrateInputsToV5 now would on a v6 one), the promise
-    // chain's .catch() would run instead and the button would stay "Save
-    // Appraisal". Finding "Update Appraisal" is proof the v4->v6 migration
-    // executed cleanly on load.
+    // succeeds -- if that call threw (as it would on a snapshot with an
+    // unrecognised inputs_version -- migrateInputsToV7 accepts 1 through 7
+    // and throws otherwise), the promise chain's .catch() would run instead
+    // and the button would stay "Save Appraisal". Finding "Update Appraisal"
+    // is proof the v4->v7 migration executed cleanly on load.
     expect(
       await screen.findByRole('button', { name: /update appraisal/i }),
     ).toBeInTheDocument();

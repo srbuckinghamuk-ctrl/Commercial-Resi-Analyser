@@ -13,6 +13,13 @@ import {
 // scope for this task's V6->V7 prop rename). AcquisitionPage is now typed on
 // CalculatorInputsV7, so every fixture is migrated once, here, rather than
 // widening the shared fixture file for one caller.
+//
+// Fix round 1: that containment is safe specifically because its failure
+// mode is loud. `migrateV6toV7` refuses an already-v7 document ("input is
+// already a v7 document"), so the day memo-fixtures.ts is widened to return
+// CalculatorInputsV7 -- making these calls redundant -- every wrapper below
+// throws immediately and every test in this file fails at setup, not a
+// silent double-migration or a quietly wrong document.
 function welshInputs(): CalculatorInputsV7 { return migrateV6toV7(welshInputsV6()); }
 function scottishInputs(): CalculatorInputsV7 { return migrateV6toV7(scottishInputsV6()); }
 function unconfirmedJurisdictionInputs(): CalculatorInputsV7 {

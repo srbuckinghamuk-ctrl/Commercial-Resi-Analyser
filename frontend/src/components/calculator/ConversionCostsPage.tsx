@@ -21,6 +21,12 @@ const FEE_BASIS_LABEL: Record<FeeBasis, string> = {
   pct_of_construction_total: '% of construction total',
 };
 
+// Derived from FEE_BASIS_LABEL rather than hand-typed: Record<FeeBasis, string>
+// already forces TS to reject a FEE_BASIS_LABEL missing a member the day
+// FeeBasis grows a new variant, so this array can never silently fall behind
+// the union the way a separately maintained `[...] as FeeBasis[]` could.
+const FEE_BASES = Object.keys(FEE_BASIS_LABEL) as FeeBasis[];
+
 function PenceCostRow({ label, penceValue, onChangePence }: {
   label: string;
   penceValue: number;
@@ -33,7 +39,7 @@ function PenceCostRow({ label, penceValue, onChangePence }: {
         <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
         <input
           type="number"
-          value={penceValue ? penceValue / 100 : ''}
+          value={penceValue / 100}
           onChange={(e) => onChangePence(Math.round(Number(e.target.value) * 100))}
           style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
         />
@@ -76,6 +82,12 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
   const costs = inputs.conversion_costs;
   const costPlan = inputs.cost_plan;
   const result = run.metrics.cost_plan;
+  // I3 (fix round 1). Read once here (a direct property access, not a
+  // computation) so the per_dwelling fee note below can say how many units
+  // the engine multiplied by, without duplicating the engine's own
+  // max(1, unit_count) arithmetic -- the ONLY figure shown is
+  // feeResult.amount_pence, already computed by cost-plan.ts.
+  const unitCount = inputs.unit_mix.units.length;
 
   const updateCosts = (partial: Partial<typeof costs>) => {
     onChange({ conversion_costs: { ...costs, ...partial } });
@@ -124,6 +136,37 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
         }
       }
     }
+
+    // C2 (fix round 1). The return trip: headline mode has no packages, and
+    // the engine ignores `packages` entirely when computing a headline
+    // base build (cost-plan.ts) -- so switching detailed -> headline while
+    // any package still carries value would make that money vanish from
+    // every total with no error, no confirmation and nothing to undo it.
+    //
+    // "Reverse the conversion" was considered and rejected: the forward
+    // conversion combines THREE independent fields into ONE package amount,
+    // so there is no principled way back for a package that was edited,
+    // renamed, added to, or was never `fire_acoustic_thermal` in the first
+    // place -- packages are general-purpose, not only the output of this
+    // page's own compliance conversion. A refusal is the only rule that
+    // provably cannot lose money regardless of how the packages arose, and
+    // it matches the release's existing pattern of a hard stop over a
+    // silent loss (§3.2.1's validation error on the forward mismatch).
+    // Nothing is stuck: the user removes or zeroes the packages by hand
+    // (mirroring the explicit, visible choice the forward conversion
+    // already asks for), then switches.
+    if (mode === 'headline' && costPlan.mode === 'detailed') {
+      const packagesCarryValue = costPlan.packages.some((p) => p.amount_pence !== 0);
+      if (packagesCarryValue) {
+        window.alert(
+          'Cannot switch to headline mode: one or more packages still carry a value, and ' +
+          'headline mode has no packages -- that money would be lost from every total. ' +
+          'Remove the packages or set their amounts to zero first.',
+        );
+        return;
+      }
+    }
+
     onChange({ cost_plan: { ...costPlan, mode } });
   };
 
@@ -213,20 +256,34 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
               onChange={(e) => changeFeeBasis(fee.id, e.target.value as FeeBasis)}
               style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
             >
-              {(['fixed', 'pct_of_base_build', 'pct_of_construction_total'] as FeeBasis[]).map((b) => (
+              {FEE_BASES.map((b) => (
                 <option key={b} value={b}>{FEE_BASIS_LABEL[b]}</option>
               ))}
             </select>
             {fee.basis === 'fixed' ? (
-              <div style={{ position: 'relative', width: 140 }}>
-                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
-                <input
-                  type="number"
-                  value={fee.amount_pence ? fee.amount_pence / 100 : ''}
-                  onChange={(e) => updateFeeLine(fee.id, { amount_pence: Math.round(Number(e.target.value) * 100) })}
-                  style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                />
-              </div>
+              <>
+                <div style={{ position: 'relative', width: 140 }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+                  <input
+                    type="number"
+                    value={fee.amount_pence / 100}
+                    onChange={(e) => updateFeeLine(fee.id, { amount_pence: Math.round(Number(e.target.value) * 100) })}
+                    style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                  />
+                </div>
+                {/* I3 (fix round 1). A per_dwelling fixed fee's entered amount
+                    is PER dwelling -- the engine multiplies by
+                    max(1, unit_count) (cost-plan.ts) -- so the figure typed
+                    above is not what the fee contributes to any total. Show
+                    the resolved amount from cost_plan.fees, the same way
+                    every pct_* row already does, rather than leaving the
+                    reader to do that multiplication themselves. */}
+                {fee.per_dwelling && feeResult && (
+                  <span style={{ color: '#64748b', fontSize: 12 }}>
+                    x {unitCount} {unitCount === 1 ? 'unit' : 'units'} = {penceToPoundsExact(feeResult.amount_pence)}
+                  </span>
+                )}
+              </>
             ) : (
               <>
                 <div style={{ position: 'relative', width: 90 }}>
@@ -249,50 +306,60 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
         );
       })}
 
+      {/* M7 (fix round 1). This basis selector was originally headline-only,
+          which was a real regression: `inputs.areas.basis` is set NOWHERE
+          else in the app (AreasPage.tsx has no basis control), so hiding it
+          in detailed mode would have made the basis permanently unreachable
+          the moment a document switched. `run.metrics.developed_area_sqm`
+          also still feeds `cost_plan.implied_rate_pence_per_sqm` in detailed
+          mode (cost-plan.ts), so the area is not a headline-only concept even
+          though "Cost per m²" (below) is. Kept in both modes; only the rate
+          input moves into the headline-only block. */}
+      <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Construction area</h4>
+      {/* R9 Task 10 (spec §15.3/§15.4). The construction cost area used to be
+          this one bare, user-typed field. It is now basis-aware: under the
+          bridge-derived basis the figure comes from `run.metrics.developed_area_sqm`
+          (the single accessor `areas.ts` exposes, enforced by the eslint guard
+          below) and this field becomes read-only; under the manual basis this
+          component stays the legitimate editor of `total_construction_sqm`,
+          exempted at the read below (R10 Task 9 took this file OFF the
+          guard's file-wide allowlist, so the exemption is now line-scoped). */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+        <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Construction area basis</label>
+        <select
+          aria-label="Construction area basis"
+          value={inputs.areas.basis}
+          onChange={(e) => onChange({ areas: { ...inputs.areas, basis: e.target.value as AreaBasis } })}
+          style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+        >
+          <option value="bridge_derived">Derived from the area bridge</option>
+          <option value="manual">Entered manually</option>
+        </select>
+      </div>
+      {inputs.areas.basis === 'bridge_derived' ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+          <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Total construction m²</label>
+          <span style={{ color: '#e2e8f0', fontSize: 14 }}>
+            {run.metrics.developed_area_sqm.toLocaleString()} m²
+          </span>
+          <span style={{ color: '#64748b', fontSize: 12 }}>
+            derived: proposed GIA {run.metrics.area_bridge.proposed_gia_sqm.toLocaleString()} m²
+            less retained and untouched area
+          </span>
+        </div>
+      ) : (
+        <CostRow
+          label="Total construction m²"
+          // eslint-disable-next-line no-restricted-syntax -- legitimate manual-basis area editor (spec §15.3); see the comment above
+          value={costs.total_construction_sqm}
+          onChangeValue={(v) => updateCosts({ total_construction_sqm: v })}
+        />
+      )}
+
       {costPlan.mode === 'headline' ? (
         <>
           <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Construction</h4>
           <PenceCostRow label="Cost per m² (£)" penceValue={costs.construction_cost_per_sqm_pence} onChangePence={(v) => updateCosts({ construction_cost_per_sqm_pence: v })} />
-
-          {/* R9 Task 10 (spec §15.3/§15.4). The construction cost area used to be
-              this one bare, user-typed field. It is now basis-aware: under the
-              bridge-derived basis the figure comes from `run.metrics.developed_area_sqm`
-              (the single accessor `areas.ts` exposes, enforced by the eslint guard
-              below) and this field becomes read-only; under the manual basis this
-              component stays the legitimate editor of `total_construction_sqm`,
-              exempted at the read below (R10 Task 9 took this file OFF the
-              guard's file-wide allowlist, so the exemption is now line-scoped). */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-            <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Construction area basis</label>
-            <select
-              aria-label="Construction area basis"
-              value={inputs.areas.basis}
-              onChange={(e) => onChange({ areas: { ...inputs.areas, basis: e.target.value as AreaBasis } })}
-              style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-            >
-              <option value="bridge_derived">Derived from the area bridge</option>
-              <option value="manual">Entered manually</option>
-            </select>
-          </div>
-          {inputs.areas.basis === 'bridge_derived' ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-              <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Total construction m²</label>
-              <span style={{ color: '#e2e8f0', fontSize: 14 }}>
-                {run.metrics.developed_area_sqm.toLocaleString()} m²
-              </span>
-              <span style={{ color: '#64748b', fontSize: 12 }}>
-                derived: proposed GIA {run.metrics.area_bridge.proposed_gia_sqm.toLocaleString()} m²
-                less retained and untouched area
-              </span>
-            </div>
-          ) : (
-            <CostRow
-              label="Total construction m²"
-              // eslint-disable-next-line no-restricted-syntax -- legitimate manual-basis area editor (spec §15.3); see the comment above
-              value={costs.total_construction_sqm}
-              onChangeValue={(v) => updateCosts({ total_construction_sqm: v })}
-            />
-          )}
 
           <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Building Regs Compliance</h4>
           <PenceCostRow label="Fire safety (£)" penceValue={costs.fire_safety_pence} onChangePence={(v) => updateCosts({ fire_safety_pence: v })} />
@@ -314,14 +381,6 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
             {costPlan.packages.map((pkg) => (
               <div key={pkg.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                {/* The audit's own package label, shown as text (not just an
-                    input's value, which no report or screen reader treats as
-                    content) -- this is the row's readable identity, and what
-                    the memo's package schedule prints. Falls back to the
-                    code's name only for a freshly added, still-unlabelled row. */}
-                <span style={{ color: '#e2e8f0', fontSize: 14, minWidth: 140 }}>
-                  {pkg.label || PACKAGE_CODE_LABEL[pkg.code]}
-                </span>
                 <select
                   aria-label="Package code"
                   value={pkg.code}
@@ -329,7 +388,7 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                   style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                 >
                   {COST_PACKAGE_CODES.map((code) => (
-                    <option key={code} value={code}>{code}</option>
+                    <option key={code} value={code}>{PACKAGE_CODE_LABEL[code]}</option>
                   ))}
                 </select>
                 <input
@@ -344,7 +403,7 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                   <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
                   <input
                     type="number"
-                    value={pkg.amount_pence ? pkg.amount_pence / 100 : ''}
+                    value={pkg.amount_pence / 100}
                     onChange={(e) => updatePackage(pkg.id, { amount_pence: Math.round(Number(e.target.value) * 100) })}
                     style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                   />
