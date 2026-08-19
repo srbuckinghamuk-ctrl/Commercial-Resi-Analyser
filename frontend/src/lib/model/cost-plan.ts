@@ -158,3 +158,144 @@ export function costPlanFromLegacyCosts(cc: ConversionCostInputs): CostPlanInput
     ],
   };
 }
+
+import type { AnyCalculatorInputs } from './finance-types';
+
+export interface CostPackageLine {
+  id: string;
+  code: CostPackageCode;
+  label: string;
+  amount_pence: number;
+  contingency_class: ContingencyClassName;
+  lender_eligible: boolean;
+}
+
+export interface ContingencyLine {
+  name: ContingencyClassName;
+  pct: number;
+  basis: 'all_packages' | 'selected_packages';
+  base_pence: number;
+  amount_pence: number;
+}
+
+export interface FeeLineResult {
+  id: string;
+  code: FeeCode;
+  category: FeeCategory;
+  label: string;
+  basis: FeeBasis;
+  base_pence: number;
+  amount_pence: number;
+}
+
+/** Spec §16. The ONLY shape the UI and the memo may read cost from. Every
+ *  contingency and fee line reports its BASE as well as its amount — that is the
+ *  audit's "show the base" discharged as data rather than prose. */
+export interface CostPlanResult {
+  mode: CostPlanMode;
+  packages: CostPackageLine[];
+  base_build_pence: number;
+  contingency: ContingencyLine[];
+  contingency_total_pence: number;
+  compliance_pence: number;
+  construction_total_pence: number;
+  fees: FeeLineResult[];
+  professional_total_pence: number;
+  statutory_total_pence: number;
+  lender_eligible_base_pence: number;
+  /** Display only; enters no calculation. null when the area is 0. */
+  implied_rate_pence_per_sqm: number | null;
+}
+
+/** A pre-v7 document has no `cost_plan`, read structurally exactly like the
+ *  codebase's other version dispatches (`'areas' in inputs`, `'programme' in inputs`).
+ *
+ *  The fallback DERIVES the plan from the document's own cost fields. It must not
+ *  be `DEFAULT_COST_PLAN`: that carries no fee lines and a hardcoded 10%
+ *  contingency, so once Task 7 makes the schedule read its totals from here,
+ *  every unmigrated document would report ZERO professional fees and ZERO
+ *  statutory costs. The golden fixtures run their native v6 documents without
+ *  migrating (`golden-fixtures.test.ts` calls `runAppraisal(fx.inputs)` directly),
+ *  so this is the difference between the identity gate passing and all twelve
+ *  fixtures failing. */
+function costPlanOf(inputs: AnyCalculatorInputs): CostPlanInputs {
+  return 'cost_plan' in inputs && inputs.cost_plan != null
+    ? inputs.cost_plan
+    : costPlanFromLegacyCosts(inputs.conversion_costs);
+}
+
+export function computeCostPlan(
+  inputs: AnyCalculatorInputs,
+  areaSqm: number,
+  unitCount: number,
+): CostPlanResult {
+  const plan = costPlanOf(inputs);
+  const cc = inputs.conversion_costs;
+  const detailed = plan.mode === 'detailed';
+
+  const packages: CostPackageLine[] = plan.packages.map((p) => ({
+    id: p.id, code: p.code, label: p.label, amount_pence: p.amount_pence,
+    contingency_class: p.contingency_class, lender_eligible: p.lender_eligible,
+  }));
+
+  // Spec §1.1: the fractional-area product rounds once, at source.
+  const baseBuild = detailed
+    ? packages.reduce((s, p) => s + p.amount_pence, 0)
+    : Math.round(cc.construction_cost_per_sqm_pence * areaSqm);
+
+  // §3.2.1: in detailed mode compliance is priced inside the packages
+  // (`fire_acoustic_thermal`). Counting the fields too would double count.
+  const compliance = detailed
+    ? 0
+    : cc.fire_safety_pence + cc.sound_insulation_pence + cc.part_l_compliance_pence;
+
+  const byId = new Map(plan.packages.map((p) => [p.id, p.amount_pence]));
+  const contingency: ContingencyLine[] = plan.contingency.map((c) => {
+    const base = c.basis === 'all_packages'
+      ? baseBuild
+      : c.package_ids.reduce((s, id) => s + (byId.get(id) ?? 0), 0);
+    return {
+      name: c.name, pct: c.pct, basis: c.basis,
+      base_pence: base,
+      amount_pence: Math.round((base * c.pct) / 100),
+    };
+  });
+  // Sum of ROUNDED figures. Three allowances at 5% are not one at 15%.
+  const contingencyTotal = contingency.reduce((s, c) => s + c.amount_pence, 0);
+
+  const constructionTotal = baseBuild + contingencyTotal + compliance;
+
+  // No fee basis includes fees, so this needs no ordering and no iteration.
+  const fees: FeeLineResult[] = plan.fee_lines.map((f) => {
+    const base = f.basis === 'pct_of_base_build' ? baseBuild
+      : f.basis === 'pct_of_construction_total' ? constructionTotal
+      : 0;
+    const amount = f.basis === 'fixed'
+      ? (f.per_dwelling ? f.amount_pence * Math.max(1, unitCount) : f.amount_pence)
+      : Math.round((base * f.pct) / 100);
+    return {
+      id: f.id, code: f.code, category: f.category, label: f.label,
+      basis: f.basis, base_pence: base, amount_pence: amount,
+    };
+  });
+
+  const totalFor = (category: FeeCategory) =>
+    fees.reduce((s, f) => s + (f.category === category ? f.amount_pence : 0), 0);
+
+  return {
+    mode: plan.mode,
+    packages,
+    base_build_pence: baseBuild,
+    contingency,
+    contingency_total_pence: contingencyTotal,
+    compliance_pence: compliance,
+    construction_total_pence: constructionTotal,
+    fees,
+    professional_total_pence: totalFor('professional'),
+    statutory_total_pence: totalFor('statutory'),
+    lender_eligible_base_pence: packages.reduce(
+      (s, p) => s + (p.lender_eligible ? p.amount_pence : 0), 0,
+    ),
+    implied_rate_pence_per_sqm: areaSqm > 0 ? Math.round(baseBuild / areaSqm) : null,
+  };
+}

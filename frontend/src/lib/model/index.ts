@@ -56,6 +56,10 @@ export type {
   CostPlanMode, CostPackageCode, CostPackage, ContingencyClassName, ContingencyClass,
   FeeBasis, FeeCode, FeeCategory, FeeLine, CostPlanInputs,
 } from './cost-plan';
+export { computeCostPlan } from './cost-plan';
+export type {
+  CostPlanResult, CostPackageLine, ContingencyLine, FeeLineResult,
+} from './cost-plan';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';
