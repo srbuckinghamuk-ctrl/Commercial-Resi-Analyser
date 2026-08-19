@@ -21,6 +21,7 @@ from .areas import (
     unit_nia_sqm,
 )
 from .breakeven import PhasedSeniorBreakevenTerms, phased_replay_redeems, solve_senior_breakeven_phased
+from .cost_plan import CostPlanResult, compute_cost_plan
 from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, breakeven_flags, derive_metrics
@@ -108,6 +109,7 @@ __all__ = [
     "CalculatorInputsV5",
     "CalculatorInputsV6",
     "CalculatorInputsV7",
+    "CostPlanResult",
     "MonthlyModel",
     "PhasedSeniorBreakevenTerms",
     "ProposedUnitV6",
@@ -121,6 +123,7 @@ __all__ = [
     "breakeven_flags",
     "build_schedule",
     "calculate_acquisition_tax",
+    "compute_cost_plan",
     "derive_jurisdiction",
     "derive_metrics",
     "developed_area_sqm",
