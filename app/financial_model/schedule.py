@@ -9,6 +9,7 @@ import math
 from dataclasses import dataclass
 
 from .areas import developed_area_sqm
+from .cost_plan import compute_cost_plan
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
@@ -192,19 +193,22 @@ def _empty_receipts() -> MonthReceipts:
 
 def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     term = max(1, math.floor(inputs.finance.term_months))
-    cc = inputs.conversion_costs
     units = inputs.unit_mix.units
 
     acquisition_total = calculate_total_acquisition_cost(inputs.acquisition)
-    construction_total = calculate_total_construction_cost(cc, developed_area_sqm(inputs))
-    # Reclassification per spec Sec 3.5/3.6: professional excludes statutory items.
-    professional_total = (
-        cc.architect_pence + cc.structural_engineer_pence + cc.mande_pence
-        + cc.planning_consultant_pence + cc.other_professional_fees_pence
-    )
-    prior_approval = cc.prior_approval_fee_per_dwelling_pence * max(1, len(units))
-    statutory_spread_total = cc.cil_s106_pence + cc.building_control_pence
-    statutory_total = prior_approval + statutory_spread_total
+    # R10 spec Sec 16. The cost stack is computed once, by the one engine that
+    # serves both modes, and this is the only place the schedule learns the
+    # three totals.
+    cost_plan = compute_cost_plan(inputs, developed_area_sqm(inputs), len(units))
+    construction_total = cost_plan.construction_total_pence
+    professional_total = cost_plan.professional_total_pence
+    # Sec 3.4: prior approval lands in month 0; every other statutory line
+    # spreads with the professional curve. Keyed on the fee CODE, preserving
+    # the pre-R10 split that was keyed on a hard-coded field name. R12
+    # generalises fee timing.
+    prior_approval = sum(f.amount_pence for f in cost_plan.fees if f.code == "prior_approval")
+    statutory_spread_total = cost_plan.statutory_total_pence - prior_approval
+    statutory_total = cost_plan.statutory_total_pence
 
     uses = [_empty_uses() for _ in range(term)]
     receipts = [_empty_receipts() for _ in range(term)]

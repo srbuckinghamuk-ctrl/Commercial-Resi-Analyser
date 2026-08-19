@@ -1,9 +1,10 @@
 import type { AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, Schedule } from './finance-types';
 import {
-  calculateGdv, calculateTotalAcquisitionCost, calculateTotalConstructionCost, unitAncillaryValuePence,
+  calculateGdv, calculateTotalAcquisitionCost, unitAncillaryValuePence,
 } from '../conversion-calc-engine';
 import { developedAreaSqm } from './areas';
 import { spreadByCurve } from './curves';
+import { computeCostPlan } from './cost-plan';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -27,18 +28,22 @@ function emptyReceipts(): MonthReceipts {
 
 export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
-  const cc = inputs.conversion_costs;
   const units = inputs.unit_mix.units;
 
   const acquisitionTotal = calculateTotalAcquisitionCost(inputs.acquisition);
-  const constructionTotal = calculateTotalConstructionCost(cc, developedAreaSqm(inputs));
-  // Reclassification per spec §3.5/§3.6: professional excludes statutory items.
-  const professionalTotal =
-    cc.architect_pence + cc.structural_engineer_pence + cc.mande_pence +
-    cc.planning_consultant_pence + cc.other_professional_fees_pence;
-  const priorApproval = cc.prior_approval_fee_per_dwelling_pence * Math.max(1, units.length);
-  const statutorySpreadTotal = cc.cil_s106_pence + cc.building_control_pence;
-  const statutoryTotal = priorApproval + statutorySpreadTotal;
+  // R10 spec §16. The cost stack is computed once, by the one engine that serves
+  // both modes, and this is the only place the schedule learns the three totals.
+  const costPlan = computeCostPlan(inputs, developedAreaSqm(inputs), units.length);
+  const constructionTotal = costPlan.construction_total_pence;
+  const professionalTotal = costPlan.professional_total_pence;
+  // §3.4: prior approval lands in month 0; every other statutory line spreads with
+  // the professional curve. Keyed on the fee CODE, preserving the pre-R10 split
+  // that was keyed on a hard-coded field name. R12 generalises fee timing.
+  const priorApproval = costPlan.fees
+    .filter((f) => f.code === 'prior_approval')
+    .reduce((s, f) => s + f.amount_pence, 0);
+  const statutorySpreadTotal = costPlan.statutory_total_pence - priorApproval;
+  const statutoryTotal = costPlan.statutory_total_pence;
 
   const uses: MonthUses[] = Array.from({ length: term }, emptyUses);
   const receipts: MonthReceipts[] = Array.from({ length: term }, emptyReceipts);

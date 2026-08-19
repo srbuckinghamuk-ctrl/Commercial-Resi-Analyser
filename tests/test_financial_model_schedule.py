@@ -10,6 +10,7 @@ from app.financial_model.migrate import (
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
     migrate_inputs_to_v6,
+    migrate_inputs_to_v7,
     migrate_v2_to_v3,
     migrate_v3_to_v4,
 )
@@ -30,6 +31,7 @@ from app.financial_model.types import (
     SalesPhasingTranche,
     UnitAncillary,
     UnitMixInputsV6,
+    cost_plan_from_legacy_costs,
 )
 
 PROGRAMME = {
@@ -308,3 +310,41 @@ class TestAncillaryValueFlowsIntoSaleReceipts:
         s = build_schedule(self._make_v6_inputs("blended", ["u2"]))
         assert s.totals.gross_sales_pence == 26_600_000  # u1 internal + u1 ancillary
         assert s.totals.gdv_pence == 52_300_000
+
+
+class TestBuildScheduleStatutoryTiming:
+    """Port of schedule.test.ts's 'buildSchedule statutory timing (R10 Sec
+    3.4)' describe block. Same literals: 38_400 / 938_400 / 900_000."""
+
+    def test_keeps_prior_approval_in_month_0_and_spreads_the_rest_of_statutory(self):
+        # 4 units x 9,600 prior approval = 38,400 in month 0, and nothing else:
+        # CIL/S106 (700,000) and building control (200,000) spread from month 1.
+        base = migrate_inputs_to_v7({})
+        conversion_costs = base.conversion_costs.model_copy(update={
+            "prior_approval_fee_per_dwelling_pence": 9_600,
+            "cil_s106_pence": 700_000,
+            "building_control_pence": 200_000,
+        })
+        units = [
+            ProposedUnitV6(
+                id=uid, type="1bed", floor_area_sqm=50,
+                estimated_value_pence=20_000_000, comparable_notes="",
+            )
+            for uid in ["u1", "u2", "u3", "u4"]
+        ]
+        # The cost plan must be rebuilt from those cost fields, because the fee
+        # lines -- not the fields -- are what the schedule now reads.
+        inputs = base.model_copy(update={
+            "finance": base.finance.model_copy(update={"term_months": 12, "funding_source": "cash"}),
+            "exit_strategy": base.exit_strategy.model_copy(update={"route": "sell_all"}),
+            "unit_mix": UnitMixInputsV6(units=units),
+            "conversion_costs": conversion_costs,
+            "cost_plan": cost_plan_from_legacy_costs(conversion_costs),
+        })
+        s = build_schedule(inputs)
+        assert s.uses[0].statutory_pence == 38_400
+        assert s.totals.statutory_pence == 938_400
+        # The spread half must be non-zero somewhere after month 0, or "month 0
+        # only" would pass vacuously on a document whose spread total happened
+        # to be 0.
+        assert sum(u.statutory_pence for u in s.uses[1:]) == 900_000

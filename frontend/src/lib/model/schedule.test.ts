@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildSchedule, spreadStraightLine } from './schedule';
-import { defaultCalculatorInputsV2 } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV6 } from './finance-types';
+import { defaultCalculatorInputsV2, defaultCalculatorInputsV7 } from '../conversion-defaults';
+import type { CalculatorInputsV2, CalculatorInputsV6, CalculatorInputsV7 } from './finance-types';
 import { migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4 } from './migrate';
 import type { ProposedUnitV6 } from '../conversion-types';
+import { costPlanFromLegacyCosts } from './cost-plan';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -255,5 +256,36 @@ describe('buildSchedule with sales_phasing (spec §4.4.1)', () => {
     expect(legalSum).toBe(400_000);                                          // conservation
     expect(s.totals.selling_costs_pence).toBe(agent + 400_000);              // totals unchanged
     expect(s.refinance).toBeNull();
+  });
+});
+
+describe('buildSchedule statutory timing (R10 §3.4)', () => {
+  it('keeps prior approval in month 0 and spreads the rest of statutory (R10 §3.4)', () => {
+    // 4 units x 9,600 prior approval = 38,400 in month 0, and nothing else:
+    // CIL/S106 (700,000) and building control (200,000) spread from month 1.
+    const base = defaultCalculatorInputsV7();
+    const inputs: CalculatorInputsV7 = {
+      ...base,
+      finance: { ...base.finance, term_months: 12, funding_source: 'cash' },
+      exit_strategy: { ...base.exit_strategy, route: 'sell_all' },
+      unit_mix: { units: ['u1', 'u2', 'u3', 'u4'].map((id) => ({
+        ...base.unit_mix.units[0], id, estimated_value_pence: 20_000_000,
+      })) },
+      conversion_costs: {
+        ...base.conversion_costs,
+        prior_approval_fee_per_dwelling_pence: 9_600,
+        cil_s106_pence: 700_000,
+        building_control_pence: 200_000,
+      },
+    };
+    // The cost plan must be rebuilt from those cost fields, because the fee lines
+    // — not the fields — are what the schedule now reads.
+    inputs.cost_plan = costPlanFromLegacyCosts(inputs.conversion_costs);
+    const s = buildSchedule(inputs);
+    expect(s.uses[0].statutory_pence).toBe(38_400);
+    expect(s.totals.statutory_pence).toBe(938_400);
+    // The spread half must be non-zero somewhere after month 0, or "month 0 only"
+    // would pass vacuously on a document whose spread total happened to be 0.
+    expect(s.uses.slice(1).reduce((t, u) => t + u.statutory_pence, 0)).toBe(900_000);
   });
 });
