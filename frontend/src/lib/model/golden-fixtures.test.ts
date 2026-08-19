@@ -334,13 +334,22 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'Q — detailed cost plan, three contingency classes, levered facility',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
-    // R10 widens the second reason from "== 6" to "!= 5": fixture Q (v7) has no pre-R8
-    // form for the same reason N/O/P (v6) do not — asPreR8Document stamps v3/v4, and
-    // migrating that back up would leave the R9 areas/ancillary AND the R10 cost_plan
-    // blocks at their zeroed/legacy-derived defaults, a different document.
+    // R10 widens the second reason from "version === 6" to "version === 6 or 7":
+    // fixture Q (v7) has no pre-R8 form for the same reason N/O/P (v6) do not —
+    // asPreR8Document stamps v3/v4, and migrating that back up would leave the R9
+    // areas/ancillary AND the R10 cost_plan blocks at their zeroed/legacy-derived
+    // defaults, a different document.
+    //
+    // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
+    // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
+    // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
+    // so it is vacuously true for every member and can never fail. Enumerating 6/7
+    // keeps the check able to fail: it catches a fixture excluded for a THIRD,
+    // unstated reason (e.g. a future non-v5/v6/v7 fixture, or a change to
+    // preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
-        jurisdictionOf(fx) !== 'england_ni' || versionOf(fx) !== 5,
+        jurisdictionOf(fx) !== 'england_ni' || versionOf(fx) === 6 || versionOf(fx) === 7,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -624,9 +633,12 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
 
   // R10 Task 11 — the acceptance gate for the v6→v7 migration, mirrored in
-  // tests/test_migrate_v7.py. The same shape as the v6 table above, one version
-  // further on, and now corpus-wide again: migrateInputsToV7 accepts v5, v6 and v7
-  // documents alike (RECOGNISED_INPUTS_VERSIONS_V7 = 1–7).
+  // tests/test_migrate_v7.py's test_v7_migration_moves_no_existing_figure (added
+  // fix round 1, I2 — this comment previously claimed that mirror existed when it
+  // did not; test_migrate_v7.py had no fixture-corpus scan, no run_appraisal call
+  // and no before/after comparison until then). The same shape as the v6 table
+  // above, one version further on, and now corpus-wide again: migrateInputsToV7
+  // accepts v5, v6 and v7 documents alike (RECOGNISED_INPUTS_VERSIONS_V7 = 1–7).
   it.each(appraisalFixtures.map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
@@ -659,10 +671,13 @@ describe('golden fixtures (shared with the Python engine)', () => {
     },
   );
 
-  // Non-vacuity guard, mirroring the Python gate's `len(names) == 12`. The
-  // corpus is loaded by directory scan, so a fixture that is deleted, renamed
-  // or never committed would silently shrink the it.each tables above to
-  // nothing rather than failing.
+  // Non-vacuity guard, mirroring test_migrate_v7.py::test_v7_migration_moves_no_
+  // existing_figure's `assert len(names) == 12` (fix round 1, M5: this comment
+  // previously said 12 while the Python side still said 11, because the true v7
+  // corpus-wide Python gate did not exist yet — see I2 above). The corpus is
+  // loaded by directory scan, so a fixture that is deleted, renamed or never
+  // committed would silently shrink the it.each tables above to nothing rather
+  // than failing.
   it('runs the migration identity gates over the whole pipeline corpus, not an empty one', () => {
     expect(appraisalFixtures).toHaveLength(12);
   });

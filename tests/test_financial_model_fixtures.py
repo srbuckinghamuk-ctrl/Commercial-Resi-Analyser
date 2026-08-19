@@ -375,14 +375,24 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
         "q-detailed-cost-plan",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
-    # R10 widens the second reason from "== 6" to "!= 5": fixture Q (v7) has no pre-R8
-    # form for the same reason N/O/P (v6) do not -- migrating a stamped-back v3/v4
-    # document up would leave the R9 areas/ancillary AND the R10 cost_plan blocks at
-    # their zeroed/legacy-derived defaults, a different document.
+    # R10 widens the second reason from "== 6" to "== 6 or 7": fixture Q (v7) has no
+    # pre-R8 form for the same reason N/O/P (v6) do not -- migrating a stamped-back
+    # v3/v4 document up would leave the R9 areas/ancillary AND the R10 cost_plan
+    # blocks at their zeroed/legacy-derived defaults, a different document.
+    #
+    # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
+    # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
+    # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
+    # so it is vacuously true for every member and can never fail. Enumerating 6/7
+    # keeps the check able to fail: it catches a fixture excluded for a THIRD,
+    # unstated reason (e.g. a future non-v5/v6/v7 fixture, or a change to
+    # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
+        version = _version_of(_load_fixture(path))
         assert (
             _jurisdiction_of(path) != "england_ni"
-            or _version_of(_load_fixture(path)) != 5
+            or version == 6
+            or version == 7
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 

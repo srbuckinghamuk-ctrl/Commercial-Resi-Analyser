@@ -3,9 +3,13 @@
 Python twin of the `migrateV6toV7` and `migrateInputsToV7 refusals` describe
 blocks in frontend/src/lib/model/migrate.test.ts.
 """
+import json
+from dataclasses import asdict
+from pathlib import Path
+
 import pytest
 
-from app.financial_model import parse_calculator_inputs
+from app.financial_model import parse_calculator_inputs, run_appraisal
 from app.financial_model.migrate import (
     is_v2_or_later,
     is_v7,
@@ -13,7 +17,9 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v7,
     migrate_v6_to_v7,
 )
-from app.financial_model.types import CalculatorInputsV7
+from app.financial_model.types import CalculatorInputsV7, cost_plan_from_legacy_costs
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
 
 @pytest.fixture
@@ -199,3 +205,82 @@ def test_parse_dispatches_on_version_7(v1_doc):
     parsed = parse_calculator_inputs(doc)
     assert parsed.inputs_version == 7
     assert type(parsed) is CalculatorInputsV7
+
+
+# ---------------------------------------------------------------------------
+# R10 Task 11 fix round 1, I2. The corpus-wide numerical-identity gate --
+# every fixture, run before and after migration to v7, must produce
+# identical output. Mirrors test_migrate_v6.py's test_v6_migration_moves_
+# no_existing_figure exactly, one version further on: THAT is the R9
+# precedent this was supposed to follow the first time, not a comment
+# claiming coverage this file did not actually have.
+# ---------------------------------------------------------------------------
+
+def _pipeline_fixtures():
+    for path in sorted(FIXTURES.glob("*.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if doc.get("kind") == "sensitivity":
+            continue  # names a base_fixture instead of carrying inputs
+        yield path.name, doc
+
+
+def _assert_cost_plan_survives(migrated, source: dict, name: str):
+    """The merge-branch half: a stored v7 document's own cost_plan must come
+    back out of the migration unchanged. Mirrors test_migrate_v6.py's
+    _assert_r9_blocks_survive."""
+    assert migrated.cost_plan.model_dump() == source["cost_plan"], (
+        f"{name}: the v7 merge branch altered the stored cost plan"
+    )
+
+
+def _assert_cost_plan_derived_from_legacy_costs(migrated, source: dict, name: str):
+    """The upgrade half: a v5/v6 document has no cost_plan of its own, so the
+    migration must derive EXACTLY the plan cost_plan_from_legacy_costs would
+    build from its conversion_costs -- the same function the engine's pre-v7
+    fallback uses (types.py), so migrating a document can never move its
+    figures relative to leaving it unmigrated."""
+    expected = cost_plan_from_legacy_costs(
+        parse_calculator_inputs(source).conversion_costs
+    )
+    assert migrated.cost_plan.model_dump() == expected.model_dump(), (
+        f"{name}: migration to v7 synthesised a cost plan other than "
+        f"cost_plan_from_legacy_costs would produce"
+    )
+
+
+def test_v7_migration_moves_no_existing_figure():
+    """The acceptance gate for R10's migration: every fixture in the corpus,
+    run before and after migration to v7, must produce identical output.
+
+    This is what makes 'purely additive' a tested claim rather than an
+    assertion. If a single figure moves, the migration is wrong -- not the
+    fixture. Corpus-wide (v5, v6 AND v7 fixtures alike): migrate_inputs_to_v7
+    accepts all three via RECOGNISED_INPUTS_VERSIONS_V7 = (1..7)."""
+    names = []
+    for name, doc in _pipeline_fixtures():
+        names.append(name)
+        migrated = migrate_inputs_to_v7(doc["inputs"])
+
+        if doc["inputs"].get("inputs_version") == 7:
+            _assert_cost_plan_survives(migrated, doc["inputs"], name)
+        else:
+            _assert_cost_plan_derived_from_legacy_costs(migrated, doc["inputs"], name)
+
+        before = run_appraisal(parse_calculator_inputs(doc["inputs"]))
+        after = run_appraisal(migrated)
+        # asdict, not model_dump: AppraisalResultV2 is a dataclass on the
+        # Python side, not a Pydantic model.
+        assert asdict(before.metrics) == asdict(after.metrics), (
+            f"{name}: migration to v7 changed a computed figure"
+        )
+        # The metrics object is the headline, but a migration defect could
+        # equally move a ledger figure the metrics happen not to surface.
+        assert asdict(before.model) == asdict(after.model), (
+            f"{name}: migration to v7 changed a ledger figure"
+        )
+        assert asdict(before.schedule) == asdict(after.schedule), (
+            f"{name}: migration to v7 changed a schedule figure"
+        )
+    # The corpus is loaded by directory scan, so an empty glob would make the
+    # loop above vacuously pass.
+    assert len(names) == 12, names
