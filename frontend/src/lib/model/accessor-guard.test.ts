@@ -255,20 +255,24 @@ describe('single-accessor guard configuration', () => {
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
   });
 
-  it('does not exempt ConversionCostsPage.tsx file-wide (R10 Task 9)', () => {
+  it('does not exempt ConversionCostsPage.tsx file-wide (R10 Task 9/12)', () => {
     // Before R10 this file was on the blanket allowlist for its one
     // legitimate total_construction_sqm read. A file-wide exemption would now
-    // also hide its (illegitimate, pending Task 12) contingency_pct read, so
-    // R10 Task 9 took the file OFF the allowlist and exempted both reads at
+    // also hide its (then-illegitimate, pending Task 12) contingency_pct read,
+    // so R10 Task 9 took the file OFF the allowlist and exempted both reads at
     // their own lines instead — the legitimate one permanently, the
-    // contingency_pct one with a "Task 12 replaces this" reason.
+    // contingency_pct one with a "Task 12 replaces this" reason. Task 12
+    // rebuilt the page around run.metrics.cost_plan.contingency, so the
+    // contingency_pct read (and its disable comment) is gone entirely; only
+    // the one permanent total_construction_sqm exemption remains.
     expect(CONFIG).not.toContain('src/components/calculator/ConversionCostsPage.tsx');
     const source = readFileSync(
       resolve(FRONTEND_ROOT, 'src/components/calculator/ConversionCostsPage.tsx'), 'utf-8',
     );
     const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
-    expect(scoped).toHaveLength(2);
+    expect(scoped).toHaveLength(1);
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
+    expect(source).not.toMatch(/\.contingency_pct\b/);
   });
 
   it('does not exempt conversion-calc-engine.ts file-wide (R10 Task 9 fix round 1, C1)', () => {

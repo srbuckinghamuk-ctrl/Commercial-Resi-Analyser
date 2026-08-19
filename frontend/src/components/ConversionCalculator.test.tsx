@@ -140,7 +140,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v6 (R8 Task 10, R
 
     render(<ConversionCalculator project={PROJECT} />);
 
-    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV6(...))
+    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV7(...))
     // succeeds -- if that call threw (as migrateInputsToV4 would on a v5
     // document, or migrateInputsToV5 now would on a v6 one), the promise
     // chain's .catch() would run instead and the button would stay "Save

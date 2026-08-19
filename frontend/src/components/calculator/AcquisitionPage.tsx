@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import type { CalculatorInputsV6, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV7, AppraisalRun } from '../../lib/model';
 import type { Jurisdiction } from '../../lib/tax/acquisition-tax';
 import { calculateBrokerFee } from '../../lib/conversion-calc-engine';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV6;
-  onChange: (partial: Partial<CalculatorInputsV6>) => void;
+  inputs: CalculatorInputsV7;
+  onChange: (partial: Partial<CalculatorInputsV7>) => void;
   run: AppraisalRun;
   /** Only used to name the postcode a derived jurisdiction came from. */
   project?: { address_postcode: string | null } | null;

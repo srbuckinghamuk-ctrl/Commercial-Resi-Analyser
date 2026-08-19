@@ -1,10 +1,16 @@
 """R10 spec §16. Python mirror of frontend/src/lib/model/cost-plan.test.ts.
 
 Mirrors the TS file's test cases and their literal expected values (see the
-comment above `doc()`/`CLASSES`/`pkg()` below), but not byte-for-byte: fix
-round 1 (I3) found `_default_v7()` below deliberately diverges from its TS
-counterpart. See that function's docstring for what differs and why the
-divergence is safe."""
+comment above `doc()`/`CLASSES`/`pkg()` below), but not byte-for-byte: Task 6
+fix round 1 (I3) found `_default_v7()` below TEMPORARILY diverged from its TS
+counterpart (TS's `defaultCalculatorInputsV7()` still built `cost_plan` from
+the bare `DEFAULT_COST_PLAN`, no fee lines). Task 12 made the TS side repoint
+to `costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)` -- the same
+construction this function already goes through via `migrate_inputs_to_v7` --
+so the two engines' v7 defaults have RE-CONVERGED. See
+`test_default_v7_matches_typescripts_default_calculator_inputs_v7` below,
+which pins the same eight fee-line literals
+`conversion-defaults.test.ts` pins on the TS side."""
 from app.financial_model.cost_plan import compute_cost_plan
 from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7
 from app.financial_model.types import (
@@ -106,32 +112,67 @@ def test_default_contingency_classes_put_the_percentage_on_general_only():
 
 
 def _default_v7() -> CalculatorInputsV7:
-    """Task 6 repoint, fix round 1 (I3): this now defers to the real
+    """Task 6 repoint, fix round 1 (I3): this defers to the real
     migrate_inputs_to_v7 rather than hand-rebuilding a v7 document (the
     original reason for the hand-rebuild -- "Python has no
-    defaultCalculatorInputsV7() yet" -- no longer holds now that Task 6 has
-    shipped the migration).
+    defaultCalculatorInputsV7() yet" -- no longer held once Task 6 shipped
+    the migration).
 
-    NOT a verbatim mirror of cost-plan.test.ts's own `doc()`/default helper,
-    despite this file's module docstring calling the file a Python mirror of
-    that TS test: TS's helper still calls `defaultCalculatorInputsV7()`,
-    which -- per its own comment in conversion-defaults.ts -- builds
-    `cost_plan` from the bare `DEFAULT_COST_PLAN` (no fee lines) and is
-    explicitly pending a Task 12 swap to
-    `costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)`. This function calls
-    that swap early on the Python side, by going through
-    migrate_inputs_to_v7 -- which already derives `cost_plan` from
-    DEFAULT_CONVERSION_COSTS via cost_plan_from_legacy_costs -- so it
-    produces eight non-zero fee lines where TS's helper still produces zero.
-    The two helpers re-converge once Task 12 makes that same swap on the TS
-    side.
+    Between Task 6 and Task 12 this was NOT a verbatim mirror of
+    cost-plan.test.ts's own `doc()`/default helper: TS's helper called
+    `defaultCalculatorInputsV7()`, which built `cost_plan` from the bare
+    `DEFAULT_COST_PLAN` (no fee lines), while this function -- via
+    migrate_inputs_to_v7({}) -- already derived `cost_plan` from
+    DEFAULT_CONVERSION_COSTS via cost_plan_from_legacy_costs, so it produced
+    eight non-zero fee lines where TS's helper produced zero.
 
-    Verified harmless in the meantime: every test below that uses the
-    `doc()` helper without overriding `fee_lines` only asserts on
-    base_build/contingency/construction_total/lender_eligible/implied_rate,
-    never on fees, so this substitution changes no expectation in this
-    file."""
+    Task 12 made the TS side repoint to the same construction
+    (`costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)`), so the two engines'
+    v7 defaults have RE-CONVERGED --
+    `test_default_v7_matches_typescripts_default_calculator_inputs_v7` below
+    pins the same eight fee-line literals `conversion-defaults.test.ts` pins
+    on the TS side."""
     return migrate_inputs_to_v7({})
+
+
+def test_default_v7_matches_typescripts_default_calculator_inputs_v7():
+    """R10 Task 12, carried item (b). Both engines' v7 default document is
+    built the same way -- `cost_plan_from_legacy_costs(DEFAULT_CONVERSION_COSTS)`
+    -- and Python's DEFAULT_CONVERSION_COSTS (app/financial_model/migrate.py)
+    is field-for-field identical to TS's (frontend/src/lib/conversion-defaults.ts).
+    This pins the literal figures `conversion-defaults.test.ts`'s
+    'defaultCalculatorInputsV7 (R10 Task 12)' describe block independently
+    pins on the TS side: same fee-line codes, categories, amounts and
+    per_dwelling flags, and the same contingency percentages. If either
+    engine's default changes without the other, this is the test that fails."""
+    plan = _default_v7().cost_plan
+    assert plan.mode == "headline"
+    assert plan.packages == []
+    assert [(c.name, c.pct) for c in plan.contingency] == [
+        ("general", 10.0), ("existing_building", 0.0), ("abnormal", 0.0),
+    ]
+    by_code = {f.code: f for f in plan.fee_lines}
+    assert set(by_code.keys()) == {
+        "architect", "structural_engineer", "mande", "planning_consultant",
+        "other_professional", "prior_approval", "cil_s106", "building_control",
+    }
+    expected = {
+        "architect": ("professional", 1_500_000, False),
+        "structural_engineer": ("professional", 500_000, False),
+        "mande": ("professional", 500_000, False),
+        "planning_consultant": ("professional", 300_000, False),
+        "other_professional": ("professional", 0, False),
+        "prior_approval": ("statutory", 9_600, True),
+        "cil_s106": ("statutory", 0, False),
+        "building_control": ("statutory", 200_000, False),
+    }
+    for code, (category, amount, per_dwelling) in expected.items():
+        f = by_code[code]
+        assert f.basis == "fixed"
+        assert f.category == category
+        assert f.amount_pence == amount
+        assert f.pct == 0
+        assert f.per_dwelling is per_dwelling
 
 
 def doc(over: dict, costs: dict | None = None) -> CalculatorInputsV7:

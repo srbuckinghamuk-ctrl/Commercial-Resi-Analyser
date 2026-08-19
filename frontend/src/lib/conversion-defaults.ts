@@ -16,7 +16,7 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, EquitySource, FacilityTerms,
 } from './model/finance-types';
-import { DEFAULT_COST_PLAN } from './model/cost-plan';
+import { costPlanFromLegacyCosts } from './model/cost-plan';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -350,16 +350,27 @@ export function defaultCalculatorInputsV6(project?: {
   };
 }
 
+/**
+ * v7 defaults (R10 Task 12): the document a freshly opened calculator starts
+ * on. `cost_plan` is derived from `DEFAULT_CONVERSION_COSTS` via
+ * `costPlanFromLegacyCosts` -- the SAME construction `migrateV6toV7` and the
+ * engine's pre-v7 fallback both use (ruling P2) -- so a brand-new document
+ * starts with the same eight fee lines a migrated one gets, rather than
+ * shipping a second, empty set of fee defaults.
+ *
+ * `conversion-defaults.test.ts` pins this cost plan against
+ * `costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)` directly, and against
+ * the literal fee-line/contingency values Python's `_default_v7()` test
+ * helper (tests/test_cost_plan.py) independently produces via
+ * `migrate_inputs_to_v7({})` -- the two engines' v7 defaults re-converge here
+ * (Task 6 fix round 1, ruling on I3).
+ */
 export function defaultCalculatorInputsV7(project?: {
   id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
 }): CalculatorInputsV7 {
   return {
     ...defaultCalculatorInputsV6(project),
     inputs_version: 7,
-    // Task 12 swaps this for costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)
-    // once Task 5 has shipped that function. Until then a new document has no
-    // fee lines, which is correct-but-incomplete rather than wrong: every test
-    // that needs fee lines supplies its own.
-    cost_plan: structuredClone(DEFAULT_COST_PLAN),
+    cost_plan: costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS),
   };
 }

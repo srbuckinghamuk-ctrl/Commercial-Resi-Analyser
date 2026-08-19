@@ -5,6 +5,18 @@ export function penceToPounds(pence: number): string {
   return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
 }
 
+/** R10 Task 12. Same as `penceToPounds` but keeps the pence, for cost-plan
+ *  contingency/fee amounts that are the product of a percentage and a base
+ *  and so are not generally whole pounds (e.g. a 5% class on 1,000,010 pence
+ *  is 50,000.5 pence). Rounding to whole pounds here would silently hide the
+ *  half-penny rounding boundary the engine itself resolves half-up. */
+export function penceToPoundsExact(pence: number): string {
+  return (pence / 100).toLocaleString(
+    'en-GB',
+    { style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2 },
+  );
+}
+
 /** Format a percentage that may be null/non-finite (e.g. IRR on a loss-making deal). */
 export function formatPct(value: number | null | undefined, decimals = 1): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';

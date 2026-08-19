@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV6 } from '../../lib/model';
-import { defaultCalculatorInputsV6 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV7 } from '../../lib/model';
+import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
 
 // Same fixture directory the shared golden-fixtures test reads from (frontend/src/lib/model/golden-fixtures.test.ts)
 // — fixture G is the Release 2b lender-valuation fixture (spec §3.2), used here as the
@@ -16,10 +16,10 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // version the file actually holds rather than the v4 it used to claim.
 const fixtureG = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV6 };
+) as { inputs: CalculatorInputsV7 };
 
 describe('AppraisalSummaryPage — null lender state', () => {
-  const inputs = defaultCalculatorInputsV6();
+  const inputs = defaultCalculatorInputsV7();
   const run = runAppraisal(inputs);
 
   it('renders the existing not-available treatment for lender GDV and LTGDV lender', () => {

@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
 import { migrateInputsToV7 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV6, CalculatorInputsV7 } from '../lib/model';
+import type { AppraisalRun, CalculatorInputsV7 } from '../lib/model';
 import { defaultCalculatorInputsV7 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
@@ -118,10 +118,10 @@ export default function ConversionCalculator({ project }: Props) {
             // to v6, and the one the fix-round-1 review missed on this task,
             // wrongly claiming no production caller used these migrators yet.
             //
-            // This component's state is v7-native, but the calculator
-            // sub-pages below are not yet (that rename is a later task) -- see
-            // `legacyInputs`/`legacyOnChange` below, which bridge v7 state to
-            // their still-v6-typed props.
+            // R10 Task 12 retired the cast bridge (formerly `legacyInputs` /
+            // `legacyOnChange`) that used to sit below: every calculator
+            // sub-page is now typed CalculatorInputsV7 directly, so this
+            // component's state and every sub-page's props are the same shape.
             //
             // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
             // that used to sit here: the migration's return type is the
@@ -166,17 +166,6 @@ export default function ConversionCalculator({ project }: Props) {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
-  // Bridge v7 state to the calculator sub-pages below, which are still typed
-  // CalculatorInputsV6 (the bulk cosmetic prop rename across every sub-page
-  // is a later task; this component only needs to be correct and tsc-clean
-  // today). Safe at runtime: CalculatorInputsV7 carries every CalculatorInputsV6
-  // field (plus `cost_plan`), no sub-page reads `inputs.inputs_version`, and no
-  // sub-page's `onChange` partial ever sets `inputs_version` -- grep confirms
-  // it -- so merging a "v6-shaped" partial into v7 state never regresses the
-  // stamped version.
-  const legacyInputs = inputs as unknown as CalculatorInputsV6;
-  const legacyOnChange = updateInputs as unknown as (partial: Partial<CalculatorInputsV6>) => void;
-
   const handleSave = useCallback(async () => {
     // No run means the engine could not compute this document, so the advisory
     // client metrics below cannot be derived. The save button is disabled in
@@ -185,10 +174,10 @@ export default function ConversionCalculator({ project }: Props) {
     setSaving(true);
     setSaveError(null);
     try {
-      // inputs_snapshot is always v6 (R9 Task 3: this component's state is
-      // v6-native); the seven client metric fields are used server-side ONLY to
-      // record mismatches for audit -- the server always recalculates and
-      // persists its own values (Task 12).
+      // inputs_snapshot is always v7 (R10 Task 6: the server boundary and this
+      // component's state both moved to v7); the seven client metric fields
+      // are used server-side ONLY to record mismatches for audit -- the
+      // server always recalculates and persists its own values.
       const payload: FinancialAppraisalCreate = {
         project_id: project.id,
         name: `Appraisal — ${project.address_raw}`,
@@ -207,7 +196,7 @@ export default function ConversionCalculator({ project }: Props) {
 
       // R8 Task 11 (defect B). The server is authoritative over the document,
       // not just over the metrics: `calculate_authoritative` normalises the
-      // snapshot to v6 (R9 Task 3) and, on a project's first appraisal, derives the tax
+      // snapshot to v7 (R10 Task 6) and, on a project's first appraisal, derives the tax
       // jurisdiction from the postcode (app/api/app.py). Before this, the
       // screen kept the england_ni document it posted while the store held the
       // derived one -- measured on a Welsh fixture as
@@ -334,46 +323,46 @@ export default function ConversionCalculator({ project }: Props) {
         ) : (
         <CalculatorErrorBoundary resetKeys={[activePage]}>
         {activePage === 'acquisition' && (
-          <AcquisitionPage inputs={legacyInputs} onChange={legacyOnChange} run={run} project={project} />
+          <AcquisitionPage inputs={inputs} onChange={updateInputs} run={run} project={project} />
         )}
         {activePage === 'areas' && (
-          <AreasPage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <AreasPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'unit_mix' && (
-          <UnitMixPage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <UnitMixPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'conversion_costs' && (
-          <ConversionCostsPage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <ConversionCostsPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'finance' && (
-          <FinancePage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <FinancePage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'programme' && (
-          <ProgrammePage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <ProgrammePage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'cashflow' && (
-          <CashflowPage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <CashflowPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'appraisal' && (
-          <AppraisalSummaryPage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <AppraisalSummaryPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'scenarios' && (
-          <ScenariosPage inputs={legacyInputs} onChange={legacyOnChange} />
+          <ScenariosPage inputs={inputs} onChange={updateInputs} />
         )}
         {activePage === 'sensitivity' && (
           <SensitivityPage inputs={inputs} />
         )}
         {activePage === 'exit_strategy' && (
-          <ExitStrategyPage inputs={legacyInputs} onChange={legacyOnChange} run={run} />
+          <ExitStrategyPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'risk_register' && (
-          <RiskRegisterPage inputs={legacyInputs} onChange={legacyOnChange} />
+          <RiskRegisterPage inputs={inputs} onChange={updateInputs} />
         )}
         {activePage === 'deal_spider' && (
-          <DealSpiderPage inputs={legacyInputs} onChange={legacyOnChange} project={project} />
+          <DealSpiderPage inputs={inputs} onChange={updateInputs} project={project} />
         )}
         {activePage === 'investor_summary' && (
-          <InvestorSummaryPage inputs={legacyInputs} run={run} project={project} />
+          <InvestorSummaryPage inputs={inputs} run={run} project={project} />
         )}
         </CalculatorErrorBoundary>
         )}
