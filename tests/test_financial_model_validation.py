@@ -18,6 +18,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
     migrate_v2_to_v3,
+    migrate_v6_to_v7,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
@@ -26,7 +27,11 @@ from app.financial_model.types import (
     CalculatorInputsV3,
     CalculatorInputsV4,
     CalculatorInputsV6,
+    CalculatorInputsV7,
+    ContingencyClass,
+    CostPackage,
     EquitySource,
+    FeeLine,
     LenderValuation,
     ProposedUnit,
     ProposedUnitV6,
@@ -911,3 +916,316 @@ class TestThe25PctWarningIsRetiredNotSoftened:
         )
         assert self.RETIRED_25PCT not in py_src
         assert self.RETIRED_25PCT not in ts_src
+
+
+def make_v7_inputs(
+    *,
+    cost_plan: dict | None = None,
+    conversion_costs: dict | None = None,
+) -> CalculatorInputsV7:
+    """R10 (Task 10). A v7 document built from the migration chain's own
+    defaults, the Python twin of validation.test.ts's makeV7Inputs.
+    migrate_v6_to_v7 derives its cost_plan via cost_plan_from_legacy_costs, so
+    the baseline is a structurally valid headline-mode plan with eight
+    fixed-basis fee lines and three contingency classes, without hand-rolling
+    any of it. `model_copy(update=...)` does not validate, so `cost_plan`
+    values must already be model instances -- see _pkg/_fee_line below."""
+    v6 = migrate_inputs_to_v6({"inputs_version": 1})
+    v7 = migrate_v6_to_v7(v6)
+    if conversion_costs is not None:
+        v7.conversion_costs = v7.conversion_costs.model_copy(update=conversion_costs)
+    if cost_plan is not None:
+        v7.cost_plan = v7.cost_plan.model_copy(update=cost_plan)
+    return v7
+
+
+def _pkg(**overrides) -> CostPackage:
+    """`model_construct` bypasses Pydantic validation (CostPackage.amount_pence
+    carries `Field(ge=0)`) -- the same idiom `_negative_area` above uses to pin
+    validate_inputs's defense-in-depth negative-amount check as correct even
+    though the ordinary Pydantic boundary already forbids the value."""
+    base = dict(
+        id="pkg-1", code="structure", label="Structure", amount_pence=1_000_000,
+        contingency_class="general", lender_eligible=True, notes="",
+    )
+    base.update(overrides)
+    return CostPackage.model_construct(**base)
+
+
+def _fee_line(**overrides) -> FeeLine:
+    base = dict(
+        id="fee-x", code="other", category="professional", label="X",
+        basis="fixed", amount_pence=1000, pct=0, per_dwelling=False,
+    )
+    base.update(overrides)
+    return FeeLine.model_construct(**base)
+
+
+def _three_classes(*, general=None, existing_building=None, abnormal=None) -> list[ContingencyClass]:
+    """Builds the three-class contingency array in CONTINGENCY_CLASS_NAMES
+    order, each overridable independently -- the Python twin of the inline
+    three-element arrays in validation.test.ts's R10 suite. `model_construct`
+    for the same reason as `_pkg` (ContingencyClass.pct carries `Field(ge=0)`,
+    and the negative-pct rule pins the defense-in-depth check)."""
+    defaults = {
+        "general": dict(name="general", pct=10, basis="all_packages", package_ids=[]),
+        "existing_building": dict(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
+        "abnormal": dict(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+    }
+    overrides = {"general": general, "existing_building": existing_building, "abnormal": abnormal}
+    for key, override in overrides.items():
+        if override is not None:
+            defaults[key].update(override)
+    return [ContingencyClass.model_construct(**defaults[k]) for k in ("general", "existing_building", "abnormal")]
+
+
+class TestCostPlanValidation:
+    """R10 (Task 10, spec Sec 16). Python twin of the 'R10 - cost plan
+    validation' describe block in validation.test.ts -- same fields,
+    severities and gating logic."""
+
+    def test_does_not_gain_errors_on_a_pre_v7_document(self):
+        inputs = make_v6_inputs()
+        issues = validate_inputs(inputs)
+        assert [i for i in issues if i.field.startswith("cost_plan.")] == []
+
+    def test_hard_errors_when_headline_mode_carries_packages(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={"mode": "headline", "packages": [_pkg()]}))
+        assert any(i.severity == "error" and i.field == "cost_plan.mode" for i in invalid)
+
+        valid = validate_inputs(make_v7_inputs())
+        assert not any(i.field == "cost_plan.mode" for i in valid)
+
+    def test_hard_errors_when_detailed_mode_has_no_packages(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={"mode": "detailed", "packages": []}))
+        assert any(i.severity == "error" and i.field == "cost_plan.packages" for i in invalid)
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={"mode": "detailed", "packages": [_pkg()]}))
+        assert not any(i.field == "cost_plan.packages" for i in valid)
+
+    def test_hard_errors_when_detailed_mode_packages_sum_to_zero(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(amount_pence=0), _pkg(id="pkg-2", amount_pence=0)],
+        }))
+        assert any(i.severity == "error" and i.field == "cost_plan.packages" for i in invalid)
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(amount_pence=1000)],
+        }))
+        assert not any(i.field == "cost_plan.packages" for i in valid)
+
+    def test_hard_errors_on_a_negative_package_amount(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(amount_pence=-1)],
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages[0].amount_pence" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(amount_pence=1000)],
+        }))
+        assert not any(i.field == "cost_plan.packages[0].amount_pence" for i in valid)
+
+    def test_hard_errors_on_a_negative_contingency_percentage(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "contingency": _three_classes(existing_building={"pct": -5}),
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.contingency[1].pct" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "contingency": _three_classes(existing_building={"pct": 5}),
+        }))
+        assert not any(i.field == "cost_plan.contingency[1].pct" for i in valid)
+
+    def test_hard_errors_on_a_duplicate_package_id(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(id="dup"), _pkg(id="dup", amount_pence=2000)],
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages" and "unique" in i.message
+            for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(id="a"), _pkg(id="b", amount_pence=2000)],
+        }))
+        assert not any(i.field == "cost_plan.packages" and "unique" in i.message for i in valid)
+
+    def test_hard_errors_on_a_duplicate_fee_line_id(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(id="dup"), _fee_line(id="dup", label="Y")],
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.fee_lines" and "unique" in i.message
+            for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(id="a"), _fee_line(id="b")],
+        }))
+        assert not any(i.field == "cost_plan.fee_lines" and "unique" in i.message for i in valid)
+
+    def test_hard_errors_when_a_selected_packages_contingency_names_an_unknown_package_id(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(id="pkg-1")],
+            "contingency": _three_classes(
+                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": ["no-such-id"]},
+            ),
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.contingency[1].package_ids" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(id="pkg-1")],
+            "contingency": _three_classes(
+                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": ["pkg-1"]},
+            ),
+        }))
+        assert not any(i.field == "cost_plan.contingency[1].package_ids" for i in valid)
+
+    def test_hard_errors_when_a_selected_packages_contingency_names_no_packages_but_carries_a_pct(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "contingency": _three_classes(
+                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": []},
+            ),
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.contingency[1].package_ids" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "contingency": _three_classes(
+                existing_building={"pct": 0, "basis": "selected_packages", "package_ids": []},
+            ),
+        }))
+        assert not any(i.field == "cost_plan.contingency[1].package_ids" for i in valid)
+
+    def test_hard_errors_when_there_are_not_exactly_three_contingency_classes(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "contingency": _three_classes()[:2],
+        }))
+        assert any(i.severity == "error" and i.field == "cost_plan.contingency" for i in invalid)
+
+        valid = validate_inputs(make_v7_inputs())
+        assert not any(i.field == "cost_plan.contingency" for i in valid)
+
+    def test_hard_errors_when_a_contingency_class_name_repeats(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "contingency": _three_classes(existing_building={"name": "general"}),
+        }))
+        assert any(i.severity == "error" and i.field == "cost_plan.contingency" for i in invalid)
+
+        valid = validate_inputs(make_v7_inputs())
+        assert not any(i.field == "cost_plan.contingency" for i in valid)
+
+    def test_hard_errors_when_detailed_mode_carries_a_non_zero_flat_fire_safety_figure(self):
+        """Spec Sec 3.2.1."""
+        invalid = validate_inputs(make_v7_inputs(
+            cost_plan={"mode": "detailed", "packages": [_pkg()]},
+            conversion_costs={"fire_safety_pence": 100},
+        ))
+        assert any(
+            i.severity == "error" and i.field == "conversion_costs.fire_safety_pence" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(
+            cost_plan={"mode": "detailed", "packages": [_pkg()]},
+            conversion_costs={"fire_safety_pence": 0},
+        ))
+        assert not any(i.field == "conversion_costs.fire_safety_pence" for i in valid)
+
+    def test_hard_errors_when_a_fixed_basis_fee_line_carries_a_non_zero_percentage(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="fixed", pct=5)],
+        }))
+        assert any(i.severity == "error" and i.field == "cost_plan.fee_lines[0].pct" for i in invalid)
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="fixed", pct=0)],
+        }))
+        assert not any(i.field == "cost_plan.fee_lines[0].pct" for i in valid)
+
+    def test_hard_errors_when_a_percentage_basis_fee_line_carries_a_non_zero_fixed_amount(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="pct_of_base_build", amount_pence=500, pct=5)],
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.fee_lines[0].amount_pence" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="pct_of_base_build", amount_pence=0, pct=5)],
+        }))
+        assert not any(i.field == "cost_plan.fee_lines[0].amount_pence" for i in valid)
+
+    def test_hard_errors_when_a_percentage_basis_fee_line_is_marked_per_dwelling(self):
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="pct_of_base_build", amount_pence=0, pct=5, per_dwelling=True)],
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.fee_lines[0].per_dwelling" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="pct_of_base_build", amount_pence=0, pct=5, per_dwelling=False)],
+        }))
+        assert not any(i.field == "cost_plan.fee_lines[0].per_dwelling" for i in valid)
+
+    def test_hard_errors_when_a_fee_line_category_contradicts_its_code(self):
+        """building_control is statutory despite sitting in the professional
+        block of ConversionCostInputs (spec Sec 3.4)."""
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(code="building_control", category="professional")],
+        }))
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.fee_lines[0].category" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(code="building_control", category="statutory")],
+        }))
+        assert not any(i.field == "cost_plan.fee_lines[0].category" for i in valid)
+
+    def test_warns_when_contingency_exceeds_50pct_of_the_base_build_cost(self):
+        invalid = validate_inputs(make_v7_inputs(
+            conversion_costs={"total_construction_sqm": 100},
+            cost_plan={"mode": "headline", "contingency": _three_classes(general={"pct": 60})},
+        ))
+        assert any(
+            i.severity == "warning" and i.field == "cost_plan.contingency" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(
+            conversion_costs={"total_construction_sqm": 100},
+            cost_plan={"mode": "headline", "contingency": _three_classes(general={"pct": 10})},
+        ))
+        assert not any(
+            i.severity == "warning" and i.field == "cost_plan.contingency" for i in valid
+        )
+
+    def test_warns_when_a_percentage_basis_fee_line_resolves_against_a_zero_base(self):
+        # make_v7_inputs defaults total_construction_sqm to 0, so headline-mode
+        # base_build is 0.
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "fee_lines": [_fee_line(basis="pct_of_base_build", amount_pence=0, pct=5)],
+        }))
+        assert any(
+            i.severity == "warning" and i.field == "cost_plan.fee_lines[0].basis" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(
+            conversion_costs={"total_construction_sqm": 100},
+            cost_plan={"fee_lines": [_fee_line(basis="pct_of_base_build", amount_pence=0, pct=5)]},
+        ))
+        assert not any(
+            i.severity == "warning" and i.field == "cost_plan.fee_lines[0].basis" for i in valid
+        )

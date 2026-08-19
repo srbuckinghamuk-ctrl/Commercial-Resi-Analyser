@@ -5,14 +5,15 @@ import { validateInputs, reconcile } from './validation';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
-import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6 } from './migrate';
+import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6, migrateV6toV7 } from './migrate';
 import { runAppraisal } from './index';
 import { DEFAULT_AREA_BRIDGE } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, ProgrammePackage, RefinanceInputs,
+  CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV7, ProgrammePackage, RefinanceInputs,
 } from './finance-types';
+import type { CostPackage, FeeLine } from './cost-plan';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -44,6 +45,24 @@ function makeV6Inputs(overrides: {
         })),
       }
       : base.unit_mix,
+  };
+}
+
+/** R10 (Task 10). A v7 document built from the migration chain's own
+ *  defaults, exactly like makeV6Inputs above — migrateV6toV7 derives its
+ *  cost_plan via costPlanFromLegacyCosts, so the baseline is a structurally
+ *  valid headline-mode plan with eight fixed-basis fee lines and three
+ *  contingency classes, without hand-rolling any of it. */
+function makeV7Inputs(overrides: {
+  cost_plan?: Partial<CalculatorInputsV7['cost_plan']>;
+  conversion_costs?: Partial<CalculatorInputsV6['conversion_costs']>;
+} = {}): CalculatorInputsV7 {
+  const v6 = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+  const v7 = migrateV6toV7(v6);
+  return {
+    ...v7,
+    conversion_costs: { ...v7.conversion_costs, ...(overrides.conversion_costs ?? {}) },
+    cost_plan: { ...v7.cost_plan, ...(overrides.cost_plan ?? {}) },
   };
 }
 
@@ -853,5 +872,316 @@ describe('R9 — the ±25% warning is retired, not softened', () => {
     const py = readFileSync(resolve(__dirname, '../../../../app/financial_model/validation.py'), 'utf-8');
     expect(ts).not.toContain(RETIRED_25PCT);
     expect(py).not.toContain(RETIRED_25PCT);
+  });
+});
+
+describe('R10 — cost plan validation', () => {
+  function pkg(overrides: Partial<CostPackage> = {}): CostPackage {
+    return {
+      id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
+      contingency_class: 'general', lender_eligible: true, notes: '', ...overrides,
+    };
+  }
+
+  function feeLine(overrides: Partial<FeeLine> = {}): FeeLine {
+    return {
+      id: 'fee-x', code: 'other', category: 'professional', label: 'X',
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false, ...overrides,
+    };
+  }
+
+  it('does not gain errors on a pre-v7 document (no cost_plan block)', () => {
+    const issues = validateInputs(makeV6Inputs({}));
+    expect(issues.filter((i) => i.field.startsWith('cost_plan.'))).toEqual([]);
+  });
+
+  it('hard-errors when headline mode carries packages', () => {
+    const invalid = validateInputs(makeV7Inputs({ cost_plan: { mode: 'headline', packages: [pkg()] } }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.mode')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs());
+    expect(valid.some((i) => i.field === 'cost_plan.mode')).toBe(false);
+  });
+
+  it('hard-errors when detailed mode has no packages', () => {
+    const invalid = validateInputs(makeV7Inputs({ cost_plan: { mode: 'detailed', packages: [] } }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.packages')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({ cost_plan: { mode: 'detailed', packages: [pkg()] } }));
+    expect(valid.some((i) => i.field === 'cost_plan.packages')).toBe(false);
+  });
+
+  it('hard-errors when detailed mode packages sum to zero', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ amount_pence: 0 }), pkg({ id: 'pkg-2', amount_pence: 0 })],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.packages')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg({ amount_pence: 1000 })] },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.packages')).toBe(false);
+  });
+
+  it('hard-errors on a negative package amount', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg({ amount_pence: -1 })] },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].amount_pence')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg({ amount_pence: 1000 })] },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.packages[0].amount_pence')).toBe(false);
+  });
+
+  it('hard-errors on a negative contingency percentage', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: -5, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].pct')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 5, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].pct')).toBe(false);
+  });
+
+  it('hard-errors on a duplicate package id', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ id: 'dup' }), pkg({ id: 'dup', amount_pence: 2000 })],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.packages'
+      && i.message.includes('unique'))).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ id: 'a' }), pkg({ id: 'b', amount_pence: 2000 })],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.packages' && i.message.includes('unique'))).toBe(false);
+  });
+
+  it('hard-errors on a duplicate fee-line id', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ id: 'dup' }), feeLine({ id: 'dup', label: 'Y' })] },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines'
+      && i.message.includes('unique'))).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ id: 'a' }), feeLine({ id: 'b' })] },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines' && i.message.includes('unique'))).toBe(false);
+  });
+
+  it('hard-errors when a selected-packages contingency names an unknown package id', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ id: 'pkg-1' })],
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: ['no-such-id'] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].package_ids')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ id: 'pkg-1' })],
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: ['pkg-1'] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].package_ids')).toBe(false);
+  });
+
+  it('hard-errors when a selected-packages contingency names no packages but carries a percentage', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].package_ids')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 0, basis: 'selected_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].package_ids')).toBe(false);
+  });
+
+  it('hard-errors when there are not exactly three contingency classes', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs());
+    expect(valid.some((i) => i.field === 'cost_plan.contingency')).toBe(false);
+  });
+
+  it('hard-errors when a contingency class name repeats', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs());
+    expect(valid.some((i) => i.field === 'cost_plan.contingency')).toBe(false);
+  });
+
+  it('hard-errors when detailed mode carries a non-zero flat fire-safety figure (spec §3.2.1)', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg()] },
+      conversion_costs: { fire_safety_pence: 100 },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'conversion_costs.fire_safety_pence')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { mode: 'detailed', packages: [pkg()] },
+      conversion_costs: { fire_safety_pence: 0 },
+    }));
+    expect(valid.some((i) => i.field === 'conversion_costs.fire_safety_pence')).toBe(false);
+  });
+
+  it('hard-errors when a fixed-basis fee line carries a non-zero percentage', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ basis: 'fixed', pct: 5 })] },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].pct')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ basis: 'fixed', pct: 0 })] },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].pct')).toBe(false);
+  });
+
+  it('hard-errors when a percentage-basis fee line carries a non-zero fixed amount', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 500, pct: 5 })] },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].amount_pence')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 0, pct: 5 })] },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].amount_pence')).toBe(false);
+  });
+
+  it('hard-errors when a percentage-basis fee line is marked per_dwelling', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 0, pct: 5, per_dwelling: true })],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].per_dwelling')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 0, pct: 5, per_dwelling: false })],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].per_dwelling')).toBe(false);
+  });
+
+  it('hard-errors when a fee-line category contradicts its code (building_control is statutory)', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ code: 'building_control', category: 'professional' })] },
+    }));
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].category')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ code: 'building_control', category: 'statutory' })] },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].category')).toBe(false);
+  });
+
+  it('warns when contingency exceeds 50% of the base build cost', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      conversion_costs: { total_construction_sqm: 100 },
+      cost_plan: {
+        mode: 'headline',
+        contingency: [
+          { name: 'general', pct: 60, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.contingency')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      conversion_costs: { total_construction_sqm: 100 },
+      cost_plan: {
+        mode: 'headline',
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.contingency')).toBe(false);
+  });
+
+  it('warns when a percentage-basis fee line resolves against a zero base', () => {
+    // makeV7Inputs defaults total_construction_sqm to 0, so headline-mode base_build is 0.
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: { fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 0, pct: 5 })] },
+    }));
+    expect(invalid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.fee_lines[0].basis')).toBe(true);
+
+    const valid = validateInputs(makeV7Inputs({
+      conversion_costs: { total_construction_sqm: 100 },
+      cost_plan: { fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 0, pct: 5 })] },
+    }));
+    expect(valid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.fee_lines[0].basis')).toBe(false);
   });
 });
