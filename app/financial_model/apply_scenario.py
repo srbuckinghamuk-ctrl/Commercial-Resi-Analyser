@@ -46,6 +46,12 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
     # rendering as though it had moved. Compliance allowances and fee lines are
     # deliberately NOT scaled: a percentage fee moves because its base moved,
     # and scaling it too would apply the stress twice.
+    #
+    # Gated on presence (getattr(out, "cost_plan", None)), not on
+    # cost_plan.mode == "detailed": compute_cost_plan's lender_eligible_base_pence
+    # reads packages regardless of mode, so a headline document that happens to
+    # carry stray packages should still have them scale consistently with
+    # everything else the lever moves.
     cost_plan = getattr(out, "cost_plan", None)
     if cost_plan is not None:
         for package in cost_plan.packages:

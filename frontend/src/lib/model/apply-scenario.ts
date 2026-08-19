@@ -60,6 +60,11 @@ export function applyScenario<T extends AnyCalculatorInputs>(
     // rendering as though it had moved. Compliance allowances and fee lines are
     // deliberately NOT scaled: a percentage fee moves because its base moved,
     // and scaling it too would apply the stress twice.
+    //
+    // Gated on presence (`'cost_plan' in inputs`), not on `mode === 'detailed'`:
+    // `lender_eligible_base_pence` (cost-plan.ts) reads `packages` regardless of
+    // mode, so a headline document that happens to carry stray packages should
+    // still have them scale consistently with everything else the lever moves.
     ...('cost_plan' in inputs && inputs.cost_plan != null ? {
       cost_plan: {
         ...inputs.cost_plan,
