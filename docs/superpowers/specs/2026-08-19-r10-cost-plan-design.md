@@ -180,10 +180,23 @@ figures into a single `fire_acoustic_thermal` package (§6) — so the normal pa
 through the error is one click, and the money is visibly moved rather than
 quietly lost.
 
-This also strengthens the §8 cross-mode equivalence pair: the headline document
-carries compliance as a separate component and the detailed document carries the
-same money inside a package, and the two construction totals must still agree to
-the penny.
+**Compliance responds differently to a cost stress in the two modes, and must.**
+In headline mode `compliance_pence` is a fixed allowance the cost lever does not
+scale — pre-R10 behaviour, which R10 must not change. In detailed mode the same
+money sits inside a package, and packages *are* scaled (§3.5). So the two modes
+agree on the construction total at rest and diverge under stress once compliance
+is non-zero.
+
+This is a real behavioural consequence of moving compliance into the priced
+works, not an inconsistency to engineer away. Scaling headline compliance too
+would move existing documents' scenario figures, which this release forbids;
+exempting a compliance package from the stress would make it the one package the
+cost lever cannot reach, recreating §1's defect in miniature. It is recorded as a
+stated limitation in §16 rather than hidden.
+
+It has one direct consequence for testing: the §8 cross-mode equivalence pair
+carries **zero compliance**, so that it tests the cost lever rather than this
+known asymmetry.
 
 ### 3.3 Contingency — one engine, three classes, a named base
 
@@ -494,10 +507,12 @@ accurate on both counts and remains conservative.
   across every reported metric, plus direct structural assertions on the
   migration's output (§4).
 - **Cross-mode equivalence.** Two documents with identical construction totals —
-  one headline, one detailed — produce identical cost stacks **and identical
-  responses to a −10% and a +10% cost stress**. This is the §3.5 guard. It
-  cannot pass vacuously: the documents are built to different shapes, and a mode
-  the cost lever does not reach fails the second half while passing the first.
+  one headline, one detailed, **both with zero compliance** (§3.2.1) — produce
+  identical cost stacks **and identical responses to a −10% and a +10% cost
+  stress**. This is the §3.5 guard. Both halves assert against hand-derived
+  literals, not merely against each other: asserting only that the two modes
+  agree would pass with both inert, which is precisely the defect being guarded
+  against.
 - **Contingency class rounding.** Independently-derived literals, not
   recomputation of the engine's own formula. Three classes at 5% on the same
   base must be pinned as three separate roundings.
@@ -526,7 +541,8 @@ accurate on both counts and remains conservative.
 
 - **New §16 — Cost plan modes.** Modes, packages, contingency classes and
   bases, fee bases, the outputs shape, the stated limitations (no VAT, no
-  per-package programme, eligibility recorded not live).
+  per-package programme, eligibility recorded not live, and the mode-dependent
+  compliance stress behaviour of §3.2.1).
 - **§3.4 Construction cost** — amended: contingency is three classes on named
   bases, and the base build is Σ packages under the detailed mode. The existing
   R9 annotation stays; a new R10 annotation records what changed and why the
