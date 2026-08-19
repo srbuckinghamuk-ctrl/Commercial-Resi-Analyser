@@ -3,7 +3,7 @@ import type {
 } from '../conversion-types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV6,
+  CalculatorInputsV6, CalculatorInputsV7,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs,
 } from './finance-types';
@@ -13,6 +13,7 @@ import {
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import { DEFAULT_AREA_BRIDGE } from './areas';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
+import { costPlanFromLegacyCosts } from './cost-plan';
 
 function isV2(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV2 {
   return snapshot.inputs_version === 2 && typeof snapshot.finance === 'object' && snapshot.finance !== null
@@ -577,4 +578,104 @@ export function migrateInputsToV6(
     };
   }
   return migrateV5toV6(migrateInputsToV5(snapshot, project));
+}
+
+/** A v7 document has the same finance shape as v2–v6, discriminated by
+ *  inputs_version === 7. */
+export function isV7(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV7 {
+  return snapshot.inputs_version === 7
+    && typeof snapshot.finance === 'object' && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/**
+ * R10 (spec §16). Adds the cost plan. Purely additive: an existing v6
+ * document's `conversion_costs` is untouched, and the plan built from it via
+ * `costPlanFromLegacyCosts` reproduces the same eight fee figures and the same
+ * contingency percentage the document already had — so no migrated
+ * appraisal's computed values move.
+ */
+export function migrateV6toV7(v6: CalculatorInputsV6): CalculatorInputsV7 {
+  if (isV7(v6 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV6toV7: input is already a v7 document');
+  }
+  const { inputs_version: _v6Version, ...rest } = v6;
+  const existingPlan = (v6 as unknown as Partial<CalculatorInputsV7>).cost_plan;
+  return {
+    ...rest,
+    inputs_version: 7,
+    cost_plan: existingPlan ?? costPlanFromLegacyCosts(v6.conversion_costs),
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V7: readonly number[] = [1, 2, 3, 4, 5, 6, 7];
+
+/**
+ * Normalises any stored snapshot (v1–v7) to v7. Mirrors migrateInputsToV6's
+ * shape exactly.
+ *
+ * The two refusals below are R8's hardest-won guard, carried forward. R8
+ * shipped `migrateInputsToV4` without a v5 guard; a v5 document satisfied none
+ * of the isVN checks, fell all the way through to the v1 fallback, and was
+ * silently corrupted — fields dropped, a *confirmed* equity source replaced by
+ * an unconfirmed stub with a different amount, the facility rebuilt from
+ * `ltv_pct` — while returning 201. An unrecognised version must fail loudly.
+ */
+export function migrateInputsToV7(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV7 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V7.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV7: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V7.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 7 && !isV7(snapshot)) {
+    throw new Error(
+      'migrateInputsToV7: inputs_version is 7 but the document fails the v7 structural check '
+      + '(finance is not an object, or is missing committed_net_facility_pence) -- refusing to '
+      + 'silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV7(snapshot)) {
+    const defaults = migrateV6toV7(migrateV5toV6(
+      migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)))),
+    ));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV7>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 7,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+    };
+  }
+  return migrateV6toV7(migrateInputsToV6(snapshot, project));
 }

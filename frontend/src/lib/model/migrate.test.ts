@@ -4,6 +4,7 @@ import {
   migrateV3toV4, migrateInputsToV4,
   migrateV4toV5, migrateInputsToV5,
   migrateV5toV6, migrateInputsToV6,
+  migrateV6toV7, migrateInputsToV7,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
@@ -437,5 +438,68 @@ describe('R9 — v5 to v6 migration', () => {
   it('refuses a v6 document through the v5 entry point', () => {
     const v6 = migrateV5toV6(v5) as unknown as Record<string, unknown>;
     expect(() => migrateInputsToV5(v6)).toThrow(/unrecognised inputs_version 6/);
+  });
+});
+
+describe('migrateV6toV7 (R10 spec §4)', () => {
+  it('produces headline mode with no packages and exactly three contingency classes', () => {
+    const v6 = migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2()))));
+    const v7 = migrateV6toV7(v6);
+    expect(v7.inputs_version).toBe(7);
+    expect(v7.cost_plan.mode).toBe('headline');
+    expect(v7.cost_plan.packages).toEqual([]);
+    expect(v7.cost_plan.contingency.map((c) => c.name))
+      .toEqual(['general', 'existing_building', 'abnormal']);
+  });
+
+  it('carries contingency_pct onto the general class and zeroes the other two', () => {
+    const v6 = migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2()))));
+    v6.conversion_costs = { ...v6.conversion_costs, contingency_pct: 12.5 };
+    const v7 = migrateV6toV7(v6);
+    expect(v7.cost_plan.contingency.map((c) => c.pct)).toEqual([12.5, 0, 0]);
+    expect(v7.cost_plan.contingency.every((c) => c.basis === 'all_packages')).toBe(true);
+  });
+
+  it('converts all eight fee fields to fixed lines with the CORRECT categories', () => {
+    // building_control is STATUTORY despite sitting in the professional block of
+    // ConversionCostInputs. Classifying it as professional would leave every
+    // grand total correct while moving money between two reported lines.
+    const v6 = migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2()))));
+    v6.conversion_costs = {
+      ...v6.conversion_costs,
+      architect_pence: 1_500_000, structural_engineer_pence: 500_000, mande_pence: 500_000,
+      planning_consultant_pence: 300_000, other_professional_fees_pence: 0,
+      building_control_pence: 200_000, cil_s106_pence: 700_000,
+      prior_approval_fee_per_dwelling_pence: 9_600,
+    };
+    const v7 = migrateV6toV7(v6);
+    const byCode = Object.fromEntries(v7.cost_plan.fee_lines.map((f) => [f.code, f]));
+    expect(v7.cost_plan.fee_lines).toHaveLength(8);
+    expect(v7.cost_plan.fee_lines.every((f) => f.basis === 'fixed')).toBe(true);
+    expect(byCode.building_control.category).toBe('statutory');
+    expect(byCode.cil_s106.category).toBe('statutory');
+    expect(byCode.prior_approval.category).toBe('statutory');
+    expect(byCode.prior_approval.per_dwelling).toBe(true);
+    expect(byCode.architect.category).toBe('professional');
+    expect(byCode.architect.amount_pence).toBe(1_500_000);
+    expect(byCode.mande.per_dwelling).toBe(false);
+  });
+
+  it('refuses a document that is already v7', () => {
+    const v7 = migrateV6toV7(migrateV5toV6(migrateV4toV5(migrateV3toV4(
+      migrateV2toV3(defaultCalculatorInputsV2())))));
+    expect(() => migrateV6toV7(v7 as never)).toThrow(/already a v7 document/);
+  });
+});
+
+describe('migrateInputsToV7 refusals (R8 carry-forward)', () => {
+  it('refuses an unrecognised inputs_version rather than falling through to v1', () => {
+    expect(() => migrateInputsToV7({ inputs_version: 99 }))
+      .toThrow(/unrecognised inputs_version/);
+  });
+
+  it('refuses a document tagged 7 that fails the structural check', () => {
+    expect(() => migrateInputsToV7({ inputs_version: 7, finance: 'not an object' }))
+      .toThrow(/fails the v7 structural check/);
   });
 });

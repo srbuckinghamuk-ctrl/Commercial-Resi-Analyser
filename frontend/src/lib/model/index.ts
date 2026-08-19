@@ -45,12 +45,13 @@ export {
   migrateInputs, migrateV2toV3, migrateInputsToV3, isV3, isV4, migrateV3toV4, migrateInputsToV4,
   isV5, migrateV4toV5, migrateInputsToV5,
   isV6, migrateV5toV6, migrateInputsToV6,
+  isV7, migrateV6toV7, migrateInputsToV7,
 } from './migrate';
 export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
 export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
 export {
   DEFAULT_COST_PLAN, COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES,
-  FEE_CODE_CATEGORY, defaultContingencyClasses,
+  FEE_CODE_CATEGORY, defaultContingencyClasses, costPlanFromLegacyCosts,
 } from './cost-plan';
 export type {
   CostPlanMode, CostPackageCode, CostPackage, ContingencyClassName, ContingencyClass,
