@@ -29,7 +29,7 @@ const { default: ExportPage } = await import('./ExportPage');
 const { getAppraisal } = await import('../lib/api');
 const { generateAppraisalPdf } = await import('../lib/export-pdf');
 const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
-const { defaultCalculatorInputsV4, defaultCalculatorInputsV6 } = await import('../lib/conversion-defaults');
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV7 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -106,7 +106,7 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     ).not.toBeInTheDocument();
 
     // Second argument is the real `AppraisalRun` computed by the real engine
-    // off the migrated v6 inputs (only `generateInvestmentMemo` is mocked
+    // off the migrated v7 inputs (only `generateInvestmentMemo` is mocked
     // here) -- its acquisition_tax carries the migrated defaults through to a
     // real computed result: england_ni with no date on record, i.e. the
     // current (assumed) band set.
@@ -120,12 +120,17 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
   // through migrateInputsToV5 would have thrown, and both PDFs would have
   // failed for every saved appraisal with only a generic "Could not
   // generate..." banner to show for it.
-  it('exports from the v6 snapshot the server now stores, rather than failing on it', async () => {
-    const storedV6 = storedV4Appraisal();
-    storedV6.inputs_snapshot = defaultCalculatorInputsV6({
+  //
+  // R10 Task 6 fix round 1: the same regression, one version on. The server
+  // boundary moved to v7; this test (and its production call sites,
+  // ExportPage.tsx:100 and :127) now exercises migrateInputsToV7 against a
+  // genuine v7 snapshot rather than v6.
+  it('exports from the v7 snapshot the server now stores, rather than failing on it', async () => {
+    const storedV7 = storedV4Appraisal();
+    storedV7.inputs_snapshot = defaultCalculatorInputsV7({
       id: PROJECT.id, price_pence: PROJECT.price_pence, floor_area_sqm: PROJECT.floor_area_sqm,
     }) as unknown as Record<string, unknown>;
-    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV6);
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV7);
 
     render(<ExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
     selectProject();
@@ -137,6 +142,6 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     ).not.toBeInTheDocument();
 
     const run = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![1];
-    expect(run.inputs.inputs_version).toBe(6);
+    expect(run.inputs.inputs_version).toBe(7);
   });
 });

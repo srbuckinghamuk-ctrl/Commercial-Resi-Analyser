@@ -1,4 +1,10 @@
-"""R10 spec §16. Python mirror of frontend/src/lib/model/cost-plan.test.ts."""
+"""R10 spec §16. Python mirror of frontend/src/lib/model/cost-plan.test.ts.
+
+Mirrors the TS file's test cases and their literal expected values (see the
+comment above `doc()`/`CLASSES`/`pkg()` below), but not byte-for-byte: fix
+round 1 (I3) found `_default_v7()` below deliberately diverges from its TS
+counterpart. See that function's docstring for what differs and why the
+divergence is safe."""
 from app.financial_model.cost_plan import compute_cost_plan
 from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7
 from app.financial_model.types import (
@@ -100,15 +106,31 @@ def test_default_contingency_classes_put_the_percentage_on_general_only():
 
 
 def _default_v7() -> CalculatorInputsV7:
-    """Task 6 repoint: now that migrate_inputs_to_v7 exists, this defers to it
-    rather than hand-rebuilding a v7 document. The cost_plan this produces
-    differs from CalculatorInputsV7's bare default factory (DEFAULT_COST_PLAN
-    has no fee lines; migrate_inputs_to_v7 derives eight non-zero fee lines
-    from DEFAULT_CONVERSION_COSTS via cost_plan_from_legacy_costs) -- every
-    test below that uses the `doc()` helper without overriding `fee_lines`
-    only asserts on base_build/contingency/construction_total/lender_eligible/
-    implied_rate, never on fees, so this substitution changes no expectation
-    in this file."""
+    """Task 6 repoint, fix round 1 (I3): this now defers to the real
+    migrate_inputs_to_v7 rather than hand-rebuilding a v7 document (the
+    original reason for the hand-rebuild -- "Python has no
+    defaultCalculatorInputsV7() yet" -- no longer holds now that Task 6 has
+    shipped the migration).
+
+    NOT a verbatim mirror of cost-plan.test.ts's own `doc()`/default helper,
+    despite this file's module docstring calling the file a Python mirror of
+    that TS test: TS's helper still calls `defaultCalculatorInputsV7()`,
+    which -- per its own comment in conversion-defaults.ts -- builds
+    `cost_plan` from the bare `DEFAULT_COST_PLAN` (no fee lines) and is
+    explicitly pending a Task 12 swap to
+    `costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)`. This function calls
+    that swap early on the Python side, by going through
+    migrate_inputs_to_v7 -- which already derives `cost_plan` from
+    DEFAULT_CONVERSION_COSTS via cost_plan_from_legacy_costs -- so it
+    produces eight non-zero fee lines where TS's helper still produces zero.
+    The two helpers re-converge once Task 12 makes that same swap on the TS
+    side.
+
+    Verified harmless in the meantime: every test below that uses the
+    `doc()` helper without overriding `fee_lines` only asserts on
+    base_build/contingency/construction_total/lender_eligible/implied_rate,
+    never on fees, so this substitution changes no expectation in this
+    file."""
     return migrate_inputs_to_v7({})
 
 

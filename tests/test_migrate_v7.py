@@ -136,11 +136,22 @@ def test_already_v7_document_is_merged_onto_defaults_not_re_migrated(v1_doc):
 def test_v7_merge_branch_default_fills_a_row_that_predates_a_schema_field(v1_doc):
     """Mirrors test_v6_merge_branch_default_fills_a_row_that_predates_a_schema_field.
     A v7 row saved before a schema field existed must be default-filled, not
-    422'd at the boundary or under-filled."""
+    422'd at the boundary or under-filled.
+
+    The `cost_plan` case is the load-bearing one for this migration: every
+    `CostPlanInputs` field (`contingency` included) defaults to an empty
+    list, so a stored row missing the key -- deleted here, mirroring the
+    other three fields already covered -- would silently compute zero
+    contingency without the `"cost_plan": {**defaults["cost_plan"], ...}`
+    merge line in migrate_inputs_to_v7 (migrate.py). Fix round 1, I2:
+    deleting that merge line was confirmed to fail this exact assertion
+    (`AssertionError: assert [] == ['general', 'existing_building',
+    'abnormal']`) before it was restored."""
     saved = migrate_v6_to_v7(_v6(v1_doc)).model_dump(mode="json")
     del saved["deal_spider"]["weights"]
     del saved["scenarios"]["upside"]
     del saved["areas"]["external_amenity_sqm"]
+    del saved["cost_plan"]["contingency"]
 
     again = migrate_inputs_to_v7(saved)
 
@@ -148,6 +159,9 @@ def test_v7_merge_branch_default_fills_a_row_that_predates_a_schema_field(v1_doc
     assert len(again.deal_spider.weights) == 9
     assert again.scenarios.upside.label == "Upside"
     assert again.areas.external_amenity_sqm == 0.0
+    assert [c.name for c in again.cost_plan.contingency] == [
+        "general", "existing_building", "abnormal",
+    ]
 
 
 def test_v7_merge_branch_preserves_a_populated_cost_plan(v1_doc):
