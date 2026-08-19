@@ -135,7 +135,7 @@ async def test_invalid_lender_valuation_rejected_with_422(client, project):
 async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     """POST with a v1-shaped inputs_snapshot (ltv_pct present) -> 200/201,
     response status == 'legacy_unreconciled', outputs recalculated under
-    calc_version 2.8.0, and finance.requires_confirmation True in the stored
+    calc_version 2.9.0, and finance.requires_confirmation True in the stored
     (migrated) snapshot."""
     v1_snapshot = {
         "acquisition": FIXTURE_A_INPUTS["acquisition"],
@@ -162,7 +162,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     body = resp.json()
 
     assert body["status"] == "legacy_unreconciled"
-    assert body["calc_version"] == "2.8.0"
+    assert body["calc_version"] == "2.9.0"
     # R8 Task 10: the server normalisation chain now runs v1 -> v2 -> v3 -> v4
     # -> v5. R9 Task 3 extends it to v6.
     assert body["inputs_snapshot"]["inputs_version"] == 6
@@ -180,7 +180,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert acq["jurisdiction_evidence_status"] == "unconfirmed"
     assert acq["acquisition_date"] is None
     # Outputs were recalculated by the v2 engine, not just passed through.
-    assert body["outputs"]["metrics"]["calc_version"] == "2.8.0"
+    assert body["outputs"]["metrics"]["calc_version"] == "2.9.0"
 
 
 async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, project):
@@ -456,7 +456,7 @@ async def test_get_returns_authoritative_outputs(client, project):
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
     assert body["gdv_pence"] == 120_000_000
-    assert body["calc_version"] == "2.8.0"
+    assert body["calc_version"] == "2.9.0"
 
 
 def _programme(construction: dict) -> dict:

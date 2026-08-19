@@ -455,9 +455,169 @@ class CalculatorInputsV6(CalculatorInputsV5):
     areas: AreaBridgeInputs = Field(default_factory=AreaBridgeInputs)
 
 
+# --- Release 10 (calc 2.9.0): cost plan modes, contingency classes, fee bases ---
+
+CostPlanMode = Literal["headline", "detailed"]
+
+CostPackageCode = Literal[
+    "enabling_strip_out_asbestos", "structure", "envelope", "roof_windows",
+    "fire_acoustic_thermal", "mech_elec_public_health", "drainage_utilities",
+    "lift", "partitions", "finishes", "common_parts", "externals", "other",
+]
+
+COST_PACKAGE_CODES: tuple[str, ...] = (
+    "enabling_strip_out_asbestos", "structure", "envelope", "roof_windows",
+    "fire_acoustic_thermal", "mech_elec_public_health", "drainage_utilities",
+    "lift", "partitions", "finishes", "common_parts", "externals", "other",
+)
+
+ContingencyClassName = Literal["general", "existing_building", "abnormal"]
+
+CONTINGENCY_CLASS_NAMES: tuple[str, ...] = ("general", "existing_building", "abnormal")
+
+FeeBasis = Literal["fixed", "pct_of_base_build", "pct_of_construction_total"]
+
+FeeCode = Literal[
+    "architect", "structural_engineer", "mande", "planning_consultant",
+    "other_professional", "prior_approval", "cil_s106", "building_control", "other",
+]
+
+FeeCategory = Literal["professional", "statutory"]
+
+# Spec Sec 3.4. FIXED, not a user choice. `building_control` reads like a
+# consultant fee and sits inside the professional block of ConversionCostInputs,
+# but schedule.py counts it in the STATUTORY total (Sec 3.6). Misclassifying it
+# moves money between two separately-reported, separately-spread lines while
+# every grand total stays correct -- invisible to any totals-based test.
+FEE_CODE_CATEGORY: dict[str, str] = {
+    "architect": "professional",
+    "structural_engineer": "professional",
+    "mande": "professional",
+    "planning_consultant": "professional",
+    "other_professional": "professional",
+    "prior_approval": "statutory",
+    "cil_s106": "statutory",
+    "building_control": "statutory",
+}
+
+
+class CostPackage(Model):
+    """Mirrors CostPackage in cost-plan.ts, field for field and in order."""
+
+    id: str
+    code: CostPackageCode
+    label: str = ""
+    amount_pence: int = Field(default=0, ge=0)
+    contingency_class: ContingencyClassName = "general"
+    # R10 records this; the ledger's draw cap does NOT read it. R14 wires it.
+    lender_eligible: bool = True
+    notes: str = ""
+
+
+class ContingencyClass(Model):
+    name: ContingencyClassName
+    pct: float = Field(default=0.0, ge=0)
+    basis: Literal["all_packages", "selected_packages"] = "all_packages"
+    package_ids: list[str] = Field(default_factory=list)
+
+
+class FeeLine(Model):
+    id: str
+    code: FeeCode
+    category: FeeCategory
+    label: str = ""
+    basis: FeeBasis = "fixed"
+    amount_pence: int = Field(default=0, ge=0)
+    pct: float = Field(default=0.0, ge=0)
+    per_dwelling: bool = False
+
+
+class CostPlanInputs(Model):
+    mode: CostPlanMode = "headline"
+    packages: list[CostPackage] = Field(default_factory=list)
+    contingency: list[ContingencyClass] = Field(default_factory=list)
+    fee_lines: list[FeeLine] = Field(default_factory=list)
+
+
+def default_contingency_classes(general_pct: float) -> list[ContingencyClass]:
+    return [
+        ContingencyClass(
+            name=name,  # type: ignore[arg-type]
+            pct=general_pct if name == "general" else 0.0,
+            basis="all_packages",
+            package_ids=[],
+        )
+        for name in CONTINGENCY_CLASS_NAMES
+    ]
+
+
+DEFAULT_COST_PLAN = CostPlanInputs(
+    mode="headline",
+    packages=[],
+    contingency=default_contingency_classes(10.0),
+    fee_lines=[],
+)
+
+
+def cost_plan_from_legacy_costs(cc) -> CostPlanInputs:
+    """Spec Sec 4. Builds a cost plan from a pre-v7 document's flat cost fields.
+
+    Used in TWO places and it must be the SAME construction in both: the v6->v7
+    migration (Task 6), and the engine's fallback for a document with no
+    cost_plan block (Task 4). DEFAULT_COST_PLAN must NOT be used as that
+    fallback -- it carries no fee lines and a hardcoded 10% contingency, so
+    every unmigrated document would report zero professional fees and zero
+    statutory costs once schedule.py reads its totals from here.
+
+    No package schedule is synthesised: splitting a headline figure into
+    invented packages would be inventing evidence.
+    """
+
+    def fee(code: str, label: str, amount: int, per_dwelling: bool = False) -> FeeLine:
+        return FeeLine(
+            id=f"fee-{code}",
+            code=code,  # type: ignore[arg-type]
+            category=FEE_CODE_CATEGORY[code],  # type: ignore[arg-type]
+            label=label,
+            basis="fixed",
+            amount_pence=amount,
+            pct=0.0,
+            per_dwelling=per_dwelling,
+        )
+
+    return CostPlanInputs(
+        mode="headline",
+        packages=[],
+        contingency=default_contingency_classes(cc.contingency_pct),
+        fee_lines=[
+            fee("architect", "Architect", cc.architect_pence),
+            fee("structural_engineer", "Structural engineer", cc.structural_engineer_pence),
+            fee("mande", "M&E", cc.mande_pence),
+            fee("planning_consultant", "Planning consultant", cc.planning_consultant_pence),
+            fee("other_professional", "Other professional fees", cc.other_professional_fees_pence),
+            fee("prior_approval", "Prior approval fee",
+                cc.prior_approval_fee_per_dwelling_pence, True),
+            fee("cil_s106", "CIL / S106", cc.cil_s106_pence),
+            fee("building_control", "Building control", cc.building_control_pence),
+        ],
+    )
+
+
+class CalculatorInputsV7(CalculatorInputsV6):
+    """Mirrors CalculatorInputsV6 with the R10 cost plan. Subclasses V6 for the
+    same reason V6 subclasses V5: the engine dispatches on it, and a flat
+    re-declaration would make those isinstance checks silently False for v7
+    documents."""
+
+    inputs_version: Literal[7] = 7  # type: ignore[assignment]
+    cost_plan: CostPlanInputs = Field(
+        default_factory=lambda: DEFAULT_COST_PLAN.model_copy(deep=True)
+    )
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
-    | CalculatorInputsV5 | CalculatorInputsV6
+    | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7
 )
 
 
@@ -469,6 +629,8 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    if version == 7:
+        return CalculatorInputsV7.model_validate(doc)
     if version == 6:
         return CalculatorInputsV6.model_validate(doc)
     if version == 5:
@@ -489,4 +651,4 @@ FlagCode = Literal[
     "breakeven_cap_exhausted", "facility_redrawn_after_redemption",
 ]
 
-CALC_VERSION = "2.8.0"
+CALC_VERSION = "2.9.0"
