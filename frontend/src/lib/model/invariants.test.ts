@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import { migrateInputsToV6 } from './migrate';
+import { migrateInputsToV7 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
@@ -55,11 +55,14 @@ function variants(
   // Release 3a Task 9: a programme variant so every existing ledger invariant in this
   // file's top describe block also exercises the dated-programme path (spec §6.1),
   // not just fixture H's hand-authored one.
-  // R9: normalised to v6, not v5. The corpus now mixes v5 and v6 documents, and
-  // migrateInputsToV5 refuses a v6 one by design — producing a v5 document would mean
-  // dropping `areas` and every unit's `ancillary` block, which is exactly the silent
-  // downgrade that guard exists to prevent.
-  const programmed = migrateInputsToV6(clone() as unknown as Record<string, unknown>);
+  // R9: normalised to v6, not v5 — migrateInputsToV5 refuses a v6 document by design,
+  // since producing one would mean dropping `areas` and every unit's `ancillary`
+  // block, the silent downgrade that guard exists to prevent.
+  // R10: widened again, to v7 not v6, for the symmetric reason — migrateInputsToV6
+  // refuses a v7 document (fixture Q), since producing one would mean dropping
+  // `cost_plan`. The corpus now mixes v5, v6 and v7 documents, and migrateInputsToV7
+  // accepts all three.
+  const programmed = migrateInputsToV7(clone() as unknown as Record<string, unknown>);
   programmed.programme = programmeForTerm(programmed.finance.term_months);
   return [
     { label: 'base', inputs },

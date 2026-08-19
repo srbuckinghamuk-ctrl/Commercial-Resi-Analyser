@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import { migrateInputsToV5, migrateInputsToV6 } from './migrate';
+import { migrateInputsToV5, migrateInputsToV6, migrateInputsToV7 } from './migrate';
+import { costPlanFromLegacyCosts } from './cost-plan';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -78,6 +79,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'n-area-bridge',
   'o-ancillary-value',
   'p-scotland-levered',
+  'q-detailed-cost-plan',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -115,6 +117,36 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // differ by exactly the retained units' ancillary, and neither number alone can
   // prove that. A schedule total rather than a summary metric, hence the mapper.
   gross_sales_pence: (r) => r.schedule.totals.gross_sales_pence,
+  // R10 spec §16, fixture Q: cost_plan.contingency and cost_plan.fees are ARRAYS of
+  // objects, so a dotted `expected_metrics` path (which works fine for the scalar
+  // cost_plan fields above it) cannot reach an individual line's base or amount —
+  // the Python mirror's `_resolve_path` does `getattr(root, part)`, and a list has no
+  // attribute named "0" or "general". These six mappers find a class by name so
+  // fixture Q can pin all three contingency classes' resolved base AND amount, the
+  // §16 "show the base" requirement discharged as an assertion rather than prose.
+  cost_plan_contingency_general_base_pence: (r) =>
+    r.metrics.cost_plan.contingency.find((c) => c.name === 'general')?.base_pence ?? null,
+  cost_plan_contingency_general_amount_pence: (r) =>
+    r.metrics.cost_plan.contingency.find((c) => c.name === 'general')?.amount_pence ?? null,
+  cost_plan_contingency_existing_building_base_pence: (r) =>
+    r.metrics.cost_plan.contingency.find((c) => c.name === 'existing_building')?.base_pence ?? null,
+  cost_plan_contingency_existing_building_amount_pence: (r) =>
+    r.metrics.cost_plan.contingency.find((c) => c.name === 'existing_building')?.amount_pence ?? null,
+  cost_plan_contingency_abnormal_base_pence: (r) =>
+    r.metrics.cost_plan.contingency.find((c) => c.name === 'abnormal')?.base_pence ?? null,
+  cost_plan_contingency_abnormal_amount_pence: (r) =>
+    r.metrics.cost_plan.contingency.find((c) => c.name === 'abnormal')?.amount_pence ?? null,
+  // Same reasoning for the two percentage fee lines (spec §8 "fee base isolation"):
+  // found by `basis` rather than `code`, since the fixture's whole point is that the
+  // two bases resolve to different figures.
+  cost_plan_fee_pct_construction_total_base_pence: (r) =>
+    r.metrics.cost_plan.fees.find((f) => f.basis === 'pct_of_construction_total')?.base_pence ?? null,
+  cost_plan_fee_pct_construction_total_amount_pence: (r) =>
+    r.metrics.cost_plan.fees.find((f) => f.basis === 'pct_of_construction_total')?.amount_pence ?? null,
+  cost_plan_fee_pct_base_build_base_pence: (r) =>
+    r.metrics.cost_plan.fees.find((f) => f.basis === 'pct_of_base_build')?.base_pence ?? null,
+  cost_plan_fee_pct_base_build_amount_pence: (r) =>
+    r.metrics.cost_plan.fees.find((f) => f.basis === 'pct_of_base_build')?.amount_pence ?? null,
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -180,14 +212,22 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // one), so a v6 fixture asserts the v6 property below instead of this one.
   const v5Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 5);
   const v6Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 6);
+  // R10: symmetrically, migrateInputsToV6 refuses a v7 document by design (it would
+  // have to drop `cost_plan` to produce one) — see RECOGNISED_INPUTS_VERSIONS_V6,
+  // which stops at 6 — so a v7 fixture asserts the v7 property in the loop below
+  // instead of the v6 one.
+  const v7Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 7);
 
-  it('every fixture is v5 or v6, and both groups are non-empty', () => {
-    expect(v5Fixtures.length + v6Fixtures.length).toBe(appraisalFixtures.length);
+  it('every fixture is v5, v6 or v7, and each group is non-empty', () => {
+    expect(v5Fixtures.length + v6Fixtures.length + v7Fixtures.length).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
       'N — full area bridge, bridge-derived construction area, all-cash',
       'O — ancillary value, blended exit, one unit sold and one retained',
       'P — Scottish acquisition, LBTT non-residential, development finance',
+    ]);
+    expect(v7Fixtures.map((f) => f.name)).toEqual([
+      'Q — detailed cost plan, three contingency classes, levered facility',
     ]);
   });
 
@@ -206,18 +246,35 @@ describe('golden fixtures (shared with the Python engine)', () => {
     });
   }
 
-  for (const fx of appraisalFixtures) {
-    // R9: the same identity guarantee at the head of the chain, and the one that now
-    // covers the WHOLE corpus — migrateInputsToV6 accepts a v5 document (upgrade path)
-    // and a v6 one (merge branch) alike. The merge branch is the one that matters for
-    // the new fixtures: it must carry `areas` and every unit's `ancillary` through
-    // untouched, and a merge that silently reset either to the zeroed default would
-    // move fixture N's construction cost by 16,170,000p and fixture O's GDV by
-    // 4,500,000p rather than pass.
+  // R10: restricted to the pre-v7 fixtures (v5Fixtures ∪ v6Fixtures) — migrateInputsToV6
+  // refuses a v7 document, mirroring the v5Fixtures restriction above. The stronger,
+  // corpus-wide statement is now the v7 loop immediately below.
+  for (const fx of appraisalFixtures.filter((f) => versionOf(f) !== 7)) {
+    // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
+    // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
+    // merge branch is the one that matters for the new fixtures: it must carry `areas`
+    // and every unit's `ancillary` through untouched, and a merge that silently reset
+    // either to the zeroed default would move fixture N's construction cost by
+    // 16,170,000p and fixture O's GDV by 4,500,000p rather than pass.
     it(`${fx.name} — reproduces its metrics after migration to v6`, () => {
       const v6 = migrateInputsToV6(fx.inputs as unknown as Record<string, unknown>);
       expect(v6.inputs_version).toBe(6);
       assertExpectedMetrics(runAppraisal(v6), fx, `${fx.name}[migrated-to-v6]`);
+    });
+  }
+
+  for (const fx of appraisalFixtures) {
+    // R10: the same identity guarantee one version further on, and the one that now
+    // covers the WHOLE corpus — migrateInputsToV7 accepts v5, v6 and v7 documents alike
+    // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
+    // `cost_plan` through untouched, and a merge that silently reset it to
+    // DEFAULT_COST_PLAN would move fixture Q's construction cost by 6,040,000p
+    // (the whole contingency total, since the base build alone survives via
+    // costPlanFromLegacyCosts's fallback) rather than pass.
+    it(`${fx.name} — reproduces its metrics after migration to v7`, () => {
+      const v7 = migrateInputsToV7(fx.inputs as unknown as Record<string, unknown>);
+      expect(v7.inputs_version).toBe(7);
+      assertExpectedMetrics(runAppraisal(v7), fx, `${fx.name}[migrated-to-v7]`);
     });
   }
 
@@ -264,7 +321,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -274,11 +331,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'N — full area bridge, bridge-derived construction area, all-cash',
       'O — ancillary value, blended exit, one unit sold and one retained',
       'P — Scottish acquisition, LBTT non-residential, development finance',
+      'Q — detailed cost plan, three contingency classes, levered facility',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
+    // R10 widens the second reason from "== 6" to "!= 5": fixture Q (v7) has no pre-R8
+    // form for the same reason N/O/P (v6) do not — asPreR8Document stamps v3/v4, and
+    // migrating that back up would leave the R9 areas/ancillary AND the R10 cost_plan
+    // blocks at their zeroed/legacy-derived defaults, a different document.
     for (const fx of excluded) {
       expect(
-        jurisdictionOf(fx) !== 'england_ni' || versionOf(fx) === 6,
+        jurisdictionOf(fx) !== 'england_ni' || versionOf(fx) !== 5,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -452,6 +514,28 @@ describe('golden fixtures (shared with the Python engine)', () => {
         peak_debt_pence: 70601817,                     // truly 70601816 (direct key)
       },
     },
+    // R10 Task 11 fix round 1 (the same convention the block above states): fixture Q
+    // adds ten new FLAT_KEYS mappers (the three contingency classes' base and amount,
+    // and the two percentage fee lines' base and amount), and every one needs a
+    // control here or the convention silently breaks for the next reader who trusts
+    // it. One entry covers all ten — poisoning `general`'s base with `existing_building`'s
+    // figure (and so on) rather than an arbitrary wrong number, so a control failure
+    // reads as "found the wrong line" rather than "found a typo".
+    {
+      namePrefix: 'Q — detailed cost plan',
+      wrongValues: {
+        cost_plan_contingency_general_base_pence: 23000000,       // truly 47000000
+        cost_plan_contingency_general_amount_pence: 2350001,      // truly 2350000
+        cost_plan_contingency_existing_building_base_pence: 47000000, // truly 23000000
+        cost_plan_contingency_existing_building_amount_pence: 3450001, // truly 3450000
+        cost_plan_contingency_abnormal_base_pence: 47000000,      // truly 3000000
+        cost_plan_contingency_abnormal_amount_pence: 240001,      // truly 240000
+        cost_plan_fee_pct_construction_total_base_pence: 47000000, // truly 53040000
+        cost_plan_fee_pct_construction_total_amount_pence: 795601, // truly 795600
+        cost_plan_fee_pct_base_build_base_pence: 53040000,        // truly 47000000
+        cost_plan_fee_pct_base_build_amount_pence: 2820001,       // truly 2820000
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -481,7 +565,11 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // `conversion_costs.total_construction_sqm` and every figure must be
   // byte-identical either side of it. If one moves, the migration is wrong —
   // not the fixture.
-  it.each(appraisalFixtures.map((f) => f.name))(
+  //
+  // R10: restricted to the pre-v7 fixtures — migrateInputsToV6 refuses a v7 document
+  // by design (RECOGNISED_INPUTS_VERSIONS_V6 stops at 6), mirroring the v5Fixtures/
+  // v6Fixtures restriction above. The stronger, corpus-wide gate is the v7 table below.
+  it.each(appraisalFixtures.filter((f) => versionOf(f) !== 7).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -535,12 +623,48 @@ describe('golden fixtures (shared with the Python engine)', () => {
     },
   );
 
-  // Non-vacuity guard, mirroring the Python gate's `len(names) == 11`. The
+  // R10 Task 11 — the acceptance gate for the v6→v7 migration, mirrored in
+  // tests/test_migrate_v7.py. The same shape as the v6 table above, one version
+  // further on, and now corpus-wide again: migrateInputsToV7 accepts v5, v6 and v7
+  // documents alike (RECOGNISED_INPUTS_VERSIONS_V7 = 1–7).
+  it.each(appraisalFixtures.map((f) => f.name))(
+    'migrating %s to v7 moves no computed figure',
+    (name) => {
+      const fx = appraisalFixtures.find((f) => f.name === name)!;
+      const before = runAppraisal(fx.inputs);
+      const migrated = migrateInputsToV7(fx.inputs as unknown as Record<string, unknown>);
+      const after = runAppraisal(migrated);
+
+      expect(migrated.inputs_version).toBe(7);
+
+      // Structural half, mirroring the v6 table's areas/ancillary check: a fixture
+      // that is already v7 (fixture Q) goes through the merge branch, where the claim
+      // is that `cost_plan` survives untouched — silently resetting it to
+      // DEFAULT_COST_PLAN would move Q's construction cost by 6,040,000p (the whole
+      // contingency total) and the numeric gate below would still catch it, but this
+      // makes the *construction* of the bug visible rather than just its symptom. A
+      // fixture being UPGRADED (v5/v6) must instead get exactly the plan
+      // costPlanFromLegacyCosts derives from its own conversion_costs — the same
+      // function the engine's pre-v7 fallback uses, per cost-plan.ts's own docstring
+      // on why a second, divergent copy would be unsafe.
+      if (versionOf(fx) === 7) {
+        expect(migrated.cost_plan).toEqual((fx.inputs as unknown as { cost_plan: unknown }).cost_plan);
+      } else {
+        expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs));
+      }
+
+      expect(after.metrics).toEqual(before.metrics);
+      expect(after.model).toEqual(before.model);
+      expect(after.schedule).toEqual(before.schedule);
+    },
+  );
+
+  // Non-vacuity guard, mirroring the Python gate's `len(names) == 12`. The
   // corpus is loaded by directory scan, so a fixture that is deleted, renamed
-  // or never committed would silently shrink the it.each table above to
+  // or never committed would silently shrink the it.each tables above to
   // nothing rather than failing.
-  it('runs the v6 identity gate over the whole pipeline corpus, not an empty one', () => {
-    expect(appraisalFixtures).toHaveLength(11);
+  it('runs the migration identity gates over the whole pipeline corpus, not an empty one', () => {
+    expect(appraisalFixtures).toHaveLength(12);
   });
 });
 

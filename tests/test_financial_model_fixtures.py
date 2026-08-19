@@ -12,6 +12,7 @@ from app.financial_model.migrate import (
     migrate_inputs,
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
+    migrate_inputs_to_v7,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.sensitivity import (
@@ -24,7 +25,8 @@ from app.financial_model.sensitivity import (
 from app.financial_model.types import (
     AnyCalculatorInputs,
     CalculatorInputsV5,
-    CalculatorInputsV6,
+    CalculatorInputsV7,
+    cost_plan_from_legacy_costs,
     ProgrammeInputs,
     ProgrammePackage,
     ProgrammePackages,
@@ -55,6 +57,7 @@ EXPECTED_FIXTURE_STEMS = [
     "n-area-bridge",
     "o-ancillary-value",
     "p-scotland-levered",
+    "q-detailed-cost-plan",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -105,6 +108,56 @@ _FLAT_KEYS = {
     # alone can prove that. A schedule total rather than a summary metric, hence the
     # mapper. Mirrors golden-fixtures.test.ts's FLAT_KEYS.
     "gross_sales_pence": lambda r: r.schedule.totals.gross_sales_pence,
+    # R10 spec Sec 16, fixture Q: cost_plan.contingency and cost_plan.fees are LISTS
+    # of dataclasses, so a dotted expected_metrics path (which works fine for the
+    # scalar cost_plan fields above it) cannot reach one -- _resolve_path does
+    # getattr(root, part), and a list has no attribute named "0" or "general".
+    # Mirrors golden-fixtures.test.ts's six contingency mappers.
+    "cost_plan_contingency_general_base_pence": (
+        lambda r: next((c.base_pence for c in r.metrics.cost_plan.contingency if c.name == "general"), None)
+    ),
+    "cost_plan_contingency_general_amount_pence": (
+        lambda r: next((c.amount_pence for c in r.metrics.cost_plan.contingency if c.name == "general"), None)
+    ),
+    "cost_plan_contingency_existing_building_base_pence": (
+        lambda r: next(
+            (c.base_pence for c in r.metrics.cost_plan.contingency if c.name == "existing_building"), None
+        )
+    ),
+    "cost_plan_contingency_existing_building_amount_pence": (
+        lambda r: next(
+            (c.amount_pence for c in r.metrics.cost_plan.contingency if c.name == "existing_building"), None
+        )
+    ),
+    "cost_plan_contingency_abnormal_base_pence": (
+        lambda r: next((c.base_pence for c in r.metrics.cost_plan.contingency if c.name == "abnormal"), None)
+    ),
+    "cost_plan_contingency_abnormal_amount_pence": (
+        lambda r: next((c.amount_pence for c in r.metrics.cost_plan.contingency if c.name == "abnormal"), None)
+    ),
+    # Same reasoning for the two percentage fee lines (spec Sec 8 "fee base
+    # isolation"): found by basis rather than code, since the fixture's whole point
+    # is that the two bases resolve to different figures.
+    "cost_plan_fee_pct_construction_total_base_pence": (
+        lambda r: next(
+            (f.base_pence for f in r.metrics.cost_plan.fees if f.basis == "pct_of_construction_total"), None
+        )
+    ),
+    "cost_plan_fee_pct_construction_total_amount_pence": (
+        lambda r: next(
+            (f.amount_pence for f in r.metrics.cost_plan.fees if f.basis == "pct_of_construction_total"), None
+        )
+    ),
+    "cost_plan_fee_pct_base_build_base_pence": (
+        lambda r: next(
+            (f.base_pence for f in r.metrics.cost_plan.fees if f.basis == "pct_of_base_build"), None
+        )
+    ),
+    "cost_plan_fee_pct_base_build_amount_pence": (
+        lambda r: next(
+            (f.amount_pence for f in r.metrics.cost_plan.fees if f.basis == "pct_of_base_build"), None
+        )
+    ),
 }
 
 
@@ -156,16 +209,21 @@ def test_golden_fixture_parity(path: Path) -> None:
 # and the (stronger, corpus-wide) migration-to-v6 identity below covers everything.
 _V5_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 5]
 _V6_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 6]
+# R10: symmetrically, migrate_inputs_to_v6 refuses a v7 document by design (it would
+# have to drop `cost_plan` to produce one) -- see _RECOGNISED_VERSIONS_V6, which stops
+# at 6 -- so a v7 fixture asserts the v7 property below instead of the v6 one.
+_V7_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 7]
 
 
-def test_every_fixture_is_v5_or_v6_and_both_groups_are_non_empty() -> None:
+def test_every_fixture_is_v5_v6_or_v7_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
-    was mistyped would drop out of both parametrisations rather than fail."""
-    assert len(_V5_FIXTURES) + len(_V6_FIXTURES) == len(APPRAISAL_FIXTURES)
+    was mistyped would drop out of every parametrisation rather than fail."""
+    assert len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) == len(APPRAISAL_FIXTURES)
     assert len(_V5_FIXTURES) > 0
     assert [p.stem for p in _V6_FIXTURES] == [
         "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
     ]
+    assert [p.stem for p in _V7_FIXTURES] == ["q-detailed-cost-plan"]
 
 
 @pytest.mark.parametrize("path", _V5_FIXTURES, ids=lambda p: p.stem)
@@ -185,19 +243,49 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
     _assert_expected_metrics(run_appraisal(v5), doc, f"{path.stem}[migrated-to-v5]")
 
 
-@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+# R10: restricted to the pre-v7 fixtures (v5 + v6) -- migrate_inputs_to_v6 refuses a
+# v7 document by design, mirroring the v5-fixtures restriction above. The stronger,
+# corpus-wide statement is test_fixtures_reproduce_their_metrics_after_migration_to_v7
+# below.
+_PRE_V7_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) != 7]
+
+
+@pytest.mark.parametrize("path", _PRE_V7_FIXTURES, ids=lambda p: p.stem)
 def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> None:
-    """R9: the same identity guarantee at the head of the chain, and the one that now
-    covers the WHOLE corpus -- migrate_inputs_to_v6 accepts a v5 document (upgrade path)
-    and a v6 one (merge branch) alike. The merge branch is the one that matters for the
-    new fixtures: it must carry ``areas`` and every unit's ``ancillary`` through
-    untouched, and a merge that silently reset either to the zeroed default would move
-    fixture N's construction cost by 16,170,000p and fixture O's GDV by 4,500,000p
-    rather than pass."""
+    """R9: the same identity guarantee at the head of the chain -- migrate_inputs_to_v6
+    accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The merge
+    branch is the one that matters for the new fixtures: it must carry ``areas`` and
+    every unit's ``ancillary`` through untouched, and a merge that silently reset
+    either to the zeroed default would move fixture N's construction cost by
+    16,170,000p and fixture O's GDV by 4,500,000p rather than pass."""
     doc = _load_fixture(path)
     v6 = migrate_inputs_to_v6(doc["inputs"])
     assert v6.inputs_version == 6
     _assert_expected_metrics(run_appraisal(v6), doc, f"{path.stem}[migrated-to-v6]")
+
+
+@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+def test_fixtures_reproduce_their_metrics_after_migration_to_v7(path: Path) -> None:
+    """R10 Task 11: the same identity guarantee one version further on, and the one
+    that now covers the WHOLE corpus again -- migrate_inputs_to_v7 accepts v5, v6 and
+    v7 documents alike (upgrade, upgrade, merge). The merge branch matters for
+    fixture Q: it must carry ``cost_plan`` through untouched, and a merge that
+    silently reset it to the default headline plan would move Q's construction cost
+    by 6,040,000p (the whole contingency total) rather than pass. A fixture being
+    UPGRADED (v5/v6) must instead get exactly the plan cost_plan_from_legacy_costs
+    derives from its own conversion_costs -- the same function the engine's pre-v7
+    fallback uses, per types.py's own docstring on why a second, divergent copy
+    would be unsafe."""
+    doc = _load_fixture(path)
+    v7 = migrate_inputs_to_v7(doc["inputs"])
+    assert v7.inputs_version == 7
+    if _version_of(doc) == 7:
+        assert v7.cost_plan == parse_calculator_inputs(doc["inputs"]).cost_plan
+    else:
+        assert v7.cost_plan == cost_plan_from_legacy_costs(
+            parse_calculator_inputs(doc["inputs"]).conversion_costs
+        )
+    _assert_expected_metrics(run_appraisal(v7), doc, f"{path.stem}[migrated-to-v7]")
 
 
 # R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named scenarios
@@ -284,12 +372,17 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     excluded = [p for p in APPRAISAL_FIXTURES if p not in _PRE_R8_FIXTURES]
     assert [p.stem for p in excluded] == [
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
+        "q-detailed-cost-plan",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
+    # R10 widens the second reason from "== 6" to "!= 5": fixture Q (v7) has no pre-R8
+    # form for the same reason N/O/P (v6) do not -- migrating a stamped-back v3/v4
+    # document up would leave the R9 areas/ancillary AND the R10 cost_plan blocks at
+    # their zeroed/legacy-derived defaults, a different document.
     for path in excluded:
         assert (
             _jurisdiction_of(path) != "england_ni"
-            or _version_of(_load_fixture(path)) == 6
+            or _version_of(_load_fixture(path)) != 5
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -437,6 +530,25 @@ _NEGATIVE_CONTROLS = [
         "cost_to_complete_max_shortfall_pence": 392_484,
         "funding_gap_pence": 1,
     }),
+    # R10 Task 11 fix round 1 (the same convention stated above): fixture Q adds ten
+    # new _FLAT_KEYS mappers (the three contingency classes' base and amount, and the
+    # two percentage fee lines' base and amount), and every one needs a control here.
+    # One entry covers all ten -- poisoning `general`'s base with `existing_building`'s
+    # figure (and so on) rather than an arbitrary wrong number, so a control failure
+    # reads as "found the wrong line" rather than "found a typo". Mirrors
+    # golden-fixtures.test.ts's negativeControls entry for fixture Q.
+    ("q-detailed-cost-plan", {
+        "cost_plan_contingency_general_base_pence": 23_000_000,           # truly 47000000
+        "cost_plan_contingency_general_amount_pence": 2_350_001,          # truly 2350000
+        "cost_plan_contingency_existing_building_base_pence": 47_000_000, # truly 23000000
+        "cost_plan_contingency_existing_building_amount_pence": 3_450_001, # truly 3450000
+        "cost_plan_contingency_abnormal_base_pence": 47_000_000,          # truly 3000000
+        "cost_plan_contingency_abnormal_amount_pence": 240_001,           # truly 240000
+        "cost_plan_fee_pct_construction_total_base_pence": 47_000_000,    # truly 53040000
+        "cost_plan_fee_pct_construction_total_amount_pence": 795_601,     # truly 795600
+        "cost_plan_fee_pct_base_build_base_pence": 53_040_000,            # truly 47000000
+        "cost_plan_fee_pct_base_build_amount_pence": 2_820_001,           # truly 2820000
+    }),
 ]
 
 
@@ -513,12 +625,15 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     serviced.finance.interest_type = "serviced"
     short_term = inputs.model_copy(deep=True)
     short_term.finance.term_months = 1
-    # R9: normalised to v6, not v5. The corpus now mixes v5 and v6 documents, and
-    # migrate_inputs_to_v5 refuses a v6 one by design -- producing a v5 document would
-    # mean dropping ``areas`` and every unit's ``ancillary`` block, which is exactly the
-    # silent downgrade that guard exists to prevent.
-    programmed = migrate_inputs_to_v6(inputs.model_dump(mode="json"))
-    assert isinstance(programmed, CalculatorInputsV6)
+    # R9: normalised to v6, not v5 -- migrate_inputs_to_v5 refuses a v6 document by
+    # design, since producing one would mean dropping ``areas`` and every unit's
+    # ``ancillary`` block, the silent downgrade that guard exists to prevent.
+    # R10: widened again, to v7 not v6, for the symmetric reason -- migrate_inputs_to_v6
+    # refuses a v7 document (fixture Q), since producing one would mean dropping
+    # ``cost_plan``. The corpus now mixes v5, v6 and v7 documents, and migrate_inputs_to_v7
+    # accepts all three.
+    programmed = migrate_inputs_to_v7(inputs.model_dump(mode="json"))
+    assert isinstance(programmed, CalculatorInputsV7)
     programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
