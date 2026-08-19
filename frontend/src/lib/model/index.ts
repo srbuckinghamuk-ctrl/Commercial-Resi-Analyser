@@ -48,6 +48,14 @@ export {
 } from './migrate';
 export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
 export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
+export {
+  DEFAULT_COST_PLAN, COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES,
+  FEE_CODE_CATEGORY, defaultContingencyClasses,
+} from './cost-plan';
+export type {
+  CostPlanMode, CostPackageCode, CostPackage, ContingencyClassName, ContingencyClass,
+  FeeBasis, FeeCode, FeeCategory, FeeLine, CostPlanInputs,
+} from './cost-plan';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';

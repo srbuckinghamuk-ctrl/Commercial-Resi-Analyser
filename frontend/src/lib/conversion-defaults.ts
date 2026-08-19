@@ -14,8 +14,9 @@ import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV6, EquitySource, FacilityTerms,
+  CalculatorInputsV6, CalculatorInputsV7, EquitySource, FacilityTerms,
 } from './model/finance-types';
+import { DEFAULT_COST_PLAN } from './model/cost-plan';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -346,5 +347,19 @@ export function defaultCalculatorInputsV6(project?: {
     unit_mix: {
       units: v5.unit_mix.units.map((u) => ({ ...u, ancillary: { ...DEFAULT_UNIT_ANCILLARY } })),
     },
+  };
+}
+
+export function defaultCalculatorInputsV7(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV7 {
+  return {
+    ...defaultCalculatorInputsV6(project),
+    inputs_version: 7,
+    // Task 12 swaps this for costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)
+    // once Task 5 has shipped that function. Until then a new document has no
+    // fee lines, which is correct-but-incomplete rather than wrong: every test
+    // that needs fee lines supplies its own.
+    cost_plan: structuredClone(DEFAULT_COST_PLAN),
   };
 }

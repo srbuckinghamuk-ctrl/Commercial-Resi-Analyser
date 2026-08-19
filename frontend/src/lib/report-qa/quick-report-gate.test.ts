@@ -30,7 +30,7 @@ const savedAppraisal: FinancialAppraisal = {
   project_id: longProject.id,
   name: 'Quick appraisal for a scheme with an unusually long descriptive name that wraps',
   inputs_snapshot: {},
-  calc_version: '2.8.0',
+  calc_version: '2.9.0',
   inputs_version: 4,
   status: 'legacy_unreconciled',
   gdv_pence: 137_000_000,
