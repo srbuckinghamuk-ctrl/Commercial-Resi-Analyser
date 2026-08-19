@@ -1247,16 +1247,28 @@ describe('R9 — the memo reports the area bridge', () => {
     expect(run.metrics.area_bridge.saleable_to_developed_pct).toBeNull();
     const text = await memoTextFor(baseInputs());
     expect(text).toContain('no area schedule has been entered for this appraisal');
-    // The regression this guards against: the null ratios printed as "0.0%"
-    // inside the Area Reconciliation / efficiencies tables themselves. Those
-    // two headings being absent already rules the tables out entirely — a
-    // narrower, cell-exact "0.0%" check used to sit here too, but R10 gave a
-    // legacy (headline-mode) document genuine, unrelated zero-percent
-    // contingency-class rows (existing_building / abnormal both default to
-    // 0%, spec §16), so a blanket "no cell anywhere reads exactly 0.0%"
-    // check now collides with correct output rather than catching the bug.
     expect(text).not.toContain('Area Reconciliation');
     expect(text).not.toContain('Net to gross');
+    // R10 Task 13 fix round 1. The check this replaces asserted no *cell* in
+    // the whole document ever read exactly "0.0%" — a blanket check written
+    // to catch a null ratio rendered as a false zero rather than an em-dash.
+    // R10 gave a legacy (headline-mode) document genuine, unrelated
+    // zero-percent contingency-class rows (existing_building and abnormal
+    // both default to 0% via costPlanFromLegacyCosts, spec §16.3), so a
+    // blanket "zero occurrences" check would either collide with that
+    // correct output (if narrowed to "no ratio section present", which the
+    // two toContain checks above already establish) or miss a real
+    // regression outside those two headings (if dropped entirely). This
+    // keeps the whole-document net while admitting the legitimate case: the
+    // number of "0.0%" cells anywhere in the document must equal exactly the
+    // number of contingency classes genuinely at 0% — no more (a resurrected
+    // null-ratio-as-0% bug would push the count past this), no fewer (a
+    // regression that suppressed or mis-rendered a genuine zero-pct class
+    // would pull it under).
+    const zeroPctContingencyClasses = run.metrics.cost_plan.contingency.filter((c) => c.pct === 0).length;
+    expect(zeroPctContingencyClasses).toBeGreaterThan(0); // non-vacuity: baseInputs() must actually exercise this
+    const zeroPctCells = text.split('\n').filter((line) => line === '0.0%').length;
+    expect(zeroPctCells).toBe(zeroPctContingencyClasses);
   });
 
   it('prints the area schedule and efficiencies tables once something has been entered', async () => {

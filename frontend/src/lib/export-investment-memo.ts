@@ -1260,6 +1260,13 @@ export function generateInvestmentMemo(
         ]
       : [
           ['  Build rate', `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`, ''],
+          // R10 Task 13 fix round 1 (F2). Without this row six real amounts
+          // (build rate, three compliance fields, the contingency amount, the
+          // construction sub-total) appeared with no printed figure for the
+          // one they sum from -- base_build_pence was computed but never
+          // shown. A bare read of cp.base_build_pence, the same figure
+          // detailed mode's package schedule sums to.
+          ['  Base build', fmt(cp.base_build_pence), perSqftPence(cp.base_build_pence, totalSqm)],
           ['  Fire safety', fmt(inputs.conversion_costs.fire_safety_pence), ''],
           ['  Sound insulation', fmt(inputs.conversion_costs.sound_insulation_pence), ''],
           ['  Part L compliance', fmt(inputs.conversion_costs.part_l_compliance_pence), ''],
@@ -2212,7 +2219,16 @@ export function generateInvestmentMemo(
 
   y = subHeading(y, 'What the figures rest on');
   const limitations: string[] = [
-    'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
+    // R10 Task 13 fix round 1 (F3, spec §16.6/§16.9). In detailed mode
+    // construction cost IS a priced package schedule, so the pre-R10 sentence
+    // is simply false there — the exact fault R8 and R9 each fixed in this
+    // same list when their own feature outgrew the sentence describing it
+    // (the acquisition-tax and area-bridge limitations above/below). The
+    // honest residual limitation in detailed mode is not "no package
+    // schedule" but "no QS evidence behind the schedule" (R15).
+    cp.mode === 'detailed'
+      ? 'Construction cost rests on a priced package schedule (a detailed cost plan), not a rate x area estimate. No QS source, date or status is recorded for any package or fee line, and no provisional sums, fixed-price coverage or package-level exclusions are modelled.'
+      : 'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
     'VAT is not modelled as a cash flow. Conversion VAT treatment is fact-specific and no reduced-rate saving is assumed; purchase VAT and any TOGC treatment are unconfirmed. An adverse VAT position would increase the funding requirement.',
     // R8 (spec §14). The sentence this replaces said the model taxed every
     // property on England/NI SDLT bands and that Scotland and Wales were not

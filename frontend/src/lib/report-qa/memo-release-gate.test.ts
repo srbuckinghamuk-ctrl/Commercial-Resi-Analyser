@@ -707,4 +707,38 @@ describe('R10 cost-plan modes (spec §16)', () => {
       }
     }
   });
+
+  // Fix round 1, F2. In headline mode the six real construction amounts
+  // (build rate, three compliance fields, the contingency amount, the
+  // construction sub-total) used to appear with no printed figure for the
+  // one they sum from — base_build_pence was computed but never shown.
+  it('prints the base build figure in headline mode, so the construction section is followable', async () => {
+    const inputs = sellAllInputs();
+    const run = runAppraisal(inputs);
+    const { info } = await report(inputs);
+    const text = documentText(info);
+    expect(run.metrics.cost_plan.mode).toBe('headline');
+    expect(text).toContain('Base build');
+    expect(text).toContain(fmtGBP(run.metrics.cost_plan.base_build_pence));
+  });
+
+  // Fix round 1, F3 (spec §16.6/§16.9). The pre-R10 limitation ("not a priced
+  // quantity-surveyed package schedule") is simply false once a document is
+  // in detailed mode — exactly the "stale disclosure survives the feature it
+  // described" fault R8 and R9 each fixed in this same list. The honest
+  // residual limitation in detailed mode is QS *evidence*, not the schedule
+  // itself.
+  it('states the true residual cost-basis limitation in each mode', async () => {
+    // documentProse, not documentText: the limitation sentence wraps across
+    // several drawn lines (autoTable/wrap), so a substring spanning a wrap
+    // point ("package" / "schedule.") only matches the whitespace-normalised
+    // reflow, the same reasoning checkAcquisitionTaxDisclosure documents.
+    const headlineProse = documentProse((await report(sellAllInputs())).info);
+    expect(headlineProse).toContain('not a priced quantity-surveyed package schedule');
+
+    const detailedProse = documentProse((await report(detailedCostPlanInputs())).info);
+    expect(detailedProse).not.toContain('not a priced quantity-surveyed package schedule');
+    expect(detailedProse).toContain('rests on a priced package schedule');
+    expect(detailedProse).toContain('No QS source, date or status is recorded');
+  });
 });

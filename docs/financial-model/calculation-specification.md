@@ -116,7 +116,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 - **Formula:** `base_build = Σ packages[].amount_pence` in `detailed` mode, or `round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)` in `headline` mode; `contingency_total = Σ` over the three named classes of `round_half_up(class_base × class.pct/100)` — each class rounds independently, so three classes at 5% on the same base is not one class at 15% (§16.3); `compliance = fire_safety + sound_insulation + part_l` in headline mode, or `0` in detailed mode (§16.2 — priced inside a package instead); `total = base_build + contingency_total + compliance`. [R10 — calc 2.9.0. Before it this line read `base = round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)`; `contingency = round(base × contingency_pct/100)`; `compliance = fire_safety + sound_insulation + part_l`; `total = base + contingency + compliance` — a single blended contingency percentage on an implicit base, which could not separate general design development from existing-building risk from abnormal risk, the three things a conversion lender most wants apart (§16). Headline mode's arithmetic is unchanged to the penny: migration copies `contingency_pct` into the `general` class on the `all_packages` basis and leaves the other two at 0 (§16.7), so `base_build`/`contingency_total`/`compliance` reproduce the pre-R10 `base`/`contingency`/`compliance` exactly.] [R9 — calc 2.8.0. Before it this line read `construction_cost_per_sqm_pence × total_construction_sqm`. The **area** is now resolved through the single accessor `developed_area_sqm(inputs)` (§15.3/§15.4), which returns the derived developed GIA on the `bridge_derived` basis and `total_construction_sqm` verbatim on the `manual` basis — so a migrated document's figure is unchanged to the penny. Reading `total_construction_sqm` anywhere else is a build failure.]
 - **Contingency base:** each of the three classes carries its **own** named, resolved base — `all_packages` (the whole base build) or `selected_packages` (a named subset) — and that base is displayed beside the class, not asserted in prose (§16.3). [R10 — calc 2.9.0. Before it this line read "the headline base build only — explicitly excludes compliance allowances, professional fees and acquisition. This base is displayed wherever contingency appears", true of the single blended percentage that no longer exists. Every class's base still excludes compliance, fees and acquisition — only the base build itself can be named, on either basis.]
 - **Timing:** spread per the spend profile (§6). R1 default: straight-line over the construction window, disclosed as an assumption.
-- **Gross/net:** entered figures are treated as net of recoverable VAT; VAT modelling is R11 and the report carries "construction VAT treatment unconfirmed — no reduced-rate saving is assumed in the appraisal".
+- **Gross/net:** entered figures are treated as net of recoverable VAT; VAT modelling is R11 and the report carries "construction VAT treatment unconfirmed — no reduced-rate saving is assumed in the appraisal". [R10 — calc 2.9.0. Before it this line named R3 as the release that would model VAT. R3 shipped without it (calc 2.2.0/2.3.0's changelog entries cover only the dated programme and phased-sales/refinance work), and the pointer went unpaid through R4–R9; it is corrected to R11 — this release's own §16.9 stated limitation — rather than left pointing at a release that has already shipped without it, the same "unpaid pointer" fault R9 fixed for the parking/balcony GDV exclusion (§3.1).]
 - **Edge cases:** negative rate/area/package amount/contingency `pct` are hard errors; a `detailed`-mode document carrying any non-zero flat compliance field is also a hard error, §16.2. [R9 — calc 2.8.0. This line also said “`total_construction_sqm` differing from Σ unit areas by >25% raises a warning (unreconciled areas)”. **That warning is deleted, not retuned.** It compared two quantities that *should* differ — by exactly the circulation, plant, storage and amenity the model had nowhere to record — so it fired on correct schemes and stayed silent on wrong ones; the tolerance was a proxy for a reconciliation that did not exist. §15.6's rules replace it, including a narrower manual-basis warning that compares the manual area against the **derived** developed area rather than against unit NIA.]
 
 ### 3.5 Professional fees [R1]
@@ -824,9 +824,21 @@ failing condition:
 
 ### 13.4 What a report may claim
 
-- **Cost basis.** The construction model is a rate × area **headline cost
-  estimate** with named allowances. A report may not describe it as a cost plan
-  until a detailed package mode is the active basis.
+- **Cost basis.** In `headline` mode the construction model is a rate × area
+  **headline cost estimate** with named allowances, and a report may not
+  describe it as a cost plan. In `detailed` mode a report may call it a
+  **detailed cost plan**, because it is one in shape — a priced package
+  schedule, not a rate × area estimate — but it must say, in the same breath,
+  that QS evidence (source, date, status) is not recorded, so as not to claim
+  an evidence status the model does not carry (§16.6, §16.9). [R10 — calc
+  2.9.0. Before it this line read "The construction model is a rate × area
+  headline cost estimate with named allowances. A report may not describe it
+  as a cost plan until a detailed package mode is the active basis." — true
+  when written, because no detailed package mode existed yet. §16 gives the
+  appraisal exactly that mode, which is what this bullet's own final clause
+  anticipated; leaving the old wording in place unannotated would have had the
+  spec assert a condition it no longer describes correctly, the same fault §14
+  and §15 each corrected in this same section's neighbours.]
 - **Suitability.** A report states that it is suitable for sponsor review and
   preliminary lender appraisal, and that it is not a credit paper, valuation,
   cost plan, tax opinion or legal report.
@@ -1270,7 +1282,7 @@ construction_total_pence    = base_build + contingency_total + compliance
 fees[]                      id, code, category, basis, base_pence, amount_pence
 professional_total_pence
 statutory_total_pence
-conversion_total_pence      = construction_total + professional_total + statutory_total [Task 13]
+conversion_total_pence      = construction_total + professional_total + statutory_total
 lender_eligible_base_pence
 implied_rate_pence_per_sqm  base_build ÷ developed_area_sqm; null when the area is 0
 ```

@@ -530,11 +530,14 @@ did not before. This is the ordinary re-hash-on-any-change behaviour; `status`
 is preserved by the existing rule and is not reset by the version bump itself.
 No `expected_metrics` value in any golden fixture moved. **This boundary move
 is also where spec §13.2's audit-hash disclosure applies for the first time in
-practice**: a row saved before this release and not yet re-saved prints
-`inputs_version: 6` (or earlier) in its stored snapshot but the *client's*
-current schema is 7, so a reader must not assume the printed `inputs_version`
-on a freshly-generated report is the one the stored `audit_hash` was computed
-over unless the row has actually been re-saved since.
+practice**: a row saved before this release and not yet re-saved has a stored
+`audit_hash` computed under whatever `inputs_version` it was last saved at
+(6 or earlier), but the report's provenance panel prints the *client's*
+current schema — `inputs_version: 7` — because the printed run is the freshly
+migrated-and-recalculated document, not the stale stored snapshot. A reader
+must not assume the printed `inputs_version` on a freshly-generated report is
+the one the stored `audit_hash` was computed over unless the row has actually
+been re-saved since.
 
 ### 10.2 The York appraisal after R10
 
@@ -547,7 +550,7 @@ The saved Stonegate record is a migrated v1 snapshot, headline mode throughout
 |---|---|---|---|
 | `cost_plan.mode` | — | `'headline'` | new field, §16.7 |
 | `cost_plan.construction_total_pence` | — | equal to `construction_cost_pence` | headline arithmetic is unchanged, only re-expressed |
-| `cost_plan.conversion_total_pence` | — | `construction_total + professional_total + statutory_total` | new field, §16.8 (Task 13) — no prior figure to compare against |
+| `cost_plan.conversion_total_pence` | — | `construction_total + professional_total + statutory_total` | new field, §16.8 — no prior figure to compare against |
 | `construction_cost_pence` | unchanged | unchanged | one contingency class carrying the old percentage on the old base reproduces the old formula exactly |
 | `professional_fees_pence`, `statutory_costs_pence` | unchanged | unchanged | eight fixed fee lines reproduce the eight flat fields exactly |
 | every cost, finance and profit figure | unchanged | unchanged | no formula moved |
