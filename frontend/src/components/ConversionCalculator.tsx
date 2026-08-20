@@ -1,9 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV6 } from '../lib/model';
+import { migrateInputsToV7 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV6 } from '../lib/model';
-import { defaultCalculatorInputsV6 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV7 } from '../lib/model';
+import { defaultCalculatorInputsV7 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
@@ -88,8 +88,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV6>(() =>
-    defaultCalculatorInputsV6(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV7>(() =>
+    defaultCalculatorInputsV7(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -99,7 +99,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV6(project));
+      setInputs(defaultCalculatorInputsV7(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -107,21 +107,28 @@ export default function ConversionCalculator({ project }: Props) {
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            // Migrate onto v6 defaults so snapshots saved before newer
-            // sections (or v1-v5 snapshots) existed still load cleanly.
-            // R9 Task 3: the server boundary moved to v6 (app/api/app.py), and
-            // migrateInputsToV5 now throws on a v6 document exactly as
-            // migrateInputsToV4 throws on a v5 one -- so this must use
-            // migrateInputsToV6. The client is half the boundary: leaving it on
-            // v5 would have made every saved appraisal unloadable.
+            // Migrate onto v7 defaults so snapshots saved before newer
+            // sections (or v1-v6 snapshots) existed still load cleanly.
+            // R10 Task 6: the server boundary moved to v7 (app/api/app.py), and
+            // migrateInputsToV6 now throws on a v7 document exactly as
+            // migrateInputsToV5 throws on a v6 one -- so this must use
+            // migrateInputsToV7. The client is half the boundary: leaving it on
+            // v6 would have made every saved appraisal unloadable -- exactly
+            // the defect R9 recorded here when it made the same move from v5
+            // to v6, and the one the fix-round-1 review missed on this task,
+            // wrongly claiming no production caller used these migrators yet.
+            //
+            // R10 Task 12 retired the cast bridge (formerly `legacyInputs` /
+            // `legacyOnChange`) that used to sit below: every calculator
+            // sub-page is now typed CalculatorInputsV7 directly, so this
+            // component's state and every sub-page's props are the same shape.
             //
             // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
-            // that used to sit here: this component's state, and every
-            // calculator sub-page prop it feeds, is v6-native as of R9, so the
-            // migration's return type is the state's type and no cast is
-            // needed to bridge them.
+            // that used to sit here: the migration's return type is the
+            // state's type, so no cast is needed to bridge them at this call
+            // site.
             setInputs(
-              migrateInputsToV6(appraisal.inputs_snapshot as Record<string, unknown>, project),
+              migrateInputsToV7(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -150,12 +157,12 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV6 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV7 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV6>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV7>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -167,10 +174,10 @@ export default function ConversionCalculator({ project }: Props) {
     setSaving(true);
     setSaveError(null);
     try {
-      // inputs_snapshot is always v6 (R9 Task 3: this component's state is
-      // v6-native); the seven client metric fields are used server-side ONLY to
-      // record mismatches for audit -- the server always recalculates and
-      // persists its own values (Task 12).
+      // inputs_snapshot is always v7 (R10 Task 6: the server boundary and this
+      // component's state both moved to v7); the seven client metric fields
+      // are used server-side ONLY to record mismatches for audit -- the
+      // server always recalculates and persists its own values.
       const payload: FinancialAppraisalCreate = {
         project_id: project.id,
         name: `Appraisal — ${project.address_raw}`,
@@ -189,7 +196,7 @@ export default function ConversionCalculator({ project }: Props) {
 
       // R8 Task 11 (defect B). The server is authoritative over the document,
       // not just over the metrics: `calculate_authoritative` normalises the
-      // snapshot to v6 (R9 Task 3) and, on a project's first appraisal, derives the tax
+      // snapshot to v7 (R10 Task 6) and, on a project's first appraisal, derives the tax
       // jurisdiction from the postcode (app/api/app.py). Before this, the
       // screen kept the england_ni document it posted while the store held the
       // derived one -- measured on a Welsh fixture as
@@ -198,7 +205,7 @@ export default function ConversionCalculator({ project }: Props) {
       // and the divergence surviving until the component remounted. Adopting
       // what came back makes the save the point at which the two agree.
       //
-      // Routed through migrateInputsToV6 rather than cast, for the same reason
+      // Routed through migrateInputsToV7 rather than cast, for the same reason
       // the load path is: the response is JSON of unknown provenance to this
       // component, and the migration is the one place that knows how to put a
       // stored snapshot onto the current shape.
@@ -215,9 +222,9 @@ export default function ConversionCalculator({ project }: Props) {
       // reconciles it. The migration runs outside the updater so the updater
       // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
-        let adopted: CalculatorInputsV6 | null = null;
+        let adopted: CalculatorInputsV7 | null = null;
         try {
-          adopted = migrateInputsToV6(result.inputs_snapshot, project);
+          adopted = migrateInputsToV7(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was

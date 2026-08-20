@@ -1,8 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { applyScenario } from './apply-scenario';
 import { migrateInputsToV6 } from './migrate';
-import { defaultCalculatorInputsV2, defaultCalculatorInputsV3, DEFAULT_SCENARIOS } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6, LenderValuation } from './';
+import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
+import {
+  defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
+} from '../conversion-defaults';
+import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6, CalculatorInputsV7, LenderValuation } from './';
+import type { ScenarioOverrides } from '../conversion-types';
+
+// Neutral overrides — every lever at 0. Not defined elsewhere in this file, so
+// built here per the R10 Task 8 brief rather than reusing DEFAULT_SCENARIOS.base
+// (which is not guaranteed to be all-zero).
+const BASE_OVERRIDES: ScenarioOverrides = {
+  label: 'Base',
+  gdv_adjustment_pct: 0,
+  construction_cost_adjustment_pct: 0,
+  timeline_adjustment_months: 0,
+  interest_rate_adjustment_pct: 0,
+};
 
 function fixtureInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -211,5 +226,161 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
     expect(stressed.unit_mix.units[0].ancillary.parking_spaces).toBe(2);
+  });
+});
+
+// R10 Task 8 — spec §3.5. `applyScenario` scaled only `conversion_costs`, which
+// drives nothing in detailed mode: the cost lives in `cost_plan.packages`. Left
+// unfixed, a detailed-mode appraisal is immune to every scenario, tornado bar
+// and sensitivity cell while still rendering as though it responded.
+describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
+  // Two documents with the SAME construction total, built to DIFFERENT shapes.
+  //   headline: rate 10,000 p/m2 x 400 m2 = 4,000,000 base
+  //             + 10% general contingency  =   400,000  -> 4,400,000
+  //   detailed: TWO packages (3,000,000 structure + 1,000,000 envelope) so the
+  //             guard cannot be satisfied by a fix that only scales the first
+  //             package (e.g. a loop that breaks early, or a `packages[0]` fix
+  //             applied under time pressure) — 4,000,000 total
+  //             + 10% general contingency  =   400,000  -> 4,400,000
+  // Compliance is zero in both (see the note above).
+  function pair(): { headline: CalculatorInputsV7; detailed: CalculatorInputsV7 } {
+    const base = defaultCalculatorInputsV7();
+    const common = {
+      ...base,
+      finance: { ...base.finance, funding_source: 'cash' as const, term_months: 12 },
+      conversion_costs: {
+        ...base.conversion_costs,
+        construction_cost_per_sqm_pence: 10_000,
+        total_construction_sqm: 400,
+        fire_safety_pence: 0, sound_insulation_pence: 0, part_l_compliance_pence: 0,
+      },
+      // 'manual' basis so developedAreaSqm returns total_construction_sqm (400)
+      // rather than a derived bridge figure — the headline base must be a number
+      // this test controls, not one another block decides.
+      areas: { ...base.areas, basis: 'manual' as const },
+    };
+    const contingency = [
+      { name: 'general' as const, pct: 10, basis: 'all_packages' as const, package_ids: [] },
+      { name: 'existing_building' as const, pct: 0, basis: 'all_packages' as const, package_ids: [] },
+      { name: 'abnormal' as const, pct: 0, basis: 'all_packages' as const, package_ids: [] },
+    ];
+    return {
+      headline: { ...common, cost_plan: { mode: 'headline', packages: [], contingency, fee_lines: [] } },
+      detailed: { ...common, cost_plan: {
+        mode: 'detailed',
+        packages: [
+          { id: 'p1', code: 'structure', label: 'Structure',
+            amount_pence: 3_000_000, contingency_class: 'general',
+            lender_eligible: true, notes: '' },
+          { id: 'p2', code: 'envelope', label: 'Envelope',
+            amount_pence: 1_000_000, contingency_class: 'general',
+            lender_eligible: true, notes: '' },
+        ],
+        contingency,
+        fee_lines: [],
+      } },
+    };
+  }
+
+  it('the two documents describe the same construction total', () => {
+    const { headline, detailed } = pair();
+    expect(runAppraisal(headline).metrics.construction_cost_pence).toBe(4_400_000);
+    expect(runAppraisal(detailed).metrics.construction_cost_pence).toBe(4_400_000);
+  });
+
+  it('and respond identically to a -10% and a +10% cost stress', () => {
+    const { headline, detailed } = pair();
+    // -10%: base 3,600,000 + 10% = 3,960,000.  +10%: 4,400,000 + 10% = 4,840,000.
+    const expected: Record<number, number> = { [-10]: 3_960_000, [10]: 4_840_000 };
+    for (const adj of [-10, 10]) {
+      const overrides = { ...BASE_OVERRIDES, construction_cost_adjustment_pct: adj };
+      const h = runAppraisal(applyScenario(headline, overrides)).metrics.construction_cost_pence;
+      const d = runAppraisal(applyScenario(detailed, overrides)).metrics.construction_cost_pence;
+      expect(h).toBe(expected[adj]);
+      expect(d).toBe(expected[adj]);
+      // The literals above are what make this falsifiable. Asserting only
+      // `d === h` would pass with BOTH modes inert, which is the exact defect
+      // this test exists to catch.
+    }
+  });
+});
+
+// I2 (Task 8 fix round 1). The cross-mode pair above deliberately carries zero
+// compliance and no fee lines, so it cannot see a regression that started
+// scaling either. This is a headline-only case with both present, asserting
+// the two negative requirements directly: compliance does NOT move with the
+// cost lever (fixed allowance, pre-R10 behaviour), and a fixed fee does NOT
+// move either — while a percentage fee DOES move, but only because its BASE
+// moved, not because the lever touched the fee amount a second time.
+describe('the cost lever does not double-apply to compliance or fees (headline mode)', () => {
+  function headlineWithComplianceAndFees(): CalculatorInputsV7 {
+    const base = defaultCalculatorInputsV7();
+    return {
+      ...base,
+      finance: { ...base.finance, funding_source: 'cash' as const, term_months: 12 },
+      conversion_costs: {
+        ...base.conversion_costs,
+        construction_cost_per_sqm_pence: 10_000,
+        total_construction_sqm: 400,
+        // Compliance: 200,000 + 150,000 + 150,000 = 500,000 total.
+        fire_safety_pence: 200_000, sound_insulation_pence: 150_000, part_l_compliance_pence: 150_000,
+      },
+      areas: { ...base.areas, basis: 'manual' as const },
+      cost_plan: {
+        mode: 'headline',
+        packages: [],
+        contingency: [
+          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
+          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+        ],
+        fee_lines: [
+          {
+            id: 'fee-fixed', code: 'architect', category: 'professional', label: 'Architect',
+            basis: 'fixed', amount_pence: 200_000, pct: 0, per_dwelling: false,
+          },
+          {
+            id: 'fee-pct', code: 'other_professional', category: 'professional', label: 'Other professional fees',
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false,
+          },
+        ],
+      },
+    };
+  }
+
+  it('at rest: base 4,000,000 + 10% contingency 400,000 + 500,000 compliance = 4,900,000; pct fee = 5% of that', () => {
+    const inputs = headlineWithComplianceAndFees();
+    const plan = computeCostPlan(inputs, developedAreaSqm(inputs), inputs.unit_mix.units.length);
+    expect(plan.base_build_pence).toBe(4_000_000);
+    expect(plan.compliance_pence).toBe(500_000);
+    expect(plan.construction_total_pence).toBe(4_900_000);
+    expect(plan.fees.find((f) => f.id === 'fee-fixed')!.amount_pence).toBe(200_000);
+    expect(plan.fees.find((f) => f.id === 'fee-pct')!.base_pence).toBe(4_900_000);
+    expect(plan.fees.find((f) => f.id === 'fee-pct')!.amount_pence).toBe(245_000);
+  });
+
+  it('under a -10% cost stress: base build scales, compliance and the fixed fee do not, the pct fee moves only because its base moved', () => {
+    const inputs = headlineWithComplianceAndFees();
+    const stressed = applyScenario(inputs, { ...BASE_OVERRIDES, construction_cost_adjustment_pct: -10 });
+    const plan = computeCostPlan(stressed, developedAreaSqm(stressed), stressed.unit_mix.units.length);
+
+    // Base build: rate 10,000 x 0.9 = 9,000/m2 x 400 m2 = 3,600,000.
+    expect(plan.base_build_pence).toBe(3_600_000);
+    // Compliance is a fixed allowance the cost lever does not scale — unchanged.
+    expect(plan.compliance_pence).toBe(500_000);
+    // Contingency: 10% of the new base build = 360,000.
+    // Construction total: 3,600,000 + 360,000 + 500,000 = 4,460,000.
+    expect(plan.construction_total_pence).toBe(4_460_000);
+    // The fixed fee never reads a base, so it is untouched by any lever.
+    expect(plan.fees.find((f) => f.id === 'fee-fixed')!.amount_pence).toBe(200_000);
+    // The pct fee's base is the NEW construction total, not the old one.
+    const pctFee = plan.fees.find((f) => f.id === 'fee-pct')!;
+    expect(pctFee.base_pence).toBe(4_460_000);
+    // 5% of 4,460,000 = 223,000 — the fee moved because its base moved.
+    // A double-application defect (scaling the fee amount by 0.9 on top of its
+    // own recomputation) would instead give 245,000 * 0.9 = 220,500. The two
+    // values differ, so this assertion is the discriminating check.
+    expect(pctFee.amount_pence).toBe(223_000);
+    expect(pctFee.amount_pence).not.toBe(220_500);
   });
 });

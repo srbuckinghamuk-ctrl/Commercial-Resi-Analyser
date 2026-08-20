@@ -1,12 +1,12 @@
-import type { AppraisalRun, CalculatorInputsV6 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV7 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import CostToCompleteCard from './CostToCompleteCard';
 
 interface Props {
-  inputs: CalculatorInputsV6;
-  onChange: (partial: Partial<CalculatorInputsV6>) => void;
+  inputs: CalculatorInputsV7;
+  onChange: (partial: Partial<CalculatorInputsV7>) => void;
   run: AppraisalRun;
 }
 
@@ -46,7 +46,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * null, whether because no lender valuation was recorded or because a recorded one could not
  * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
  * surfaces the distinction via its own validation messages). */
-function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV6; run: AppraisalRun }) {
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV7; run: AppraisalRun }) {
   const { metrics } = run;
   const lv = inputs.lender_valuation;
 

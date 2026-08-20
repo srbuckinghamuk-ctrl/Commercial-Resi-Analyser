@@ -112,6 +112,12 @@ export function calculateTotalConstructionCost(
   // contingency -- base = round_half_up(construction_cost_per_sqm_pence × area).
   // Integer-sqm inputs are unaffected (rounding an already-integer product is identity).
   const baseCost = Math.round(costs.construction_cost_per_sqm_pence * areaSqm);
+  // R10 Task 9 fix round 1 (C1): this is computeCostPlan's predecessor, still the
+  // live cost estimate migrate.ts's v1→v2 bootstrap uses (there is no cost_plan
+  // yet that early in the migration chain) — a legitimate read, line-scoped
+  // rather than allowlisting the whole file, which would also un-guard
+  // total_construction_sqm, TAX_TABLES and selectBandSet here.
+  // eslint-disable-next-line no-restricted-syntax -- legitimate: computeCostPlan's predecessor (see above)
   const contingency = Math.round((baseCost * costs.contingency_pct) / 100);
   const compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence;
   return baseCost + contingency + compliance;

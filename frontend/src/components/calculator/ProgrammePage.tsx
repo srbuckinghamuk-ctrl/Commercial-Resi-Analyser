@@ -1,11 +1,11 @@
 import { useCallback } from 'react';
-import type { CalculatorInputsV6, AppraisalRun, ProgrammePackage, SpendCurve } from '../../lib/model';
+import type { CalculatorInputsV7, AppraisalRun, ProgrammePackage, SpendCurve } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth } from '../../lib/programme-months';
 
 interface Props {
-  inputs: CalculatorInputsV6;
-  onChange: (partial: Partial<CalculatorInputsV6>) => void;
+  inputs: CalculatorInputsV7;
+  onChange: (partial: Partial<CalculatorInputsV7>) => void;
   run: AppraisalRun;
 }
 

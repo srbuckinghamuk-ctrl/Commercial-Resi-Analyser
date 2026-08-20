@@ -316,6 +316,14 @@ def test_v6_migration_moves_no_existing_figure():
     fixture."""
     names = []
     for name, doc in _pipeline_fixtures():
+        # R10: migrate_inputs_to_v6 refuses a v7 document by design (it would have to
+        # drop `cost_plan` to produce a v6 one) -- see _RECOGNISED_VERSIONS_V6, which
+        # stops at 6. Fixture Q (q-detailed-cost-plan.json) is v7, so it is excluded
+        # from this v6-specific gate; test_fixtures_reproduce_their_metrics_after_
+        # migration_to_v7 in test_financial_model_fixtures.py is the corpus-wide
+        # (v5+v6+v7) mirror of this same property one version further on.
+        if doc["inputs"].get("inputs_version") == 7:
+            continue
         names.append(name)
         migrated = migrate_inputs_to_v6(doc["inputs"])
         # R9 Task 12: the zeroed-blocks half applies to a document that is being

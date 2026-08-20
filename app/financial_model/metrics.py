@@ -15,6 +15,7 @@ from .breakeven import (
     solve_senior_breakeven,
     solve_senior_breakeven_phased,
 )
+from .cost_plan import CostPlanResult, compute_cost_plan
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct
 from .lender_valuation import compute_lender_gdv
@@ -130,6 +131,10 @@ class AppraisalResultV2:
     # R9 spec Sec 15.8 -- the construction cost area actually used, whichever
     # basis produced it. Equal to area_bridge.developed_area_sqm.
     developed_area_sqm: float
+    # R10 spec Sec 16 -- the full cost derivation: every package, every
+    # contingency class with its base, every fee line with its base. The UI
+    # and the report read cost from here and never recompute one.
+    cost_plan: CostPlanResult
     # R9 spec Sec 3.1 -- GDV excluding ancillary. This is the pre-R9 figure,
     # kept so a variance against it stays expressible.
     gdv_internal_pence: int
@@ -237,6 +242,8 @@ def derive_metrics(
     # R9 spec Sec 15.8. Derived once, here, and read by every consumer from
     # the result -- the UI and the memo never call area_bridge themselves.
     bridge = area_bridge(inputs)
+    # R10 spec Sec 16. Derived once, here, and read by every consumer from the result.
+    cost_plan = compute_cost_plan(inputs, bridge.developed_area_sqm, len(inputs.unit_mix.units))
     gdv_parts = calculate_gdv_breakdown(inputs.unit_mix.units)
     # Lender-underwritten GDV (spec Sec 3.2, Release 2b Task 3). None for v2
     # inputs (no lender_valuation field at all), v3 inputs with the block
@@ -457,6 +464,7 @@ def derive_metrics(
         sdlt_pence=sdlt,
         area_bridge=bridge,
         developed_area_sqm=bridge.developed_area_sqm,
+        cost_plan=cost_plan,
         gdv_internal_pence=gdv_parts.internal_pence,
         gdv_ancillary_pence=gdv_parts.ancillary_pence,
         construction_cost_pence=t.construction_pence,

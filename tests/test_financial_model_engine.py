@@ -10,6 +10,7 @@ from pathlib import Path
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import default_calculator_inputs_v2
+from app.financial_model.legacy_costs import calculate_total_construction_cost
 from app.financial_model.schedule import (
     MonthReceipts,
     MonthUses,
@@ -17,7 +18,6 @@ from app.financial_model.schedule import (
     ScheduleRefinance,
     ScheduleTotals,
     build_schedule,
-    calculate_total_construction_cost,
 )
 from app.financial_model.types import (
     CalculatorInputsV2,

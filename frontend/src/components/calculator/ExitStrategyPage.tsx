@@ -1,11 +1,11 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
-import type { CalculatorInputsV6, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
+import type { CalculatorInputsV7, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV6;
-  onChange: (partial: Partial<CalculatorInputsV6>) => void;
+  inputs: CalculatorInputsV7;
+  onChange: (partial: Partial<CalculatorInputsV7>) => void;
   run: AppraisalRun;
 }
 
@@ -92,7 +92,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   // a block valid (e.g. blended for both, or retain_all for refinance) leaves
   // it untouched.
   const selectRoute = (route: ExitRoute) => {
-    const partial: Partial<CalculatorInputsV6> = { exit_strategy: { ...exit, route } };
+    const partial: Partial<CalculatorInputsV7> = { exit_strategy: { ...exit, route } };
     if (route === 'retain_all') partial.sales_phasing = null;
     if (route === 'sell_all') partial.refinance = null;
     onChange(partial);

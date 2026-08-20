@@ -1,0 +1,168 @@
+{
+  "name": "Q — detailed cost plan, three contingency classes, levered facility",
+  "kind": "pipeline",
+  "note": "R10 spec §16. Five packages across five codes (enabling_strip_out_asbestos 8,000,000p, structure 15,000,000p, envelope 12,000,000p, mech_elec_public_health 9,000,000p, externals 3,000,000p, base build 47,000,000p), with externals the sole lender_eligible: false line (lender_eligible_base_pence 44,000,000p). All three contingency classes are non-zero and on DIFFERENT bases: general is 5% of all_packages (base 47,000,000p, amount 2,350,000p); existing_building is 15% of selected_packages naming pkg-enabling and pkg-structure (base 23,000,000p, amount 3,450,000p); abnormal is 8% of selected_packages naming pkg-externals alone (base 3,000,000p, amount 240,000p). Contingency total 6,040,000p; construction_total_pence 53,040,000p. A regression that resolved existing_building against the whole base build (47,000,000p) instead of its named 23,000,000p subset would compute 7,050,000p instead of 3,450,000p — moving construction_cost_pence by +3,600,000p (53,040,000 → 56,640,000) rather than failing silently. The same failure mode on abnormal (resolved against all_packages instead of its named externals package) would move it by +3,520,000p (240,000 → 3,760,000).\n\nTwo fee lines are percentage-based on DIFFERENT bases, alongside six fixed lines: architect is 6% of pct_of_base_build (base 47,000,000p, amount 2,820,000p) and planning_consultant is 1.5% of pct_of_construction_total (base 53,040,000p, amount 795,600p). A regression that swapped the two bases would move architect from 2,820,000p to round(53,040,000×0.06)=3,182,400p (+362,400p) and planning_consultant from 795,600p to round(47,000,000×0.015)=705,000p (−90,600p) — the §8 'fee base isolation' failure mode, falsifiable by construction. professional_total_pence 5,015,600p (architect 2,820,000 + structural_engineer 600,000 fixed + mande 550,000 fixed + planning_consultant 795,600 + other_professional 250,000 fixed); statutory_total_pence 448,000p (prior_approval 9,600p × 5 dwellings = 48,000 fixed/per_dwelling + cil_s106 180,000 fixed + building_control 220,000 fixed).\n\nfire_safety_pence, sound_insulation_pence and part_l_compliance_pence are all 0 (§3.2.1 — detailed mode prices compliance inside packages; none is carried here, so compliance_pence is 0 and construction_total_pence is exactly base_build + contingency, no third term).\n\nHAND-DERIVED (independently of both engines, before either ran — see task-11-report.md for the full worksheet, and task-13-report.md for conversion_total_pence added in R10 Task 13): every package amount, base_build_pence (47,000,000), every contingency class's base and amount and the contingency total (6,040,000), compliance_pence (0), construction_total_pence (53,040,000 = construction_cost_pence), every fee line's base and amount, professional_total_pence (5,015,600) and statutory_total_pence (448,000), conversion_total_pence (58,503,600 = construction_total_pence 53,040,000 + professional_total_pence 5,015,600 + statutory_total_pence 448,000 — CARRIED-2, the restored \"Total Conversion Costs\" figure, computed once in the engine, purely additive), lender_eligible_base_pence (44,000,000), implied_rate_pence_per_sqm (round(47,000,000/500)=94,000), gdv_pence (180,000,000 = 3×32,000,000 + 2×42,000,000, no ancillary), acquisition_cost_pence (52,750,000, reusing fixture N's acquisition block verbatim — same purchase price, fees and date — so its acquisition_tax_pence of 1,450,000 is a previously-verified figure, not a fresh SDLT calculation), selling_costs_pence (3,100,000 = round(180,000,000×1.5%) + 400,000 legal), cost_before_finance_pence (114,353,600 = 52,750,000 + 53,040,000 + 5,015,600 + 448,000 + 3,100,000), gdv_internal_pence (180,000,000, identical to gdv_pence since no unit carries ancillary value), gdv_ancillary_pence (0, same reason), gross_sales_pence (180,000,000, identical to gdv_pence under sell_all with nothing retained), sdlt_pence (1,450,000 — the deprecated jurisdiction-neutral alias of acquisition_tax_pence, the same figure under a different name, not a second calculation), cost_plan.mode ('detailed', a direct echo of the input), developed_area_sqm and area_bridge.developed_area_sqm and area_bridge.manual_area_sqm (500 = the manual-basis conversion_costs.total_construction_sqm), area_bridge.unit_nia_sqm (365 = 65×3 + 85×2), and area_bridge.developed_gia_sqm (0, since every bridge-geometry field is 0) with area_bridge.nia_to_gia_pct (null, its denominator is 0).\n\nINVARIANT-CROSS-CHECKED, not hand-derived (per the ruling: these depend on the rolled-up monthly interest ledger, which is not hand-replayed here): finance_costs_pence, total_development_cost_pence, profit_pence and its two ratios, peak_debt_pence and peak_debt_month, net_ltc_pct/gross_ltc_pct/ltgdv_developer_pct, equity_contributed_pence, funding_gap_pence and the two cost_to_complete_* figures. These were taken from the engine only after the hand-derived cost stack above matched both engines to the penny on first run, and are held here because both engines agree to the penny, reconciliation.sources_equal_uses is true with report_safe true and no flags, and the corpus-wide TDC-identity invariant (test_invariants / TestInvariantMatrix, invariants.test.ts) independently confirms total_development_cost_pence equals the sum of the ledger's monthly uses plus rolled interest, capitalised fees and the exit fee. day_one_advance_pence (35,000,000) is a direct echo of finance.day_one_advance_pence, not ledger output, and is listed with the invariant group only because it sits in that part of the metrics object.\n\nEvery pin above belongs to exactly one of the two lists — none is left unassigned.\n\nFixture Q deliberately exercises NO rounding boundary: every product in it (each contingency class's base × pct, each percentage fee's base × pct, the per-dwelling fee × unit count) lands on an exact whole-pence figure, so this fixture cannot by itself distinguish 'sum of three independently rounded contingency classes' from 'round of the summed base × summed pct' — a regression that collapsed the three classes' rounding into one would still pass here. That is deliberate, not an oversight: the discriminator is pinned instead by cost-plan.test.ts's 'sums three rounded figures rather than rounding the sum' test and its Python twin in test_cost_plan.py, not reworked into this fixture. A later author extending Q must not assume it covers that case.\n\nThe facility (net 80,000,000p, gross 89,000,000p, 8% rolled-up, equity 40,000,000p) is comfortably sized: funding_gap_pence is 0 and cost_to_complete never shows a shortfall (first_shortfall_month null, max_shortfall_pence 0) — unlike fixture P, this fixture is not exercising the §5.10 deferred defect, only the mode-aware cost lever and the ledger machinery downstream of a detailed cost plan.",
+  "inputs": {
+    "inputs_version": 7,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 50000000, "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000, "broker_fee_pct": 1.0, "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-03-10",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": { "units": [
+      { "id": "u1", "type": "2bed", "floor_area_sqm": 65, "estimated_value_pence": 32000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u2", "type": "2bed", "floor_area_sqm": 65, "estimated_value_pence": 32000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u3", "type": "2bed", "floor_area_sqm": 65, "estimated_value_pence": 32000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u4", "type": "3bed", "floor_area_sqm": 85, "estimated_value_pence": 42000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u5", "type": "3bed", "floor_area_sqm": 85, "estimated_value_pence": 42000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } }
+    ] },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 0, "cil_s106_pence": 0,
+      "architect_pence": 0, "structural_engineer_pence": 0, "mande_pence": 0,
+      "planning_consultant_pence": 0, "building_control_pence": 0,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 0,
+      "total_construction_sqm": 500, "contingency_pct": 0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "cost_plan": {
+      "mode": "detailed",
+      "packages": [
+        { "id": "pkg-enabling", "code": "enabling_strip_out_asbestos", "label": "Enabling works, strip-out & asbestos removal", "amount_pence": 8000000, "contingency_class": "existing_building", "lender_eligible": true, "notes": "" },
+        { "id": "pkg-structure", "code": "structure", "label": "Structural repairs and new floors", "amount_pence": 15000000, "contingency_class": "existing_building", "lender_eligible": true, "notes": "" },
+        { "id": "pkg-envelope", "code": "envelope", "label": "Envelope — windows, cladding, roof", "amount_pence": 12000000, "contingency_class": "general", "lender_eligible": true, "notes": "" },
+        { "id": "pkg-mande", "code": "mech_elec_public_health", "label": "M&E and public health installations", "amount_pence": 9000000, "contingency_class": "general", "lender_eligible": true, "notes": "" },
+        { "id": "pkg-externals", "code": "externals", "label": "Externals and landscaping", "amount_pence": 3000000, "contingency_class": "abnormal", "lender_eligible": false, "notes": "" }
+      ],
+      "contingency": [
+        { "name": "general", "pct": 5, "basis": "all_packages", "package_ids": [] },
+        { "name": "existing_building", "pct": 15, "basis": "selected_packages", "package_ids": ["pkg-enabling", "pkg-structure"] },
+        { "name": "abnormal", "pct": 8, "basis": "selected_packages", "package_ids": ["pkg-externals"] }
+      ],
+      "fee_lines": [
+        { "id": "fee-architect", "code": "architect", "category": "professional", "label": "Architect", "basis": "pct_of_base_build", "amount_pence": 0, "pct": 6, "per_dwelling": false },
+        { "id": "fee-structural", "code": "structural_engineer", "category": "professional", "label": "Structural engineer", "basis": "fixed", "amount_pence": 600000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-mande", "code": "mande", "category": "professional", "label": "M&E consultant", "basis": "fixed", "amount_pence": 550000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-planning", "code": "planning_consultant", "category": "professional", "label": "Planning consultant", "basis": "pct_of_construction_total", "amount_pence": 0, "pct": 1.5, "per_dwelling": false },
+        { "id": "fee-other-prof", "code": "other_professional", "category": "professional", "label": "Other professional fees", "basis": "fixed", "amount_pence": 250000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-prior-approval", "code": "prior_approval", "category": "statutory", "label": "Prior approval fee", "basis": "fixed", "amount_pence": 9600, "pct": 0, "per_dwelling": true },
+        { "id": "fee-cil", "code": "cil_s106", "category": "statutory", "label": "CIL / S106", "basis": "fixed", "amount_pence": 180000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-building-control", "code": "building_control", "category": "statutory", "label": "Building control", "basis": "fixed", "amount_pence": 220000, "pct": 0, "per_dwelling": false }
+      ]
+    },
+    "finance": {
+      "funding_source": "development_finance", "day_one_advance_pence": 35000000,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 80000000,
+      "committed_gross_facility_pence": 89000000, "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 12, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 40000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "sell_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 400000, "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2 }
+    },
+    "deal_spider": {
+      "storeys": 3, "building_height_m": 10, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 9, "exit_sell": true, "exit_refinance": true, "exit_hold": false,
+      "exit_part_sale": false, "prior_approval_window_months": 2, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 180000000,
+    "gdv_internal_pence": 180000000,
+    "gdv_ancillary_pence": 0,
+    "gross_sales_pence": 180000000,
+    "acquisition_tax_pence": 1450000,
+    "sdlt_pence": 1450000,
+    "acquisition_cost_pence": 52750000,
+    "construction_cost_pence": 53040000,
+    "professional_fees_pence": 5015600,
+    "statutory_costs_pence": 448000,
+    "selling_costs_pence": 3100000,
+    "cost_before_finance_pence": 114353600,
+    "finance_costs_pence": 6730081,
+    "total_development_cost_pence": 121083681,
+    "profit_pence": 58916319,
+    "profit_is_unrealised": false,
+    "profit_on_cost_pct": 48.66,
+    "profit_on_gdv_pct": 32.73,
+    "peak_debt_pence": 77093681,
+    "peak_debt_month": 11,
+    "day_one_advance_pence": 35000000,
+    "gross_ltc_pct": 63.67,
+    "net_ltc_pct": 65.48,
+    "ltgdv_developer_pct": 42.83,
+    "equity_contributed_pence": 40000000,
+    "funding_gap_pence": 0,
+    "cost_to_complete_first_shortfall_month": null,
+    "cost_to_complete_max_shortfall_pence": 0,
+    "developed_area_sqm": 500,
+    "area_bridge.developed_area_sqm": 500,
+    "area_bridge.manual_area_sqm": 500,
+    "area_bridge.unit_nia_sqm": 365,
+    "area_bridge.developed_gia_sqm": 0,
+    "area_bridge.nia_to_gia_pct": null,
+    "cost_plan.mode": "detailed",
+    "cost_plan.base_build_pence": 47000000,
+    "cost_plan.contingency_total_pence": 6040000,
+    "cost_plan.compliance_pence": 0,
+    "cost_plan.construction_total_pence": 53040000,
+    "cost_plan.professional_total_pence": 5015600,
+    "cost_plan.statutory_total_pence": 448000,
+    "cost_plan.conversion_total_pence": 58503600,
+    "cost_plan.lender_eligible_base_pence": 44000000,
+    "cost_plan.implied_rate_pence_per_sqm": 94000,
+    "cost_plan_contingency_general_base_pence": 47000000,
+    "cost_plan_contingency_general_amount_pence": 2350000,
+    "cost_plan_contingency_existing_building_base_pence": 23000000,
+    "cost_plan_contingency_existing_building_amount_pence": 3450000,
+    "cost_plan_contingency_abnormal_base_pence": 3000000,
+    "cost_plan_contingency_abnormal_amount_pence": 240000,
+    "cost_plan_fee_pct_construction_total_base_pence": 53040000,
+    "cost_plan_fee_pct_construction_total_amount_pence": 795600,
+    "cost_plan_fee_pct_base_build_base_pence": 47000000,
+    "cost_plan_fee_pct_base_build_amount_pence": 2820000
+  }
+}

@@ -203,9 +203,10 @@ class TestAppraisalV5Normalisation:
     snapshot to the current schema version (app/api/app.py), not v4.
 
     R9 Task 3 moved that boundary on again, from v5 to v6
-    (migrate_inputs_to_v6). The class name is left alone deliberately -- these
-    cases are about the jurisdiction fields v5 introduced, which v6 carries
-    forward untouched, and renaming them would obscure what they pin."""
+    (migrate_inputs_to_v6). R10 Task 6 moves it once more, from v6 to v7
+    (migrate_inputs_to_v7). The class name is left alone deliberately -- these
+    cases are about the jurisdiction fields v5 introduced, which v6 and v7
+    carry forward untouched, and renaming them would obscure what they pin."""
 
     @pytest.mark.asyncio
     async def test_v4_snapshot_normalises_to_v6_with_default_jurisdiction(
@@ -222,11 +223,11 @@ class TestAppraisalV5Normalisation:
         assert resp.status_code == 201, resp.text
         body = resp.json()
         # The governance column (drives audit_hash), not just the snapshot's
-        # own inputs_version. R9 Task 3: the boundary is v6.
-        assert body["inputs_version"] == 6
+        # own inputs_version. R10 Task 6: the boundary is v7.
+        assert body["inputs_version"] == 7
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 6
+        assert snapshot["inputs_version"] == 7
         acq = snapshot["acquisition"]
         assert acq["jurisdiction"] == "england_ni"
         assert acq["jurisdiction_source"] == "migrated_default"
@@ -302,20 +303,21 @@ class TestAppraisalV5Normalisation:
         self, client, monkeypatch,
     ):
         """Fix round 1, review item 1: an inputs_version this module doesn't
-        implement (here 7, a stand-in for a future/unknown client version)
+        implement (here 8, a stand-in for a future/unknown client version)
         satisfies none of the is_vN structural checks and used to fall
         through, undetected, all the way to migrate_inputs' v1 fallback --
         reading a real, fully-formed document as noise and rebuilding
         finance/equity_sources from an LTV-based heuristic. That must now be
         a 422, not a 201 carrying a silently corrupted snapshot.
 
-        R9 Task 3 moved the stand-in from 6 to 7: 6 is now a version this
-        server implements, so it no longer stands in for one it does not."""
+        R9 Task 3 moved the stand-in from 6 to 7; R10 Task 6 moves it again,
+        from 7 to 8: 7 is now a version this server implements, so it no
+        longer stands in for one it does not."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         unknown_version_doc = copy.deepcopy(FIXTURE_A_INPUTS)
-        unknown_version_doc["inputs_version"] = 7
+        unknown_version_doc["inputs_version"] = 8
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
@@ -329,9 +331,10 @@ class TestAppraisalV5Normalisation:
     async def test_unknown_future_inputs_version_is_422_not_silent_corruption(
         self, client, monkeypatch,
     ):
-        """R9 Task 3. R8's silent-corruption bug, guarded forward: an
-        inputs_version this server does not implement must be refused, never
-        rebuilt from the v1 LTV heuristic and returned as 201.
+        """R9 Task 3, extended by R10 Task 6. R8's silent-corruption bug,
+        guarded forward: an inputs_version this server does not implement
+        must be refused, never rebuilt from the v1 LTV heuristic and returned
+        as 201.
 
         Distinct from the case above: this one carries nothing but the version
         tag, and pins that the migration's own refusal *message* reaches the
@@ -343,7 +346,7 @@ class TestAppraisalV5Normalisation:
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
             "name": "Future version appraisal",
-            "inputs_snapshot": {"inputs_version": 7},
+            "inputs_snapshot": {"inputs_version": 8},
         })
         assert resp.status_code == 422, resp.text
         assert "unrecognised inputs_version" in resp.text

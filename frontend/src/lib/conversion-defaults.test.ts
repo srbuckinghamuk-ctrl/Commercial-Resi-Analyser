@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
-  defaultCalculatorInputsV5, defaultCalculatorInputsV6, DEFAULT_SCENARIOS,
+  defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
+  DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
-import { migrateInputs, migrateV4toV5, migrateV5toV6 } from './model';
+import { migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, costPlanFromLegacyCosts } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
 
 describe('defaultCalculatorInputs', () => {
@@ -133,5 +134,72 @@ describe('defaultCalculatorInputsV6 (R9 Task 3)', () => {
     const v6 = defaultCalculatorInputsV6();
     expect(v6.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(v6.acquisition.acquisition_date).toBeNull();
+  });
+});
+
+describe('defaultCalculatorInputsV7 (R10 Task 12)', () => {
+  // Same guard as the V5/V6 blocks above: conversion-defaults.ts cannot import
+  // model/migrate.ts (migrate.ts imports it), so this is what stops the fresh
+  // document and the migrated one drifting apart.
+  it('is exactly what migrateV6toV7 makes of the v6 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV7>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV7()))
+      .toEqual(stripIds(migrateV6toV7(defaultCalculatorInputsV6())));
+  });
+
+  // Carried item (a) of Task 12: the cost plan was ported from the bare
+  // DEFAULT_COST_PLAN (no fee lines) to costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS)
+  // -- the SAME construction the migration and the engine's pre-v7 fallback
+  // use (ruling P2) -- so a brand-new document starts with the same eight fee
+  // lines a migrated one gets.
+  it('derives cost_plan from DEFAULT_CONVERSION_COSTS via costPlanFromLegacyCosts, not the bare default', () => {
+    expect(defaultCalculatorInputsV7().cost_plan)
+      .toEqual(costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS));
+  });
+
+  // Carried item (b) of Task 12 (Task 6 fix round 1, ruling on I3): Python's
+  // `_default_v7()` test helper (tests/test_cost_plan.py) builds its document
+  // via `migrate_inputs_to_v7({})`, which resolves to the SAME construction --
+  // `cost_plan_from_legacy_costs(DEFAULT_CONVERSION_COSTS)`, where Python's
+  // DEFAULT_CONVERSION_COSTS (app/financial_model/migrate.py) is field-for-field
+  // identical to this file's. The two engines' v7 defaults were DELIBERATELY
+  // diverged earlier in the release (TS had zero fee lines, Python had eight);
+  // this pins that they have re-converged, by asserting the literal figures
+  // Python's suite independently pins for the same eight lines. If either
+  // side's default changes without the other, this is the test that fails.
+  it('the eight default fee lines match Python\'s _default_v7() literal for literal (cross-engine parity)', () => {
+    const plan = defaultCalculatorInputsV7().cost_plan;
+    expect(plan.mode).toBe('headline');
+    expect(plan.packages).toEqual([]);
+    expect(plan.contingency.map((c) => [c.name, c.pct])).toEqual([
+      ['general', 10], ['existing_building', 0], ['abnormal', 0],
+    ]);
+    const byCode = Object.fromEntries(plan.fee_lines.map((f) => [f.code, f]));
+    expect(Object.keys(byCode).sort()).toEqual([
+      'architect', 'building_control', 'cil_s106', 'mande',
+      'other_professional', 'planning_consultant', 'prior_approval', 'structural_engineer',
+    ]);
+    const expected: Record<string, { category: string; amount: number; perDwelling: boolean }> = {
+      architect: { category: 'professional', amount: 1_500_000, perDwelling: false },
+      structural_engineer: { category: 'professional', amount: 500_000, perDwelling: false },
+      mande: { category: 'professional', amount: 500_000, perDwelling: false },
+      planning_consultant: { category: 'professional', amount: 300_000, perDwelling: false },
+      other_professional: { category: 'professional', amount: 0, perDwelling: false },
+      prior_approval: { category: 'statutory', amount: 9_600, perDwelling: true },
+      cil_s106: { category: 'statutory', amount: 0, perDwelling: false },
+      building_control: { category: 'statutory', amount: 200_000, perDwelling: false },
+    };
+    for (const [code, exp] of Object.entries(expected)) {
+      const f = byCode[code];
+      expect(f.basis).toBe('fixed');
+      expect(f.category).toBe(exp.category);
+      expect(f.amount_pence).toBe(exp.amount);
+      expect(f.pct).toBe(0);
+      expect(f.per_dwelling).toBe(exp.perDwelling);
+    }
   });
 });

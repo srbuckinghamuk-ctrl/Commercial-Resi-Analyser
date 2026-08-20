@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v6
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v7
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
@@ -402,31 +402,37 @@ def calculate_authoritative(
     was_v1 = not is_v2_or_later(raw)
 
     try:
-        # R9 (Task 3): the server boundary moved from v5 to v6. Chain
-        # migrations to v6 before validation (v1 -> v2 -> ... -> v5 -> v6; an
-        # already-v6 payload is merged onto v6 defaults rather than
-        # re-migrated). The v6 step is purely additive -- it writes the area
+        # R10 (Task 6): the server boundary moved from v6 to v7. Chain
+        # migrations to v7 before validation (v1 -> v2 -> ... -> v6 -> v7; an
+        # already-v7 payload is merged onto v7 defaults rather than
+        # re-migrated). The v7 step is purely additive -- it adds the cost
+        # plan, deriving it from the document's own flat cost fields via
+        # cost_plan_from_legacy_costs, which is intended to leave every
+        # migrated appraisal's computed values unchanged. tests/test_migrate_v7.py
+        # pins the migration's shape and both refusals, AND the numeric-identity
+        # gate: test_v7_migration_moves_no_existing_figure is the v7 twin of
+        # test_migrate_v6.py's test_v6_migration_moves_no_existing_figure, run
+        # corpus-wide over every fixture, with its TS equivalent in
+        # golden-fixtures.test.ts -- shipped in both engines (R10 Task 11).
+        # R9 (Task 3) moved this boundary from v5 to v6, writing the area
         # bridge on the `manual` basis with every figure zeroed, and a zeroed
-        # ancillary block on every unit -- so the cost area stays
-        # `conversion_costs.total_construction_sqm` and every stored appraisal
-        # reproduces its figures exactly (pinned by
-        # tests/test_migrate_v6.py::test_v6_migration_moves_no_existing_figure
-        # and its TS twin in golden-fixtures.test.ts). R8 (Task 10) moved this
+        # ancillary block on every unit, so the cost area stays
+        # `conversion_costs.total_construction_sqm`. R8 (Task 10) moved this
         # boundary from v4 to v5; Release 3a made the v4 document --
         # lender_valuation and programme included -- drive run_appraisal
         # directly, and the engine still null-wires every lender-basis metric
         # when that block is absent (spec Sec 2) and falls back to the calc
         # 2.1.0 auto windows when `programme` is None (spec Sec 6). This is
         # also what gets persisted as inputs_snapshot. Like
-        # migrate_inputs_to_v5, migrate_inputs_to_v6 already returns a
+        # migrate_inputs_to_v6, migrate_inputs_to_v7 already returns a
         # validated model -- no separate .model_validate call is needed here.
-        inputs = migrate_inputs_to_v6(raw)
+        inputs = migrate_inputs_to_v7(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # A malformed or unsupported-version inputs_snapshot must 4xx, never
-        # 500 (Task 10 known item #1). migrate_inputs_to_v6 -- like
-        # migrate_inputs_to_v5 and migrate_inputs_to_v4 before it, and the
+        # 500 (Task 10 known item #1). migrate_inputs_to_v7 -- like
+        # migrate_inputs_to_v6 and migrate_inputs_to_v5 before it, and the
         # merge helper all three delegate to -- raises plain Python
         # exceptions, not ValidationError, for
         # shapes it cannot interpret: e.g. a document already refused by an
@@ -488,7 +494,7 @@ def calculate_authoritative(
             "client_mismatches": mismatches,
         },
         "calc_version": CALC_VERSION,
-        "inputs_version": 6,
+        "inputs_version": 7,
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
@@ -498,7 +504,7 @@ def calculate_authoritative(
         "audit_hash": audit_hash(
             project_id=str(payload.project_id),
             calc_version=CALC_VERSION,
-            inputs_version=6,
+            inputs_version=7,
             status=status,
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),

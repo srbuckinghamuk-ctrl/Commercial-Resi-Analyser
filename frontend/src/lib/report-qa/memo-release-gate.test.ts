@@ -17,7 +17,9 @@ import {
   refinanceInputs, blendedInputs, legacyV1Snapshot,
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
+  detailedCostPlanInputs,
 } from './memo-fixtures';
+import { humanise } from '../format';
 
 /**
  * The report release gate (audit §9: "before external issue, automated report QA
@@ -36,7 +38,7 @@ const savedRecord: FinancialAppraisal = {
   project_id: qaProject.id,
   name: 'Stonegate appraisal',
   inputs_snapshot: {},
-  calc_version: '2.8.0',
+  calc_version: '2.9.0',
   inputs_version: 4,
   status: 'reconciled',
   input_hash: 'a'.repeat(64),
@@ -162,7 +164,7 @@ describe('investment memorandum release gate', () => {
       expect(text).toContain(savedRecord.id);
       expect(text).toContain(savedRecord.outputs_hash!);
       expect(text).toContain(savedRecord.audit_hash!);
-      expect(text).toContain('2.8.0');
+      expect(text).toContain('2.9.0');
       expect(text).toContain('Europe/London');
       // Fix round 1 (item 4): the row's value, which survived being replaced by
       // 'n/a'. Asserted adjacent to its own label so it cannot be satisfied by
@@ -625,5 +627,118 @@ describe('investment memorandum release gate', () => {
     expect(text).toContain('Internal saleable value');
     expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
     expect(sparsePages(info)).toEqual([]);
+  });
+});
+
+/**
+ * R10 Task 13 (spec §16, CARRIED-1). Every ROUTES fixture above is a v4/v5/v6
+ * (headline-mode) document, so the sweep above never exercises the
+ * mode-dependent cost section at all: not the "Detailed Cost Plan — QS
+ * Evidence Not Recorded" heading, not the package schedule, not a contingency
+ * class resolving against a base other than the whole base build. These
+ * assertions follow the same positioned-text convention as the rest of this
+ * file — read off the inspected PDF's own draw stream via `documentText`, not
+ * off the generator's intentions — and compute their expected strings from
+ * the run's own `metrics.cost_plan`, the same discipline
+ * `checkAcquisitionTaxDisclosure` (report-checks.ts) uses for the tax regime
+ * strings, so a label or a base figure that drifts in the generator is caught
+ * without the assertion itself hard-coding a second, independent copy of the
+ * arithmetic.
+ */
+function fmtGBP(pence: number): string {
+  return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
+}
+function fmtPercent(pct: number): string {
+  return `${pct.toFixed(1)}%`;
+}
+const CONTINGENCY_BASIS_LABEL = { all_packages: 'all packages', selected_packages: 'selected packages' } as const;
+
+describe('R10 cost-plan modes (spec §16)', () => {
+  it('renders the headline cost section, and only the headline heading', async () => {
+    const { info } = await report(sellAllInputs());
+    const text = documentText(info);
+    expect(text).toContain('Headline Cost Estimate');
+    expect(text).not.toContain('Detailed Cost Plan');
+  });
+
+  it('renders the detailed cost section, discloses QS evidence is not recorded, and prints the package schedule', async () => {
+    const inputs = detailedCostPlanInputs();
+    const run = runAppraisal(inputs);
+    const { info } = await report(inputs);
+    const text = documentText(info);
+    expect(text).toContain('Detailed Cost Plan — QS Evidence Not Recorded');
+    expect(text).not.toContain('Headline Cost Estimate');
+    // The package schedule itself — every package in the fixture's cost plan
+    // is drawn with its label and its own amount, not summarised away.
+    for (const p of run.metrics.cost_plan.packages) {
+      expect(text).toContain(p.label);
+      expect(text).toContain(fmtGBP(p.amount_pence));
+    }
+    // The route sweep above (`ROUTES`) never runs a detailed-mode document
+    // through the page-bounds / sparse-page gate, so the new package-schedule
+    // rows get their own check here rather than an assumption that a longer
+    // table behaves the same as the ones already swept.
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
+  });
+
+  it('prints each contingency class beside its own resolved base, in both modes', async () => {
+    for (const makeInputs of [sellAllInputs, detailedCostPlanInputs]) {
+      const inputs = makeInputs();
+      const run = runAppraisal(inputs);
+      const { info } = await report(inputs);
+      const text = documentText(info);
+      // Non-vacuity: the loop below would pass trivially over an empty array.
+      expect(run.metrics.cost_plan.contingency.length).toBe(3);
+      for (const c of run.metrics.cost_plan.contingency) {
+        const expectedLine =
+          `  ${humanise(c.name)} contingency — ${fmtPercent(c.pct)} of `
+          + `${CONTINGENCY_BASIS_LABEL[c.basis]} (${fmtGBP(c.base_pence)})`;
+        expect(text, `${makeInputs.name}: ${c.name}`).toContain(expectedLine);
+      }
+      // The fixture's whole point (memo-fixtures.ts doc comment): the three
+      // classes resolve against three DIFFERENT bases in detailed mode, so a
+      // regression that resolved every class against the base build alone
+      // would still pass a test that only checked the base appeared, not
+      // that it appeared correctly per class.
+      if (makeInputs === detailedCostPlanInputs) {
+        const bases = new Set(run.metrics.cost_plan.contingency.map((c) => c.base_pence));
+        expect(bases.size).toBe(3);
+      }
+    }
+  });
+
+  // Fix round 1, F2. In headline mode the six real construction amounts
+  // (build rate, three compliance fields, the contingency amount, the
+  // construction sub-total) used to appear with no printed figure for the
+  // one they sum from — base_build_pence was computed but never shown.
+  it('prints the base build figure in headline mode, so the construction section is followable', async () => {
+    const inputs = sellAllInputs();
+    const run = runAppraisal(inputs);
+    const { info } = await report(inputs);
+    const text = documentText(info);
+    expect(run.metrics.cost_plan.mode).toBe('headline');
+    expect(text).toContain('Base build');
+    expect(text).toContain(fmtGBP(run.metrics.cost_plan.base_build_pence));
+  });
+
+  // Fix round 1, F3 (spec §16.6/§16.9). The pre-R10 limitation ("not a priced
+  // quantity-surveyed package schedule") is simply false once a document is
+  // in detailed mode — exactly the "stale disclosure survives the feature it
+  // described" fault R8 and R9 each fixed in this same list. The honest
+  // residual limitation in detailed mode is QS *evidence*, not the schedule
+  // itself.
+  it('states the true residual cost-basis limitation in each mode', async () => {
+    // documentProse, not documentText: the limitation sentence wraps across
+    // several drawn lines (autoTable/wrap), so a substring spanning a wrap
+    // point ("package" / "schedule.") only matches the whitespace-normalised
+    // reflow, the same reasoning checkAcquisitionTaxDisclosure documents.
+    const headlineProse = documentProse((await report(sellAllInputs())).info);
+    expect(headlineProse).toContain('not a priced quantity-surveyed package schedule');
+
+    const detailedProse = documentProse((await report(detailedCostPlanInputs())).info);
+    expect(detailedProse).not.toContain('not a priced quantity-surveyed package schedule');
+    expect(detailedProse).toContain('rests on a priced package schedule');
+    expect(detailedProse).toContain('No QS source, date or status is recorded');
   });
 });

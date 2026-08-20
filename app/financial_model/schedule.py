@@ -1,14 +1,27 @@
 """Port of frontend/src/lib/model/schedule.ts, plus the cost-helper functions it
-imports from frontend/src/lib/conversion-calc-engine.ts (calculateGdv,
-calculateTotalAcquisitionCost, calculateTotalConstructionCost;
-calculateTotalProfessionalFees is also ported here so migrate.py can share it,
-mirroring the TS module that houses all four)."""
+imports from frontend/src/lib/conversion-calc-engine.ts (calculate_gdv,
+calculate_total_acquisition_cost).
+
+R10 (spec Sec 16): build_schedule no longer sums conversion_costs fields
+itself for construction/professional/statutory -- it calls compute_cost_plan
+once and reads the three totals from the result, the same engine
+compute_cost_plan.ts serves to the UI and the memo.
+
+R10 Task 9 fix round 1 (I3): calculate_total_construction_cost and
+calculate_total_professional_fees -- unused by build_schedule, kept only for
+migrate.py's v1 facility-sizing path, which runs before a document has a
+cost_plan block at all -- moved to legacy_costs.py. That isolates their one
+legitimate raw contingency_pct read in its own module, so
+tests/test_accessor_guard.py can allowlist it without also un-guarding this
+module (mirrors frontend/src/lib/conversion-calc-engine.ts, which isolates
+the same calculator away from schedule.ts)."""
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
 from .areas import developed_area_sqm
+from .cost_plan import compute_cost_plan
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
@@ -16,7 +29,6 @@ from .types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
     AnyCalculatorInputs,
-    ConversionCostInputs,
     ProgrammePackage,
     ProposedUnit,
 )
@@ -97,29 +109,6 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     )
 
 
-def calculate_total_construction_cost(costs: ConversionCostInputs, area_sqm: float) -> int:
-    # Spec Sec 1.1: fractional-area products round once, at source, in one step
-    # before contingency -- base = money_round(construction_cost_per_sqm_pence x
-    # area). Integer-sqm inputs are unaffected. Matches conversion-calc-engine.ts.
-    #
-    # R9: the area is an explicit parameter. Callers resolve it once through
-    # developed_area_sqm (spec Sec 15.4); tests/test_accessor_guard.py makes
-    # reading the raw field here a test failure.
-    base_cost = money_round(costs.construction_cost_per_sqm_pence * area_sqm)
-    contingency = money_round((base_cost * costs.contingency_pct) / 100)
-    compliance = costs.fire_safety_pence + costs.sound_insulation_pence + costs.part_l_compliance_pence
-    return base_cost + contingency + compliance
-
-
-def calculate_total_professional_fees(costs: ConversionCostInputs, unit_count: int = 1) -> int:
-    return (
-        costs.prior_approval_fee_per_dwelling_pence * max(1, unit_count)
-        + costs.cil_s106_pence + costs.architect_pence + costs.structural_engineer_pence
-        + costs.mande_pence + costs.planning_consultant_pence + costs.building_control_pence
-        + costs.other_professional_fees_pence
-    )
-
-
 @dataclass
 class MonthUses:
     acquisition_pence: int
@@ -192,19 +181,22 @@ def _empty_receipts() -> MonthReceipts:
 
 def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     term = max(1, math.floor(inputs.finance.term_months))
-    cc = inputs.conversion_costs
     units = inputs.unit_mix.units
 
     acquisition_total = calculate_total_acquisition_cost(inputs.acquisition)
-    construction_total = calculate_total_construction_cost(cc, developed_area_sqm(inputs))
-    # Reclassification per spec Sec 3.5/3.6: professional excludes statutory items.
-    professional_total = (
-        cc.architect_pence + cc.structural_engineer_pence + cc.mande_pence
-        + cc.planning_consultant_pence + cc.other_professional_fees_pence
-    )
-    prior_approval = cc.prior_approval_fee_per_dwelling_pence * max(1, len(units))
-    statutory_spread_total = cc.cil_s106_pence + cc.building_control_pence
-    statutory_total = prior_approval + statutory_spread_total
+    # R10 spec Sec 16. The cost stack is computed once, by the one engine that
+    # serves both modes, and this is the only place the schedule learns the
+    # three totals.
+    cost_plan = compute_cost_plan(inputs, developed_area_sqm(inputs), len(units))
+    construction_total = cost_plan.construction_total_pence
+    professional_total = cost_plan.professional_total_pence
+    # Sec 3.4: prior approval lands in month 0; every other statutory line
+    # spreads with the professional curve. Keyed on the fee CODE, preserving
+    # the pre-R10 split that was keyed on a hard-coded field name. R12
+    # generalises fee timing.
+    prior_approval = sum(f.amount_pence for f in cost_plan.fees if f.code == "prior_approval")
+    statutory_spread_total = cost_plan.statutory_total_pence - prior_approval
+    statutory_total = cost_plan.statutory_total_pence
 
     uses = [_empty_uses() for _ in range(term)]
     receipts = [_empty_receipts() for _ in range(term)]

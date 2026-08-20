@@ -11,7 +11,7 @@ import {
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth } from './programme-months';
-import { repairGluedDescription } from './format';
+import { repairGluedDescription, humanise } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
 import {
@@ -1218,10 +1218,83 @@ export function generateInvestmentMemo(
   // package mode lands (R10) the model is a rate x area headline estimate with
   // named allowances, and a lender reading "cost plan" would reasonably expect
   // a priced package schedule behind it.
-  y = subHeading(y, 'Headline Cost Estimate');
-  // Every row below is either a raw stored input (rate, area, fixed fee) or an
-  // engine-computed total from run.metrics / run.model.totals — no cost or fee
-  // amount is derived here (spec §11.9).
+  //
+  // R10 Task 13 (CARRIED-1 / spec §16): the section is now mode-dependent.
+  // Headline mode keeps the R7 phrase verbatim. Detailed mode is a priced QS
+  // package schedule in shape, but this release records no QS provenance
+  // (source, date, status — R15), so the heading says exactly that rather than
+  // implying an evidence status the model does not carry.
+  const cp = metrics.cost_plan;
+  y = subHeading(
+    y,
+    cp.mode === 'detailed'
+      ? 'Detailed Cost Plan — QS Evidence Not Recorded'
+      : 'Headline Cost Estimate',
+  );
+  // Every row below is either a raw stored input (rate, area) or an
+  // engine-computed figure from run.metrics.cost_plan / run.model.totals — no
+  // cost or fee amount is derived here (spec §11.9). CARRIED-1: the eight fee
+  // lines and the package/contingency lines below all read
+  // run.metrics.cost_plan, never the deprecated conversion_costs fee fields —
+  // nothing writes those any more, so a raw read would print a schedule that
+  // does not sum to its own sub-totals.
+  const CONTINGENCY_BASIS_LABEL = {
+    all_packages: 'all packages',
+    selected_packages: 'selected packages',
+  } as const;
+  const FEE_BASIS_LABEL = {
+    fixed: 'fixed',
+    pct_of_base_build: '% of base build',
+    pct_of_construction_total: '% of construction total',
+  } as const;
+  type MemoRow = [string, string, string];
+  const constructionRows: MemoRow[] =
+    cp.mode === 'detailed'
+      ? [
+          ['  Package schedule', '', ''],
+          ...cp.packages.map((p): MemoRow => [
+            `    ${p.label || humanise(p.code)} (${humanise(p.code)})`,
+            fmt(p.amount_pence),
+            '',
+          ]),
+        ]
+      : [
+          ['  Build rate', `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`, ''],
+          // R10 Task 13 fix round 1 (F2). Without this row six real amounts
+          // (build rate, three compliance fields, the contingency amount, the
+          // construction sub-total) appeared with no printed figure for the
+          // one they sum from -- base_build_pence was computed but never
+          // shown. A bare read of cp.base_build_pence, the same figure
+          // detailed mode's package schedule sums to.
+          ['  Base build', fmt(cp.base_build_pence), perSqftPence(cp.base_build_pence, totalSqm)],
+          ['  Fire safety', fmt(inputs.conversion_costs.fire_safety_pence), ''],
+          ['  Sound insulation', fmt(inputs.conversion_costs.sound_insulation_pence), ''],
+          ['  Part L compliance', fmt(inputs.conversion_costs.part_l_compliance_pence), ''],
+        ];
+  // Spec §16: each of the three classes rounds independently against its own
+  // NAMED base — three allowances at 5% are deliberately not one at 15%. The
+  // base shown here is the resolved figure (`c.base_pence`), never re-derived.
+  const contingencyRows: MemoRow[] = cp.contingency.map((c): MemoRow => [
+    `  ${humanise(c.name)} contingency — ${fmtPct(c.pct)} of ${CONTINGENCY_BASIS_LABEL[c.basis]} (${fmt(c.base_pence)})`,
+    fmt(c.amount_pence),
+    '',
+  ]);
+  // Spec §16: no fee basis includes fees, so a fixed line and a percentage
+  // line can be printed by the same rule with no ordering dependency.
+  // FeeLineResult carries no `pct` or `per_dwelling` (those are the INPUT
+  // line's fields, already folded into `amount_pence` by the engine) — a
+  // fixed line prints its label as stored; a percentage line prints its
+  // resolved base, which is what spec §16 requires shown, not the input pct.
+  const feeRows = (category: 'professional' | 'statutory'): MemoRow[] =>
+    cp.fees
+      .filter((f) => f.category === category)
+      .map((f): MemoRow => [
+        f.basis === 'fixed'
+          ? `  ${f.label}`
+          : `  ${f.label} — ${FEE_BASIS_LABEL[f.basis]} (${fmt(f.base_pence)})`,
+        fmt(f.amount_pence),
+        '',
+      ]);
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
@@ -1237,26 +1310,22 @@ export function generateInvestmentMemo(
       ['  Sub-total acquisition (inc. tax, fees)', fmt(metrics.acquisition_cost_pence), perSqftPence(metrics.acquisition_cost_pence, totalSqm)],
       ['', '', ''],
       ['CONSTRUCTION', '', ''],
-      ['  Build rate', `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`, ''],
-      [`  Contingency rate`, fmtPct(inputs.conversion_costs.contingency_pct), ''],
-      ['  Fire safety', fmt(inputs.conversion_costs.fire_safety_pence), ''],
-      ['  Sound insulation', fmt(inputs.conversion_costs.sound_insulation_pence), ''],
-      ['  Part L compliance', fmt(inputs.conversion_costs.part_l_compliance_pence), ''],
+      ...constructionRows,
+      ...contingencyRows,
       ['  Sub-total construction (inc. contingency)', fmt(metrics.construction_cost_pence), perSqftPence(metrics.construction_cost_pence, totalSqm)],
       ['', '', ''],
       ['PROFESSIONAL FEES', '', ''],
-      ['  Architect', fmt(inputs.conversion_costs.architect_pence), ''],
-      ['  Structural engineer', fmt(inputs.conversion_costs.structural_engineer_pence), ''],
-      ['  M&E', fmt(inputs.conversion_costs.mande_pence), ''],
-      ['  Planning consultant', fmt(inputs.conversion_costs.planning_consultant_pence), ''],
-      ['  Other professional fees', fmt(inputs.conversion_costs.other_professional_fees_pence), ''],
+      ...feeRows('professional'),
       ['  Sub-total professional fees', fmt(metrics.professional_fees_pence), perSqftPence(metrics.professional_fees_pence, totalSqm)],
       ['', '', ''],
       ['STATUTORY COSTS', '', ''],
-      ['  Prior approval fee per dwelling', fmt(inputs.conversion_costs.prior_approval_fee_per_dwelling_pence), ''],
-      ['  CIL / S106', fmt(inputs.conversion_costs.cil_s106_pence), ''],
-      ['  Building control', fmt(inputs.conversion_costs.building_control_pence), ''],
+      ...feeRows('statutory'),
       ['  Sub-total statutory costs', fmt(metrics.statutory_costs_pence), perSqftPence(metrics.statutory_costs_pence, totalSqm)],
+      ['', '', ''],
+      // R10 Task 13 (CARRIED-2): the restored bottom line, a bare read of
+      // cost_plan.conversion_total_pence — construction + professional +
+      // statutory, computed once in the engine, not summed here.
+      ['TOTAL CONVERSION COSTS', fmt(cp.conversion_total_pence), perSqftPence(cp.conversion_total_pence, totalSqm)],
       ['', '', ''],
       ['FINANCE COSTS', '', ''],
       [`  Arrangement fee (${fmtPct(inputs.finance.arrangement_fee_pct)} of ${inputs.finance.arrangement_fee_basis.replace(/_/g, ' ')})`, fmt(model.totals.arrangement_fee_pence), ''],
@@ -2042,8 +2111,25 @@ export function generateInvestmentMemo(
         `${tax.regime} — ${JURISDICTION_LABEL[tax.jurisdiction]}, non-residential, `
         + `bands in force from ${formatBandDate(tax.band_set_effective_from)} `
         + `(table ${tax.table_version})`],
-      ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
-      ['Contingency', fmtPct(inputs.conversion_costs.contingency_pct), 'On base build cost only'],
+      // Final review I2. This row used to print the entered rate unconditionally,
+      // three rows above the contingency rows that ARE mode-gated (§16.9/CARRIED-1
+      // below) -- in detailed mode the entered rate drives nothing, so the memo
+      // showed a lender a build rate the model did not use. Gated the same way:
+      // headline keeps the entered rate (unchanged); detailed reads the bare
+      // cp.implied_rate_pence_per_sqm (spec §16.8, base build ÷ developed area),
+      // labelled as implied so it reads as derived, not entered.
+      cp.mode === 'detailed'
+        ? ['Build rate £/m²', cp.implied_rate_pence_per_sqm === null ? 'n/a — zero area' : fmt(cp.implied_rate_pence_per_sqm), 'Implied — base build ÷ developed area (spec §16.8), not an entered figure']
+        : ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
+      // R10 Task 13 (CARRIED-1, spec §16): one row per contingency class, each
+      // with its own NAMED, resolved base — the static "On base build cost
+      // only" string is retired because the base now differs by class and is
+      // a computed figure, not a fixed assumption.
+      ...cp.contingency.map((c): [string, string, string] => [
+        `${humanise(c.name)} contingency`,
+        fmtPct(c.pct),
+        `${CONTINGENCY_BASIS_LABEL[c.basis]} (${fmt(c.base_pence)})`,
+      ]),
       ['Blended GDV £/sq ft', perSqftPence(metrics.gdv_pence, totalSqm), 'Comparable evidence — verify'],
       ['Committed net facility', inputs.finance.committed_net_facility_pence === null ? 'Not entered' : fmt(inputs.finance.committed_net_facility_pence), inputs.finance.requires_confirmation ? 'Requires confirmation' : 'Confirmed'],
       ['RLV target profit', fmtPct(inputs.deal_spider.target_profit_on_cost_pct), 'deal_spider.target_profit_on_cost_pct (configurable)'],
@@ -2142,7 +2228,16 @@ export function generateInvestmentMemo(
 
   y = subHeading(y, 'What the figures rest on');
   const limitations: string[] = [
-    'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
+    // R10 Task 13 fix round 1 (F3, spec §16.6/§16.9). In detailed mode
+    // construction cost IS a priced package schedule, so the pre-R10 sentence
+    // is simply false there — the exact fault R8 and R9 each fixed in this
+    // same list when their own feature outgrew the sentence describing it
+    // (the acquisition-tax and area-bridge limitations above/below). The
+    // honest residual limitation in detailed mode is not "no package
+    // schedule" but "no QS evidence behind the schedule" (R15).
+    cp.mode === 'detailed'
+      ? 'Construction cost rests on a priced package schedule (a detailed cost plan), not a rate x area estimate. No QS source, date or status is recorded for any package or fee line, and no provisional sums, fixed-price coverage or package-level exclusions are modelled.'
+      : 'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
     'VAT is not modelled as a cash flow. Conversion VAT treatment is fact-specific and no reduced-rate saving is assumed; purchase VAT and any TOGC treatment are unconfirmed. An adverse VAT position would increase the funding requirement.',
     // R8 (spec §14). The sentence this replaces said the model taxed every
     // property on England/NI SDLT bands and that Scotland and Wales were not

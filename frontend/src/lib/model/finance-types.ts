@@ -6,6 +6,7 @@ import type { UnitMixInputsV6 } from '../conversion-types';
 import type { SpendCurve } from './curves';
 import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
+import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 
 export type { SpendCurve };
 
@@ -207,9 +208,21 @@ export interface CalculatorInputsV6
   areas: AreaBridgeInputs;
 }
 
+/**
+ * R10 (spec §16). Adds the cost plan. Purely additive: migration writes
+ * `mode: 'headline'` with no packages, the general contingency class carrying
+ * the document's existing `conversion_costs.contingency_pct`, and the eight
+ * existing fee fields as `fixed` fee lines — so **no existing appraisal's
+ * computed values move**.
+ */
+export interface CalculatorInputsV7 extends Omit<CalculatorInputsV6, 'inputs_version'> {
+  inputs_version: 7;
+  cost_plan: CostPlanInputs;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
-  | CalculatorInputsV5 | CalculatorInputsV6;
+  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -357,6 +370,10 @@ export interface AppraisalResultV2 {
   /** R9 spec §15.8 — the construction cost area actually used, whichever basis
    *  produced it. Equal to `area_bridge.developed_area_sqm`. */
   developed_area_sqm: number;
+  /** R10 spec §16 — the full cost derivation: every package, every contingency
+   *  class with its base, every fee line with its base. The UI and the report
+   *  read cost from here and never recompute one. */
+  cost_plan: CostPlanResult;
   /** R9 spec §3.1 — GDV excluding ancillary. This is the pre-R9 figure, kept so
    *  a variance against it stays expressible. */
   gdv_internal_pence: number;
@@ -415,4 +432,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.8.0';
+export const CALC_VERSION = '2.9.0';

@@ -9,10 +9,11 @@ from typing import Callable
 
 from .acquisition_tax import regime_for, select_band_set
 from .areas import area_bridge
+from .cost_plan import compute_cost_plan
 from .engine import MonthlyModel, pct
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
-from .types import AnyCalculatorInputs
+from .types import FEE_CODE_CATEGORY, AnyCalculatorInputs
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
@@ -258,6 +259,131 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                     f"The manual construction area ({manual} m2) differs from the bridge's "
                     f"developed area ({bridge.developed_gia_sqm} m2) by more than 5% - one of "
                     "them is wrong, or the manual basis needs a reason.",
+                )
+
+    # R10 spec Sec 16 -- the cost plan. `cost_plan` is read structurally exactly
+    # like `areas` above: a pre-v7 document has no cost_plan attribute at all
+    # and must not gain errors from a block introduced this release.
+    cp = getattr(inputs, "cost_plan", None)
+    if cp is not None:
+        if cp.mode == "detailed":
+            if len(cp.packages) == 0:
+                err("cost_plan.packages", "Detailed mode requires at least one cost package.")
+            elif sum(p.amount_pence for p in cp.packages) == 0:
+                err(
+                    "cost_plan.packages",
+                    "Detailed mode packages sum to zero - no construction cost is being priced.",
+                )
+        if cp.mode == "headline" and len(cp.packages) > 0:
+            err("cost_plan.mode", "Headline mode does not use packages - remove them, or switch to detailed mode.")
+
+        for idx, p in enumerate(cp.packages):
+            if p.amount_pence < 0:
+                err(f"cost_plan.packages[{idx}].amount_pence", "Package amount cannot be negative.")
+        for idx, c in enumerate(cp.contingency):
+            if c.pct < 0:
+                err(f"cost_plan.contingency[{idx}].pct", "Contingency percentage cannot be negative.")
+
+        if len({p.id for p in cp.packages}) != len(cp.packages):
+            err("cost_plan.packages", "Package ids must be unique.")
+        if len({f.id for f in cp.fee_lines}) != len(cp.fee_lines):
+            err("cost_plan.fee_lines", "Fee line ids must be unique.")
+
+        package_ids = {p.id for p in cp.packages}
+        for idx, c in enumerate(cp.contingency):
+            if c.basis == "selected_packages":
+                if any(pid not in package_ids for pid in c.package_ids):
+                    err(
+                        f"cost_plan.contingency[{idx}].package_ids",
+                        "One or more package_ids do not match a package in this cost plan.",
+                    )
+                if len(c.package_ids) == 0 and c.pct != 0:
+                    err(
+                        f"cost_plan.contingency[{idx}].package_ids",
+                        "A selected-packages contingency naming no packages cannot carry a "
+                        "non-zero percentage.",
+                    )
+
+        contingency_names = [c.name for c in cp.contingency]
+        if len(cp.contingency) != 3 or len(set(contingency_names)) != len(contingency_names):
+            err(
+                "cost_plan.contingency",
+                "A cost plan must have exactly three contingency classes, one per class name, "
+                "with no repeats.",
+            )
+
+        # Spec Sec 3.2.1: in detailed mode, compliance is priced inside the
+        # fire_acoustic_thermal package (compute_cost_plan returns
+        # compliance_pence 0 for detailed mode). A document carrying both would
+        # double-count that money invisibly, so any non-zero flat compliance
+        # figure is a hard error rather than being silently dropped by the
+        # engine.
+        if cp.mode == "detailed":
+            cc = inputs.conversion_costs
+            if cc.fire_safety_pence != 0:
+                err(
+                    "conversion_costs.fire_safety_pence",
+                    "Detailed mode prices compliance inside the fire_acoustic_thermal package - "
+                    "fire_safety_pence must be zero to avoid double-counting.",
+                )
+            if cc.sound_insulation_pence != 0:
+                err(
+                    "conversion_costs.sound_insulation_pence",
+                    "Detailed mode prices compliance inside the fire_acoustic_thermal package - "
+                    "sound_insulation_pence must be zero to avoid double-counting.",
+                )
+            if cc.part_l_compliance_pence != 0:
+                err(
+                    "conversion_costs.part_l_compliance_pence",
+                    "Detailed mode prices compliance inside the fire_acoustic_thermal package - "
+                    "part_l_compliance_pence must be zero to avoid double-counting.",
+                )
+
+        for idx, fl in enumerate(cp.fee_lines):
+            if fl.basis == "fixed":
+                if fl.pct != 0:
+                    err(
+                        f"cost_plan.fee_lines[{idx}].pct",
+                        "A fixed-basis fee line cannot carry a non-zero percentage.",
+                    )
+            else:
+                if fl.amount_pence != 0:
+                    err(
+                        f"cost_plan.fee_lines[{idx}].amount_pence",
+                        "A percentage-basis fee line cannot carry a non-zero fixed amount.",
+                    )
+                if fl.per_dwelling:
+                    err(
+                        f"cost_plan.fee_lines[{idx}].per_dwelling",
+                        "per_dwelling only applies to a fixed-basis fee line.",
+                    )
+            # Spec Sec 3.4: building_control is FIXED as statutory despite sitting
+            # in the professional-fee block of ConversionCostInputs. A wrong
+            # category moves money between two separately-reported,
+            # separately-spread totals while every grand total stays correct --
+            # invisible to any totals-based test.
+            if fl.code != "other" and fl.category != FEE_CODE_CATEGORY[fl.code]:
+                err(
+                    f"cost_plan.fee_lines[{idx}].category",
+                    f"Fee code '{fl.code}' must be categorised '{FEE_CODE_CATEGORY[fl.code]}'.",
+                )
+
+        # Warnings only -- both need the resolved plan (base_build/base per fee
+        # line), which is exactly what compute_cost_plan already derives, so it
+        # is reused here rather than re-implemented.
+        resolved = compute_cost_plan(inputs, bridge.developed_area_sqm, len(inputs.unit_mix.units))
+        if resolved.base_build_pence > 0 and resolved.contingency_total_pence > resolved.base_build_pence * 0.5:
+            warn(
+                "cost_plan.contingency",
+                f"Contingency ({resolved.contingency_total_pence} pence) exceeds 50% of the base "
+                f"build cost ({resolved.base_build_pence} pence) - check the packages or "
+                "percentages.",
+            )
+        for idx, fee in enumerate(resolved.fees):
+            if fee.basis != "fixed" and fee.base_pence == 0:
+                warn(
+                    f"cost_plan.fee_lines[{idx}].basis",
+                    "This fee line resolves against a zero base and will compute to zero.",
                 )
 
     if inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) == 0:

@@ -10,6 +10,7 @@ import { computeLenderGdv } from './lender-valuation';
 // eslint-disable-next-line no-restricted-syntax -- see above; validation reports the date, it does not compute tax
 import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
 import { areaBridge } from './areas';
+import { computeCostPlan, FEE_CODE_CATEGORY } from './cost-plan';
 import { pct } from './pct';
 
 export interface ValidationIssue {
@@ -103,6 +104,10 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   if ((areas == null || areas.basis === 'manual') && bridge.developed_area_sqm < 0) {
     err('conversion_costs.total_construction_sqm', 'Area cannot be negative.');
   }
+  // R10 Task 9: contingency_pct is now legacy (run.metrics.cost_plan.contingency
+  // is the resolved figure), but this validates the raw manual/pre-v7 input, which
+  // still exists and is still user-editable until Task 12 rebuilds the cost page.
+  // eslint-disable-next-line no-restricted-syntax -- R10 Task 12 replaces this read
   if (inputs.conversion_costs.contingency_pct < 0) {
     err('conversion_costs.contingency_pct', 'Contingency cannot be negative.');
   }
@@ -224,6 +229,125 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       }
     }
   }
+  // R10 spec §16 — the cost plan. `cost_plan` is read structurally exactly like
+  // `areas` above: a pre-v7 document has no cost_plan block at all and must not
+  // gain errors from a block introduced this release.
+  const cp = 'cost_plan' in inputs ? inputs.cost_plan : null;
+  if (cp != null) {
+    if (cp.mode === 'detailed') {
+      if (cp.packages.length === 0) {
+        err('cost_plan.packages', 'Detailed mode requires at least one cost package.');
+      } else if (cp.packages.reduce((s, p) => s + p.amount_pence, 0) === 0) {
+        err('cost_plan.packages', 'Detailed mode packages sum to zero — no construction cost is being priced.');
+      }
+    }
+    if (cp.mode === 'headline' && cp.packages.length > 0) {
+      err('cost_plan.mode', 'Headline mode does not use packages — remove them, or switch to detailed mode.');
+    }
+
+    cp.packages.forEach((p, idx) => {
+      if (p.amount_pence < 0) err(`cost_plan.packages[${idx}].amount_pence`, 'Package amount cannot be negative.');
+    });
+    cp.contingency.forEach((c, idx) => {
+      if (c.pct < 0) err(`cost_plan.contingency[${idx}].pct`, 'Contingency percentage cannot be negative.');
+    });
+    // Final review I3 (spec §16.5: "Any negative amount_pence or pct on a
+    // package, contingency class OR fee line"). This third leg was missing --
+    // Python enforces it at the schema (types.py FeeLine, Field(ge=0)), so a
+    // negative fee was accepted by the client, computed into a total and shown
+    // on screen, then rejected server-side with a raw pydantic 422 instead of
+    // this module's own ValidationIssue message.
+    cp.fee_lines.forEach((fl, idx) => {
+      if (fl.amount_pence < 0) err(`cost_plan.fee_lines[${idx}].amount_pence`, 'Fee line amount cannot be negative.');
+      if (fl.pct < 0) err(`cost_plan.fee_lines[${idx}].pct`, 'Fee line percentage cannot be negative.');
+    });
+
+    if (new Set(cp.packages.map((p) => p.id)).size !== cp.packages.length) {
+      err('cost_plan.packages', 'Package ids must be unique.');
+    }
+    if (new Set(cp.fee_lines.map((f) => f.id)).size !== cp.fee_lines.length) {
+      err('cost_plan.fee_lines', 'Fee line ids must be unique.');
+    }
+
+    const packageIds = new Set(cp.packages.map((p) => p.id));
+    cp.contingency.forEach((c, idx) => {
+      if (c.basis === 'selected_packages') {
+        if (c.package_ids.some((id) => !packageIds.has(id))) {
+          err(`cost_plan.contingency[${idx}].package_ids`,
+            'One or more package_ids do not match a package in this cost plan.');
+        }
+        if (c.package_ids.length === 0 && c.pct !== 0) {
+          err(`cost_plan.contingency[${idx}].package_ids`,
+            'A selected-packages contingency naming no packages cannot carry a non-zero percentage.');
+        }
+      }
+    });
+
+    const contingencyNames = cp.contingency.map((c) => c.name);
+    if (cp.contingency.length !== 3 || new Set(contingencyNames).size !== contingencyNames.length) {
+      err('cost_plan.contingency',
+        'A cost plan must have exactly three contingency classes, one per class name, with no repeats.');
+    }
+
+    // Spec §3.2.1: in detailed mode, compliance is priced inside the
+    // fire_acoustic_thermal package (compute_cost_plan returns compliance_pence
+    // 0 for detailed mode). A document carrying both would double-count that
+    // money invisibly, so any non-zero flat compliance figure is a hard error
+    // rather than being silently dropped by the engine.
+    if (cp.mode === 'detailed') {
+      const cc = inputs.conversion_costs;
+      if (cc.fire_safety_pence !== 0) {
+        err('conversion_costs.fire_safety_pence',
+          'Detailed mode prices compliance inside the fire_acoustic_thermal package — fire_safety_pence must be zero to avoid double-counting.');
+      }
+      if (cc.sound_insulation_pence !== 0) {
+        err('conversion_costs.sound_insulation_pence',
+          'Detailed mode prices compliance inside the fire_acoustic_thermal package — sound_insulation_pence must be zero to avoid double-counting.');
+      }
+      if (cc.part_l_compliance_pence !== 0) {
+        err('conversion_costs.part_l_compliance_pence',
+          'Detailed mode prices compliance inside the fire_acoustic_thermal package — part_l_compliance_pence must be zero to avoid double-counting.');
+      }
+    }
+
+    cp.fee_lines.forEach((fl, idx) => {
+      if (fl.basis === 'fixed') {
+        if (fl.pct !== 0) err(`cost_plan.fee_lines[${idx}].pct`, 'A fixed-basis fee line cannot carry a non-zero percentage.');
+      } else {
+        if (fl.amount_pence !== 0) {
+          err(`cost_plan.fee_lines[${idx}].amount_pence`, 'A percentage-basis fee line cannot carry a non-zero fixed amount.');
+        }
+        if (fl.per_dwelling) {
+          err(`cost_plan.fee_lines[${idx}].per_dwelling`, 'per_dwelling only applies to a fixed-basis fee line.');
+        }
+      }
+      // Spec §3.4: building_control is FIXED as statutory despite sitting in the
+      // professional-fee block of ConversionCostInputs. A wrong category moves
+      // money between two separately-reported, separately-spread totals while
+      // every grand total stays correct — invisible to any totals-based test.
+      if (fl.code !== 'other' && fl.category !== FEE_CODE_CATEGORY[fl.code]) {
+        err(`cost_plan.fee_lines[${idx}].category`,
+          `Fee code '${fl.code}' must be categorised '${FEE_CODE_CATEGORY[fl.code]}'.`);
+      }
+    });
+
+    // Warnings only — both need the resolved plan (base_build/base per fee
+    // line), which is exactly what computeCostPlan already derives, so it is
+    // reused here rather than re-implemented.
+    const resolved = computeCostPlan(inputs, bridge.developed_area_sqm, inputs.unit_mix.units.length);
+    if (resolved.base_build_pence > 0 && resolved.contingency_total_pence > resolved.base_build_pence * 0.5) {
+      warn('cost_plan.contingency',
+        `Contingency (${resolved.contingency_total_pence} pence) exceeds 50% of the base build cost `
+        + `(${resolved.base_build_pence} pence) — check the packages or percentages.`);
+    }
+    resolved.fees.forEach((fee, idx) => {
+      if (fee.basis !== 'fixed' && fee.base_pence === 0) {
+        warn(`cost_plan.fee_lines[${idx}].basis`,
+          'This fee line resolves against a zero base and will compute to zero.');
+      }
+    });
+  }
+
   if (inputs.exit_strategy.route === 'blended' && inputs.exit_strategy.retained_units.length === 0) {
     warn('exit_strategy.retained_units', 'Blended exit selected but no units are marked as retained.');
   }

@@ -18,6 +18,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v4,
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
+    migrate_inputs_to_v7,
 )
 from app.financial_model.schedule import (
     MonthReceipts,
@@ -34,6 +35,7 @@ from app.financial_model.types import (
     CalculatorInputsV4,
     CalculatorInputsV5,
     CalculatorInputsV6,
+    CostPlanInputs,
     EquitySource,
     ExitStrategyInputs,
     FacilityTerms,
@@ -689,3 +691,42 @@ class TestAreaBridgeAndGdvSplitOnResult:
         known_total_gdv_pence = 25_000_000 + 1_600_000  # internal + ancillary, literal
         assert run.metrics.profit_pence == known_profit_pence
         assert run.metrics.profit_on_gdv_pct == pct(known_profit_pence, known_total_gdv_pence)
+
+
+class TestCostPlanOnResult:
+    def test_the_cost_plan_on_the_result_agrees_with_the_schedule_totals_cross_site(self):
+        # R10 spec Sec 3.3, applying the acquisition-tax cross-site check's
+        # reasoning to cost: the schedule and derive_metrics each compute the
+        # cost plan independently (schedule.py, metrics.py), so a defect that
+        # moves one and not the other is invisible to any test that only
+        # reads one side. Mirrors metrics.test.ts's identically named test.
+        base = migrate_inputs_to_v7({})
+        conversion_costs = base.conversion_costs.model_copy(update={
+            "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0,
+        })
+        cost_plan = CostPlanInputs.model_validate({
+            "mode": "detailed",
+            "packages": [
+                {"id": "p1", "code": "enabling_strip_out_asbestos", "label": "Strip out",
+                 "amount_pence": 1_000_000, "contingency_class": "existing_building",
+                 "lender_eligible": True, "notes": ""},
+                {"id": "p2", "code": "structure", "label": "Structure", "amount_pence": 3_000_000,
+                 "contingency_class": "general", "lender_eligible": True, "notes": ""},
+            ],
+            "contingency": [
+                {"name": "general", "pct": 5, "basis": "all_packages", "package_ids": []},
+                {"name": "existing_building", "pct": 15, "basis": "selected_packages", "package_ids": ["p1"]},
+                {"name": "abnormal", "pct": 2.5, "basis": "all_packages", "package_ids": []},
+            ],
+            "fee_lines": [
+                {"id": "f1", "code": "architect", "category": "professional", "label": "Architect",
+                 "basis": "pct_of_construction_total", "amount_pence": 0, "pct": 6, "per_dwelling": False},
+                {"id": "f2", "code": "cil_s106", "category": "statutory", "label": "CIL / S106",
+                 "basis": "fixed", "amount_pence": 700_000, "pct": 0, "per_dwelling": False},
+            ],
+        })
+        inputs = base.model_copy(update={"cost_plan": cost_plan, "conversion_costs": conversion_costs})
+        run = run_appraisal(inputs)
+        assert run.metrics.cost_plan.construction_total_pence == run.schedule.totals.construction_pence
+        assert run.metrics.cost_plan.professional_total_pence == run.schedule.totals.professional_pence
+        assert run.metrics.cost_plan.statutory_total_pence == run.schedule.totals.statutory_pence

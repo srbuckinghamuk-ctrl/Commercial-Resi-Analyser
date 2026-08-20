@@ -12,17 +12,34 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R7** | Report repair and governance: layout engine, provenance panel, export copy, DRAFT gate, PDF QA harness | **P0** | none (report only) |
 | **R8** | Jurisdiction + acquisition tax (SDLT/LBTT/LTT), versioned bands | P1 | inputs v5, calc minor |
 | **R9** | Area bridge and efficiency reconciliation | P1 | inputs v6, calc minor |
-| **R10** | Cost-plan modes (headline vs detailed QS packages), contingency separation, fee bases | P1 | inputs v7, calc minor |
+| **R10** — **DONE, shipped** | Cost-plan modes (headline vs detailed QS packages), contingency separation, fee bases | P1 | inputs v7, calc 2.9.0 |
 | **R11** | Line-level VAT and TOGC cash flow | P1 | inputs v8, calc minor |
 | **R12** | Dated, dependent programme phases | P1 | inputs v9, calc minor |
 | **R13** | Exit/refinance depth: unit sales, NOI, DSCR/ICR, constraint binding | P1 | inputs v10, calc minor |
 | **R14** | Lender case governance + monitoring cost-to-complete **+ the §5.10 rolled-up-interest defect carried from R9 (see “Carried defects” below)** | P1 | new records, calc **minor** — §5.10's remaining-funding term moves |
-| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags | P1 | inputs v11 |
+| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v11 |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
 
----
+**R10 status (calc 2.9.0, inputs v7):** shipped. It gave the appraisal a mutually
+exclusive headline/detailed cost-plan mode, the audit's own package schedule and
+code enum, three named contingency classes each on a displayed, resolved base, and
+professional/statutory fee lines with fixed and percentage bases — closing §7.5's
+"screening-level cost plan" finding and its "separate general contingency from
+existing-building and abnormal-risk contingency" / "allow eligibility bases per
+package and show the base" / "fixed and percentage bases without double counting"
+asks. See spec §16.
 
-## Carried defects — found in one release, to be corrected in another
+**§7.5 items R10 deliberately did not address, now R15's responsibility.** §7.5
+also asked for "QS source/date/status, fixed-price coverage, provisional sums,
+inflation and package exclusions" on the detailed schedule. None of that is
+modelled: a package or a fee line carries no source, date, status, price-coverage
+flag, provisional-sum marker or inflation index (spec §16.9's stated limitation).
+It was deliberately left for R15 rather than folded into R10, on the same
+reasoning R9 applied to the acquisition jurisdiction's evidence status (spec
+§14.6) and the area bridge's (spec §15.9, "areas carry no evidence status") — an
+evidence/provenance model is its own piece of work, not a field bolted onto a
+release whose job was the arithmetic. §7.5's VAT ask is separately owned by R11
+(spec §16.9), not R15.
 
 A defect found mid-release is not always safe to fix in that release. Where the fix
 is a behaviour change to a **reported** metric, it needs its own hand-derived
