@@ -1,7 +1,7 @@
 import type { ProposedUnit, UnitType, DealSpiderInputs, AcquisitionInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
-import { chargeableConsiderationPence, vatBasisGate } from './model/vat';
+import { chargeableConsiderationPence } from './model/vat';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
@@ -226,11 +226,25 @@ export function computeSpider(
   // figures at 0 (vat.ts's `inertVat()`), so this resolves to exactly 0 — the
   // true state ("VAT not modelled"), not a discovered "no tax advantage". The
   // distinction is surfaced below via `taxAdvantageNote`, not silently dropped.
+  //
+  // Ruling R43 (fix round 1, spec §17.10 "the spider's counterfactual counts
+  // only evidenced rates"). Every category ships at `rate_pct: 0,
+  // evidence_status: 'unconfirmed'` by default and nothing forces a user to
+  // touch all six before setting `registered: true` — so "registered, one
+  // category ever configured" is a valid, likely state. A 0% rate nobody has
+  // filled in is arithmetically indistinguishable from a 0% rate someone
+  // determined, so an untouched category must NOT be scored as a 20% saving.
+  // The counterfactual therefore sums only charge lines whose
+  // `evidence_status` is `'confirmed'` — an unevidenced rate contributes
+  // nothing to a claimed saving, the same principle the rest of the release
+  // runs on.
   const STANDARD_VAT_RATE_PCT = 20;
-  const grossVatSavedVsStandardRate = metrics.vat.charges.reduce(
-    (sum, c) => sum + (Math.round((c.net_base_pence * STANDARD_VAT_RATE_PCT) / 100) - c.vat_pence),
-    0,
-  );
+  const grossVatSavedVsStandardRate = metrics.vat.charges
+    .filter((c) => c.evidence_status === 'confirmed')
+    .reduce(
+      (sum, c) => sum + (Math.round((c.net_base_pence * STANDARD_VAT_RATE_PCT) / 100) - c.vat_pence),
+      0,
+    );
   const vatSaving =
     grossVatSavedVsStandardRate - metrics.irrecoverable_vat_pence - metrics.vat_carry_interest_pence;
   const taxAdvantagePct =
@@ -240,15 +254,21 @@ export function computeSpider(
         100
       : 0;
 
-  // Judgement calls 2 and 3 (task-13 brief, spec §17.10): the UNCONFIRMED
-  // caveat becomes evidence-driven (reusing `vatBasisGate` — the same
-  // judgement the §17.10 draft gate makes, not a second hand-rolled rule),
-  // and an unregistered document gets its own distinct note so its 0 reads as
-  // "not modelled" rather than a silently discovered "no tax advantage".
+  // Judgement calls 2 and 3 (task-13 brief, spec §17.10), R43-corrected:
+  // `vatBasisGate` is deliberately NOT reused here (fix round 1 — that
+  // instruction was wrong). `vatBasisGate` asks "does this document have
+  // MATERIAL unconfirmed VAT?" and correctly ignores a non-charging
+  // unconfirmed row, because for the §17.10 draft gate there is nothing at
+  // stake in a row that charges nothing. Here a non-charging unconfirmed row
+  // is EXACTLY where the phantom saving above is manufactured, so the axis
+  // asks a different question: is ANY charge line unevidenced, whether or not
+  // it currently charges? That is a second rule because it is a different
+  // predicate, not a duplicate of the first.
+  const anyChargeLineUnconfirmed = metrics.vat.charges.some((c) => c.evidence_status !== 'confirmed');
   const taxAdvantageNote: string | null = !metrics.vat.registered
     ? 'VAT saving not modelled: this document is not VAT-registered, so the figure above reflects SDLT and CIL only — it is not a confirmed zero tax advantage.'
-    : !vatBasisGate(metrics.vat).vatBasisConfirmed
-      ? 'VAT evidence UNCONFIRMED for at least one charged category or the purchase treatment — obtain specific tax advice before relying on the VAT component of this figure.'
+    : anyChargeLineUnconfirmed
+      ? 'VAT evidence UNCONFIRMED for at least one charge category (confirmed rows only count toward the saving above) — obtain specific tax advice before relying on this figure.'
       : null;
   const taxAdvantageProvisional = taxAdvantageNote !== null;
 

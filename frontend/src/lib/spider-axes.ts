@@ -90,7 +90,14 @@ export const CLASS_MA_AXES: SpiderAxisDef[] = [
     // counterfactual and a manually-entered CIL offset into ONE number that
     // no lender metric reads anywhere else — that combination, not the VAT
     // term alone, is what keeps the whole axis out of the appraisal.
-    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + the VAT this deal\'s own modelled treatment saves against a standard-rated (20%) counterfactual, net of irrecoverable VAT and VAT carry interest + CIL existing-floorspace offset. Zero, not a confirmed zero tax advantage, wherever the document is not VAT-registered. Illustrative only: folds an SDLT counterfactual and a manual CIL offset into one number no lender metric uses, so it stays excluded from the appraisal and all lender metrics. A caveat appears alongside this axis whenever the VAT evidence itself is UNCONFIRMED for a charged category or the purchase treatment. Normalised 0–6% of GDV to 0–5.',
+    //
+    // R43 (fix round 1, spec §17.10): a category nobody has configured ships
+    // at `rate_pct: 0, evidence_status: 'unconfirmed'`, and a 0% rate nobody
+    // filled in is arithmetically indistinguishable from a 0% rate someone
+    // determined — so the counterfactual counts ONLY charge lines with
+    // confirmed evidence. The help text says so, so the prose and the
+    // arithmetic stay in lockstep.
+    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + the VAT this deal\'s own modelled treatment saves against a standard-rated (20%) counterfactual — counting only charge categories with CONFIRMED evidence, so an unconfigured category (0% rate, unconfirmed) contributes nothing — net of irrecoverable VAT and VAT carry interest + CIL existing-floorspace offset. Zero, not a confirmed zero tax advantage, wherever the document is not VAT-registered. Illustrative only: folds an SDLT counterfactual and a manual CIL offset into one number no lender metric uses, so it stays excluded from the appraisal and all lender metrics. A caveat appears alongside this axis whenever ANY VAT charge category is UNCONFIRMED, whether or not it currently charges. Normalised 0–6% of GDV to 0–5.',
     illustrative: true,
   },
   {

@@ -40,6 +40,12 @@ function vatDocument(opts: {
   constructionRatePct?: number;
   recoverablePct?: number;
   evidenceStatus?: EvidenceStatus;
+  // R43 (fix round 1): the migration/new-document default leaves every OTHER
+  // category at `rate_pct: 0, evidence_status: 'unconfirmed'` — untouched.
+  // Left undefined (the realistic default state), unless a test needs to
+  // isolate "every category confirmed" or "a non-charging category left
+  // unconfirmed" specifically.
+  otherCategoriesEvidenceStatus?: EvidenceStatus;
 } = {}): CalculatorInputsV8 {
   const doc = migrateInputsToV8(fixtureInputs() as unknown as Record<string, unknown>);
   return {
@@ -56,7 +62,9 @@ function vatDocument(opts: {
               recovery_basis: 'partial_exemption',
               evidence_status: opts.evidenceStatus ?? 'confirmed',
             }
-          : t,
+          : opts.otherCategoriesEvidenceStatus === undefined
+            ? t
+            : { ...t, evidence_status: opts.otherCategoriesEvidenceStatus },
       ),
     },
   };
@@ -318,6 +326,45 @@ describe('tax advantage axis', () => {
     expect(registeredAxis.raw).toBeGreaterThan(inertAxis.raw);
   });
 
+  // R43 (fix round 1, spec §17.10 "the spider's counterfactual counts only
+  // evidenced rates"). The two comparisons above are direction-only, by
+  // design (R9's self-referential-test precedent). But BOTH documents there
+  // share the same five untouched (unconfirmed, 0%) categories, so a phantom
+  // contribution from those categories cancels out of the COMPARISON while
+  // staying baked into both absolute values — exactly how this shipped once
+  // already, undetected. This is the absolute guard: a document with ONLY
+  // `construction` configured must produce EXACTLY the construction-derived
+  // figure, with zero contribution from the five untouched categories. The
+  // one unavoidable re-use is the "× 20% counterfactual" formula itself
+  // (applied here to the construction line's own already-resolved
+  // `net_base_pence`/`vat_pence`) — that formula IS the thing under test, not
+  // a re-derivation of `resolveVatTreatment`'s rate/recoverable logic.
+  it('excludes untouched (unconfirmed, 0%) categories from the counterfactual entirely', () => {
+    const inputs = vatDocument({ registered: true, constructionRatePct: 5, recoverablePct: 100 });
+    const metrics = runAppraisal(inputs).metrics;
+    const construction = metrics.vat.charges.find((c) => c.category === 'construction')!;
+    expect(construction.evidence_status).toBe('confirmed');
+    const others = metrics.vat.charges.filter((c) => c.category !== 'construction');
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((c) => c.evidence_status !== 'confirmed')).toBe(true);
+
+    const resSdlt = calculateAcquisitionTax({
+      consideration_pence: asChargeableConsideration(inputs.acquisition.purchase_price_pence),
+      jurisdiction: 'england_ni', basis: 'residential_higher', date: null,
+    }).total_pence;
+    const commSdlt = calculateAcquisitionTax({
+      consideration_pence: asChargeableConsideration(inputs.acquisition.purchase_price_pence),
+      jurisdiction: 'england_ni', basis: 'non_residential', date: null,
+    }).total_pence;
+    const constructionSavedVsStandardRate =
+      Math.round((construction.net_base_pence * 20) / 100) - construction.vat_pence;
+    const expectedVatSaving =
+      constructionSavedVsStandardRate - metrics.irrecoverable_vat_pence - metrics.vat_carry_interest_pence;
+    const expected = ((resSdlt - commSdlt + expectedVatSaving) / metrics.gdv_pence) * 100;
+    const axis = computeSpider(inputs, ALL_PASS).axes.find((a) => a.id === 'tax_advantage')!;
+    expect(axis.raw).toBeCloseTo(expected, 6);
+  });
+
   // Judgement call 1 (task-13 brief / spec §17.10): `illustrative` stays true.
   // The VAT component is no longer a guess, but the axis still folds an SDLT
   // counterfactual and a CIL offset into one number that no lender metric
@@ -338,13 +385,18 @@ describe('tax advantage axis', () => {
     }
   });
 
-  // Judgement call 2: the UNCONFIRMED caveat is now evidence-driven — it
-  // reuses `vatBasisGate` (model/vat.ts), the same judgement the §17.10 draft
-  // gate makes, rather than a second hand-rolled rule.
-  describe('the UNCONFIRMED VAT caveat is evidence-driven', () => {
-    it('is present when the VAT evidence is unconfirmed on a category that actually charges VAT', () => {
+  // Judgement call 2, R43-corrected (fix round 1): the UNCONFIRMED caveat is
+  // evidence-driven, but it does NOT reuse `vatBasisGate` — that instruction
+  // was wrong. `vatBasisGate` asks "does this document have MATERIAL
+  // unconfirmed VAT?" and deliberately ignores a non-charging unconfirmed
+  // row. Here a non-charging unconfirmed row is exactly where the R43
+  // phantom is manufactured, so the axis's own predicate fires on ANY
+  // unconfirmed charge line, charging or not.
+  describe('the UNCONFIRMED VAT caveat fires on any unconfirmed line, not vatBasisGate\'s materiality test', () => {
+    it('is present when the charging (construction) category itself is unconfirmed', () => {
       const inputs = vatDocument({
-        registered: true, constructionRatePct: 5, recoverablePct: 100, evidenceStatus: 'unconfirmed',
+        registered: true, constructionRatePct: 5, recoverablePct: 100,
+        evidenceStatus: 'unconfirmed', otherCategoriesEvidenceStatus: 'confirmed',
       });
       const result = computeSpider(inputs, ALL_PASS);
       const axis = result.axes.find((a) => a.id === 'tax_advantage')!;
@@ -353,9 +405,24 @@ describe('tax advantage axis', () => {
       expect(result.caveats.some((c) => c.includes('UNCONFIRMED'))).toBe(true);
     });
 
-    it('is absent when the VAT evidence is confirmed', () => {
+    // This is the exact case `vatBasisGate` would (correctly, for its OWN
+    // question) stay silent on: a category charging nothing. `vatBasisGate`'s
+    // materiality test excludes it; the axis's own predicate must not.
+    it('is present when a non-charging (0%, untouched) category is unconfirmed', () => {
       const inputs = vatDocument({
-        registered: true, constructionRatePct: 5, recoverablePct: 100, evidenceStatus: 'confirmed',
+        registered: true, constructionRatePct: 5, recoverablePct: 100,
+        evidenceStatus: 'confirmed', otherCategoriesEvidenceStatus: 'unconfirmed',
+      });
+      const result = computeSpider(inputs, ALL_PASS);
+      const axis = result.axes.find((a) => a.id === 'tax_advantage')!;
+      expect(axis.provisional).toBe(true);
+      expect(axis.note).toContain('UNCONFIRMED');
+    });
+
+    it('is absent only when every charge category is confirmed', () => {
+      const inputs = vatDocument({
+        registered: true, constructionRatePct: 5, recoverablePct: 100,
+        evidenceStatus: 'confirmed', otherCategoriesEvidenceStatus: 'confirmed',
       });
       const result = computeSpider(inputs, ALL_PASS);
       const axis = result.axes.find((a) => a.id === 'tax_advantage')!;
