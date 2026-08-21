@@ -13,6 +13,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
     migrate_inputs_to_v7,
+    migrate_inputs_to_v8,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.sensitivity import (
@@ -58,6 +59,7 @@ EXPECTED_FIXTURE_STEMS = [
     "o-ancillary-value",
     "p-scotland-levered",
     "q-detailed-cost-plan",
+    "r-vat-quarterly",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -158,6 +160,17 @@ _FLAT_KEYS = {
             (f.amount_pence for f in r.metrics.cost_plan.fees if f.basis == "pct_of_base_build"), None
         )
     ),
+    # R11 spec Sec 17.4, fixture R: the schedule's own construction spend curve,
+    # pinned as a flat array so an explicit `programme` block (Ruling R16) that
+    # spread over the wrong number of months is caught directly, before trusting
+    # any VAT figure built on top of it. Mirrors golden-fixtures.test.ts.
+    "uses_construction_pence": lambda r: [u.construction_pence for u in r.schedule.uses],
+    # R11 spec Sec 17.4's worked cycle, as three flat month-indexed arrays rather
+    # than reaching into metrics.vat.months (a list of dataclasses) with a dotted
+    # path -- the same reasoning as the six contingency/fee mappers above.
+    "vat_months_incurred_pence": lambda r: [m.incurred_pence for m in r.metrics.vat.months],
+    "vat_months_reclaimed_pence": lambda r: [m.reclaimed_pence for m in r.metrics.vat.months],
+    "vat_months_carry_pence": lambda r: [m.carry_pence for m in r.metrics.vat.months],
 }
 
 
@@ -213,17 +226,25 @@ _V6_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) =
 # have to drop `cost_plan` to produce one) -- see _RECOGNISED_VERSIONS_V6, which stops
 # at 6 -- so a v7 fixture asserts the v7 property below instead of the v6 one.
 _V7_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 7]
+# R11: symmetrically again, migrate_inputs_to_v7 refuses a v8 document by design (it
+# would have to drop `vat` to produce one) -- see _RECOGNISED_VERSIONS_V7, which stops
+# at 7 -- so a v8 fixture asserts its own v8-specific properties instead of the v7 one.
+_V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 8]
 
 
-def test_every_fixture_is_v5_v6_or_v7_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_v6_v7_or_v8_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
-    assert len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) == len(APPRAISAL_FIXTURES)
+    assert (
+        len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
+        == len(APPRAISAL_FIXTURES)
+    )
     assert len(_V5_FIXTURES) > 0
     assert [p.stem for p in _V6_FIXTURES] == [
         "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
     ]
     assert [p.stem for p in _V7_FIXTURES] == ["q-detailed-cost-plan"]
+    assert [p.stem for p in _V8_FIXTURES] == ["r-vat-quarterly"]
 
 
 @pytest.mark.parametrize("path", _V5_FIXTURES, ids=lambda p: p.stem)
@@ -246,8 +267,11 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # R10: restricted to the pre-v7 fixtures (v5 + v6) -- migrate_inputs_to_v6 refuses a
 # v7 document by design, mirroring the v5-fixtures restriction above. The stronger,
 # corpus-wide statement is test_fixtures_reproduce_their_metrics_after_migration_to_v7
-# below.
-_PRE_V7_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) != 7]
+# below. R11 widens the exclusion to v7 or v8 -- migrate_inputs_to_v6 refuses v8 the
+# same way (_RECOGNISED_VERSIONS_V6 stops at 6).
+_PRE_V7_FIXTURES = [
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8)
+]
 
 
 @pytest.mark.parametrize("path", _PRE_V7_FIXTURES, ids=lambda p: p.stem)
@@ -264,11 +288,18 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
     _assert_expected_metrics(run_appraisal(v6), doc, f"{path.stem}[migrated-to-v6]")
 
 
-@pytest.mark.parametrize("path", APPRAISAL_FIXTURES, ids=lambda p: p.stem)
+# R11: restricted to the pre-v8 fixtures -- migrate_inputs_to_v7 refuses a v8
+# document by design (_RECOGNISED_VERSIONS_V7 stops at 7). Fixture R (v8) asserts
+# its own identity guarantee in test_fixture_r_reproduces_its_metrics_after_
+# migration_to_v8 below instead.
+_PRE_V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) != 8]
+
+
+@pytest.mark.parametrize("path", _PRE_V8_FIXTURES, ids=lambda p: p.stem)
 def test_fixtures_reproduce_their_metrics_after_migration_to_v7(path: Path) -> None:
     """R10 Task 11: the same identity guarantee one version further on, and the one
-    that now covers the WHOLE corpus again -- migrate_inputs_to_v7 accepts v5, v6 and
-    v7 documents alike (upgrade, upgrade, merge). The merge branch matters for
+    that now covers v5 through v7 -- migrate_inputs_to_v7 accepts v5, v6 and v7
+    documents alike (upgrade, upgrade, merge). The merge branch matters for
     fixture Q: it must carry ``cost_plan`` through untouched, and a merge that
     silently reset it to the default headline plan would move Q's construction cost
     by 6,040,000p (the whole contingency total) rather than pass. A fixture being
@@ -286,6 +317,21 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v7(path: Path) -> N
             parse_calculator_inputs(doc["inputs"]).conversion_costs
         )
     _assert_expected_metrics(run_appraisal(v7), doc, f"{path.stem}[migrated-to-v7]")
+
+
+@pytest.mark.parametrize("path", _V8_FIXTURES, ids=lambda p: p.stem)
+def test_fixture_r_reproduces_its_metrics_after_migration_to_v8(path: Path) -> None:
+    """R11: fixture R's own identity guarantee. It is already v8, so
+    migrate_inputs_to_v8 merges it onto v8 defaults (_RECOGNISED_VERSIONS_V8 =
+    1..8) rather than writing the inert block, and that merge must carry its LIVE
+    vat block through untouched -- exactly the claim the v6/v7 tests above assert
+    for ``areas`` and ``cost_plan`` on a fixture that is already at the target
+    version. Mirrors golden-fixtures.test.ts's identically-named describe block."""
+    doc = _load_fixture(path)
+    migrated = migrate_inputs_to_v8(doc["inputs"])
+    assert migrated.inputs_version == 8
+    assert migrated.vat == parse_calculator_inputs(doc["inputs"]).vat
+    _assert_expected_metrics(run_appraisal(migrated), doc, f"{path.stem}[migrated-to-v8]")
 
 
 # R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named scenarios
@@ -372,20 +418,21 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     excluded = [p for p in APPRAISAL_FIXTURES if p not in _PRE_R8_FIXTURES]
     assert [p.stem for p in excluded] == [
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
-        "q-detailed-cost-plan",
+        "q-detailed-cost-plan", "r-vat-quarterly",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
-    # R10 widens the second reason from "== 6" to "== 6 or 7": fixture Q (v7) has no
-    # pre-R8 form for the same reason N/O/P (v6) do not -- migrating a stamped-back
-    # v3/v4 document up would leave the R9 areas/ancillary AND the R10 cost_plan
-    # blocks at their zeroed/legacy-derived defaults, a different document.
+    # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
+    # to include 8: fixture R (v8), like fixture Q (v7) before it, has no pre-R8 form --
+    # migrating a stamped-back v3/v4 document up would leave the R9 areas/ancillary,
+    # the R10 cost_plan AND the R11 vat blocks at their zeroed/legacy-derived/inert
+    # defaults, a different document.
     #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
-    # so it is vacuously true for every member and can never fail. Enumerating 6/7
-    # keeps the check able to fail: it catches a fixture excluded for a THIRD,
-    # unstated reason (e.g. a future non-v5/v6/v7 fixture, or a change to
+    # so it is vacuously true for every member and can never fail. Enumerating 6/7/8
+    # keeps the check able to fail: it catches a fixture excluded for a FOURTH,
+    # unstated reason (e.g. a future non-v5/v6/v7/v8 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -393,6 +440,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             _jurisdiction_of(path) != "england_ni"
             or version == 6
             or version == 7
+            or version == 8
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -559,6 +607,24 @@ _NEGATIVE_CONTROLS = [
         "cost_plan_fee_pct_base_build_base_pence": 53_040_000,            # truly 47000000
         "cost_plan_fee_pct_base_build_amount_pence": 2_820_001,           # truly 2820000
     }),
+    # R11 (the same convention stated above): fixture R adds four new _FLAT_KEYS array
+    # mappers (the schedule's construction spend curve, and the VAT engine's three
+    # month-indexed arrays). Each wrong value is a plausible REAL mistake -- a shifted
+    # programme window, a swapped incurred-VAT month, the two periods' reclaims
+    # swapped, a one-pence slip at the peak carry -- not an arbitrary wrong number, so
+    # a control failure reads as "found the wrong month/line" rather than "found a typo".
+    ("r-vat-quarterly", {
+        # truly [0, 25000000, 25000000, 25000000, 25000000, 0, 0] -- shifted one month
+        # later, the exact shape an unset `programme` block (auto windows) would give.
+        "uses_construction_pence": [0, 0, 25000000, 25000000, 25000000, 25000000, 0],
+        # truly [10000000, 5000000, 5000000, 5000000, 5000000, 0, 0] -- months 0/1 swapped.
+        "vat_months_incurred_pence": [5000000, 10000000, 5000000, 5000000, 5000000, 0, 0],
+        # truly [0, 0, 0, 20000000, 0, 0, 10000000] -- the two periods' reclaims swapped.
+        "vat_months_reclaimed_pence": [0, 0, 0, 10000000, 0, 0, 20000000],
+        # truly [10000000, 15000000, 20000000, 5000000, 10000000, 10000000, 0] -- the
+        # peak off by one penny.
+        "vat_months_carry_pence": [10000000, 15000000, 19999999, 5000000, 10000000, 10000000, 0],
+    }),
 ]
 
 
@@ -642,7 +708,12 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # refuses a v7 document (fixture Q), since producing one would mean dropping
     # ``cost_plan``. The corpus now mixes v5, v6 and v7 documents, and migrate_inputs_to_v7
     # accepts all three.
-    programmed = migrate_inputs_to_v7(inputs.model_dump(mode="json"))
+    # R11: widened once more, to v8 -- migrate_inputs_to_v7 refuses a v8 document
+    # (fixture R) by the same design, since producing one would mean dropping `vat`.
+    # migrate_inputs_to_v8 accepts all four versions (upgrade, upgrade, upgrade, merge),
+    # and the isinstance check below still holds unchanged: CalculatorInputsV8
+    # subclasses CalculatorInputsV7.
+    programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
     assert isinstance(programmed, CalculatorInputsV7)
     programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
@@ -769,12 +840,23 @@ class TestInvariantMatrix:
         # ancillary fees but NOT the capitalised arrangement fee, while TDC (from
         # metrics) does include it -- so the identity needs an explicit
         # + capitalised_fees_pence term.
+        #
+        # R11 correction (spec Sec 17.5/17.6, fixture R): `uses_total_pence` carries
+        # `u.vat_pence`, the FULL gross input VAT charged that month -- but TDC only
+        # ever carries the IRRECOVERABLE slice forward (`irrecoverable_vat_pence`,
+        # folded into cost_before_finance). The recoverable slice comes back as
+        # `vat_reclaim_pence`, a repayment, not a cost, so it must be netted out here
+        # or this identity over-counts by exactly `vat.total_recoverable_pence` --
+        # confirmed against fixture R, where it was zero for every one of the twelve
+        # pre-VAT fixtures (registered: false, nothing to recover) and this term was
+        # vacuously zero throughout, so the gap went unseen until now.
         run = run_appraisal(inputs)
         monthly_uses = sum(m.uses_total_pence for m in run.model.months)
         rolled = sum(m.interest_capitalised_pence for m in run.model.months)
         serviced = sum(m.interest_serviced_pence for m in run.model.months)
         assert run.metrics.total_development_cost_pence == (
-            monthly_uses + rolled + serviced + run.metrics.selling_costs_pence
+            monthly_uses - run.metrics.vat.total_recoverable_pence
+            + rolled + serviced + run.metrics.selling_costs_pence
             + run.model.totals.exit_fee_pence + run.model.totals.capitalised_fees_pence
         )
 

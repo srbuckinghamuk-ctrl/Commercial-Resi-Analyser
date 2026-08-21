@@ -1,0 +1,183 @@
+{
+  "name": "R — VAT quarterly return cycle, purchase VAT chargeable, levered facility",
+  "kind": "pipeline",
+  "note": "R11 spec §17.4's worked cycle, pinned as the release's normative fixture, PLUS a levered facility and chargeable purchase VAT (§17.7) so the acquisition-tax uplift and a non-zero vat_carry_interest_pence are pinned in the same document rather than in isolation. See task-11-report.md for the full hand-derivation.\n\nprogramme.packages.construction is EXPLICIT (start_offset 1, duration_months 4, straight_line) per Ruling R16 -- with programme: null the auto windows would spread construction over term-2 = 5 months for this 7-month term, not the 4 the worked cycle needs, and every reclaim figure would shift. HAND-DERIVED: construction_total_pence 100,000,000 (headline mode, base_build = construction_cost_per_sqm_pence 200,000 × total_construction_sqm 500, zero contingency, zero compliance) spreads EVENLY across months 1-4 at 25,000,000p/month -- uses[].construction_pence = [0, 25000000, 25000000, 25000000, 25000000, 0, 0], asserted before trusting any VAT figure.\n\nVAT treatments: only 'acquisition' and 'construction' carry a non-zero rate (20%, 100% recoverable, zero_rated_sale -- new-build residential is the zero-rated first grant that makes input VAT recoverable). professional/statutory/selling/lender_ancillary are deliberately left at 0% so the fixture's month-by-month carry is hand-derivable as exactly two additive streams, not diluted by a third. finance.broker_fee_pence/lender_legal_fee_pence/valuation_fee_pence/monitoring_surveyor_fee_pence are all 0, so lender_ancillary's base is 0 regardless.\n\nConstruction VAT (§17.4's worked cycle, verbatim): 20% of 25,000,000p = 5,000,000p (£50,000) incurred in each of months 1-4, fully recoverable. Quarterly returns, first_period_end_month 2, repayment_lag_months 1: period 1 (months 0-2) incurs 0 + 5,000,000 + 5,000,000 = 10,000,000p, reclaimed month 3; period 2 (months 3-5) incurs 5,000,000 + 5,000,000 + 0 = 10,000,000p, reclaimed month 6; period 3 (month 6 alone) incurs nothing, so it never manifests as a reclaim event -- reported neither as a reclaim nor as receivable_at_maturity_pence (0), exactly as §17.4 requires for a period with nothing in it.\n\nAcquisition VAT: purchase_price_pence 50,000,000, vendor_opted_to_tax true, togc_treatment does_not_apply -- is_purchase_vat_chargeable is true. Same 'acquisition' treatment row (rate 20%, recoverable 100%) resolves BOTH the ledger's acquisition VAT charge (money_round(50,000,000 × 20 / 100) = 10,000,000p, incurred and reclaimable in full) AND chargeable_consideration_pence (§17.7): 50,000,000 + 10,000,000 = 60,000,000p. Acquisition VAT is incurred entirely in month 0 (the acquisition month) and falls inside period 1's window, so it is reclaimed at month 3 ALONGSIDE construction's own period-1 reclaim -- the two streams merge in that one reclaim event but not before it.\n\nCombining the two streams gives the fixture's actual month-end carry (cumulative incurred − cumulative reclaimed), hand-derived and NOT the pure single-category table: incurred = [10000000, 5000000, 5000000, 5000000, 5000000, 0, 0]; reclaimed = [0, 0, 0, 20000000, 0, 0, 10000000] (month 3 = period 1's 10,000,000 acquisition + 10,000,000 construction; month 6 = period 2's 10,000,000 construction alone); carry_pence by month = [10000000, 15000000, 20000000, 5000000, 10000000, 10000000, 0] (£000: 100, 150, 200, 50, 100, 100, 0). From month 3 onward this is IDENTICAL to §17.4's own table (50, 100, 100, 0 in £000) because the acquisition VAT is fully incurred AND fully reclaimed within the first three months; months 0-2 carry the table's own values (0, 50, 100) plus the acquisition VAT's constant 100,000p (10,000,000p) sitting uncollected until month 3. Peak carry is therefore 20,000,000p (£200,000) at month 2, not the isolated table's £100,000 -- the difference is exactly the acquisition VAT, and is reported here rather than silently reconciled away. total_input_vat_pence 30,000,000 (10,000,000 acquisition + 20,000,000 construction); total_recoverable_pence 30,000,000 (both categories 100% recoverable); total_irrecoverable_pence 0 (§17.5's invariant: fully recoverable VAT changes no cost line, so construction_cost_pence/professional_fees_pence/statutory_costs_pence/selling_costs_pence below are exactly what a registered:false twin of this document would show); total_reclaimed_pence 30,000,000; receivable_at_maturity_pence 0; purchase_vat_pence 10,000,000.\n\nAcquisition tax (§17.7's uplift, non-residential SDLT, england_ni, bands unchanged since 2016-03-17): chargeable consideration 60,000,000p falls in the top (>25,000,000p) 5% band throughout its extension -- SDLT on the VAT-EXCLUSIVE 50,000,000p would be 1,450,000p (0 + 2%×10,000,000 + 5%×25,000,000 = 0 + 200,000 + 1,250,000), reused verbatim from fixture N/Q's own purchase price/legal/survey/broker/date. On the VAT-INCLUSIVE 60,000,000p it is 1,950,000p (0 + 200,000 + 5%×35,000,000 = 1,750,000) -- an uplift of exactly 500,000p (5% of the 10,000,000p acquisition VAT, since both considerations sit inside the same top band). acquisition_cost_pence = 50,000,000 (price) + 500,000 (legal) + 300,000 (survey) + 500,000 (broker, 1% of price) + 1,950,000 (tax) = 53,250,000.\n\nCost stack (hand-derived, headline cost_plan mode, zero contingency, zero compliance): construction_total_pence 100,000,000; professional_fees_pence 4,500,000 (architect 3,000,000 + structural_engineer 1,000,000 + other_professional 500,000, all fixed); statutory_costs_pence 1,000,000 (cil_s106 800,000 + building_control 200,000, both fixed); selling_costs_pence 3,250,000 (1.5% of gdv_pence 210,000,000 = 3,150,000, + 100,000 legal); cost_before_finance_pence 162,000,000 (53,250,000 + 100,000,000 + 4,500,000 + 1,000,000 + 3,250,000 + irrecoverable_vat 0). gdv_pence 210,000,000 (3 identical 2-bed units at 70,000,000p, no ancillary) = gdv_internal_pence, gdv_ancillary_pence 0, gross_sales_pence 210,000,000 (sell_all, nothing retained). developed_area_sqm / area_bridge.developed_area_sqm / area_bridge.manual_area_sqm 500 (manual basis, = conversion_costs.total_construction_sqm); area_bridge.unit_nia_sqm 240 (3 × 80); area_bridge.developed_gia_sqm 0 (no bridge-geometry field is non-zero); area_bridge.nia_to_gia_pct null. cost_plan.mode 'headline'; cost_plan.base_build_pence 100,000,000; cost_plan.contingency_total_pence 0; cost_plan.compliance_pence 0; cost_plan.construction_total_pence 100,000,000; cost_plan.professional_total_pence 4,500,000; cost_plan.statutory_total_pence 1,000,000; cost_plan.conversion_total_pence 105,500,000; cost_plan.lender_eligible_base_pence 0 (headline mode carries no packages, so the lender-eligible sum over an empty package list is 0 -- this is a headline-mode artefact of the field, not a statement that none of the build cost is lender-eligible); cost_plan.implied_rate_pence_per_sqm 200,000 (100,000,000 / 500).\n\nA quarterly-return, first_period_end_month 2, 7-month-term document with a non-zero rate necessarily produces a final return period whose reclaim falls outside the modelled term (period 3, month 6 alone) -- validate_inputs reports the expected 'vat.repayment_lag_months' WARNING for this document (§17.4's own stated behaviour: 'reclaims falling after the final month are not received'), which does not affect report_safe.\n\nINVARIANT-CROSS-CHECKED, not hand-derived (per Q's precedent -- these depend on the rolled-up monthly interest ledger, which is not hand-replayed here): finance_costs_pence, vat_carry_interest_pence, total_development_cost_pence, profit_pence and its two ratios, peak_debt_pence and peak_debt_month, net_ltc_pct/gross_ltc_pct/ltgdv_developer_pct, equity_contributed_pence, funding_gap_pence and the two cost_to_complete_* figures, day_one_advance_pence (55,250,000, a direct echo of finance.day_one_advance_pence). Taken from the engine only after the hand-derived cost stack and VAT figures above matched both engines to the penny on first run, with reconciliation.sources_equal_uses true, report_safe true and no unexpected flags.",
+  "inputs": {
+    "inputs_version": 8,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 50000000, "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000, "broker_fee_pct": 1.0, "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-08-01",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": { "units": [
+      { "id": "u1", "type": "2bed", "floor_area_sqm": 80, "estimated_value_pence": 70000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u2", "type": "2bed", "floor_area_sqm": 80, "estimated_value_pence": 70000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+      { "id": "u3", "type": "2bed", "floor_area_sqm": 80, "estimated_value_pence": 70000000, "comparable_notes": "",
+        "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } }
+    ] },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 0, "cil_s106_pence": 0,
+      "architect_pence": 0, "structural_engineer_pence": 0, "mande_pence": 0,
+      "planning_consultant_pence": 0, "building_control_pence": 0,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 200000,
+      "total_construction_sqm": 500, "contingency_pct": 0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "cost_plan": {
+      "mode": "headline",
+      "packages": [],
+      "contingency": [
+        { "name": "general", "pct": 0 },
+        { "name": "existing_building", "pct": 0 },
+        { "name": "abnormal", "pct": 0 }
+      ],
+      "fee_lines": [
+        { "id": "fee-architect", "code": "architect", "category": "professional", "label": "Architect", "basis": "fixed", "amount_pence": 3000000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-structural", "code": "structural_engineer", "category": "professional", "label": "Structural engineer", "basis": "fixed", "amount_pence": 1000000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-other-prof", "code": "other_professional", "category": "professional", "label": "Other professional fees", "basis": "fixed", "amount_pence": 500000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-cil", "code": "cil_s106", "category": "statutory", "label": "CIL / S106", "basis": "fixed", "amount_pence": 800000, "pct": 0, "per_dwelling": false },
+        { "id": "fee-building-control", "code": "building_control", "category": "statutory", "label": "Building control", "basis": "fixed", "amount_pence": 200000, "pct": 0, "per_dwelling": false }
+      ]
+    },
+    "programme": {
+      "anchor_month": null,
+      "packages": {
+        "construction": { "start_offset": 1, "duration_months": 4, "curve": { "kind": "straight_line" } },
+        "professional": { "start_offset": 0, "duration_months": 5, "curve": { "kind": "straight_line" } },
+        "statutory": { "start_offset": 0, "duration_months": 5, "curve": { "kind": "straight_line" } }
+      }
+    },
+    "vat": {
+      "registered": true,
+      "return_frequency": "quarterly",
+      "first_period_end_month": 2,
+      "repayment_lag_months": 1,
+      "treatments": [
+        { "category": "acquisition", "rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale", "evidence_status": "confirmed", "notes": "" },
+        { "category": "construction", "rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale", "evidence_status": "confirmed", "notes": "" },
+        { "category": "professional", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "statutory", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "selling", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "lender_ancillary", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" }
+      ],
+      "purchase": { "vendor_opted_to_tax": true, "togc_treatment": "does_not_apply", "evidence_status": "confirmed", "notes": "" }
+    },
+    "finance": {
+      "funding_source": "development_finance", "day_one_advance_pence": 55250000,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 160000000,
+      "committed_gross_facility_pence": 170000000, "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 7, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 110000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "sell_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 100000, "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2 }
+    },
+    "deal_spider": {
+      "storeys": 2, "building_height_m": 7, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 3, "exit_sell": true, "exit_refinance": false, "exit_hold": false,
+      "exit_part_sale": false, "prior_approval_window_months": 1, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 210000000,
+    "gdv_internal_pence": 210000000,
+    "gdv_ancillary_pence": 0,
+    "gross_sales_pence": 210000000,
+    "acquisition_tax_pence": 1950000,
+    "chargeable_consideration_pence": 60000000,
+    "acquisition_cost_pence": 53250000,
+    "construction_cost_pence": 100000000,
+    "professional_fees_pence": 4500000,
+    "statutory_costs_pence": 1000000,
+    "selling_costs_pence": 3250000,
+    "irrecoverable_vat_pence": 0,
+    "cost_before_finance_pence": 162000000,
+    "developed_area_sqm": 500,
+    "area_bridge.developed_area_sqm": 500,
+    "area_bridge.manual_area_sqm": 500,
+    "area_bridge.unit_nia_sqm": 240,
+    "area_bridge.developed_gia_sqm": 0,
+    "area_bridge.nia_to_gia_pct": null,
+    "cost_plan.mode": "headline",
+    "cost_plan.base_build_pence": 100000000,
+    "cost_plan.contingency_total_pence": 0,
+    "cost_plan.compliance_pence": 0,
+    "cost_plan.construction_total_pence": 100000000,
+    "cost_plan.professional_total_pence": 4500000,
+    "cost_plan.statutory_total_pence": 1000000,
+    "cost_plan.conversion_total_pence": 105500000,
+    "cost_plan.lender_eligible_base_pence": 0,
+    "cost_plan.implied_rate_pence_per_sqm": 200000,
+    "vat.registered": true,
+    "vat.total_input_vat_pence": 30000000,
+    "vat.total_recoverable_pence": 30000000,
+    "vat.total_irrecoverable_pence": 0,
+    "vat.total_reclaimed_pence": 30000000,
+    "vat.receivable_at_maturity_pence": 0,
+    "vat.peak_carry_pence": 20000000,
+    "vat.peak_carry_month": 2,
+    "vat.purchase_vat_pence": 10000000,
+    "uses_construction_pence": [0, 25000000, 25000000, 25000000, 25000000, 0, 0],
+    "vat_months_incurred_pence": [10000000, 5000000, 5000000, 5000000, 5000000, 0, 0],
+    "vat_months_reclaimed_pence": [0, 0, 0, 20000000, 0, 0, 10000000],
+    "vat_months_carry_pence": [10000000, 15000000, 20000000, 5000000, 10000000, 10000000, 0],
+    "finance_costs_pence": 7753298,
+    "vat_carry_interest_pence": 113318,
+    "total_development_cost_pence": 169753298,
+    "profit_pence": 40246702,
+    "profit_is_unrealised": false,
+    "profit_on_cost_pct": 23.71,
+    "profit_on_gdv_pct": 19.17,
+    "peak_debt_pence": 64803298,
+    "peak_debt_month": 6,
+    "day_one_advance_pence": 55250000,
+    "net_ltc_pct": 51.62,
+    "gross_ltc_pct": 38.17,
+    "ltgdv_developer_pct": 30.86,
+    "equity_contributed_pence": 110000000,
+    "funding_gap_pence": 0,
+    "cost_to_complete_first_shortfall_month": null,
+    "cost_to_complete_max_shortfall_pence": 0
+  }
+}

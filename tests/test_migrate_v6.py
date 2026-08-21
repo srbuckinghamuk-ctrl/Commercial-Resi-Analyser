@@ -321,8 +321,10 @@ def test_v6_migration_moves_no_existing_figure():
         # stops at 6. Fixture Q (q-detailed-cost-plan.json) is v7, so it is excluded
         # from this v6-specific gate; test_fixtures_reproduce_their_metrics_after_
         # migration_to_v7 in test_financial_model_fixtures.py is the corpus-wide
-        # (v5+v6+v7) mirror of this same property one version further on.
-        if doc["inputs"].get("inputs_version") == 7:
+        # (v5+v6+v7) mirror of this same property one version further on. R11 widens
+        # the exclusion to v7 or v8 -- fixture R (r-vat-quarterly.json) is v8, and
+        # migrate_inputs_to_v6 refuses it for the identical reason.
+        if doc["inputs"].get("inputs_version") in (7, 8):
             continue
         names.append(name)
         migrated = migrate_inputs_to_v6(doc["inputs"])

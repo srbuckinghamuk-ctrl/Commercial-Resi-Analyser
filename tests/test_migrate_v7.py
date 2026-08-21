@@ -261,10 +261,15 @@ def test_v7_migration_moves_no_existing_figure():
 
     This is what makes 'purely additive' a tested claim rather than an
     assertion. If a single figure moves, the migration is wrong -- not the
-    fixture. Corpus-wide (v5, v6 AND v7 fixtures alike): migrate_inputs_to_v7
-    accepts all three via RECOGNISED_INPUTS_VERSIONS_V7 = (1..7)."""
+    fixture. Corpus-wide over v5, v6 AND v7 fixtures: migrate_inputs_to_v7
+    accepts all three via RECOGNISED_INPUTS_VERSIONS_V7 = (1..7). R11: fixture R
+    (r-vat-quarterly.json) is v8, and migrate_inputs_to_v7 refuses a v8 document
+    by the same design -- it is excluded here and gets its own gate in
+    test_migrate_v8.py."""
     names = []
     for name, doc in _pipeline_fixtures():
+        if doc["inputs"].get("inputs_version") == 8:
+            continue
         names.append(name)
         migrated = migrate_inputs_to_v7(doc["inputs"])
 

@@ -387,10 +387,23 @@ def test_parse_dispatches_on_version_8(v1_doc):
 # ---------------------------------------------------------------------------
 
 def _pipeline_fixtures():
+    """The PRE-EXISTING (pre-v8) corpus this migration-inertness gate is about.
+
+    R11 fixture R (r-vat-quarterly.json) is excluded: it is already a v8
+    document carrying a LIVE vat block (registered: true, non-zero rates), so
+    migrate_inputs_to_v8 takes the merge-onto-defaults branch for it rather than
+    writing the inert block this gate asserts -- _assert_structural_write's
+    'registered is False' / 'every rate 0' claims would fail for it not because
+    the migration is wrong but because they assert the wrong thing about an
+    already-registered document. Fixture R's own migrate-to-v8 (merge branch)
+    identity is asserted separately, in test_financial_model_fixtures.py's
+    test_fixture_r_reproduces_its_metrics_after_migration_to_v8."""
     for path in sorted(FIXTURES.glob("*.json")):
         doc = json.loads(path.read_text(encoding="utf-8"))
         if doc.get("kind") == "sensitivity":
             continue  # names a base_fixture instead of carrying inputs
+        if doc["inputs"].get("inputs_version") == 8:
+            continue  # fixture R -- already v8, merge branch, not the inert write
         yield path.name, doc
 
 
