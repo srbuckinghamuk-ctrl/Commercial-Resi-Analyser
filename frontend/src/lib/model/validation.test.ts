@@ -1267,7 +1267,12 @@ describe('R11 — VAT validation (spec §17.9)', () => {
       }));
       expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].vat_override')).toBe(true);
 
-      const valid = validateInputs(makeV8Inputs({ cost_plan: { mode: 'headline', packages: [] } }));
+      // Fix round 1 (minor 3): the near-miss of the actual precondition is
+      // the SAME override present in DETAILED mode, not the override removed
+      // entirely — that changes only the one field the rule actually gates on.
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride())] },
+      }));
       expect(valid.some((i) => i.field === 'cost_plan.packages[0].vat_override')).toBe(false);
     });
 
@@ -1278,7 +1283,7 @@ describe('R11 — VAT validation (spec §17.9)', () => {
       expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].vat_override')).toBe(true);
 
       const valid = validateInputs(makeV8Inputs({
-        cost_plan: { mode: 'headline', fee_lines: [feeLineWithOverride(null)] },
+        cost_plan: { mode: 'detailed', fee_lines: [feeLineWithOverride(vatOverride())] },
       }));
       expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].vat_override')).toBe(false);
     });
@@ -1507,6 +1512,26 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     expect(recIssues.some((i) => i.field === field)).toBe(false);
   }
 
+  // Local, minimal duplicates of the hard-error describe's helpers above —
+  // that describe scopes them to its own callback, and this is a separate
+  // top-level describe (same convention the R10 cost-plan block already uses
+  // for its own `pkg()`/`feeLine()`).
+  function pkgWithOverride(override: VatOverride | null): CostPackage {
+    return {
+      id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
+      contingency_class: 'general', lender_eligible: true, notes: '',
+      vat_override: override,
+    };
+  }
+
+  function feeLineWithOverride(override: VatOverride | null): FeeLine {
+    return {
+      id: 'fee-1', code: 'other', category: 'professional', label: 'X',
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
+      vat_override: override,
+    };
+  }
+
   describe("recovery_basis 'zero_rated_sale' while exit_strategy retains a unit", () => {
     const idx = VAT_CHARGE_CATEGORIES.indexOf('selling');
 
@@ -1533,10 +1558,7 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
         },
         exit_strategy: { route: 'blended', retained_units: [{ unit_id: 'u1', monthly_rent_pence: 1000 }] },
       });
-      const issues = validateInputs(inputs);
-      expect(issues.some(
-        (i) => i.severity === 'warning' && i.field === `vat.treatments[${idx}].recovery_basis`,
-      )).toBe(true);
+      assertWarningChannel(inputs, `vat.treatments[${idx}].recovery_basis`);
     });
 
     it('does not warn on a sell_all exit — no unit is retained', () => {
@@ -1551,6 +1573,54 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
       });
       expect(validateInputs(inputs).some(
         (i) => i.field === `vat.treatments[${idx}].recovery_basis`,
+      )).toBe(false);
+    });
+
+    // Fix round 1 (Ruling R35). A VatOverride carries its OWN recovery_basis —
+    // exactly the same unsafe assumption is expressible on a package or fee
+    // line, and a scan of vat.treatments alone never sees it. Two more cases,
+    // making this rule's total four, not two.
+    it('warns on a package override recovered as zero_rated_sale', () => {
+      const inputs = makeV8Inputs({
+        vat: { registered: true },
+        cost_plan: {
+          mode: 'detailed',
+          packages: [pkgWithOverride(vatOverride({
+            rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale',
+          }))],
+        },
+        exit_strategy: { route: 'retain_all' },
+      });
+      assertWarningChannel(inputs, 'cost_plan.packages[0].vat_override.recovery_basis');
+    });
+
+    it('warns on a fee-line override recovered as zero_rated_sale', () => {
+      const inputs = makeV8Inputs({
+        vat: { registered: true },
+        cost_plan: {
+          mode: 'detailed',
+          fee_lines: [feeLineWithOverride(vatOverride({
+            rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale',
+          }))],
+        },
+        exit_strategy: { route: 'retain_all' },
+      });
+      assertWarningChannel(inputs, 'cost_plan.fee_lines[0].vat_override.recovery_basis');
+    });
+
+    it('does not warn on a package override recovered as zero_rated_sale when no unit is retained', () => {
+      const inputs = makeV8Inputs({
+        vat: { registered: true },
+        cost_plan: {
+          mode: 'detailed',
+          packages: [pkgWithOverride(vatOverride({
+            rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale',
+          }))],
+        },
+        exit_strategy: { route: 'sell_all' },
+      });
+      expect(validateInputs(inputs).some(
+        (i) => i.field === 'cost_plan.packages[0].vat_override.recovery_basis',
       )).toBe(false);
     });
   });

@@ -384,9 +384,20 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     // eslint-disable-next-line no-restricted-syntax -- structural shape/bounds validation only (spec §17.9); never resolves a charge, so it does not re-implement resolveVatTreatment's precedence
     const treatments = vatInputs.treatments;
 
-    // Override in headline mode, and rate_pct/recoverable_pct bounds on every
-    // override — one pass over packages, one over fee lines, each reading
-    // `vat_override` exactly once into a local for the same reason as above.
+    // Fix round 1 (Ruling R35): computed here, ahead of the override loop
+    // below, so the zero-rated-sale warning can fire on an OVERRIDE's own
+    // recovery_basis in the same pass that already extracts it — a
+    // VatOverride carries its own recovery_basis, so the identical unsafe
+    // assumption (full recovery on a zero-rated first grant while retaining a
+    // unit for exempt residential letting) is expressible there too, and a
+    // scan of `treatments` alone never sees it.
+    const retainsAUnit = inputs.exit_strategy.route === 'retain_all'
+      || (inputs.exit_strategy.route === 'blended' && inputs.exit_strategy.retained_units.length > 0);
+
+    // Override in headline mode, rate_pct/recoverable_pct bounds, and the
+    // zero-rated-sale-with-retained-units warning — one pass over packages,
+    // one over fee lines, each reading `vat_override` exactly once into a
+    // local for the same reason as the `treatments` exemption above.
     let anyOverrideNonZeroRate = false;
     if (cp != null) {
       cp.packages.forEach((p, idx) => {
@@ -406,6 +417,13 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
           err(`cost_plan.packages[${idx}].vat_override.recoverable_pct`,
             'VAT override recoverable percentage must be between 0 and 100%.');
         }
+        if (retainsAUnit && override.recovery_basis === 'zero_rated_sale') {
+          warn(`cost_plan.packages[${idx}].vat_override.recovery_basis`,
+            'This override is recovered on the basis of a zero-rated first grant, but the exit '
+            + 'strategy retains at least one unit. Retained residential letting is an exempt '
+            + 'supply, so full recovery here is unsafe — check whether the recoverable '
+            + 'proportion should be restricted.');
+        }
       });
       cp.fee_lines.forEach((fl, idx) => {
         // eslint-disable-next-line no-restricted-syntax -- see the `treatments` exemption above; same structural-validation reasoning for the override object
@@ -423,6 +441,13 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
         if (override.recoverable_pct < 0 || override.recoverable_pct > 100) {
           err(`cost_plan.fee_lines[${idx}].vat_override.recoverable_pct`,
             'VAT override recoverable percentage must be between 0 and 100%.');
+        }
+        if (retainsAUnit && override.recovery_basis === 'zero_rated_sale') {
+          warn(`cost_plan.fee_lines[${idx}].vat_override.recovery_basis`,
+            'This override is recovered on the basis of a zero-rated first grant, but the exit '
+            + 'strategy retains at least one unit. Retained residential letting is an exempt '
+            + 'supply, so full recovery here is unsafe — check whether the recoverable '
+            + 'proportion should be restricted.');
         }
       });
     }
@@ -480,8 +505,8 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     // The zero-rated first grant is what makes input VAT recoverable;
     // retained residential letting is EXEMPT, so full recovery is unsafe.
     // This is the single most likely real-world VAT error the model can catch.
-    const retainsAUnit = inputs.exit_strategy.route === 'retain_all'
-      || (inputs.exit_strategy.route === 'blended' && inputs.exit_strategy.retained_units.length > 0);
+    // (`retainsAUnit` itself is computed above, ahead of the override loop,
+    // which also checks a package/fee-line override's own recovery_basis.)
     if (retainsAUnit) {
       treatments.forEach((t, idx) => {
         if (t.recovery_basis === 'zero_rated_sale') {

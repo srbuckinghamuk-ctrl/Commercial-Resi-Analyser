@@ -1327,7 +1327,12 @@ class TestVatValidationHardErrors:
             i.severity == "error" and i.field == "cost_plan.packages[0].vat_override" for i in invalid
         )
 
-        valid = validate_inputs(make_v8_inputs(cost_plan={"mode": "headline", "packages": []}))
+        # Fix round 1 (minor 3): the near-miss of the actual precondition is the
+        # SAME override present in DETAILED mode, not the override removed
+        # entirely -- that changes only the one field the rule actually gates on.
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override())],
+        }))
         assert not any(i.field == "cost_plan.packages[0].vat_override" for i in valid)
 
     def test_hard_errors_on_a_fee_line_vat_override_in_headline_mode(self):
@@ -1340,7 +1345,7 @@ class TestVatValidationHardErrors:
         )
 
         valid = validate_inputs(make_v8_inputs(cost_plan={
-            "mode": "headline", "fee_lines": [_fee_line(vat_override=None)],
+            "mode": "detailed", "fee_lines": [_fee_line(vat_override=_override())],
         }))
         assert not any(i.field == "cost_plan.fee_lines[0].vat_override" for i in valid)
 
@@ -1590,11 +1595,7 @@ class TestVatValidationWarnings:
         inputs.vat.treatments = _treatments(
             selling={"rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale"},
         )
-        issues = validate_inputs(inputs)
-        assert any(
-            i.severity == "warning" and i.field == f"vat.treatments[{idx}].recovery_basis"
-            for i in issues
-        )
+        self._assert_warning_channel(inputs, f"vat.treatments[{idx}].recovery_basis")
 
     def test_does_not_warn_on_zero_rated_sale_with_a_sell_all_exit(self):
         idx = VAT_CHARGE_CATEGORIES.index("selling")
@@ -1605,6 +1606,50 @@ class TestVatValidationWarnings:
         )
         issues = validate_inputs(inputs)
         assert not any(i.field == f"vat.treatments[{idx}].recovery_basis" for i in issues)
+
+    # Fix round 1 (Ruling R35). A VatOverride carries its OWN recovery_basis --
+    # exactly the same unsafe assumption is expressible on a package or fee
+    # line, and a scan of vat.treatments alone never sees it. Two more cases,
+    # making this rule's total four, not two.
+    def test_warns_on_a_package_override_recovered_as_zero_rated_sale(self):
+        inputs = make_v8_inputs(
+            cost_plan={
+                "mode": "detailed",
+                "packages": [_pkg(vat_override=_override(
+                    rate_pct=20, recoverable_pct=100, recovery_basis="zero_rated_sale",
+                ))],
+            },
+            exit_strategy={"route": "retain_all"},
+        )
+        inputs.vat.registered = True
+        self._assert_warning_channel(inputs, "cost_plan.packages[0].vat_override.recovery_basis")
+
+    def test_warns_on_a_fee_line_override_recovered_as_zero_rated_sale(self):
+        inputs = make_v8_inputs(
+            cost_plan={
+                "mode": "detailed",
+                "fee_lines": [_fee_line(vat_override=_override(
+                    rate_pct=20, recoverable_pct=100, recovery_basis="zero_rated_sale",
+                ))],
+            },
+            exit_strategy={"route": "retain_all"},
+        )
+        inputs.vat.registered = True
+        self._assert_warning_channel(inputs, "cost_plan.fee_lines[0].vat_override.recovery_basis")
+
+    def test_does_not_warn_on_a_package_override_recovered_as_zero_rated_sale_when_no_unit_is_retained(self):
+        inputs = make_v8_inputs(
+            cost_plan={
+                "mode": "detailed",
+                "packages": [_pkg(vat_override=_override(
+                    rate_pct=20, recoverable_pct=100, recovery_basis="zero_rated_sale",
+                ))],
+            },
+            exit_strategy={"route": "sell_all"},
+        )
+        inputs.vat.registered = True
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "cost_plan.packages[0].vat_override.recovery_basis" for i in issues)
 
     def test_warns_when_togc_applies_but_the_vendor_has_not_opted_to_tax(self):
         inputs = make_v8_inputs()

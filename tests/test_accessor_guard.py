@@ -431,6 +431,38 @@ def test_no_unauthorised_reader_of_a_vat_override():
     )
 
 
+def test_vat_accessor_allowlist_pins_exactly_these_two_files():
+    """Fix round 1, minor 1. TypeScript's twin allowlist (eslint.config.js) is
+    pinned by exact equality ("pins the allowlist array to EXACTLY these
+    files", accessor-guard.test.ts) precisely because R10 found that widening
+    it un-guarded three unrelated fields, and only exact equality -- not
+    membership -- catches a widening. Python's three allowlists (this one,
+    BAND_SELECTOR_ALLOWLIST and CONTINGENCY_ALLOWLIST below) had no equivalent
+    pin; a future third file added to any of them would pass every test above
+    silently. This is the same guard, applied to the same set."""
+    assert VAT_ACCESSOR_ALLOWLIST == {
+        "app/financial_model/vat.py",
+        "app/financial_model/validation.py",
+    }
+
+
+def test_band_selector_allowlist_pins_exactly_these_two_files():
+    """See test_vat_accessor_allowlist_pins_exactly_these_two_files above."""
+    assert BAND_SELECTOR_ALLOWLIST == {
+        "app/financial_model/acquisition_tax.py",
+        "app/financial_model/validation.py",
+    }
+
+
+def test_contingency_allowlist_pins_exactly_these_three_files():
+    """See test_vat_accessor_allowlist_pins_exactly_these_two_files above."""
+    assert CONTINGENCY_ALLOWLIST == {
+        "app/financial_model/types.py",
+        "app/financial_model/legacy_costs.py",
+        "app/financial_model/validation.py",
+    }
+
+
 def test_the_vat_guard_does_not_flag_a_pydantic_field_declaration():
     """types.py DECLARES both fields and CONSTRUCTS the default block
     (`VatInputs(treatments=default_vat_treatments())`). Neither is a read: an

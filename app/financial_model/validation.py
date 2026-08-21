@@ -429,8 +429,20 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         # select_band_set and contingency_pct above.
         treatments = vat_inputs.treatments
 
-        # Override in headline mode, and rate_pct/recoverable_pct bounds on
-        # every override -- one pass over packages, one over fee lines.
+        # Fix round 1 (Ruling R35): computed here, ahead of the override loop
+        # below, so the zero-rated-sale warning can fire on an OVERRIDE's own
+        # recovery_basis in the same pass that already extracts it -- a
+        # VatOverride carries its own recovery_basis, so the identical unsafe
+        # assumption (full recovery on a zero-rated first grant while
+        # retaining a unit for exempt residential letting) is expressible
+        # there too, and a scan of `treatments` alone never sees it.
+        retains_a_unit = inputs.exit_strategy.route == "retain_all" or (
+            inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) > 0
+        )
+
+        # Override in headline mode, rate_pct/recoverable_pct bounds, and the
+        # zero-rated-sale-with-retained-units warning -- one pass over
+        # packages, one over fee lines.
         any_override_non_zero_rate = False
         if cp is not None:
             for idx, p in enumerate(cp.packages):
@@ -455,6 +467,14 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                         f"cost_plan.packages[{idx}].vat_override.recoverable_pct",
                         "VAT override recoverable percentage must be between 0 and 100%.",
                     )
+                if retains_a_unit and override.recovery_basis == "zero_rated_sale":
+                    warn(
+                        f"cost_plan.packages[{idx}].vat_override.recovery_basis",
+                        "This override is recovered on the basis of a zero-rated first grant, "
+                        "but the exit strategy retains at least one unit. Retained residential "
+                        "letting is an exempt supply, so full recovery here is unsafe - check "
+                        "whether the recoverable proportion should be restricted.",
+                    )
             for idx, fl in enumerate(cp.fee_lines):
                 override = fl.vat_override
                 if override is None:
@@ -477,6 +497,14 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                     err(
                         f"cost_plan.fee_lines[{idx}].vat_override.recoverable_pct",
                         "VAT override recoverable percentage must be between 0 and 100%.",
+                    )
+                if retains_a_unit and override.recovery_basis == "zero_rated_sale":
+                    warn(
+                        f"cost_plan.fee_lines[{idx}].vat_override.recovery_basis",
+                        "This override is recovered on the basis of a zero-rated first grant, "
+                        "but the exit strategy retains at least one unit. Retained residential "
+                        "letting is an exempt supply, so full recovery here is unsafe - check "
+                        "whether the recoverable proportion should be restricted.",
                     )
 
         # rate_pct / recoverable_pct out of 0..100 on every treatment row.
@@ -540,10 +568,9 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         # The zero-rated first grant is what makes input VAT recoverable;
         # retained residential letting is EXEMPT, so full recovery is unsafe.
         # This is the single most likely real-world VAT error the model can
-        # catch.
-        retains_a_unit = inputs.exit_strategy.route == "retain_all" or (
-            inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) > 0
-        )
+        # catch. (`retains_a_unit` itself is computed above, ahead of the
+        # override loop, which also checks a package/fee-line override's own
+        # recovery_basis.)
         if retains_a_unit:
             for idx, t in enumerate(treatments):
                 if t.recovery_basis == "zero_rated_sale":
