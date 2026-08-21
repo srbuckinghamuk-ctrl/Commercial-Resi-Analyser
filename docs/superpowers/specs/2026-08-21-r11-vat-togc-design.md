@@ -593,6 +593,38 @@ block.
   interest with the document as given, less total interest from the same
   document with `vat.registered` forced false.
 
+### The counterfactual must hold the acquisition tax fixed (R33)
+
+VAT imposes **two** costs, and only one of them is carry:
+
+- a **timing** cost — money out, money back later, interest on the gap;
+- a **permanent** cost — acquisition tax charged on the VAT-inclusive
+  consideration (§17.7), which never comes back.
+
+A counterfactual that simply forces `registered: false` removes both. Forcing it
+drives `resolveVatTreatment` to `INERT`, the acquisition rate to 0, and the
+chargeable consideration back to the exclusive price — so the counterfactual run
+carries a smaller month-0 outflow, draws less and pays less interest **for a
+reason that is not the VAT cash cycle**.
+
+Two things break. `vat_carry_interest_pence` is overstated by the interest on the
+SDLT-on-VAT uplift. And §17.5's `Δprofit === Δfinance_costs` identity fails,
+because the counterfactual's `cost_before_finance_pence` also falls by the tax
+delta. Both occur on any `vendor_opted_to_tax` document — which is precisely the
+shape §17.7 blesses for an unregistered buyer, not a hypothetical.
+
+**The counterfactual therefore holds the acquisition tax at the as-given
+figure.** It forces `registered: false` *and* pins the counterfactual document's
+acquisition tax to the tax the real document was charged, using the existing
+`acquisition_tax_override_pence` mechanism with a reason naming the
+counterfactual. Acquisition cost is then identical on both sides and the
+difference is exactly the VAT cash cycle — including the carry on purchase VAT
+itself, which *is* a timing cost and does belong in the figure.
+
+The permanent cost is not hidden by this: it is disclosed by
+`chargeable_consideration_pence` and by the acquisition tax itself, which is
+where a reader looks for a cost that never comes back.
+
 ### Carry interest and profit impact are two quantities, not one (R31)
 
 The field measures **interest**. §17.5's primary invariant measures **profit**,
@@ -661,6 +693,12 @@ The specification must state, and the memo must disclose:
   not tested (R15).
 - Reclaims falling after the modelled term are reported as receivable and are
   **not** in the cash flow.
+- **`net_ltc_pct` and `gross_ltc_pct` treat VAT differently, deliberately
+  (R34).** Gross LTC measures against total development cost, so it moves with
+  irrecoverable VAT. Net LTC measures against the cost the lender advances
+  against, and VAT is not advance-eligible (§17.6), so it does not. The two are
+  internally coherent but will read as a bug if printed side by side unexplained,
+  so the report must state which denominator each uses.
 
 ## 16. Guards this release must watch fail
 
