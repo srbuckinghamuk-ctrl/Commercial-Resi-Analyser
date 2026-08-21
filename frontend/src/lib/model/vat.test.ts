@@ -891,4 +891,89 @@ describe('vatBasisGate (spec §17.10, ruling R5)', () => {
     const vat = computeVat(confirmed, costPlan, schedule);
     expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
   });
+
+  // Fix round 1 (ruling R42). Spec §17.10 states materiality as TWO disjuncts;
+  // the first pass over the brief's pseudo-code implemented only the first
+  // (a treatments row's own evidence_status against its resolved charge).
+  // These three pin the second: `purchase.evidence_status` is a structurally
+  // SEPARATE fact from any treatments row's evidence_status — `computeVat`
+  // derives the acquisition CHARGE LINE's evidence_status solely from
+  // `resolveVatTreatment`'s read of `treatments`, never from `vat.purchase` —
+  // so a document can have one confirmed while the other is not, and nothing
+  // before this fix noticed.
+  it('gates on an unconfirmed PURCHASE evidence status even when the acquisition treatment row is confirmed', () => {
+    const { inputs, costPlan, schedule } = buildWorkedVatCase({
+      vendorOptedToTax: true, togcTreatment: 'does_not_apply',
+      purchasePricePence: 50_000_000, acquisitionAt20: true,
+    });
+    // The acquisition CATEGORY row is confirmed here — the FIRST disjunct is
+    // false — so this fixture isolates the second one and nothing else.
+    const confirmed = {
+      ...inputs,
+      vat: {
+        ...inputs.vat,
+        treatments: inputs.vat.treatments.map((t) => (t.category === 'acquisition'
+          ? { ...t, evidence_status: 'confirmed' as const }
+          : t)),
+      },
+    };
+    expect(confirmed.vat.purchase.evidence_status).toBe('unconfirmed'); // DEFAULT_VAT's own default
+    const vat = computeVat(confirmed, costPlan, schedule);
+    const acquisitionLine = vat.charges.find((c) => c.id === 'category:acquisition')!;
+    expect(acquisitionLine.evidence_status).toBe('confirmed');
+    expect(vat.purchase_vat_chargeable).toBe(true);
+    expect(vat.purchase_evidence_status).toBe('unconfirmed');
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(false);
+  });
+
+  it('does not gate on an unconfirmed purchase evidence status once purchase VAT is itself confirmed', () => {
+    const { inputs, costPlan, schedule } = buildWorkedVatCase({
+      vendorOptedToTax: true, togcTreatment: 'does_not_apply',
+      purchasePricePence: 50_000_000, acquisitionAt20: true,
+    });
+    const confirmed = {
+      ...inputs,
+      vat: {
+        ...inputs.vat,
+        // buildWorkedVatCase ALWAYS rates 'construction' at 20% by default
+        // (its own doc comment) — confirmed here too, alongside 'acquisition',
+        // so the FIRST disjunct cannot be what makes this "does not gate".
+        treatments: inputs.vat.treatments.map((t) => (t.category === 'acquisition' || t.category === 'construction'
+          ? { ...t, evidence_status: 'confirmed' as const }
+          : t)),
+        purchase: { ...inputs.vat.purchase, evidence_status: 'confirmed' as const },
+      },
+    };
+    const vat = computeVat(confirmed, costPlan, schedule);
+    expect(vat.purchase_vat_chargeable).toBe(true);
+    expect(vat.purchase_evidence_status).toBe('confirmed');
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
+  });
+
+  it('does not gate an unconfirmed purchase evidence status where purchase VAT is not chargeable at all', () => {
+    // TOGC applies: isPurchaseVatChargeable is false regardless of the option
+    // to tax (spec §17.7) — materiality requires BOTH unconfirmed AND
+    // chargeable, so an unconfirmed status on a non-chargeable purchase is
+    // nothing to gate on, mirroring "an unconfirmed row charging nothing
+    // gates nothing" for the first disjunct.
+    const { inputs, costPlan, schedule } = buildWorkedVatCase({
+      vendorOptedToTax: true, togcTreatment: 'applies', purchasePricePence: 50_000_000,
+    });
+    // buildWorkedVatCase always rates 'construction' at 20% by default and
+    // leaves it unconfirmed — confirmed here so the FIRST disjunct cannot be
+    // what makes this "does not gate" (this test is about the second alone).
+    const confirmed = {
+      ...inputs,
+      vat: {
+        ...inputs.vat,
+        treatments: inputs.vat.treatments.map((t) => (t.category === 'construction'
+          ? { ...t, evidence_status: 'confirmed' as const }
+          : t)),
+      },
+    };
+    expect(confirmed.vat.purchase.evidence_status).toBe('unconfirmed');
+    const vat = computeVat(confirmed, costPlan, schedule);
+    expect(vat.purchase_vat_chargeable).toBe(false);
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
+  });
 });

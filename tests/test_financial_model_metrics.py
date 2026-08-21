@@ -91,6 +91,7 @@ def _empty_vat(term_months: int) -> VatResult:
         total_input_vat_pence=0, total_recoverable_pence=0, total_irrecoverable_pence=0,
         total_reclaimed_pence=0, receivable_at_maturity_pence=0, peak_carry_pence=0,
         peak_carry_month=None, purchase_vat_pence=0,
+        purchase_vat_chargeable=False, purchase_evidence_status="unconfirmed",
     )
 
 

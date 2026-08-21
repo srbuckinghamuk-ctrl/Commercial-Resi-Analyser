@@ -102,6 +102,18 @@ describe('VAT basis in the draft gate (R11, spec §17.10)', () => {
       .toBe('not_approved');
   });
 
+  // Fix round 1 (minor 1). The mirror image of the test above: with NO lender
+  // case AND an unconfirmed VAT basis, the reason must still be
+  // 'vat_basis_unconfirmed', not 'not_approved' — the two adjacent tests
+  // (this describe block's first case, and the one above) made this likely
+  // but neither actually pinned the ORDER at the no-lender-case boundary,
+  // which is exactly the shape R8's own "does not displace" test found worth
+  // a dedicated case for the tax-basis clause.
+  it('orders above not_approved with no lender case at all', () => {
+    expect(draftReason(reconciled, null, confirmedTax, { vatBasisConfirmed: false }))
+      .toBe('vat_basis_unconfirmed');
+  });
+
   // The fourth argument was added after every existing call site was written.
   // A default that did not preserve today's behaviour would silently change
   // the meaning of every one-, two- and three-argument caller in the app.

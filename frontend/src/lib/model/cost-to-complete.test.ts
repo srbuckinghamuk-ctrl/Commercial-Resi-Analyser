@@ -34,7 +34,7 @@ function emptyVat(termMonths: number): VatResult {
     )),
     total_input_vat_pence: 0, total_recoverable_pence: 0, total_irrecoverable_pence: 0,
     total_reclaimed_pence: 0, receivable_at_maturity_pence: 0, peak_carry_pence: 0, peak_carry_month: null,
-    purchase_vat_pence: 0,
+    purchase_vat_pence: 0, purchase_vat_chargeable: false, purchase_evidence_status: 'unconfirmed',
   };
 }
 function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {

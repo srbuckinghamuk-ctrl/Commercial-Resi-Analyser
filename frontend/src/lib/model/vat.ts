@@ -332,6 +332,20 @@ export interface VatResult {
   /** Disclosure of the acquisition line's VAT, so §17.7's chargeable
    *  consideration is visible rather than buried in a tax figure. */
   purchase_vat_pence: number;
+  /** Task 12 fix round 1 (spec §17.10, ruling R42). `isPurchaseVatChargeable`'s
+   *  own answer, disclosed so a consumer of the RESULT (the draft gate, the
+   *  memo) reads whether purchase VAT is actually due off the engine rather
+   *  than re-deriving it from `vat.purchase` itself. Always `false` when the
+   *  engine is inert — nothing is charged, so nothing here can gate. */
+  purchase_vat_chargeable: boolean;
+  /** The purchase leg's OWN evidence status — whether `vendor_opted_to_tax`/
+   *  `togc_treatment` are themselves evidenced. Deliberately distinct from any
+   *  `treatments` row's `evidence_status`, which is a separate fact about a
+   *  category's rate/recoverable_pct: `computeVat` derives the acquisition
+   *  charge line's evidence_status solely from `resolveVatTreatment`'s read of
+   *  `treatments`, and nothing ties the two together, so a document can have
+   *  one confirmed while the other is not (spec §17.10, ruling R42). */
+  purchase_evidence_status: EvidenceStatus;
 }
 
 /** Task 12, spec §17.10. What `draftReason` (report-provenance.ts) needs to
@@ -345,19 +359,31 @@ export interface VatBasisGate {
  * it does not compute it. This is the ONE place that turns a computed
  * `VatResult` into the boolean the draft gate reads.
  *
- * "Material" means the category actually bears VAT: a charge line's
- * `evidence_status` is `'unconfirmed'` AND its resolved `vat_pence` is
- * non-zero. An unconfirmed row charging nothing gates nothing — no threshold
- * constant is invented, this is exact. `registered: false` can never gate:
- * an unregistered document's `charges` array is empty (`inertVat`), so there
- * is nothing here for it to have an opinion about.
+ * Materiality is the spec's own two disjuncts (§17.10), not the first one
+ * alone (fix round 1, ruling R42 — the first pass over-narrowed this):
+ *
+ * 1. a charge line's `evidence_status` is `'unconfirmed'` AND its resolved
+ *    `vat_pence` is non-zero — an unconfirmed row charging nothing gates
+ *    nothing, no threshold constant is invented, this is exact;
+ * 2. `purchase_evidence_status` is `'unconfirmed'` AND `purchase_vat_chargeable`
+ *    is true — the fact that purchase VAT is DUE AT ALL can be unconfirmed
+ *    even where the acquisition category's rate/recoverable_pct row (a
+ *    structurally SEPARATE fact — `computeVat` derives the acquisition
+ *    charge line's `evidence_status` solely from `resolveVatTreatment`'s read
+ *    of `treatments`, never from `vat.purchase`) happens to be confirmed.
+ *
+ * `registered: false` can never gate either disjunct: an unregistered
+ * document's `charges` array is empty and `purchase_vat_chargeable` is
+ * `false` by construction (`inertVat`), so there is nothing here for it to
+ * have an opinion about.
  */
 export function vatBasisGate(vat: VatResult): VatBasisGate {
-  return {
-    vatBasisConfirmed: !vat.charges.some(
-      (c) => c.evidence_status === 'unconfirmed' && c.vat_pence !== 0,
-    ),
-  };
+  const treatmentRowUnconfirmed = vat.charges.some(
+    (c) => c.evidence_status === 'unconfirmed' && c.vat_pence !== 0,
+  );
+  const purchaseUnconfirmed =
+    vat.purchase_vat_chargeable && vat.purchase_evidence_status === 'unconfirmed';
+  return { vatBasisConfirmed: !treatmentRowUnconfirmed && !purchaseUnconfirmed };
 }
 
 /**
@@ -444,6 +470,12 @@ function inertVat(termMonths: number): VatResult {
     peak_carry_pence: 0,
     peak_carry_month: null,
     purchase_vat_pence: 0,
+    // §17.10 ruling R42: an inert engine charges nothing, so `false` here is
+    // structural, not a read of `vat.purchase` — this function doesn't even
+    // receive `vat` — and it is what makes "registered: false can never gate"
+    // true by construction rather than by the gate remembering to check it.
+    purchase_vat_chargeable: false,
+    purchase_evidence_status: 'unconfirmed',
   };
 }
 
@@ -542,9 +574,10 @@ export function computeVat(
     );
 
   // --- acquisition: purchase VAT, and only purchase VAT (§17.7) ---
-  const purchaseBase = isPurchaseVatChargeable(vat.purchase)
-    ? inputs.acquisition.purchase_price_pence
-    : 0;
+  // Computed ONCE and disclosed on the result (`purchase_vat_chargeable`)
+  // rather than re-derived by a consumer — ruling R42.
+  const purchaseVatChargeable = isPurchaseVatChargeable(vat.purchase);
+  const purchaseBase = purchaseVatChargeable ? inputs.acquisition.purchase_price_pence : 0;
 
   // --- construction: the category base is net of every overridden package ---
   // Gated on detailed mode, mirroring cost-plan.ts:262: `computeCostPlan`
@@ -669,5 +702,7 @@ export function computeVat(
     peak_carry_pence: peakCarry,
     peak_carry_month: peakCarryMonth,
     purchase_vat_pence: acquisitionLine.vat_pence,
+    purchase_vat_chargeable: purchaseVatChargeable,
+    purchase_evidence_status: vat.purchase.evidence_status,
   };
 }

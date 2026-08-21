@@ -1454,6 +1454,12 @@ export function generateInvestmentMemo(
       + 'acquisition tax base (spec §17.5, §17.7).',
     );
   } else {
+    // Fix round 1: `vat.registered === true` here implies `'vat' in inputs` —
+    // `computeVat` only ever produces a registered VatResult when the input
+    // block exists — so `vatInputs` is never null in this branch. Narrowed
+    // ONCE here rather than re-checked at the read site below, which used to
+    // carry an unreachable `vatInputs === null` arm.
+    const cycle = vatInputs as NonNullable<typeof vatInputs>;
     const categoryLines = vat.charges.filter((c) => c.id.startsWith('category:'));
     table({
       startY: y,
@@ -1499,7 +1505,7 @@ export function generateInvestmentMemo(
       body: [
         [
           'Return cycle',
-          vatInputs === null ? 'n/a' : `${vatInputs.return_frequency === 'quarterly' ? 'Quarterly' : 'Monthly'}, first period ends month ${vatInputs.first_period_end_month}, reclaimed ${vatInputs.repayment_lag_months} month(s) after period end`,
+          `${cycle.return_frequency === 'quarterly' ? 'Quarterly' : 'Monthly'}, first period ends month ${cycle.first_period_end_month}, reclaimed ${cycle.repayment_lag_months} month(s) after period end`,
         ],
         [
           'Peak VAT carry',
@@ -2319,7 +2325,11 @@ export function generateInvestmentMemo(
         metrics.chargeable_consideration_pence > inputs.acquisition.purchase_price_pence
           ? `Chargeable consideration ${fmt(metrics.chargeable_consideration_pence)} — `
             + `${fmt(metrics.chargeable_consideration_pence - inputs.acquisition.purchase_price_pence)} VAT uplift on the `
-            + `${fmt(inputs.acquisition.purchase_price_pence)} price, evidence ${vatInputs?.purchase.evidence_status ?? 'n/a'} (spec §17.7)`
+            // Fix round 1 (ruling R42). Read off run.metrics.vat, the engine's
+            // own disclosure — not off the raw input — so the memo cannot
+            // print a different evidence status from the one the draft gate
+            // (vatBasisGate) actually consulted.
+            + `${fmt(inputs.acquisition.purchase_price_pence)} price, evidence ${vat.purchase_evidence_status} (spec §17.7)`
           : 'No VAT uplift on the chargeable consideration (spec §17.7)',
       ],
       ['Agent fee', fmtPct(inputs.exit_strategy.selling_agent_fee_pct), 'Standard estate agent fee'],

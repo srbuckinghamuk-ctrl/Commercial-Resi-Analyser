@@ -278,6 +278,18 @@ class VatResult:
     # Disclosure of the acquisition line's VAT, so Sec 17.7's chargeable
     # consideration is visible rather than buried in a tax figure.
     purchase_vat_pence: int
+    # Task 12 fix round 1 (spec Sec 17.10, ruling R42). is_purchase_vat_chargeable's
+    # own answer, disclosed so a consumer of the RESULT reads whether purchase
+    # VAT is actually due off the engine rather than re-deriving it from
+    # vat.purchase itself. Always False when the engine is inert.
+    purchase_vat_chargeable: bool
+    # The purchase leg's OWN evidence status -- whether vendor_opted_to_tax /
+    # togc_treatment are themselves evidenced. Deliberately distinct from any
+    # treatments row's evidence_status, which is a separate fact about a
+    # category's rate/recoverable_pct: compute_vat derives the acquisition
+    # charge line's evidence_status solely from resolve_vat_treatment's read of
+    # treatments, and nothing ties the two together (spec Sec 17.10, ruling R42).
+    purchase_evidence_status: EvidenceStatus
 
 
 def spread_pro_rata(total: int, weights: Sequence[float]) -> list[int]:
@@ -370,6 +382,11 @@ def _inert_vat(term_months: int) -> VatResult:
         peak_carry_pence=0,
         peak_carry_month=None,
         purchase_vat_pence=0,
+        # An inert engine charges nothing, so False here is structural -- this
+        # function doesn't even receive `vat` -- and it is what makes
+        # "registered: false can never gate" true by construction.
+        purchase_vat_chargeable=False,
+        purchase_evidence_status="unconfirmed",
     )
 
 
@@ -465,9 +482,11 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
         )
 
     # --- acquisition: purchase VAT, and only purchase VAT (Sec 17.7) ---
+    # Computed ONCE and disclosed on the result (purchase_vat_chargeable)
+    # rather than re-derived by a consumer -- ruling R42.
+    purchase_vat_chargeable = is_purchase_vat_chargeable(vat.purchase)
     purchase_base = (
-        inputs.acquisition.purchase_price_pence
-        if is_purchase_vat_chargeable(vat.purchase) else 0
+        inputs.acquisition.purchase_price_pence if purchase_vat_chargeable else 0
     )
 
     # --- construction: the category base is net of every overridden package ---
@@ -599,4 +618,6 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
         peak_carry_pence=peak_carry,
         peak_carry_month=peak_carry_month,
         purchase_vat_pence=acquisition_line.vat_pence,
+        purchase_vat_chargeable=purchase_vat_chargeable,
+        purchase_evidence_status=vat.purchase.evidence_status,
     )
