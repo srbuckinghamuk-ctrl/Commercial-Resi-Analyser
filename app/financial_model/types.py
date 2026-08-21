@@ -724,6 +724,12 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10: without this branch a v8 document falls through every
+    # check below to the CalculatorInputsV2 default, silently dropping the VAT
+    # block and every other post-v2 field -- R8's silent-corruption class of
+    # defect, which returned 201 while dropping a confirmed equity source.
+    if version == 8:
+        return CalculatorInputsV8.model_validate(doc)
     if version == 7:
         return CalculatorInputsV7.model_validate(doc)
     if version == 6:

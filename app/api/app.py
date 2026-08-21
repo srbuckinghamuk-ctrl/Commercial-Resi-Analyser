@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v7
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v8
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
@@ -402,6 +402,29 @@ def calculate_authoritative(
     was_v1 = not is_v2_or_later(raw)
 
     try:
+        # R11 (Task 10, spec Sec 17.11): the server boundary moved from v7 to
+        # v8. The v8 step adds the VAT block, written `registered: false` --
+        # which drives resolve_vat_treatment to INERT and
+        # chargeable_consideration_pence back to the exclusive price, so like
+        # the v7 step before it, it is intended to leave every migrated
+        # appraisal's computed values unchanged. It also SUBTRACTS two things
+        # exactly once: every package's and every fee line's `vat_override` is
+        # written null (the field arrived with R11; no stored row can
+        # legitimately carry one), and spec Sec 17.8's deleted contingency
+        # `basis` / `package_ids` are dropped, the per-package
+        # `contingency_class` tag surviving as the one mechanism.
+        # tests/test_migrate_v8.py pins the migration's shape and both
+        # refusals, AND the corpus-wide gate: test_v8_migration_moves_no_
+        # existing_figure asserts BOTH numeric identity and the structural
+        # write, because R9 recorded that a numeric-only gate goes provably
+        # blind on a block no engine consumes. Its TS twin is in
+        # golden-fixtures.test.ts.
+        #
+        # This move is deliberately made in ONE commit with BOTH client halves
+        # (ConversionCalculator.tsx, ExportPage.tsx) and with BOTH suites run:
+        # R10 moved this line to v7 while the client still called
+        # migrateInputsToV6, which broke every saved appraisal.
+        #
         # R10 (Task 6): the server boundary moved from v6 to v7. Chain
         # migrations to v7 before validation (v1 -> v2 -> ... -> v6 -> v7; an
         # already-v7 payload is merged onto v7 defaults rather than
@@ -424,15 +447,16 @@ def calculate_authoritative(
         # when that block is absent (spec Sec 2) and falls back to the calc
         # 2.1.0 auto windows when `programme` is None (spec Sec 6). This is
         # also what gets persisted as inputs_snapshot. Like
-        # migrate_inputs_to_v6, migrate_inputs_to_v7 already returns a
+        # migrate_inputs_to_v6, migrate_inputs_to_v8 already returns a
         # validated model -- no separate .model_validate call is needed here.
-        inputs = migrate_inputs_to_v7(raw)
+        inputs = migrate_inputs_to_v8(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # A malformed or unsupported-version inputs_snapshot must 4xx, never
-        # 500 (Task 10 known item #1). migrate_inputs_to_v7 -- like
-        # migrate_inputs_to_v6 and migrate_inputs_to_v5 before it, and the
+        # 500 (Task 10 known item #1). migrate_inputs_to_v8 -- like
+        # migrate_inputs_to_v7, migrate_inputs_to_v6 and
+        # migrate_inputs_to_v5 before it, and the
         # merge helper all three delegate to -- raises plain Python
         # exceptions, not ValidationError, for
         # shapes it cannot interpret: e.g. a document already refused by an
@@ -494,7 +518,11 @@ def calculate_authoritative(
             "client_mismatches": mismatches,
         },
         "calc_version": CALC_VERSION,
-        "inputs_version": 7,
+        # R11 Task 10: moved 7 -> 8 with the migration boundary above. This is
+        # the GOVERNANCE column and it feeds audit_hash (spec Sec 13.2) -- left
+        # at 7 it would record a v7 provenance for a document the same response
+        # returns as v8, which is the split R10 shipped in a different form.
+        "inputs_version": 8,
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
@@ -504,7 +532,7 @@ def calculate_authoritative(
         "audit_hash": audit_hash(
             project_id=str(payload.project_id),
             calc_version=CALC_VERSION,
-            inputs_version=7,
+            inputs_version=8,
             status=status,
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),

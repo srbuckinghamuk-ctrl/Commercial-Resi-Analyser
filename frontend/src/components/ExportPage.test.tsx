@@ -29,7 +29,7 @@ const { default: ExportPage } = await import('./ExportPage');
 const { getAppraisal } = await import('../lib/api');
 const { generateAppraisalPdf } = await import('../lib/export-pdf');
 const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
-const { defaultCalculatorInputsV4, defaultCalculatorInputsV7 } = await import('../lib/conversion-defaults');
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV8 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -123,14 +123,18 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
   //
   // R10 Task 6 fix round 1: the same regression, one version on. The server
   // boundary moved to v7; this test (and its production call sites,
-  // ExportPage.tsx:100 and :127) now exercises migrateInputsToV7 against a
+  // ExportPage.tsx:100 and :127) exercised migrateInputsToV7 against a
   // genuine v7 snapshot rather than v6.
-  it('exports from the v7 snapshot the server now stores, rather than failing on it', async () => {
-    const storedV7 = storedV4Appraisal();
-    storedV7.inputs_snapshot = defaultCalculatorInputsV7({
+  //
+  // R11 Task 10: once more, to v8. The whole point of moving the server and
+  // both client halves in ONE commit is that this test can never be left
+  // pinned a version behind the boundary it guards.
+  it('exports from the v8 snapshot the server now stores, rather than failing on it', async () => {
+    const storedV8 = storedV4Appraisal();
+    storedV8.inputs_snapshot = defaultCalculatorInputsV8({
       id: PROJECT.id, price_pence: PROJECT.price_pence, floor_area_sqm: PROJECT.floor_area_sqm,
     }) as unknown as Record<string, unknown>;
-    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV7);
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV8);
 
     render(<ExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
     selectProject();
@@ -142,6 +146,15 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     ).not.toBeInTheDocument();
 
     const run = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![1];
-    expect(run.inputs.inputs_version).toBe(7);
+    expect(run.inputs.inputs_version).toBe(8);
+    // The block reached the engine, rather than being dropped somewhere on the
+    // way through the export path. Narrowed with `in` rather than cast: `run.inputs`
+    // is the AnyCalculatorInputs union and only the v8 member declares `vat`, so a
+    // cast would assert exactly the thing under test.
+    expect('vat' in run.inputs).toBe(true);
+    if ('vat' in run.inputs) {
+      expect(run.inputs.vat.registered).toBe(false);
+      expect(run.inputs.vat.treatments).toHaveLength(6);
+    }
   });
 });

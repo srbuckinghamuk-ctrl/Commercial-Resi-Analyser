@@ -2,9 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
+  defaultCalculatorInputsV8,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
-import { migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, costPlanFromLegacyCosts } from './model';
+import {
+  migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8,
+  costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
+} from './model';
 import { CLASS_MA_AXES } from './deal-spider';
 
 describe('defaultCalculatorInputs', () => {
@@ -201,5 +205,57 @@ describe('defaultCalculatorInputsV7 (R10 Task 12)', () => {
       expect(f.pct).toBe(0);
       expect(f.per_dwelling).toBe(exp.perDwelling);
     }
+  });
+});
+
+describe('defaultCalculatorInputsV8 (R11 Task 10, spec §17.11)', () => {
+  // Same guard as the V5/V6/V7 blocks above: conversion-defaults.ts cannot
+  // import model/migrate.ts (migrate.ts imports it), so this is what stops the
+  // fresh document and the migrated one drifting apart. §17.11 makes that
+  // drift a specification failure and not just an inconsistency: DEFAULT_VAT
+  // and the migration must write the SAME block.
+  it('is exactly what migrateV7toV8 makes of the v7 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV8>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV8()))
+      .toEqual(stripIds(migrateV7toV8(defaultCalculatorInputsV7())));
+  });
+
+  // The literal block Python's `migrate_inputs_to_v8({})` independently
+  // produces, via CalculatorInputsV8's `DEFAULT_VAT.model_copy(deep=True)`
+  // default_factory -- pinned here the same way the eight fee lines above pin
+  // the v7 re-convergence. tests/test_migrate_v8.py asserts the same figures.
+  it("the default VAT block matches Python's migrate_inputs_to_v8({}) field for field", () => {
+    const vat = defaultCalculatorInputsV8().vat;
+    expect(vat.registered).toBe(false);
+    expect(vat.return_frequency).toBe('quarterly');
+    expect(vat.first_period_end_month).toBe(2);
+    expect(vat.repayment_lag_months).toBe(1);
+    expect(vat.treatments.map((t) => t.category)).toEqual([...VAT_CHARGE_CATEGORIES]);
+    for (const t of vat.treatments) {
+      expect(t.rate_pct).toBe(0);
+      expect(t.recoverable_pct).toBe(0);
+      expect(t.recovery_basis).toBe('unconfirmed');
+      expect(t.evidence_status).toBe('unconfirmed');
+      expect(t.notes).toBe('');
+    }
+    expect(vat.purchase).toEqual({
+      vendor_opted_to_tax: false,
+      togc_treatment: 'unconfirmed',
+      evidence_status: 'unconfirmed',
+      notes: '',
+    });
+  });
+
+  it('hands every caller its own block, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV8();
+    const b = defaultCalculatorInputsV8();
+    a.vat.treatments[0].rate_pct = 20;
+    a.vat.purchase.notes = 'edited';
+    expect(b.vat.treatments[0].rate_pct).toBe(0);
+    expect(b.vat.purchase.notes).toBe('');
   });
 });

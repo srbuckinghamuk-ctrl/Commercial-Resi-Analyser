@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import ConversionCostsPage from './ConversionCostsPage';
 import { runAppraisal } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV7, CostPackage, FeeLine } from '../../lib/model';
-import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV8, CostPackage, FeeLine } from '../../lib/model';
+import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 
@@ -15,8 +15,8 @@ import type { ProposedUnitV6 } from '../../lib/conversion-types';
  * 40, retained 100 -> developed 520) so the bridge-derived figure asserted
  * here (520) is the same one that suite already pins.
  */
-function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV7 {
-  const inputs = defaultCalculatorInputsV7();
+function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV8 {
+  const inputs = defaultCalculatorInputsV8();
   return {
     ...inputs,
     areas: {
@@ -83,7 +83,7 @@ describe('ConversionCostsPage — construction area basis selector', () => {
 // so a component that recomputed the contingency amount itself, instead of
 // reading the run, would render something else (or throw).
 function runWithContingencyAmount(amountPence: number): AppraisalRun {
-  const inputs = defaultCalculatorInputsV7();
+  const inputs = defaultCalculatorInputsV8();
   const run = runAppraisal(inputs);
   return {
     ...run,
@@ -112,8 +112,8 @@ function runWithContingencyAmount(amountPence: number): AppraisalRun {
 // value, so a label that happened to equal the code's human name would make
 // this test ambiguous for a reason that has nothing to do with what it is
 // checking.
-function detailedInputs(): CalculatorInputsV7 {
-  const base = defaultCalculatorInputsV7();
+function detailedInputs(): CalculatorInputsV8 {
+  const base = defaultCalculatorInputsV8();
   return {
     ...base,
     finance: { ...base.finance, funding_source: 'cash', term_months: 12 },
@@ -147,7 +147,7 @@ function detailedInputs(): CalculatorInputsV7 {
 
 describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan, never recomputes them', () => {
   it('renders the contingency amount from the run, not from its own arithmetic', () => {
-    const inputs = defaultCalculatorInputsV7();
+    const inputs = defaultCalculatorInputsV8();
     const run = runWithContingencyAmount(12_345_678);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
     expect(screen.getByText(/123,456\.78/)).toBeInTheDocument();
@@ -170,7 +170,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
     expect(screen.getByDisplayValue('Structure')).toBeInTheDocument();
     // And the negative half — without it, a grid rendered unconditionally passes.
     cleanup();
-    const headline: CalculatorInputsV7 = {
+    const headline: CalculatorInputsV8 = {
       ...inputs,
       cost_plan: { ...inputs.cost_plan, mode: 'headline' as const, packages: [] },
     };
@@ -211,8 +211,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   // duplicated -- and that it happens through the SAME onChange every other
   // edit on this page uses, not a second code path.
   it('offers to convert compliance allowances into a package when switching to detailed mode', () => {
-    const base = defaultCalculatorInputsV7();
-    const inputs: CalculatorInputsV7 = {
+    const base = defaultCalculatorInputsV8();
+    const inputs: CalculatorInputsV8 = {
       ...base,
       conversion_costs: {
         ...base.conversion_costs,
@@ -244,7 +244,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('switches mode without prompting when there is no compliance to convert', () => {
-    const inputs = defaultCalculatorInputsV7(); // compliance fields are 0 by default
+    const inputs = defaultCalculatorInputsV8(); // compliance fields are 0 by default
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     const confirmSpy = vi.spyOn(window, 'confirm');
@@ -258,8 +258,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('leaves the compliance fields untouched when the user declines the conversion', () => {
-    const base = defaultCalculatorInputsV7();
-    const inputs: CalculatorInputsV7 = {
+    const base = defaultCalculatorInputsV8();
+    const inputs: CalculatorInputsV8 = {
       ...base,
       conversion_costs: { ...base.conversion_costs, fire_safety_pence: 200_000 },
     };
@@ -307,7 +307,7 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 
   it('allows switching back to headline once every package is zeroed', () => {
     const inputs = detailedInputs();
-    const zeroed: CalculatorInputsV7 = {
+    const zeroed: CalculatorInputsV8 = {
       ...inputs,
       cost_plan: {
         ...inputs.cost_plan,
@@ -332,8 +332,8 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 // construction_total 4,400,000 (no compliance, no other fee lines) are
 // pinned literals so the resolved-base assertions below are falsifiable,
 // not just "some text appeared".
-function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV7 {
-  const base = defaultCalculatorInputsV7();
+function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV8 {
+  const base = defaultCalculatorInputsV8();
   return {
     ...base,
     areas: { ...base.areas, basis: 'manual' },
@@ -479,8 +479,8 @@ function unit(id: string): ProposedUnitV6 {
 
 describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (multiplied) amount (I3, fix round 1)', () => {
   it('shows the resolved amount, not the per-dwelling figure typed in', () => {
-    const base = defaultCalculatorInputsV7();
-    const inputs: CalculatorInputsV7 = {
+    const base = defaultCalculatorInputsV8();
+    const inputs: CalculatorInputsV8 = {
       ...base,
       unit_mix: { units: ['u1', 'u2', 'u3'].map(unit) },
       cost_plan: {

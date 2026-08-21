@@ -12,8 +12,11 @@
  * Test-support only; not imported by the application.
  */
 import type { Project, EligibilityAssessment } from '../../types';
-import type { CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, CalculatorInputsV7, AcquisitionInputsV5 } from '../model';
-import { migrateV5toV6, migrateV6toV7 } from '../model';
+import type {
+  CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, CalculatorInputsV7,
+  CalculatorInputsV8, AcquisitionInputsV5,
+} from '../model';
+import { migrateV5toV6, migrateV6toV7, migrateV7toV8 } from '../model';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -445,9 +448,17 @@ export function legacyV1Snapshot(): Record<string, unknown> {
  * detailed mode prices compliance inside a package, and a non-zero flat
  * figure alongside is a hard validation error (spec §3.2.1).
  */
-export function detailedCostPlanInputs(): CalculatorInputsV7 {
-  const v7 = migrateV6toV7(v6AcquisitionInputs());
-  return {
+export function detailedCostPlanInputs(): CalculatorInputsV8 {
+  const v7: CalculatorInputsV7 = migrateV6toV7(v6AcquisitionInputs());
+  // R11 Task 10 (spec §17.11): the third bridging wrapper, in the same
+  // style as migrateV5toV6 above -- the fixture set is MIGRATED to the
+  // current version rather than cast to it, so it carries the same VAT
+  // block a stored document gets. Its failure mode is loud by
+  // construction: migrateV7toV8 refuses an already-v8 document ("input is
+  // already a v8 document"), so the day this file is widened to build v8
+  // documents directly, this call throws at setup rather than silently
+  // migrating a shape nobody checked.
+  return migrateV7toV8({
     ...v7,
     conversion_costs: {
       ...v7.conversion_costs,
@@ -482,5 +493,5 @@ export function detailedCostPlanInputs(): CalculatorInputsV7 {
         return f;
       }),
     },
-  };
+  });
 }

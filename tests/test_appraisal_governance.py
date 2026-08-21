@@ -164,8 +164,11 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert body["status"] == "legacy_unreconciled"
     assert body["calc_version"] == "2.9.0"
     # R8 Task 10: the server normalisation chain now runs v1 -> v2 -> v3 -> v4
-    # -> v5. R9 Task 3 extends it to v6. R10 Task 6 extends it to v7.
-    assert body["inputs_snapshot"]["inputs_version"] == 7
+    # -> v5. R9 Task 3 extends it to v6. R10 Task 6 extends it to v7. R11
+    # Task 10 extends it to v8 (spec Sec 17.11), adding the inert VAT block.
+    assert body["inputs_snapshot"]["inputs_version"] == 8
+    assert body["inputs_snapshot"]["vat"]["registered"] is False
+    assert len(body["inputs_snapshot"]["vat"]["treatments"]) == 6
     assert body["inputs_snapshot"]["lender_valuation"] is None
     assert body["inputs_snapshot"]["programme"] is None
     assert body["inputs_snapshot"]["sales_phasing"] is None
@@ -208,7 +211,7 @@ async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, 
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 7
+    assert snapshot["inputs_version"] == 8
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
     # A v5 row is not a legacy v1 migration -- it must not be stamped as one.

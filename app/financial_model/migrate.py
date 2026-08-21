@@ -21,12 +21,14 @@ from .legacy_costs import (
 )
 from .schedule import calculate_total_acquisition_cost
 from .types import (
+    DEFAULT_VAT,
     AcquisitionInputs,
     CalculatorInputsV2,
     CalculatorInputsV4,
     CalculatorInputsV5,
     CalculatorInputsV6,
     CalculatorInputsV7,
+    CalculatorInputsV8,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -311,9 +313,13 @@ def is_v6(snapshot: dict[str, Any]) -> bool:
 
 
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
+    # R11: is_v8 belongs here for the same reason is_v7 did -- the server
+    # boundary now migrates to v8, and a v8 raw payload that fell through this
+    # check would be tagged `legacy_unreconciled` (app.py's `was_v1`).
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
+        or is_v8(snapshot)
     )
 
 
@@ -1015,3 +1021,168 @@ def migrate_inputs_to_v7(
             "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
         })
     return migrate_v6_to_v7(migrate_inputs_to_v6(snapshot, project))
+
+
+# --- Release 11 (calc 2.9.0 -> next): VAT and TOGC (spec Sec 17.11) ---------
+
+
+def is_v8(snapshot: dict[str, Any]) -> bool:
+    """A v8 document has the same finance shape as v2-v7, discriminated by
+    inputs_version == 8. Port of isV8.
+
+    Gates on the CONTAINER, never on the presence of a ``vat`` block.
+    ``revalidate_instances='never'`` lets a CalculatorInputsV7 hold a v8
+    sub-block, so "has a vat key" would answer a different question from "is a
+    v8 document" and the two engines would disagree about the same row.
+    """
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 8
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
+def _v8_cost_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """The cost-plan half of the v7 -> v8 write. Port of the `cost_plan` block
+    inside migrateV7toV8.
+
+    Only keys the stored plan actually has are rewritten: a plan missing
+    ``contingency`` entirely must stay missing so CalculatorInputsV8's own
+    defaults fill it, rather than being pinned to an empty list here (that is
+    the zero-contingency failure R10 found on the merge path, reproduced one
+    layer down).
+    """
+    out = dict(plan or {})
+    if out.get("packages") is not None:
+        # `vat_override: None` is the migration's ASSERTION, not a preserved
+        # value: the field arrived with R11 and no stored row can legitimately
+        # carry one.
+        out["packages"] = [{**p, "vat_override": None} for p in out["packages"]]
+    if out.get("fee_lines") is not None:
+        out["fee_lines"] = [{**f, "vat_override": None} for f in out["fee_lines"]]
+    if out.get("contingency") is not None:
+        # Rebuilt from the two surviving fields rather than spread, which is
+        # what actually DROPS spec Sec 17.8's deleted `basis` / `package_ids`
+        # off a stored R10 row. The `contingency_class` TAG on each package is
+        # the surviving mechanism and is retained untouched above.
+        out["contingency"] = [
+            {k: v for k, v in row.items() if k in ("name", "pct")}
+            for row in out["contingency"]
+        ]
+    return out
+
+
+def migrate_v7_to_v8(v7: dict[str, Any] | CalculatorInputsV7) -> CalculatorInputsV8:
+    """Upgrades a v7 document to v8 by stamping ``inputs_version: 8`` and adding
+    the VAT block. Port of migrateV7toV8 (spec Sec 17.11).
+
+    Purely additive by construction: the block is written ``registered: False``,
+    which drives ``resolve_vat_treatment`` to INERT and
+    ``chargeable_consideration_pence`` back to the exclusive price -- so no
+    migrated appraisal's computed values move. It is the SAME block ``DEFAULT_VAT``
+    gives a brand-new document, so the two engines' v-defaults re-converge
+    (conversion-defaults.ts:365) one version on.
+
+    Two things are also SUBTRACTED, and only here -- see ``_v8_cost_plan``.
+
+    Input is accepted as either a plain dict or an already-validated Pydantic
+    model, exactly as migrate_v6_to_v7 accepts both.
+
+    Precondition: `v7` must not already be a v8 document -- this guards against
+    double-migration (idempotence), same as migrate_v6_to_v7.
+    """
+    if isinstance(v7, CalculatorInputsV8):
+        raise ValueError("migrate_v7_to_v8: input is already a v8 document")
+    if isinstance(v7, BaseModel):
+        doc = v7.model_dump(mode="json")
+    else:
+        if is_v8(v7):
+            raise ValueError("migrate_v7_to_v8: input is already a v8 document")
+        doc = dict(v7)
+
+    doc["cost_plan"] = _v8_cost_plan(doc.get("cost_plan"))
+    # Mirrors migrate_v6_to_v7's `existing_plan`: a block already on the
+    # document is kept rather than overwritten, so a mistagged row does not
+    # lose data here.
+    existing_vat = doc.get("vat")
+    doc["vat"] = (
+        existing_vat
+        if existing_vat is not None
+        else DEFAULT_VAT.model_dump(mode="json")
+    )
+    doc["inputs_version"] = 8
+    return CalculatorInputsV8.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V8 = (1, 2, 3, 4, 5, 6, 7, 8)
+
+
+def migrate_inputs_to_v8(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV8:
+    """Normalises any stored snapshot (v1-v8) to v8. Port of migrateInputsToV8,
+    and structurally identical to migrate_inputs_to_v7 above: an already-v8
+    document is merged field-by-field onto v8 defaults so a field added to the
+    schema after the row was saved is default-filled rather than raising at this
+    boundary or under-filling; anything older routes through the existing chain.
+
+    The two refusals below are R8's hardest-won guard, carried forward. R8
+    shipped ``migrate_inputs_to_v4`` without a v5 guard; a v5 document satisfied
+    none of the is_vN checks, fell all the way through to ``migrate_inputs``'s
+    v1 fallback, and was silently corrupted -- fields dropped, a *confirmed*
+    equity source replaced by an unconfirmed stub with a different amount, the
+    facility rebuilt from ``ltv_pct`` -- while the API returned 201. An
+    unrecognised version must fail loudly.
+
+    The version predicate is MEMBERSHIP OF THE DECLARED TUPLE, deliberately.
+    R10 found a predicate loosened from ``== 6`` to ``!= 5`` -- the literal
+    negation of the set's own definition -- so it could never fail;
+    tests/test_migrate_v8.py tests this one with a document tagged 9, the
+    neighbour that catches that shape.
+
+    As in migrate_inputs_to_v7, a document declaring ``inputs_version``
+    2/3/4/5/6/7 that fails ITS OWN structural check is deliberately NOT refused:
+    that stays the existing, tested, permissive v1-fallback behaviour. Only an
+    entirely unplaceable version number, or a version-8 tag that is not
+    structurally v8, is refused here.
+    """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V8:
+        raise ValueError(
+            f"migrate_inputs_to_v8: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V8}, or absent for a v1 document)"
+        )
+    if version == 8 and not is_v8(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v8: inputs_version is 8 but the document fails "
+            "the v8 structural check (finance is not a dict, or is missing "
+            "committed_net_facility_pence) -- refusing to silently reinterpret "
+            "it via the v1 fallback path"
+        )
+    if is_v8(snapshot):
+        defaults = migrate_v7_to_v8(
+            migrate_v6_to_v7(
+                migrate_v5_to_v6(
+                    migrate_v4_to_v5(
+                        migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                    ),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV8.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 8,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            # R10 found the cost_plan line above was a merge nobody had ever
+            # deleted to check; without it a stored row computed zero
+            # contingency. This one is the same shape and carries the same risk:
+            # VatInputs.treatments defaults to an EMPTY list, so without this
+            # line a saved `registered: true` row missing (or partially
+            # carrying) its treatments would come back registered and price no
+            # VAT at all. tests/test_migrate_v8.py::test_v8_merge_branch_deep_
+            # merges_a_saved_vat_block_onto_defaults is the deletion check.
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+        })
+    return migrate_v7_to_v8(migrate_inputs_to_v7(snapshot, project))

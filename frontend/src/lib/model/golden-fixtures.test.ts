@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import { migrateInputsToV5, migrateInputsToV6, migrateInputsToV7 } from './migrate';
+import {
+  migrateInputsToV5, migrateInputsToV6, migrateInputsToV7, migrateInputsToV8,
+} from './migrate';
 import { costPlanFromLegacyCosts } from './cost-plan';
+import { VAT_CHARGE_CATEGORIES } from './vat';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -665,6 +668,62 @@ describe('golden fixtures (shared with the Python engine)', () => {
         expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs));
       }
 
+      expect(after.metrics).toEqual(before.metrics);
+      expect(after.model).toEqual(before.model);
+      expect(after.schedule).toEqual(before.schedule);
+    },
+  );
+
+  // R11 Task 10 (spec §17.11) — the same acceptance gate one version further on,
+  // mirrored in tests/test_migrate_v8.py::test_v8_migration_moves_no_existing_figure.
+  //
+  // R9 recorded that a gate of this shape can be PROVABLY BLIND: where the
+  // migration synthesises a block no engine consumes, "the figures did not
+  // move" is guaranteed by construction and the gate cannot fail. Here the
+  // numeric half IS meaningful — the VAT engine is live and reads
+  // `vat.registered`, so a migration writing `registered: true` would move
+  // every fixture. But the numeric half alone still cannot tell a block written
+  // CORRECTLY from one written merely harmlessly, so the structural half below
+  // asserts what §17.11 actually specifies: six rows in declared order at zero,
+  // every override null, and the two deleted contingency fields gone.
+  it.each(appraisalFixtures.map((f) => f.name))(
+    'migrating %s to v8 moves no computed figure, and writes the specified block',
+    (name) => {
+      const fx = appraisalFixtures.find((f) => f.name === name)!;
+      const before = runAppraisal(fx.inputs);
+      const migrated = migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>);
+      const after = runAppraisal(migrated);
+
+      expect(migrated.inputs_version).toBe(8);
+
+      // Structural half — §17.11's write, asserted directly.
+      expect(migrated.vat.registered).toBe(false);
+      expect(migrated.vat.treatments.map((t) => t.category)).toEqual([...VAT_CHARGE_CATEGORIES]);
+      expect(migrated.vat.treatments).toHaveLength(6);
+      for (const t of migrated.vat.treatments) {
+        expect(t.rate_pct).toBe(0);
+        expect(t.recoverable_pct).toBe(0);
+        expect(t.recovery_basis).toBe('unconfirmed');
+        expect(t.evidence_status).toBe('unconfirmed');
+      }
+      expect(migrated.vat.purchase.vendor_opted_to_tax).toBe(false);
+      expect(migrated.vat.purchase.togc_treatment).toBe('unconfirmed');
+      for (const p of migrated.cost_plan.packages) expect(p.vat_override).toBeNull();
+      for (const f of migrated.cost_plan.fee_lines) expect(f.vat_override).toBeNull();
+      for (const c of migrated.cost_plan.contingency) {
+        expect('basis' in c).toBe(false);
+        expect('package_ids' in c).toBe(false);
+      }
+      // Fixture Q is already v7 and carries a real package schedule; the merge
+      // branch must bring it through untouched apart from the two subtractions
+      // above, exactly as the v7 gate asserts for `cost_plan` as a whole.
+      if (versionOf(fx) === 7) {
+        const savedPlan = (fx.inputs as unknown as { cost_plan: { packages: unknown[] } }).cost_plan;
+        expect(migrated.cost_plan.packages).toHaveLength(savedPlan.packages.length);
+        expect(migrated.cost_plan.mode).toBe('detailed');
+      }
+
+      // Numeric half.
       expect(after.metrics).toEqual(before.metrics);
       expect(after.model).toEqual(before.model);
       expect(after.schedule).toEqual(before.schedule);

@@ -100,6 +100,22 @@ export const DEFAULT_VAT: VatInputs = {
   },
 };
 
+/** A fresh, independently mutable copy of `DEFAULT_VAT`. `DEFAULT_VAT` is a
+ *  module const: handing it out directly would alias one `treatments` array and
+ *  one `purchase` object into every new and every migrated document, so editing
+ *  one appraisal's VAT block would edit them all. The v8 defaults factory and
+ *  `migrateV7toV8` both go through here, which is what makes §17.11's claim
+ *  that the two write the SAME block a single construction rather than two
+ *  literals that could drift. Twin of Python's
+ *  `DEFAULT_VAT.model_copy(deep=True)` default_factory on CalculatorInputsV8. */
+export function defaultVatInputs(): VatInputs {
+  return {
+    ...DEFAULT_VAT,
+    treatments: defaultVatTreatments(),
+    purchase: { ...DEFAULT_VAT.purchase },
+  };
+}
+
 export interface VatCharge {
   category: VatChargeCategory;
   override: VatOverride | null;
