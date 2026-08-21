@@ -11,9 +11,9 @@ import {
 import { defaultCalculatorInputsV2 } from './conversion-defaults';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
-import { migrateInputsToV5 } from './model';
+import { migrateInputsToV5, migrateInputsToV8 } from './model';
 import { calculateAcquisitionTax, asChargeableConsideration } from './tax/acquisition-tax';
-import type { CalculatorInputsV2 } from './model';
+import type { CalculatorInputsV2, CalculatorInputsV8, EvidenceStatus } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
 
 // ── Fixtures ─────────────────────────────────────────────
@@ -28,6 +28,38 @@ function fixtureInputs(): CalculatorInputsV2 {
   ];
   inputs.conversion_costs.total_construction_sqm = 160;
   return inputs;
+}
+
+// Task 13 (spec §17.10). `fixtureInputs()` migrated to v8 with the `vat`
+// block overridden so the tax-advantage axis's VAT component can be driven
+// deliberately. Only the `construction` category is touched — the other five
+// stay at the inert default (rate 0) — because that is the one line every
+// test below cares about isolating.
+function vatDocument(opts: {
+  registered?: boolean;
+  constructionRatePct?: number;
+  recoverablePct?: number;
+  evidenceStatus?: EvidenceStatus;
+} = {}): CalculatorInputsV8 {
+  const doc = migrateInputsToV8(fixtureInputs() as unknown as Record<string, unknown>);
+  return {
+    ...doc,
+    vat: {
+      ...doc.vat,
+      registered: opts.registered ?? true,
+      treatments: doc.vat.treatments.map((t) =>
+        t.category === 'construction'
+          ? {
+              ...t,
+              rate_pct: opts.constructionRatePct ?? 5,
+              recoverable_pct: opts.recoverablePct ?? 100,
+              recovery_basis: 'partial_exemption',
+              evidence_status: opts.evidenceStatus ?? 'confirmed',
+            }
+          : t,
+      ),
+    },
+  };
 }
 
 function criterion(partial: Partial<EligibilityCriterion> & { key: string }): EligibilityCriterion {
@@ -237,10 +269,11 @@ describe('building safety axis', () => {
 });
 
 describe('tax advantage axis', () => {
-  it('captures SDLT saving + VAT saving + CIL offset as % of GDV', () => {
+  it('captures SDLT saving + CIL offset as % of GDV when VAT is not registered (inert, so its component is a true zero — nothing here is re-derived, it is what an inert engine structurally returns)', () => {
     const inputs = fixtureInputs();
     inputs.deal_spider.cil_offset_pence = 1_000_000;
     const metrics = runAppraisal(inputs).metrics;
+    expect(metrics.vat.registered).toBe(false); // the premise the 0 below rests on
     const resSdlt = calculateAcquisitionTax({
       consideration_pence: asChargeableConsideration(inputs.acquisition.purchase_price_pence),
       jurisdiction: 'england_ni', basis: 'residential_higher', date: null,
@@ -249,19 +282,53 @@ describe('tax advantage axis', () => {
       consideration_pence: asChargeableConsideration(inputs.acquisition.purchase_price_pence),
       jurisdiction: 'england_ni', basis: 'non_residential', date: null,
     }).total_pence;
-    const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
-    const expected =
-      ((resSdlt - commSdlt + vatSaving + 1_000_000) / metrics.gdv_pence) * 100;
+    const expected = ((resSdlt - commSdlt + 0 + 1_000_000) / metrics.gdv_pence) * 100;
     expect(axisResult(inputs, 'tax_advantage').raw).toBeCloseTo(expected, 3);
   });
 
-  // Spec §11.10: the 15% construction-VAT saving folded into this axis must
-  // never be presented as anything other than an unconfirmed illustration.
-  it('is flagged illustrative with an UNCONFIRMED VAT caveat in its help text', () => {
+  // Task 13 (spec §17.10). Replaces the hard-coded `construction_cost_pence *
+  // 0.15` guess with the modelled figure. Both documents below have identical
+  // construction cost; only the VAT treatment differs, so under the OLD
+  // literal these two axes were identical. NOTE the access path: SpiderResult
+  // has no `tax_advantage_pct` — the axis lives in `SpiderResult.axes[]` with
+  // `id: 'tax_advantage'`, and the figure is `.raw` (verified against
+  // deal-spider.ts before being written here). The expectation is a
+  // DIRECTION (greater-than), not a recomputed number: R9 recorded that a test
+  // reproducing the same arithmetic as the code agrees with a bug forever.
+  it("takes its VAT component from the model, not from a 15% assumption", () => {
+    const axis = (r: ReturnType<typeof computeSpider>) =>
+      r.axes.find((a) => a.id === 'tax_advantage')!.raw;
+    const recoverable = computeSpider(
+      vatDocument({ registered: true, constructionRatePct: 5, recoverablePct: 100 }), ALL_PASS,
+    );
+    const blocked = computeSpider(
+      vatDocument({ registered: true, constructionRatePct: 5, recoverablePct: 0 }), ALL_PASS,
+    );
+    expect(axis(recoverable)).not.toBe(axis(blocked));
+    expect(axis(recoverable)).toBeGreaterThan(axis(blocked));
+  });
+
+  it('moves when only the VAT treatment changes, holding construction cost and SDLT fixed', () => {
+    const inert = computeSpider(vatDocument({ registered: false }), ALL_PASS);
+    const registered = computeSpider(
+      vatDocument({ registered: true, constructionRatePct: 5, recoverablePct: 100 }), ALL_PASS,
+    );
+    const inertAxis = inert.axes.find((a) => a.id === 'tax_advantage')!;
+    const registeredAxis = registered.axes.find((a) => a.id === 'tax_advantage')!;
+    expect(registeredAxis.raw).toBeGreaterThan(inertAxis.raw);
+  });
+
+  // Judgement call 1 (task-13 brief / spec §17.10): `illustrative` stays true.
+  // The VAT component is no longer a guess, but the axis still folds an SDLT
+  // counterfactual and a CIL offset into one number that no lender metric
+  // uses — see the `illustrative` doc comment on CLASS_MA_AXES's tax_advantage
+  // entry in spider-axes.ts for the full reasoning.
+  it('is flagged illustrative and its help text no longer claims a 15% assumption', () => {
     const def = CLASS_MA_AXES.find((d) => d.id === 'tax_advantage')!;
     expect(def.illustrative).toBe(true);
-    expect(def.help).toContain('UNCONFIRMED');
     expect(def.help).toContain('excluded from the appraisal and all lender metrics');
+    expect(def.help).not.toContain('15%');
+    expect(def.help).not.toContain('illustrative 15%');
   });
 
   it('no other axis is marked illustrative', () => {
@@ -269,6 +336,44 @@ describe('tax advantage axis', () => {
     for (const def of others) {
       expect(def.illustrative).toBeFalsy();
     }
+  });
+
+  // Judgement call 2: the UNCONFIRMED caveat is now evidence-driven — it
+  // reuses `vatBasisGate` (model/vat.ts), the same judgement the §17.10 draft
+  // gate makes, rather than a second hand-rolled rule.
+  describe('the UNCONFIRMED VAT caveat is evidence-driven', () => {
+    it('is present when the VAT evidence is unconfirmed on a category that actually charges VAT', () => {
+      const inputs = vatDocument({
+        registered: true, constructionRatePct: 5, recoverablePct: 100, evidenceStatus: 'unconfirmed',
+      });
+      const result = computeSpider(inputs, ALL_PASS);
+      const axis = result.axes.find((a) => a.id === 'tax_advantage')!;
+      expect(axis.provisional).toBe(true);
+      expect(axis.note).toContain('UNCONFIRMED');
+      expect(result.caveats.some((c) => c.includes('UNCONFIRMED'))).toBe(true);
+    });
+
+    it('is absent when the VAT evidence is confirmed', () => {
+      const inputs = vatDocument({
+        registered: true, constructionRatePct: 5, recoverablePct: 100, evidenceStatus: 'confirmed',
+      });
+      const result = computeSpider(inputs, ALL_PASS);
+      const axis = result.axes.find((a) => a.id === 'tax_advantage')!;
+      expect(axis.provisional).toBe(false);
+      expect(axis.note).toBeNull();
+      expect(result.caveats.some((c) => c.includes('UNCONFIRMED'))).toBe(false);
+    });
+  });
+
+  // Judgement call 3: an unregistered document is inert, so the modelled VAT
+  // saving is genuinely 0 — but that must read as "not modelled", never as a
+  // silently discovered "no tax advantage". A distinct note carries that.
+  it('marks the VAT component "not modelled" rather than a silent zero when the document is not VAT-registered', () => {
+    const inputs = vatDocument({ registered: false });
+    const result = computeSpider(inputs, ALL_PASS);
+    const axis = result.axes.find((a) => a.id === 'tax_advantage')!;
+    expect(axis.note).toMatch(/not modelled/i);
+    expect(axis.note).not.toContain('UNCONFIRMED'); // distinct from the evidence caveat
   });
 });
 

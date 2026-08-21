@@ -76,7 +76,21 @@ export const CLASS_MA_AXES: SpiderAxisDef[] = [
     max: 6,
     direction: 'higher',
     unit: '% GDV',
-    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + an illustrative 15% VAT saving on construction (5% conversion rate vs 20%) + CIL existing-floorspace offset. Illustrative only: assumes 15% of construction cost as potential reduced-rate VAT saving. UNCONFIRMED — obtain specific tax advice; excluded from the appraisal and all lender metrics. Normalised 0–6% of GDV to 0–5.',
+    // Task 13 (spec §17.10). The VAT component used to be a flat
+    // `construction_cost_pence * 0.15` guess; it is now the VAT actually
+    // saved against a standard-rated (20%) counterfactual, net of
+    // irrecoverable VAT and the VAT carry's own finance cost — the same VAT
+    // model reported everywhere else in the document, not a second figure
+    // that could disagree with it. It is 0, not a confirmed zero advantage,
+    // wherever the document is not VAT-registered (computeSpider's
+    // per-run `note` on this axis says so explicitly).
+    //
+    // `illustrative` stays true (judgement call, task-13 brief): the VAT
+    // figure is no longer a guess, but this axis still adds an SDLT
+    // counterfactual and a manually-entered CIL offset into ONE number that
+    // no lender metric reads anywhere else — that combination, not the VAT
+    // term alone, is what keeps the whole axis out of the appraisal.
+    help: 'Tax captured by the commercial-to-resi route as % of GDV: (residential SDLT incl. 5% surcharge − non-residential SDLT actually paid) + the VAT this deal\'s own modelled treatment saves against a standard-rated (20%) counterfactual, net of irrecoverable VAT and VAT carry interest + CIL existing-floorspace offset. Zero, not a confirmed zero tax advantage, wherever the document is not VAT-registered. Illustrative only: folds an SDLT counterfactual and a manual CIL offset into one number no lender metric uses, so it stays excluded from the appraisal and all lender metrics. A caveat appears alongside this axis whenever the VAT evidence itself is UNCONFIRMED for a charged category or the purchase treatment. Normalised 0–6% of GDV to 0–5.',
     illustrative: true,
   },
   {

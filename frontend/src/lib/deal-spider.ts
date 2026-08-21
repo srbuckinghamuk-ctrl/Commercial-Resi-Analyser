@@ -1,7 +1,7 @@
 import type { ProposedUnit, UnitType, DealSpiderInputs, AcquisitionInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
-import { chargeableConsiderationPence } from './model/vat';
+import { chargeableConsiderationPence, vatBasisGate } from './model/vat';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
@@ -210,13 +210,47 @@ export function computeSpider(
     consideration_pence: consideration, jurisdiction,
     basis: 'non_residential', date: commercialDate,
   }).total_pence;
-  const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
+  // Task 13 (spec §17.10). The hard-coded `construction_cost_pence * 0.15`
+  // guess is replaced by the modelled figure: the VAT actually saved against a
+  // standard-rated (UK 20%) counterfactual, less irrecoverable VAT and the VAT
+  // carry's own finance cost. Every term is read off the RESULT
+  // (`metrics.vat.charges[].net_base_pence`/`.vat_pence`, both already
+  // resolved by `computeVat`, plus `metrics.irrecoverable_vat_pence` and
+  // `metrics.vat_carry_interest_pence`) — none of `resolveVatTreatment`'s own
+  // rate/recoverable/rounding logic is re-derived here. R9 recorded three
+  // self-referential tests that recomputed the engine's own arithmetic and
+  // would have agreed with a bug in it forever; this keeps that door shut by
+  // construction, not by discipline.
+  //
+  // An unregistered (inert) document has `charges: []` and both metrics
+  // figures at 0 (vat.ts's `inertVat()`), so this resolves to exactly 0 — the
+  // true state ("VAT not modelled"), not a discovered "no tax advantage". The
+  // distinction is surfaced below via `taxAdvantageNote`, not silently dropped.
+  const STANDARD_VAT_RATE_PCT = 20;
+  const grossVatSavedVsStandardRate = metrics.vat.charges.reduce(
+    (sum, c) => sum + (Math.round((c.net_base_pence * STANDARD_VAT_RATE_PCT) / 100) - c.vat_pence),
+    0,
+  );
+  const vatSaving =
+    grossVatSavedVsStandardRate - metrics.irrecoverable_vat_pence - metrics.vat_carry_interest_pence;
   const taxAdvantagePct =
     metrics.gdv_pence > 0
       ? ((residentialSdlt - commercialSdlt + vatSaving + spider.cil_offset_pence) /
           metrics.gdv_pence) *
         100
       : 0;
+
+  // Judgement calls 2 and 3 (task-13 brief, spec §17.10): the UNCONFIRMED
+  // caveat becomes evidence-driven (reusing `vatBasisGate` — the same
+  // judgement the §17.10 draft gate makes, not a second hand-rolled rule),
+  // and an unregistered document gets its own distinct note so its 0 reads as
+  // "not modelled" rather than a silently discovered "no tax advantage".
+  const taxAdvantageNote: string | null = !metrics.vat.registered
+    ? 'VAT saving not modelled: this document is not VAT-registered, so the figure above reflects SDLT and CIL only — it is not a confirmed zero tax advantage.'
+    : !vatBasisGate(metrics.vat).vatBasisConfirmed
+      ? 'VAT evidence UNCONFIRMED for at least one charged category or the purchase treatment — obtain specific tax advice before relying on the VAT component of this figure.'
+      : null;
+  const taxAdvantageProvisional = taxAdvantageNote !== null;
 
   // Acquisition headroom against max bid (RLV at the configured target return).
   // The PRICE here, not the chargeable consideration: this is what the buyer
@@ -253,8 +287,14 @@ export function computeSpider(
     const raw = raws[def.id];
     const score = normaliseAxis(def, raw);
     const weight = spider.weights[def.id] ?? 1;
-    const provisional = def.id === 'prior_approval' ? priorApproval.provisional : false;
-    const note = def.id === 'prior_approval' ? priorApproval.note : null;
+    const provisional =
+      def.id === 'prior_approval' ? priorApproval.provisional
+      : def.id === 'tax_advantage' ? taxAdvantageProvisional
+      : false;
+    const note =
+      def.id === 'prior_approval' ? priorApproval.note
+      : def.id === 'tax_advantage' ? taxAdvantageNote
+      : null;
     if (provisional && note) caveats.push(`${def.short}: ${note}`);
     return {
       id: def.id,
