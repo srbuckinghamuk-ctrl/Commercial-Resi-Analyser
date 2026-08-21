@@ -12,6 +12,7 @@ from app.financial_model.vat import (
     default_vat_treatments,
     is_purchase_vat_chargeable,
     resolve_vat_treatment,
+    vat_return_periods,
 )
 
 
@@ -107,3 +108,63 @@ def test_ships_inert_not_registered_every_rate_and_recovery_zero_every_status_un
         assert t.evidence_status == "unconfirmed"
     assert DEFAULT_VAT.purchase.vendor_opted_to_tax is False
     assert DEFAULT_VAT.purchase.togc_treatment == "unconfirmed"
+
+
+def _quarterly():
+    return DEFAULT_VAT.model_copy(update={
+        "registered": True,
+        "return_frequency": "quarterly",
+        "first_period_end_month": 2,
+        "repayment_lag_months": 1,
+    })
+
+
+def test_covers_the_term_with_contiguous_periods_starting_at_month_0():
+    ps = vat_return_periods(_quarterly(), 12)
+    assert ps[0].first_month == 0
+    for i in range(1, len(ps)):
+        assert ps[i].first_month == ps[i - 1].last_month + 1
+    assert ps[-1].last_month >= 11
+
+
+def test_ends_the_first_period_at_first_period_end_month_and_quarters_thereafter():
+    ps = vat_return_periods(_quarterly(), 12)
+    assert (ps[0].first_month, ps[0].last_month, ps[0].reclaim_month) == (0, 2, 3)
+    assert (ps[1].first_month, ps[1].last_month, ps[1].reclaim_month) == (3, 5, 6)
+    assert (ps[2].first_month, ps[2].last_month, ps[2].reclaim_month) == (6, 8, 9)
+
+
+def test_reports_a_reclaim_falling_beyond_the_final_month_as_null_never_clamped():
+    # Term 12 => final month index 11. The period ending month 11 reclaims in
+    # month 12, which does not exist. Clamping it into month 11 would
+    # manufacture a receipt the borrower has not had (Sec 17.4).
+    ps = vat_return_periods(_quarterly(), 12)
+    last = ps[-1]
+    assert last.last_month == 11
+    assert last.reclaim_month is None
+
+
+def test_gives_monthly_registration_one_period_per_month():
+    monthly = _quarterly().model_copy(update={
+        "return_frequency": "monthly", "first_period_end_month": 0,
+    })
+    ps = vat_return_periods(monthly, 4)
+    assert [(p.first_month, p.last_month, p.reclaim_month) for p in ps] == [
+        (0, 0, 1), (1, 1, 2), (2, 2, 3), (3, 3, None),
+    ]
+
+
+def test_honours_a_longer_repayment_lag():
+    ps = vat_return_periods(_quarterly().model_copy(update={"repayment_lag_months": 3}), 12)
+    assert ps[0].reclaim_month == 5
+    assert ps[1].reclaim_month == 8
+
+
+def test_returns_no_periods_when_the_document_is_not_vat_registered():
+    assert vat_return_periods(_quarterly().model_copy(update={"registered": False}), 12) == []
+
+
+def test_handles_a_first_period_end_at_or_beyond_the_final_month():
+    ps = vat_return_periods(_quarterly().model_copy(update={"first_period_end_month": 20}), 6)
+    assert len(ps) == 1
+    assert (ps[0].first_month, ps[0].last_month, ps[0].reclaim_month) == (0, 5, None)

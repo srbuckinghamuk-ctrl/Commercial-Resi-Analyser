@@ -33,6 +33,8 @@ __all__ = [
     "resolve_vat_treatment",
     "is_purchase_vat_chargeable",
     "ResolvedVatTreatment",
+    "VatReturnPeriod",
+    "vat_return_periods",
 ]
 
 
@@ -80,6 +82,47 @@ def resolve_vat_treatment(
         evidence_status=row.evidence_status,
         source="override",
     )
+
+
+@dataclass(frozen=True)
+class VatReturnPeriod:
+    index: int
+    first_month: int
+    last_month: int
+    # None where the reclaim falls outside the modelled term. Never clamped
+    # into the final month -- that would manufacture a receipt (Sec 17.4).
+    reclaim_month: int | None
+
+
+def vat_return_periods(vat: VatInputs, term_months: int) -> list[VatReturnPeriod]:
+    """Sec 17.4. The first return period covers months 0..first_period_end_month
+    inclusive; subsequent periods are one month (monthly) or three months
+    (quarterly). VAT incurred anywhere in a period is reclaimed in a single
+    amount at period_end + repayment_lag_months. A reclaim falling after the
+    final modelled month is reported as None, never clamped into the final
+    month -- that would manufacture a receipt the borrower has not had."""
+    if not vat.registered:
+        return []
+    term = max(1, int(term_months))
+    length = 3 if vat.return_frequency == "quarterly" else 1
+    lag = max(0, int(vat.repayment_lag_months))
+    periods: list[VatReturnPeriod] = []
+    first = 0
+    end = max(0, int(vat.first_period_end_month))
+    index = 0
+    while first <= term - 1:
+        last = min(end, term - 1)
+        reclaim = last + lag
+        periods.append(VatReturnPeriod(
+            index=index,
+            first_month=first,
+            last_month=last,
+            reclaim_month=reclaim if reclaim <= term - 1 else None,
+        ))
+        first = last + 1
+        end = last + length
+        index += 1
+    return periods
 
 
 def is_purchase_vat_chargeable(purchase: PurchaseVatInputs) -> bool:

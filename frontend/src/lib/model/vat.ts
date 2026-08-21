@@ -131,6 +131,46 @@ export function resolveVatTreatment(vat: VatInputs, charge: VatCharge): Resolved
   };
 }
 
+export interface VatReturnPeriod {
+  index: number;
+  first_month: number;
+  last_month: number;
+  /** null where the reclaim falls outside the modelled term. Never clamped
+   *  into the final month — that would manufacture a receipt (§17.4). */
+  reclaim_month: number | null;
+}
+
+/** §17.4. The first return period covers months 0..first_period_end_month
+ *  inclusive; subsequent periods are one month (monthly) or three months
+ *  (quarterly). VAT incurred anywhere in a period is reclaimed in a single
+ *  amount at period_end + repayment_lag_months. A reclaim falling after the
+ *  final modelled month is reported as null, never clamped into the final
+ *  month — that would manufacture a receipt the borrower has not had. */
+export function vatReturnPeriods(vat: VatInputs, termMonths: number): VatReturnPeriod[] {
+  if (!vat.registered) return [];
+  const term = Math.max(1, Math.floor(termMonths));
+  const length = vat.return_frequency === 'quarterly' ? 3 : 1;
+  const lag = Math.max(0, Math.floor(vat.repayment_lag_months));
+  const periods: VatReturnPeriod[] = [];
+  let first = 0;
+  let end = Math.max(0, Math.floor(vat.first_period_end_month));
+  let index = 0;
+  while (first <= term - 1) {
+    const last = Math.min(end, term - 1);
+    const reclaim = last + lag;
+    periods.push({
+      index,
+      first_month: first,
+      last_month: last,
+      reclaim_month: reclaim <= term - 1 ? reclaim : null,
+    });
+    first = last + 1;
+    end = last + length;
+    index += 1;
+  }
+  return periods;
+}
+
 /** §17.7, stated as one biconditional rather than three branches so that
  *  `'unconfirmed'` needs no separate clause: an unconfirmed TOGC is charged,
  *  which is the prudent case. Where TOGC applies, VAT is nil regardless of the

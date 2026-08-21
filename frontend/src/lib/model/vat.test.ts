@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   VAT_CHARGE_CATEGORIES, DEFAULT_VAT, defaultVatTreatments,
-  resolveVatTreatment, isPurchaseVatChargeable,
+  resolveVatTreatment, isPurchaseVatChargeable, vatReturnPeriods,
 } from './vat';
 
 describe('VAT treatment resolution (spec §17.2)', () => {
@@ -97,5 +97,59 @@ describe('the treatments array is schema, not a list', () => {
     }
     expect(DEFAULT_VAT.purchase.vendor_opted_to_tax).toBe(false);
     expect(DEFAULT_VAT.purchase.togc_treatment).toBe('unconfirmed');
+  });
+});
+
+describe('the return cycle (spec §17.4)', () => {
+  const quarterly = { ...DEFAULT_VAT, registered: true, return_frequency: 'quarterly' as const,
+    first_period_end_month: 2, repayment_lag_months: 1 };
+
+  it('covers the term with contiguous periods starting at month 0', () => {
+    const ps = vatReturnPeriods(quarterly, 12);
+    expect(ps[0].first_month).toBe(0);
+    for (let i = 1; i < ps.length; i++) {
+      expect(ps[i].first_month).toBe(ps[i - 1].last_month + 1);
+    }
+    expect(ps[ps.length - 1].last_month).toBeGreaterThanOrEqual(11);
+  });
+
+  it('ends the first period at first_period_end_month and quarters thereafter', () => {
+    const ps = vatReturnPeriods(quarterly, 12);
+    expect(ps[0]).toMatchObject({ first_month: 0, last_month: 2, reclaim_month: 3 });
+    expect(ps[1]).toMatchObject({ first_month: 3, last_month: 5, reclaim_month: 6 });
+    expect(ps[2]).toMatchObject({ first_month: 6, last_month: 8, reclaim_month: 9 });
+  });
+
+  it('reports a reclaim falling beyond the final month as null, never clamped', () => {
+    // Term 12 => final month index 11. The period ending month 11 reclaims in
+    // month 12, which does not exist. Clamping it into month 11 would
+    // manufacture a receipt the borrower has not had (§17.4).
+    const ps = vatReturnPeriods(quarterly, 12);
+    const last = ps[ps.length - 1];
+    expect(last.last_month).toBe(11);
+    expect(last.reclaim_month).toBeNull();
+  });
+
+  it('gives monthly registration one period per month', () => {
+    const monthly = { ...quarterly, return_frequency: 'monthly' as const, first_period_end_month: 0 };
+    const ps = vatReturnPeriods(monthly, 4);
+    expect(ps.map((p) => [p.first_month, p.last_month, p.reclaim_month]))
+      .toEqual([[0, 0, 1], [1, 1, 2], [2, 2, 3], [3, 3, null]]);
+  });
+
+  it('honours a longer repayment lag', () => {
+    const ps = vatReturnPeriods({ ...quarterly, repayment_lag_months: 3 }, 12);
+    expect(ps[0].reclaim_month).toBe(5);
+    expect(ps[1].reclaim_month).toBe(8);
+  });
+
+  it('returns no periods when the document is not VAT registered', () => {
+    expect(vatReturnPeriods({ ...quarterly, registered: false }, 12)).toEqual([]);
+  });
+
+  it('handles a first period end at or beyond the final month', () => {
+    const ps = vatReturnPeriods({ ...quarterly, first_period_end_month: 20 }, 6);
+    expect(ps).toHaveLength(1);
+    expect(ps[0]).toMatchObject({ first_month: 0, last_month: 5, reclaim_month: null });
   });
 });
