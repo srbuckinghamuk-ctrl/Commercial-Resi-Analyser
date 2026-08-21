@@ -536,6 +536,51 @@ the guard working. This limitations list has carried a disclosure outliving its
 feature in R8, R9 and R10, which makes reviewing the whole list — not only this
 sentence — a required step rather than a courtesy.
 
+### The spider's counterfactual counts only evidenced rates (R43)
+
+The tax-advantage axis measures VAT saved against a standard-rated
+counterfactual. A saving is only real if the actual rate is a **determined
+fact**. An unconfigured category is not.
+
+Every category ships at `rate_pct: 0, evidence_status: 'unconfirmed'` — that is
+the migration default and the new-document default (§17.1) — and nothing
+requires a user to configure all six before setting `registered: true`. So
+"registered, with one category ever touched" is a valid, unvalidated, and
+probably common state. A naive counterfactual scores each untouched category as a
+full 20% saving, because a 0% rate nobody has filled in is arithmetically
+indistinguishable from a 0% rate someone determined.
+
+**The counterfactual therefore includes only charge lines whose
+`evidence_status` is `'confirmed'`.** An unevidenced rate contributes nothing to
+a claimed saving. That is the same principle the rest of the release runs on: the
+model does not assert what it cannot evidence.
+
+**And the axis's caveat is not `vatBasisGate`.** They answer different questions:
+
+| | Question | Unconfirmed row charging nothing |
+|---|---|---|
+| `vatBasisGate` (§17.10 draft gate) | Does this document have *material* unconfirmed VAT? | Gates nothing — there is nothing at stake |
+| The axis caveat | Is any rate in this saving unevidenced? | **Caveats** — an unevidenced 0% is exactly where a phantom saving is manufactured |
+
+Reusing `vatBasisGate` here imports a materiality threshold tuned for the other
+question and silences the caveat in precisely the case that needs it. The axis
+caveat fires when **any** charge line is unconfirmed, whether or not it currently
+charges.
+
+**Why this was invisible.** The axis's tests are direction-only — deliberately,
+to avoid the self-referential recomputation R9 recorded. But both compared
+documents shared the same unconfigured categories, so the phantom cancelled out
+of the *comparison* while remaining baked into both absolute values. A direction
+test cannot see a constant added to both sides. The guard is therefore an
+**absolute** assertion: a document with only `construction` configured must
+produce exactly the construction-derived figure, with no contribution from the
+five untouched categories.
+
+**The acquisition category is already safe** and needs no special case:
+`computeVat` zeroes `net_base_pence` — not merely `vat_pence` — when purchase VAT
+is not chargeable, so a vendor's decision not to opt to tax is correctly never
+scored as a conversion-route saving.
+
 **The deal spider.** `deal-spider.ts:208`'s `construction_cost_pence × 0.15` is
 replaced by the modelled figure: the VAT actually saved relative to a
 standard-rated counterfactual, less irrecoverable VAT and carry interest. The
