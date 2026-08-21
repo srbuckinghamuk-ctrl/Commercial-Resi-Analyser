@@ -247,13 +247,32 @@ Reclaims are a new inflow, `vat_reclaim_pence`, on `MonthReceipts` and on
 
 - **100% swept to senior debt**, ignoring `sales_sweep_pct`. It returns a
   specific advance rather than realising an asset.
-- **Does not trigger the exit fee** and does not set the redemption state. A
-  reclaim that happens to clear the balance is not a redemption, and a
-  subsequent draw against it must not raise `facility_redrawn_after_redemption`.
+- **Applied first in the month**, before the sales sweep and before the §4.5
+  refinance event, because it reduces the balance those two then have to clear.
 - **Is not part of `gross_receipts_pence`**, so no GDV-, LTGDV- or
   break-even-denominated metric moves.
 - Where there is no facility, it flows to distribution and into
   `equity_cashflows_pence`, exactly as sale receipts already do for a cash deal.
+
+**A reclaim that fully clears the balance redeems the facility on exactly the
+same terms as any other full redemption** — the exit fee is charged once and the
+redemption state is set.
+
+This is not the intuitive answer and it is worth stating why the intuitive one
+is wrong. A reclaim is not a realisation, so "a reclaim never redeems" reads
+correctly. But the ledger charges the exit fee inside `if (balance > 0 &&
+!isCash)` at the sales sweep. If a reclaim zeroes the balance while leaving the
+redemption state unset, the later sale finds `balance === 0`, takes neither
+branch, and **the exit fee is never charged and never carried** — silently lost,
+with every total still reconciling. The fee is contractually due on redemption
+whoever funds it, so the reclaim must redeem properly or not at all.
+
+The consequence is accepted deliberately: a later draw that re-opens a balance
+the reclaim had cleared raises `facility_redrawn_after_redemption`. The facility
+genuinely was redeemed, so the flag is honest rather than spurious.
+
+A **partial** reclaim charges no fee and sets no redemption state, exactly like
+a partial sales sweep.
 
 ### The sources-and-uses identity (calculation specification §7)
 
@@ -540,6 +559,13 @@ block.
 
 `FlagCode` gains `'vat_funding_gap'`.
 
+### VAT under sensitivity
+
+`computeVat` reads the cost plan, so a sensitivity cell that moves construction
+cost moves its VAT with it, automatically and with no special-casing. VAT is
+**not** a sensitivity lever of its own in R11, and it is **not** invariant across
+cells the way the facility is (§12.2). No cell-validity rule changes.
+
 ## 15. §17.13 — Stated limitations
 
 The specification must state, and the memo must disclose:
@@ -570,7 +596,8 @@ before it is trusted:
 | The single-accessor eslint rule | Downgrade to `'warn'`; the guard test must still fail, and the allowlist contents are asserted |
 | The v8 version predicate | A document tagged `9` |
 | Migration identity | Corpus-wide, plus the structural assertion, in both engines |
-| Reclaim is not a redemption | A reclaim that clears the balance must not charge the exit fee nor raise `facility_redrawn_after_redemption` |
+| A full reclaim redeems properly | Build a document whose reclaim clears the balance before any sale; the exit fee must still be charged exactly once, and total exit fee must equal the same document's fee when the sale redeems instead |
+| A partial reclaim does not redeem | A reclaim smaller than the balance charges no exit fee and sets no redemption state |
 | The server-side `vat` deep-merge | Delete it; a stored-row test must fail |
 
 ## 17. Also in scope
