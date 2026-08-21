@@ -428,6 +428,13 @@ export interface AppraisalResultV2 {
    *  class with its base, every fee line with its base. The UI and the report
    *  read cost from here and never recompute one. */
   cost_plan: CostPlanResult;
+  /** R11 spec §17.12 — the full VAT derivation: per-category resolved treatment,
+   *  per-month VAT out, per-month reclaim, the carry vector, peak carry and its
+   *  month, total input VAT, total reclaimed, total irrecoverable, and
+   *  `receivable_at_maturity_pence`. This is the SCHEDULE's `vat`, republished
+   *  here rather than recomputed: §17.5 runs the engine once, in one direction.
+   *  The UI and the report read VAT from here and never call `computeVat`. */
+  vat: VatResult;
   /** R9 spec §3.1 — GDV excluding ancillary. This is the pre-R9 figure, kept so
    *  a variance against it stays expressible. */
   gdv_internal_pence: number;
@@ -438,8 +445,27 @@ export interface AppraisalResultV2 {
   professional_fees_pence: number;
   statutory_costs_pence: number;
   selling_costs_pence: number;
+  /** R11 spec §17.5 — VAT the scheme cannot recover, on its OWN line and added
+   *  to `cost_before_finance_pence` (and so to TDC and to profit). Deliberately
+   *  NOT folded back into `construction_cost_pence`, however natural that
+   *  reads: `computeVat` reads the cost plan, so a VAT figure entering a cost
+   *  base is the one thing that could make the engine cyclic. Equal to
+   *  `vat.total_irrecoverable_pence`. */
+  irrecoverable_vat_pence: number;
   cost_before_finance_pence: number;
   finance_costs_pence: number;
+  /** R11 spec §17.12 — the finance cost attributable to carrying recoverable
+   *  VAT. A **disclosure of a slice of `finance_costs_pence`, not an addition
+   *  to it**: the interest is already there, charged by the ledger on a balance
+   *  the VAT outflow raised, and adding it again would double count.
+   *
+   *  Defined by an explicit counterfactual, never by apportioning interest
+   *  across balances: total interest with the document as given, less total
+   *  interest from the same document with `vat.registered` forced false. That
+   *  is the same quantity §17.5's primary invariant measures wherever the
+   *  facility's fee bases are VAT-independent, so the two pin each other. 0 for
+   *  a document with no VAT block, or one that is not registered. */
+  vat_carry_interest_pence: number;
   total_development_cost_pence: number;
   profit_pence: number;
   profit_is_unrealised: boolean;

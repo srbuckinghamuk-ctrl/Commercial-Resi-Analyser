@@ -1,11 +1,11 @@
 import type {
-  AnyCalculatorInputs, AppraisalResultV2, ModelFlag, MonthlyModel, Schedule,
+  AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from '../tax/acquisition-tax';
 import { computeLenderGdv } from './lender-valuation';
-import { exitFeeAmount } from './monthly-engine';
+import { exitFeeAmount, runLedger } from './monthly-engine';
 import { solveDeveloperBreakeven, solveSeniorBreakeven, solveSeniorBreakevenPhased } from './breakeven';
 import type { DeveloperBreakevenTerms, SeniorBreakevenTerms, PhasedSeniorBreakevenTerms } from './breakeven';
 import { computeCostToComplete } from './cost-to-complete';
@@ -14,6 +14,11 @@ import { areaBridge } from './areas';
 import { computeCostPlan } from './cost-plan';
 import { calculateGdvBreakdown } from '../conversion-calc-engine';
 import { chargeableConsiderationPence } from './vat';
+// §17.12's counterfactual runs the pipeline's first two stages a second time.
+// Imported HERE rather than reached through `runAppraisal`, which is what makes
+// the recursion impossible by construction: `index.ts` imports this module, so
+// there is no edge back — `deriveMetrics` can never re-enter itself.
+import { buildSchedule } from './schedule';
 
 /** Re-exported from './pct' (R9). Many modules and tests import `pct` from
  *  metrics; the definition moved to break an import cycle, not to move the
@@ -53,6 +58,48 @@ export function breakevenFlags(
     message: 'break-even solver range exhausted — inputs are implausible; treat all break-even figures as unavailable',
   });
   return out;
+}
+
+/**
+ * §17.12 — `vat_carry_interest_pence`, by the counterfactual and by nothing else.
+ *
+ * Total interest with the document as given, less total interest from the same
+ * document with `vat.registered` forced false. It is a **disclosure of a slice
+ * of `finance_costs_pence`, not an addition to it**: the ledger has already
+ * charged this interest, on a balance the VAT outflow raised.
+ *
+ * Deliberately NOT an apportionment of interest across balances. An
+ * apportionment is free to disagree with §17.5's primary invariant ("profit
+ * moves only by the carry interest"), and the two tests exist precisely to pin
+ * each other; only the counterfactual makes them the same quantity.
+ *
+ * **The recursion guard is structural, not a flag.** This helper calls
+ * `buildSchedule` and `runLedger` directly — it never calls `runAppraisal` or
+ * `deriveMetrics` — so the counterfactual run cannot itself compute a
+ * counterfactual. The early return below closes the same door a second time:
+ * the counterfactual document is unregistered, so were it ever passed back
+ * through here it would answer 0 without running anything.
+ *
+ * Note that only `registered` is forced. `chargeableConsiderationPence` does not
+ * read it (§17.7: the buyer pays the vendor's VAT whether or not the buyer can
+ * recover it), so the acquisition tax — and the acquisition cost line the ledger
+ * funds in month 0 — is identical on both sides. What differs is exactly the VAT
+ * cash cycle: the outflows and the reclaims.
+ */
+function vatCarryInterestPence(inputs: AnyCalculatorInputs, model: MonthlyModel): number {
+  // Structural, exactly as `computeVat` and `chargeableConsiderationPence` read
+  // it, and written as a narrowing guard rather than a ternary so the spread
+  // below is typed as the v8 member of the union — a pre-v8 document has no
+  // `vat` key to force, and `{ ...v7doc, vat: ... }` is a `tsc` error, correctly.
+  if (!('vat' in inputs)) return 0;
+  const vat = inputs.vat;
+  if (!vat.registered) return 0;
+  const counterfactual: CalculatorInputsV8 = {
+    ...inputs, vat: { ...vat, registered: false },
+  };
+  const cfSchedule = buildSchedule(counterfactual);
+  const cfModel = runLedger(cfSchedule, counterfactual.finance, counterfactual.equity_sources);
+  return model.totals.interest_pence - cfModel.totals.interest_pence;
 }
 
 export function deriveMetrics(
@@ -121,8 +168,18 @@ export function deriveMetrics(
       'acquisition_tax_override_reason' in acq ? acq.acquisition_tax_override_reason : null,
   });
   const sdlt = acquisitionTax.total_pence;
-  const costBeforeFinance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence;
+  // §17.5. Irrecoverable VAT is a cost of the scheme, and it enters cost-before-
+  // finance on its OWN line — never folded back into `construction_cost_pence`,
+  // however natural that reads. `computeVat` reads the cost plan, so a VAT
+  // figure entering a cost base is the one move that could make the engine
+  // cyclic; keeping it here, downstream of every base, is what makes a cycle
+  // impossible by construction rather than merely detected.
+  const irrecoverableVat = schedule.vat.total_irrecoverable_pence;
+  const costBeforeFinance =
+    t.cost_before_finance_ex_selling_pence + t.selling_costs_pence + irrecoverableVat;
   const financeCosts = model.totals.finance_costs_pence;
+  // §17.12. A slice of `financeCosts` above, disclosed — never added to it.
+  const vatCarryInterest = vatCarryInterestPence(inputs, model);
   const tdc = costBeforeFinance + financeCosts;
   const grossReceipts = t.gross_sales_pence;
   const profit = grossReceipts + t.retained_value_pence - tdc;
@@ -211,6 +268,15 @@ export function deriveMetrics(
       } else {
         const phasedTerms: PhasedSeniorBreakevenTerms = {
           draws_and_fees_pence: model.months.map((mm) => mm.draw_pence + mm.capitalised_fees_pence),
+          // R11 ruling R24. The ledger repays senior debt from the VAT reclaim
+          // (§17.6), so a replay with no reclaim term solves for a break-even
+          // sale price the deal does not need — a wrong financial number, not a
+          // cosmetic gap. Frozen from the actual run, exactly like the draws
+          // above: a reclaim returns an advance, so it does not scale with the
+          // sale price being solved for. (The static path above needs no
+          // equivalent: `redemption_balance_at_disposal_pence` is captured
+          // after the reclaim — ruling R23.)
+          vat_reclaims_pence: model.months.map((mm) => mm.vat_reclaim_pence),
           monthly_rate: inputs.finance.annual_interest_rate_pct / 100 / 12,
           rolled_up: inputs.finance.interest_type === 'rolled_up',
           sales_sweep_pct: inputs.finance.sales_sweep_pct,
@@ -281,14 +347,20 @@ export function deriveMetrics(
     area_bridge: bridge,
     developed_area_sqm: bridge.developed_area_sqm,
     cost_plan: costPlan,
+    // §17.12. The SCHEDULE's VatResult, republished — not a second derivation.
+    // §17.5 runs the VAT engine once, in one direction, and every consumer reads
+    // the answer from here.
+    vat: schedule.vat,
     gdv_internal_pence: gdvParts.internal_pence,
     gdv_ancillary_pence: gdvParts.ancillary_pence,
     construction_cost_pence: t.construction_pence,
     professional_fees_pence: t.professional_pence,
     statutory_costs_pence: t.statutory_pence,
     selling_costs_pence: t.selling_costs_pence,
+    irrecoverable_vat_pence: irrecoverableVat,
     cost_before_finance_pence: costBeforeFinance,
     finance_costs_pence: financeCosts,
+    vat_carry_interest_pence: vatCarryInterest,
     total_development_cost_pence: tdc,
     profit_pence: profit,
     profit_is_unrealised: profitIsUnrealised,

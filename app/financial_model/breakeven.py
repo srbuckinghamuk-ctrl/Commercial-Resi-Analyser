@@ -114,6 +114,17 @@ class PhasedSeniorBreakevenTerms:
     (Sec 5.11 is the enforcement question)."""
 
     draws_and_fees_pence: list[int]  # per month: draw_pence + capitalised_fees_pence, frozen
+    # R11 ruling R24. The ledger's own vat_reclaim_pence per month, frozen -- the
+    # reclaim repays senior debt (Sec 17.6), so a replay without it solves for a
+    # sale price the deal does not actually need. Independent of the sale price
+    # being solved for, exactly like draws_and_fees_pence: a reclaim is the
+    # return of an advance, not a realisation, so scaling total gross receipts
+    # does not move it. Same length as draws_and_fees_pence.
+    #
+    # The static (unphased) path needs no equivalent: it reads
+    # redemption_balance_at_disposal_pence, which the ledger captures AFTER the
+    # reclaim has been applied (ruling R23).
+    vat_reclaims_pence: list[int]
     monthly_rate: float              # annual_interest_rate_pct / 100 / 12
     rolled_up: bool
     sales_sweep_pct: float
@@ -187,6 +198,36 @@ def phased_replay_redeems(t: PhasedSeniorBreakevenTerms, total_gross: int) -> bo
         balance = balance + dc + interest
         if balance > peak:
             peak = balance
+        # R11 Sec 17.6 / ruling R24. The reclaim is applied at the SAME point in
+        # the month the ledger applies it: whole (never through sales_sweep_pct,
+        # which governs realisations) and BEFORE the tranche sweep, because it
+        # reduces the balance that sweep then has to clear. A full reclaim
+        # redeems on the same terms as any other full redemption, so a later
+        # tranche charges no second exit fee -- mirroring engine.py's reclaim
+        # block in order, in the full-redemption arm, and in the fee it charges.
+        reclaim = t.vat_reclaims_pence[m] if m < len(t.vat_reclaims_pence) else 0
+        if reclaim > 0 and balance > 0:
+            fee = 0 if redeemed else exit_fee_amount(
+                t.finance, t.committed_gross_facility_pence, peak, balance,
+            )
+            if reclaim >= balance + fee:
+                balance = 0
+                redeemed = True
+            else:
+                # The partial arm carries the SAME documented Sec 5.11 deviation
+                # the tranche arm below carries, and for the same reason. The
+                # reclaim does not move with G, but the BALANCE it meets does the
+                # moment any tranche precedes it -- so the ledger's own clamp
+                # (applied = min(reclaim, balance), falling back to reclaim - fee
+                # only when that would exactly clear the balance) would jump the
+                # residual from ~0 up to `fee` at the G where the balance first
+                # falls to the reclaim, and feasibility would stop being monotone
+                # in G. Reserving the fee up front keeps the residual weakly
+                # decreasing in G; the cost is that a partial reclaim repays up
+                # to `fee` less principal than the real ledger does, so the
+                # phased break-even stays conservatively overstated -- never
+                # understated.
+                balance -= max(0, min(reclaim - fee, balance))
         net = net_by_month.get(m, 0)
         if net > 0 and balance > 0:
             sweep_available = money_round((net * t.sales_sweep_pct) / 100)
@@ -220,6 +261,9 @@ def solve_senior_breakeven_phased(t: PhasedSeniorBreakevenTerms) -> int | None:
     # more total G to clear the same balance than the single-tranche closed form accounts
     # for. Grown by doubling below until genuinely feasible, so correctness never depends on
     # the seed's tightness -- only its cost (bisection is O(log hi), so a loose seed is cheap).
+    # Deliberately reclaim-free (R24): omitting vat_reclaims_pence here can only make the
+    # terminal balance, and so the seed, LARGER than the real trajectory needs. A seed that
+    # is too large is free; one that is too small would be a correctness bug.
     b0 = 0
     peak0 = 0
     for dc in t.draws_and_fees_pence:

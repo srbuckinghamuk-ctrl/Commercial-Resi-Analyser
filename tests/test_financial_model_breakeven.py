@@ -191,6 +191,7 @@ def _phased_base() -> PhasedSeniorBreakevenTerms:
     # two tranches 50/50 in months 2 and 3; no agent fee/legal/enforcement; 100% sweep.
     return PhasedSeniorBreakevenTerms(
         draws_and_fees_pence=[10_000_000, 0, 0, 0],
+        vat_reclaims_pence=[0, 0, 0, 0],  # R24: no VAT in this shape -- the reclaim tests are below
         monthly_rate=0.02,
         rolled_up=True,
         sales_sweep_pct=100,
@@ -264,6 +265,7 @@ class TestSolveSeniorBreakevenPhased:
     def _non_zero_fee_base(exit_fee_basis: str) -> PhasedSeniorBreakevenTerms:
         return PhasedSeniorBreakevenTerms(
             draws_and_fees_pence=[1_000_000, 0, 0, 0],
+            vat_reclaims_pence=[0, 0, 0, 0],  # R24: no VAT in this shape
             monthly_rate=0.01,
             rolled_up=True,
             sales_sweep_pct=100,
@@ -300,3 +302,105 @@ class TestSolveSeniorBreakevenPhased:
         exact = g
         assert phased_replay_redeems(t, exact) is True
         assert phased_replay_redeems(t, exact - 1) is False
+
+
+class TestPhasedReplayAppliesTheVatReclaim:
+    """Ruling R24 -- transliteration of breakeven.test.ts's `ruling R24 -- the
+    phased replay applies the VAT reclaim (spec Sec 17.6)` describe block."""
+
+    @staticmethod
+    def _reclaim_base(reclaims: list[int]) -> PhasedSeniorBreakevenTerms:
+        # Four months, 10,000,000 drawn at month 0 at 2%/mo rolled up, two 50/50
+        # tranches in months 2 and 3, no fees. Identical to _phased_base() except
+        # for the reclaim under test, so the comparison below isolates it.
+        return PhasedSeniorBreakevenTerms(
+            draws_and_fees_pence=[10_000_000, 0, 0, 0],
+            vat_reclaims_pence=reclaims,
+            monthly_rate=0.02,
+            rolled_up=True,
+            sales_sweep_pct=100,
+            tranches=[
+                SalesPhasingTranche(month_offset=2, pct_of_gross_receipts=50),
+                SalesPhasingTranche(month_offset=3, pct_of_gross_receipts=50),
+            ],
+            selling_agent_fee_pct=0,
+            selling_legal_fee_pence=0,
+            enforcement_cost_assumption_pence=0,
+            finance=TERMS_FEE_FREE,
+            committed_gross_facility_pence=0,
+        )
+
+    def test_solves_a_strictly_lower_breakeven_when_a_reclaim_repays_the_balance(self):
+        # A comparison, not an absolute: an absolute literal would pin whatever the
+        # solver happens to produce rather than the rule under test. The ledger
+        # repays from the reclaim, so a replay that ignores it solves for a sale
+        # price the deal does not actually need.
+        without = solve_senior_breakeven_phased(self._reclaim_base([0, 0, 0, 0]))
+        with_reclaim = solve_senior_breakeven_phased(self._reclaim_base([0, 2_000_000, 0, 0]))
+        assert without is not None
+        assert with_reclaim is not None
+        assert with_reclaim < without
+
+    def test_applies_the_reclaim_before_the_tranche_sweep_in_its_own_month(self):
+        # Order is falsifiable here: a reclaim landing in the same month as a
+        # tranche must shrink the balance that tranche has to clear. Applying it
+        # after the sweep would leave the month-2 tranche facing the full balance,
+        # pushing the solved G back up towards the reclaim-free answer.
+        same_month = solve_senior_breakeven_phased(self._reclaim_base([0, 0, 2_000_000, 0]))
+        month_later = solve_senior_breakeven_phased(self._reclaim_base([0, 0, 0, 2_000_000]))
+        reclaim_free = solve_senior_breakeven_phased(self._reclaim_base([0, 0, 0, 0]))
+        assert same_month is not None
+        assert month_later is not None
+        assert reclaim_free is not None
+        # Earlier is cheaper: the month-2 reclaim also saves a month of interest on
+        # what it repays, so it must solve strictly lower than the month-3 one.
+        assert same_month < month_later
+        # ...and both must beat the reclaim-free trajectory.
+        assert month_later < reclaim_free
+
+    def test_a_reclaim_that_clears_the_balance_outright_needs_no_sale_price(self):
+        # Sec 17.6: a full reclaim redeems on the same terms as any other full
+        # redemption. Once redeemed, no tranche receipt is needed to redeem again.
+        t = self._reclaim_base([0, 20_000_000, 0, 0])
+        assert solve_senior_breakeven_phased(t) == 0
+        assert phased_replay_redeems(t, 0) is True
+
+    def test_does_not_sweep_the_reclaim_through_sales_sweep_pct(self):
+        # Sec 17.6: the reclaim returns a specific advance rather than realising an
+        # asset, so it is applied WHOLE. Halving the sweep must leave a
+        # reclaim-only trajectory's redemption untouched.
+        full = dc_replace(self._reclaim_base([0, 20_000_000, 0, 0]), sales_sweep_pct=100)
+        halved = dc_replace(self._reclaim_base([0, 20_000_000, 0, 0]), sales_sweep_pct=50)
+        assert phased_replay_redeems(full, 0) is True
+        assert phased_replay_redeems(halved, 0) is True
+
+    def test_monotonicity_survives_a_reclaim_landing_between_two_tranches(self):
+        # The reclaim does not move with G, but the BALANCE it meets does the
+        # moment a tranche precedes it -- so the ledger's own clamp reintroduces
+        # exactly the discontinuity Sec 5.11's fee reserve exists to remove, one
+        # month earlier. This shape has been WATCHED FAILING: swap the reclaim
+        # arm in breakeven.py for the ledger's clamp (applied = min(reclaim,
+        # balance), falling back to reclaim - fee only when that would exactly
+        # clear the balance) and the solver returns 10,015,752 while G values in
+        # [10,064,448, 10,064,789] do NOT redeem -- the scan below fails at
+        # d = 49,000. A guard nobody has watched fail is not a guard.
+        t = dc_replace(
+            self._reclaim_base([0, 0, 500_000, 0]),
+            tranches=[
+                SalesPhasingTranche(month_offset=1, pct_of_gross_receipts=99),
+                SalesPhasingTranche(month_offset=3, pct_of_gross_receipts=1),
+            ],
+            finance=TERMS_FEE_FREE.model_copy(update={
+                "exit_fee_pct": 5, "exit_fee_basis": "committed_gross_facility",
+            }),
+            committed_gross_facility_pence=1_000_000,  # fixed basis -> fee = 50,000 regardless
+        )
+        g = solve_senior_breakeven_phased(t)
+        assert g is not None
+        assert phased_replay_redeems(t, g) is True
+        assert phased_replay_redeems(t, g - 1) is False
+        # Feasibility must never go True -> False as G grows: the bisection's
+        # correctness depends on it, and a hole above the solved boundary means
+        # the reported break-even is UNDERSTATED -- a price that does not redeem.
+        for d in range(0, 200_001, 500):
+            assert phased_replay_redeems(t, g + d) is True, d
