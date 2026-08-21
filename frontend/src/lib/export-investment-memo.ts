@@ -19,6 +19,7 @@ import {
 } from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
 import type { Jurisdiction } from './tax/acquisition-tax';
+import type { RecoveryBasis, VatChargeCategory } from './model';
 import type { ProposedUnit, ProposedUnitV6, UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { calculateGdv } from './conversion-calc-engine';
@@ -68,6 +69,11 @@ const DRAFT_REASON_SENTENCE: Record<DraftReason, string> = {
   unreconciled: 'one or more hard validations fail',
   senior_not_repaid: 'the senior facility is not repaid within the modelled term',
   tax_basis_unconfirmed: 'the acquisition tax jurisdiction has not been confirmed',
+  // R11 (spec §17.10). Ordered immediately below tax_basis_unconfirmed in
+  // draftReason() (report-provenance.ts) — see that function's own comment
+  // for why: an unconfirmed VAT basis does not make the arithmetic wrong, so
+  // it must not displace a reason saying the figures themselves may be.
+  vat_basis_unconfirmed: 'a VAT treatment that actually bears VAT is not yet evidence-confirmed',
   not_approved: 'no lender case has been credit approved',
 };
 
@@ -75,7 +81,29 @@ const WATERMARK_TEXT: Record<DraftReason, string> = {
   unreconciled: 'DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE',
   senior_not_repaid: 'DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE',
   tax_basis_unconfirmed: 'DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
+  vat_basis_unconfirmed: 'DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
   not_approved: 'DRAFT - NOT APPROVED FOR LENDER RELIANCE',
+};
+
+/** Spec §17.2/§17.10. The reader is told the recovery basis in words, not the
+ *  internal key — kept beside the memo's other label tables (JURISDICTION_LABEL
+ *  above) so a new basis cannot be added without a printed name for it. */
+const RECOVERY_BASIS_LABEL: Record<RecoveryBasis, string> = {
+  zero_rated_sale: 'Zero-rated sale',
+  partial_exemption: 'Partial exemption',
+  blocked: 'Blocked (no recovery)',
+  unconfirmed: 'Unconfirmed',
+};
+
+/** Spec §17.2. The six VAT charge categories, in the schema's own fixed order
+ *  (VAT_CHARGE_CATEGORIES, model/vat.ts) — never reordered here. */
+const VAT_CATEGORY_LABEL: Record<VatChargeCategory, string> = {
+  acquisition: 'Acquisition (purchase price)',
+  construction: 'Construction',
+  professional: 'Professional fees',
+  statutory: 'Statutory costs',
+  selling: 'Selling costs',
+  lender_ancillary: 'Lender ancillary fees',
 };
 
 /** Spec §14. The reader is told which country's regime was applied, not the
@@ -328,6 +356,18 @@ export function generateInvestmentMemo(
   // and table version produced `acquisition_tax_pence`. Read, never re-derived:
   // the memo names the basis the figure came from, it does not choose one.
   const tax = metrics.acquisition_tax;
+  // R11 (spec §17.10/§17.12). The engine's own computed VatResult — every
+  // figure below reads this (or `metrics.*_vat_pence` / `chargeable_consideration_
+  // pence`, likewise engine output) and recomputes nothing (file header's
+  // no-recalculation rule). `vatInputs` is guarded because a pre-v8 document
+  // carries no `vat` block at all; `vat` itself is always present (inert for
+  // such a document — schedule.ts always returns a VatResult).
+  const vat = metrics.vat;
+  const vatInputs = 'vat' in inputs ? inputs.vat : null;
+  const constructionVatLine = vat.charges.find((c) => c.id === 'category:construction') ?? null;
+  const constructionVatOverridden = vat.charges.some(
+    (c) => c.category === 'construction' && c.source === 'override',
+  );
   // `inputs` may be a pre-Release-2b v2 document with no `lender_valuation` field at all —
   // this mirrors the null it would carry on a v3 document with no block recorded.
   const lenderValuation = 'lender_valuation' in inputs ? inputs.lender_valuation : null;
@@ -1398,6 +1438,107 @@ export function generateInvestmentMemo(
     `At the deal spider's configured target profit on cost of ${fmtPct(inputs.deal_spider.target_profit_on_cost_pct)}, the residual land value is ${fmt(metrics.rlv_pence)}. The purchase price of ${fmt(inputs.acquisition.purchase_price_pence)} is ${rlvDiff >= 0 ? `${fmt(Math.abs(rlvDiff))} below` : `${fmt(Math.abs(rlvDiff))} above`} the RLV, representing ${rlvDiff >= 0 ? 'positive' : 'negative'} headroom of ${fmtPct(Math.abs(rlvHeadroom))}. This RLV uses the appraisal's own finance and acquisition tax (spec §3.18) — it is not re-solved for the residual price.`,
   );
 
+  // ── VAT (spec §17.10, §17.12) ──
+  //
+  // Every figure below is read off `run.metrics.vat` (the engine's own
+  // computed VatResult) or off the recorded VAT input block — nothing here is
+  // recomputed (file header's no-recalculation rule). Skipped down to a single
+  // sentence where the engine is inactive: there is no treatment, cycle or
+  // carry to disclose for a document that charges no VAT at all.
+  y = subHeading(y, 'VAT');
+  if (!vat.registered) {
+    y = bodyText(
+      y,
+      'VAT is not registered on this appraisal (vat.registered = false). The VAT engine is '
+      + 'inactive: no VAT is charged, and none enters the cash flow, cost-before-finance or the '
+      + 'acquisition tax base (spec §17.5, §17.7).',
+    );
+  } else {
+    const categoryLines = vat.charges.filter((c) => c.id.startsWith('category:'));
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Category', 'Rate', 'Recoverable', 'Recovery basis', 'Evidence']],
+      body: categoryLines.map((c) => [
+        VAT_CATEGORY_LABEL[c.category],
+        fmtPct(c.rate_pct),
+        fmtPct(c.recoverable_pct),
+        RECOVERY_BASIS_LABEL[c.recovery_basis],
+        c.evidence_status === 'confirmed' ? 'Confirmed' : 'Unconfirmed',
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
+
+    const overriddenCategories = [...new Set(
+      vat.charges.filter((c) => c.source === 'override').map((c) => VAT_CATEGORY_LABEL[c.category]),
+    )];
+    if (overriddenCategories.length > 0) {
+      y = bodyText(
+        y,
+        `One or more ${overriddenCategories.join(', ')} lines carry an individual VAT override — the `
+        + 'row above is the blended category result, not a single rate applied to every line (spec §17.2).',
+      );
+    }
+
+    // R11 (spec §17.12, ruling R32). The carry can be legitimately negative —
+    // equity funds the outflow and the reclaim repays senior debt that would
+    // otherwise have accrued interest — and it is never clamped, never
+    // relabelled as a cost when it falls that way.
+    const vatCarryInterest = metrics.vat_carry_interest_pence;
+    const vatCarryInterestText = vatCarryInterest < 0
+      ? `${fmt(Math.abs(vatCarryInterest))} saving — carrying VAT reduced total finance costs`
+      : fmt(vatCarryInterest);
+
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      body: [
+        [
+          'Return cycle',
+          vatInputs === null ? 'n/a' : `${vatInputs.return_frequency === 'quarterly' ? 'Quarterly' : 'Monthly'}, first period ends month ${vatInputs.first_period_end_month}, reclaimed ${vatInputs.repayment_lag_months} month(s) after period end`,
+        ],
+        [
+          'Peak VAT carry',
+          vat.peak_carry_month === null ? 'n/a' : `${fmt(vat.peak_carry_pence)} in ${monthLabel(vat.peak_carry_month)}`,
+        ],
+        ['Total input VAT', fmt(vat.total_input_vat_pence)],
+        ['Total VAT reclaimed', fmt(vat.total_reclaimed_pence)],
+        ['Total irrecoverable VAT (in cost-before-finance)', fmt(vat.total_irrecoverable_pence)],
+        ['VAT carry interest (disclosed slice of total finance costs)', vatCarryInterestText],
+        ...(vat.receivable_at_maturity_pence !== 0
+          ? [['VAT receivable after the modelled term (not in the cash flow)', fmt(vat.receivable_at_maturity_pence)]]
+          : []),
+      ],
+      styles: { fontSize: 9, cellPadding: 2 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: {
+        0: { fontStyle: 'bold' },
+        1: { halign: 'right' },
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
+
+    y = bodyText(
+      y,
+      `Irrecoverable VAT of ${fmt(vat.total_irrecoverable_pence)} is included within cost-before-finance `
+      + '(spec §17.5), never folded into a category cost line. VAT carry interest is a disclosed slice of '
+      + `finance costs, not an addition to them (spec §17.12)${vatCarryInterest < 0 ? ' — reported here as a saving because it is negative, not clamped to zero' : ''}.`
+      // R11 (spec §17.13, ruling R34). Only stated here where it is actually
+      // material — this section's own line above already shows the £0 case,
+      // and a standing structural sentence printed on every registered
+      // document regardless of amount would duplicate Section 7's own
+      // (correctly gated) disclosure of the same fact.
+      + (vat.total_irrecoverable_pence > 0
+        ? " Net LTC's denominator excludes it; Gross LTC's does not (spec §17.13) — see Section 7, Key Lending Metrics."
+        : ''),
+    );
+  }
+
   // ── Section 6: Programme ──
   y = sectionTitle(y, 6, 'Programme');
 
@@ -1638,6 +1779,19 @@ export function generateInvestmentMemo(
     y,
     'Net LTC = cumulative net senior advances (principal draws + capitalised non-interest fees) ÷ development cost before disposal and finance (spec §5.4). Gross LTC = peak gross senior debt ÷ total development cost, TDC (spec §5.5). LTGDV = peak gross senior debt ÷ GDV [developer basis], or ÷ lender-underwritten GDV [lender basis, not available until a lender valuation is recorded]. Senior repayment break-even (spec §5.11) = minimum gross sale price fully redeeming the senior facility, including the disclosed enforcement-cost assumption of ' + fmt(inputs.finance.enforcement_cost_assumption_pence) + '.',
   );
+  // R11 (spec §17.13, ruling R34). The two denominators are deliberately not
+  // like-for-like: Gross LTC's TDC includes irrecoverable VAT (it is folded
+  // into cost-before-finance, spec §17.5) while Net LTC's denominator does
+  // not, because VAT is not advance-eligible (spec §17.6). Printed side by
+  // side unexplained the two would read as a bug rather than as a deliberate
+  // choice, so the report states which denominator each uses whenever the VAT
+  // engine is live enough for the difference to matter.
+  if (vat.total_irrecoverable_pence > 0) {
+    y = bodyText(
+      y,
+      `Net LTC's denominator excludes the ${fmt(vat.total_irrecoverable_pence)} of irrecoverable VAT in this appraisal; Gross LTC's TDC includes it. The two ratios are therefore not directly comparable — see Section 5, VAT.`,
+    );
+  }
   if (metrics.senior_breakeven_pence !== null && lenderValuation != null) {
     y = bodyText(y, `Senior break-even percentages are measured against the lender valuation: ${lenderValuation.reason} — ${lenderValuation.author}, ${fmtDate(lenderValuation.date)}.`);
   }
@@ -2138,8 +2292,36 @@ export function generateInvestmentMemo(
       ['Loan term', `${inputs.finance.term_months} months`, 'Assumed programme duration'],
       ['Arrangement fee', fmtPct(inputs.finance.arrangement_fee_pct), 'Indicative terms'],
       ['Exit fee', fmtPct(inputs.finance.exit_fee_pct), 'Indicative terms'],
-      ['Construction VAT', 'Treatment unconfirmed', 'No reduced-rate saving assumed in this appraisal (spec §3.4)'],
-      ['Purchase VAT / TOGC', 'Unconfirmed', 'Purchase price treated as VAT-exempt/TOGC — unconfirmed (spec §3.3)'],
+      // R11 (spec §17.10). Both rows used to print a permanent "unconfirmed" —
+      // false the moment the VAT engine shipped. They now read the engine's own
+      // modelled treatment; see the VAT section (Section 5) for the full
+      // category-by-category breakdown and the return cycle.
+      [
+        'Construction VAT',
+        constructionVatLine === null
+          ? 'VAT not registered'
+          : `${fmtPct(constructionVatLine.rate_pct)}, ${fmtPct(constructionVatLine.recoverable_pct)} recoverable`,
+        constructionVatLine === null
+          ? 'vat.registered is false — VAT engine inactive, no VAT charged (spec §17.5)'
+          : `${RECOVERY_BASIS_LABEL[constructionVatLine.recovery_basis]}, evidence ${constructionVatLine.evidence_status}`
+            + `${constructionVatOverridden ? '; one or more packages carry an individual override' : ''}`
+            + ' (spec §17.2; see Section 5, VAT)',
+      ],
+      [
+        'Purchase VAT / TOGC',
+        vatInputs === null
+          ? 'Not modelled — pre-VAT-engine document'
+          : !vatInputs.purchase.vendor_opted_to_tax
+            ? 'Vendor has not opted to tax — no purchase VAT'
+            : vatInputs.purchase.togc_treatment === 'applies'
+              ? 'TOGC applies — no purchase VAT'
+              : `Vendor opted to tax; TOGC ${vatInputs.purchase.togc_treatment === 'unconfirmed' ? 'unconfirmed, prudently treated as chargeable' : 'does not apply'} — purchase VAT charged`,
+        metrics.chargeable_consideration_pence > inputs.acquisition.purchase_price_pence
+          ? `Chargeable consideration ${fmt(metrics.chargeable_consideration_pence)} — `
+            + `${fmt(metrics.chargeable_consideration_pence - inputs.acquisition.purchase_price_pence)} VAT uplift on the `
+            + `${fmt(inputs.acquisition.purchase_price_pence)} price, evidence ${vatInputs?.purchase.evidence_status ?? 'n/a'} (spec §17.7)`
+          : 'No VAT uplift on the chargeable consideration (spec §17.7)',
+      ],
       ['Agent fee', fmtPct(inputs.exit_strategy.selling_agent_fee_pct), 'Standard estate agent fee'],
       ['Legal fee (disposal)', fmt(inputs.exit_strategy.selling_legal_fee_pence), 'Estimate'],
     ],
@@ -2238,7 +2420,27 @@ export function generateInvestmentMemo(
     cp.mode === 'detailed'
       ? 'Construction cost rests on a priced package schedule (a detailed cost plan), not a rate x area estimate. No QS source, date or status is recorded for any package or fee line, and no provisional sums, fixed-price coverage or package-level exclusions are modelled.'
       : 'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
-    'VAT is not modelled as a cash flow. Conversion VAT treatment is fact-specific and no reduced-rate saving is assumed; purchase VAT and any TOGC treatment are unconfirmed. An adverse VAT position would increase the funding requirement.',
+    // R11 (spec §17.13). This sentence used to say VAT was not modelled as a
+    // cash flow at all — false the moment the VAT engine shipped (Section 5,
+    // VAT, and the two rewritten Appendix A rows above read the same run's
+    // computed VatResult). What replaces it is §17.13's actual residual scope,
+    // which the false blanket statement was masking: VAT recovery is an input
+    // proportion with a declared basis, not a computed partial-exemption
+    // calculation, so a scheme with a genuine partial-exemption position needs
+    // adviser input to set the recoverable proportion. There is no separate
+    // VAT facility — VAT draws on the main facility and is ineligible for the
+    // development-cost advance. No capital goods scheme, option-to-tax
+    // revocation or self-supply charge is modelled. The TOGC treatment is
+    // recorded and evidenced, not tested against the conditions for relief.
+    // Any VAT reclaim falling after the modelled term is reported as
+    // receivable, not credited to the cash flow.
+    'VAT recovery is an input proportion with a declared basis, not a computed partial-exemption '
+    + 'calculation — a scheme with a genuine partial-exemption position needs adviser input to set '
+    + 'the recoverable proportion. There is no separate VAT facility: VAT draws on the main facility '
+    + 'and is ineligible for the development-cost advance. No capital goods scheme, option-to-tax '
+    + 'revocation or self-supply charge is modelled. The TOGC treatment is recorded and evidenced, '
+    + 'not tested against the conditions for relief. Any VAT reclaim falling after the modelled term '
+    + 'is reported as receivable and is not credited to the cash flow (spec §17.13).',
     // R8 (spec §14). The sentence this replaces said the model taxed every
     // property on England/NI SDLT bands and that Scotland and Wales were not
     // correctly taxed. Both halves became false when the engine became

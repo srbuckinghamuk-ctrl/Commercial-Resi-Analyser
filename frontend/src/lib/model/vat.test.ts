@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   VAT_CHARGE_CATEGORIES, DEFAULT_VAT, defaultVatTreatments,
   resolveVatTreatment, isPurchaseVatChargeable, vatReturnPeriods,
-  spreadProRata, computeVat, chargeableConsiderationPence,
+  spreadProRata, computeVat, chargeableConsiderationPence, vatBasisGate,
 } from './vat';
 import { runAppraisal } from './index';
 import { validateInputs } from './validation';
@@ -821,5 +821,74 @@ describe('the unregistered buyer (spec §17.7, ruling R27)', () => {
     // The whole amount lands in the irrecoverable total.
     expect(run.schedule.vat.total_irrecoverable_pence)
       .toBeGreaterThanOrEqual(10_000_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 12 — vatBasisGate (spec §17.10, ruling R5)
+//
+// The draft gate itself (draftReason) stays pure and lives in
+// report-provenance.ts; this is the ONE place that turns a VatResult into the
+// gate's boolean. "Material" means the category actually bears VAT: a
+// treatment row marked unconfirmed that charges nothing gates nothing, and an
+// unregistered document — no charge lines at all — can never gate.
+// ---------------------------------------------------------------------------
+describe('vatBasisGate (spec §17.10, ruling R5)', () => {
+  it('gates on an unconfirmed row that actually bears VAT', () => {
+    const { inputs, costPlan, schedule } = buildWorkedVatCase({ acquisitionAt20: false });
+    // buildWorkedVatCase's default construction row is 'unconfirmed' — see
+    // defaultVatTreatments — and construction is rated (100,000,000p base),
+    // so its charge line is non-zero.
+    const vat = computeVat(inputs, costPlan, schedule);
+    const constructionLine = vat.charges.find((c) => c.id === 'category:construction')!;
+    expect(constructionLine.evidence_status).toBe('unconfirmed');
+    expect(constructionLine.vat_pence).toBeGreaterThan(0);
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(false);
+  });
+
+  it('does not gate on an unconfirmed row that charges nothing', () => {
+    // Registered, but every category rated 0% (buildWorkedVatCase's default
+    // for every category except construction, which is rated but confirmed
+    // here) — every OTHER category is 'unconfirmed' by defaultVatTreatments
+    // and charges zero, so none of them may gate.
+    const { inputs, costPlan, schedule } = buildWorkedVatCase();
+    const confirmed = {
+      ...inputs,
+      vat: {
+        ...inputs.vat,
+        treatments: inputs.vat.treatments.map((t) => (t.category === 'construction'
+          ? { ...t, evidence_status: 'confirmed' as const }
+          : t)),
+      },
+    };
+    const vat = computeVat(confirmed, costPlan, schedule);
+    const unconfirmedZeroCharge = vat.charges.filter(
+      (c) => c.category !== 'construction' && c.evidence_status === 'unconfirmed',
+    );
+    expect(unconfirmedZeroCharge.length).toBeGreaterThan(0);
+    expect(unconfirmedZeroCharge.every((c) => c.vat_pence === 0)).toBe(true);
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
+  });
+
+  it('never gates an unregistered document — there are no charge lines to be unconfirmed', () => {
+    const { inputs, costPlan, schedule } = buildWorkedVatCase({ registered: false });
+    const vat = computeVat(inputs, costPlan, schedule);
+    expect(vat.charges).toEqual([]);
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
+  });
+
+  it('does not gate once the bearing row is confirmed', () => {
+    const { inputs, costPlan, schedule } = buildWorkedVatCase();
+    const confirmed = {
+      ...inputs,
+      vat: {
+        ...inputs.vat,
+        treatments: inputs.vat.treatments.map((t) => (t.category === 'construction'
+          ? { ...t, evidence_status: 'confirmed' as const }
+          : t)),
+      },
+    };
+    const vat = computeVat(confirmed, costPlan, schedule);
+    expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
   });
 });

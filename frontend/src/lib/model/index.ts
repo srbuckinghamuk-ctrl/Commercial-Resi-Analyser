@@ -64,11 +64,12 @@ export type {
 } from './cost-plan';
 export {
   DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments, defaultVatInputs,
-  resolveVatTreatment, isPurchaseVatChargeable,
+  resolveVatTreatment, isPurchaseVatChargeable, vatBasisGate,
 } from './vat';
 export type {
   VatChargeCategory, RecoveryBasis, TogcTreatment, VatTreatment,
   VatOverride, PurchaseVatInputs, VatInputs, ResolvedVatTreatment, VatCharge,
+  VatBasisGate,
 } from './vat';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };

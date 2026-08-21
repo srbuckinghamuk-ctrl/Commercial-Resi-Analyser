@@ -334,6 +334,32 @@ export interface VatResult {
   purchase_vat_pence: number;
 }
 
+/** Task 12, spec §17.10. What `draftReason` (report-provenance.ts) needs to
+ *  know about the VAT basis. */
+export interface VatBasisGate {
+  vatBasisConfirmed: boolean;
+}
+
+/**
+ * Spec §17.10, ruling R5. `draftReason` stays pure — it receives this gate,
+ * it does not compute it. This is the ONE place that turns a computed
+ * `VatResult` into the boolean the draft gate reads.
+ *
+ * "Material" means the category actually bears VAT: a charge line's
+ * `evidence_status` is `'unconfirmed'` AND its resolved `vat_pence` is
+ * non-zero. An unconfirmed row charging nothing gates nothing — no threshold
+ * constant is invented, this is exact. `registered: false` can never gate:
+ * an unregistered document's `charges` array is empty (`inertVat`), so there
+ * is nothing here for it to have an opinion about.
+ */
+export function vatBasisGate(vat: VatResult): VatBasisGate {
+  return {
+    vatBasisConfirmed: !vat.charges.some(
+      (c) => c.evidence_status === 'unconfirmed' && c.vat_pence !== 0,
+    ),
+  };
+}
+
 /**
  * Integer-pence pro-rata allocation summing EXACTLY to `total`.
  *
