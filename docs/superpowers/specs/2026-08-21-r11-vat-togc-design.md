@@ -301,6 +301,40 @@ Where chargeable, the VAT is an outflow in month 0 and reclaims on the cycle
 like any other input VAT, subject to the `acquisition` category's
 `recoverable_pct`.
 
+### The unregistered buyer, and why `registered: false` cannot express it
+
+**Chargeability is a fact about the vendor. Recovery is a fact about the buyer.**
+A vendor who has opted to tax charges VAT on the price whatever the buyer's VAT
+status; whether the buyer gets it back is a separate question.
+
+`vat.registered: false` makes the whole engine inert (§17.1) — it is the migrated
+and new-document default, the switch that keeps this release additive. It is
+**not** a statement that the buyer is unregistered, and it must not be read as
+one.
+
+Those two facts collide in one state: `vendor_opted_to_tax: true`,
+`togc_treatment: 'does_not_apply'`, `registered: false`. Chargeability says VAT
+is due; the inert engine resolves the acquisition rate to 0; and the chargeable
+consideration collapses back to the exclusive price. The model would then decide
+VAT *is* chargeable and charge tax on a base that excludes it — the exact
+under-report this section exists to remove, in the case where it costs most,
+because an unregistered buyer recovers none of that VAT.
+
+**That state is therefore a hard validation error** (§17.9). It is not a case the
+model may silently approximate.
+
+The real position is already expressible, and expressible exactly: set
+`registered: true`, the `acquisition` row to the applicable rate,
+`recoverable_pct: 0` and `recovery_basis: 'blocked'`. VAT is charged, none of it
+comes back, the consideration is VAT-inclusive, the acquisition tax is charged on
+that inclusive base, and the whole amount lands in `irrecoverable_vat_pence`.
+Every figure is right, and the schema needed nothing new to say it.
+
+The rejected alternative was sourcing `rate_pct` independently of `registered`,
+so an inert document could still charge purchase VAT. It is identity-safe (every
+migrated rate is 0), but it makes `registered` mean two different things in two
+places, and this release exists partly to stop one field carrying two meanings.
+
 **And the acquisition tax base moves.** SDLT, LBTT and LTT are all charged on
 the VAT-inclusive consideration. Today six call sites pass
 `acquisition.purchase_price_pence` straight in as `consideration_pence`:
@@ -407,6 +441,12 @@ indistinguishable from a no-op.
 - `repayment_lag_months` negative or greater than 6;
 - `togc_treatment: 'applies'` together with a non-zero `acquisition` rate — the
   fixed rule in §5 must be unrepresentable, not merely unlikely.
+- **`vat.registered: false` while purchase VAT is chargeable** (the vendor has
+  opted to tax and TOGC does not apply). The inert engine would resolve the
+  acquisition rate to 0 and charge acquisition tax on the exclusive price while
+  the model holds that VAT is due — §17.7. The error message must name the
+  correct modelling: `registered: true` with `recoverable_pct: 0` and
+  `recovery_basis: 'blocked'`.
 
 Each of these rules is specified for a **set** of fields. R10 twice specified a
 rule for three fields and shipped a test named for one. Every rule above needs a
