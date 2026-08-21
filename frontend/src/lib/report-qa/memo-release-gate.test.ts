@@ -38,7 +38,7 @@ const savedRecord: FinancialAppraisal = {
   project_id: qaProject.id,
   name: 'Stonegate appraisal',
   inputs_snapshot: {},
-  calc_version: '2.9.0',
+  calc_version: '2.10.0',
   inputs_version: 4,
   status: 'reconciled',
   input_hash: 'a'.repeat(64),
@@ -164,7 +164,7 @@ describe('investment memorandum release gate', () => {
       expect(text).toContain(savedRecord.id);
       expect(text).toContain(savedRecord.outputs_hash!);
       expect(text).toContain(savedRecord.audit_hash!);
-      expect(text).toContain('2.9.0');
+      expect(text).toContain('2.10.0');
       expect(text).toContain('Europe/London');
       // Fix round 1 (item 4): the row's value, which survived being replaced by
       // 'n/a'. Asserted adjacent to its own label so it cannot be satisfied by

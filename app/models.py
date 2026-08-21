@@ -351,8 +351,8 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v7, not by this schema) -- may be any of v1 through
-    # v7. A v5+ document's `acquisition` block carries the R8 fields
+    # migrate_inputs_to_v8, not by this schema) -- may be any of v1 through
+    # v8. A v5+ document's `acquisition` block carries the R8 fields
     # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
     # `acquisition_date`, `acquisition_tax_override_pence`,
     # `acquisition_tax_override_reason`) defined on
@@ -361,8 +361,11 @@ class FinancialAppraisalCreate(BaseModel):
     # `AreaBridgeInputs` / `UnitAncillary` in the same module; a v7 document
     # adds the R10 `cost_plan` block (mode, package schedule, three
     # contingency classes, fee lines), defined on `CostPlanInputs` in the same
-    # module. Those are the typed schemas the fields are actually enforced
-    # against.
+    # module; a v8 document adds the R11 `vat` block (registered, return
+    # cycle, six per-category treatment rows, the purchase/TOGC block, and an
+    # optional `vat_override` on each cost package and fee line), defined on
+    # `VatInputs` in the same module. Those are the typed schemas the fields
+    # are actually enforced against.
     inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the
     # server always recalculates and never trusts these for persistence:

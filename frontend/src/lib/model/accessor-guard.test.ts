@@ -47,6 +47,20 @@ async function lint(code: string, filePath: string) {
   return result.messages;
 }
 
+// R11 "also in scope". Every test below spawns a brand-new ESLint instance
+// (`new ESLint(...)` in `lint()` above) and runs its Node API in-process --
+// there is no shared/cached instance, so each of the 24 real-linter tests
+// independently pays ESLint's config resolution and TypeScript-parser
+// start-up cost. That cost is fine in isolation (2-3s) but is load-sensitive:
+// under the full suite's parallel workers this has timed out intermittently
+// against vitest's 30s global `testTimeout` (observed three times in R11
+// alone, and in each of the two releases before it), never against a
+// standalone run of this file. An explicit, longer per-test timeout is given
+// to every real-linter test rather than picking one, because the flake has
+// never been the same test twice -- whichever instantiation lands under the
+// load spike is the one that times out.
+const REAL_LINTER_TIMEOUT_MS = 60_000;
+
 describe('single-accessor guard enforcement (runs the real linter)', () => {
   it('reports a direct read of total_construction_sqm as an ERROR, not a warning', async () => {
     const messages = await lint(
@@ -59,7 +73,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2); // 2 = error, 1 = warning. `npm run lint --max-warnings 0` (package.json) would also
     // now fail on a downgrade to 'warn', but that is a second, independent belt — this assertion is the direct one.
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   // R9 fix wave — three read paths the guard could not see. Each is asserted
   // through the real linter, and each asserts that the message is the NEW
@@ -75,7 +89,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure/.test(m.message));
     expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a COMPUTED read of total_construction_sqm as an ERROR', async () => {
     const messages = await lint(
@@ -85,7 +99,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /computed member access/.test(m.message));
     expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does NOT flag an object-literal write of total_construction_sqm', async () => {
     // The counter-example the destructuring selector needs. `ObjectExpression >
@@ -97,7 +111,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
       'src/lib/model/__synthetic-consumer.ts',
     );
     expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a reference to selectBandSet as an ERROR', async () => {
     const messages = await lint(
@@ -108,7 +122,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /selectBandSet/.test(m.message));
     expect(hit, `expected a selectBandSet hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a reference to TAX_TABLES as an ERROR, not a warning', async () => {
     const messages = await lint(
@@ -118,7 +132,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /TAX_TABLES/.test(m.message));
     expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does not flag the same source when the path is on the allowlist', async () => {
     // Pins that the allowlist actually suppresses the rule, not merely that
@@ -130,7 +144,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     );
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
     expect(hit, `expected no hit on the allowlisted path; got: ${JSON.stringify(messages)}`).toBeUndefined();
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   // R10 Task 9 — the same three read shapes, applied to contingency_pct, now
   // that cost_plan supersedes it (spec §16).
@@ -142,7 +156,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /contingency_pct/.test(m.message));
     expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a DESTRUCTURED read of contingency_pct as an ERROR', async () => {
     const messages = await lint(
@@ -155,7 +169,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure/.test(m.message));
     expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a COMPUTED read of contingency_pct as an ERROR', async () => {
     const messages = await lint(
@@ -165,7 +179,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /computed member access/.test(m.message));
     expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does NOT flag an object-literal write of contingency_pct', async () => {
     // The counter-example the destructuring selector needs, mirroring the
@@ -177,7 +191,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
       'src/lib/model/__synthetic-consumer.ts',
     );
     expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does not flag a contingency_pct read on the allowlisted cost-plan.ts path', async () => {
     const messages = await lint(
@@ -186,7 +200,7 @@ describe('single-accessor guard enforcement (runs the real linter)', () => {
     );
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
     expect(hit, `expected no hit on the allowlisted path; got: ${JSON.stringify(messages)}`).toBeUndefined();
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 });
 
 describe('single-accessor guard configuration', () => {
@@ -375,7 +389,7 @@ describe('single-accessor guard configuration', () => {
     expect(hit!.severity).toBe(2);
     expect(hit!.message).toMatch(/resolveVatTreatment\(\)/);
     expect(hit!.message).toMatch(/17\.2/);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a DESTRUCTURED read of vat.treatments as an ERROR', async () => {
     const messages = await lint(
@@ -388,7 +402,7 @@ describe('single-accessor guard configuration', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure treatments/.test(m.message));
     expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a COMPUTED read of vat.treatments as an ERROR', async () => {
     const messages = await lint(
@@ -398,7 +412,7 @@ describe('single-accessor guard configuration', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /treatments through a computed/.test(m.message));
     expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does NOT flag an object-literal write of treatments', async () => {
     // The counter-example the destructuring selector needs. `defaultVatTreatments()`
@@ -409,7 +423,7 @@ describe('single-accessor guard configuration', () => {
       'src/lib/model/__synthetic-consumer.ts',
     );
     expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a direct read of a vat_override as an ERROR, not a warning', async () => {
     const messages = await lint(
@@ -420,7 +434,7 @@ describe('single-accessor guard configuration', () => {
     expect(hit, `expected a vat_override hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
     expect(hit!.message).toMatch(/resolveVatTreatment\(\)/);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a DESTRUCTURED read of a vat_override as an ERROR', async () => {
     const messages = await lint(
@@ -433,7 +447,7 @@ describe('single-accessor guard configuration', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure vat_override/.test(m.message));
     expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('reports a COMPUTED read of a vat_override as an ERROR', async () => {
     const messages = await lint(
@@ -443,7 +457,7 @@ describe('single-accessor guard configuration', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /vat_override through a computed/.test(m.message));
     expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does NOT flag an object-literal write of vat_override', async () => {
     // cost-plan.ts's defaults and ConversionCostsPage.tsx's package editor both
@@ -453,7 +467,7 @@ describe('single-accessor guard configuration', () => {
       'src/lib/model/__synthetic-consumer.ts',
     );
     expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does not flag a vat.treatments read on the allowlisted vat.ts path', async () => {
     const messages = await lint(
@@ -462,7 +476,7 @@ describe('single-accessor guard configuration', () => {
     );
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
     expect(hit, `expected no hit on the allowlisted path; got: ${JSON.stringify(messages)}`).toBeUndefined();
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   // R11 Task 7 (spec 17.7) -- the brand's escape hatch.
   it('reports a reference to asChargeableConsideration as an ERROR, not a warning', async () => {
@@ -476,7 +490,7 @@ describe('single-accessor guard configuration', () => {
     expect(hit!.severity).toBe(2);
     expect(hit!.message).toMatch(/chargeableConsiderationPence\(inputs\)/);
     expect(hit!.message).toMatch(/17\.7/);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('does not flag asChargeableConsideration on the two paths that own the brand', async () => {
     for (const owner of ['src/lib/tax/acquisition-tax.ts', 'src/lib/model/vat.ts']) {
@@ -488,7 +502,7 @@ describe('single-accessor guard configuration', () => {
       const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
       expect(hit, `expected no hit on ${owner}; got: ${JSON.stringify(messages)}`).toBeUndefined();
     }
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 
   it('the guard now bites a planted total_construction_sqm read in conversion-calc-engine.ts (C1 restoration proof)', async () => {
     // Before the fix, this file was on the file-wide allowlist, so this same
@@ -501,5 +515,5 @@ describe('single-accessor guard configuration', () => {
     const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /total_construction_sqm/.test(m.message));
     expect(hit, `expected a no-restricted-syntax hit; got: ${JSON.stringify(messages)}`).toBeDefined();
     expect(hit!.severity).toBe(2);
-  });
+  }, REAL_LINTER_TIMEOUT_MS);
 });

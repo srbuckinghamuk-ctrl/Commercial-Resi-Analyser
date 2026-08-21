@@ -145,8 +145,11 @@ describe('computeCostPlan — three contingency classes round independently', ()
 describe('computeCostPlan — contingency scoped by package tag, mode-dependent (R11 spec §17.8)', () => {
   it('resolves a contingency base from the package TAG, not from a stale id list', () => {
     // The two mechanisms are made to DISAGREE deliberately. Before this task,
-    // package_ids decided the base and this test would report 1,000,000.
-    // After it, the tag decides and the base is the other package.
+    // package_ids decided the base -- and this document's helper stamps
+    // package_ids: [] on every class, since nothing here sets it, so the old
+    // mechanism would report 0, not a plausible-looking figure from either
+    // package. After it, the tag decides and the base is the OTHER package
+    // (7,000,000, abnormal's own package, not general's 1,000,000).
     const inputs = detailedCostPlanDocument({
       packages: [
         { id: 'p1', code: 'structure', amount_pence: 1_000_000, contingency_class: 'general' },

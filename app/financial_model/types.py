@@ -756,4 +756,4 @@ FlagCode = Literal[
     "vat_funding_gap",
 ]
 
-CALC_VERSION = "2.9.0"
+CALC_VERSION = "2.10.0"

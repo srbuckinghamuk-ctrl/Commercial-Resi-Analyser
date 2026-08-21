@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.8.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.10.0`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -121,7 +121,8 @@ being told — so this list and the code cannot silently drift apart:
 | N — area bridge, all-cash | v6 | The full entered area bridge, bridge-derived construction area (spec §15, R9). |
 | O — ancillary value, blended exit | v6 | Parking/balcony value split between GDV and gross sale receipts under a blended exit. |
 | P — Scotland, levered | v6 | LBTT; the §5.10 cost-to-complete counter-example (test-cases §14.9), deferred to R14 as C1. |
-| **Q — detailed cost plan, levered** | **v7** | **The detailed cost-plan mode, three contingency classes on different bases, two fee bases — added R10 (Task 11); test-cases §16.8.** |
+| Q — detailed cost plan, levered | v7 | The detailed cost-plan mode, three contingency classes on different bases, two fee bases — added R10 (Task 11); test-cases §16.8. |
+| **R — VAT quarterly, levered** | **v8** | **The pinned VAT return cycle plus chargeable purchase VAT and its acquisition-tax uplift — added R11; test-cases §17.1.** |
 
 (A, F–M carry `inputs_version: 5` in their stored JSON regardless of which release originally
 authored them — every fixture below v6 was brought up to the then-current schema rather than
@@ -141,7 +142,7 @@ rather than through the whole-corpus loops every other fixture runs through.
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.9.0"`
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.10.0"`
   (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
   `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
   Outputs are only comparable within one `calc_version` — a report or comparison spanning two
@@ -156,20 +157,23 @@ Two independent version numbers travel with every appraisal document:
   the two acquisition-tax override fields, spec §14); `6` = Release 9's `CalculatorInputsV6` shape
   (adds the entered `areas` block and a per-unit `ancillary` block, spec §15); `7` = Release 10's
   `CalculatorInputsV7` shape (adds the `cost_plan` block — mode, package schedule, three
-  contingency classes, fee lines, spec §16). Every new save persists `inputs_version: 7` — the
-  migration chain v1→v2→v3→v4→v5→v6→v7 is applied in-place before persistence, so the stored
-  document is never left in an older shape after a save. An *unrecognised* `inputs_version` (8,
-  99) is rejected with a 422 by both engines rather than falling through to the v1 fallback path,
+  contingency classes, fee lines, spec §16); `8` = Release 11's `CalculatorInputsV8` shape (adds
+  the `vat` block — registration, return cycle, six per-category treatment rows, the
+  purchase/TOGC block, and an optional `vat_override` on each cost package and fee line, spec
+  §17). Every new save persists `inputs_version: 8` — the migration chain
+  v1→v2→v3→v4→v5→v6→v7→v8 is applied in-place before persistence, so the stored document is
+  never left in an older shape after a save. An *unrecognised* `inputs_version` (9, 99) is
+  rejected with a 422 by both engines rather than falling through to the v1 fallback path,
   which would silently rebuild the finance block.
 
-`calc_version` and `inputs_version` are independent axes. Calc `2.9.0` consumes v2 through v7
+`calc_version` and `inputs_version` are independent axes. Calc `2.10.0` consumes v2 through v8
 input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis metrics
 are null, a document with `programme: null` produces a byte-identical schedule to its v3 source,
 and a document with no `cost_plan` at all is read through `costPlanFromLegacyCosts`/
-`cost_plan_from_legacy_costs`, spec §16.7), but **v7 is canonical server-side** [R10]:
-`calculate_authoritative` migrates whatever arrives to v7 before validating, calculating and
-persisting it, so no older-shaped input reaches the engines without migration and no
-older-shaped document is ever stored.
+`cost_plan_from_legacy_costs`, spec §16.7), but **v8 is canonical server-side** [R11, following
+R10's v7]: `calculate_authoritative` migrates whatever arrives to v8 before validating,
+calculating and persisting it, so no older-shaped input reaches the engines without migration
+and no older-shaped document is ever stored.
 
 ## 4. Status lifecycle
 
