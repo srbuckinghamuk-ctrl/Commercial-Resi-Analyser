@@ -754,7 +754,13 @@ describe('the unregistered buyer (spec §17.7, ruling R27)', () => {
     // never be an error -- otherwise every migrated document fails validation.
     const inputs = vatDocument({ vendorOptedToTax: false, purchasePricePence: 50_000_000 });
     const off = { ...inputs, vat: { ...inputs.vat, registered: false } };
-    expect(validateInputs(off).filter((i) => i.field === 'vat.registered')).toEqual([]);
+    // Filtered to the ERROR severity, not the field alone: R11 Task 9 adds a
+    // WARNING on this same field ("registered: false with non-zero
+    // construction cost", spec §17.9) that legitimately fires here too --
+    // buildWorkedVatCase's default document prices a non-zero construction
+    // base build. That warning does not contradict this test's claim, which is
+    // specifically that the state is never a hard ERROR on its own.
+    expect(validateInputs(off).filter((i) => i.severity === 'error' && i.field === 'vat.registered')).toEqual([]);
   });
 
   it('does not fire where TOGC applies, whatever the option to tax', () => {
@@ -762,7 +768,7 @@ describe('the unregistered buyer (spec §17.7, ruling R27)', () => {
       vendorOptedToTax: true, togc: 'applies', purchasePricePence: 50_000_000,
     });
     const off = { ...inputs, vat: { ...inputs.vat, registered: false } };
-    expect(validateInputs(off).filter((i) => i.field === 'vat.registered')).toEqual([]);
+    expect(validateInputs(off).filter((i) => i.severity === 'error' && i.field === 'vat.registered')).toEqual([]);
   });
 
   it('fires on an UNCONFIRMED TOGC too — the prudent case is still chargeable', () => {

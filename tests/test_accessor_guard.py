@@ -125,14 +125,22 @@ CONTINGENCY_ALLOWLIST = {
 # fact. A second reader is a second implementation of that precedence, which is
 # the R10 "two mechanisms for one fact" defect exactly.
 #
-# vat.py is the only allowlisted file, mirroring eslint.config.js's single new
-# entry. It carries the resolver's own `vat.treatments` read AND compute_vat's
+# vat.py carries the resolver's own `vat.treatments` read AND compute_vat's
 # four collect-and-forward `vat_override` reads, which hand the value straight
 # to the resolver without interpreting it -- correct code the guard would
 # otherwise fail on retroactively.
+#
+# validation.py joins it in R11 Task 9, for the same reason it is already in
+# BAND_SELECTOR_ALLOWLIST and CONTINGENCY_ALLOWLIST above: its TS twin
+# (model/validation.ts) exempts each individual structural read with its own
+# `eslint-disable-next-line`, because a raw shape/bounds check is not a
+# resolved charge and does not re-implement resolve_vat_treatment's
+# override-over-category precedence -- but Python has no line-scoped
+# equivalent, so the same narrow, legitimate use is exempted file-wide here
+# instead.
 VAT_TREATMENTS_FIELD = "treatments"
 VAT_OVERRIDE_FIELD = "vat_override"
-VAT_ACCESSOR_ALLOWLIST = {"app/financial_model/vat.py"}
+VAT_ACCESSOR_ALLOWLIST = {"app/financial_model/vat.py", "app/financial_model/validation.py"}
 
 # R11 Task 7 (spec Sec 17.7). The Python half of the TS `ChargeableConsideration`
 # brand. TypeScript makes `tsc` reject a raw purchase_price_pence at the tax

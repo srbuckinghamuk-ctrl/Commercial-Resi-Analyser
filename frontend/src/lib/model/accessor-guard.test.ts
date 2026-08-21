@@ -301,11 +301,19 @@ describe('single-accessor guard configuration', () => {
     // for that (the import and the call), plus a third (R10 Task 9) for the
     // raw contingency_pct negative-value check, which is real user input
     // until Task 12 rebuilds the cost page around cost_plan.
+    //
+    // R11 Task 9 adds three more, for the VAT §17.9 validation block: one
+    // structural read of `vat.treatments` (shape/bounds checks only — never
+    // resolves a charge, so it does not re-implement resolveVatTreatment's
+    // override-over-category precedence), reused by every check in that
+    // block, and one per `vat_override` extraction (one for packages, one for
+    // fee lines) — each read into a local exactly once and worked with from
+    // there, rather than re-reading `.vat_override` at every call site.
     const source = readFileSync(
       resolve(FRONTEND_ROOT, 'src/lib/model/validation.ts'), 'utf-8',
     );
     const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
-    expect(scoped).toHaveLength(3);
+    expect(scoped).toHaveLength(6);
     // A file-wide `/* eslint-disable no-restricted-syntax */` would satisfy the
     // linter and defeat the guard silently.
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);

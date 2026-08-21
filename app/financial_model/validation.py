@@ -14,7 +14,7 @@ from .engine import MonthlyModel, pct
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .types import FEE_CODE_CATEGORY, AnyCalculatorInputs
-from .vat import is_purchase_vat_chargeable
+from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
@@ -266,6 +266,10 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     # like `areas` above: a pre-v7 document has no cost_plan attribute at all
     # and must not gain errors from a block introduced this release.
     cp = getattr(inputs, "cost_plan", None)
+    # R11 Task 9: hoisted out of the `if cp is not None` block below so the VAT
+    # warning further down ("registered: false with non-zero construction
+    # cost") can read the resolved construction total without recomputing it.
+    resolved_cost_plan = None
     if cp is not None:
         if cp.mode == "detailed":
             if len(cp.packages) == 0:
@@ -358,6 +362,7 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         # line), which is exactly what compute_cost_plan already derives, so it
         # is reused here rather than re-implemented.
         resolved = compute_cost_plan(inputs, bridge.developed_area_sqm, len(inputs.unit_mix.units))
+        resolved_cost_plan = resolved
         if resolved.base_build_pence > 0 and resolved.contingency_total_pence > resolved.base_build_pence * 0.5:
             warn(
                 "cost_plan.contingency",
@@ -405,6 +410,189 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             "the position exactly: VAT charged, none recovered, and the acquisition tax on "
             "the VAT-inclusive consideration.",
         )
+
+    # R11 spec Sec 17.9 (Task 9). Every rule below is specified for a SET of
+    # fields -- R10 twice shipped a rule covering three fields with a test
+    # named for one, leaving two unguarded while the suite looked complete.
+    # Each rule here loops its own field set rather than checking a single
+    # representative one. Gated on `vat_inputs is not None` throughout: a
+    # pre-v8 document has no vat attribute at all and must produce no VAT
+    # issue, full stop.
+    if vat_inputs is not None:
+        # Single structural read of `treatments`, reused by every check below --
+        # none of them resolve a charge or apply the override-over-category
+        # precedence (that stays resolve_vat_treatment's alone, spec Sec 17.2).
+        # validation.py is allowlisted in VAT_ACCESSOR_ALLOWLIST
+        # (tests/test_accessor_guard.py) for exactly this: Python's guard has
+        # no line-scoped exemption (unlike eslint-disable-next-line), so this
+        # mirrors how the same file is already allowlisted for
+        # select_band_set and contingency_pct above.
+        treatments = vat_inputs.treatments
+
+        # Override in headline mode, and rate_pct/recoverable_pct bounds on
+        # every override -- one pass over packages, one over fee lines.
+        any_override_non_zero_rate = False
+        if cp is not None:
+            for idx, p in enumerate(cp.packages):
+                override = p.vat_override
+                if override is None:
+                    continue
+                if override.rate_pct != 0:
+                    any_override_non_zero_rate = True
+                if cp.mode == "headline":
+                    err(
+                        f"cost_plan.packages[{idx}].vat_override",
+                        "A VAT override only applies in detailed mode - headline mode has no "
+                        "packages to override. Remove the override, or switch to detailed mode.",
+                    )
+                if override.rate_pct < 0 or override.rate_pct > 100:
+                    err(
+                        f"cost_plan.packages[{idx}].vat_override.rate_pct",
+                        "VAT override rate must be between 0 and 100%.",
+                    )
+                if override.recoverable_pct < 0 or override.recoverable_pct > 100:
+                    err(
+                        f"cost_plan.packages[{idx}].vat_override.recoverable_pct",
+                        "VAT override recoverable percentage must be between 0 and 100%.",
+                    )
+            for idx, fl in enumerate(cp.fee_lines):
+                override = fl.vat_override
+                if override is None:
+                    continue
+                if override.rate_pct != 0:
+                    any_override_non_zero_rate = True
+                if cp.mode == "headline":
+                    err(
+                        f"cost_plan.fee_lines[{idx}].vat_override",
+                        "A VAT override only applies in detailed mode - headline mode has no "
+                        "fee lines to override individually. Remove the override, or switch to "
+                        "detailed mode.",
+                    )
+                if override.rate_pct < 0 or override.rate_pct > 100:
+                    err(
+                        f"cost_plan.fee_lines[{idx}].vat_override.rate_pct",
+                        "VAT override rate must be between 0 and 100%.",
+                    )
+                if override.recoverable_pct < 0 or override.recoverable_pct > 100:
+                    err(
+                        f"cost_plan.fee_lines[{idx}].vat_override.recoverable_pct",
+                        "VAT override recoverable percentage must be between 0 and 100%.",
+                    )
+
+        # rate_pct / recoverable_pct out of 0..100 on every treatment row.
+        for idx, t in enumerate(treatments):
+            if t.rate_pct < 0 or t.rate_pct > 100:
+                err(f"vat.treatments[{idx}].rate_pct", "VAT rate must be between 0 and 100%.")
+            if t.recoverable_pct < 0 or t.recoverable_pct > 100:
+                err(
+                    f"vat.treatments[{idx}].recoverable_pct",
+                    "Recoverable percentage must be between 0 and 100%.",
+                )
+
+        # `treatments` must hold exactly the six VAT_CHARGE_CATEGORIES, once
+        # each, in the declared order -- schema, not a user-managed list
+        # (spec Sec 17.1).
+        categories = [t.category for t in treatments]
+        shape_ok = (
+            len(categories) == len(VAT_CHARGE_CATEGORIES)
+            and all(categories[i] == c for i, c in enumerate(VAT_CHARGE_CATEGORIES))
+        )
+        if not shape_ok:
+            err(
+                "vat.treatments",
+                "Treatments must be exactly the six VAT charge categories, once each, in "
+                f"order: {', '.join(VAT_CHARGE_CATEGORIES)}.",
+            )
+
+        # first_period_end_month must sit inside the modelled term.
+        if vat_inputs.first_period_end_month < 0 or vat_inputs.first_period_end_month >= f.term_months:
+            err(
+                "vat.first_period_end_month",
+                f"First period end month must be between 0 and {f.term_months - 1}.",
+            )
+
+        # repayment_lag_months: HMRC's payment window, capped at a documented
+        # maximum rather than left open-ended.
+        if vat_inputs.repayment_lag_months < 0 or vat_inputs.repayment_lag_months > 6:
+            err("vat.repayment_lag_months", "Repayment lag must be between 0 and 6 months.")
+
+        # Sec 17.3: where TOGC applies, purchase VAT is nil regardless of the
+        # option to tax -- that is the whole effect of a TOGC, and it must not
+        # be expressible as "TOGC applies AND the acquisition rate is
+        # non-zero".
+        acq_idx = next((i for i, t in enumerate(treatments) if t.category == "acquisition"), -1)
+        if (
+            acq_idx != -1
+            and vat_inputs.purchase.togc_treatment == "applies"
+            and treatments[acq_idx].rate_pct != 0
+        ):
+            err(
+                f"vat.treatments[{acq_idx}].rate_pct",
+                "Where TOGC applies, purchase VAT is nil regardless of the option to tax - "
+                "the acquisition treatment row's rate must be 0.",
+            )
+
+        # --- Warnings. Each carries real domain content, and each belongs on
+        # `run.validation` (this function's return), never on
+        # `reconcile().issues` (see the module note above validate_inputs:
+        # that channel carries only errors, bar one 'model' warning). ---
+
+        # The zero-rated first grant is what makes input VAT recoverable;
+        # retained residential letting is EXEMPT, so full recovery is unsafe.
+        # This is the single most likely real-world VAT error the model can
+        # catch.
+        retains_a_unit = inputs.exit_strategy.route == "retain_all" or (
+            inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) > 0
+        )
+        if retains_a_unit:
+            for idx, t in enumerate(treatments):
+                if t.recovery_basis == "zero_rated_sale":
+                    warn(
+                        f"vat.treatments[{idx}].recovery_basis",
+                        "This category is recovered on the basis of a zero-rated first grant, "
+                        "but the exit strategy retains at least one unit. Retained residential "
+                        "letting is an exempt supply, so full recovery here is unsafe - check "
+                        "whether the recoverable proportion should be restricted.",
+                    )
+
+        # Possible, but then the TOGC changes nothing and the finding is
+        # probably mis-entered.
+        if vat_inputs.purchase.togc_treatment == "applies" and not vat_inputs.purchase.vendor_opted_to_tax:
+            warn(
+                "vat.purchase.togc_treatment",
+                "TOGC is marked as applying, but the vendor has not opted to tax - TOGC "
+                "treatment changes nothing where there is no option to tax to disapply, so "
+                "this is probably entered in error.",
+            )
+
+        # The engine is inert and the funding need is being reported as zero.
+        construction_total = resolved_cost_plan.construction_total_pence if resolved_cost_plan is not None else 0
+        if not vat_inputs.registered and construction_total != 0:
+            warn(
+                "vat.registered",
+                "The VAT engine is switched off (vat.registered: false), but this document "
+                "has a non-zero construction cost. Input VAT on construction and fees will "
+                "be reported as zero throughout, including any that would otherwise be "
+                "recoverable.",
+            )
+
+        # Ruling R4: derived from vat_return_periods(vat, term_months) -- an
+        # INPUT derivation -- never from the RESULT field
+        # vat.receivable_at_maturity_pence, which validate_inputs cannot see
+        # (it takes inputs only). Gated on a non-zero resolved rate so this
+        # cannot fire on a registered document that charges nothing: a
+        # zero-rated document has nothing to reclaim, in or out of term.
+        any_non_zero_rate = any(t.rate_pct != 0 for t in treatments) or any_override_non_zero_rate
+        if vat_inputs.registered and any_non_zero_rate:
+            periods = vat_return_periods(vat_inputs, f.term_months)
+            final_period = periods[-1] if periods else None
+            if final_period is not None and final_period.reclaim_month is None:
+                warn(
+                    "vat.repayment_lag_months",
+                    "The final VAT return period's reclaim falls outside the modelled term "
+                    "and will not appear in the cash flow - consider a shorter term, a "
+                    "shorter repayment lag, or reporting the balance as a receivable.",
+                )
 
     if inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) == 0:
         warn("exit_strategy.retained_units", "Blended exit selected but no units are marked as retained.")

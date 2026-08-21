@@ -800,7 +800,13 @@ def test_the_unregistered_buyer_error_does_not_fire_where_the_vendor_has_not_opt
     off = inputs.model_copy(update={
         "vat": inputs.vat.model_copy(update={"registered": False}),
     })
-    assert _issues_on(off, "vat.registered") == []
+    # Filtered to the ERROR severity, not the field alone: R11 Task 9 adds a
+    # WARNING on this same field ("registered: false with non-zero
+    # construction cost", spec Sec 17.9) that legitimately fires here too --
+    # _build_worked_vat_case's default document prices a non-zero construction
+    # base build. That warning does not contradict this test's claim, which is
+    # specifically that the state is never a hard ERROR on its own.
+    assert _issues_on(off, "vat.registered", "error") == []
 
 
 def test_the_unregistered_buyer_error_does_not_fire_where_togc_applies():
@@ -810,7 +816,7 @@ def test_the_unregistered_buyer_error_does_not_fire_where_togc_applies():
     off = inputs.model_copy(update={
         "vat": inputs.vat.model_copy(update={"registered": False}),
     })
-    assert _issues_on(off, "vat.registered") == []
+    assert _issues_on(off, "vat.registered", "error") == []
 
 
 def test_the_unregistered_buyer_error_fires_on_an_unconfirmed_togc():
