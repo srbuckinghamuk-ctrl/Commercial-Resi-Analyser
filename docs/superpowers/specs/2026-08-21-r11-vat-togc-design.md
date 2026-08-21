@@ -586,14 +586,53 @@ block.
   month reclaim, the carry vector, peak carry and its month, total input VAT,
   total reclaimed, total irrecoverable, and `receivable_at_maturity_pence`;
 - `irrecoverable_vat_pence` — included in `cost_before_finance_pence`;
-- `vat_carry_interest_pence` — the finance cost attributable to carrying VAT.
+- `vat_carry_interest_pence` — the **interest** attributable to carrying VAT.
   It is a **disclosure of a slice of `finance_costs_pence`, not an addition to
   it**: the interest is already there, charged by the ledger on a balance the
   VAT outflow raised. Its value is defined by an explicit counterfactual — total
   interest with the document as given, less total interest from the same
-  document with `vat.registered` forced false. That definition is the same
-  quantity §17.5's primary invariant measures, so the two pin each other; any
-  other attribution method would let them disagree.
+  document with `vat.registered` forced false.
+
+### Carry interest and profit impact are two quantities, not one (R31)
+
+The field measures **interest**. §17.5's primary invariant measures **profit**,
+which moves by the change in `finance_costs_pence`. On most documents these
+coincide and the two pin each other, which is why the counterfactual definition
+was chosen over an apportionment.
+
+They diverge whenever a **fee base is itself VAT-dependent**. With
+`exit_fee_basis: 'peak_debt'`, carrying VAT raises peak debt, which raises the
+exit fee — so finance costs rise by more than interest alone, and profit falls by
+more than `vat_carry_interest_pence` reports.
+
+Both figures are correct; they answer different questions. The specification
+therefore requires **both** to be pinned:
+
+- on a document whose fee bases are VAT-independent, `Δprofit === Δfinance_costs
+  === vat_carry_interest_pence`;
+- on a document with `exit_fee_basis: 'peak_debt'`, `Δprofit === Δfinance_costs`
+  **and** `Δfinance_costs > vat_carry_interest_pence`.
+
+The second test is what stops the divergence being latent. Without it, a later
+change that quietly redefined one of the two would be invisible.
+
+### The carry can be negative, and must not be clamped (R32)
+
+Where equity funds the VAT outflow but the reclaim sweeps 100% to senior debt
+(§17.6), the reclaim repays borrowing that funded *other* costs. The facility is
+then smaller than it would have been without VAT, and
+`vat_carry_interest_pence` is **negative** — carrying VAT saved interest.
+
+That is faithful to the ledger and it is not an artefact to tidy away. It is
+reported with its sign, never clamped to zero, and the report must read it as a
+saving rather than a cost when negative. This follows the codebase's standing
+principle that a figure is shown as it falls out, never adjusted to look
+sensible — the same rule that keeps a funding gap visible.
+
+The alternative — repaying whichever source actually funded each month's VAT —
+was considered and rejected for R11: it requires tracking VAT funding provenance
+month by month, and the money is not lost either way, since a smaller facility
+reaches the developer as a smaller redemption at exit.
 - `chargeable_consideration_pence` — the base the acquisition tax was charged
   on, so the VAT-on-price uplift is visible rather than buried in a tax figure.
 
