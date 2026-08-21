@@ -5,6 +5,7 @@ import {
   spreadProRata, computeVat, chargeableConsiderationPence,
 } from './vat';
 import { runAppraisal } from './index';
+import { validateInputs } from './validation';
 import { computeCostPlan, defaultContingencyClasses } from './cost-plan';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
@@ -691,5 +692,128 @@ describe('chargeable consideration (spec §17.7)', () => {
     expect(taxDelta).toBeGreaterThan(0);
     expect(withVat.metrics.acquisition_cost_pence - without.metrics.acquisition_cost_pence)
       .toBe(taxDelta);
+  });
+});
+
+describe('the object-side laundering hole is closed by the type (ruling R28)', () => {
+  it('rejects a bare { acquisition } at COMPILE time, not at review', () => {
+    // The whole assertion is the `@ts-expect-error` below: it fails `tsc -b` if
+    // the line ever STOPS being an error, which is exactly what an optional
+    // `vat?:` member would do. A caller holding a real v8 document could then
+    // write this and receive a branded EXCLUSIVE price -- laundering through an
+    // intermediate OBJECT, invisible to the brand and to the Python scan alike,
+    // and reading like correct accessor use.
+    //
+    // Runtime is not the point here; the line is never evaluated.
+    const rejected = () =>
+      // @ts-expect-error ruling R28: `vat` is required-but-nullable. Writing
+      // `vat: undefined` is a declaration that no VAT block exists; omitting it
+      // is an absence that could equally be an oversight.
+      chargeableConsiderationPence({ acquisition: { purchase_price_pence: 1 } });
+    expect(typeof rejected).toBe('function');
+  });
+
+  it('accepts the same document when it declares vat: undefined', () => {
+    expect(Number(chargeableConsiderationPence({
+      acquisition: { purchase_price_pence: 50_000_000 }, vat: undefined,
+    }))).toBe(50_000_000);
+  });
+});
+
+describe('the unregistered buyer (spec §17.7, ruling R27)', () => {
+  /** The colliding state: the vendor has opted, TOGC does not apply, and the
+   *  engine is switched off. Chargeability says VAT is due; the inert resolver
+   *  says the rate is 0. */
+  const colliding = () => vatDocument({
+    vendorOptedToTax: true, togc: 'does_not_apply',
+    purchasePricePence: 50_000_000, acquisitionRatePct: 20,
+  });
+
+  it('is a hard validation ERROR, not a silent approximation', () => {
+    const inputs = { ...colliding(), vat: { ...colliding().vat, registered: false } };
+    const issues = validateInputs(inputs).filter(
+      (i) => i.severity === 'error' && i.field === 'vat.registered',
+    );
+    expect(issues).toHaveLength(1);
+  });
+
+  it("names the correct modelling: registered, the rate, recoverable_pct 0, basis 'blocked'", () => {
+    // A hard error that does not say what to do instead gets softened to a
+    // warning by the next person who hits it. The message has to carry the fix.
+    const inputs = { ...colliding(), vat: { ...colliding().vat, registered: false } };
+    const issue = validateInputs(inputs).find((i) => i.field === 'vat.registered')!;
+    expect(issue.message).toMatch(/registered/);
+    expect(issue.message).toMatch(/recoverable_pct/);
+    expect(issue.message).toMatch(/blocked/);
+    expect(issue.message).toMatch(/acquisition/);
+  });
+
+  it('does not fire where the vendor has not opted to tax', () => {
+    // registered: false is the migration default and the inert switch. It is a
+    // statement about the ENGINE, never about the buyer, so on its own it must
+    // never be an error -- otherwise every migrated document fails validation.
+    const inputs = vatDocument({ vendorOptedToTax: false, purchasePricePence: 50_000_000 });
+    const off = { ...inputs, vat: { ...inputs.vat, registered: false } };
+    expect(validateInputs(off).filter((i) => i.field === 'vat.registered')).toEqual([]);
+  });
+
+  it('does not fire where TOGC applies, whatever the option to tax', () => {
+    const inputs = vatDocument({
+      vendorOptedToTax: true, togc: 'applies', purchasePricePence: 50_000_000,
+    });
+    const off = { ...inputs, vat: { ...inputs.vat, registered: false } };
+    expect(validateInputs(off).filter((i) => i.field === 'vat.registered')).toEqual([]);
+  });
+
+  it('fires on an UNCONFIRMED TOGC too — the prudent case is still chargeable', () => {
+    const inputs = vatDocument({
+      vendorOptedToTax: true, togc: 'unconfirmed', purchasePricePence: 50_000_000,
+    });
+    const off = { ...inputs, vat: { ...inputs.vat, registered: false } };
+    expect(off.vat.purchase.togc_treatment).toBe('unconfirmed');
+    expect(validateInputs(off).filter(
+      (i) => i.severity === 'error' && i.field === 'vat.registered',
+    )).toHaveLength(1);
+  });
+
+  it('models the real position EXACTLY, with nothing new in the schema', () => {
+    // §17.7's answer to the rejected alternative: registered, the applicable
+    // acquisition rate, recoverable_pct 0, recovery_basis 'blocked'. VAT
+    // charged, none recovered, the consideration VAT-inclusive, acquisition tax
+    // on that inclusive base, and the whole amount irrecoverable.
+    const base = vatDocument({
+      vendorOptedToTax: true, togc: 'does_not_apply',
+      purchasePricePence: 50_000_000, acquisitionRatePct: 20,
+    });
+    const blocked: CalculatorInputsV8 = {
+      ...base,
+      vat: {
+        ...base.vat,
+        registered: true,
+        treatments: base.vat.treatments.map((t) => (t.category === 'acquisition'
+          ? { ...t, rate_pct: 20, recoverable_pct: 0, recovery_basis: 'blocked' as const }
+          : t)),
+      },
+    };
+    expect(validateInputs(blocked).filter((i) => i.field === 'vat.registered')).toEqual([]);
+
+    const run = runAppraisal(blocked);
+    // VAT charged, and none of it comes back.
+    const acquisitionVat = run.schedule.vat.charges.find((c) => c.id === 'category:acquisition')!;
+    expect(acquisitionVat.vat_pence).toBe(10_000_000);
+    expect(acquisitionVat.recoverable_pence).toBe(0);
+    expect(acquisitionVat.irrecoverable_pence).toBe(10_000_000);
+    expect(run.schedule.vat.purchase_vat_pence).toBe(10_000_000);
+    // The consideration is VAT-inclusive, and the tax is charged on it.
+    expect(run.metrics.chargeable_consideration_pence).toBe(60_000_000);
+    // Strictly more tax than the same document without purchase VAT.
+    const without = runAppraisal(vatDocument({
+      vendorOptedToTax: false, purchasePricePence: 50_000_000,
+    }));
+    expect(run.metrics.acquisition_tax_pence)
+      .toBeGreaterThan(without.metrics.acquisition_tax_pence);
+    // The whole amount lands in the irrecoverable total.
+    expect(run.schedule.vat.total_irrecoverable_pence)
+      .toBeGreaterThanOrEqual(10_000_000);
   });
 });

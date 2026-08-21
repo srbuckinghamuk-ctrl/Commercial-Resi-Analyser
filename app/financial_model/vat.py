@@ -157,16 +157,26 @@ def is_purchase_vat_chargeable(purchase: PurchaseVatInputs) -> bool:
 
 class ConsiderationInputs(Protocol):
     """The minimum a chargeable consideration needs: the acquisition block, and
-    the document's VAT block where it has one.
+    the document's VAT block.
 
-    Narrower than AnyCalculatorInputs deliberately, mirroring vat.ts's
-    ConsiderationInputs. migrate.py's v1 bootstrap computes an acquisition cost
-    from a half-built document -- there is no CalculatorInputs object in
-    existence at that point -- so the accessor is structural, not nominal.
-    ``vat`` is read with getattr because a pre-v8 document does not carry the
-    attribute at all."""
+    Structural rather than nominal, mirroring vat.ts's ConsiderationInputs:
+    migrate.py's v1 bootstrap computes an acquisition cost from a half-built
+    document -- there is no CalculatorInputs object in existence at that point,
+    because the finance block this very figure feeds has not been translated
+    yet.
+
+    Ruling R28: ``vat`` is declared REQUIRED-but-nullable, not optional. A
+    caller that has no VAT block must pass ``vat=None`` explicitly, so "this
+    document has no VAT block" is a declaration a reader and a grep can both
+    see, rather than an absence that could equally be an oversight -- the TS
+    twin makes the same shape a `tsc` error. The lookup below is still a
+    getattr, because a pre-v8 PYDANTIC model genuinely does not carry the
+    attribute; the declaration governs the hand-built callers, which are the
+    ones that could launder an exclusive price through an intermediate object.
+    """
 
     acquisition: Any
+    vat: VatInputs | None
 
 
 def chargeable_consideration_pence(inputs: ConsiderationInputs) -> int:

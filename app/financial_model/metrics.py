@@ -279,8 +279,10 @@ def derive_metrics(
     # preserves their figures to the penny.
     #
     # Fix round 2: the gate is on the *acquisition block*, not on the container.
-    # schedule.py's calculate_total_acquisition_cost is handed the block alone and
-    # can only gate on it, and the two sites must use the identical predicate or
+    # schedule.py's calculate_total_acquisition_cost gates on the block too --
+    # R11 widened its parameter to the whole document (spec Sec 17.7), but it
+    # still reads `inputs.acquisition` and tests THAT, exactly as this site
+    # does -- and the two sites must use the identical predicate or
     # they can disagree -- Pydantic's default revalidate_instances='never' lets a
     # CalculatorInputsV4 hold an AcquisitionInputsV5, at which point a
     # container-level gate here reports SDLT while the schedule charges LTT. Not

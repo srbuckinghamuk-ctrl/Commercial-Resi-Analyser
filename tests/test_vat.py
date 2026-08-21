@@ -19,6 +19,7 @@ from app.financial_model.types import (
     default_contingency_classes,
 )
 from app.financial_model import run_appraisal
+from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import (
     DEFAULT_VAT,
     VAT_CHARGE_CATEGORIES,
@@ -748,3 +749,112 @@ def test_the_acquisition_cost_moves_with_the_consideration_not_only_the_reported
     assert (
         with_vat.metrics.acquisition_cost_pence - without.metrics.acquisition_cost_pence
     ) == tax_delta
+
+
+# ---------------------------------------------------------------------------
+# The unregistered buyer (spec Sec 17.7, ruling R27). Mirrors vat.test.ts.
+# ---------------------------------------------------------------------------
+
+def _colliding_document(togc: str = "does_not_apply"):
+    """The colliding state: the vendor has opted, TOGC does not apply (or is
+    unconfirmed), and the engine is switched off. Chargeability says VAT is due;
+    the inert resolver says the rate is 0."""
+    inputs = _vat_document(
+        vendor_opted_to_tax=True, togc=togc,
+        purchase_price_pence=50_000_000, acquisition_rate_pct=20,
+    )
+    return inputs.model_copy(update={
+        "vat": inputs.vat.model_copy(update={"registered": False}),
+    })
+
+
+def _issues_on(inputs, field: str, severity: str | None = None):
+    return [
+        i for i in validate_inputs(inputs)
+        if i.field == field and (severity is None or i.severity == severity)
+    ]
+
+
+def test_an_unregistered_buyer_with_chargeable_purchase_vat_is_a_hard_error():
+    """Ruling R27. Chargeability is a fact about the VENDOR; recovery is a fact
+    about the BUYER. registered: false is the engine's inert switch, not a
+    statement that the buyer is unregistered, and the collision must not be
+    silently approximated."""
+    assert len(_issues_on(_colliding_document(), "vat.registered", "error")) == 1
+
+
+def test_the_unregistered_buyer_error_names_the_correct_modelling():
+    """A hard error that does not say what to do instead gets softened to a
+    warning by the next person who hits it. The message has to carry the fix."""
+    issue = _issues_on(_colliding_document(), "vat.registered")[0]
+    assert "registered" in issue.message
+    assert "recoverable_pct" in issue.message
+    assert "blocked" in issue.message
+    assert "acquisition" in issue.message
+
+
+def test_the_unregistered_buyer_error_does_not_fire_where_the_vendor_has_not_opted():
+    """registered: false is the migration default. On its own it must never be
+    an error, or every migrated document fails validation."""
+    inputs = _vat_document(vendor_opted_to_tax=False, purchase_price_pence=50_000_000)
+    off = inputs.model_copy(update={
+        "vat": inputs.vat.model_copy(update={"registered": False}),
+    })
+    assert _issues_on(off, "vat.registered") == []
+
+
+def test_the_unregistered_buyer_error_does_not_fire_where_togc_applies():
+    inputs = _vat_document(
+        vendor_opted_to_tax=True, togc="applies", purchase_price_pence=50_000_000,
+    )
+    off = inputs.model_copy(update={
+        "vat": inputs.vat.model_copy(update={"registered": False}),
+    })
+    assert _issues_on(off, "vat.registered") == []
+
+
+def test_the_unregistered_buyer_error_fires_on_an_unconfirmed_togc():
+    """The prudent case is still chargeable (Sec 17.7's biconditional)."""
+    doc = _colliding_document(togc="unconfirmed")
+    assert doc.vat.purchase.togc_treatment == "unconfirmed"
+    assert len(_issues_on(doc, "vat.registered", "error")) == 1
+
+
+def test_the_real_position_is_expressible_exactly_with_nothing_new_in_the_schema():
+    """Sec 17.7's answer to the rejected alternative: registered, the applicable
+    acquisition rate, recoverable_pct 0, recovery_basis 'blocked'. VAT charged,
+    none recovered, the consideration VAT-inclusive, acquisition tax on that
+    inclusive base, and the whole amount irrecoverable."""
+    base = _vat_document(
+        vendor_opted_to_tax=True, togc="does_not_apply",
+        purchase_price_pence=50_000_000, acquisition_rate_pct=20,
+    )
+    treatments = [
+        t.model_copy(update={
+            "rate_pct": 20, "recoverable_pct": 0, "recovery_basis": "blocked",
+        }) if t.category == "acquisition" else t
+        for t in base.vat.treatments
+    ]
+    blocked = base.model_copy(update={
+        "vat": base.vat.model_copy(update={"registered": True, "treatments": treatments}),
+    })
+    assert _issues_on(blocked, "vat.registered") == []
+
+    run = run_appraisal(blocked)
+    charge = next(
+        c for c in run.schedule.vat.charges if c.id == "category:acquisition"
+    )
+    # VAT charged, and none of it comes back.
+    assert charge.vat_pence == 10_000_000
+    assert charge.recoverable_pence == 0
+    assert charge.irrecoverable_pence == 10_000_000
+    assert run.schedule.vat.purchase_vat_pence == 10_000_000
+    # The consideration is VAT-inclusive, and the tax is charged on it.
+    assert run.metrics.chargeable_consideration_pence == 60_000_000
+    # Strictly more tax than the same document without purchase VAT.
+    without = run_appraisal(_vat_document(
+        vendor_opted_to_tax=False, purchase_price_pence=50_000_000,
+    ))
+    assert run.metrics.acquisition_tax_pence > without.metrics.acquisition_tax_pence
+    # The whole amount lands in the irrecoverable total.
+    assert run.schedule.vat.total_irrecoverable_pence >= 10_000_000

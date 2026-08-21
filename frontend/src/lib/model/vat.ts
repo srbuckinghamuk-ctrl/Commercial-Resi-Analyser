@@ -193,20 +193,38 @@ export function isPurchaseVatChargeable(purchase: PurchaseVatInputs): boolean {
 }
 
 /**
- * The minimum a chargeable consideration needs: the acquisition block, and the
- * document's VAT block where it has one.
+ * Ruling R28 — the marker a caller must write to say "this document has no VAT
+ * block", `vat` being **required-but-nullable** rather than optional.
  *
- * Narrower than `AnyCalculatorInputs` deliberately. `migrate.ts`'s v1 bootstrap
- * computes an acquisition cost from a half-built document — there is no
- * `CalculatorInputs` object in existence at that point — and widening the
- * parameter to the full union would force a cast there, which is exactly the
- * hole the brand exists to close. Every `AnyCalculatorInputs` satisfies this
- * structurally, so no consumer has to adapt.
+ * An optional `vat?: VatInputs` re-opened laundering from the OBJECT side: a
+ * caller holding a real v8 document could write
+ * `chargeableConsiderationPence({ acquisition: doc.acquisition })` and receive a
+ * branded **exclusive** price. It compiles, it lints clean, and the Python scan
+ * cannot see it either — that scan constrains the keyword's VALUE, never the
+ * accessor's ARGUMENT. The brand closes laundering through an intermediate
+ * number; nothing but this closed it through an intermediate object, and it is
+ * the harder shape to catch in review because it reads like correct accessor use.
+ *
+ * Making the member required means `{ acquisition }` alone is a `tsc` error and
+ * `vat: undefined` has to be written out — an explicit, greppable declaration.
  */
-export interface ConsiderationInputs {
-  acquisition: { purchase_price_pence: number };
-  vat?: VatInputs;
+export interface NoVatBlock {
+  vat: undefined;
 }
+
+/**
+ * What the accessor accepts: a real document, or one explicitly declared to have
+ * no VAT block.
+ *
+ * The second arm exists for `migrate.ts`'s v1 bootstrap, which computes an
+ * acquisition cost from a HALF-BUILT document — there is no `CalculatorInputs`
+ * object in existence at that point, because the finance block this very figure
+ * feeds has not been translated yet. Taking `AnyCalculatorInputs` alone would
+ * force a cast there, which is exactly the hole the brand exists to close.
+ */
+export type ConsiderationInputs =
+  | AnyCalculatorInputs
+  | (NoVatBlock & { acquisition: { purchase_price_pence: number } });
 
 /** THE single site that decides what the acquisition tax is charged on.
  *  SDLT, LBTT and LTT are all charged on the VAT-INCLUSIVE consideration
@@ -219,8 +237,9 @@ export function chargeableConsiderationPence(
 ): ChargeableConsideration {
   const price = inputs.acquisition.purchase_price_pence;
   // Read structurally, exactly as `computeVat` does: a pre-v8 document has no
-  // `vat` block at all and its consideration is simply its price.
-  const vat = inputs.vat ?? null;
+  // `vat` block at all, and a `NoVatBlock` caller has declared it has none —
+  // both mean the consideration is simply the price.
+  const vat = ('vat' in inputs ? inputs.vat : undefined) ?? null;
   if (vat == null || !isPurchaseVatChargeable(vat.purchase)) {
     return asChargeableConsideration(price);
   }

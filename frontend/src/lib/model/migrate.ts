@@ -134,8 +134,11 @@ export function migrateInputs(
   const costBeforeFinance =
     // v1 has no VAT block at all, so the chargeable consideration IS the price
     // (§17.7). Passed as the half-built document the accessor needs, rather than
-    // by fabricating a branded number here.
-    calculateTotalAcquisitionCost({ acquisition }) +
+    // by fabricating a branded number here. `vat: undefined` is written out
+    // rather than omitted (ruling R28): the member is required-but-nullable, so
+    // "this document has no VAT block" is a declaration a reader and a grep can
+    // both see, not an absence that could equally be an oversight.
+    calculateTotalAcquisitionCost({ acquisition, vat: undefined }) +
     // v1 migration runs before the areas block exists, so the manual field IS
     // the area here — passed explicitly rather than read inside the callee.
     calculateTotalConstructionCost(conversion_costs, conversion_costs.total_construction_sqm) +

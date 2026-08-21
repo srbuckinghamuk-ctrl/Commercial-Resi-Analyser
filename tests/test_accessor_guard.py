@@ -142,13 +142,19 @@ VAT_ACCESSOR_ALLOWLIST = {"app/financial_model/vat.py"}
 # keyword-only (acquisition_tax.py), so there is no positional spelling that
 # could evade this.
 #
-# acquisition_tax.py declares the parameter; vat.py owns the accessor.
+# Ruling R29: the allowlist is EMPTY, and deliberately so. Task 7's brief
+# named acquisition_tax.py (which declares the parameter) and vat.py (which owns
+# the accessor), but neither file contains a `consideration_pence=` keyword at
+# all -- declaring a parameter is an `arg` node and owning the accessor is a
+# `FunctionDef`, so neither is a shape this finder can see. Allowlisting them
+# would be YAGNI, and it would contradict this module's own recorded policy:
+# CONTINGENCY_ALLOWLIST dropped migrate.py for exactly this reason, noting that
+# "if a future read needs it, the guard firing is the correct prompt to add it
+# back deliberately". Kept as a named empty set rather than inlined, so a future
+# entry has an obvious and commented home.
 CONSIDERATION_KEYWORD = "consideration_pence"
 CONSIDERATION_ACCESSOR = "chargeable_consideration_pence"
-CONSIDERATION_ALLOWLIST = {
-    "app/financial_model/acquisition_tax.py",
-    "app/financial_model/vat.py",
-}
+CONSIDERATION_ALLOWLIST: set[str] = set()
 
 
 def _iter_py_files():

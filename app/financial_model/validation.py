@@ -14,6 +14,7 @@ from .engine import MonthlyModel, pct
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule
 from .types import FEE_CODE_CATEGORY, AnyCalculatorInputs
+from .vat import is_purchase_vat_chargeable
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
@@ -370,6 +371,40 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                     f"cost_plan.fee_lines[{idx}].basis",
                     "This fee line resolves against a zero base and will compute to zero.",
                 )
+
+    # R11 spec Sec 17.7 / Sec 17.9 (ruling R27). Chargeability is a fact about
+    # the VENDOR; recovery is a fact about the BUYER. vat.registered: false is
+    # the engine's inert switch and the migration default -- it is NOT a
+    # statement that the buyer is unregistered, and it must not be read as one.
+    #
+    # In the colliding state the model holds that VAT is due while
+    # resolve_vat_treatment returns the inert 0% row, so
+    # chargeable_consideration_pence collapses back to the exclusive price and
+    # the acquisition tax is charged on a base that excludes VAT -- the exact
+    # under-report Sec 17.7 exists to remove, in the case where it costs MOST,
+    # because a buyer who cannot recover it bears the whole amount.
+    #
+    # The rejected alternative was sourcing rate_pct independently of
+    # registered. Identity-safe, but it makes one field mean two things in two
+    # places, and this release exists partly to stop that. Read with getattr,
+    # mirroring the TS engine's structural `'vat' in inputs`: a pre-v8 document
+    # has no vat block at all.
+    vat_inputs = getattr(inputs, "vat", None)
+    if (
+        vat_inputs is not None
+        and not vat_inputs.registered
+        and is_purchase_vat_chargeable(vat_inputs.purchase)
+    ):
+        err(
+            "vat.registered",
+            "Purchase VAT is chargeable (the vendor has opted to tax and TOGC does not "
+            "apply), but the VAT engine is switched off, so the acquisition tax would be "
+            "charged on the VAT-exclusive price. Set vat.registered to true and give the "
+            "acquisition treatment row the applicable rate. If the buyer cannot recover "
+            "that VAT, set recoverable_pct: 0 and recovery_basis: 'blocked' -- that models "
+            "the position exactly: VAT charged, none recovered, and the acquisition tax on "
+            "the VAT-inclusive consideration.",
+        )
 
     if inputs.exit_strategy.route == "blended" and len(inputs.exit_strategy.retained_units) == 0:
         warn("exit_strategy.retained_units", "Blended exit selected but no units are marked as retained.")

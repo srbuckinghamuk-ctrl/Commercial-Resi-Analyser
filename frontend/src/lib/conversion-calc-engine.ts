@@ -4,20 +4,19 @@ import type {
   ProposedUnit,
   ProposedUnitV6,
 } from './conversion-types';
-import type { AcquisitionInputsV5 } from './model/finance-types';
+import type { AcquisitionInputsV5, AnyCalculatorInputs } from './model/finance-types';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 import { chargeableConsiderationPence } from './model/vat';
-import type { ConsiderationInputs } from './model/vat';
+import type { NoVatBlock } from './model/vat';
 
-/** R11 spec §17.7. The document, narrowed to what an acquisition figure needs:
- *  the acquisition block in full, plus (via `ConsiderationInputs`) the VAT block
- *  that decides the chargeable consideration. Extends the accessor's own
- *  parameter type rather than restating it, so the two cannot drift. Every
- *  `AnyCalculatorInputs` satisfies it, and so does `migrate.ts`'s half-built v1
- *  document. */
-export interface AcquisitionCostInputs extends ConsiderationInputs {
-  acquisition: AcquisitionInputs | AcquisitionInputsV5;
-}
+/** R11 spec §17.7. What an acquisition figure needs: a real document, or one
+ *  explicitly declared to carry no VAT block — the same two arms
+ *  `ConsiderationInputs` has, reusing its `NoVatBlock` marker (ruling R28) so
+ *  the two cannot drift, but with the acquisition block in FULL because this
+ *  function reads legal fees, survey, broker pct and the tax overrides too. */
+export type AcquisitionCostInputs =
+  | AnyCalculatorInputs
+  | (NoVatBlock & { acquisition: AcquisitionInputs | AcquisitionInputsV5 });
 
 /** R9 spec §15.5 — a unit's ancillary value. A pre-v6 unit carries no
  *  `ancillary` block at all, read structurally (the codebase's version-dispatch

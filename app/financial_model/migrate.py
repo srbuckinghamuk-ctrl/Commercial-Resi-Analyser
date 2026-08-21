@@ -435,9 +435,14 @@ def migrate_inputs(
         # price (Sec 17.7). Passed as the half-built document the accessor
         # needs -- SimpleNamespace rather than a fabricated CalculatorInputs,
         # because no valid document exists yet at this point in the chain (the
-        # finance block this figure feeds has not been translated). Mirrors
-        # migrate.ts's `calculateTotalAcquisitionCost({ acquisition })`.
-        calculate_total_acquisition_cost(SimpleNamespace(acquisition=acq_obj))
+        # finance block this figure feeds has not been translated). vat=None is
+        # written out rather than omitted (ruling R28): the Protocol member is
+        # required-but-nullable, so "no VAT block" is a declaration, not an
+        # absence. Mirrors migrate.ts's
+        # `calculateTotalAcquisitionCost({ acquisition, vat: undefined })`.
+        calculate_total_acquisition_cost(
+            SimpleNamespace(acquisition=acq_obj, vat=None)
+        )
         # v1 migration runs before the areas block exists, so the manual field IS
         # the area here -- passed explicitly rather than read inside the callee.
         + calculate_total_construction_cost(cc_obj, cc_obj.total_construction_sqm)
