@@ -102,7 +102,6 @@ def test_default_contingency_classes_put_the_percentage_on_general_only():
     assert [(c.name, c.pct) for c in classes] == [
         ("general", 12.5), ("existing_building", 0.0), ("abnormal", 0.0),
     ]
-    assert all(c.basis == "all_packages" for c in classes)
 
 
 # --- compute_cost_plan -- direct port of cost-plan.test.ts ------------------
@@ -194,9 +193,9 @@ def doc(over: dict, costs: dict | None = None) -> CalculatorInputsV7:
 
 def CLASSES(general: float, existing: float, abnormal: float) -> list[dict]:
     return [
-        {"name": "general", "pct": general, "basis": "all_packages", "package_ids": []},
-        {"name": "existing_building", "pct": existing, "basis": "all_packages", "package_ids": []},
-        {"name": "abnormal", "pct": abnormal, "basis": "all_packages", "package_ids": []},
+        {"name": "general", "pct": general},
+        {"name": "existing_building", "pct": existing},
+        {"name": "abnormal", "pct": abnormal},
     ]
 
 
@@ -208,6 +207,38 @@ def pkg(id_: str, amount: int, over: dict | None = None) -> dict:
     if over:
         d.update(over)
     return d
+
+
+def detailed_cost_plan_document(*, packages: list[dict] | None = None,
+                                 contingency: list[dict] | None = None) -> CalculatorInputsV7:
+    """R11 spec Sec 17.8. Python twin of cost-plan.test.ts's
+    detailedCostPlanDocument. `package_ids: []` is stamped onto every
+    contingency class regardless: a bare `{"name", "pct"}` is the correct
+    final input shape (the field is gone from ContingencyClass), but
+    stamping it keeps this helper safe to run against the PRE-refactor
+    engine too, which still reads `c.package_ids` -- without it, pydantic's
+    own default (also `[]`) would apply just the same via model_validate,
+    but stamping it explicitly here keeps the two engines' helpers as close
+    to identical, statement for statement, as the languages allow."""
+    over: dict = {"mode": "detailed"}
+    if packages is not None:
+        over["packages"] = packages
+    if contingency is not None:
+        over["contingency"] = [{"package_ids": [], **c} for c in contingency]
+    return doc(over)
+
+
+def headline_cost_plan_document(*, construction_per_sqm: int | None = None,
+                                 area_sqm: float | None = None,
+                                 contingency: list[dict] | None = None) -> CalculatorInputsV7:
+    over: dict = {"mode": "headline"}
+    if contingency is not None:
+        over["contingency"] = [{"package_ids": [], **c} for c in contingency]
+    costs = (
+        {"construction_cost_per_sqm_pence": construction_per_sqm}
+        if construction_per_sqm is not None else None
+    )
+    return doc(over, costs)
 
 
 class TestComputeCostPlanHeadlineMode:
@@ -242,28 +273,37 @@ class TestComputeCostPlanThreeContingencyClassesRoundIndependently:
         # 50,000.5 -> 50,001 half-up. Three classes: 150,003.
         # One class at 15% would be 150,001.5 -> 150,002. The two differ by 1p,
         # so this test fails if the classes are ever collapsed for rounding.
+        #
+        # Headline mode: R11 spec Sec 17.8 makes existing_building/abnormal
+        # scope by package tag in DETAILED mode, so a single untagged package
+        # could no longer give all three classes the same base. Headline mode
+        # still gives every class the whole base build, which is what this
+        # test needs to isolate rounding independence from scoping.
         r = compute_cost_plan(
-            doc({"mode": "detailed", "packages": [pkg("p1", 1_000_010)],
-                 "contingency": CLASSES(5, 5, 5)}),
-            0, 1,
+            headline_cost_plan_document(
+                construction_per_sqm=1_000_010, area_sqm=1, contingency=CLASSES(5, 5, 5),
+            ),
+            1, 1,
         )
         assert [c.amount_pence for c in r.contingency] == [50_001, 50_001, 50_001]
         assert r.contingency_total_pence == 150_003
 
-    def test_resolves_a_selected_packages_class_against_only_the_named_packages(self):
-        # existing_building at 20% of p2 alone (2,000,000) = 400,000.
+    def test_resolves_existing_building_against_only_its_tagged_packages_as_an_addition_to_general(self):
+        # existing_building at 20% of p2 alone (2,000,000, tagged
+        # existing_building) = 400,000.
         # general at 10% of the whole base build (3,000,000) = 300,000.
         r = compute_cost_plan(
-            doc({
-                "mode": "detailed",
-                "packages": [pkg("p1", 1_000_000), pkg("p2", 2_000_000)],
-                "contingency": [
-                    {"name": "general", "pct": 10, "basis": "all_packages", "package_ids": []},
-                    {"name": "existing_building", "pct": 20, "basis": "selected_packages",
-                     "package_ids": ["p2"]},
-                    {"name": "abnormal", "pct": 0, "basis": "all_packages", "package_ids": []},
+            detailed_cost_plan_document(
+                packages=[
+                    pkg("p1", 1_000_000, {"contingency_class": "general"}),
+                    pkg("p2", 2_000_000, {"contingency_class": "existing_building"}),
                 ],
-            }),
+                contingency=[
+                    {"name": "general", "pct": 10},
+                    {"name": "existing_building", "pct": 20},
+                    {"name": "abnormal", "pct": 0},
+                ],
+            ),
             0, 1,
         )
         assert r.base_build_pence == 3_000_000
@@ -272,6 +312,69 @@ class TestComputeCostPlanThreeContingencyClassesRoundIndependently:
         assert r.contingency[1].base_pence == 2_000_000
         assert r.contingency[1].amount_pence == 400_000
         assert r.contingency_total_pence == 700_000
+
+
+class TestComputeCostPlanContingencyScopedByPackageTag:
+    """R11 spec Sec 17.8. Python twin of cost-plan.test.ts's planted-divergence
+    suite. The two mechanisms (tag vs. package_ids) agree in every document
+    that exists today, so a re-pin proves nothing -- these documents make the
+    tag and a (pre-migration) id list DISAGREE deliberately."""
+
+    def test_resolves_a_contingency_base_from_the_package_tag_not_from_a_stale_id_list(self):
+        # Before this task, package_ids decided the base and this test would
+        # report a wrong figure. After it, the tag decides and the base is
+        # the OTHER package.
+        inputs = detailed_cost_plan_document(
+            packages=[
+                pkg("p1", 1_000_000, {"contingency_class": "general"}),
+                pkg("p2", 7_000_000, {"code": "externals", "contingency_class": "abnormal"}),
+            ],
+            contingency=[
+                {"name": "general", "pct": 0},
+                {"name": "existing_building", "pct": 0},
+                {"name": "abnormal", "pct": 10},
+            ],
+        )
+        result = compute_cost_plan(inputs, 100, 1)
+        abnormal = next(c for c in result.contingency if c.name == "abnormal")
+        assert abnormal.base_pence == 7_000_000
+        assert abnormal.amount_pence == 700_000
+        assert abnormal.basis == "selected_packages"
+
+    def test_gives_every_contingency_class_the_whole_base_build_in_headline_mode(self):
+        # The calculator renders all three percentages in BOTH modes, and a
+        # headline document has no packages to tag. Scoping by tag here would
+        # silently zero a live, shipped input path (spec Sec 17.8).
+        inputs = headline_cost_plan_document(
+            construction_per_sqm=100_000, area_sqm=100,   # base build 10,000,000p
+            contingency=[
+                {"name": "general", "pct": 5},
+                {"name": "existing_building", "pct": 15},
+                {"name": "abnormal", "pct": 0},
+            ],
+        )
+        result = compute_cost_plan(inputs, 100, 1)
+        existing = next(c for c in result.contingency if c.name == "existing_building")
+        assert existing.base_pence == 10_000_000
+        assert existing.amount_pence == 1_500_000
+        assert existing.basis == "all_packages"
+
+    def test_gives_general_the_whole_base_build_in_detailed_mode_tagged_or_not(self):
+        inputs = detailed_cost_plan_document(
+            packages=[
+                pkg("p1", 1_000_000, {"contingency_class": "existing_building"}),
+                pkg("p2", 7_000_000, {"code": "externals", "contingency_class": "abnormal"}),
+            ],
+            contingency=[
+                {"name": "general", "pct": 5},
+                {"name": "existing_building", "pct": 0},
+                {"name": "abnormal", "pct": 0},
+            ],
+        )
+        result = compute_cost_plan(inputs, 100, 1)
+        general = next(c for c in result.contingency if c.name == "general")
+        assert general.base_pence == 8_000_000
+        assert general.basis == "all_packages"
 
 
 class TestComputeCostPlanFeeBasesNeverIncludeFees:

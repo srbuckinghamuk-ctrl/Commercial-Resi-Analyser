@@ -335,9 +335,9 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
         }],
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',

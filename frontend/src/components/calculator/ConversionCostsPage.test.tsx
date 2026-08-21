@@ -131,9 +131,9 @@ function detailedInputs(): CalculatorInputsV7 {
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null },
       ],
       contingency: [
-        { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
-        { name: 'existing_building', pct: 15, basis: 'selected_packages', package_ids: ['p1'] },
-        { name: 'abnormal', pct: 2.5, basis: 'all_packages', package_ids: [] },
+        { name: 'general', pct: 5 },
+        { name: 'existing_building', pct: 15 },
+        { name: 'abnormal', pct: 2.5 },
       ],
       fee_lines: [
         { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
@@ -176,6 +176,31 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
     };
     render(<ConversionCostsPage inputs={headline} run={runAppraisal(headline)} onChange={vi.fn()} />);
     expect(screen.queryByDisplayValue('Structure')).not.toBeInTheDocument();
+  });
+
+  // R11 spec §17.8. The contingency-class select on each package row went live
+  // this release (previously "recorded only" -- see the R10 comment this task
+  // rewrote). Assert it writes ONLY the row it belongs to: a change handler
+  // that updated every package (e.g. a stale closure over the wrong id) would
+  // still pass a test that only checked the changed row.
+  it("changing a package's contingency class select updates that package, and no other", () => {
+    const inputs = detailedInputs(); // p1 tagged existing_building, p2 tagged general
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} run={runAppraisal(inputs)} onChange={onChange} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package contingency class' });
+    expect(selects).toHaveLength(2);
+    fireEvent.change(selects[0], { target: { value: 'abnormal' } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: {
+        ...inputs.cost_plan,
+        packages: [
+          { ...inputs.cost_plan.packages[0], contingency_class: 'abnormal' },
+          inputs.cost_plan.packages[1],
+        ],
+      },
+    });
   });
 
   // §3.2.1 / §6. Switching to detailed mode on a document carrying compliance

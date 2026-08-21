@@ -289,21 +289,6 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         if len({f.id for f in cp.fee_lines}) != len(cp.fee_lines):
             err("cost_plan.fee_lines", "Fee line ids must be unique.")
 
-        package_ids = {p.id for p in cp.packages}
-        for idx, c in enumerate(cp.contingency):
-            if c.basis == "selected_packages":
-                if any(pid not in package_ids for pid in c.package_ids):
-                    err(
-                        f"cost_plan.contingency[{idx}].package_ids",
-                        "One or more package_ids do not match a package in this cost plan.",
-                    )
-                if len(c.package_ids) == 0 and c.pct != 0:
-                    err(
-                        f"cost_plan.contingency[{idx}].package_ids",
-                        "A selected-packages contingency naming no packages cannot carry a "
-                        "non-zero percentage.",
-                    )
-
         contingency_names = [c.name for c in cp.contingency]
         if len(cp.contingency) != 3 or len(set(contingency_names)) != len(contingency_names):
             err(

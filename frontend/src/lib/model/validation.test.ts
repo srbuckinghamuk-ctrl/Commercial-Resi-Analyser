@@ -944,9 +944,9 @@ describe('R10 — cost plan validation', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: -5, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: -5 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -955,9 +955,9 @@ describe('R10 — cost plan validation', () => {
     const valid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 5 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -1020,64 +1020,12 @@ describe('R10 — cost plan validation', () => {
     expect(valid.some((i) => i.field === 'cost_plan.fee_lines' && i.message.includes('unique'))).toBe(false);
   });
 
-  it('hard-errors when a selected-packages contingency names an unknown package id', () => {
-    const invalid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        mode: 'detailed',
-        packages: [pkg({ id: 'pkg-1' })],
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: ['no-such-id'] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].package_ids')).toBe(true);
-
-    const valid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        mode: 'detailed',
-        packages: [pkg({ id: 'pkg-1' })],
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: ['pkg-1'] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].package_ids')).toBe(false);
-  });
-
-  it('hard-errors when a selected-packages contingency names no packages but carries a percentage', () => {
-    const invalid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].package_ids')).toBe(true);
-
-    const valid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'selected_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].package_ids')).toBe(false);
-  });
-
   it('hard-errors when there are not exactly three contingency classes', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
         ],
       },
     }));
@@ -1091,9 +1039,9 @@ describe('R10 — cost plan validation', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'general', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'general', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -1203,9 +1151,9 @@ describe('R10 — cost plan validation', () => {
       cost_plan: {
         mode: 'headline',
         contingency: [
-          { name: 'general', pct: 60, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 60 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -1216,9 +1164,9 @@ describe('R10 — cost plan validation', () => {
       cost_plan: {
         mode: 'headline',
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));

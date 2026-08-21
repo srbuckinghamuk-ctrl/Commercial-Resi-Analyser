@@ -190,9 +190,9 @@ class TestTheCostLeverReachesBothModes:
         base.areas.basis = "manual"
 
         contingency = [
-            ContingencyClass(name="general", pct=10, basis="all_packages", package_ids=[]),
-            ContingencyClass(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
-            ContingencyClass(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+            ContingencyClass(name="general", pct=10),
+            ContingencyClass(name="existing_building", pct=0),
+            ContingencyClass(name="abnormal", pct=0),
         ]
 
         headline = base.model_copy(deep=True)
@@ -268,9 +268,9 @@ class TestTheCostLeverDoesNotDoubleApply:
             mode="headline",
             packages=[],
             contingency=[
-                ContingencyClass(name="general", pct=10, basis="all_packages", package_ids=[]),
-                ContingencyClass(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
-                ContingencyClass(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+                ContingencyClass(name="general", pct=10),
+                ContingencyClass(name="existing_building", pct=0),
+                ContingencyClass(name="abnormal", pct=0),
             ],
             fee_lines=[
                 FeeLine(

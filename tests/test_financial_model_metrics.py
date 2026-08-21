@@ -714,9 +714,9 @@ class TestCostPlanOnResult:
                  "contingency_class": "general", "lender_eligible": True, "notes": ""},
             ],
             "contingency": [
-                {"name": "general", "pct": 5, "basis": "all_packages", "package_ids": []},
-                {"name": "existing_building", "pct": 15, "basis": "selected_packages", "package_ids": ["p1"]},
-                {"name": "abnormal", "pct": 2.5, "basis": "all_packages", "package_ids": []},
+                {"name": "general", "pct": 5},
+                {"name": "existing_building", "pct": 15},
+                {"name": "abnormal", "pct": 2.5},
             ],
             "fee_lines": [
                 {"id": "f1", "code": "architect", "category": "professional", "label": "Architect",

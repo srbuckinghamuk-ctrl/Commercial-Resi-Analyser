@@ -260,9 +260,9 @@ describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
       areas: { ...base.areas, basis: 'manual' as const },
     };
     const contingency = [
-      { name: 'general' as const, pct: 10, basis: 'all_packages' as const, package_ids: [] },
-      { name: 'existing_building' as const, pct: 0, basis: 'all_packages' as const, package_ids: [] },
-      { name: 'abnormal' as const, pct: 0, basis: 'all_packages' as const, package_ids: [] },
+      { name: 'general' as const, pct: 10 },
+      { name: 'existing_building' as const, pct: 0 },
+      { name: 'abnormal' as const, pct: 0 },
     ];
     return {
       headline: { ...common, cost_plan: { mode: 'headline', packages: [], contingency, fee_lines: [] } },
@@ -330,9 +330,9 @@ describe('the cost lever does not double-apply to compliance or fees (headline m
         mode: 'headline',
         packages: [],
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
         fee_lines: [
           {

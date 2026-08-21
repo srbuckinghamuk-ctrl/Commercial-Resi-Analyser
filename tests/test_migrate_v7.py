@@ -55,7 +55,6 @@ def test_v6_to_v7_carries_contingency_pct_onto_general_and_zeroes_the_other_two(
     })
     v7 = migrate_v6_to_v7(v6)
     assert [c.pct for c in v7.cost_plan.contingency] == [12.5, 0, 0]
-    assert all(c.basis == "all_packages" for c in v7.cost_plan.contingency)
 
 
 def test_v6_to_v7_converts_all_eight_fee_fields_with_the_correct_categories(v1_doc):

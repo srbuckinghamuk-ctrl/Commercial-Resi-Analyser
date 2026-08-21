@@ -32,11 +32,12 @@ export interface CostPackage {
   code: CostPackageCode;
   label: string;
   amount_pence: number;
-  /** Recorded but NOT live in R10 (spec §16.9): neither engine reads this field
-   *  when resolving a contingency class's base. Scoping is driven solely by each
-   *  ContingencyClass's own `basis` / `package_ids` — set nowhere in the product
-   *  today, so every class currently applies to `all_packages`. Do not wire this
-   *  in without reading §16.9 first; it changes contingency base resolution. */
+  /** R11 spec §17.8. Live: scopes this package into its contingency class's
+   *  base in detailed mode. `general` always takes the whole base build
+   *  regardless of tag; `existing_building` and `abnormal` take the sum of
+   *  packages carrying that tag, as an ADDITION on top of general. Headline
+   *  mode has no packages, so every class there takes the whole base build
+   *  regardless of tag -- see computeCostPlan's contingency resolution. */
   contingency_class: ContingencyClassName;
   /** R10 records this and computes `lender_eligible_base_pence` from it, but the
    *  ledger's draw cap does NOT read it. Wiring it to
@@ -49,13 +50,14 @@ export interface CostPackage {
   vat_override: VatOverride | null;
 }
 
+/** R11 spec §17.8. One mechanism: the package's own `contingency_class` tag.
+ *  `basis` / `package_ids` were a second, unwritten mechanism (R10 carry-over)
+ *  and are deleted from the INPUT here. The result type `ContingencyLine`
+ *  keeps `basis`, now DERIVED by computeCostPlan rather than read from this
+ *  type -- see its resolution block for the mode-dependent rule. */
 export interface ContingencyClass {
   name: ContingencyClassName;
   pct: number;
-  /** 'all_packages' — the whole base build, and the only meaningful option in
-   *  headline mode, where there are no packages to name. */
-  basis: 'all_packages' | 'selected_packages';
-  package_ids: string[];
 }
 
 export type FeeBasis = 'fixed' | 'pct_of_base_build' | 'pct_of_construction_total';
@@ -116,8 +118,6 @@ export function defaultContingencyClasses(generalPct: number): ContingencyClass[
   return CONTINGENCY_CLASS_NAMES.map((name) => ({
     name,
     pct: name === 'general' ? generalPct : 0,
-    basis: 'all_packages' as const,
-    package_ids: [],
   }));
 }
 
@@ -269,13 +269,22 @@ export function computeCostPlan(
     ? 0
     : cc.fire_safety_pence + cc.sound_insulation_pence + cc.part_l_compliance_pence;
 
-  const byId = new Map(plan.packages.map((p) => [p.id, p.amount_pence]));
+  // R11 spec §17.8. One mechanism: the package's own tag. `basis`/`package_ids`
+  // are gone from the input; the result keeps `basis` as a DERIVED description of
+  // the base, so the reported shape and every fixture's strings are unchanged.
+  //
+  // Headline mode gives every class the whole base build. There are no packages
+  // to tag, and ConversionCostsPage renders all three percentages in both modes —
+  // scoping by tag here would silently zero a live input path.
   const contingency: ContingencyLine[] = plan.contingency.map((c) => {
-    const base = c.basis === 'all_packages'
-      ? baseBuild
-      : c.package_ids.reduce((s, id) => s + (byId.get(id) ?? 0), 0);
+    const scoped = detailed && c.name !== 'general';
+    const base = scoped
+      ? packages.filter((p) => p.contingency_class === c.name)
+          .reduce((s, p) => s + p.amount_pence, 0)
+      : baseBuild;
+    const basis: 'all_packages' | 'selected_packages' = scoped ? 'selected_packages' : 'all_packages';
     return {
-      name: c.name, pct: c.pct, basis: c.basis,
+      name: c.name, pct: c.pct, basis,
       base_pence: base,
       amount_pence: Math.round((base * c.pct) / 100),
     };

@@ -968,9 +968,9 @@ def _three_classes(*, general=None, existing_building=None, abnormal=None) -> li
     for the same reason as `_pkg` (ContingencyClass.pct carries `Field(ge=0)`,
     and the negative-pct rule pins the defense-in-depth check)."""
     defaults = {
-        "general": dict(name="general", pct=10, basis="all_packages", package_ids=[]),
-        "existing_building": dict(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
-        "abnormal": dict(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+        "general": dict(name="general", pct=10),
+        "existing_building": dict(name="existing_building", pct=0),
+        "abnormal": dict(name="abnormal", pct=0),
     }
     overrides = {"general": general, "existing_building": existing_building, "abnormal": abnormal}
     for key, override in overrides.items():
@@ -1070,44 +1070,6 @@ class TestCostPlanValidation:
             "fee_lines": [_fee_line(id="a"), _fee_line(id="b")],
         }))
         assert not any(i.field == "cost_plan.fee_lines" and "unique" in i.message for i in valid)
-
-    def test_hard_errors_when_a_selected_packages_contingency_names_an_unknown_package_id(self):
-        invalid = validate_inputs(make_v7_inputs(cost_plan={
-            "mode": "detailed",
-            "packages": [_pkg(id="pkg-1")],
-            "contingency": _three_classes(
-                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": ["no-such-id"]},
-            ),
-        }))
-        assert any(
-            i.severity == "error" and i.field == "cost_plan.contingency[1].package_ids" for i in invalid
-        )
-
-        valid = validate_inputs(make_v7_inputs(cost_plan={
-            "mode": "detailed",
-            "packages": [_pkg(id="pkg-1")],
-            "contingency": _three_classes(
-                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": ["pkg-1"]},
-            ),
-        }))
-        assert not any(i.field == "cost_plan.contingency[1].package_ids" for i in valid)
-
-    def test_hard_errors_when_a_selected_packages_contingency_names_no_packages_but_carries_a_pct(self):
-        invalid = validate_inputs(make_v7_inputs(cost_plan={
-            "contingency": _three_classes(
-                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": []},
-            ),
-        }))
-        assert any(
-            i.severity == "error" and i.field == "cost_plan.contingency[1].package_ids" for i in invalid
-        )
-
-        valid = validate_inputs(make_v7_inputs(cost_plan={
-            "contingency": _three_classes(
-                existing_building={"pct": 0, "basis": "selected_packages", "package_ids": []},
-            ),
-        }))
-        assert not any(i.field == "cost_plan.contingency[1].package_ids" for i in valid)
 
     def test_hard_errors_when_there_are_not_exactly_three_contingency_classes(self):
         invalid = validate_inputs(make_v7_inputs(cost_plan={

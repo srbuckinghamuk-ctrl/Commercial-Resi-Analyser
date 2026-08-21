@@ -525,12 +525,12 @@ class CostPackage(Model):
     code: CostPackageCode
     label: str = ""
     amount_pence: int = Field(default=0, ge=0)
-    # Recorded but NOT live in R10 (spec Sec 16.9): neither engine reads this
-    # field when resolving a contingency class's base. Scoping is driven solely
-    # by each ContingencyClass's own basis / package_ids -- set nowhere in the
-    # product today, so every class currently applies to all_packages. Do not
-    # wire this in without reading Sec 16.9 first; it changes contingency base
-    # resolution.
+    # R11 spec Sec 17.8. Live: scopes this package into its contingency class's
+    # base in detailed mode. "general" always takes the whole base build
+    # regardless of tag; "existing_building" and "abnormal" take the sum of
+    # packages carrying that tag, as an ADDITION on top of general. Headline
+    # mode has no packages, so every class there takes the whole base build
+    # regardless of tag -- see compute_cost_plan's contingency resolution.
     contingency_class: ContingencyClassName = "general"
     # R10 records this; the ledger's draw cap does NOT read it. R14 wires it.
     lender_eligible: bool = True
@@ -542,10 +542,14 @@ class CostPackage(Model):
 
 
 class ContingencyClass(Model):
+    """R11 spec Sec 17.8. One mechanism: the package's own contingency_class
+    tag. `basis` / `package_ids` were a second, unwritten mechanism (R10
+    carry-over) and are deleted from the INPUT here. The result dataclass
+    ContingencyLine (cost_plan.py) keeps `basis`, now DERIVED by
+    compute_cost_plan rather than read from this model."""
+
     name: ContingencyClassName
     pct: float = Field(default=0.0, ge=0)
-    basis: Literal["all_packages", "selected_packages"] = "all_packages"
-    package_ids: list[str] = Field(default_factory=list)
 
 
 class FeeLine(Model):
@@ -575,8 +579,6 @@ def default_contingency_classes(general_pct: float) -> list[ContingencyClass]:
         ContingencyClass(
             name=name,  # type: ignore[arg-type]
             pct=general_pct if name == "general" else 0.0,
-            basis="all_packages",
-            package_ids=[],
         )
         for name in CONTINGENCY_CLASS_NAMES
     ]

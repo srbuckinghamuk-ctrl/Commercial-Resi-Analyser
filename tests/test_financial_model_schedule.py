@@ -402,9 +402,9 @@ class TestBuildScheduleFollowsCostPlanOverLegacyFields:
                 contingency_class="general", lender_eligible=True, notes="",
             )],
             contingency=[
-                ContingencyClass(name="general", pct=10, basis="all_packages", package_ids=[]),
-                ContingencyClass(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
-                ContingencyClass(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+                ContingencyClass(name="general", pct=10),
+                ContingencyClass(name="existing_building", pct=0),
+                ContingencyClass(name="abnormal", pct=0),
             ],
             fee_lines=[
                 FeeLine(id="f1", code="architect", category="professional", label="Architect",

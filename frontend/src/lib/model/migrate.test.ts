@@ -457,7 +457,6 @@ describe('migrateV6toV7 (R10 spec §4)', () => {
     v6.conversion_costs = { ...v6.conversion_costs, contingency_pct: 12.5 };
     const v7 = migrateV6toV7(v6);
     expect(v7.cost_plan.contingency.map((c) => c.pct)).toEqual([12.5, 0, 0]);
-    expect(v7.cost_plan.contingency.every((c) => c.basis === 'all_packages')).toBe(true);
   });
 
   it('converts all eight fee fields to fixed lines with the CORRECT categories', () => {

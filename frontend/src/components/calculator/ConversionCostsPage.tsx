@@ -409,20 +409,18 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                     style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                   />
                 </div>
-                {/* Final review I1 (spec §16.9). This field is recorded but NOT
-                    live: neither engine reads it when resolving a contingency
-                    class's base -- scoping runs entirely off each class's
-                    basis / package_ids below, which nothing in this page
-                    writes, so every class currently applies to all packages
-                    regardless of what is selected here. Labelled "(recorded)"
-                    plus a title tooltip so a user cannot reasonably infer the
-                    figure is live -- do not wire this control without reading
-                    §16.9 first. */}
+                {/* R11 spec §17.8. Live: scopes this package into its
+                    contingency class's base. `general`'s percentage always
+                    applies to the whole base build regardless of this
+                    selection; `existing_building` and `abnormal` apply only
+                    to packages tagged with that class, as an ADDITION on top
+                    of general -- see the Contingency block below and
+                    computeCostPlan's resolution rule. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ color: '#64748b', fontSize: 11 }}>Contingency class (recorded)</span>
+                  <span style={{ color: '#64748b', fontSize: 11 }}>Contingency class</span>
                   <select
-                    aria-label="Package contingency class (recorded only — does not narrow the contingency base in R10)"
-                    title="Recorded only in R10: this does not narrow which packages a contingency class's percentage applies to. Scoping is driven solely by each class's basis / package_ids, below, not by this selection."
+                    aria-label="Package contingency class"
+                    title="Scopes this package into its contingency class's base: existing_building and abnormal apply only to packages tagged with that class, as an addition on top of general (spec §17.8)."
                     value={pkg.contingency_class}
                     onChange={(e) => updatePackage(pkg.id, { contingency_class: e.target.value as ContingencyClassName })}
                     style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
@@ -460,7 +458,11 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
 
       {/* R10 §3.3/§6. Both modes show the same three contingency rows: pct
           (editable), and the RESOLVED base and computed amount, read from
-          run.metrics.cost_plan.contingency -- never recomputed here. */}
+          run.metrics.cost_plan.contingency -- never recomputed here. R11 spec
+          §17.8: that base now comes from each package's own contingency_class
+          tag (detailed mode) or the whole base build (headline mode, or
+          `general` in either mode) -- resolved in cost-plan.ts, not on this
+          page. */}
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Contingency</h4>
       {CONTINGENCY_CLASS_NAMES.map((name) => {
         const line = result.contingency.find((c) => c.name === name);

@@ -472,9 +472,9 @@ export function detailedCostPlanInputs(): CalculatorInputsV7 {
         },
       ],
       contingency: [
-        { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
-        { name: 'existing_building', pct: 12, basis: 'selected_packages', package_ids: ['pkg-envelope'] },
-        { name: 'abnormal', pct: 8, basis: 'selected_packages', package_ids: ['pkg-externals'] },
+        { name: 'general', pct: 5 },
+        { name: 'existing_building', pct: 12 },
+        { name: 'abnormal', pct: 8 },
       ],
       fee_lines: v7.cost_plan.fee_lines.map((f) => {
         if (f.code === 'architect') return { ...f, basis: 'pct_of_base_build' as const, amount_pence: 0, pct: 5 };

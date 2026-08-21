@@ -269,20 +269,6 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       err('cost_plan.fee_lines', 'Fee line ids must be unique.');
     }
 
-    const packageIds = new Set(cp.packages.map((p) => p.id));
-    cp.contingency.forEach((c, idx) => {
-      if (c.basis === 'selected_packages') {
-        if (c.package_ids.some((id) => !packageIds.has(id))) {
-          err(`cost_plan.contingency[${idx}].package_ids`,
-            'One or more package_ids do not match a package in this cost plan.');
-        }
-        if (c.package_ids.length === 0 && c.pct !== 0) {
-          err(`cost_plan.contingency[${idx}].package_ids`,
-            'A selected-packages contingency naming no packages cannot carry a non-zero percentage.');
-        }
-      }
-    });
-
     const contingencyNames = cp.contingency.map((c) => c.name);
     if (cp.contingency.length !== 3 || new Set(contingencyNames).size !== contingencyNames.length) {
       err('cost_plan.contingency',
