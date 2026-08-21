@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 # has_facility: ruling R20 -- the ONE derivation of "does this deal have a
 # facility?", owned by the ledger, which is what spends the fees this gate
@@ -47,6 +47,7 @@ __all__ = [
     "default_vat_treatments",
     "resolve_vat_treatment",
     "is_purchase_vat_chargeable",
+    "chargeable_consideration_pence",
     "ResolvedVatTreatment",
     "VatReturnPeriod",
     "vat_return_periods",
@@ -152,6 +153,39 @@ def is_purchase_vat_chargeable(purchase: PurchaseVatInputs) -> bool:
     regardless of the option to tax -- that is the whole effect of a TOGC
     (Sec 17.3)."""
     return purchase.vendor_opted_to_tax and purchase.togc_treatment != "applies"
+
+
+class ConsiderationInputs(Protocol):
+    """The minimum a chargeable consideration needs: the acquisition block, and
+    the document's VAT block where it has one.
+
+    Narrower than AnyCalculatorInputs deliberately, mirroring vat.ts's
+    ConsiderationInputs. migrate.py's v1 bootstrap computes an acquisition cost
+    from a half-built document -- there is no CalculatorInputs object in
+    existence at that point -- so the accessor is structural, not nominal.
+    ``vat`` is read with getattr because a pre-v8 document does not carry the
+    attribute at all."""
+
+    acquisition: Any
+
+
+def chargeable_consideration_pence(inputs: ConsiderationInputs) -> int:
+    """THE single site that decides what the acquisition tax is charged on.
+
+    SDLT, LBTT and LTT are all charged on the VAT-INCLUSIVE consideration
+    (Sec 17.7), and every pre-R11 call site passed the exclusive price. Mirrors
+    chargeableConsiderationPence in vat.ts; the TS twin returns a branded
+    ChargeableConsideration, which Python has no equivalent for -- the Python
+    half of the guard is the AST scan in tests/test_accessor_guard.py.
+    """
+    price = inputs.acquisition.purchase_price_pence
+    # Read structurally, exactly as compute_vat does: a pre-v8 document has no
+    # vat block at all and its consideration is simply its price.
+    vat = getattr(inputs, "vat", None)
+    if vat is None or not is_purchase_vat_chargeable(vat.purchase):
+        return price
+    treatment = resolve_vat_treatment(vat, "acquisition", None)
+    return price + money_round((price * treatment.rate_pct) / 100)
 
 
 # ---------------------------------------------------------------------------

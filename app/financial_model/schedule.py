@@ -32,7 +32,12 @@ from .types import (
     ProgrammePackage,
     ProposedUnit,
 )
-from .vat import VatResult, compute_vat
+from .vat import (
+    ConsiderationInputs,
+    VatResult,
+    chargeable_consideration_pence,
+    compute_vat,
+)
 
 
 def unit_ancillary_value_pence(u: ProposedUnit) -> int:
@@ -68,7 +73,7 @@ def calculate_gdv(units: list[ProposedUnit]) -> int:
     return calculate_gdv_breakdown(units).total_pence
 
 
-def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
+def calculate_total_acquisition_cost(inputs: ConsiderationInputs) -> int:
     """Spec Sec 3.3 -- the acquisition line of the cost stack, acquisition tax
     included.
 
@@ -79,13 +84,21 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     the report names. Both fixture suites and test_financial_model_metrics.py
     pin their equality.
 
-    ``acq`` is annotated with the base class, which AcquisitionInputsV5
+    ``inputs.acquisition`` is the base class, which AcquisitionInputsV5
     subclasses; the isinstance gate is Python's stand-in for the TS engine's
     ``'jurisdiction' in acq`` guard (the same pairing derive_metrics uses). A
     v2-v4 acquisition block carries none of the new fields, so it resolves to
     england_ni with a null date and no override -- byte-for-byte what
     calculate_commercial_sdlt returned before R8 deleted it.
+
+    R11 (spec Sec 17.7): it takes the DOCUMENT, not the acquisition block
+    alone, because the tax base is the VAT-inclusive consideration and that is
+    a fact about the document's VAT block. Mirrors calculateTotalAcquisitionCost
+    in conversion-calc-engine.ts, which changed the same way and for the same
+    reason -- there, because a branded ChargeableConsideration cannot be
+    obtained from the block alone.
     """
+    acq = inputs.acquisition
     is_v5 = isinstance(acq, AcquisitionInputsV5)
     jurisdiction = acq.jurisdiction if is_v5 else "england_ni"
     raw_date = acq.acquisition_date if is_v5 else None
@@ -96,7 +109,8 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     # derive_metrics degrades identically so the two tax sites cannot drift.
     date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
     sdlt = calculate_acquisition_tax(
-        consideration_pence=acq.purchase_price_pence,
+        # Sec 17.7: the VAT-INCLUSIVE consideration, never the raw price.
+        consideration_pence=chargeable_consideration_pence(inputs),
         jurisdiction=jurisdiction,
         basis="non_residential",
         date=date,
@@ -218,7 +232,7 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     term = max(1, math.floor(inputs.finance.term_months))
     units = inputs.unit_mix.units
 
-    acquisition_total = calculate_total_acquisition_cost(inputs.acquisition)
+    acquisition_total = calculate_total_acquisition_cost(inputs)
     # R10 spec Sec 16. The cost stack is computed once, by the one engine that
     # serves both modes, and this is the only place the schedule learns the
     # three totals.

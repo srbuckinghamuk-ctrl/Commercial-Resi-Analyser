@@ -13,6 +13,7 @@ import { pct } from './pct';
 import { areaBridge } from './areas';
 import { computeCostPlan } from './cost-plan';
 import { calculateGdvBreakdown } from '../conversion-calc-engine';
+import { chargeableConsiderationPence } from './vat';
 
 /** Re-exported from './pct' (R9). Many modules and tests import `pct` from
  *  metrics; the definition moved to break an import cycle, not to move the
@@ -106,8 +107,11 @@ export function deriveMetrics(
   // hard acquisition.acquisition_date error independently, and calculateTotal
   // AcquisitionCost degrades identically so the two tax sites cannot drift.
   const acqDate = resolveAcquisitionDate(acqJurisdiction, 'non_residential', acqRawDate);
+  // §17.7: the VAT-INCLUSIVE consideration, never the raw price. Branded, so
+  // reverting this line to `acq.purchase_price_pence` is a `tsc` error.
+  const chargeableConsideration = chargeableConsiderationPence(inputs);
   const acquisitionTax = calculateAcquisitionTax({
-    consideration_pence: acq.purchase_price_pence,
+    consideration_pence: chargeableConsideration,
     jurisdiction: acqJurisdiction,
     basis: 'non_residential',
     date: acqDate,
@@ -268,6 +272,10 @@ export function deriveMetrics(
     acquisition_cost_pence: t.acquisition_pence,
     acquisition_tax_pence: sdlt,
     acquisition_tax: acquisitionTax,
+    // §17.7. `Number(...)` strips the brand: the RESULT is a plain figure the
+    // report and the API serialise, not a value anything may feed back into a
+    // tax call without going through the accessor again.
+    chargeable_consideration_pence: Number(chargeableConsideration),
     /** @deprecated R8 — use acquisition_tax_pence. Removed in R16. */
     sdlt_pence: sdlt,
     area_bridge: bridge,

@@ -25,6 +25,22 @@ const FRONTEND_ROOT = resolve(__dirname, '../../..');
 const CONFIG_PATH = resolve(FRONTEND_ROOT, 'eslint.config.js');
 const CONFIG = readFileSync(CONFIG_PATH, 'utf-8');
 
+/** The `files` array of the allowlist block — the LAST `files: [...]` before the
+ *  block that switches `no-restricted-syntax` off. Parsed rather than asserted
+ *  as a substring so the test can pin the array's EXACT contents (R10: a
+ *  `toContain`-only assertion cannot see a widening). */
+function allowlistFiles(): string[] {
+  const marker = "rules: { 'no-restricted-syntax': 'off' }";
+  const off = CONFIG.indexOf(marker);
+  expect(off, 'no allowlist block found in eslint.config.js').toBeGreaterThan(-1);
+  const before = CONFIG.slice(0, off);
+  const start = before.lastIndexOf('files: [');
+  expect(start, 'no files array found in the allowlist block').toBeGreaterThan(-1);
+  const end = before.indexOf(']', start);
+  const body = before.slice(start + 'files: ['.length, end);
+  return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+}
+
 async function lint(code: string, filePath: string) {
   const eslint = new ESLint({ cwd: FRONTEND_ROOT, overrideConfigFile: CONFIG_PATH });
   const [result] = await eslint.lintText(code, { filePath });
@@ -204,6 +220,46 @@ describe('single-accessor guard configuration', () => {
     expect(CONFIG).toContain("MemberExpression[computed=true][property.value='contingency_pct']");
   });
 
+  it('restricts all three read shapes of vat.treatments and vat_override (R11 spec 17.2)', () => {
+    // Same reasoning as the cost-area and contingency trios above, applied to
+    // R11's two fields. Each shape is a distinct AST node the others cannot see.
+    expect(CONFIG).toContain("MemberExpression[property.name='treatments']");
+    expect(CONFIG).toContain("ObjectPattern > Property[key.name='treatments']");
+    expect(CONFIG).toContain("MemberExpression[computed=true][property.value='treatments']");
+    expect(CONFIG).toContain("MemberExpression[property.name='vat_override']");
+    expect(CONFIG).toContain("ObjectPattern > Property[key.name='vat_override']");
+    expect(CONFIG).toContain("MemberExpression[computed=true][property.value='vat_override']");
+  });
+
+  it('restricts asChargeableConsideration as an Identifier, not a MemberExpression (R11 spec 17.7)', () => {
+    // The R9 defect, written down so it cannot ship again: the escape hatch is
+    // a bare imported function name, so a MemberExpression selector against it
+    // lints clean and never fires. Identifier is the verified-correct shape --
+    // the same one TAX_TABLES and selectBandSet use.
+    expect(CONFIG).toContain("Identifier[name='asChargeableConsideration']");
+    expect(CONFIG).not.toContain("MemberExpression[property.name='asChargeableConsideration']");
+  });
+
+  it('pins the allowlist array to EXACTLY these files (R11 spec 17.2 rule 2)', () => {
+    // R10 found that widening this array un-guarded three unrelated fields, and
+    // the guard's own test pinned the hole. `toContain` cannot catch a widening;
+    // exact equality can. A future task adding a file must change this list
+    // deliberately, and say why in the config comment above it.
+    expect(allowlistFiles()).toEqual([
+      'src/lib/model/areas.ts',
+      'src/lib/tax/acquisition-tax.ts',
+      'src/lib/model/cost-plan.ts',
+      'src/lib/model/vat.ts',
+      'src/lib/conversion-types.ts',
+      'src/lib/model/finance-types.ts',
+      'src/lib/model/migrate.ts',
+      'src/lib/conversion-defaults.ts',
+      'src/lib/report-qa/memo-fixtures.ts',
+      '**/*.test.ts',
+      '**/*.test.tsx',
+    ]);
+  });
+
   it('keeps the allowlist to the modules that own, declare, write or build fixtures for the values', () => {
     for (const allowed of [
       'src/lib/model/areas.ts',
@@ -288,6 +344,134 @@ describe('single-accessor guard configuration', () => {
     const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
     expect(scoped).toHaveLength(1);
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
+  });
+
+  // R11 Task 7 (spec 17.2 rule 2) -- the VAT block's single accessor. The same
+  // three read shapes again, for `vat.treatments` and for `vat_override`, each
+  // asserted through the REAL linter at severity 2.
+  it('reports a direct read of vat.treatments as an ERROR, not a warning', async () => {
+    const messages = await lint(
+      'export function illegal(vat: any) { return vat.treatments; }\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /vat\.treatments directly/.test(m.message));
+    expect(hit, `expected a vat.treatments hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+    expect(hit!.message).toMatch(/resolveVatTreatment\(\)/);
+    expect(hit!.message).toMatch(/17\.2/);
+  });
+
+  it('reports a DESTRUCTURED read of vat.treatments as an ERROR', async () => {
+    const messages = await lint(
+      'export function illegal(vat: { treatments: unknown[] }) {\n'
+      + '  const { treatments } = vat;\n'
+      + '  return treatments;\n'
+      + '}\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure treatments/.test(m.message));
+    expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('reports a COMPUTED read of vat.treatments as an ERROR', async () => {
+    const messages = await lint(
+      "export function illegal(vat: Record<string, unknown>) { return vat['treatments']; }\n",
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /treatments through a computed/.test(m.message));
+    expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('does NOT flag an object-literal write of treatments', async () => {
+    // The counter-example the destructuring selector needs. `defaultVatTreatments()`
+    // output and the migration both WRITE this key; the rule has never
+    // restricted writes, and scoping to ObjectPattern is what keeps that true.
+    const messages = await lint(
+      'export const write = (v: unknown[]) => ({ treatments: v });\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
+  });
+
+  it('reports a direct read of a vat_override as an ERROR, not a warning', async () => {
+    const messages = await lint(
+      'export function illegal(p: any) { return p.vat_override; }\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /vat_override directly/.test(m.message));
+    expect(hit, `expected a vat_override hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+    expect(hit!.message).toMatch(/resolveVatTreatment\(\)/);
+  });
+
+  it('reports a DESTRUCTURED read of a vat_override as an ERROR', async () => {
+    const messages = await lint(
+      'export function illegal(p: { vat_override: unknown }) {\n'
+      + '  const { vat_override } = p;\n'
+      + '  return vat_override;\n'
+      + '}\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /destructure vat_override/.test(m.message));
+    expect(hit, `expected a destructuring hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('reports a COMPUTED read of a vat_override as an ERROR', async () => {
+    const messages = await lint(
+      "export function illegal(p: Record<string, unknown>) { return p['vat_override']; }\n",
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /vat_override through a computed/.test(m.message));
+    expect(hit, `expected a computed-access hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+  });
+
+  it('does NOT flag an object-literal write of vat_override', async () => {
+    // cost-plan.ts's defaults and ConversionCostsPage.tsx's package editor both
+    // write `vat_override: null`. Writes are not reads.
+    const messages = await lint(
+      'export const write = () => ({ vat_override: null });\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    expect(messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toEqual([]);
+  });
+
+  it('does not flag a vat.treatments read on the allowlisted vat.ts path', async () => {
+    const messages = await lint(
+      'export function legal(vat: any) { return vat.treatments; }\n',
+      'src/lib/model/vat.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
+    expect(hit, `expected no hit on the allowlisted path; got: ${JSON.stringify(messages)}`).toBeUndefined();
+  });
+
+  // R11 Task 7 (spec 17.7) -- the brand's escape hatch.
+  it('reports a reference to asChargeableConsideration as an ERROR, not a warning', async () => {
+    const messages = await lint(
+      "import { asChargeableConsideration } from '../tax/acquisition-tax';\n"
+      + 'export const illegal = (n: number) => asChargeableConsideration(n);\n',
+      'src/lib/model/__synthetic-consumer.ts',
+    );
+    const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax' && /asChargeableConsideration/.test(m.message));
+    expect(hit, `expected an asChargeableConsideration hit; got: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(hit!.severity).toBe(2);
+    expect(hit!.message).toMatch(/chargeableConsiderationPence\(inputs\)/);
+    expect(hit!.message).toMatch(/17\.7/);
+  });
+
+  it('does not flag asChargeableConsideration on the two paths that own the brand', async () => {
+    for (const owner of ['src/lib/tax/acquisition-tax.ts', 'src/lib/model/vat.ts']) {
+      const messages = await lint(
+        "import { asChargeableConsideration } from '../tax/acquisition-tax';\n"
+        + 'export const legal = (n: number) => asChargeableConsideration(n);\n',
+        owner,
+      );
+      const hit = messages.find((m) => m.ruleId === 'no-restricted-syntax');
+      expect(hit, `expected no hit on ${owner}; got: ${JSON.stringify(messages)}`).toBeUndefined();
+    }
   });
 
   it('the guard now bites a planted total_construction_sqm read in conversion-calc-engine.ts (C1 restoration proof)', async () => {

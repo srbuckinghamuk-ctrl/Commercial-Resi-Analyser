@@ -18,9 +18,11 @@ from app.financial_model.types import (
     VatOverride,
     default_contingency_classes,
 )
+from app.financial_model import run_appraisal
 from app.financial_model.vat import (
     DEFAULT_VAT,
     VAT_CHARGE_CATEGORIES,
+    chargeable_consideration_pence,
     compute_vat,
     default_vat_treatments,
     is_purchase_vat_chargeable,
@@ -668,3 +670,81 @@ def test_derives_the_facility_gate_once_vat_base_and_ledger_fee_move_together():
             charge.net_base_pence if charge is not None else None,
             ledger.totals.ancillary_fees_pence,
         ) == (label, expected, expected)
+
+
+def _vat_document(
+    *,
+    vendor_opted_to_tax: bool = False,
+    togc: str = "unconfirmed",
+    purchase_price_pence: int = 0,
+    acquisition_rate_pct: float = 0,
+):
+    """Task 7 (spec Sec 17.7). Mirrors vat.test.ts's `vatDocument`: the worked
+    case addressed by the four facts Sec 17.7 turns on. `acquisition_rate_pct`
+    is 20 or nothing, which is the only rate Sec 17.7's worked figures need --
+    asserted rather than silently coerced, so a future 5% case must add the
+    option rather than read as 20."""
+    inputs, _, _ = _build_worked_vat_case(
+        vendor_opted_to_tax=vendor_opted_to_tax,
+        togc_treatment=togc,
+        purchase_price_pence=purchase_price_pence,
+        acquisition_at_20=acquisition_rate_pct == 20,
+    )
+    return inputs
+
+
+def test_chargeable_consideration_equals_the_price_where_no_purchase_vat():
+    inputs = _vat_document(vendor_opted_to_tax=False)
+    assert chargeable_consideration_pence(inputs) == inputs.acquisition.purchase_price_pence
+
+
+def test_chargeable_consideration_includes_purchase_vat_where_opted_and_no_togc():
+    inputs = _vat_document(
+        vendor_opted_to_tax=True, togc="does_not_apply",
+        purchase_price_pence=50_000_000, acquisition_rate_pct=20,
+    )
+    assert chargeable_consideration_pence(inputs) == 60_000_000
+
+
+def test_chargeable_consideration_excludes_purchase_vat_where_togc_applies():
+    inputs = _vat_document(
+        vendor_opted_to_tax=True, togc="applies",
+        purchase_price_pence=50_000_000, acquisition_rate_pct=20,
+    )
+    assert chargeable_consideration_pence(inputs) == 50_000_000
+
+
+def test_more_acquisition_tax_is_charged_on_the_vat_inclusive_consideration():
+    """The permanent cost the app reports as zero today. Both figures are read
+    off the RESULT, independently computed by the tax engine -- not recomputed
+    here, which would make the test agree with a bug forever."""
+    with_vat = run_appraisal(_vat_document(
+        vendor_opted_to_tax=True, togc="does_not_apply",
+        purchase_price_pence=50_000_000, acquisition_rate_pct=20,
+    ))
+    without = run_appraisal(_vat_document(
+        vendor_opted_to_tax=False, purchase_price_pence=50_000_000,
+    ))
+    assert with_vat.metrics.acquisition_tax_pence > without.metrics.acquisition_tax_pence
+    assert with_vat.metrics.chargeable_consideration_pence == 60_000_000
+    assert without.metrics.chargeable_consideration_pence == 50_000_000
+
+
+def test_the_acquisition_cost_moves_with_the_consideration_not_only_the_reported_tax():
+    """The tax is charged at two independent sites (derive_metrics and
+    schedule.py's calculate_total_acquisition_cost). Asserting only
+    acquisition_tax_pence would leave the second site free to keep charging the
+    exclusive price -- R8's exact defect shape, and the reason spec Sec 17.7
+    names all six call sites rather than the reported one."""
+    with_vat = run_appraisal(_vat_document(
+        vendor_opted_to_tax=True, togc="does_not_apply",
+        purchase_price_pence=50_000_000, acquisition_rate_pct=20,
+    ))
+    without = run_appraisal(_vat_document(
+        vendor_opted_to_tax=False, purchase_price_pence=50_000_000,
+    ))
+    tax_delta = with_vat.metrics.acquisition_tax_pence - without.metrics.acquisition_tax_pence
+    assert tax_delta > 0
+    assert (
+        with_vat.metrics.acquisition_cost_pence - without.metrics.acquisition_cost_pence
+    ) == tax_delta

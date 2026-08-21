@@ -132,7 +132,10 @@ export function migrateInputs(
     ...((v1.finance ?? {}) as Partial<FinanceInputs>),
   };
   const costBeforeFinance =
-    calculateTotalAcquisitionCost(acquisition) +
+    // v1 has no VAT block at all, so the chargeable consideration IS the price
+    // (§17.7). Passed as the half-built document the accessor needs, rather than
+    // by fabricating a branded number here.
+    calculateTotalAcquisitionCost({ acquisition }) +
     // v1 migration runs before the areas block exists, so the manual field IS
     // the area here — passed explicitly rather than read inside the callee.
     calculateTotalConstructionCost(conversion_costs, conversion_costs.total_construction_sqm) +

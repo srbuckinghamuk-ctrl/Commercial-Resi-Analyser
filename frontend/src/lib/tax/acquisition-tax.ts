@@ -236,8 +236,24 @@ export interface AcquisitionTaxResult {
   computed_total_pence: number | null;
 }
 
+/** R11 spec §17.7. A nominal type, so `tsc` — not a lint rule and not review —
+ *  rejects a raw `purchase_price_pence` where a chargeable consideration is
+ *  required. An intermediate variable does not launder it: the variable is a
+ *  plain number too. `purchase_price_pence` has 23 legitimate readers in this
+ *  tree, so restricting the FIELD would be noise; this restricts the USE. */
+export type ChargeableConsideration = number & { readonly __brand: unique symbol };
+
+/** The escape hatch, for fixture builders and tests only. Restricted by name in
+ *  eslint.config.js — production code must call chargeableConsiderationPence(). */
+export function asChargeableConsideration(n: number): ChargeableConsideration {
+  return n as ChargeableConsideration;
+}
+
 export interface AcquisitionTaxArgs {
-  consideration_pence: number;
+  /** VAT-INCLUSIVE (spec §17.7). SDLT, LBTT and LTT are all charged on the
+   *  consideration including any purchase VAT, so this is never the raw price
+   *  — obtain it from `chargeableConsiderationPence(inputs)` in model/vat.ts. */
+  consideration_pence: ChargeableConsideration;
   jurisdiction: Jurisdiction;
   basis: TaxBasis;
   date: string | null;
@@ -255,7 +271,10 @@ export function calculateAcquisitionTax(args: AcquisitionTaxArgs): AcquisitionTa
   let surcharge = 0;
 
   if (consideration_pence > 0) {
-    let remaining = consideration_pence;
+    // Annotated: `consideration_pence` is branded, and a brand is not something
+    // you may subtract from and still call a consideration. Inside the band walk
+    // it is an ordinary running total.
+    let remaining: number = consideration_pence;
     let prevThreshold = 0;
     for (const band of set.bands) {
       const width = band.up_to_pence - prevThreshold;

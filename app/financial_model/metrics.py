@@ -20,6 +20,7 @@ from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct
 from .lender_valuation import compute_lender_gdv
 from .schedule import Schedule, calculate_gdv_breakdown
+from .vat import chargeable_consideration_pence
 from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax, resolve_acquisition_date
 from .types import (
     CALC_VERSION,
@@ -120,6 +121,12 @@ class AppraisalResultV2:
     # Spec Sec 14 (R8) -- the full derivation: regime, band breakdown, surcharge,
     # band-set effective date, table version, source and override provenance.
     acquisition_tax: AcquisitionTaxResult
+    # R11 spec Sec 17.7 -- the figure the acquisition tax was actually charged
+    # on: the price PLUS any chargeable purchase VAT. Equal to
+    # acquisition.purchase_price_pence unless the vendor has opted to tax and
+    # TOGC does not apply. Disclosed rather than left implicit, so the tax base
+    # is visible in the result instead of buried inside a tax figure.
+    chargeable_consideration_pence: int
     # DEPRECATED (R8): a jurisdiction-neutral figure under an England/NI-only
     # name. Carries the identical value to acquisition_tax_pence; retained only
     # so pre-R8 report and export readers keep working. Removed in R16.
@@ -292,7 +299,17 @@ def derive_metrics(
     # sites cannot drift.
     date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
     acquisition_tax = calculate_acquisition_tax(
-        consideration_pence=acq.purchase_price_pence,
+        # Sec 17.7: the VAT-INCLUSIVE consideration, never the raw price.
+        #
+        # Spelled as the CALL rather than through an intermediate variable, and
+        # deliberately not mirroring metrics.ts, which holds the figure in a
+        # local. TypeScript can: the value is branded, and the brand flows
+        # through the variable. Python has no nominal type, so the AST guard in
+        # tests/test_accessor_guard.py requires the accessor call AT the
+        # keyword -- an intermediate Name is precisely the laundering shape the
+        # brand exists to defeat, and one a scan cannot tell from a raw price.
+        # The accessor is pure, so the second call below is the same figure.
+        consideration_pence=chargeable_consideration_pence(inputs),
         jurisdiction=jurisdiction,
         basis="non_residential",
         date=date,
@@ -460,6 +477,7 @@ def derive_metrics(
         acquisition_cost_pence=t.acquisition_pence,
         acquisition_tax_pence=sdlt,
         acquisition_tax=acquisition_tax,
+        chargeable_consideration_pence=chargeable_consideration_pence(inputs),
         # DEPRECATED (R8) -- use acquisition_tax_pence. Removed in R16.
         sdlt_pence=sdlt,
         area_bridge=bridge,

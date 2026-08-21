@@ -10,6 +10,7 @@ output of migration.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel
@@ -430,7 +431,13 @@ def migrate_inputs(
     acq_obj = AcquisitionInputs.model_validate(acquisition)
     cc_obj = ConversionCostInputs.model_validate(conversion_costs)
     cost_before_finance = (
-        calculate_total_acquisition_cost(acq_obj)
+        # v1 has no VAT block at all, so the chargeable consideration IS the
+        # price (Sec 17.7). Passed as the half-built document the accessor
+        # needs -- SimpleNamespace rather than a fabricated CalculatorInputs,
+        # because no valid document exists yet at this point in the chain (the
+        # finance block this figure feeds has not been translated). Mirrors
+        # migrate.ts's `calculateTotalAcquisitionCost({ acquisition })`.
+        calculate_total_acquisition_cost(SimpleNamespace(acquisition=acq_obj))
         # v1 migration runs before the areas block exists, so the manual field IS
         # the area here -- passed explicitly rather than read inside the callee.
         + calculate_total_construction_cost(cc_obj, cc_obj.total_construction_sqm)

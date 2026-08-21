@@ -405,6 +405,12 @@ export interface AppraisalResultV2 {
   /** Spec §14 (R8) — the full derivation: regime, band breakdown, surcharge,
    *  band-set effective date, table version, source and override provenance. */
   acquisition_tax: AcquisitionTaxResult;
+  /** R11 spec §17.7 — the figure the acquisition tax was actually charged on:
+   *  the price PLUS any chargeable purchase VAT. Equal to
+   *  `acquisition.purchase_price_pence` unless the vendor has opted to tax and
+   *  TOGC does not apply. Disclosed rather than left implicit, so the tax base
+   *  is visible in the result instead of buried inside a tax figure. */
+  chargeable_consideration_pence: number;
   /**
    * @deprecated R8 — a jurisdiction-neutral figure under an England/NI-only
    * name. Carries the identical value to `acquisition_tax_pence`; retained only

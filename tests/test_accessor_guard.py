@@ -43,7 +43,11 @@ and flags only the node shapes that are an actual read:
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
+from typing import get_args
+
+from app.financial_model.types import FlagCode
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
@@ -112,6 +116,38 @@ CONTINGENCY_ALLOWLIST = {
     # R10 Task 9 fix round 1 (I2): allowlisting it anyway was YAGNI; if a
     # future read needs it, the guard firing is the correct prompt to add it
     # back deliberately.
+}
+
+
+# R11 Task 7 (spec Sec 17.2 rule 1). `resolve_vat_treatment` is the ONLY
+# function that may read `vat.treatments` or a `vat_override`; it applies the
+# line-override-then-category precedence and keeps evidence_status a category
+# fact. A second reader is a second implementation of that precedence, which is
+# the R10 "two mechanisms for one fact" defect exactly.
+#
+# vat.py is the only allowlisted file, mirroring eslint.config.js's single new
+# entry. It carries the resolver's own `vat.treatments` read AND compute_vat's
+# four collect-and-forward `vat_override` reads, which hand the value straight
+# to the resolver without interpreting it -- correct code the guard would
+# otherwise fail on retroactively.
+VAT_TREATMENTS_FIELD = "treatments"
+VAT_OVERRIDE_FIELD = "vat_override"
+VAT_ACCESSOR_ALLOWLIST = {"app/financial_model/vat.py"}
+
+# R11 Task 7 (spec Sec 17.7). The Python half of the TS `ChargeableConsideration`
+# brand. TypeScript makes `tsc` reject a raw purchase_price_pence at the tax
+# boundary; Python has no nominal types, so the equivalent is this scan: every
+# `consideration_pence=` keyword argument in app/ must be a CALL to
+# chargeable_consideration_pence. calculate_acquisition_tax's parameter is
+# keyword-only (acquisition_tax.py), so there is no positional spelling that
+# could evade this.
+#
+# acquisition_tax.py declares the parameter; vat.py owns the accessor.
+CONSIDERATION_KEYWORD = "consideration_pence"
+CONSIDERATION_ACCESSOR = "chargeable_consideration_pence"
+CONSIDERATION_ALLOWLIST = {
+    "app/financial_model/acquisition_tax.py",
+    "app/financial_model/vat.py",
 }
 
 
@@ -199,6 +235,67 @@ def _contingency_reads(tree: ast.AST) -> list[int]:
         + _getattr_reads(tree, CONTINGENCY_FIELD)
         + _subscript_reads(tree, CONTINGENCY_FIELD)
     )
+
+
+def _vat_treatments_reads(tree: ast.AST) -> list[int]:
+    """Every shape that is an actual read of `vat.treatments` -- the same three
+    the cost-area finder checks (R11 spec Sec 17.2). A pydantic FIELD
+    DECLARATION (`treatments: list[VatTreatment] = Field(...)`) is an AnnAssign,
+    not an Attribute, and a keyword argument (`VatInputs(treatments=...)`) is an
+    ast.keyword -- neither is a read, and neither is flagged, which is what
+    keeps types.py off the allowlist."""
+    return sorted(
+        _attribute_reads(tree, VAT_TREATMENTS_FIELD)
+        + _getattr_reads(tree, VAT_TREATMENTS_FIELD)
+        + _subscript_reads(tree, VAT_TREATMENTS_FIELD)
+    )
+
+
+def _vat_override_reads(tree: ast.AST) -> list[int]:
+    """Every shape that is an actual read of a `vat_override` (R11 spec
+    Sec 17.2). Same three shapes, same declaration/write exclusions."""
+    return sorted(
+        _attribute_reads(tree, VAT_OVERRIDE_FIELD)
+        + _getattr_reads(tree, VAT_OVERRIDE_FIELD)
+        + _subscript_reads(tree, VAT_OVERRIDE_FIELD)
+    )
+
+
+def _called_name(func: ast.AST) -> str | None:
+    """The bare name of a called function, whether written `f(...)` or
+    `module.f(...)`. Anything else (a call on a subscript, a lambda) is not a
+    shape this guard can decide, and it abstains rather than guesses."""
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _unguarded_considerations(tree: ast.AST) -> list[int]:
+    """Line numbers of every ``consideration_pence=<x>`` keyword argument whose
+    value is NOT a call to ``chargeable_consideration_pence`` (R11 spec
+    Sec 17.7).
+
+    This is the Python half of the TS branded type. An intermediate variable
+    does not launder it here either: a bare Name is not an ast.Call, so
+    ``consideration_pence=price`` is flagged exactly as
+    ``consideration_pence=acq.purchase_price_pence`` is."""
+    lines = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != CONSIDERATION_KEYWORD:
+                continue
+            value = kw.value
+            if (
+                isinstance(value, ast.Call)
+                and _called_name(value.func) == CONSIDERATION_ACCESSOR
+            ):
+                continue
+            lines.append(kw.value.lineno)
+    return sorted(lines)
 
 
 def _name_references(tree: ast.AST, name: str) -> list[int]:
@@ -291,6 +388,66 @@ def test_no_unauthorised_selector_of_the_tax_band_sets():
     assert offenders == [], (
         "These files select acquisition-tax band sets directly instead of calling "
         "calculate_acquisition_tax() from app/financial_model/acquisition_tax.py:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_no_unauthorised_reader_of_the_vat_treatments():
+    """R11 spec Sec 17.2 rule 1. resolve_vat_treatment is the only function that
+    may read vat.treatments -- it applies the line-override-then-category
+    precedence and the not-registered inert case. A second reader is a second
+    implementation of that precedence."""
+    offenders = _offenders(_vat_treatments_reads, VAT_ACCESSOR_ALLOWLIST)
+    assert offenders == [], (
+        "These files read vat.treatments directly instead of calling "
+        "resolve_vat_treatment() from app/financial_model/vat.py:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_no_unauthorised_reader_of_a_vat_override():
+    """The other half of Sec 17.2 rule 1: the per-line override. Reading it
+    outside the resolver is how the override-over-category precedence gets
+    re-implemented."""
+    offenders = _offenders(_vat_override_reads, VAT_ACCESSOR_ALLOWLIST)
+    assert offenders == [], (
+        "These files read a vat_override directly instead of passing it to "
+        "resolve_vat_treatment() from app/financial_model/vat.py:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_the_vat_guard_does_not_flag_a_pydantic_field_declaration():
+    """types.py DECLARES both fields and CONSTRUCTS the default block
+    (`VatInputs(treatments=default_vat_treatments())`). Neither is a read: an
+    annotated assignment is an AnnAssign and a keyword argument is an
+    ast.keyword, and flagging either would be the false positive that gets a
+    guard weakened until it is useless. This is why types.py is NOT on the
+    allowlist -- it does not need to be."""
+    flagged = {
+        o.split(":", 1)[0]
+        for o in _offenders(_vat_treatments_reads, VAT_ACCESSOR_ALLOWLIST)
+        + _offenders(_vat_override_reads, VAT_ACCESSOR_ALLOWLIST)
+    }
+    assert "app/financial_model/types.py" not in flagged
+
+
+def test_every_acquisition_tax_base_is_the_chargeable_consideration():
+    """R11 spec Sec 17.7. SDLT, LBTT and LTT are all charged on the
+    VAT-INCLUSIVE consideration, and every pre-R11 call site passed
+    acquisition.purchase_price_pence straight in -- under-reporting a PERMANENT
+    cost, not a timing one.
+
+    The TS engine makes this a `tsc` error via the branded ChargeableConsideration
+    type. Python has no equivalent, so this scan is the guard: every
+    `consideration_pence=` keyword argument must be a CALL to the accessor.
+    purchase_price_pence has 10 legitimate readers in this package, so the guard
+    restricts the USE, not the field."""
+    offenders = _offenders(_unguarded_considerations, CONSIDERATION_ALLOWLIST)
+    assert offenders == [], (
+        "These acquisition-tax call sites are charged on something other than "
+        "chargeable_consideration_pence(inputs) from app/financial_model/vat.py "
+        "(spec Sec 17.7 -- the tax base is the VAT-INCLUSIVE consideration):\n  "
         + "\n  ".join(offenders)
     )
 
@@ -437,3 +594,172 @@ def test_the_contingency_guard_does_not_flag_a_dict_literal_key():
         CONTINGENCY_ALLOWLIST,
     )
     assert not any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_vat_treatments_guard_itself_detects_a_planted_attribute_read():
+    """A guard nobody has watched fail is not a guard (R11 spec Sec 17.2)."""
+    offenders = _probe_offenders(
+        "x = inputs.vat.treatments\n", _vat_treatments_reads, VAT_ACCESSOR_ALLOWLIST,
+    )
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_vat_treatments_guard_itself_detects_planted_getattr_and_dict_reads():
+    for source in (
+        'x = getattr(inputs.vat, "treatments")\n',
+        'x = snapshot["vat"]["treatments"]\n',
+    ):
+        attr_only = _probe_offenders(
+            source,
+            lambda t: _attribute_reads(t, VAT_TREATMENTS_FIELD),
+            VAT_ACCESSOR_ALLOWLIST,
+        )
+        assert not any("__guard_probe.py" in o for o in attr_only), (
+            "the attribute-only finder must NOT see " + source.strip()
+        )
+        offenders = _probe_offenders(
+            source, _vat_treatments_reads, VAT_ACCESSOR_ALLOWLIST,
+        )
+        assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_vat_override_guard_itself_detects_a_planted_attribute_read():
+    offenders = _probe_offenders(
+        "x = package.vat_override\n", _vat_override_reads, VAT_ACCESSOR_ALLOWLIST,
+    )
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_vat_guard_does_not_flag_a_dict_literal_key():
+    """The counter-example both dict-key shapes need: constructing a block with
+    `{"treatments": [], "vat_override": None}` is a write, not a read."""
+    offenders = _probe_offenders(
+        'doc = {"vat": {"treatments": []}, "package": {"vat_override": None}}\n',
+        lambda t: _vat_treatments_reads(t) + _vat_override_reads(t),
+        VAT_ACCESSOR_ALLOWLIST,
+    )
+    assert not any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_consideration_guard_itself_detects_a_planted_raw_price():
+    """The exact reversion the guard exists to catch: an acquisition-tax call
+    charged on the VAT-exclusive price (R11 spec Sec 17.7)."""
+    offenders = _probe_offenders(
+        "t = calculate_acquisition_tax(\n"
+        "    consideration_pence=acq.purchase_price_pence,\n"
+        '    jurisdiction="england_ni", basis="non_residential", date=None,\n'
+        ")\n",
+        _unguarded_considerations,
+        CONSIDERATION_ALLOWLIST,
+    )
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_consideration_guard_is_not_laundered_by_an_intermediate_variable():
+    """deal-spider.ts passed the price through an intermediate `price` variable,
+    which is why the TS guard is a branded type and not a shape-based lint
+    selector. The Python scan must not be fooled by the same shape: a bare Name
+    is not an ast.Call, so it is flagged."""
+    offenders = _probe_offenders(
+        "price = acq.purchase_price_pence\n"
+        "t = calculate_acquisition_tax(consideration_pence=price)\n",
+        _unguarded_considerations,
+        CONSIDERATION_ALLOWLIST,
+    )
+    assert any("__guard_probe.py" in o for o in offenders)
+
+
+def test_the_consideration_guard_accepts_the_accessor_call():
+    """The counter-example: the correct spelling must lint clean, or the guard
+    would be unsatisfiable and would simply be switched off. Both the bare and
+    the module-qualified call are accepted."""
+    for source in (
+        "t = calculate_acquisition_tax(\n"
+        "    consideration_pence=chargeable_consideration_pence(inputs),\n"
+        ")\n",
+        "t = calculate_acquisition_tax(\n"
+        "    consideration_pence=vat.chargeable_consideration_pence(inputs),\n"
+        ")\n",
+    ):
+        offenders = _probe_offenders(
+            source, _unguarded_considerations, CONSIDERATION_ALLOWLIST,
+        )
+        assert not any("__guard_probe.py" in o for o in offenders), source
+
+
+# ---------------------------------------------------------------------------
+# Ruling R26 -- FlagCode parity across the two engines.
+#
+# Task 6 added 'vat_funding_gap' to the TypeScript FlagCode union and NOT to the
+# Python Literal. Nothing failed: ModelFlag.code is a plain `str`, and the
+# Python FlagCode has no consumer at all -- it is documentation until something
+# reads it. The omission was caught by review, not by a test, and nothing
+# prevented the next release repeating it exactly. This is that something.
+# ---------------------------------------------------------------------------
+
+FLAG_CODE_TS = (
+    Path(__file__).resolve().parents[1]
+    / "frontend" / "src" / "lib" / "model" / "finance-types.ts"
+)
+
+
+def _ts_flag_codes() -> set[str]:
+    """The members of the TypeScript `FlagCode` union.
+
+    Comments are stripped BEFORE the string literals are extracted: the union's
+    own doc comment contains an apostrophe ("a month's VAT"), which a naive
+    quote-pair scan would read as the start of a member."""
+    source = FLAG_CODE_TS.read_text(encoding="utf-8")
+    start = source.index("export type FlagCode =")
+    end = source.index(";", start)
+    body = source[start:end]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    body = re.sub(r"//[^\n]*", "", body)
+    return set(re.findall(r"'([a-z_]+)'", body))
+
+
+def _flag_code_drift(ts: set[str], py: set[str]) -> str | None:
+    """None when the two engines agree; otherwise a report naming which members
+    are missing from WHICH side. A parity failure that does not say which side
+    is short is a puzzle, not a report."""
+    if ts == py:
+        return None
+    return (
+        "FlagCode has drifted between the engines.\n"
+        f"  missing from Python (app/financial_model/types.py): {sorted(ts - py)}\n"
+        "  missing from TypeScript (frontend/src/lib/model/finance-types.ts): "
+        f"{sorted(py - ts)}"
+    )
+
+
+def test_the_flag_code_union_is_identical_in_both_engines():
+    """Ruling R26. The two engines must agree on the vocabulary of flags they
+    can emit, or one of them can produce a code the other's type says is
+    impossible -- silently, because ModelFlag.code is a plain str on both
+    sides."""
+    ts = _ts_flag_codes()
+    py = set(get_args(FlagCode))
+    assert ts, "parsed no members out of the TypeScript FlagCode union"
+    drift = _flag_code_drift(ts, py)
+    assert drift is None, drift
+
+
+def test_the_flag_code_parity_guard_names_the_side_that_is_short():
+    """Watch it fail, in both directions. A parity test that passes when the two
+    lists differ is worse than none; one that fails without naming the member is
+    a puzzle. Planted against the REAL parsed sets, so it cannot pass by
+    comparing two hand-written constants."""
+    ts = _ts_flag_codes()
+    py = set(get_args(FlagCode))
+    victim = "vat_funding_gap"
+    assert victim in ts and victim in py, (
+        "the planted victim must exist on both sides before it is removed"
+    )
+
+    dropped_from_python = _flag_code_drift(ts, py - {victim})
+    assert dropped_from_python is not None
+    assert f"missing from Python (app/financial_model/types.py): ['{victim}']" in dropped_from_python
+
+    dropped_from_ts = _flag_code_drift(ts - {victim}, py)
+    assert dropped_from_ts is not None
+    assert f"finance-types.ts): ['{victim}']" in dropped_from_ts

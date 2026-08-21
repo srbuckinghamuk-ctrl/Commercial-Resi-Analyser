@@ -33,7 +33,7 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const units = inputs.unit_mix.units;
 
-  const acquisitionTotal = calculateTotalAcquisitionCost(inputs.acquisition);
+  const acquisitionTotal = calculateTotalAcquisitionCost(inputs);
   // R10 spec §16. The cost stack is computed once, by the one engine that serves
   // both modes, and this is the only place the schedule learns the three totals.
   const costPlan = computeCostPlan(inputs, developedAreaSqm(inputs), units.length);

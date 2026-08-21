@@ -12,7 +12,7 @@ import { defaultCalculatorInputsV2 } from './conversion-defaults';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
 import { migrateInputsToV5 } from './model';
-import { calculateAcquisitionTax } from './tax/acquisition-tax';
+import { calculateAcquisitionTax, asChargeableConsideration } from './tax/acquisition-tax';
 import type { CalculatorInputsV2 } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
 
@@ -242,11 +242,11 @@ describe('tax advantage axis', () => {
     inputs.deal_spider.cil_offset_pence = 1_000_000;
     const metrics = runAppraisal(inputs).metrics;
     const resSdlt = calculateAcquisitionTax({
-      consideration_pence: inputs.acquisition.purchase_price_pence,
+      consideration_pence: asChargeableConsideration(inputs.acquisition.purchase_price_pence),
       jurisdiction: 'england_ni', basis: 'residential_higher', date: null,
     }).total_pence;
     const commSdlt = calculateAcquisitionTax({
-      consideration_pence: inputs.acquisition.purchase_price_pence,
+      consideration_pence: asChargeableConsideration(inputs.acquisition.purchase_price_pence),
       jurisdiction: 'england_ni', basis: 'non_residential', date: null,
     }).total_pence;
     const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
@@ -277,7 +277,7 @@ describe('tax advantage is computed within one regime (R8)', () => {
     const inputs = migrateInputsToV5({ inputs_version: 1 } as Record<string, unknown>);
     inputs.acquisition.purchase_price_pence = 75_348_200;
     const residential = calculateAcquisitionTax({
-      consideration_pence: 75_348_200, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(75_348_200), jurisdiction: 'england_ni',
       basis: 'residential_higher', date: null,
     }).total_pence;
     expect(residential).toBe(6_534_820); // the pre-R8 residential-sdlt figure

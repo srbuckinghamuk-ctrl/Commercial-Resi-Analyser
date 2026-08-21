@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   VAT_CHARGE_CATEGORIES, DEFAULT_VAT, defaultVatTreatments,
   resolveVatTreatment, isPurchaseVatChargeable, vatReturnPeriods,
-  spreadProRata, computeVat,
+  spreadProRata, computeVat, chargeableConsiderationPence,
 } from './vat';
+import { runAppraisal } from './index';
 import { computeCostPlan, defaultContingencyClasses } from './cost-plan';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
@@ -612,5 +613,83 @@ describe('computeVat (spec §17.5)', () => {
     expect(vat.charges.every((c) => c.net_base_pence >= 0)).toBe(true);
     expect(vat.charges.every((c) => c.vat_pence >= 0)).toBe(true);
     expect(vat.months.every((m) => m.incurred_pence >= 0)).toBe(true);
+  });
+});
+
+/** Task 7 (spec §17.7). The brief's `vatDocument`: `buildWorkedVatCase`'s
+ *  document, addressed by the four facts §17.7 turns on — whether the vendor
+ *  has opted, the TOGC position, the price, and the acquisition category's
+ *  rate. Nothing here is stubbed: the same real `computeCostPlan` /
+ *  `buildSchedule` document the worked cycle above uses. */
+function vatDocument(opts: {
+  vendorOptedToTax?: boolean;
+  togc?: TogcTreatment;
+  purchasePricePence?: number;
+  acquisitionRatePct?: number;
+} = {}): CalculatorInputsV8 {
+  return buildWorkedVatCase({
+    vendorOptedToTax: opts.vendorOptedToTax,
+    togcTreatment: opts.togc,
+    purchasePricePence: opts.purchasePricePence,
+    // `buildWorkedVatCase` rates the acquisition category at 20% or not at all,
+    // which is the only rate §17.7's worked figures need. Asserted rather than
+    // silently coerced: a future 5% case must add the option, not read as 20.
+    acquisitionAt20: opts.acquisitionRatePct === 20,
+  }).inputs;
+}
+
+describe('chargeable consideration (spec §17.7)', () => {
+  it('equals the price where no purchase VAT is chargeable', () => {
+    const inputs = vatDocument({ vendorOptedToTax: false });
+    expect(Number(chargeableConsiderationPence(inputs)))
+      .toBe(inputs.acquisition.purchase_price_pence);
+  });
+
+  it('includes purchase VAT where the vendor has opted and TOGC does not apply', () => {
+    const inputs = vatDocument({
+      vendorOptedToTax: true, togc: 'does_not_apply',
+      purchasePricePence: 50_000_000, acquisitionRatePct: 20,
+    });
+    expect(Number(chargeableConsiderationPence(inputs))).toBe(60_000_000);
+  });
+
+  it('excludes purchase VAT where TOGC applies', () => {
+    const inputs = vatDocument({
+      vendorOptedToTax: true, togc: 'applies',
+      purchasePricePence: 50_000_000, acquisitionRatePct: 20,
+    });
+    expect(Number(chargeableConsiderationPence(inputs))).toBe(50_000_000);
+  });
+
+  it('charges more acquisition tax on the VAT-inclusive consideration', () => {
+    // The permanent cost the app reports as zero today. Both figures are read
+    // off the RESULT, independently computed by the tax engine -- not
+    // recomputed here, which would make the test agree with a bug forever.
+    const withVat = runAppraisal(vatDocument({
+      vendorOptedToTax: true, togc: 'does_not_apply',
+      purchasePricePence: 50_000_000, acquisitionRatePct: 20,
+    }));
+    const without = runAppraisal(vatDocument({ vendorOptedToTax: false, purchasePricePence: 50_000_000 }));
+    expect(withVat.metrics.acquisition_tax_pence)
+      .toBeGreaterThan(without.metrics.acquisition_tax_pence);
+    expect(withVat.metrics.chargeable_consideration_pence).toBe(60_000_000);
+    expect(without.metrics.chargeable_consideration_pence).toBe(50_000_000);
+  });
+
+  it('moves the acquisition COST and the day-one debt with it, not only the reported tax', () => {
+    // The tax is charged at two independent sites (metrics.ts and
+    // conversion-calc-engine.ts's calculateTotalAcquisitionCost). Asserting only
+    // `acquisition_tax_pence` would leave the second site free to keep charging
+    // the exclusive price -- R8's exact defect shape, and the reason spec §17.7
+    // names all six call sites rather than the reported one.
+    const withVat = runAppraisal(vatDocument({
+      vendorOptedToTax: true, togc: 'does_not_apply',
+      purchasePricePence: 50_000_000, acquisitionRatePct: 20,
+    }));
+    const without = runAppraisal(vatDocument({ vendorOptedToTax: false, purchasePricePence: 50_000_000 }));
+    const taxDelta = withVat.metrics.acquisition_tax_pence - without.metrics.acquisition_tax_pence;
+    expect(taxDelta).toBeGreaterThan(0);
+    expect(withVat.metrics.acquisition_cost_pence - without.metrics.acquisition_cost_pence)
+      .toBe(taxDelta);
   });
 });

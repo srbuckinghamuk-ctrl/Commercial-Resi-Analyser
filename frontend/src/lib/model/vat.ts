@@ -9,6 +9,11 @@ import type {
   AnyCalculatorInputs, EvidenceStatus, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
 import type { CostPlanResult } from './cost-plan';
+// §17.7: the brand and its escape hatch live with the tax engine that demands
+// them. A runtime import, but acquisition-tax.ts imports nothing from model/,
+// so there is no cycle.
+import { asChargeableConsideration } from '../tax/acquisition-tax';
+import type { ChargeableConsideration } from '../tax/acquisition-tax';
 // Ruling R20 — the ONE derivation of "does this deal have a facility?", owned by
 // the ledger, which is what spends the fees this gate governs. A runtime import,
 // not a type one: monthly-engine.ts imports nothing from here, so there is no
@@ -185,6 +190,42 @@ export function vatReturnPeriods(vat: VatInputs, termMonths: number): VatReturnP
  *  option to tax — that is the whole effect of a TOGC (§17.3). */
 export function isPurchaseVatChargeable(purchase: PurchaseVatInputs): boolean {
   return purchase.vendor_opted_to_tax && purchase.togc_treatment !== 'applies';
+}
+
+/**
+ * The minimum a chargeable consideration needs: the acquisition block, and the
+ * document's VAT block where it has one.
+ *
+ * Narrower than `AnyCalculatorInputs` deliberately. `migrate.ts`'s v1 bootstrap
+ * computes an acquisition cost from a half-built document — there is no
+ * `CalculatorInputs` object in existence at that point — and widening the
+ * parameter to the full union would force a cast there, which is exactly the
+ * hole the brand exists to close. Every `AnyCalculatorInputs` satisfies this
+ * structurally, so no consumer has to adapt.
+ */
+export interface ConsiderationInputs {
+  acquisition: { purchase_price_pence: number };
+  vat?: VatInputs;
+}
+
+/** THE single site that decides what the acquisition tax is charged on.
+ *  SDLT, LBTT and LTT are all charged on the VAT-INCLUSIVE consideration
+ *  (§17.7), and every pre-R11 call site passed the exclusive price.
+ *
+ *  Returns the branded `ChargeableConsideration`, so a call site that reverts
+ *  to the raw price is a `tsc` error rather than a review comment. */
+export function chargeableConsiderationPence(
+  inputs: ConsiderationInputs,
+): ChargeableConsideration {
+  const price = inputs.acquisition.purchase_price_pence;
+  // Read structurally, exactly as `computeVat` does: a pre-v8 document has no
+  // `vat` block at all and its consideration is simply its price.
+  const vat = inputs.vat ?? null;
+  if (vat == null || !isPurchaseVatChargeable(vat.purchase)) {
+    return asChargeableConsideration(price);
+  }
+  const treatment = resolveVatTreatment(vat, { category: 'acquisition', override: null });
+  return asChargeableConsideration(price + Math.round((price * treatment.rate_pct) / 100));
 }
 
 // ---------------------------------------------------------------------------

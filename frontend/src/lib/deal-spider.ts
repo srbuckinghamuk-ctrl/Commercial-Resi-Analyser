@@ -1,6 +1,7 @@
 import type { ProposedUnit, UnitType, DealSpiderInputs, AcquisitionInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
+import { chargeableConsiderationPence } from './model/vat';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
@@ -180,8 +181,12 @@ export function computeSpider(
   const downsideMetrics = runAppraisal(applyScenario(inputs, inputs.scenarios.downside)).metrics;
   const priorApproval = scorePriorApproval(eligibility);
 
-  // Tax advantage
-  const price = inputs.acquisition.purchase_price_pence;
+  // Tax advantage. §17.7: BOTH regimes are charged on the same VAT-inclusive
+  // consideration — comparing a VAT-inclusive residential figure against a
+  // VAT-exclusive commercial one would manufacture an advantage out of the
+  // base, not the rates. Branded, so the intermediate variable this file used
+  // to launder the raw price through no longer type-checks.
+  const consideration = chargeableConsiderationPence(inputs);
   // R8 Task 7: both sides of this comparison must be the same regime, or the
   // score compares English residential rates against Scottish/Welsh commercial
   // ones. v2–v4 documents carry no jurisdiction at all — same `in` guard as
@@ -198,11 +203,11 @@ export function computeSpider(
   const residentialDate = resolveAcquisitionDate(jurisdiction, 'residential_higher', rawDate);
   const commercialDate = resolveAcquisitionDate(jurisdiction, 'non_residential', rawDate);
   const residentialSdlt = calculateAcquisitionTax({
-    consideration_pence: price, jurisdiction,
+    consideration_pence: consideration, jurisdiction,
     basis: 'residential_higher', date: residentialDate,
   }).total_pence;
   const commercialSdlt = calculateAcquisitionTax({
-    consideration_pence: price, jurisdiction,
+    consideration_pence: consideration, jurisdiction,
     basis: 'non_residential', date: commercialDate,
   }).total_pence;
   const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
@@ -213,7 +218,11 @@ export function computeSpider(
         100
       : 0;
 
-  // Acquisition headroom against max bid (RLV at the configured target return)
+  // Acquisition headroom against max bid (RLV at the configured target return).
+  // The PRICE here, not the chargeable consideration: this is what the buyer
+  // pays the vendor, stripped out of TDC so the residual is compared against a
+  // bid. §17.7 moves the tax BASE, not the price a bid is measured against.
+  const price = acq.purchase_price_pence;
   const totalCostExLand = metrics.total_development_cost_pence - price - metrics.sdlt_pence;
   const maxBid = calculateRlv(totalCostExLand, metrics.gdv_pence, spider.target_profit_on_cost_pct);
   const headroomPct = maxBid > 0 ? ((maxBid - price) / maxBid) * 100 : -100;
