@@ -4,6 +4,8 @@ describe blocks (Release 3a Task 4 / Release 3b Task 4, spec Sec 6.1 / Sec
 4.4.1, calc 2.2.0 / calc 2.3.0). Same scenarios, same expected arrays as the
 TS side.
 """
+from dataclasses import asdict
+
 from app.financial_model.areas import developed_area_sqm
 from app.financial_model.engine import money_round
 from app.financial_model.migrate import (
@@ -519,18 +521,33 @@ class TestBuildScheduleVat:
         assert schedule.totals.vat_reclaim_pence == 20_000_000
 
     def test_leaves_every_non_vat_figure_identical_to_the_same_document_with_vat_off(self):
-        # Sec 17.5's one-direction rule, at the schedule boundary. If VAT ever
-        # feeds a cost base, this fails.
+        # Sec 17.5's one-direction rule, at the schedule boundary. Compared
+        # EXHAUSTIVELY BY EXCLUSION (ruling R21) rather than an enumerated
+        # field list: build a dict from each dataclass and pop the VAT keys,
+        # so a field added to MonthUses/MonthReceipts/ScheduleTotals in future
+        # is covered automatically, and a newly-leaking field fails this test
+        # without anyone remembering to update an allowlist here.
         on = build_schedule(_worked_vat_document())
         off = build_schedule(_worked_vat_document(registered=False))
-        assert [u.construction_pence for u in on.uses] == [u.construction_pence for u in off.uses]
-        assert [u.professional_pence for u in on.uses] == [u.professional_pence for u in off.uses]
-        assert [u.statutory_pence for u in on.uses] == [u.statutory_pence for u in off.uses]
-        assert [u.acquisition_pence for u in on.uses] == [u.acquisition_pence for u in off.uses]
-        assert on.totals.construction_pence == off.totals.construction_pence
+
+        def without(keys, items):
+            out = []
+            for item in items:
+                d = asdict(item)
+                for k in keys:
+                    d.pop(k, None)
+                out.append(d)
+            return out
+
+        assert without(["vat_pence"], on.uses) == without(["vat_pence"], off.uses)
         assert (
-            on.totals.cost_before_finance_ex_selling_pence
-            == off.totals.cost_before_finance_ex_selling_pence
+            without(["vat_reclaim_pence"], on.receipts)
+            == without(["vat_reclaim_pence"], off.receipts)
+        )
+        vat_total_keys = ["vat_pence", "vat_reclaim_pence", "irrecoverable_vat_pence"]
+        assert (
+            without(vat_total_keys, [on.totals])[0]
+            == without(vat_total_keys, [off.totals])[0]
         )
 
     def test_writes_zeroed_vat_lines_for_a_document_with_no_vat_block_at_all(self):

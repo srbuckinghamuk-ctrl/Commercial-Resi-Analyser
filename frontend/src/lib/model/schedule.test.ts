@@ -438,17 +438,27 @@ describe('buildSchedule VAT (spec §17.6)', () => {
   });
 
   it('leaves every non-VAT figure identical to the same document with VAT off', () => {
-    // §17.5's one-direction rule, at the schedule boundary. If VAT ever feeds a
-    // cost base, this fails.
+    // §17.5's one-direction rule, at the schedule boundary. Compared
+    // EXHAUSTIVELY BY EXCLUSION (ruling R21) rather than an enumerated field
+    // list: strip the VAT fields off both sides and deep-equal the remainder,
+    // so a field added to MonthUses/MonthReceipts/Schedule.totals in future is
+    // covered automatically, and a newly-leaking field fails this test without
+    // anyone remembering to update an allowlist here.
     const on = buildSchedule(workedVatDocument());
     const off = buildSchedule(workedVatDocument({ registered: false }));
-    expect(on.uses.map((u) => u.construction_pence)).toEqual(off.uses.map((u) => u.construction_pence));
-    expect(on.uses.map((u) => u.professional_pence)).toEqual(off.uses.map((u) => u.professional_pence));
-    expect(on.uses.map((u) => u.statutory_pence)).toEqual(off.uses.map((u) => u.statutory_pence));
-    expect(on.uses.map((u) => u.acquisition_pence)).toEqual(off.uses.map((u) => u.acquisition_pence));
-    expect(on.totals.construction_pence).toBe(off.totals.construction_pence);
-    expect(on.totals.cost_before_finance_ex_selling_pence)
-      .toBe(off.totals.cost_before_finance_ex_selling_pence);
+
+    const usesWithoutVat = (uses: typeof on.uses) => uses.map(({ vat_pence, ...rest }) => rest);
+    expect(usesWithoutVat(on.uses)).toEqual(usesWithoutVat(off.uses));
+
+    const receiptsWithoutVat = (receipts: typeof on.receipts) =>
+      receipts.map(({ vat_reclaim_pence, ...rest }) => rest);
+    expect(receiptsWithoutVat(on.receipts)).toEqual(receiptsWithoutVat(off.receipts));
+
+    const totalsWithoutVat = (totals: typeof on.totals) => {
+      const { vat_pence, vat_reclaim_pence, irrecoverable_vat_pence, ...rest } = totals;
+      return rest;
+    };
+    expect(totalsWithoutVat(on.totals)).toEqual(totalsWithoutVat(off.totals));
   });
 
   it('writes zeroed VAT lines for a document with no vat block at all', () => {
