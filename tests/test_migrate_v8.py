@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.financial_model import parse_calculator_inputs, run_appraisal
+from app.financial_model import parse_calculator_inputs, run_appraisal, validate_inputs
 from app.financial_model.migrate import (
     is_v2_or_later,
     is_v7,
@@ -368,3 +368,120 @@ def test_v8_migration_moves_no_existing_figure():
     # The corpus is loaded by directory scan, so an empty glob would make the
     # loop above vacuously pass.
     assert len(names) == 12, names
+
+
+# ---------------------------------------------------------------------------
+# Ruling R38 (spec Sec 17.11, "The migration must add no validation issue
+# either"). Twin of golden-fixtures.test.ts's 'migrating %s to v8 adds and
+# removes no validation issue'.
+#
+# The numeric gate above could never have caught R38's defect, because the
+# figures genuinely did not move: the migration wrote `first_period_end_month:
+# 2` onto every document while `registered: false` kept the engine dormant, so
+# no number changed -- and yet every stored appraisal with `term_months <= 2`
+# acquired a HARD ERROR, which makes report_safe false and marks the report
+# DRAFT. An "inert" migration would have silently downgraded them all.
+#
+# The assertion is deliberately "the SAME issues", not "no errors": a document
+# that was already invalid must stay invalid in the same way. That is what
+# generalises past the specific bug.
+#
+# ONE exemption, and it is named rather than absorbed into a loose comparison.
+# Sec 17.9 SPECIFIES a warning for "`registered: false` with a non-zero
+# construction cost -- the engine is inert and the funding need is being
+# reported as zero". A pre-v8 document has no `vat` block and therefore no VAT
+# issue at all, so that warning can only ever appear AFTER migration. It is
+# unavoidable by construction and it is the correct disclosure: this document
+# has construction cost and no VAT modelled.
+#
+# The exemption is confined to WARNINGS on that one field, because severity is
+# what carries the consequence R38 is about: an ERROR makes report_safe false
+# and marks the report DRAFT; a warning is a disclosure and does not. So the
+# ERROR set is compared with no exemption whatsoever, and no issue of either
+# severity may be REMOVED.
+# ---------------------------------------------------------------------------
+
+def _issue_keys(issues) -> list[tuple[str, str, str]]:
+    return sorted((i.severity, i.field, i.message) for i in issues)
+
+
+#: Sec 17.9's inert-engine disclosure. (severity, field) only -- an ERROR on
+#: `vat.registered` (the purchase-VAT-chargeable rule) is NOT exempt.
+_MIGRATION_DISCLOSURE = ("warning", "vat.registered")
+
+
+def _assert_issue_sets_agree(before, after, name: str):
+    added = [i for i in after if i not in before]
+    removed = [i for i in before if i not in after]
+
+    assert removed == [], (
+        f"{name}: migration to v8 REMOVED a validation issue -- a document that was "
+        f"already invalid must stay invalid in the same way\n  removed: {removed}"
+    )
+
+    errors_before = [i for i in before if i[0] == "error"]
+    errors_after = [i for i in after if i[0] == "error"]
+    assert errors_before == errors_after, (
+        f"{name}: migration to v8 changed the ERROR set. An error makes report_safe "
+        f"false and marks the report DRAFT (ruling R38)\n"
+        f"  added:   {[i for i in errors_after if i not in errors_before]}\n"
+        f"  removed: {[i for i in errors_before if i not in errors_after]}"
+    )
+
+    unexpected = [i for i in added if (i[0], i[1]) != _MIGRATION_DISCLOSURE]
+    assert unexpected == [], (
+        f"{name}: migration to v8 added a validation issue other than Sec 17.9's "
+        f"inert-engine disclosure\n  added: {unexpected}"
+    )
+
+
+def test_v8_migration_adds_and_removes_no_validation_issue():
+    names = []
+    disclosed = 0
+    for name, doc in _pipeline_fixtures():
+        names.append(name)
+        before = _issue_keys(validate_inputs(parse_calculator_inputs(doc["inputs"])))
+        migrated = migrate_inputs_to_v8(doc["inputs"])
+        after = _issue_keys(validate_inputs(migrated))
+        _assert_issue_sets_agree(before, after, name)
+
+        # Cross-check the exemption against Sec 17.9's own condition rather than
+        # trusting it: the disclosure must appear exactly where a non-zero
+        # construction cost makes it true, and nowhere else.
+        got_disclosure = any((i[0], i[1]) == _MIGRATION_DISCLOSURE for i in after)
+        has_construction = migrated.conversion_costs.total_construction_sqm > 0
+        assert got_disclosure == has_construction, (
+            f"{name}: Sec 17.9's inert-engine disclosure fired={got_disclosure} but the "
+            f"document's construction cost is non-zero={has_construction}"
+        )
+        disclosed += int(got_disclosure)
+
+    assert len(names) == 12, names
+    # Non-vacuity: the exemption is exercised, so this test is not silently
+    # asserting an empty carve-out.
+    assert disclosed > 0
+
+
+def test_v8_migration_adds_no_validation_issue_to_a_one_month_document():
+    """The synthetic case the fixture corpus does not contain, and the exact
+    shape R38 was written for: `first_period_end_month` defaults to 2, so a
+    1-month term is the document where an ungated return-cycle bound fires.
+
+    Deleting the `registered` gate in validation.py was confirmed to fail this
+    test naming `vat.first_period_end_month` -- see task-10-report.md."""
+    v7 = migrate_inputs_to_v7({"inputs_version": 1})
+    v7.finance = v7.finance.model_copy(update={"term_months": 1})
+    source = v7.model_dump(mode="json")
+
+    before = _issue_keys(validate_inputs(parse_calculator_inputs(source)))
+    migrated = migrate_inputs_to_v8(source)
+    after = _issue_keys(validate_inputs(migrated))
+
+    # Non-vacuity: the migrated document really does carry the block whose
+    # bound would fire, on a term short enough to trip it.
+    assert migrated.vat.registered is False
+    assert migrated.vat.first_period_end_month == 2
+    assert migrated.finance.term_months == 1
+
+    _assert_issue_sets_agree(before, after, "synthetic 1-month document")
+    assert not any(field == "vat.first_period_end_month" for _, field, _ in after)

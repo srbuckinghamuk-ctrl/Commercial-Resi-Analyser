@@ -473,16 +473,35 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
         + `${VAT_CHARGE_CATEGORIES.join(', ')}.`);
     }
 
-    // first_period_end_month must sit inside the modelled term.
-    if (vatInputs.first_period_end_month < 0 || vatInputs.first_period_end_month >= f.term_months) {
-      err('vat.first_period_end_month',
-        `First period end month must be between 0 and ${f.term_months - 1}.`);
-    }
+    // --- The two RETURN-CYCLE bounds. Both gated on `registered` (ruling R38,
+    // spec §17.11). A field that parameterises a DORMANT engine is not
+    // validated: with `registered: false` no return period is ever computed, so
+    // there is no cycle to be out of bounds.
+    //
+    // This is not a softening. It is the fix for a shipped defect. The
+    // migration gives EVERY document a `vat` block carrying
+    // `first_period_end_month: 2`, so ungated these rules turned every stored
+    // appraisal with `term_months <= 2` into a hard error on migration — and a
+    // hard error makes `report_safe` false, which marks the report DRAFT. An
+    // "inert" migration would have silently downgraded every short-term
+    // appraisal in the database.
+    //
+    // The bounds that stay UNCONDITIONAL above are the ones that are nonsense
+    // in any state: a negative rate, a negative recoverable proportion, a
+    // treatments array that is not the six categories. A document that later
+    // registers gets these two errors then, which is the right moment for them.
+    if (vatInputs.registered) {
+      // first_period_end_month must sit inside the modelled term.
+      if (vatInputs.first_period_end_month < 0 || vatInputs.first_period_end_month >= f.term_months) {
+        err('vat.first_period_end_month',
+          `First period end month must be between 0 and ${f.term_months - 1}.`);
+      }
 
-    // repayment_lag_months: HMRC's payment window, capped at a documented
-    // maximum rather than left open-ended.
-    if (vatInputs.repayment_lag_months < 0 || vatInputs.repayment_lag_months > 6) {
-      err('vat.repayment_lag_months', 'Repayment lag must be between 0 and 6 months.');
+      // repayment_lag_months: HMRC's payment window, capped at a documented
+      // maximum rather than left open-ended.
+      if (vatInputs.repayment_lag_months < 0 || vatInputs.repayment_lag_months > 6) {
+        err('vat.repayment_lag_months', 'Repayment lag must be between 0 and 6 months.');
+      }
     }
 
     // §17.3: where TOGC applies, purchase VAT is nil regardless of the option

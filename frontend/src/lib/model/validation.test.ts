@@ -1436,42 +1436,86 @@ describe('R11 — VAT validation (spec §17.9)', () => {
     });
   });
 
+  // --- The two RETURN-CYCLE bounds (ruling R38, spec §17.11).
+  //
+  // These cases were originally written on `makeV8Inputs()` unmodified, i.e. on
+  // `registered: false` documents. That was asserting the wrong thing: a rule
+  // about a LIVE return cycle has to be tested on a document whose cycle is
+  // live. Written that way they also pinned the defect R38 exists to fix — the
+  // migration writes `first_period_end_month: 2` onto EVERY document, so an
+  // ungated rule made every stored appraisal with `term_months <= 2` a hard
+  // error, and a hard error marks the report DRAFT.
   describe('first_period_end_month out of range', () => {
     it('hard-errors when negative', () => {
-      const invalid = validateInputs(makeV8Inputs({ vat: { first_period_end_month: -1 } }));
+      const invalid = validateInputs(makeV8Inputs({ vat: { registered: true, first_period_end_month: -1 } }));
       expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.first_period_end_month')).toBe(true);
 
-      const valid = validateInputs(makeV8Inputs({ vat: { first_period_end_month: 0 } }));
+      const valid = validateInputs(makeV8Inputs({ vat: { registered: true, first_period_end_month: 0 } }));
       expect(valid.some((i) => i.field === 'vat.first_period_end_month')).toBe(false);
     });
 
     it('hard-errors when >= term_months', () => {
       const invalid = validateInputs(makeV8Inputs({
-        finance: { term_months: 3 }, vat: { first_period_end_month: 3 },
+        finance: { term_months: 3 }, vat: { registered: true, first_period_end_month: 3 },
       }));
       expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.first_period_end_month')).toBe(true);
 
       const valid = validateInputs(makeV8Inputs({
-        finance: { term_months: 3 }, vat: { first_period_end_month: 2 },
+        finance: { term_months: 3 }, vat: { registered: true, first_period_end_month: 2 },
       }));
       expect(valid.some((i) => i.field === 'vat.first_period_end_month')).toBe(false);
+    });
+
+    // R38. The migration's own write — `first_period_end_month: 2` on a 1-month
+    // term — must produce NO issue while `registered` is false. Ungated this was
+    // a hard error, which makes `report_safe` false and marks the report DRAFT:
+    // an "inert" migration would have silently downgraded every short-term
+    // appraisal in the database.
+    it('is not validated at all while the engine is dormant, and is the moment it registers', () => {
+      const dormant = makeV8Inputs({ finance: { term_months: 1 } });
+      expect(dormant.vat.registered).toBe(false);
+      expect(dormant.vat.first_period_end_month).toBe(2);
+      expect(validateInputs(dormant).some((i) => i.field === 'vat.first_period_end_month')).toBe(false);
+
+      // The gate DEFERS the rule, it does not delete it.
+      const live = makeV8Inputs({ finance: { term_months: 1 }, vat: { registered: true } });
+      expect(validateInputs(live).some(
+        (i) => i.severity === 'error' && i.field === 'vat.first_period_end_month',
+      )).toBe(true);
     });
   });
 
   describe('repayment_lag_months out of range', () => {
     it('hard-errors when negative', () => {
-      const invalid = validateInputs(makeV8Inputs({ vat: { repayment_lag_months: -1 } }));
+      const invalid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: -1 } }));
       expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.repayment_lag_months')).toBe(true);
 
-      const valid = validateInputs(makeV8Inputs({ vat: { repayment_lag_months: 0 } }));
+      const valid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: 0 } }));
       expect(valid.some((i) => i.field === 'vat.repayment_lag_months')).toBe(false);
     });
 
+    // R38's second gated field. Tested with a value that is nonsense in any
+    // state (7 > the 6-month cap) so this cannot pass merely because the
+    // default happens to be in range.
+    it('is not validated at all while the engine is dormant, and is the moment it registers', () => {
+      const dormant = makeV8Inputs({ vat: { repayment_lag_months: 7 } });
+      expect(dormant.vat.registered).toBe(false);
+      expect(validateInputs(dormant).some((i) => i.field === 'vat.repayment_lag_months')).toBe(false);
+
+      const live = makeV8Inputs({ vat: { registered: true, repayment_lag_months: 7 } });
+      expect(validateInputs(live).some(
+        (i) => i.severity === 'error' && i.field === 'vat.repayment_lag_months',
+      )).toBe(true);
+    });
+
     it('hard-errors when greater than 6', () => {
-      const invalid = validateInputs(makeV8Inputs({ vat: { repayment_lag_months: 7 } }));
+      const invalid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: 7 } }));
       expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.repayment_lag_months')).toBe(true);
 
-      const valid = validateInputs(makeV8Inputs({ vat: { repayment_lag_months: 6 } }));
+      // `registered: true` on the valid half too — under the R38 gate an
+      // unregistered document passes this rule VACUOUSLY, which would make the
+      // in-range assertion prove nothing about the bound.
+      const valid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: 6 } }));
       expect(valid.some((i) => i.field === 'vat.repayment_lag_months')).toBe(false);
     });
   });

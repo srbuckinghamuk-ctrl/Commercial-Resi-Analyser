@@ -1496,49 +1496,104 @@ class TestVatValidationHardErrors:
         valid = validate_inputs(make_v8_inputs())
         assert not any(i.field == "vat.treatments" for i in valid)
 
+    # --- The two RETURN-CYCLE bounds (ruling R38, spec Sec 17.11).
+    #
+    # These four cases were originally written on make_v8_inputs() unmodified,
+    # i.e. on `registered: False` documents. That was asserting the wrong
+    # thing: a rule about a LIVE return cycle has to be tested on a document
+    # whose cycle is live. Written that way they also pinned the defect R38
+    # exists to fix -- the migration writes `first_period_end_month: 2` onto
+    # EVERY document, so an ungated rule made every stored appraisal with
+    # `term_months <= 2` a hard error, and a hard error marks the report DRAFT.
+    #
+    # `_registered_v8` therefore switches the engine on, and the two
+    # `..._is_not_validated_while_the_engine_is_dormant` cases below pin the
+    # gate itself in the other direction.
+
+    @staticmethod
+    def _registered_v8(**kwargs):
+        inputs = make_v8_inputs(**kwargs)
+        inputs.vat.registered = True
+        return inputs
+
     def test_hard_errors_when_first_period_end_month_is_negative(self):
-        inputs = make_v8_inputs()
+        inputs = self._registered_v8()
         inputs.vat.first_period_end_month = -1
         invalid = validate_inputs(inputs)
         assert any(i.severity == "error" and i.field == "vat.first_period_end_month" for i in invalid)
 
-        valid_inputs = make_v8_inputs()
+        valid_inputs = self._registered_v8()
         valid_inputs.vat.first_period_end_month = 0
         valid = validate_inputs(valid_inputs)
         assert not any(i.field == "vat.first_period_end_month" for i in valid)
 
     def test_hard_errors_when_first_period_end_month_is_at_or_past_term_months(self):
-        inputs = make_v8_inputs(finance={"term_months": 3})
+        inputs = self._registered_v8(finance={"term_months": 3})
         inputs.vat.first_period_end_month = 3
         invalid = validate_inputs(inputs)
         assert any(i.severity == "error" and i.field == "vat.first_period_end_month" for i in invalid)
 
-        valid_inputs = make_v8_inputs(finance={"term_months": 3})
+        valid_inputs = self._registered_v8(finance={"term_months": 3})
         valid_inputs.vat.first_period_end_month = 2
         valid = validate_inputs(valid_inputs)
         assert not any(i.field == "vat.first_period_end_month" for i in valid)
 
+    def test_first_period_end_month_is_not_validated_while_the_engine_is_dormant(self):
+        """R38. The migration's own write -- `first_period_end_month: 2` on a
+        1-month term -- must produce NO issue while `registered` is false.
+        Ungated this was a hard error, which makes `report_safe` false and
+        marks the report DRAFT: an "inert" migration would have silently
+        downgraded every short-term appraisal in the database."""
+        inputs = make_v8_inputs(finance={"term_months": 1})
+        assert inputs.vat.registered is False
+        assert inputs.vat.first_period_end_month == 2
+        assert not any(i.field == "vat.first_period_end_month" for i in validate_inputs(inputs))
+
+        # And the moment the document registers, the error arrives -- which is
+        # the right moment for it. The gate defers the rule, it does not
+        # delete it.
+        inputs.vat.registered = True
+        assert any(
+            i.severity == "error" and i.field == "vat.first_period_end_month"
+            for i in validate_inputs(inputs)
+        )
+
     def test_hard_errors_when_repayment_lag_months_is_negative(self):
-        inputs = make_v8_inputs()
+        inputs = self._registered_v8()
         inputs.vat.repayment_lag_months = -1
         invalid = validate_inputs(inputs)
         assert any(i.severity == "error" and i.field == "vat.repayment_lag_months" for i in invalid)
 
-        valid_inputs = make_v8_inputs()
+        valid_inputs = self._registered_v8()
         valid_inputs.vat.repayment_lag_months = 0
         valid = validate_inputs(valid_inputs)
         assert not any(i.field == "vat.repayment_lag_months" for i in valid)
 
     def test_hard_errors_when_repayment_lag_months_exceeds_6(self):
-        inputs = make_v8_inputs()
+        inputs = self._registered_v8()
         inputs.vat.repayment_lag_months = 7
         invalid = validate_inputs(inputs)
         assert any(i.severity == "error" and i.field == "vat.repayment_lag_months" for i in invalid)
 
-        valid_inputs = make_v8_inputs()
+        valid_inputs = self._registered_v8()
         valid_inputs.vat.repayment_lag_months = 6
         valid = validate_inputs(valid_inputs)
         assert not any(i.field == "vat.repayment_lag_months" for i in valid)
+
+    def test_repayment_lag_months_is_not_validated_while_the_engine_is_dormant(self):
+        """R38's second gated field. Tested with a value that is nonsense in
+        any state (7 > the 6-month cap) so this cannot pass merely because the
+        default happens to be in range."""
+        inputs = make_v8_inputs()
+        inputs.vat.repayment_lag_months = 7
+        assert inputs.vat.registered is False
+        assert not any(i.field == "vat.repayment_lag_months" for i in validate_inputs(inputs))
+
+        inputs.vat.registered = True
+        assert any(
+            i.severity == "error" and i.field == "vat.repayment_lag_months"
+            for i in validate_inputs(inputs)
+        )
 
     def test_hard_errors_when_togc_applies_with_a_non_zero_acquisition_rate(self):
         acq_idx = VAT_CHARGE_CATEGORIES.index("acquisition")

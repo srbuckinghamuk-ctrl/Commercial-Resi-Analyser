@@ -164,26 +164,10 @@ describe('SensitivityPage — axis and step editor', () => {
   // whole grid. This must be able to fail against an implementation that renders
   // "—" in every cell (row captions alone can't tell a mixed grid from a blank one),
   // so it pins the unmeasured row's dash cells and the measured row's real values.
-  //
-  // R11 Task 10 — DISCLOSED BEHAVIOUR CHANGE, needs a ruling. The measured step
-  // was -11 (a 1-month derived term). Once `buildInputs` migrates fixture F to
-  // v8, EVERY document carries a `vat` block whose `first_period_end_month` is
-  // the schema default 2, and §17.9's rule "first_period_end_month >= term_months
-  // is a hard error" is written unconditionally -- it does NOT gate on
-  // `vat.registered`. So a derived term of 1 or 2 months is now an ERROR
-  // position, and §12.7 correctly renders it unmeasured, on a block the engine
-  // ignores because `registered: false`.
-  //
-  // That collides with §17.11's "the migration is inert": migrating a saved
-  // 1- or 2-month appraisal turns a valid document into an invalid one. The step
-  // moves to -9 (a 3-month term) only so this R5 assertion keeps testing what it
-  // was written to test; it is NOT a resolution. See task-10-report.md -- the
-  // fix belongs in §17.9's rule (Task 9's file, whose whole VAT suite is built
-  // on `registered: false` fixtures), not here.
   it('renders unmeasured and measured rows side by side for a mixed timeline axis', () => {
     render(<SensitivityPage inputs={buildInputs()} />);
     fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'timeline' } });
-    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12, -9' } });
+    fireEvent.change(screen.getByLabelText(/row steps/i), { target: { value: '-12, -11' } });
 
     const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
     const rows = within(matrix).getAllByRole('row');
@@ -198,7 +182,7 @@ describe('SensitivityPage — axis and step editor', () => {
     }
 
     const measuredRow = rows[2];
-    expect(within(measuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline -9 months');
+    expect(within(measuredRow).getAllByRole('rowheader')[0]).toHaveTextContent('Timeline -11 months');
     for (const cell of within(measuredRow).getAllByRole('cell')) {
       expect(cell.textContent).toMatch(/-?\d+\.\d%/);
     }

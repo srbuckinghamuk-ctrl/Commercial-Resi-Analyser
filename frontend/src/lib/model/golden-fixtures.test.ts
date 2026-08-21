@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
+import { validateInputs } from './validation';
+import type { ValidationIssue } from './validation';
 import {
   migrateInputsToV5, migrateInputsToV6, migrateInputsToV7, migrateInputsToV8,
 } from './migrate';
@@ -739,6 +741,96 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // than failing.
   it('runs the migration identity gates over the whole pipeline corpus, not an empty one', () => {
     expect(appraisalFixtures).toHaveLength(12);
+  });
+
+  // Ruling R38 (spec §17.11, "The migration must add no validation issue
+  // either"). Twin of tests/test_migrate_v8.py::test_v8_migration_adds_and_
+  // removes_no_validation_issue.
+  //
+  // The numeric gate above could never have caught R38's defect, because the
+  // figures genuinely did not move: the migration wrote
+  // `first_period_end_month: 2` onto every document while `registered: false`
+  // kept the engine dormant, so no number changed — and yet every stored
+  // appraisal with `term_months <= 2` acquired a HARD ERROR, which makes
+  // report_safe false and marks the report DRAFT.
+  //
+  // The assertion is "the SAME issues", not "no errors": a document that was
+  // already invalid must stay invalid in the same way.
+  //
+  // ONE exemption, named rather than absorbed into a loose comparison. §17.9
+  // SPECIFIES a warning for "`registered: false` with a non-zero construction
+  // cost". A pre-v8 document has no `vat` block and so no VAT issue at all, so
+  // that warning can only ever appear AFTER migration — unavoidable by
+  // construction, and the correct disclosure. It is confined to WARNINGS on
+  // that one field, because severity carries the consequence: an ERROR marks
+  // the report DRAFT, a warning does not. The ERROR set is compared with no
+  // exemption at all, and nothing may be REMOVED.
+  const MIGRATION_DISCLOSURE = { severity: 'warning', field: 'vat.registered' };
+
+  function issueKeys(issues: ValidationIssue[]): string[] {
+    return issues.map((i) => `${i.severity} ${i.field} ${i.message}`).sort();
+  }
+  const isDisclosure = (key: string) => key.startsWith(
+    `${MIGRATION_DISCLOSURE.severity} ${MIGRATION_DISCLOSURE.field} `,
+  );
+
+  function assertIssueSetsAgree(before: string[], after: string[], name: string) {
+    const removed = before.filter((i) => !after.includes(i));
+    expect(removed, `${name}: migration to v8 REMOVED a validation issue`).toEqual([]);
+
+    const errorsBefore = before.filter((i) => i.startsWith('error '));
+    const errorsAfter = after.filter((i) => i.startsWith('error '));
+    expect(
+      errorsAfter,
+      `${name}: migration to v8 changed the ERROR set — an error marks the report DRAFT (R38)`,
+    ).toEqual(errorsBefore);
+
+    const unexpected = after.filter((i) => !before.includes(i) && !isDisclosure(i));
+    expect(
+      unexpected,
+      `${name}: migration to v8 added an issue other than §17.9's inert-engine disclosure`,
+    ).toEqual([]);
+  }
+
+  it.each(appraisalFixtures.map((f) => f.name))(
+    'migrating %s to v8 adds and removes no validation issue',
+    (name) => {
+      const fx = appraisalFixtures.find((f) => f.name === name)!;
+      const before = issueKeys(validateInputs(fx.inputs));
+      const migrated = migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>);
+      const after = issueKeys(validateInputs(migrated));
+
+      assertIssueSetsAgree(before, after, name);
+
+      // Cross-check the exemption against §17.9's own condition rather than
+      // trusting it: the disclosure must appear exactly where a non-zero
+      // construction cost makes it true, and nowhere else.
+      expect(after.some(isDisclosure))
+        .toBe(migrated.conversion_costs.total_construction_sqm > 0);
+    },
+  );
+
+  // The synthetic case the fixture corpus does not contain, and the exact shape
+  // R38 was written for: `first_period_end_month` defaults to 2, so a 1-month
+  // term is the document where an ungated return-cycle bound fires.
+  it('adds no validation issue to a one-month document (R38)', () => {
+    const v7 = migrateInputsToV7({ inputs_version: 1 });
+    const source = JSON.parse(JSON.stringify({
+      ...v7, finance: { ...v7.finance, term_months: 1 },
+    })) as Record<string, unknown>;
+
+    const before = issueKeys(validateInputs(source as unknown as AnyCalculatorInputs));
+    const migrated = migrateInputsToV8(source);
+    const after = issueKeys(validateInputs(migrated));
+
+    // Non-vacuity: the migrated document really does carry the block whose
+    // bound would fire, on a term short enough to trip it.
+    expect(migrated.vat.registered).toBe(false);
+    expect(migrated.vat.first_period_end_month).toBe(2);
+    expect(migrated.finance.term_months).toBe(1);
+
+    assertIssueSetsAgree(before, after, 'synthetic 1-month document');
+    expect(after.some((i) => i.includes('vat.first_period_end_month'))).toBe(false);
   });
 });
 
