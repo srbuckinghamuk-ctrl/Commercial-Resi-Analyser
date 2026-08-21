@@ -260,11 +260,12 @@ export interface VatResult {
  * last non-zero weight absorbs the residue, mirroring `spreadStraightLine` and
  * `spreadByCurve` (spec §6.1's invariant).
  *
- * When `Σw === 0` it returns all zeros. A charge with a non-zero VAT figure but
- * no monthly spend cannot be placed — a real state (a fee the schedule gives no
- * months) — and silently moving it to month 0 would invent a cash outflow the
- * spend profile does not show. The charge line still discloses the VAT; only
- * its cash timing is absent.
+ * When `Σw === 0` it returns all zeros — this function has no month to prefer,
+ * so it makes no choice. The CALLER decides what an unplaceable charge means:
+ * `computeVat` falls back to month 0 (ruling R15), because a charged penny the
+ * months never carry is never funded by the ledger while Task 8 still puts its
+ * irrecoverable part into cost-before-finance — a cost in the profit line no
+ * source ever paid for.
  */
 export function spreadProRata(total: number, weights: readonly number[]): number[] {
   const out: number[] = new Array(weights.length).fill(0);
@@ -377,18 +378,41 @@ export function computeVat(
     const r = receiptsAt(m);
     return r === undefined ? 0 : r.agent_fee_pence + r.selling_legal_pence;
   });
+  // Month 0 — where the ledger capitalises the ancillary fees, and the fallback
+  // for any charge whose own base has no spend months at all (ruling R15).
+  const monthZeroWeights = Array.from({ length: term }, (_, m) => (m === 0 ? 1 : 0));
   const weights: Readonly<Record<VatChargeCategory, number[]>> = {
     acquisition: weightsFrom((u) => u.acquisition_pence),
     construction: weightsFrom((u) => u.construction_pence),
     professional: weightsFrom((u) => u.professional_pence),
     statutory: weightsFrom((u) => u.statutory_pence),
     selling: sellingWeights,
-    // §17.3: interest and the arrangement, exit, non-utilisation and extension
-    // fees are exempt financial services and never bear VAT. `lender_ancillary`
-    // is the ONLY finance-side base, and it is this schedule field — there is no
-    // code path from here to an interest or arrangement-fee figure.
-    lender_ancillary: weightsFrom((u) => u.lender_ancillary_fees_pence),
+    lender_ancillary: monthZeroWeights,
   };
+
+  // §17.3 and ruling R13. Interest and the arrangement, exit, non-utilisation
+  // and extension fees are exempt financial services and never bear VAT;
+  // `lender_ancillary` — broker, lender legal, valuation, monitoring surveyor —
+  // is the ONLY finance-side base, and there is no code path from here to an
+  // interest or arrangement-fee figure.
+  //
+  // The base comes from `inputs.finance`, NOT from
+  // `MonthUses.lender_ancillary_fees_pence`: that schedule field is initialised
+  // to 0 in `emptyUses()` and never assigned by `buildSchedule`, because the
+  // ledger computes and capitalises these fees itself (monthly-engine.ts:57-60).
+  // Reading it would leave this charge structurally zero forever — R10's
+  // "recorded but not live" shape. `finance` is an INPUT, so the one-direction
+  // rule is intact. Gated exactly as the ledger gates it: a cash deal, or one
+  // with no committed net facility, pays no lender fees and must bear no VAT on
+  // them.
+  const finance = inputs.finance;
+  const isCash = finance.funding_source === 'cash';
+  const netFacility = isCash ? 0 : (finance.committed_net_facility_pence ?? 0);
+  const hasFacility = !isCash && netFacility > 0;
+  const lenderAncillaryBase = hasFacility
+    ? finance.broker_fee_pence + finance.lender_legal_fee_pence
+      + finance.valuation_fee_pence + finance.monitoring_surveyor_fee_pence
+    : 0;
 
   // The per-line overrides live on the INPUT cost plan; the computed amounts
   // live on the result. Matched by id so a pct-based fee is charged on the
@@ -417,9 +441,20 @@ export function computeVat(
     : 0;
 
   // --- construction: the category base is net of every overridden package ---
+  // Gated on detailed mode, mirroring cost-plan.ts:262: `computeCostPlan`
+  // returns `packages` populated in EITHER mode but folds their amounts into
+  // `construction_total_pence` only in detailed mode. Subtracting
+  // unconditionally would drive a headline document's category base negative —
+  // negative VAT, negative months, and a negative contribution to
+  // `total_irrecoverable_pence` that Task 8 adds to cost-before-finance.
+  // validation.ts:244-246 hard-errors on headline-with-packages, so this is
+  // latent, not live; the unvalidated path still has to degrade to something
+  // defined rather than to silently negative money, exactly as schedule.ts:74-82
+  // records for its own clamp.
+  const detailed = costPlan.mode === 'detailed';
   const packageLines: VatChargeLine[] = [];
   let overriddenPackages = 0;
-  for (const p of costPlan.packages) {
+  for (const p of detailed ? costPlan.packages : []) {
     const override = packageOverrides.get(p.id);
     if (override === undefined) continue;
     overriddenPackages += p.amount_pence;
@@ -458,7 +493,7 @@ export function computeVat(
     category('statutory', costPlan.statutory_total_pence - overriddenStatutory),
     ...statutoryLines,
     category('selling', sum(sellingWeights)),
-    category('lender_ancillary', sum(weights.lender_ancillary)),
+    category('lender_ancillary', lenderAncillaryBase),
   ];
 
   // Spread each ROUNDED charge line across its base's months. The charged and
@@ -468,7 +503,11 @@ export function computeVat(
   const recoverableByMonth: number[] = new Array(term).fill(0);
   for (const c of charges) {
     if (c.vat_pence === 0 && c.recoverable_pence === 0) continue;
-    const w = weights[c.category];
+    // Ruling R15: a base with no spend months places its VAT in month 0 rather
+    // than nowhere, so `Σ months[].incurred_pence === total_input_vat_pence`
+    // holds for every document and the ledger funds every penny charged.
+    const own = weights[c.category];
+    const w = sum(own) === 0 ? monthZeroWeights : own;
     const inc = spreadProRata(c.vat_pence, w);
     const rec = spreadProRata(c.recoverable_pence, w);
     for (let m = 0; m < term; m += 1) {

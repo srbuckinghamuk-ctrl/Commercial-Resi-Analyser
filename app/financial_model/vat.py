@@ -243,11 +243,12 @@ def spread_pro_rata(total: int, weights: Sequence[float]) -> list[int]:
     ``round``, which is banker's rounding and silently disagrees with JS
     Math.round.
 
-    When ``sum(weights) == 0`` it returns all zeros. A charge with a non-zero
-    VAT figure but no monthly spend cannot be placed -- a real state (a fee the
-    schedule gives no months) -- and silently moving it to month 0 would invent
-    a cash outflow the spend profile does not show. The charge line still
-    discloses the VAT; only its cash timing is absent."""
+    When ``sum(weights) == 0`` it returns all zeros -- this function has no
+    month to prefer, so it makes no choice. The CALLER decides what an
+    unplaceable charge means: compute_vat falls back to month 0 (ruling R15),
+    because a charged penny the months never carry is never funded by the
+    ledger while Task 8 still puts its irrecoverable part into
+    cost-before-finance -- a cost in the profit line no source ever paid for."""
     out = [0] * len(weights)
     total_weight = sum(weights)
     if total_weight == 0:
@@ -350,30 +351,52 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
     if vat is None or not vat.registered:
         return _inert_vat(term)
 
-    def weights_from(pick) -> list[float]:
+    def weights_from(pick) -> list[int]:
         return [
             pick(schedule.uses[m]) if m < len(schedule.uses) else 0
             for m in range(term)
         ]
 
-    selling_weights: list[float] = [
+    selling_weights: list[int] = [
         (schedule.receipts[m].agent_fee_pence + schedule.receipts[m].selling_legal_pence)
         if m < len(schedule.receipts) else 0
         for m in range(term)
     ]
-    weights: dict[str, list[float]] = {
+    # Month 0 -- where the ledger capitalises the ancillary fees, and the
+    # fallback for any charge whose own base has no spend months (ruling R15).
+    month_zero_weights: list[int] = [1 if m == 0 else 0 for m in range(term)]
+    weights: dict[str, list[int]] = {
         "acquisition": weights_from(lambda u: u.acquisition_pence),
         "construction": weights_from(lambda u: u.construction_pence),
         "professional": weights_from(lambda u: u.professional_pence),
         "statutory": weights_from(lambda u: u.statutory_pence),
         "selling": selling_weights,
-        # Sec 17.3: interest and the arrangement, exit, non-utilisation and
-        # extension fees are exempt financial services and never bear VAT.
-        # lender_ancillary is the ONLY finance-side base, and it is this
-        # schedule field -- there is no code path from here to an interest or
-        # arrangement-fee figure.
-        "lender_ancillary": weights_from(lambda u: u.lender_ancillary_fees_pence),
+        "lender_ancillary": month_zero_weights,
     }
+
+    # Sec 17.3 and ruling R13. Interest and the arrangement, exit,
+    # non-utilisation and extension fees are exempt financial services and never
+    # bear VAT; lender_ancillary -- broker, lender legal, valuation, monitoring
+    # surveyor -- is the ONLY finance-side base, and there is no code path from
+    # here to an interest or arrangement-fee figure.
+    #
+    # The base comes from inputs.finance, NOT from
+    # MonthUses.lender_ancillary_fees_pence: that schedule field is initialised
+    # to 0 in _empty_uses() and never assigned by build_schedule, because the
+    # ledger computes and capitalises these fees itself (engine.py:191-194).
+    # Reading it would leave this charge structurally zero forever -- R10's
+    # "recorded but not live" shape. `finance` is an INPUT, so the one-direction
+    # rule is intact. Gated exactly as the ledger gates it: a cash deal, or one
+    # with no committed net facility, pays no lender fees and must bear no VAT
+    # on them.
+    finance = inputs.finance
+    is_cash = finance.funding_source == "cash"
+    net_facility = 0 if is_cash else (finance.committed_net_facility_pence or 0)
+    has_facility = not is_cash and net_facility > 0
+    lender_ancillary_base = (
+        finance.broker_fee_pence + finance.lender_legal_fee_pence
+        + finance.valuation_fee_pence + finance.monitoring_surveyor_fee_pence
+    ) if has_facility else 0
 
     # The per-line overrides live on the INPUT cost plan; the computed amounts
     # live on the result. Matched by id so a pct-based fee is charged on the
@@ -402,9 +425,20 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
     )
 
     # --- construction: the category base is net of every overridden package ---
+    # Gated on detailed mode, mirroring cost_plan.py's own base_build branch:
+    # compute_cost_plan returns `packages` populated in EITHER mode but folds
+    # their amounts into construction_total_pence only in detailed mode.
+    # Subtracting unconditionally would drive a headline document's category
+    # base negative -- negative VAT, negative months, and a negative
+    # contribution to total_irrecoverable_pence that Task 8 adds to
+    # cost-before-finance. validation.py hard-errors on headline-with-packages,
+    # so this is latent, not live; the unvalidated path still has to degrade to
+    # something defined rather than to silently negative money, exactly as
+    # schedule.py records for its own clamp.
+    detailed = cost_plan.mode == "detailed"
     package_lines: list[VatChargeLine] = []
     overridden_packages = 0
-    for p in cost_plan.packages:
+    for p in (cost_plan.packages if detailed else []):
         override = package_overrides.get(p.id)
         if override is None:
             continue
@@ -446,8 +480,8 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
         *professional_lines,
         category_line("statutory", cost_plan.statutory_total_pence - overridden_statutory),
         *statutory_lines,
-        category_line("selling", int(sum(selling_weights))),
-        category_line("lender_ancillary", int(sum(weights["lender_ancillary"]))),
+        category_line("selling", sum(selling_weights)),
+        category_line("lender_ancillary", lender_ancillary_base),
     ]
 
     # Spread each ROUNDED charge line across its base's months. The charged and
@@ -458,7 +492,11 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
     for c in charges:
         if c.vat_pence == 0 and c.recoverable_pence == 0:
             continue
-        w = weights[c.category]
+        # Ruling R15: a base with no spend months places its VAT in month 0
+        # rather than nowhere, so sum(m.incurred_pence) == total_input_vat_pence
+        # holds for every document and the ledger funds every penny charged.
+        own = weights[c.category]
+        w = month_zero_weights if sum(own) == 0 else own
         inc = spread_pro_rata(c.vat_pence, w)
         rec = spread_pro_rata(c.recoverable_pence, w)
         for m in range(term):
