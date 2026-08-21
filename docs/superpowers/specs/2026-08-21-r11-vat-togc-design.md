@@ -191,6 +191,33 @@ Month-end VAT carry (cumulative paid − cumulative reclaimed):
 Peak carry £100,000. Profit falls by the interest on that carry and by nothing
 else — see §17.5 below.
 
+**This table is illustrative, not normative (R41).** It isolates the construction
+cycle so the mechanism is legible. The corpus's VAT fixture,
+`r-vat-quarterly.json`, also carries chargeable purchase VAT, and **purchase VAT
+lands in month 0 — inside P0's window, alongside construction's first two
+months** — so its carry is the table's vector plus a constant £100,000 across
+months 0–2:
+
+| m | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| incurred (£000) | 100 | 50 | 50 | 50 | 50 | 0 | 0 |
+| reclaimed (£000) | 0 | 0 | 0 | 200 | 0 | 0 | 100 |
+| carry (£000) | 100 | 150 | 200 | 50 | 100 | 100 | 0 |
+
+**Peak carry £200,000, at month 2.** Months 3–6 are identical to the isolated
+table; only P0 differs, and it differs by exactly the purchase VAT.
+
+That composite vector is the **normative** one, because it is the one a fixture
+pins. The isolated table above is kept because it explains the cycle without the
+acquisition charge on top — but nothing pins it, and a figure nothing pins is not
+a claim this specification makes.
+
+The two were briefly in conflict: an earlier draft called the isolated table
+normative while requiring the fixture to carry purchase VAT, which are jointly
+unsatisfiable. The implementer escalated rather than reconciling them by zeroing
+the acquisition rate, which would have made the fixture agree with the spec by
+making it exercise less.
+
 **The implementation plan must re-derive these figures against the document it
 actually constructs**, not transcribe them. R10 shipped two plan tests asserting
 figures their own documents could never produce, because defaults the plan never
