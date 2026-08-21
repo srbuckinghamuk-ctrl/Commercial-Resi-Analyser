@@ -129,9 +129,9 @@ def test_covers_the_term_with_contiguous_periods_starting_at_month_0():
 
 def test_ends_the_first_period_at_first_period_end_month_and_quarters_thereafter():
     ps = vat_return_periods(_quarterly(), 12)
-    assert (ps[0].first_month, ps[0].last_month, ps[0].reclaim_month) == (0, 2, 3)
-    assert (ps[1].first_month, ps[1].last_month, ps[1].reclaim_month) == (3, 5, 6)
-    assert (ps[2].first_month, ps[2].last_month, ps[2].reclaim_month) == (6, 8, 9)
+    assert (ps[0].index, ps[0].first_month, ps[0].last_month, ps[0].reclaim_month) == (0, 0, 2, 3)
+    assert (ps[1].index, ps[1].first_month, ps[1].last_month, ps[1].reclaim_month) == (1, 3, 5, 6)
+    assert (ps[2].index, ps[2].first_month, ps[2].last_month, ps[2].reclaim_month) == (2, 6, 8, 9)
 
 
 def test_reports_a_reclaim_falling_beyond_the_final_month_as_null_never_clamped():
@@ -168,3 +168,21 @@ def test_handles_a_first_period_end_at_or_beyond_the_final_month():
     ps = vat_return_periods(_quarterly().model_copy(update={"first_period_end_month": 20}), 6)
     assert len(ps) == 1
     assert (ps[0].first_month, ps[0].last_month, ps[0].reclaim_month) == (0, 5, None)
+
+
+def test_clamps_a_degenerate_term_to_one_month_matching_build_schedule():
+    # schedule.py clamps `max(1, math.floor(inputs.finance.term_months))` before
+    # any of this runs, and from Task 3 onward vat_return_periods receives its
+    # term from that already-built schedule. If this returned no periods for a
+    # term of 0 (or negative), a built month of uses would have no VAT period
+    # covering it -- so matching the clamp here is deliberate consistency with
+    # an existing engine-wide convention, not an oversight.
+    for term in (0, -1):
+        ps = vat_return_periods(_quarterly(), term)
+        assert len(ps) == 1
+        assert (ps[0].first_month, ps[0].last_month) == (0, 0)
+
+
+def test_clamps_a_negative_first_period_end_month_to_0():
+    ps = vat_return_periods(_quarterly().model_copy(update={"first_period_end_month": -5}), 6)
+    assert (ps[0].first_month, ps[0].last_month, ps[0].reclaim_month) == (0, 0, 1)

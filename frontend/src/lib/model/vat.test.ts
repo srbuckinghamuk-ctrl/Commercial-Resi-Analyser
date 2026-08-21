@@ -115,9 +115,9 @@ describe('the return cycle (spec §17.4)', () => {
 
   it('ends the first period at first_period_end_month and quarters thereafter', () => {
     const ps = vatReturnPeriods(quarterly, 12);
-    expect(ps[0]).toMatchObject({ first_month: 0, last_month: 2, reclaim_month: 3 });
-    expect(ps[1]).toMatchObject({ first_month: 3, last_month: 5, reclaim_month: 6 });
-    expect(ps[2]).toMatchObject({ first_month: 6, last_month: 8, reclaim_month: 9 });
+    expect(ps[0]).toMatchObject({ index: 0, first_month: 0, last_month: 2, reclaim_month: 3 });
+    expect(ps[1]).toMatchObject({ index: 1, first_month: 3, last_month: 5, reclaim_month: 6 });
+    expect(ps[2]).toMatchObject({ index: 2, first_month: 6, last_month: 8, reclaim_month: 9 });
   });
 
   it('reports a reclaim falling beyond the final month as null, never clamped', () => {
@@ -151,5 +151,24 @@ describe('the return cycle (spec §17.4)', () => {
     const ps = vatReturnPeriods({ ...quarterly, first_period_end_month: 20 }, 6);
     expect(ps).toHaveLength(1);
     expect(ps[0]).toMatchObject({ first_month: 0, last_month: 5, reclaim_month: null });
+  });
+
+  it('clamps a degenerate term to one month, matching buildSchedule', () => {
+    // schedule.ts clamps `Math.max(1, Math.floor(inputs.finance.term_months))`
+    // before any of this runs, and from Task 3 onward vatReturnPeriods receives
+    // its term from that already-built schedule. If this returned no periods
+    // for a term of 0 (or negative), a built month of uses would have no VAT
+    // period covering it — so matching the clamp here is deliberate
+    // consistency with an existing engine-wide convention, not an oversight.
+    for (const term of [0, -1]) {
+      const ps = vatReturnPeriods(quarterly, term);
+      expect(ps).toHaveLength(1);
+      expect(ps[0]).toMatchObject({ first_month: 0, last_month: 0 });
+    }
+  });
+
+  it('clamps a negative first_period_end_month to 0', () => {
+    const ps = vatReturnPeriods({ ...quarterly, first_period_end_month: -5 }, 6);
+    expect(ps[0]).toMatchObject({ first_month: 0, last_month: 0, reclaim_month: 1 });
   });
 });
