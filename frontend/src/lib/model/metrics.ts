@@ -60,6 +60,14 @@ export function breakevenFlags(
   return out;
 }
 
+/** Ruling R33 — the reason stamped on the counterfactual document's acquisition-tax
+ *  override. It never reaches a user: the counterfactual is a throwaway document
+ *  built inside `vatCarryInterestPence`, never validated, never persisted and
+ *  never rendered. Named rather than inlined so a grep for it finds the one site
+ *  that writes an override the user did not ask for. */
+export const VAT_COUNTERFACTUAL_TAX_REASON =
+  'R33 VAT carry counterfactual — acquisition tax held at the as-given figure';
+
 /**
  * §17.12 — `vat_carry_interest_pence`, by the counterfactual and by nothing else.
  *
@@ -80,13 +88,34 @@ export function breakevenFlags(
  * the counterfactual document is unregistered, so were it ever passed back
  * through here it would answer 0 without running anything.
  *
- * Note that only `registered` is forced. `chargeableConsiderationPence` does not
- * read it (§17.7: the buyer pays the vendor's VAT whether or not the buyer can
- * recover it), so the acquisition tax — and the acquisition cost line the ledger
- * funds in month 0 — is identical on both sides. What differs is exactly the VAT
- * cash cycle: the outflows and the reclaims.
+ * **The counterfactual holds the acquisition tax FIXED (ruling R33).** VAT
+ * imposes two costs and only one of them is carry: a TIMING cost (money out,
+ * money back later, interest on the gap) and a PERMANENT one — acquisition tax
+ * charged on the VAT-inclusive consideration (§17.7), which never comes back.
+ *
+ * Forcing `registered: false` alone removes both. `chargeableConsiderationPence`
+ * DOES read `registered` — it calls `resolveVatTreatment`, which returns `INERT`
+ * for an unregistered document, so the acquisition rate goes to 0 and the
+ * consideration collapses back to the exclusive price. On any
+ * `vendor_opted_to_tax` document the counterfactual would then carry a smaller
+ * month-0 outflow, draw less and pay less interest for a reason that is not the
+ * VAT cash cycle: the carry would be overstated by the interest on the
+ * SDLT-on-VAT uplift, and §17.5's `Δprofit === Δfinance_costs` identity would
+ * fail because the counterfactual's cost-before-finance fell by the tax delta
+ * too.
+ *
+ * So the counterfactual pins its acquisition tax to the tax the real document
+ * was charged, through the existing `acquisition_tax_override_pence` mechanism
+ * with a reason naming the counterfactual. Acquisition cost is then identical on
+ * both sides and the difference is exactly the VAT cash cycle — including the
+ * carry on purchase VAT itself, which IS a timing cost and does belong. The
+ * permanent cost is not hidden: `chargeable_consideration_pence` and the
+ * acquisition tax disclose it, which is where a reader looks for a cost that
+ * never comes back.
  */
-function vatCarryInterestPence(inputs: AnyCalculatorInputs, model: MonthlyModel): number {
+function vatCarryInterestPence(
+  inputs: AnyCalculatorInputs, model: MonthlyModel, acquisitionTaxPence: number,
+): number {
   // Structural, exactly as `computeVat` and `chargeableConsiderationPence` read
   // it, and written as a narrowing guard rather than a ternary so the spread
   // below is typed as the v8 member of the union — a pre-v8 document has no
@@ -95,7 +124,19 @@ function vatCarryInterestPence(inputs: AnyCalculatorInputs, model: MonthlyModel)
   const vat = inputs.vat;
   if (!vat.registered) return 0;
   const counterfactual: CalculatorInputsV8 = {
-    ...inputs, vat: { ...vat, registered: false },
+    ...inputs,
+    vat: { ...vat, registered: false },
+    // R33. `buildSchedule` charges acquisition tax through its own site
+    // (`calculateTotalAcquisitionCost`), which reads this override exactly as
+    // `deriveMetrics` does — so pinning it here holds BOTH tax sites at the
+    // as-given figure and the month-0 acquisition outflow is identical on both
+    // sides. Where the real document already carries an override, this is a
+    // no-op: `acquisitionTaxPence` is that same override.
+    acquisition: {
+      ...inputs.acquisition,
+      acquisition_tax_override_pence: acquisitionTaxPence,
+      acquisition_tax_override_reason: VAT_COUNTERFACTUAL_TAX_REASON,
+    },
   };
   const cfSchedule = buildSchedule(counterfactual);
   const cfModel = runLedger(cfSchedule, counterfactual.finance, counterfactual.equity_sources);
@@ -174,12 +215,15 @@ export function deriveMetrics(
   // figure entering a cost base is the one move that could make the engine
   // cyclic; keeping it here, downstream of every base, is what makes a cycle
   // impossible by construction rather than merely detected.
-  const irrecoverableVat = schedule.vat.total_irrecoverable_pence;
+  // Read off the schedule TOTALS, the same `t.*` every other cost line in this
+  // block reads. `schedule.vat.total_irrecoverable_pence` carries the identical
+  // figure, but one number with two read paths is the shape drift starts from.
+  const irrecoverableVat = t.irrecoverable_vat_pence;
   const costBeforeFinance =
     t.cost_before_finance_ex_selling_pence + t.selling_costs_pence + irrecoverableVat;
   const financeCosts = model.totals.finance_costs_pence;
   // §17.12. A slice of `financeCosts` above, disclosed — never added to it.
-  const vatCarryInterest = vatCarryInterestPence(inputs, model);
+  const vatCarryInterest = vatCarryInterestPence(inputs, model, sdlt);
   const tdc = costBeforeFinance + financeCosts;
   const grossReceipts = t.gross_sales_pence;
   const profit = grossReceipts + t.retained_value_pence - tdc;

@@ -271,7 +271,19 @@ def breakeven_flags(
     return out
 
 
-def vat_carry_interest_pence(inputs: AnyCalculatorInputs, model: MonthlyModel) -> int:
+VAT_COUNTERFACTUAL_TAX_REASON = (
+    "R33 VAT carry counterfactual - acquisition tax held at the as-given figure"
+)
+"""Ruling R33 -- the reason stamped on the counterfactual document's
+acquisition-tax override. It never reaches a user: the counterfactual is a
+throwaway document built inside vat_carry_interest_pence, never validated, never
+persisted and never rendered. Named rather than inlined so a grep for it finds
+the one site that writes an override the user did not ask for."""
+
+
+def vat_carry_interest_pence(
+    inputs: AnyCalculatorInputs, model: MonthlyModel, acquisition_tax_pence: int,
+) -> int:
     """Sec 17.12 -- vat_carry_interest_pence, by the counterfactual and by nothing
     else. Mirrors vatCarryInterestPence in metrics.ts.
 
@@ -292,11 +304,30 @@ def vat_carry_interest_pence(inputs: AnyCalculatorInputs, model: MonthlyModel) -
     the counterfactual document is unregistered, so were it ever passed back
     through here it would answer 0 without running anything.
 
-    Note that only `registered` is forced. chargeable_consideration_pence does
-    not read it (Sec 17.7: the buyer pays the vendor's VAT whether or not the
-    buyer can recover it), so the acquisition tax -- and the acquisition cost
-    line the ledger funds in month 0 -- is identical on both sides. What differs
-    is exactly the VAT cash cycle: the outflows and the reclaims.
+    THE COUNTERFACTUAL HOLDS THE ACQUISITION TAX FIXED (ruling R33). VAT imposes
+    two costs and only one of them is carry: a TIMING cost (money out, money back
+    later, interest on the gap) and a PERMANENT one -- acquisition tax charged on
+    the VAT-inclusive consideration (Sec 17.7), which never comes back.
+
+    Forcing registered=False alone removes both. chargeable_consideration_pence
+    DOES read `registered` -- it calls resolve_vat_treatment, which returns INERT
+    for an unregistered document, so the acquisition rate goes to 0 and the
+    consideration collapses back to the exclusive price. On any
+    vendor_opted_to_tax document the counterfactual would then carry a smaller
+    month-0 outflow, draw less and pay less interest for a reason that is not the
+    VAT cash cycle: the carry would be overstated by the interest on the
+    SDLT-on-VAT uplift, and Sec 17.5's dProfit == dFinance_costs identity would
+    fail because the counterfactual's cost-before-finance fell by the tax delta
+    too.
+
+    So the counterfactual pins its acquisition tax to the tax the real document
+    was charged, through the existing acquisition_tax_override_pence mechanism
+    with a reason naming the counterfactual. Acquisition cost is then identical
+    on both sides and the difference is exactly the VAT cash cycle -- including
+    the carry on purchase VAT itself, which IS a timing cost and does belong. The
+    permanent cost is not hidden: chargeable_consideration_pence and the
+    acquisition tax disclose it, which is where a reader looks for a cost that
+    never comes back.
     """
     # Structural, exactly as compute_vat and chargeable_consideration_pence read
     # it: a pre-v8 document has no `vat` block at all and must be inert.
@@ -305,6 +336,15 @@ def vat_carry_interest_pence(inputs: AnyCalculatorInputs, model: MonthlyModel) -
         return 0
     counterfactual = inputs.model_copy(deep=True)
     counterfactual.vat.registered = False
+    # R33. build_schedule charges acquisition tax through its own site
+    # (calculate_total_acquisition_cost), which reads this override exactly as
+    # derive_metrics does -- so pinning it here holds BOTH tax sites at the
+    # as-given figure and the month-0 acquisition outflow is identical on both
+    # sides. Where the real document already carries an override this is a no-op:
+    # acquisition_tax_pence is that same override. A `vat` block only exists on a
+    # v8 document, which subclasses V5, so the override fields are always present.
+    counterfactual.acquisition.acquisition_tax_override_pence = acquisition_tax_pence
+    counterfactual.acquisition.acquisition_tax_override_reason = VAT_COUNTERFACTUAL_TAX_REASON
     cf_schedule = build_schedule(counterfactual)
     cf_model = run_ledger(cf_schedule, counterfactual.finance, counterfactual.equity_sources)
     return model.totals.interest_pence - cf_model.totals.interest_pence
@@ -394,13 +434,16 @@ def derive_metrics(
     # cost plan, so a VAT figure entering a cost base is the one move that could
     # make the engine cyclic; keeping it here, downstream of every base, is what
     # makes a cycle impossible by construction rather than merely detected.
-    irrecoverable_vat = schedule.vat.total_irrecoverable_pence
+    # Read off the schedule TOTALS, the same t.* every other cost line in this
+    # block reads. schedule.vat.total_irrecoverable_pence carries the identical
+    # figure, but one number with two read paths is the shape drift starts from.
+    irrecoverable_vat = t.irrecoverable_vat_pence
     cost_before_finance = (
         t.cost_before_finance_ex_selling_pence + t.selling_costs_pence + irrecoverable_vat
     )
     finance_costs = model.totals.finance_costs_pence
     # Sec 17.12. A slice of finance_costs above, disclosed -- never added to it.
-    vat_carry_interest = vat_carry_interest_pence(inputs, model)
+    vat_carry_interest = vat_carry_interest_pence(inputs, model, sdlt)
     tdc = cost_before_finance + finance_costs
     gross_receipts = t.gross_sales_pence
     profit = gross_receipts + t.retained_value_pence - tdc

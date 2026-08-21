@@ -361,11 +361,12 @@ describe('ruling R24 — the phased replay applies the VAT reclaim (spec §17.6)
     expect(withReclaim as number).toBeLessThan(without as number);
   });
 
-  it('applies the reclaim BEFORE the tranche sweep, in the reclaim’s own month', () => {
-    // Order is falsifiable here: a reclaim landing in the same month as a
-    // tranche must shrink the balance that tranche has to clear. Applying it
-    // after the sweep would leave the month-2 tranche facing the full balance,
-    // pushing the solved G back up towards the reclaim-free answer.
+  it('an earlier reclaim beats a later one (timing of interest, NOT the ordering rule)', () => {
+    // Named for what it actually pins. On this fee-free shape both the reclaim
+    // arm and the tranche arm are plain subtractions from the same opening
+    // balance, so neither clamp binds and the month's closing balance is
+    // identical whichever order they run in — this cannot falsify R24's
+    // ordering requirement, and the test below is what does.
     const sameMonth = solveSeniorBreakevenPhased(reclaimBase([0, 0, 2_000_000, 0]));
     const monthLater = solveSeniorBreakevenPhased(reclaimBase([0, 0, 0, 2_000_000]));
     expect(sameMonth).not.toBeNull();
@@ -376,6 +377,50 @@ describe('ruling R24 — the phased replay applies the VAT reclaim (spec §17.6)
     // …and both must beat the reclaim-free trajectory.
     expect(monthLater as number)
       .toBeLessThan(solveSeniorBreakevenPhased(reclaimBase([0, 0, 0, 0])) as number);
+  });
+
+  it('applies the reclaim BEFORE the tranche sweep (watched failing on order)', () => {
+    // R24's actual ordering rule, on a shape where the order CHANGES the outcome.
+    // The lever is `exit_fee_basis: 'redemption_balance'`: the fee is a function
+    // of the balance the arm meets, so whichever arm runs first pays a fee on the
+    // FULL balance and the other pays on the reduced one. Interest is switched
+    // off (rate 0, not rolled up) so every figure below is exact arithmetic.
+    //
+    //   month 0: draw 1,000,000        -> balance 1,000,000
+    //   month 1: reclaim 700,000 and one tranche, 100% sweep, no selling costs
+    //            so the sweep is G itself. Exit fee = 20% of the balance met.
+    //
+    //   correct order (reclaim first): fee = 200,000; 700,000 < 1,200,000 so the
+    //     reclaim is partial and repays 700,000 - 200,000 = 500,000, leaving
+    //     500,000. The sweep then meets fee = 100,000 and redeems iff
+    //     G >= 600,000.
+    //   wrong order (sweep first): fee = 200,000; the sweep repays G - 200,000,
+    //     leaving 1,200,000 - G. The reclaim then meets fee = 20% of that and
+    //     redeems iff 700,000 >= 1.2 x (1,200,000 - G), i.e. G >= 616,667.
+    //
+    // WATCHED FAILING: move the reclaim block below the tranche sweep in
+    // breakeven.ts and G = 600,000 leaves 20,000 outstanding — the assertion
+    // below flips to false. The whole window [600,000, 616,666] separates the
+    // two orders, so the guard has 16,667 pence of margin, not one.
+    const t: PhasedSeniorBreakevenTerms = {
+      draws_and_fees_pence: [1_000_000, 0],
+      vat_reclaims_pence: [0, 700_000],
+      monthly_rate: 0,
+      rolled_up: false,
+      sales_sweep_pct: 100,
+      tranches: [{ month_offset: 1, pct_of_gross_receipts: 100 }],
+      selling_agent_fee_pct: 0,
+      selling_legal_fee_pence: 0,
+      enforcement_cost_assumption_pence: 0,
+      finance: { ...TERMS_FEE_FREE, exit_fee_pct: 20, exit_fee_basis: 'redemption_balance' },
+      committed_gross_facility_pence: 0,
+    };
+    expect(phasedReplayRedeems(t, 600_000)).toBe(true);    // false under the wrong order
+    expect(phasedReplayRedeems(t, 599_999)).toBe(false);   // and tight from below
+    expect(solveSeniorBreakevenPhased(t)).toBe(600_000);
+    // The far side of the window: the wrong order's own boundary must already be
+    // comfortably feasible under the right one.
+    expect(phasedReplayRedeems(t, 616_667)).toBe(true);
   });
 
   it('a reclaim that clears the balance outright needs no sale price at all', () => {
@@ -423,7 +468,9 @@ describe('ruling R24 — the phased replay applies the VAT reclaim (spec §17.6)
     // Feasibility must never go true → false as G grows: the bisection's
     // correctness depends on it, and a hole above the solved boundary means the
     // reported break-even is UNDERSTATED — a price that does not redeem.
-    for (let d = 0; d <= 200_000; d += 500) {
+    // Step 100, not 500: the hole this guards is 342 pence wide, so a 500-step
+    // scan cleared it by a 37-pence margin — a margin, not a guarantee.
+    for (let d = 0; d <= 200_000; d += 100) {
       expect(phasedReplayRedeems(t, exact + d)).toBe(true);
     }
   });
