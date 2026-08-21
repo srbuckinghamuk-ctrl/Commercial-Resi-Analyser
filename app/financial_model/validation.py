@@ -302,6 +302,35 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 "with no repeats.",
             )
 
+        # R11 ruling R46. Sec 17.8 made the package tag live: in detailed mode,
+        # existing_building/abnormal resolve against sum(packages where
+        # contingency_class == name), not the whole base build. A document can
+        # carry a non-zero percentage on a class no package is tagged with --
+        # the calculator renders all three percentages in both modes, and new
+        # packages default to contingency_class 'general' -- so the resolved
+        # base is silently zero. This is a WARNING, not an error: the rule
+        # that used to catch this (a selected-packages contingency naming no
+        # packages cannot carry a non-zero percentage) was deleted this
+        # release, and an error here would repeat R38's defect -- a stored
+        # document already in this state would acquire a hard error on
+        # migration, making report_safe false and silently downgrading the
+        # report to DRAFT. Reads `cost_plan`, which exists at v7 as well as
+        # v8, so this fires identically before and after migration and does
+        # not touch the R38/R39 regression gate (which permits exactly one
+        # warning addition, on vat.registered).
+        if cp.mode == "detailed":
+            for idx, c in enumerate(cp.contingency):
+                if c.name == "general":
+                    continue
+                has_tagged_package = any(p.contingency_class == c.name for p in cp.packages)
+                if c.pct != 0 and not has_tagged_package:
+                    warn(
+                        f"cost_plan.contingency[{idx}].pct",
+                        f"Contingency class '{c.name}' has a non-zero percentage ({c.pct}%) but "
+                        f"no package is tagged '{c.name}' - its resolved base is zero, so this "
+                        "contingency will compute to zero.",
+                    )
+
         # Spec Sec 3.2.1: in detailed mode, compliance is priced inside the
         # fire_acoustic_thermal package (compute_cost_plan returns
         # compliance_pence 0 for detailed mode). A document carrying both would

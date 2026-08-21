@@ -7,7 +7,8 @@ import type { ValidationIssue } from './validation';
 import {
   migrateInputsToV5, migrateInputsToV6, migrateInputsToV7, migrateInputsToV8,
 } from './migrate';
-import { costPlanFromLegacyCosts } from './cost-plan';
+import { costPlanFromLegacyCosts, computeCostPlan } from './cost-plan';
+import { areaBridge } from './areas';
 import { VAT_CHARGE_CATEGORIES } from './vat';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
@@ -899,9 +900,25 @@ describe('golden fixtures (shared with the Python engine)', () => {
 
       // Cross-check the exemption against §17.9's own condition rather than
       // trusting it: the disclosure must appear exactly where a non-zero
-      // construction cost makes it true, and nowhere else.
+      // RESOLVED construction cost makes it true, and nowhere else.
+      //
+      // Minor 4 (whole-branch review): this used to check
+      // `migrated.conversion_costs.total_construction_sqm > 0`, which is a
+      // PROXY, not §17.9's own condition — validation.ts's warning actually
+      // reads `resolvedCostPlan.construction_total_pence !== 0`, and in
+      // detailed mode the base build is derived from `cost_plan.packages`,
+      // not from `total_construction_sqm` at all. The two quantities agree on
+      // every fixture in this corpus today (this is latent, not yet
+      // observed), so the proxy previously read as correct. Recomputed here
+      // exactly as validation.ts does, so a future fixture where the two
+      // diverge is actually caught.
+      const resolvedConstructionTotal = computeCostPlan(
+        migrated,
+        areaBridge(migrated).developed_area_sqm,
+        migrated.unit_mix.units.length,
+      ).construction_total_pence;
       expect(exempted.length === 1)
-        .toBe(migrated.conversion_costs.total_construction_sqm > 0);
+        .toBe(resolvedConstructionTotal !== 0);
     },
   );
 

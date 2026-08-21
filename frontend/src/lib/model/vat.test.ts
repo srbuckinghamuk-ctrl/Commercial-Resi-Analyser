@@ -18,10 +18,15 @@ describe('VAT treatment resolution (spec §17.2)', () => {
   const vat = {
     ...DEFAULT_VAT,
     registered: true,
+    // Minor 3 (whole-branch review): every category gets a non-zero rate, not
+    // just 'construction' — the six-category loop just below this fixture
+    // ("yields a zero-rate resolution for every category when not
+    // registered") would otherwise pass 5 of its 6 iterations vacuously, even
+    // with the `if (!vat.registered) return INERT` guard deleted.
     treatments: defaultVatTreatments().map((t) =>
       t.category === 'construction'
         ? { ...t, rate_pct: 5, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' as const }
-        : t),
+        : { ...t, rate_pct: 10, recoverable_pct: 50, recovery_basis: 'partial_exemption' as const }),
   };
 
   it('falls back to the category row when the charge has no override', () => {

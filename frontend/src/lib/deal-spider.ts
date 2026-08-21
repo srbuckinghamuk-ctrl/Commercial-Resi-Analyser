@@ -245,6 +245,17 @@ export function computeSpider(
       (sum, c) => sum + (Math.round((c.net_base_pence * STANDARD_VAT_RATE_PCT) / 100) - c.vat_pence),
       0,
     );
+  // Ruling R47. The two deductions below are WHOLE-DOCUMENT figures — unlike
+  // `grossVatSavedVsStandardRate` above, they are NOT filtered to charge lines
+  // whose `evidence_status` is `'confirmed'`. That asymmetry is deliberate,
+  // not an oversight: `irrecoverable_vat_pence` and `vat_carry_interest_pence`
+  // are real costs of the whole VAT position however each line is evidenced —
+  // deducting only the confirmed share would UNDERSTATE them, since an
+  // unconfirmed rate can still be charging real, irrecoverable VAT today. So
+  // an unconfirmed line's irrecoverable VAT is deducted from a saving it was
+  // not allowed to contribute to above; that is the conservative direction
+  // for this figure to be asymmetric in, and it is why `taxAdvantageNote`
+  // below does not claim the two sides are treated alike.
   const vatSaving =
     grossVatSavedVsStandardRate - metrics.irrecoverable_vat_pence - metrics.vat_carry_interest_pence;
   const taxAdvantagePct =
@@ -268,7 +279,7 @@ export function computeSpider(
   const taxAdvantageNote: string | null = !metrics.vat.registered
     ? 'VAT saving not modelled: this document is not VAT-registered, so the figure above reflects SDLT and CIL only — it is not a confirmed zero tax advantage.'
     : anyChargeLineUnconfirmed
-      ? 'VAT evidence UNCONFIRMED for at least one charge category (confirmed rows only count toward the saving above) — obtain specific tax advice before relying on this figure.'
+      ? 'VAT evidence UNCONFIRMED for at least one charge category (only confirmed rows count toward the saving above — irrecoverable VAT and its carry interest are still deducted in full, whatever their evidence status) — obtain specific tax advice before relying on this figure.'
       : null;
   const taxAdvantageProvisional = taxAdvantageNote !== null;
 

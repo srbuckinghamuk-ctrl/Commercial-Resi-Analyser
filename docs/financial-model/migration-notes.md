@@ -580,7 +580,8 @@ document migrated to v8 gets:
 
 - `vat.registered: false`, so `resolveVatTreatment` drives every charge to
   `INERT` and `chargeableConsiderationPence` collapses back to the exclusive
-  price — no existing appraisal's computed values move (§17.11);
+  price — no existing appraisal's computed values move (§17.11), with the
+  one named exception §11.1 qualifies (ruling R46);
 - the six treatment rows at `rate_pct: 0`, `recoverable_pct: 0`,
   `recovery_basis: 'unconfirmed'`, `evidence_status: 'unconfirmed'`;
 - `purchase`: `vendor_opted_to_tax: false`, `togc_treatment: 'unconfirmed'`,
@@ -617,7 +618,27 @@ downstream of it.
 ### 11.1 The numerical-identity claim, and where it is tested
 
 **Claim: the v7 → v8 migration is purely additive. Every existing appraisal
-produces byte-identical output either side of it — not "close", identical.**
+produces byte-identical output either side of it — not "close", identical —
+with exactly one named, reachable exception (ruling R46).** §17.8 makes a
+detailed-mode package's `contingency_class` tag live: a document carrying a
+non-zero percentage on `existing_building` or `abnormal` while no package
+carries that tag now resolves that class's contingency base to zero, where
+before every class resolved against the whole base build regardless of tag.
+This is not caused by the migration step itself — the migration touches
+nothing on `cost_plan.packages` or their tags — but by the engine's new
+resolution rule (§17.8), which applies the first time such a document is run
+under calc `2.10.0`, migrated or not. It is the one figure this release does
+move, and it is disclosed rather than left silent: `validate_inputs` (§17.9)
+adds a **warning** naming the class and stating its resolved base is zero.
+The rule is deliberately a warning, not an error — the same reasoning R38
+established: a stored document already in that shape must not acquire a hard
+validation error on migration, which would make `report_safe` false and
+silently downgrade the report to DRAFT. The rule reads `cost_plan`, which is
+identical before and after the v7 → v8 boundary, so it fires identically
+either side of it and does not add to the R38/R39 regression gate below (that
+gate permits exactly one addition, the `vat.registered` warning, and the
+corpus's one detailed-mode fixture already has every non-general class
+correctly tagged, so the gate observes no R46 warning on any fixture either).
 
 This is a *tested* claim, mirroring §10.1's pattern one version on:
 

@@ -34,6 +34,11 @@ from app.financial_model.vat import (
 
 
 def _registered_vat():
+    # Minor 3 (whole-branch review): every category gets a non-zero rate, not
+    # just 'construction' -- the six-category loop in
+    # test_yields_a_zero_rate_resolution_for_every_category_when_not_registered
+    # would otherwise pass 5 of its 6 iterations vacuously, even with the
+    # `if not vat.registered: return INERT` guard deleted.
     treatments = default_vat_treatments()
     updated = []
     for t in treatments:
@@ -42,7 +47,9 @@ def _registered_vat():
                 "rate_pct": 5, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale",
             }))
         else:
-            updated.append(t)
+            updated.append(t.model_copy(update={
+                "rate_pct": 10, "recoverable_pct": 50, "recovery_basis": "partial_exemption",
+            }))
     return DEFAULT_VAT.model_copy(update={"registered": True, "treatments": updated})
 
 

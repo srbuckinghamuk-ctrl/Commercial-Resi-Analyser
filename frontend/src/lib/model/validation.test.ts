@@ -1218,6 +1218,55 @@ describe('R10 — cost plan validation', () => {
     expect(valid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.contingency')).toBe(false);
   });
 
+  it('warns (not errors) when a detailed-mode non-general contingency class has a '
+    + 'non-zero percentage but no package carries its tag (R46)', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ contingency_class: 'general' })],
+        contingency: [
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 8 },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.contingency[2].pct')).toBe(true);
+    // R46 is a deliberate warning, not a hard error -- see the ruling: an error
+    // would repeat R38's defect by turning a migrated document's state into a
+    // hard error that silently downgrades a report to DRAFT.
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[2].pct')).toBe(false);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ contingency_class: 'abnormal' })],
+        contingency: [
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 8 },
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.contingency[2].pct')).toBe(false);
+  });
+
+  it('does not warn on the R46 rule in headline mode, where all classes resolve against '
+    + 'the whole base build', () => {
+    const issues = validateInputs(makeV7Inputs({
+      conversion_costs: { total_construction_sqm: 100 },
+      cost_plan: {
+        mode: 'headline',
+        contingency: [
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 8 },
+        ],
+      },
+    }));
+    expect(issues.some((i) => i.field.startsWith('cost_plan.contingency[2]'))).toBe(false);
+  });
+
   it('warns when a percentage-basis fee line resolves against a zero base', () => {
     // makeV7Inputs defaults total_construction_sqm to 0, so headline-mode base_build is 0.
     const invalid = validateInputs(makeV7Inputs({

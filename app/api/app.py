@@ -407,12 +407,22 @@ def calculate_authoritative(
         # which drives resolve_vat_treatment to INERT and
         # chargeable_consideration_pence back to the exclusive price, so like
         # the v7 step before it, it is intended to leave every migrated
-        # appraisal's computed values unchanged. It also SUBTRACTS two things
-        # exactly once: every package's and every fee line's `vat_override` is
-        # written null (the field arrived with R11; no stored row can
-        # legitimately carry one), and spec Sec 17.8's deleted contingency
-        # `basis` / `package_ids` are dropped, the per-package
-        # `contingency_class` tag surviving as the one mechanism.
+        # appraisal's computed values unchanged -- WITH ONE NAMED EXCEPTION
+        # (ruling R46): spec Sec 17.8 makes the package's `contingency_class`
+        # tag live, not the migration step itself, but the effect is the same
+        # from a stored appraisal's point of view -- a detailed-mode document
+        # carrying a non-zero percentage on `existing_building` or `abnormal`
+        # with no package tagged to that class now resolves that class's base
+        # to zero rather than the whole base build, on the FIRST run under
+        # this release's engine, migrated or not. validate_inputs (Sec 17.9)
+        # WARNS (not errors) on that shape so it is disclosed rather than
+        # silently zeroed, and it does not touch report_safe or the R38/R39
+        # regression gate. It also SUBTRACTS two things exactly once: every
+        # package's and every fee line's `vat_override` is written null (the
+        # field arrived with R11; no stored row can legitimately carry one),
+        # and spec Sec 17.8's deleted contingency `basis` / `package_ids` are
+        # dropped, the per-package `contingency_class` tag surviving as the
+        # one mechanism.
         # tests/test_migrate_v8.py pins the migration's shape and both
         # refusals, AND the corpus-wide gate: test_v8_migration_moves_no_
         # existing_figure asserts BOTH numeric identity and the structural

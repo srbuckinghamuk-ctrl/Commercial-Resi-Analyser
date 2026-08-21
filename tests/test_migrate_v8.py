@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from app.financial_model import parse_calculator_inputs, run_appraisal, validate_inputs
+from app.financial_model.areas import area_bridge
+from app.financial_model.cost_plan import compute_cost_plan
 from app.financial_model.migrate import (
     _v8_cost_plan,
     is_v2_or_later,
@@ -550,9 +552,25 @@ def test_v8_migration_adds_and_removes_no_validation_issue():
 
         # Cross-check the exemption against Sec 17.9's own condition rather than
         # trusting it: the disclosure must appear exactly where a non-zero
-        # construction cost makes it true, and nowhere else.
+        # RESOLVED construction cost makes it true, and nowhere else.
+        #
+        # Minor 4 (whole-branch review): this used to check
+        # `migrated.conversion_costs.total_construction_sqm > 0`, which is a
+        # PROXY, not Sec 17.9's own condition -- validate_inputs's warning
+        # actually reads `resolved_cost_plan.construction_total_pence != 0`,
+        # and in detailed mode the base build is derived from
+        # `cost_plan.packages`, not from `total_construction_sqm` at all. The
+        # two quantities agree on every fixture in this corpus today (this is
+        # latent, not yet observed), so the proxy previously read as correct.
+        # Recomputed here exactly as validate_inputs does, so a future fixture
+        # where the two diverge is actually caught.
         got_disclosure = len(exempted) == 1
-        has_construction = migrated.conversion_costs.total_construction_sqm > 0
+        resolved_construction_total = compute_cost_plan(
+            migrated,
+            area_bridge(migrated).developed_area_sqm,
+            len(migrated.unit_mix.units),
+        ).construction_total_pence
+        has_construction = resolved_construction_total != 0
         assert got_disclosure == has_construction, (
             f"{name}: Sec 17.9's inert-engine disclosure fired={got_disclosure} but the "
             f"document's construction cost is non-zero={has_construction}"

@@ -1238,6 +1238,38 @@ class TestCostPlanValidation:
         }))
         assert not any(i.field == "cost_plan.fee_lines[0].category" for i in valid)
 
+    def test_warns_not_errors_when_detailed_mode_non_general_contingency_has_no_tagged_package(self):
+        """R11 ruling R46. Python twin of the same-named test in
+        validation.test.ts."""
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(contingency_class="general")],
+            "contingency": _three_classes(general={"pct": 5}, abnormal={"pct": 8}),
+        }))
+        assert any(
+            i.severity == "warning" and i.field == "cost_plan.contingency[2].pct" for i in invalid
+        )
+        # R46 is a deliberate warning, not a hard error -- an error would
+        # repeat R38's defect by turning a migrated document's state into a
+        # hard error that silently downgrades a report to DRAFT.
+        assert not any(
+            i.severity == "error" and i.field == "cost_plan.contingency[2].pct" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(contingency_class="abnormal")],
+            "contingency": _three_classes(general={"pct": 5}, abnormal={"pct": 8}),
+        }))
+        assert not any(i.field == "cost_plan.contingency[2].pct" for i in valid)
+
+    def test_does_not_warn_r46_in_headline_mode(self):
+        invalid = validate_inputs(make_v7_inputs(
+            conversion_costs={"total_construction_sqm": 100},
+            cost_plan={"mode": "headline", "contingency": _three_classes(general={"pct": 5}, abnormal={"pct": 8})},
+        ))
+        assert not any(i.field.startswith("cost_plan.contingency[2]") for i in invalid)
+
     def test_warns_when_contingency_exceeds_50pct_of_the_base_build_cost(self):
         invalid = validate_inputs(make_v7_inputs(
             conversion_costs={"total_construction_sqm": 100},
