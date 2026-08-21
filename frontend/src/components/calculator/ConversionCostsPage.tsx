@@ -75,6 +75,7 @@ function newPackage(): CostPackage {
     contingency_class: 'general',
     lender_eligible: false,
     notes: '',
+    vat_override: null,
   };
 }
 

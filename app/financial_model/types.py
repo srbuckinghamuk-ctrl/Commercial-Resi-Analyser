@@ -501,6 +501,23 @@ FEE_CODE_CATEGORY: dict[str, str] = {
 }
 
 
+# R11 spec Sec 17.3. Defined here, ahead of the R10 block, because CostPackage
+# and FeeLine below carry a `vat_override: VatOverride | None` field: pydantic
+# builds a model's core schema at class-definition time (this module uses
+# `from __future__ import annotations`, so forward refs resolve against the
+# module's globals at first use), and CostPlanInputs -- which contains
+# CostPackage/FeeLine -- is instantiated immediately below (DEFAULT_COST_PLAN),
+# well before the rest of the R11 VAT block. The remaining VAT types are
+# declared in their natural place after the R10 cost-plan block.
+RecoveryBasis = Literal["zero_rated_sale", "partial_exemption", "blocked", "unconfirmed"]
+
+
+class VatOverride(Model):
+    rate_pct: float = Field(default=0.0, ge=0)
+    recoverable_pct: float = Field(default=0.0, ge=0)
+    recovery_basis: RecoveryBasis = "unconfirmed"
+
+
 class CostPackage(Model):
     """Mirrors CostPackage in cost-plan.ts, field for field and in order."""
 
@@ -518,6 +535,10 @@ class CostPackage(Model):
     # R10 records this; the ledger's draw cap does NOT read it. R14 wires it.
     lender_eligible: bool = True
     notes: str = ""
+    # R11 spec Sec 17.1. Detailed mode only -- hard-rejected in headline mode
+    # (validation, Task 9). None on every migrated line and on every line the
+    # user has not overridden. Read ONLY through resolve_vat_treatment().
+    vat_override: VatOverride | None = None
 
 
 class ContingencyClass(Model):
@@ -536,6 +557,10 @@ class FeeLine(Model):
     amount_pence: int = Field(default=0, ge=0)
     pct: float = Field(default=0.0, ge=0)
     per_dwelling: bool = False
+    # R11 spec Sec 17.1. Detailed mode only -- hard-rejected in headline mode
+    # (validation, Task 9). None on every migrated line and on every line the
+    # user has not overridden. Read ONLY through resolve_vat_treatment().
+    vat_override: VatOverride | None = None
 
 
 class CostPlanInputs(Model):
@@ -621,9 +646,71 @@ class CalculatorInputsV7(CalculatorInputsV6):
     )
 
 
+# --- Release 11 (calc 2.10.0): VAT and TOGC ---
+
+VatChargeCategory = Literal[
+    "acquisition", "construction", "professional",
+    "statutory", "selling", "lender_ancillary",
+]
+
+VAT_CHARGE_CATEGORIES: tuple[str, ...] = (
+    "acquisition", "construction", "professional",
+    "statutory", "selling", "lender_ancillary",
+)
+
+TogcTreatment = Literal["applies", "does_not_apply", "unconfirmed"]
+
+
+class VatTreatment(Model):
+    """Mirrors VatTreatment in vat.ts, field for field and in order."""
+
+    category: VatChargeCategory
+    rate_pct: float = Field(default=0.0, ge=0)
+    recoverable_pct: float = Field(default=0.0, ge=0)
+    recovery_basis: RecoveryBasis = "unconfirmed"
+    evidence_status: EvidenceStatus = "unconfirmed"
+    notes: str = ""
+
+
+class PurchaseVatInputs(Model):
+    vendor_opted_to_tax: bool = False
+    togc_treatment: TogcTreatment = "unconfirmed"
+    evidence_status: EvidenceStatus = "unconfirmed"
+    notes: str = ""
+
+
+class VatInputs(Model):
+    registered: bool = False
+    return_frequency: Literal["monthly", "quarterly"] = "quarterly"
+    first_period_end_month: int = Field(default=2, ge=0)
+    repayment_lag_months: int = Field(default=1, ge=0)
+    treatments: list[VatTreatment] = Field(default_factory=list)
+    purchase: PurchaseVatInputs = Field(default_factory=PurchaseVatInputs)
+
+
+def default_vat_treatments() -> list[VatTreatment]:
+    return [
+        VatTreatment(category=c)  # type: ignore[arg-type]
+        for c in VAT_CHARGE_CATEGORIES
+    ]
+
+
+DEFAULT_VAT = VatInputs(treatments=default_vat_treatments())
+
+
+class CalculatorInputsV8(CalculatorInputsV7):
+    """Mirrors CalculatorInputsV7 with the R11 VAT block. Subclasses V7 for the
+    same reason V7 subclasses V6: the engine dispatches on it, and a flat
+    re-declaration would make those isinstance checks silently False for v8
+    documents."""
+
+    inputs_version: Literal[8] = 8  # type: ignore[assignment]
+    vat: VatInputs = Field(default_factory=lambda: DEFAULT_VAT.model_copy(deep=True))
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
-    | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7
+    | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
 )
 
 

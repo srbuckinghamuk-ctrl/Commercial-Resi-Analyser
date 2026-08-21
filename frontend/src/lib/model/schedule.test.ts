@@ -332,7 +332,7 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
         mode: 'detailed',
         packages: [{
           id: 'p1', code: 'structure', label: 'Structure', amount_pence: 10_000_000,
-          contingency_class: 'general', lender_eligible: true, notes: '',
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
         }],
         contingency: [
           { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
@@ -341,11 +341,11 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
         ],
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'fixed', amount_pence: 2_000_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 2_000_000, pct: 0, per_dwelling: false, vat_override: null },
           { id: 'f2', code: 'prior_approval', category: 'statutory', label: 'Prior approval',
-            basis: 'fixed', amount_pence: 5_000, pct: 0, per_dwelling: true },
+            basis: 'fixed', amount_pence: 5_000, pct: 0, per_dwelling: true, vat_override: null },
           { id: 'f3', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-            basis: 'fixed', amount_pence: 300_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 300_000, pct: 0, per_dwelling: false, vat_override: null },
         ],
       },
     };

@@ -879,14 +879,16 @@ describe('R10 — cost plan validation', () => {
   function pkg(overrides: Partial<CostPackage> = {}): CostPackage {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
-      contingency_class: 'general', lender_eligible: true, notes: '', ...overrides,
+      contingency_class: 'general', lender_eligible: true, notes: '',
+      vat_override: null, ...overrides,
     };
   }
 
   function feeLine(overrides: Partial<FeeLine> = {}): FeeLine {
     return {
       id: 'fee-x', code: 'other', category: 'professional', label: 'X',
-      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false, ...overrides,
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
+      vat_override: null, ...overrides,
     };
   }
 

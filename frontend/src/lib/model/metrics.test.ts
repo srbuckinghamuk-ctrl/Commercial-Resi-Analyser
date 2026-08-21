@@ -742,9 +742,9 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         packages: [
           { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
             amount_pence: 1_000_000, contingency_class: 'existing_building',
-            lender_eligible: true, notes: '' },
+            lender_eligible: true, notes: '', vat_override: null },
           { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
-            contingency_class: 'general', lender_eligible: true, notes: '' },
+            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null },
         ],
         contingency: [
           { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
@@ -753,9 +753,9 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         ],
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false },
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
           { id: 'f2', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null },
         ],
       },
     });

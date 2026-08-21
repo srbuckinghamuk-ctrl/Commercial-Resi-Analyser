@@ -7,6 +7,7 @@ import type { SpendCurve } from './curves';
 import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
+import type { VatInputs } from './vat';
 
 export type { SpendCurve };
 
@@ -220,9 +221,17 @@ export interface CalculatorInputsV7 extends Omit<CalculatorInputsV6, 'inputs_ver
   cost_plan: CostPlanInputs;
 }
 
+/** R11 (spec 17). Adds the VAT block. Purely additive: migration (Task 10)
+ *  writes `registered: false`, so the engine is inert and no existing
+ *  appraisal's computed values move. */
+export interface CalculatorInputsV8 extends Omit<CalculatorInputsV7, 'inputs_version'> {
+  inputs_version: 8;
+  vat: VatInputs;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
-  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7;
+  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'

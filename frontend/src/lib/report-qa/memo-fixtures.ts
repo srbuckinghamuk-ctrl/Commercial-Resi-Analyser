@@ -460,15 +460,15 @@ export function detailedCostPlanInputs(): CalculatorInputsV7 {
       packages: [
         {
           id: 'pkg-structure', code: 'structure', label: 'Structural repairs',
-          amount_pence: 20_000_000, contingency_class: 'general', lender_eligible: true, notes: '',
+          amount_pence: 20_000_000, contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope — windows, cladding, roof',
-          amount_pence: 10_000_000, contingency_class: 'existing_building', lender_eligible: true, notes: '',
+          amount_pence: 10_000_000, contingency_class: 'existing_building', lender_eligible: true, notes: '', vat_override: null,
         },
         {
           id: 'pkg-externals', code: 'externals', label: 'Externals and landscaping',
-          amount_pence: 5_000_000, contingency_class: 'abnormal', lender_eligible: false, notes: '',
+          amount_pence: 5_000_000, contingency_class: 'abnormal', lender_eligible: false, notes: '', vat_override: null,
         },
       ],
       contingency: [

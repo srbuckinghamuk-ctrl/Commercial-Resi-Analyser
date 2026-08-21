@@ -61,6 +61,14 @@ export { computeCostPlan } from './cost-plan';
 export type {
   CostPlanResult, CostPackageLine, ContingencyLine, FeeLineResult,
 } from './cost-plan';
+export {
+  DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments,
+  resolveVatTreatment, isPurchaseVatChargeable,
+} from './vat';
+export type {
+  VatChargeCategory, RecoveryBasis, TogcTreatment, VatTreatment,
+  VatOverride, PurchaseVatInputs, VatInputs, ResolvedVatTreatment, VatCharge,
+} from './vat';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';

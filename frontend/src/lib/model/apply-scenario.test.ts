@@ -271,10 +271,10 @@ describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
         packages: [
           { id: 'p1', code: 'structure', label: 'Structure',
             amount_pence: 3_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '' },
+            lender_eligible: true, notes: '', vat_override: null },
           { id: 'p2', code: 'envelope', label: 'Envelope',
             amount_pence: 1_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '' },
+            lender_eligible: true, notes: '', vat_override: null },
         ],
         contingency,
         fee_lines: [],
@@ -337,11 +337,11 @@ describe('the cost lever does not double-apply to compliance or fees (headline m
         fee_lines: [
           {
             id: 'fee-fixed', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'fixed', amount_pence: 200_000, pct: 0, per_dwelling: false,
+            basis: 'fixed', amount_pence: 200_000, pct: 0, per_dwelling: false, vat_override: null,
           },
           {
             id: 'fee-pct', code: 'other_professional', category: 'professional', label: 'Other professional fees',
-            basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false,
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null,
           },
         ],
       },

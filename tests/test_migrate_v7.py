@@ -227,8 +227,16 @@ def _pipeline_fixtures():
 def _assert_cost_plan_survives(migrated, source: dict, name: str):
     """The merge-branch half: a stored v7 document's own cost_plan must come
     back out of the migration unchanged. Mirrors test_migrate_v6.py's
-    _assert_r9_blocks_survive."""
-    assert migrated.cost_plan.model_dump() == source["cost_plan"], (
+    _assert_r9_blocks_survive.
+
+    Compares against the SOURCE PARSED through the same model (R11: CostPackage
+    and FeeLine gained `vat_override`, absent from every pre-R11 fixture), not
+    against the raw JSON dict -- exactly as the sibling
+    `_assert_cost_plan_derived_from_legacy_costs` already does below. Otherwise
+    this would fail for any additive field ever given a default, on a fixture
+    this task forbids editing."""
+    expected = parse_calculator_inputs(source).cost_plan
+    assert migrated.cost_plan.model_dump() == expected.model_dump(), (
         f"{name}: the v7 merge branch altered the stored cost plan"
     )
 

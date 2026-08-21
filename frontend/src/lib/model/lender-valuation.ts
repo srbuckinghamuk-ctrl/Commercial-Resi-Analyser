@@ -1,6 +1,6 @@
 import type {
   CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV7,
+  CalculatorInputsV7, CalculatorInputsV8,
 } from './finance-types';
 
 /** Sq ft per sq m (spec §3.2 `global_per_sqft` basis). No shared constant existed
@@ -45,7 +45,7 @@ export interface LenderGdvResult {
 // lender metrics at all.
 export function computeLenderGdv(
   inputs: CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5
-    | CalculatorInputsV6 | CalculatorInputsV7,
+    | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8,
 ): LenderGdvResult | null {
   const lv = inputs.lender_valuation;
   if (lv == null) return null;

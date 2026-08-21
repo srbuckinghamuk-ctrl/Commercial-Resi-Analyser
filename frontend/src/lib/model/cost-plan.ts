@@ -3,6 +3,8 @@
  *  block on CalculatorInputsV7 rather than an edit — the same reasoning as
  *  AcquisitionInputsV5 (R8) and UnitMixInputsV6 (R9). */
 
+import type { VatOverride } from './vat';
+
 export type CostPlanMode = 'headline' | 'detailed';
 
 /** The audit's own twelve packages (§7.5), plus `other`. A fixed enum plus a
@@ -41,6 +43,10 @@ export interface CostPackage {
    *  `development_cost_advance_pct` is R14. Do not assume this figure is live. */
   lender_eligible: boolean;
   notes: string;
+  /** R11 spec 17.1. Detailed mode only -- hard-rejected in headline mode
+   *  (validation, Task 9). null on every migrated line and on every line the
+   *  user has not overridden. Read ONLY through resolveVatTreatment(). */
+  vat_override: VatOverride | null;
 }
 
 export interface ContingencyClass {
@@ -91,6 +97,10 @@ export interface FeeLine {
   /** Preserves §3.6's `prior_approval_fee_per_dwelling × max(1, unit_count)`.
    *  Hard-validated false on any 'pct_*' basis. */
   per_dwelling: boolean;
+  /** R11 spec 17.1. Detailed mode only -- hard-rejected in headline mode
+   *  (validation, Task 9). null on every migrated line and on every line the
+   *  user has not overridden. Read ONLY through resolveVatTreatment(). */
+  vat_override: VatOverride | null;
 }
 
 export interface CostPlanInputs {
@@ -146,6 +156,7 @@ export function costPlanFromLegacyCosts(cc: ConversionCostInputs): CostPlanInput
     amount_pence: amount,
     pct: 0,
     per_dwelling: perDwelling,
+    vat_override: null,
   });
   return {
     mode: 'headline',
