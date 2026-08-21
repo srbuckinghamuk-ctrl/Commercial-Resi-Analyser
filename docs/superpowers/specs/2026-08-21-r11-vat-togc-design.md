@@ -575,11 +575,31 @@ not the six categories. Migration writes zeroes and exactly six rows, so none of
 them can fire on a migrated document.
 
 **Both engines carry a regression gate for the general case**, because the
-specific bug is less important than the class: migrate every fixture, plus a
-synthetic `term_months: 1` document, and assert `validateInputs` returns **the
-same issues after migration as before it**. That assertion is what would have
-caught this, and it catches the next one too — the numeric identity gate never
-could, because the figures genuinely did not move.
+specific bug is less important than the class: migrate every fixture, plus
+synthetic `term_months: 1` **and `term_months: 2`** documents, and compare
+`validateInputs` before and after.
+
+"The same issues" is the intent but not the literal test, and the difference
+matters (R39). §17.9 *specifies* a warning for `registered: false` with a
+non-zero construction cost — and a pre-v8 document has no `vat` block at all, so
+that warning **can only appear after migration**. A literal same-set assertion is
+unsatisfiable by design.
+
+The gate is therefore the narrowest form that still bites:
+
+- the **error** set is compared with **no exemption whatsoever**;
+- **nothing may be removed** at either severity;
+- the **only** permitted addition is a warning on `vat.registered`, cross-checked
+  per fixture against §17.9's own condition, with a non-vacuity assertion so the
+  exemption cannot quietly swallow a second finding.
+
+Both term-1 and term-2 cases are required: the ungated rule bit at **both**, so a
+term-1-only case would have left half the regression unguarded.
+
+That assertion is what would have caught this, and it catches the next one too —
+the numeric identity gate never could, because the figures genuinely did not
+move. Confirmed empirically: with the rule un-gated, the numeric gate stayed
+green throughout.
 
 ### The boundary that broke R10, in full
 
