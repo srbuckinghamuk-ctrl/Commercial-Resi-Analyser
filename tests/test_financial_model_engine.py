@@ -55,8 +55,10 @@ def receipts(**partial) -> MonthReceipts:
     return MonthReceipts(**base)
 
 
-# R11: no test in this file exercises VAT -- an inert result of the schedule's
-# own length, mirroring vat.py's _inert_vat() shape exactly.
+# R11: the VAT block itself is never read by the ledger -- the ledger reads only
+# uses[m].vat_pence and receipts[m].vat_reclaim_pence, which the VAT engine writes
+# back. So every schedule built here carries an inert result of the schedule's own
+# length, mirroring vat.py's _inert_vat() shape exactly.
 def _empty_vat(term_months: int) -> VatResult:
     return VatResult(
         registered=False, charges=[], periods=[],
@@ -562,3 +564,221 @@ class TestRefinanceEvent:
         last = m.months[3]
         assert last.refinance_proceeds_pence == 0
         assert last.additional_equity_pence == 500_000 + last.repayment_pence + last.exit_fee_pence
+
+
+# ---------------------------------------------------------------------------
+# R11 spec Sec 17.6 -- VAT in the ledger: funding, sweep and redemption.
+# Mirror of monthly-engine.test.ts's two VAT describes, figure for figure.
+# ---------------------------------------------------------------------------
+
+
+def _vat_document(
+    advance_pct: float = 100,
+    committed_equity_pence: int = 5_000_000,
+    sales_sweep_pct: float = 100,
+    reclaim_clears_balance: bool = False,
+    same_month_sale_and_reclaim: bool = False,
+    cash: bool = False,
+):
+    """A five-month VAT document, deliberately stripped of everything that is
+    not under test: 0% interest, no arrangement fee, no ancillary fees, no
+    day-one advance and nothing at all in month 0. What is left is
+
+        m1  25,000,000 construction + 5,000,000 VAT     (the funding question)
+        m3  a VAT reclaim                               (the sweep question)
+        m4  a 60,000,000 sale                           (the redemption question)
+
+    The eligible base for the development-cost advance is construction +
+    professional + statutory = 25,000,000, so at 100% the cap stops the draw at
+    the build and the 5,000,000 of VAT must come from equity or from a visible
+    gap. The exit fee is 1% of the 100,000,000 committed gross facility =
+    1,000,000, independent of which month redeems and of the balance then
+    outstanding.
+
+    Ruling R7: the advance-cap guard is built on ZERO committed equity. The
+    engine funds equity first, so an equity-rich document simply pays the VAT
+    out of equity and proves nothing about eligibility."""
+    terms = replace(
+        DEFAULT_FACILITY_TERMS,
+        funding_source="cash" if cash else "development_finance",
+        day_one_advance_pence=0,
+        development_cost_advance_pct=advance_pct,
+        committed_net_facility_pence=100_000_000,
+        committed_gross_facility_pence=100_000_000,
+        annual_interest_rate_pct=0,
+        interest_type="rolled_up",
+        arrangement_fee_pct=0,
+        exit_fee_pct=1, exit_fee_basis="committed_gross_facility",
+        term_months=5, equity_draw_rule="equity_first",
+        sales_sweep_pct=sales_sweep_pct,
+    )
+    schedule = mk_schedule(
+        [
+            uses(),
+            uses(construction_pence=25_000_000, vat_pence=5_000_000),
+            uses(), uses(), uses(),
+        ],
+        [
+            receipts(), receipts(), receipts(),
+            receipts(
+                vat_reclaim_pence=30_000_000 if reclaim_clears_balance else 10_000_000,
+                gross_sale_pence=60_000_000 if same_month_sale_and_reclaim else 0,
+            ),
+            receipts(gross_sale_pence=0 if same_month_sale_and_reclaim else 60_000_000),
+        ],
+    )
+    return schedule, terms, (equity(committed_equity_pence) if committed_equity_pence > 0 else [])
+
+
+def _run_vat_ledger(**kwargs):
+    schedule, terms, sources = _vat_document(**kwargs)
+    return run_ledger(schedule, terms, sources)
+
+
+def test_funds_the_build_but_never_advances_against_the_vat():
+    # THE GUARD (spec Sec 17.6). Advance pct 100, zero committed equity.
+    # `eligible` is construction + professional + statutory = 25,000,000, so the
+    # cap stops the draw at the build and the VAT falls through to a visible gap.
+    #
+    # Add u.vat_pence to `eligible` in engine.py and the cap becomes 30,000,000,
+    # the draw covers everything and the gap disappears -- this assertion MUST
+    # break. Watched failing; see the task report.
+    model = _run_vat_ledger(advance_pct=100, committed_equity_pence=0)
+    m1 = model.months[1]
+    assert m1.uses_total_pence == 30_000_000   # 25,000,000 build + 5,000,000 VAT
+    assert m1.draw_pence == 25_000_000         # the build only
+    assert m1.funding_gap_pence == 5_000_000   # exactly the VAT
+
+
+def test_raises_vat_funding_gap_when_neither_equity_nor_headroom_can_fund_the_vat():
+    model = _run_vat_ledger(advance_pct=100, committed_equity_pence=0)
+    flags = [f for f in model.flags if f.code == "vat_funding_gap"]
+    assert len(flags) == 1
+    assert flags[0].severity == "red"
+    assert flags[0].month == 1
+    assert flags[0].amount_pence == 5_000_000
+    # The generic gap flag still fires alongside it; the VAT one narrows it.
+    assert any(f.code == "funding_gap" for f in model.flags)
+
+
+def test_funds_the_vat_from_equity_where_equity_is_available():
+    # The same document with equity committed: no gap, and the draw is still
+    # capped at the build. This is the narrative case; the guard above is the
+    # one that fails when eligibility is widened.
+    model = _run_vat_ledger(advance_pct=100, committed_equity_pence=5_000_000)
+    assert model.months[1].funding_gap_pence == 0
+    assert model.months[1].draw_pence == 25_000_000
+    assert model.months[1].equity_contribution_pence == 5_000_000
+    assert model.totals.equity_contributed_pence > 0
+    assert not any(f.code == "vat_funding_gap" for f in model.flags)
+
+
+def test_discloses_the_gross_vat_cycle_on_the_ledger_totals():
+    model = _run_vat_ledger()
+    assert model.totals.vat_pence == 5_000_000
+    assert model.totals.vat_reclaim_pence == 10_000_000
+
+
+def test_applies_a_reclaim_wholly_to_senior_debt_ignoring_sales_sweep_pct():
+    model = _run_vat_ledger(sales_sweep_pct=50)
+    reclaim_month = model.months[3]
+    assert reclaim_month.vat_reclaim_pence == 10_000_000
+    assert reclaim_month.repayment_pence == 10_000_000   # not 5,000,000
+    assert reclaim_month.gross_receipts_pence == 0       # never a sale receipt
+    assert reclaim_month.closing_balance_pence == 15_000_000
+
+
+def test_charges_the_exit_fee_exactly_once_when_a_reclaim_clears_the_balance():
+    # The trap (Sec 17.6): the ledger charges the exit fee inside the
+    # "balance > 0 and not is_cash" branch at the sales sweep. A reclaim that
+    # zeroes the balance without redeeming leaves the sale with nothing to do,
+    # and the fee is never charged and never carried -- lost, with every total
+    # still reconciling.
+    cleared_by_reclaim = _run_vat_ledger(reclaim_clears_balance=True)
+    cleared_by_sale = _run_vat_ledger(reclaim_clears_balance=False)
+    # Genuinely two different documents: the reclaim redeems in month 3 in one,
+    # the sale redeems in month 4 in the other.
+    assert cleared_by_reclaim.months[3].closing_balance_pence == 0
+    assert cleared_by_sale.months[3].closing_balance_pence == 15_000_000
+    assert cleared_by_reclaim.months[3].exit_fee_pence == 1_000_000
+    assert cleared_by_sale.months[4].exit_fee_pence == 1_000_000
+
+    assert cleared_by_reclaim.totals.exit_fee_pence > 0
+    assert cleared_by_reclaim.totals.exit_fee_pence == cleared_by_sale.totals.exit_fee_pence
+    # Charged once, not twice: the month-4 sale finds the facility redeemed.
+    assert cleared_by_reclaim.months[4].exit_fee_pence == 0
+    # Surplus over balance + fee distributes: 30,000,000 - 25,000,000 - 1,000,000.
+    assert cleared_by_reclaim.months[3].distribution_pence == 4_000_000
+
+
+def test_does_not_redeem_on_a_partial_reclaim():
+    model = _run_vat_ledger(reclaim_clears_balance=False)
+    reclaim_month = model.months[3]
+    assert reclaim_month.exit_fee_pence == 0
+    assert reclaim_month.distribution_pence == 0
+    assert not any(f.code == "facility_redrawn_after_redemption" for f in model.flags)
+
+
+def test_withholds_discharge_when_a_reclaim_lands_in_the_exit_fee_band():
+    # Spec Sec 17.6: a partial reclaim behaves "exactly like a partial sales
+    # sweep", and the sweep's Sec 4.4 clamp exists precisely so a repayment that
+    # cannot also cover the fee never zeroes the balance. Balance 25,000,000,
+    # fee 1,000,000: a 25,500,000 reclaim must leave 500,000 outstanding rather
+    # than clear the facility with the fee uncharged.
+    schedule, terms, sources = _vat_document()
+    schedule.receipts[3] = receipts(vat_reclaim_pence=25_500_000)
+    model = run_ledger(schedule, terms, sources)
+    assert model.months[3].exit_fee_pence == 0
+    assert model.months[3].repayment_pence == 24_500_000
+    assert model.months[3].closing_balance_pence == 500_000
+    assert model.months[3].distribution_pence == 1_000_000   # the withheld residue
+    # The month-4 sale then redeems properly, and the fee is charged there.
+    assert model.months[4].exit_fee_pence == 1_000_000
+    assert model.totals.exit_fee_pence == 1_000_000
+
+
+def test_applies_the_reclaim_before_the_sale():
+    # Ordering, not arithmetic: the same 10,000,000 arriving as a reclaim in
+    # month 3 leaves the month-4 sale only 15,000,000 to redeem.
+    model = _run_vat_ledger()
+    assert model.months[4].repayment_pence == 15_000_000
+    assert model.months[4].distribution_pence == 60_000_000 - 15_000_000 - 1_000_000
+    assert model.senior_outstanding_at_maturity_pence == 0
+
+
+def test_captures_the_redemption_balance_after_the_reclaim_in_a_shared_month():
+    """Ordering consequence worth pinning (spec Sec 5.11 + Sec 17.6): the reclaim
+    is applied first, so the balance the disposal actually has to redeem -- and
+    therefore redemption_balance_at_disposal_pence and the Sec 4.4.1 redemption
+    schedule -- is the post-reclaim 15,000,000, not the pre-reclaim 25,000,000.
+    The field's own doc comment says "immediately before sale receipts are
+    applied", and a reclaim is not a sale receipt."""
+    model = _run_vat_ledger(same_month_sale_and_reclaim=True)
+    assert model.months[3].vat_reclaim_pence == 10_000_000
+    assert model.redemption_balance_at_disposal_pence == 15_000_000
+    assert [(e.month, e.balance_pence) for e in model.redemption_schedule] == [(3, 15_000_000)]
+    # Reclaim 10,000,000 + sale repayment 15,000,000, one exit fee.
+    assert model.months[3].repayment_pence == 25_000_000
+    assert model.months[3].exit_fee_pence == 1_000_000
+    assert model.months[3].closing_balance_pence == 0
+
+
+def test_distributes_a_reclaim_to_equity_on_a_cash_deal():
+    model = _run_vat_ledger(cash=True, committed_equity_pence=30_000_000)
+    assert model.months[3].distribution_pence == 10_000_000
+    assert model.equity_cashflows_pence[3] > 0
+    assert model.equity_cashflows_pence[3] == 10_000_000
+    assert model.totals.finance_costs_pence == 0
+
+
+def test_keeps_sources_equal_to_uses_to_the_penny_with_vat_live():
+    # All three funding shapes: equity-funded VAT, a VAT funding gap, and a
+    # reclaim that redeems. The reclaim appears on neither side of the Sec 7
+    # identity, exactly as sale-proceeds repayments do.
+    for kwargs in ({}, {"committed_equity_pence": 0}, {"reclaim_clears_balance": True}):
+        schedule, terms, sources = _vat_document(**kwargs)
+        model = run_ledger(schedule, terms, sources)
+        inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+        rec = reconcile(inputs, schedule, model)
+        assert rec.sources_equal_uses is True, kwargs
+        assert rec.debt_rollforward_ok is True, kwargs

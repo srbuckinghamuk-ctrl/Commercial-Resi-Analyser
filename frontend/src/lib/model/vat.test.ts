@@ -6,6 +6,7 @@ import {
 } from './vat';
 import { computeCostPlan, defaultContingencyClasses } from './cost-plan';
 import { buildSchedule } from './schedule';
+import { runLedger } from './monthly-engine';
 import { developedAreaSqm } from './areas';
 import { defaultCalculatorInputsV7 } from '../conversion-defaults';
 import type { CalculatorInputsV8 } from './finance-types';
@@ -199,6 +200,10 @@ interface WorkedVatOpts {
   /** Ruling R13: the ledger charges no ancillary fee on a cash deal, so no VAT
    *  may be charged on one either. */
   cashDeal?: boolean;
+  /** Ruling R20: the ledger's facility gate has a second limb — a development
+   *  finance deal with no committed net facility also pays no ancillary fee.
+   *  `undefined` keeps the default 500,000,000. */
+  committedNetFacilityPence?: number | null;
 }
 
 /** The §17.4 worked cycle, built as a REAL document and run through the REAL
@@ -256,7 +261,8 @@ function buildWorkedVatCase(opts: WorkedVatOpts = {}) {
     finance: {
       ...v7.finance,
       funding_source: opts.cashDeal === true ? 'cash' : v7.finance.funding_source,
-      committed_net_facility_pence: 500_000_000,
+      committed_net_facility_pence:
+        opts.committedNetFacilityPence === undefined ? 500_000_000 : opts.committedNetFacilityPence,
       broker_fee_pence: 250_000,
       lender_legal_fee_pence: 150_000,
       valuation_fee_pence: 100_000,
@@ -484,6 +490,32 @@ describe('computeVat (spec §17.5)', () => {
     expect(finance[0].net_base_pence).toBe(0);
     expect(finance[0].vat_pence).toBe(0);
     expect(vat.months[0].incurred_pence).toBe(0);
+  });
+
+  it('derives the facility gate ONCE: the VAT base and the ledger fee move together (R20)', () => {
+    // Ruling R20. `hasFacility` is now exported by monthly-engine.ts and called
+    // by BOTH the ledger and computeVat, so this asserts the COUPLING rather
+    // than either behaviour: whatever the gate decides, the `lender_ancillary`
+    // VAT base and the fees the ledger actually charges must be the same
+    // number, in the same document. If the gate later gains a condition, this
+    // fails rather than VAT quietly charging on a fee no one pays.
+    const cases: Array<{ label: string; opts: WorkedVatOpts; expected: number }> = [
+      { label: 'facility', opts: {}, expected: 550_000 },
+      { label: 'cash deal', opts: { cashDeal: true }, expected: 0 },
+      { label: 'no committed facility', opts: { committedNetFacilityPence: null }, expected: 0 },
+    ];
+    for (const { label, opts, expected } of cases) {
+      const { inputs, costPlan, schedule } =
+        buildWorkedVatCase({ allCategoriesAt20: true, ...opts });
+      const charge = computeVat(inputs, costPlan, schedule).charges
+        .find((c) => c.category === 'lender_ancillary');
+      const ledger = runLedger(schedule, inputs.finance, inputs.equity_sources);
+      expect({
+        label,
+        vatBase: charge?.net_base_pence,
+        ledgerFees: ledger.totals.ancillary_fees_pence,
+      }).toEqual({ label, vatBase: expected, ledgerFees: expected });
+    }
   });
 
   it('charges purchase VAT in month 0 where the vendor has opted to tax (§17.7)', () => {

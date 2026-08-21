@@ -2,6 +2,18 @@ import type {
   EquitySource, FacilityTerms, LedgerMonth, ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
 
+/** R11 ruling R20. "Does this deal have a facility?" — the single derivation of
+ *  that fact, owned by the module that spends it. The ledger gates the
+ *  arrangement and ancillary fees on it; `computeVat` (vat.ts) gates the
+ *  `lender_ancillary` VAT base on it, because VAT must not be charged on a fee
+ *  no one pays. Both call THIS function: derived twice, the two would drift the
+ *  moment the gate gained a condition, and no total would move to say so.
+ *  Pinned by vat.test.ts's "derives the facility gate ONCE" test, which asserts
+ *  the VAT base and the ledger's ancillary fees in one assertion. */
+export function hasFacility(finance: FacilityTerms): boolean {
+  return finance.funding_source !== 'cash' && (finance.committed_net_facility_pence ?? 0) > 0;
+}
+
 /** Exported for breakeven.ts's caller (metrics.ts): the exit fee due on redeeming a given
  * balance is a pure function of the facility's basis terms — it never depends on the
  * hypothetical sale price used by the senior break-even solver (spec §5.11). */
@@ -47,14 +59,14 @@ export function runLedger(
   const committedEquity = equitySources
     .filter((s) => s.classification === 'cash' && s.evidence_status !== 'rejected')
     .reduce((sum, s) => sum + s.amount_pence, 0);
-  const hasFacility = !isCash && netFacility > 0;
+  const facilityExists = hasFacility(finance);   // R20: derived once, above.
 
   // Arrangement fee: charged on commitment, capitalised in month 0 (spec §3.9).
   const arrangementBase =
     finance.arrangement_fee_basis === 'committed_gross_facility' ? grossFacility : netFacility;
-  const arrangementFee = hasFacility
+  const arrangementFee = facilityExists
     ? Math.round((arrangementBase * finance.arrangement_fee_pct) / 100) : 0;
-  const ancillaryFees = hasFacility
+  const ancillaryFees = facilityExists
     ? finance.broker_fee_pence + finance.lender_legal_fee_pence
       + finance.valuation_fee_pence + finance.monitoring_surveyor_fee_pence
     : 0;
@@ -85,6 +97,10 @@ export function runLedger(
   let totalGap = 0;
   let totalDistributions = 0;
   let totalRepayments = 0;
+  // R11 spec §17.6: the gross VAT cycle, disclosed on totals. Neither is a finance
+  // cost and neither enters §7's identity (see reconcile() in validation.ts).
+  let totalVat = 0;
+  let totalVatReclaim = 0;
   let reserveExhaustedFlagged = false;
   let facilityExceededFlagged = false;
   // Spec §5.11: the disposal month's senior balance immediately before sale receipts are
@@ -101,9 +117,13 @@ export function runLedger(
 
   for (let m = 0; m < term; m++) {
     const u = schedule.uses[m];
+    // R11 spec §17.6: VAT is a real cash outflow in the month it is incurred, so it
+    // joins the month's cash uses alongside acquisition, construction, professional
+    // and statutory — and is funded by the same waterfall below. It returns later as
+    // `receipts[m].vat_reclaim_pence`, which repays rather than funds.
     const cashUses =
       u.acquisition_pence + u.construction_pence + u.professional_pence + u.statutory_pence
-      + (m === 0 ? ancillaryFees : 0);
+      + u.vat_pence + (m === 0 ? ancillaryFees : 0);
 
     let draw = 0;
     let capFees = 0;
@@ -116,7 +136,7 @@ export function runLedger(
       : Math.max(0, committedEquity - equityUsed - equityContribution));
 
     if (m === 0) {
-      if (hasFacility) {
+      if (facilityExists) {
         capFees = arrangementFee;
         cumNetUsed += capFees;
         if (finance.day_one_advance_pence != null) {
@@ -135,7 +155,14 @@ export function runLedger(
       const fromEquity = Math.min(cashUses, equityAvailable());
       equityContribution += fromEquity;
       let remainder = cashUses - fromEquity;
-      if (remainder > 0 && hasFacility) {
+      if (remainder > 0 && facilityExists) {
+        // R11 spec §17.6: `u.vat_pence` is DELIBERATELY absent from this base and its
+        // absence is load-bearing. Lenders do not advance against reclaimable VAT on
+        // the same terms as against build cost, so VAT falls to equity or to gross
+        // headroom and, where neither can meet it, to a visible `vat_funding_gap`.
+        // Adding u.vat_pence here raises the cap and silently funds the VAT from the
+        // facility — monthly-engine.test.ts's "funds the build but never advances
+        // against the VAT" is the guard, and it has been watched failing.
         const eligible = u.construction_pence + u.professional_pence + u.statutory_pence;
         const advanceCap = Math.round((eligible * finance.development_cost_advance_pct) / 100);
         const undrawnNet = Math.max(0, netFacility - cumNetUsed);
@@ -175,22 +202,69 @@ export function runLedger(
     if (balance > peakDebt) { peakDebt = balance; peakDebtMonth = m; }
 
     const r = schedule.receipts[m];
+    // Declared here, ahead of the VAT reclaim, so the reclaim, the sales sweep and the
+    // §4.5 refinance all accumulate into the same three figures rather than shadowing
+    // or overwriting one another.
+    let repayment = 0;
+    let exitFee = 0;
+    let distribution = 0;
+    let refinanceProceeds = 0;
+
+    // R11 spec §17.6. A reclaim returns a specific advance, so it is applied whole
+    // (ignoring sales_sweep_pct) and it is applied FIRST — it reduces the balance the
+    // sale and the refinance then have to clear, and so the balance recorded as this
+    // month's redemption balance below.
+    //
+    // A reclaim that fully clears the balance REDEEMS, on the same terms as any other
+    // full redemption. The intuitive rule — "a reclaim is not a realisation, so it
+    // never redeems" — silently loses the exit fee: the sale below charges it inside
+    // `if (balance > 0 && !isCash)`, and a balance already zeroed by a reclaim takes
+    // neither branch. The accepted consequence is that a later draw re-opening the
+    // balance raises `facility_redrawn_after_redemption`, which is honest.
+    const vatReclaim = r.vat_reclaim_pence;
+    if (vatReclaim > 0) {
+      if (balance > 0 && !isCash) {
+        const fee = facilityRedeemed ? 0 : exitFeeAmount(finance, grossFacility, peakDebt, balance);
+        if (vatReclaim >= balance + fee) {
+          repayment += balance;
+          exitFee += fee;
+          totalExitFee += fee;
+          facilityRedeemed = true;
+          distribution += vatReclaim - balance - fee;
+          balance = 0;
+        } else {
+          // A partial reclaim behaves exactly like a partial sales sweep, including
+          // the §4.4 clamp: a reclaim landing in [balance, balance + fee) must not
+          // zero the balance, or the fee is never charged and never carried.
+          let applied = Math.min(vatReclaim, balance);
+          if (applied === balance) applied = Math.max(0, vatReclaim - fee);
+          repayment += applied;
+          balance -= applied;
+          distribution += vatReclaim - applied;
+        }
+      } else {
+        // No facility left to repay (redeemed, or a cash deal): the reclaim flows to
+        // the developer, exactly as sale receipts already do.
+        distribution += vatReclaim;
+      }
+    }
+
     if (!isCash && r.gross_sale_pence > 0) {
       redemptionBalanceAtDisposal = balance;
       redemptionSchedule.push({ month: m, balance_pence: balance });
     }
     const netReceipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence;
-    let repayment = 0;
-    let exitFee = 0;
-    let distribution = 0;
-    let refinanceProceeds = 0;
     if (netReceipts > 0) {
       const sweepAvailable = Math.round((netReceipts * finance.sales_sweep_pct) / 100);
+      // Sale-attributable only: `repayment`/`exitFee` may already carry a VAT reclaim,
+      // and the clamp below compares against the balance this sweep alone can clear.
+      let saleRepayment = 0;
+      let saleExitFee = 0;
       if (balance > 0 && !isCash) {
         const fee = facilityRedeemed ? 0 : exitFeeAmount(finance, grossFacility, peakDebt, balance);
         if (sweepAvailable >= balance + fee) {
-          repayment = balance;
-          exitFee = fee;
+          saleRepayment = balance;
+          saleExitFee = fee;
           totalExitFee += fee;
           facilityRedeemed = true;
           balance = 0;
@@ -200,12 +274,14 @@ export function runLedger(
           // in [balance, balance + fee) would zero the balance via Math.min below
           // while the fee silently vanishes (never charged, never carried) — the
           // exit fee must not be payable from a repayment that fully clears principal.
-          repayment = Math.min(sweepAvailable, balance);
-          if (repayment === balance) repayment = Math.max(0, sweepAvailable - fee);
-          balance -= repayment;
+          saleRepayment = Math.min(sweepAvailable, balance);
+          if (saleRepayment === balance) saleRepayment = Math.max(0, sweepAvailable - fee);
+          balance -= saleRepayment;
         }
       }
-      distribution = netReceipts - repayment - exitFee;
+      repayment += saleRepayment;
+      exitFee += saleExitFee;
+      distribution += netReceipts - saleRepayment - saleExitFee;
     }
 
     // spec §4.5 refinance event — fixed order: the sales sweep above ran first.
@@ -245,11 +321,25 @@ export function runLedger(
     totalGap += fundingGap;
     totalDistributions += distribution;
     totalRepayments += repayment + exitFee;
+    totalVat += u.vat_pence;
+    totalVatReclaim += vatReclaim;
 
     if (fundingGap > 0 && !flags.some((f) => f.code === 'funding_gap')) {
       flags.push({
         code: 'funding_gap', severity: 'red', month: m, amount_pence: fundingGap,
         message: `Funding gap from month ${m}: committed equity and facility cannot fund all costs. Overruns do not create facility.`,
+      });
+    }
+    // R11 spec §17.6: VAT is ineligible for the development-cost advance, so a gap can
+    // open in a month whose build is fully advanced. Named separately from the generic
+    // flag above (both fire) because the cause and the remedy are different: this is
+    // working capital for the VAT carry, not an overrun. The VAT-attributable slice is
+    // the smaller of the residual gap and the month's VAT.
+    if (fundingGap > 0 && u.vat_pence > 0 && !flags.some((f) => f.code === 'vat_funding_gap')) {
+      flags.push({
+        code: 'vat_funding_gap', severity: 'red', month: m,
+        amount_pence: Math.min(fundingGap, u.vat_pence),
+        message: `VAT funding gap from month ${m}: ${Math.min(fundingGap, u.vat_pence)} pence of VAT is unfunded. VAT is not eligible for the development-cost advance, so it must come from equity or gross facility headroom.`,
       });
     }
     if (interestReserve != null && !reserveExhaustedFlagged
@@ -282,7 +372,7 @@ export function runLedger(
       exit_fee_pence: exitFee,
       repayment_pence: repayment,
       closing_balance_pence: balance,
-      undrawn_net_facility_pence: hasFacility ? netFacility - cumNetUsed : null,
+      undrawn_net_facility_pence: facilityExists ? netFacility - cumNetUsed : null,
       facility_headroom_pence: grossFacility > 0 ? grossFacility - balance : null,
       interest_reserve_remaining_pence:
         interestReserve != null ? interestReserve - cumCapitalisedInterest : null,
@@ -291,6 +381,7 @@ export function runLedger(
       funding_gap_pence: fundingGap,
       gross_receipts_pence: r.gross_sale_pence,
       net_receipts_pence: netReceipts,
+      vat_reclaim_pence: vatReclaim,
       refinance_proceeds_pence: refinanceProceeds,
       distribution_pence: distribution,
     });
@@ -339,6 +430,8 @@ export function runLedger(
       funding_gap_pence: totalGap,
       distributions_pence: totalDistributions,
       repayments_pence: totalRepayments,
+      vat_pence: totalVat,
+      vat_reclaim_pence: totalVatReclaim,
     },
     peak_debt_pence: peakDebt,
     peak_debt_month: peakDebt > 0 ? peakDebtMonth : null,

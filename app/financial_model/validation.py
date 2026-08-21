@@ -618,6 +618,15 @@ def reconcile(
     # (net_receipts/repayment_pence never appear on either side of this identity either).
     # It still counts in full toward additional_equity_pence itself, the
     # additional_equity_required flag, equity contributed, and the equity cash-flow vector.
+    #
+    # R11 spec Sec 17.6: the VAT reclaim is the THIRD such exclusion, on the same terms.
+    # This function needs no structural change for VAT. The VAT outflow enters
+    # uses_total_pence (engine.py adds uses[m].vat_pence to cash_uses) and is funded
+    # through the existing per-month loop by draws, equity or a visible gap; the reclaim
+    # repays, exactly as sale proceeds do. So, like sale-proceeds repayments and
+    # refinance-shortfall equity, model.totals.vat_reclaim_pence appears on NEITHER
+    # side. Over the term sources therefore fund the GROSS VAT outflow even though most
+    # of it returns -- which is correct, and is the treatment sale proceeds already get.
     sources_total = (
         model.totals.equity_contributed_pence
         + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence)

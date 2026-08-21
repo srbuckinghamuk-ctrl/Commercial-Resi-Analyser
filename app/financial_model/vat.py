@@ -17,7 +17,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .engine import money_round
+# has_facility: ruling R20 -- the ONE derivation of "does this deal have a
+# facility?", owned by the ledger, which is what spends the fees this gate
+# governs. engine.py is safe to import at runtime (see the note below).
+from .engine import has_facility, money_round
 from .types import (
     DEFAULT_VAT,
     VAT_CHARGE_CATEGORIES,
@@ -383,20 +386,19 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
     # The base comes from inputs.finance, NOT from
     # MonthUses.lender_ancillary_fees_pence: that schedule field is initialised
     # to 0 in _empty_uses() and never assigned by build_schedule, because the
-    # ledger computes and capitalises these fees itself (engine.py:191-194).
-    # Reading it would leave this charge structurally zero forever -- R10's
-    # "recorded but not live" shape. `finance` is an INPUT, so the one-direction
-    # rule is intact. Gated exactly as the ledger gates it: a cash deal, or one
-    # with no committed net facility, pays no lender fees and must bear no VAT
-    # on them.
+    # ledger computes and capitalises these fees itself. Reading it would leave
+    # this charge structurally zero forever -- R10's "recorded but not live"
+    # shape. finance is an INPUT, so the one-direction rule is intact.
+    #
+    # Ruling R20: gated by the ledger's OWN gate, has_facility from engine.py,
+    # rather than by a second derivation of the same condition. A deal with no
+    # facility pays no lender fees, so it must bear no VAT on them, and that
+    # must stay true if the gate ever gains a condition.
     finance = inputs.finance
-    is_cash = finance.funding_source == "cash"
-    net_facility = 0 if is_cash else (finance.committed_net_facility_pence or 0)
-    has_facility = not is_cash and net_facility > 0
     lender_ancillary_base = (
         finance.broker_fee_pence + finance.lender_legal_fee_pence
         + finance.valuation_fee_pence + finance.monitoring_surveyor_fee_pence
-    ) if has_facility else 0
+    ) if has_facility(finance) else 0
 
     # The per-line overrides live on the INPUT cost plan; the computed amounts
     # live on the result. Matched by id so a pct-based fee is charged on the

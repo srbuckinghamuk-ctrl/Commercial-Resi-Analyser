@@ -9,6 +9,11 @@ import type {
   AnyCalculatorInputs, EvidenceStatus, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
 import type { CostPlanResult } from './cost-plan';
+// Ruling R20 — the ONE derivation of "does this deal have a facility?", owned by
+// the ledger, which is what spends the fees this gate governs. A runtime import,
+// not a type one: monthly-engine.ts imports nothing from here, so there is no
+// cycle (its only import is the type-erased './finance-types').
+import { hasFacility } from './monthly-engine';
 
 export type VatChargeCategory =
   | 'acquisition' | 'construction' | 'professional'
@@ -399,17 +404,16 @@ export function computeVat(
   // The base comes from `inputs.finance`, NOT from
   // `MonthUses.lender_ancillary_fees_pence`: that schedule field is initialised
   // to 0 in `emptyUses()` and never assigned by `buildSchedule`, because the
-  // ledger computes and capitalises these fees itself (monthly-engine.ts:57-60).
-  // Reading it would leave this charge structurally zero forever — R10's
-  // "recorded but not live" shape. `finance` is an INPUT, so the one-direction
-  // rule is intact. Gated exactly as the ledger gates it: a cash deal, or one
-  // with no committed net facility, pays no lender fees and must bear no VAT on
-  // them.
+  // ledger computes and capitalises these fees itself. Reading it would leave
+  // this charge structurally zero forever — R10's "recorded but not live"
+  // shape. `finance` is an INPUT, so the one-direction rule is intact.
+  //
+  // Ruling R20: gated by the ledger's OWN gate, `hasFacility` from
+  // monthly-engine.ts, rather than by a second derivation of the same
+  // condition. A deal with no facility pays no lender fees, so it must bear no
+  // VAT on them, and that must stay true if the gate ever gains a condition.
   const finance = inputs.finance;
-  const isCash = finance.funding_source === 'cash';
-  const netFacility = isCash ? 0 : (finance.committed_net_facility_pence ?? 0);
-  const hasFacility = !isCash && netFacility > 0;
-  const lenderAncillaryBase = hasFacility
+  const lenderAncillaryBase = hasFacility(finance)
     ? finance.broker_fee_pence + finance.lender_legal_fee_pence
       + finance.valuation_fee_pence + finance.monitoring_surveyor_fee_pence
     : 0;

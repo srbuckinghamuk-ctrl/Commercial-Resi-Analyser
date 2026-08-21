@@ -9,6 +9,7 @@ from dataclasses import replace
 
 from app.financial_model.areas import developed_area_sqm
 from app.financial_model.cost_plan import compute_cost_plan
+from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import migrate_inputs_to_v7
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
@@ -254,6 +255,7 @@ def _build_worked_vat_case(
     togc_treatment: str = "unconfirmed",
     purchase_price_pence: int = 0,
     cash_deal: bool = False,
+    committed_net_facility_pence: int | None = 500_000_000,
 ):
     """The Sec 17.4 worked cycle, built as a REAL document and run through the
     REAL compute_cost_plan and build_schedule -- never a stub, because the
@@ -293,7 +295,7 @@ def _build_worked_vat_case(
     }
     doc["finance"] = {
         **doc["finance"],
-        "committed_net_facility_pence": 500_000_000,
+        "committed_net_facility_pence": committed_net_facility_pence,
         "broker_fee_pence": 250_000,
         "lender_legal_fee_pence": 150_000,
         "valuation_fee_pence": 100_000,
@@ -632,3 +634,29 @@ def test_the_two_engines_agree_on_the_worked_cycle():
     assert [m.carry_pence for m in vat.months] == [
         0, 5_000_000, 10_000_000, 5_000_000, 10_000_000, 10_000_000, 0,
     ]
+
+
+def test_derives_the_facility_gate_once_vat_base_and_ledger_fee_move_together():
+    """Ruling R20. has_facility is now exported by engine.py and called by BOTH
+    the ledger and compute_vat, so this asserts the COUPLING rather than either
+    behaviour: whatever the gate decides, the lender_ancillary VAT base and the
+    fees the ledger actually charges must be the same number, in the same
+    document. If the gate later gains a condition, this fails rather than VAT
+    quietly charging on a fee no one pays."""
+    cases = [
+        ("facility", {}, 550_000),
+        ("cash deal", {"cash_deal": True}, 0),
+        ("no committed facility", {"committed_net_facility_pence": None}, 0),
+    ]
+    for label, opts, expected in cases:
+        inputs, cost_plan, schedule = _build_worked_vat_case(
+            all_categories_at_20=True, **opts,
+        )
+        charge = next(
+            c for c in compute_vat(inputs, cost_plan, schedule).charges
+            if c.category == "lender_ancillary"
+        )
+        ledger = run_ledger(schedule, inputs.finance, inputs.equity_sources)
+        assert (label, charge.net_base_pence, ledger.totals.ancillary_fees_pence) == (
+            label, expected, expected,
+        )

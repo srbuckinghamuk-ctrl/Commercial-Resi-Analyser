@@ -239,7 +239,11 @@ export type FlagCode =
   | 'negative_profit' | 'requires_confirmation' | 'irr_unavailable'
   | 'unrealised_profit_basis' | 'exit_fee_not_charged'
   | 'senior_breakeven_unsolvable' | 'developer_breakeven_unsolvable'
-  | 'breakeven_cap_exhausted' | 'facility_redrawn_after_redemption';
+  | 'breakeven_cap_exhausted' | 'facility_redrawn_after_redemption'
+  /** R11 spec §17.6: VAT is not eligible for the development-cost advance, so a
+   *  month's VAT can fall through to a funding gap even where the build itself
+   *  is fully advanced. Narrows the generic `funding_gap` — both fire. */
+  | 'vat_funding_gap';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -319,6 +323,14 @@ export interface LedgerMonth {
   funding_gap_pence: number;
   gross_receipts_pence: number;
   net_receipts_pence: number;
+  /** R11 spec §17.6. The VAT reclaimed this month, applied to senior debt in
+   *  full (ignoring `sales_sweep_pct`) and before the sales sweep and the §4.5
+   *  refinance event. Deliberately absent from `gross_receipts_pence` and
+   *  `net_receipts_pence`: it returns a specific advance rather than realising
+   *  an asset, so no GDV-, LTGDV- or break-even-denominated metric may read it.
+   *  Where it exceeds the balance plus the exit fee, or where there is no
+   *  facility, the excess falls into `distribution_pence`. */
+  vat_reclaim_pence: number;
   /** Spec §4.5 — 0 when no refinance event occurs this month. */
   refinance_proceeds_pence: number;
   distribution_pence: number;
@@ -346,6 +358,13 @@ export interface MonthlyModel {
     funding_gap_pence: number;
     distributions_pence: number;
     repayments_pence: number;
+    /** R11 spec §17.6. The gross VAT cycle as the LEDGER saw it: `vat_pence` is
+     *  the VAT funded through the per-month loop (part of `uses_total_pence`),
+     *  `vat_reclaim_pence` the VAT swept back out. Disclosure only — neither is
+     *  a finance cost, and `vat_reclaim_pence` appears on neither side of §7's
+     *  sources-and-uses identity. */
+    vat_pence: number;
+    vat_reclaim_pence: number;
   };
   peak_debt_pence: number;
   peak_debt_month: number | null;
