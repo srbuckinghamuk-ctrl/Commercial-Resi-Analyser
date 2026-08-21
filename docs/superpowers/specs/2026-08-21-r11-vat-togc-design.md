@@ -316,17 +316,38 @@ R10 shipped `CostPackage.contingency_class` recorded but not live, and
 product. R10 assigned R11 the decision. R11 keeps the tag and deletes the
 id-list.
 
-**The resolution rule:**
+**The resolution rule is mode-dependent, and it has to be.**
 
-- **`general`** applies to the whole base build. It is the scheme-wide
-  allowance, and in headline mode there are no packages to name.
-- **`existing_building`** and **`abnormal`** apply only to packages tagged with
-  that class, as an *additional* allowance on top of general.
+- **Headline mode: every class's base is the whole base build.** There are no
+  packages, so scoping is not expressible — you cannot scope what you have not
+  scheduled.
+- **Detailed mode:** `general` takes the whole base build; `existing_building`
+  and `abnormal` take the sum of packages tagged with that class, as an
+  *additional* allowance on top of general.
 
 A package tagged `existing_building` therefore carries both general and
 existing-building contingency. That is the honest reading of the audit's
 "separate general contingency from existing-building and abnormal-risk
 contingency" — the second is an addition for elevated risk, not a substitution.
+
+### Why the headline branch is not a convenience
+
+`ConversionCostsPage.tsx` renders all three contingency percentages as editable
+in **both** modes, and `defaultContingencyClasses()` gives all three
+`basis: 'all_packages'`. A headline-mode user can therefore set
+`existing_building` to 15% today and receive 15% of the base build.
+
+A rule of "tagged packages only, in all modes" would silently zero that user's
+contingency — a live, reachable, shipped input path, reduced to nothing with
+every total still reconciling. The mode-dependent rule reproduces headline
+behaviour exactly.
+
+**The result shape is unchanged.** `ContingencyLine.basis` survives on the
+*result* as `'all_packages' | 'selected_packages'`, now derived from mode and
+class rather than read from the input. `q-detailed-cost-plan.json` therefore
+keeps even its basis strings, and the identity claim covers the whole result
+object rather than just its figures. Only the *input* fields `basis` and
+`package_ids` are deleted.
 
 ### Why this lands byte-identical, and why that is a trap
 
