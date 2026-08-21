@@ -640,6 +640,40 @@ describe('VAT reclaims: sweep and redemption (spec §17.6)', () => {
     expect(model.totals.exit_fee_pence).toBe(1_000_000);
   });
 
+  it('distributes the whole reclaim and repays nothing when the fee exceeds the balance', () => {
+    // The clamp's degenerate case: balance <= vatReclaim < fee, so
+    // `max(0, vatReclaim - fee)` is 0 -- nothing is repaid, the whole reclaim
+    // distributes, and the debt stays outstanding. This mirrors the pre-existing
+    // §4.4 sales-sweep clamp exactly and deliberately: a repayment that cannot
+    // also cover the exit fee must not discharge the facility, and the ledger
+    // would rather hand the cash to the developer than clear principal it cannot
+    // properly redeem. Documented here because neither clamp has ever had a test
+    // for this corner.
+    //
+    // Balance 500,000, exit fee 1,000,000 (1% of the committed gross facility,
+    // which does not shrink with the balance), reclaim 600,000.
+    const d = vatDocument({ committedEquityPence: 0 });
+    const schedule = mkSchedule(
+      [uses({}), uses({ construction_pence: 500_000 }), uses({}), uses({}), uses({})],
+      [
+        receipts({}), receipts({}), receipts({}),
+        receipts({ vat_reclaim_pence: 600_000 }),
+        receipts({ gross_sale_pence: 60_000_000 }),
+      ],
+    );
+    const model = runLedger(schedule, d.terms, d.equitySources);
+    expect(model.months[1].closing_balance_pence).toBe(500_000);
+    expect(model.months[3].repayment_pence).toBe(0);
+    expect(model.months[3].exit_fee_pence).toBe(0);
+    expect(model.months[3].distribution_pence).toBe(600_000);   // the whole reclaim
+    expect(model.months[3].closing_balance_pence).toBe(500_000);
+    // The month-4 sale redeems properly and charges the fee once.
+    expect(model.months[4].exit_fee_pence).toBe(1_000_000);
+    expect(model.months[4].repayment_pence).toBe(500_000);
+    expect(model.totals.exit_fee_pence).toBe(1_000_000);
+    expect(model.senior_outstanding_at_maturity_pence).toBe(0);
+  });
+
   it('applies the reclaim before the sale, reducing the balance the sale must clear', () => {
     // Ordering, not arithmetic: the same 10,000,000 arriving as a reclaim in
     // month 3 leaves the month-4 sale only 15,000,000 to redeem.

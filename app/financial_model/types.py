@@ -744,6 +744,10 @@ FlagCode = Literal[
     "unrealised_profit_basis", "exit_fee_not_charged",
     "senior_breakeven_unsolvable", "developer_breakeven_unsolvable",
     "breakeven_cap_exhausted", "facility_redrawn_after_redemption",
+    # R11 spec Sec 17.6: VAT is not eligible for the development-cost advance, so a
+    # month's VAT can fall through to a funding gap even where the build itself is
+    # fully advanced. Narrows the generic funding_gap -- both fire.
+    "vat_funding_gap",
 ]
 
 CALC_VERSION = "2.9.0"

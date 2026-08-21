@@ -737,6 +737,40 @@ def test_withholds_discharge_when_a_reclaim_lands_in_the_exit_fee_band():
     assert model.totals.exit_fee_pence == 1_000_000
 
 
+def test_distributes_the_whole_reclaim_when_the_fee_exceeds_the_balance():
+    """The clamp's degenerate case: balance <= vat_reclaim < fee, so
+    max(0, vat_reclaim - fee) is 0 -- nothing is repaid, the whole reclaim
+    distributes, and the debt stays outstanding. This mirrors the pre-existing
+    Sec 4.4 sales-sweep clamp exactly and deliberately: a repayment that cannot
+    also cover the exit fee must not discharge the facility, and the ledger
+    would rather hand the cash to the developer than clear principal it cannot
+    properly redeem. Documented here because neither clamp has ever had a test
+    for this corner.
+
+    Balance 500,000, exit fee 1,000,000 (1% of the committed gross facility,
+    which does not shrink with the balance), reclaim 600,000."""
+    _, terms, sources = _vat_document(committed_equity_pence=0)
+    schedule = mk_schedule(
+        [uses(), uses(construction_pence=500_000), uses(), uses(), uses()],
+        [
+            receipts(), receipts(), receipts(),
+            receipts(vat_reclaim_pence=600_000),
+            receipts(gross_sale_pence=60_000_000),
+        ],
+    )
+    model = run_ledger(schedule, terms, sources)
+    assert model.months[1].closing_balance_pence == 500_000
+    assert model.months[3].repayment_pence == 0
+    assert model.months[3].exit_fee_pence == 0
+    assert model.months[3].distribution_pence == 600_000   # the whole reclaim
+    assert model.months[3].closing_balance_pence == 500_000
+    # The month-4 sale redeems properly and charges the fee once.
+    assert model.months[4].exit_fee_pence == 1_000_000
+    assert model.months[4].repayment_pence == 500_000
+    assert model.totals.exit_fee_pence == 1_000_000
+    assert model.senior_outstanding_at_maturity_pence == 0
+
+
 def test_applies_the_reclaim_before_the_sale():
     # Ordering, not arithmetic: the same 10,000,000 arriving as a reclaim in
     # month 3 leaves the month-4 sale only 15,000,000 to redeem.

@@ -652,11 +652,19 @@ def test_derives_the_facility_gate_once_vat_base_and_ledger_fee_move_together():
         inputs, cost_plan, schedule = _build_worked_vat_case(
             all_categories_at_20=True, **opts,
         )
+        # Default None rather than letting next() raise: a missing charge must
+        # report as a value mismatch, exactly as vat.test.ts's `charge?.net_base_pence`
+        # does, not as a StopIteration traceback.
         charge = next(
-            c for c in compute_vat(inputs, cost_plan, schedule).charges
-            if c.category == "lender_ancillary"
+            (
+                c for c in compute_vat(inputs, cost_plan, schedule).charges
+                if c.category == "lender_ancillary"
+            ),
+            None,
         )
         ledger = run_ledger(schedule, inputs.finance, inputs.equity_sources)
-        assert (label, charge.net_base_pence, ledger.totals.ancillary_fees_pence) == (
-            label, expected, expected,
-        )
+        assert (
+            label,
+            charge.net_base_pence if charge is not None else None,
+            ledger.totals.ancillary_fees_pence,
+        ) == (label, expected, expected)
