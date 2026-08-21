@@ -437,8 +437,9 @@ indistinguishable from a no-op.
   override;
 - `treatments` that is not exactly the six `VatChargeCategory` values, each once,
   in the declared order;
-- `first_period_end_month` negative or ≥ `term_months`;
-- `repayment_lag_months` negative or greater than 6;
+- `first_period_end_month` negative or ≥ `term_months`, **and**
+  `repayment_lag_months` negative or greater than 6 — **both gated on
+  `registered: true`** (R38, below);
 - `togc_treatment: 'applies'` together with a non-zero `acquisition` rate — the
   fixed rule in §5 must be unrepresentable, not merely unlikely.
 - **`vat.registered: false` while purchase VAT is chargeable** (the vendor has
@@ -544,6 +545,41 @@ There is a `cost_plan` deep-merge on the server upsert path that R10 found
 nobody had deleted to check; without it a stored row computes zero contingency.
 The v8 work adds a `vat` block to the same merge, and the same "delete it and
 watch a test fail" check applies.
+
+### The migration must add no validation issue either (R38)
+
+§17.11 promises the migration is inert. That promise was stated numerically —
+*no existing appraisal's computed values move* — and numerically it held. It was
+**not** true of validation, and that gap shipped as a defect.
+
+The return-cycle bounds were written unconditionally, gated only on a `vat` block
+existing. Migration gives **every** document a `vat` block carrying
+`first_period_end_month: 2`. So the moment a stored appraisal with
+`term_months <= 2` was migrated, it acquired a hard validation error — from a
+block the engine ignores, because `registered` is false and the cycle is never
+computed. Measured directly: `term=1` yields `errors=[]` at v7 and
+`errors=["vat.first_period_end_month"]` at v8.
+
+A hard error makes `report_safe` false, which marks the report DRAFT. So an
+inert migration would have silently downgraded every short-term appraisal in the
+database.
+
+**The rule: a field that parameterises a dormant engine is not validated.** The
+two return-cycle bounds are gated on `registered: true`. You cannot validate a
+return cycle that does not exist, and a document that later registers gets the
+error then, which is the right moment for it.
+
+The bounds that stay unconditional are the ones that are nonsense in any state —
+a negative rate, a negative recoverable proportion, a treatments array that is
+not the six categories. Migration writes zeroes and exactly six rows, so none of
+them can fire on a migrated document.
+
+**Both engines carry a regression gate for the general case**, because the
+specific bug is less important than the class: migrate every fixture, plus a
+synthetic `term_months: 1` document, and assert `validateInputs` returns **the
+same issues after migration as before it**. That assertion is what would have
+caught this, and it catches the next one too — the numeric identity gate never
+could, because the figures genuinely did not move.
 
 ### The boundary that broke R10, in full
 
