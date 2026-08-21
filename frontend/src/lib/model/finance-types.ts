@@ -7,7 +7,7 @@ import type { SpendCurve } from './curves';
 import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
-import type { VatInputs } from './vat';
+import type { VatInputs, VatResult } from './vat';
 
 export type { SpendCurve };
 
@@ -255,12 +255,20 @@ export interface MonthUses {
   professional_pence: number;
   statutory_pence: number;
   lender_ancillary_fees_pence: number;
+  /** R11 spec §17.6. Written back from `computeVat`'s `months[].incurred_pence`
+   *  after the uses/receipts arrays are fully built — never a source figure
+   *  itself (§17.5's one-direction rule). */
+  vat_pence: number;
 }
 
 export interface MonthReceipts {
   gross_sale_pence: number;
   agent_fee_pence: number;
   selling_legal_pence: number;
+  /** R11 spec §17.6. Written back from `computeVat`'s `months[].reclaimed_pence`.
+   *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt, so
+   *  no GDV-, LTGDV- or break-even-denominated metric may read it. */
+  vat_reclaim_pence: number;
 }
 
 export interface Schedule {
@@ -276,7 +284,19 @@ export interface Schedule {
     selling_costs_pence: number; gross_sales_pence: number;
     gdv_pence: number; retained_value_pence: number;
     cost_before_finance_ex_selling_pence: number;
+    /** R11 spec §17.6/§17.5. `vat_pence`/`vat_reclaim_pence` disclose the gross
+     *  VAT cycle; `irrecoverable_vat_pence` is the cost-plan-adjacent figure
+     *  Task 8 adds to cost-before-finance on its own line. None of these three
+     *  feed `cost_before_finance_ex_selling_pence` above — that would double
+     *  count the very figure Task 8 adds downstream. */
+    vat_pence: number;
+    vat_reclaim_pence: number;
+    irrecoverable_vat_pence: number;
   };
+  /** R11 spec §17.5/§17.6. The full VAT result, computed strictly downstream of
+   *  the finished uses/receipts arrays and written back into them — never the
+   *  other way round. */
+  vat: VatResult;
 }
 
 export interface LedgerMonth {

@@ -10,17 +10,33 @@ import type {
   AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, EquitySource, FacilityTerms,
   MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
+import type { VatResult } from './vat';
 
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
 function uses(partial: Partial<MonthUses>): MonthUses {
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0, ...partial,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0, ...partial,
   };
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
-  return { gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, ...partial };
+  return {
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0, ...partial,
+  };
+}
+// R11: no test in this file exercises VAT — an inert result of the schedule's
+// own length, mirroring vat.ts's inertVat() shape exactly.
+function emptyVat(termMonths: number): VatResult {
+  return {
+    registered: false, charges: [], periods: [],
+    months: Array.from({ length: termMonths }, (_, month) => (
+      { month, incurred_pence: 0, reclaimed_pence: 0, carry_pence: 0 }
+    )),
+    total_input_vat_pence: 0, total_recoverable_pence: 0, total_irrecoverable_pence: 0,
+    total_reclaimed_pence: 0, receivable_at_maturity_pence: 0, peak_carry_pence: 0, peak_carry_month: null,
+    purchase_vat_pence: 0,
+  };
 }
 function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
   const sum = (f: (x: MonthUses) => number) => u.reduce((a, x) => a + f(x), 0);
@@ -37,7 +53,11 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       gdv_pence: grossSales, retained_value_pence: 0,
       cost_before_finance_ex_selling_pence:
         sum((x) => x.acquisition_pence + x.construction_pence + x.professional_pence + x.statutory_pence),
+      vat_pence: sum((x) => x.vat_pence),
+      vat_reclaim_pence: r.reduce((a, x) => a + x.vat_reclaim_pence, 0),
+      irrecoverable_vat_pence: 0,
     },
+    vat: emptyVat(u.length),
   };
 }
 

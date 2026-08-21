@@ -5,6 +5,7 @@ import {
 import { developedAreaSqm } from './areas';
 import { spreadByCurve } from './curves';
 import { computeCostPlan } from './cost-plan';
+import { computeVat } from './vat';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -18,12 +19,14 @@ export function spreadStraightLine(total: number, months: number): number[] {
 function emptyUses(): MonthUses {
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0,
   };
 }
 
 function emptyReceipts(): MonthReceipts {
-  return { gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0 };
+  return {
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0,
+  };
 }
 
 export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
@@ -114,6 +117,7 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
         gross_sale_pence: grossSales,
         agent_fee_pence: agentFee,
         selling_legal_pence: sellingLegal,
+        vat_reclaim_pence: 0,
       };
     } else {
       // spec §4.4.1: tranche split with final-tranche residue absorption; selling
@@ -148,6 +152,18 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   };
 
   const sellingCosts = grossSales > 0 ? agentFee + sellingLegal : 0;
+
+  // R11 spec §17.6. VAT is computed from the finished spend profile and written
+  // back onto it. One pass, and strictly one-directional: nothing above this line
+  // reads VAT, so a VAT figure can never feed a base that feeds VAT (§17.5).
+  // `cost_before_finance_ex_selling_pence` below must NOT gain VAT — irrecoverable
+  // VAT enters cost-before-finance in Task 8, at the metrics layer, on its own line.
+  const vat = computeVat(inputs, costPlan, { term_months: term, uses, receipts });
+  vat.months.forEach((mo, m) => {
+    uses[m].vat_pence = mo.incurred_pence;
+    receipts[m].vat_reclaim_pence = mo.reclaimed_pence;
+  });
+
   return {
     term_months: term,
     uses,
@@ -164,6 +180,10 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       retained_value_pence: retainedValue,
       cost_before_finance_ex_selling_pence:
         acquisitionTotal + constructionTotal + professionalTotal + statutoryTotal,
+      vat_pence: vat.total_input_vat_pence,
+      vat_reclaim_pence: vat.total_reclaimed_pence,
+      irrecoverable_vat_pence: vat.total_irrecoverable_pence,
     },
+    vat,
   };
 }
