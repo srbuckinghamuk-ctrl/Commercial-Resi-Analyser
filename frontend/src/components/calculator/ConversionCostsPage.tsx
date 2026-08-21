@@ -1,6 +1,7 @@
 import type {
   CalculatorInputsV8, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
+  VatOverride, RecoveryBasis,
 } from '../../lib/model';
 import { COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES } from '../../lib/model';
 import { penceToPounds, penceToPoundsExact, humanise } from '../../lib/format';
@@ -62,6 +63,85 @@ function CostRow({ label, value, onChangeValue }: {
         onChange={(e) => onChangeValue(Number(e.target.value))}
         style={{ width: 140, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
       />
+    </div>
+  );
+}
+
+const RECOVERY_BASES: readonly RecoveryBasis[] = [
+  'zero_rated_sale', 'partial_exemption', 'blocked', 'unconfirmed',
+];
+
+/** R11 Task 14 (spec §17.2 rule 3). Detailed-mode package and fee rows gain an
+ *  optional VAT override, and the schema is inert until something writes it --
+ *  the exact defect R10 shipped as `contingency_class`. Setting it writes the
+ *  full three-field object on that ONE row (never touching any other row);
+ *  clearing it writes `null`, never a zeroed object, so a cleared override is
+ *  indistinguishable from one that was never set (spec §17.1: `CostPackage
+ *  .vat_override`/`FeeLine.vat_override` are both `null` unless the user sets
+ *  one).
+ *
+ *  `override` is read directly off the package/fee line as a plain prop --
+ *  this control is the write-side editor of the mechanism, never a second
+ *  implementation of `resolveVatTreatment`'s override-over-category
+ *  precedence (spec §17.2 rule 1): it never compares the override against the
+ *  category row to decide which figure is charged, so the read is exempted at
+ *  this one call site (below) rather than file-wide, the same pattern this
+ *  file already uses for its one legitimate `total_construction_sqm` read. */
+function VatOverrideControl({ label, override, onSet, onClear }: {
+  label: string;
+  override: VatOverride | null;
+  onSet: (o: VatOverride) => void;
+  onClear: () => void;
+}) {
+  if (override === null) {
+    return (
+      <button
+        aria-label={`Add VAT override — ${label}`}
+        onClick={() => onSet({ rate_pct: 0, recoverable_pct: 0, recovery_basis: 'unconfirmed' })}
+        style={{ padding: '4px 10px', background: '#1e293b', border: '1px solid #1e3a5f', borderRadius: 4, color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}
+      >
+        + VAT override
+      </button>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ color: '#64748b', fontSize: 11 }}>VAT override</span>
+      <div style={{ position: 'relative', width: 70 }}>
+        <input
+          type="number"
+          aria-label={`${label} VAT override rate %`}
+          value={override.rate_pct}
+          onChange={(e) => onSet({ ...override, rate_pct: Number(e.target.value) })}
+          style={{ width: '100%', padding: '4px 8px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+        />
+        <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 12 }}>%</span>
+      </div>
+      <div style={{ position: 'relative', width: 70 }}>
+        <input
+          type="number"
+          aria-label={`${label} VAT override recoverable %`}
+          value={override.recoverable_pct}
+          onChange={(e) => onSet({ ...override, recoverable_pct: Number(e.target.value) })}
+          style={{ width: '100%', padding: '4px 8px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+        />
+        <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 12 }}>%</span>
+      </div>
+      <select
+        aria-label={`${label} VAT override recovery basis`}
+        value={override.recovery_basis}
+        onChange={(e) => onSet({ ...override, recovery_basis: e.target.value as RecoveryBasis })}
+        style={{ padding: '4px 8px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+      >
+        {RECOVERY_BASES.map((b) => <option key={b} value={b}>{humanise(b)}</option>)}
+      </select>
+      <button
+        aria-label={`Clear VAT override — ${label}`}
+        onClick={onClear}
+        style={{ padding: '4px 8px', background: '#1e293b', border: '1px solid #7f1d1d', borderRadius: 4, color: '#f87171', fontSize: 12, cursor: 'pointer' }}
+      >
+        Clear
+      </button>
     </div>
   );
 }
@@ -303,6 +383,17 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                 )}
               </>
             )}
+            {/* R11 Task 14 (spec §17.1/§17.2 rule 3). Detailed-mode only --
+                `FeeLine.vat_override` is hard-rejected in headline mode. */}
+            {costPlan.mode === 'detailed' && (
+              <VatOverrideControl
+                label={fee.label !== '' ? fee.label : fee.code}
+                // eslint-disable-next-line no-restricted-syntax -- legitimate write-side override editor (spec §17.2 rule 3); never compares against the category row, so it does not reimplement resolveVatTreatment's precedence -- see VatOverrideControl's doc comment above
+                override={fee.vat_override}
+                onSet={(o) => updateFeeLine(fee.id, { vat_override: o })}
+                onClear={() => updateFeeLine(fee.id, { vat_override: null })}
+              />
+            )}
           </div>
         );
       })}
@@ -438,6 +529,13 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                   />
                   Lender-eligible
                 </label>
+                <VatOverrideControl
+                  label={pkg.label !== '' ? pkg.label : pkg.code}
+                  // eslint-disable-next-line no-restricted-syntax -- legitimate write-side override editor (spec §17.2 rule 3); never compares against the category row, so it does not reimplement resolveVatTreatment's precedence -- see VatOverrideControl's doc comment above
+                  override={pkg.vat_override}
+                  onSet={(o) => updatePackage(pkg.id, { vat_override: o })}
+                  onClear={() => updatePackage(pkg.id, { vat_override: null })}
+                />
                 <button
                   onClick={() => removePackage(pkg.id)}
                   style={{ padding: '4px 10px', background: '#1e293b', border: '1px solid #7f1d1d', borderRadius: 4, color: '#f87171', fontSize: 13, cursor: 'pointer' }}

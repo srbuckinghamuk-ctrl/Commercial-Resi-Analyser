@@ -177,7 +177,7 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>5. Finance Structure</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>6. Finance Structure</h3>
 
       <ReconciliationStrip run={run} />
 

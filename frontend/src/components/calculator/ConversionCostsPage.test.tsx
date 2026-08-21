@@ -501,3 +501,88 @@ describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (m
     expect(screen.getByText(/x 3 units = £288\.00/)).toBeInTheDocument();
   });
 });
+
+// R11 Task 14 (spec §17.2 rule 3). If no UI writes `vat_override`, the schema
+// carries a mechanism nothing writes -- the exact defect R10 shipped
+// (`contingency_class`). Detailed-mode package and fee rows get an override
+// control that writes `vat_override` on that ONE row and clears it to `null`,
+// never a zeroed object.
+describe('ConversionCostsPage — per-line VAT override control (spec §17.2 rule 3)', () => {
+  it('setting an override on one package writes vat_override on that package and leaves every other package null', () => {
+    const inputs = detailedInputs();
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /add vat override — strip out/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    expect(updated.find((p) => p.id === 'p1')!.vat_override).not.toBeNull();
+    expect(updated.find((p) => p.id === 'p2')!.vat_override).toBeNull();
+  });
+
+  it('clearing a package override writes null, not a zeroed object', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.packages[0].vat_override = { rate_pct: 5, recoverable_pct: 50, recovery_basis: 'partial_exemption' };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /clear vat override — strip out/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    const p1 = updated.find((p) => p.id === 'p1')!;
+    expect(p1.vat_override).toBeNull();
+    // Not a zeroed object -- an object with all-zero fields would also pass a
+    // naive `!p1.vat_override.rate_pct` check but is NOT what the spec asks for.
+    expect(p1.vat_override).not.toEqual({ rate_pct: 0, recoverable_pct: 0, recovery_basis: 'unconfirmed' });
+  });
+
+  it('editing an active package override writes the changed field only, on that package', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.packages[0].vat_override = { rate_pct: 5, recoverable_pct: 50, recovery_basis: 'partial_exemption' };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: /strip out vat override rate %/i }), { target: { value: '12' } });
+
+    const updated = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    const p1 = updated.find((p) => p.id === 'p1')!;
+    expect(p1.vat_override).toEqual({ rate_pct: 12, recoverable_pct: 50, recovery_basis: 'partial_exemption' });
+    expect(updated.find((p) => p.id === 'p2')!.vat_override).toBeNull();
+  });
+
+  it('setting an override on one fee line writes vat_override on that fee and leaves the other fee null', () => {
+    const inputs = detailedInputs();
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /add vat override — architect/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.fee_lines as FeeLine[];
+    expect(updated.find((f) => f.id === 'f1')!.vat_override).not.toBeNull();
+    expect(updated.find((f) => f.id === 'f2')!.vat_override).toBeNull();
+  });
+
+  it('clearing a fee line override writes null', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.fee_lines[0].vat_override = { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /clear vat override — architect/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.fee_lines as FeeLine[];
+    expect(updated.find((f) => f.id === 'f1')!.vat_override).toBeNull();
+  });
+
+  it('does not render the override control in headline mode', () => {
+    const inputs = defaultCalculatorInputsV8();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.queryByText(/vat override/i)).not.toBeInTheDocument();
+  });
+});

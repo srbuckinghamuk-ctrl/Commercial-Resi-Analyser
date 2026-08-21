@@ -122,7 +122,7 @@ export default function DealSpiderPage({ inputs, onChange, project }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 4 }}>13. Deal Spider</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 4 }}>14. Deal Spider</h3>
       <p style={{ color: '#64748b', fontSize: 13, marginBottom: 20 }}>
         9-axis Class MA risk profile. Every axis is normalised to 0–5 with outward always better.
         Axes marked † are provisional — an eligibility check behind them is unverified.

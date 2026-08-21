@@ -48,7 +48,7 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>9. Scenario Comparison</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>10. Scenario Comparison</h3>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
         {scenarioKeys.map((key) => (

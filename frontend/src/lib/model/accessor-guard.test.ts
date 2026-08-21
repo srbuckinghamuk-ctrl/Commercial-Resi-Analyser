@@ -328,13 +328,21 @@ describe('single-accessor guard configuration', () => {
     // contingency_pct one with a "Task 12 replaces this" reason. Task 12
     // rebuilt the page around run.metrics.cost_plan.contingency, so the
     // contingency_pct read (and its disable comment) is gone entirely; only
-    // the one permanent total_construction_sqm exemption remains.
+    // the one permanent total_construction_sqm exemption remained until R11.
+    //
+    // R11 Task 14 (spec §17.2 rule 3) adds two more: the per-line VAT override
+    // control's own read of `pkg.vat_override` and `fee.vat_override`, to
+    // populate the editor with the row's current value. Neither compares the
+    // override against the category row to decide which figure is charged —
+    // that decision stays resolveVatTreatment's alone — so each is a legitimate
+    // write-side read, exempted at its own call site rather than file-wide,
+    // exactly like the total_construction_sqm exemption above it.
     expect(CONFIG).not.toContain('src/components/calculator/ConversionCostsPage.tsx');
     const source = readFileSync(
       resolve(FRONTEND_ROOT, 'src/components/calculator/ConversionCostsPage.tsx'), 'utf-8',
     );
     const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
-    expect(scoped).toHaveLength(1);
+    expect(scoped).toHaveLength(3);
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);
     expect(source).not.toMatch(/\.contingency_pct\b/);
   });
