@@ -5,14 +5,14 @@ import {
   migrateV4toV5, migrateInputsToV5,
   migrateV5toV6, migrateInputsToV6,
   migrateV6toV7, migrateInputsToV7,
-  migrateV7toV8, migrateInputsToV8,
+  migrateV7toV8, migrateInputsToV8, isV8,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV7,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
-import { VAT_CHARGE_CATEGORIES } from './vat';
+import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
 
 const V1_SNAPSHOT = {
   project_id: 'p1',
@@ -598,6 +598,36 @@ describe('migrateV7toV8 (R11 spec §17.11)', () => {
   it('refuses a document that is already v8', () => {
     const v8 = migrateV7toV8(someV7Document());
     expect(() => migrateV7toV8(v8 as never)).toThrow(/already a v8 document/);
+  });
+
+  // Fix round 2, Minor 10. `existingVat` mirrors migrateV6toV7's `existingPlan`:
+  // a block already on the document is KEPT rather than overwritten, so a
+  // mistagged row does not lose data here. That branch bypasses the inert write
+  // the identity gate assumes, so it needs its own test — the corpus-wide gate
+  // only ever sees documents that take the other branch.
+  it('keeps a VAT block the v7 document already carries, rather than resetting it', () => {
+    const source = {
+      ...someV7Document(),
+      vat: {
+        ...defaultVatInputs(),
+        registered: true,
+        return_frequency: 'monthly' as const,
+        treatments: defaultVatTreatments().map(
+          (t, i) => (i === 1 ? { ...t, rate_pct: 20 } : t),
+        ),
+      },
+    };
+
+    const v8 = migrateV7toV8(source as never);
+
+    expect(v8.vat.registered).toBe(true);
+    expect(v8.vat.return_frequency).toBe('monthly');
+    expect(v8.vat.treatments[1].rate_pct).toBe(20);
+    // Non-vacuity: this is NOT what the inert default would have produced.
+    expect(v8.vat).not.toEqual(defaultVatInputs());
+    // And the container gate is unmoved by the stray block — it is still a v7
+    // document until inputs_version says otherwise.
+    expect(isV8(source as unknown as Record<string, unknown>)).toBe(false);
   });
 
   it('hands back an independently mutable VAT block, not the shared default', () => {

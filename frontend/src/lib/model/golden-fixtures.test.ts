@@ -765,31 +765,43 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // that one field, because severity carries the consequence: an ERROR marks
   // the report DRAFT, a warning does not. The ERROR set is compared with no
   // exemption at all, and nothing may be REMOVED.
-  const MIGRATION_DISCLOSURE = { severity: 'warning', field: 'vat.registered' };
+  // Pinned as the WHOLE issue string, not a (severity, field) prefix. Keying on
+  // the pair and probing with `some` would swallow a SECOND, different warning
+  // on `vat.registered` -- the exemption has to name one message, not a field.
+  const MIGRATION_DISCLOSURE = 'warning vat.registered '
+    + 'The VAT engine is switched off (vat.registered: false), but this document has a '
+    + 'non-zero construction cost. Input VAT on construction and fees will be reported as '
+    + 'zero throughout, including any that would otherwise be recoverable.';
 
   function issueKeys(issues: ValidationIssue[]): string[] {
-    return issues.map((i) => `${i.severity} ${i.field} ${i.message}`).sort();
+    return issues.map((i) => `${i.severity} ${i.field} ${i.message}`).sort();
   }
-  const isDisclosure = (key: string) => key.startsWith(
-    `${MIGRATION_DISCLOSURE.severity} ${MIGRATION_DISCLOSURE.field} `,
-  );
 
-  function assertIssueSetsAgree(before: string[], after: string[], name: string) {
+  /** Returns the exempted additions, so callers can assert non-vacuity. */
+  function assertIssueSetsAgree(before: string[], after: string[], name: string): string[] {
     const removed = before.filter((i) => !after.includes(i));
     expect(removed, `${name}: migration to v8 REMOVED a validation issue`).toEqual([]);
 
-    const errorsBefore = before.filter((i) => i.startsWith('error '));
-    const errorsAfter = after.filter((i) => i.startsWith('error '));
+    const errorsBefore = before.filter((i) => i.startsWith('error '));
+    const errorsAfter = after.filter((i) => i.startsWith('error '));
     expect(
       errorsAfter,
       `${name}: migration to v8 changed the ERROR set — an error marks the report DRAFT (R38)`,
     ).toEqual(errorsBefore);
 
-    const unexpected = after.filter((i) => !before.includes(i) && !isDisclosure(i));
+    const added = after.filter((i) => !before.includes(i));
+    const unexpected = added.filter((i) => i !== MIGRATION_DISCLOSURE);
     expect(
       unexpected,
       `${name}: migration to v8 added an issue other than §17.9's inert-engine disclosure`,
     ).toEqual([]);
+
+    const exempted = added.filter((i) => i === MIGRATION_DISCLOSURE);
+    expect(
+      exempted.length,
+      `${name}: the §17.9 exemption covers at most ONE issue`,
+    ).toBeLessThanOrEqual(1);
+    return exempted;
   }
 
   it.each(appraisalFixtures.map((f) => f.name))(
@@ -800,23 +812,45 @@ describe('golden fixtures (shared with the Python engine)', () => {
       const migrated = migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>);
       const after = issueKeys(validateInputs(migrated));
 
-      assertIssueSetsAgree(before, after, name);
+      const exempted = assertIssueSetsAgree(before, after, name);
 
       // Cross-check the exemption against §17.9's own condition rather than
       // trusting it: the disclosure must appear exactly where a non-zero
       // construction cost makes it true, and nowhere else.
-      expect(after.some(isDisclosure))
+      expect(exempted.length === 1)
         .toBe(migrated.conversion_costs.total_construction_sqm > 0);
     },
   );
 
+  // Non-vacuity, corpus-wide (spec §17.11 names it; the Python twin asserts
+  // `disclosed > 0`). `it.each` above runs one test per fixture, so none of them
+  // can see whether the carve-out is exercised ANYWHERE -- if §17.9's warning
+  // stopped firing entirely, every per-fixture case would still pass while the
+  // exemption silently became dead weight.
+  it('exercises the §17.9 exemption on at least one fixture, so the carve-out is not dead', () => {
+    const disclosed = appraisalFixtures.filter((fx) => {
+      const before = issueKeys(validateInputs(fx.inputs));
+      const after = issueKeys(validateInputs(
+        migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>),
+      ));
+      return after.filter((i) => !before.includes(i)).includes(MIGRATION_DISCLOSURE);
+    });
+    expect(disclosed.length).toBeGreaterThan(0);
+  });
+
   // The synthetic case the fixture corpus does not contain, and the exact shape
-  // R38 was written for: `first_period_end_month` defaults to 2, so a 1-month
-  // term is the document where an ungated return-cycle bound fires.
-  it('adds no validation issue to a one-month document (R38)', () => {
+  // R38 was written for: `first_period_end_month` defaults to 2, so a short term
+  // is the document where an ungated return-cycle bound fires.
+  //
+  // BOTH terms, per §17.11 (R39). Term 2 is the `>=`-versus-`>` boundary: the
+  // migration writes `first_period_end_month: 2`, so a rule re-weakened to
+  // `> term_months`, or a gate re-narrowed to something like
+  // `registered || term_months >= 2`, FAILS at term 2 and PASSES at term 1. A
+  // term-1-only case would let either regression back in.
+  it.each([1, 2])('adds no validation issue to a %i-month document (R38)', (termMonths) => {
     const v7 = migrateInputsToV7({ inputs_version: 1 });
     const source = JSON.parse(JSON.stringify({
-      ...v7, finance: { ...v7.finance, term_months: 1 },
+      ...v7, finance: { ...v7.finance, term_months: termMonths },
     })) as Record<string, unknown>;
 
     const before = issueKeys(validateInputs(source as unknown as AnyCalculatorInputs));
@@ -827,9 +861,10 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // bound would fire, on a term short enough to trip it.
     expect(migrated.vat.registered).toBe(false);
     expect(migrated.vat.first_period_end_month).toBe(2);
-    expect(migrated.finance.term_months).toBe(1);
+    expect(migrated.finance.term_months).toBe(termMonths);
+    expect(migrated.vat.first_period_end_month).toBeGreaterThanOrEqual(termMonths);
 
-    assertIssueSetsAgree(before, after, 'synthetic 1-month document');
+    assertIssueSetsAgree(before, after, `synthetic ${termMonths}-month document`);
     expect(after.some((i) => i.includes('vat.first_period_end_month'))).toBe(false);
   });
 });

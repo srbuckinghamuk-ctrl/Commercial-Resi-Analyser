@@ -13,6 +13,7 @@ import pytest
 
 from app.financial_model import parse_calculator_inputs, run_appraisal, validate_inputs
 from app.financial_model.migrate import (
+    _v8_cost_plan,
     is_v2_or_later,
     is_v7,
     is_v8,
@@ -72,10 +73,26 @@ def test_the_migration_and_default_vat_write_the_same_block(v1_doc):
     assert migrate_inputs_to_v8({}).vat.model_dump() == DEFAULT_VAT.model_dump()
 
 
+#: A non-null override, for the non-vacuity halves below. `CostPackage` and
+#: `FeeLine` are SHARED between V7 and V8, so a v7-tagged document really can
+#: carry one -- which is what makes migrate_v7_to_v8's null-ing branch live code
+#: rather than a formality.
+_STRAY_OVERRIDE = {"rate_pct": 20.0, "recoverable_pct": 100.0,
+                   "recovery_basis": "zero_rated_sale"}
+
+
 def _detailed_v7(v1_doc) -> dict:
-    """A v7 document carrying exactly the shapes R10 persisted: packages and fee
-    lines with no `vat_override` key, and contingency rows still carrying the two
-    fields Sec 17.8 deletes."""
+    """A v7 document carrying exactly the shapes R10 persisted: contingency rows
+    still holding the two fields Sec 17.8 deletes, plus -- on one package and one
+    fee line -- a NON-NULL `vat_override`.
+
+    The override is the load-bearing detail. Fix round 2, Important 3: this
+    helper originally built packages with no `vat_override` key at all, so
+    `all(p.vat_override is None)` after migration was satisfied by the FIELD
+    DEFAULT and held with `_v8_cost_plan` bypassed entirely -- the provably-blind
+    gate Sec 17.11 cites R9 for. The TS twin (migrate.test.ts) always set one;
+    Python now matches it.
+    """
     saved = _v7(v1_doc).model_dump(mode="json")
     saved["cost_plan"]["mode"] = "detailed"
     saved["cost_plan"]["packages"] = [
@@ -83,6 +100,7 @@ def _detailed_v7(v1_doc) -> dict:
             "id": "p1", "code": "structure", "label": "Structure",
             "amount_pence": 1_000_000, "contingency_class": "general",
             "lender_eligible": True, "notes": "",
+            "vat_override": dict(_STRAY_OVERRIDE),
         },
         {
             "id": "p2", "code": "mech_elec_public_health", "label": "M&E",
@@ -90,6 +108,7 @@ def _detailed_v7(v1_doc) -> dict:
             "lender_eligible": True, "notes": "",
         },
     ]
+    saved["cost_plan"]["fee_lines"][0]["vat_override"] = dict(_STRAY_OVERRIDE)
     for row in saved["cost_plan"]["contingency"]:
         row["basis"] = "whole_build"
         row["package_ids"] = ["p1"]
@@ -99,23 +118,78 @@ def _detailed_v7(v1_doc) -> dict:
 def test_v7_to_v8_nulls_every_line_override_and_drops_the_deleted_contingency_fields(
     v1_doc,
 ):
-    v8 = migrate_v7_to_v8(_detailed_v7(v1_doc))
+    """Fix round 2, Important 3. Both halves of this test were previously
+    VACUOUS in Python, and the review proved it rather than inferring it:
+
+    - the override half passed on the FIELD DEFAULT, because the source rows
+      carried no `vat_override` key at all;
+    - the contingency half asserted against `model_dump()`, and `Model` uses
+      pydantic's default `extra="ignore"`, so `basis` / `package_ids` are
+      dropped by VALIDATION regardless of what `_v8_cost_plan` does.
+
+    Both now bite: the source carries a real override (asserted non-None
+    BEFORE migrating), and the contingency assertion runs against the
+    PRE-VALIDATION dict `_v8_cost_plan` produces.
+    """
+    source = _detailed_v7(v1_doc)
+
+    # Non-vacuity, asserted before the migration runs: the input really does
+    # carry the overrides whose removal is under test.
+    assert source["cost_plan"]["packages"][0]["vat_override"] is not None
+    assert source["cost_plan"]["fee_lines"][0]["vat_override"] is not None
+    assert all("basis" in row for row in source["cost_plan"]["contingency"])
+    assert all("package_ids" in row for row in source["cost_plan"]["contingency"])
+
+    # The contingency half, against the PRE-VALIDATION dict. `extra="ignore"`
+    # means model_dump() would drop these keys even if _v8_cost_plan never
+    # touched them, so this is the only assertion that can actually fail.
+    rebuilt = _v8_cost_plan(source["cost_plan"])
+    assert len(rebuilt["contingency"]) == 3
+    for row in rebuilt["contingency"]:
+        assert "basis" not in row, row
+        assert "package_ids" not in row, row
+    assert all(p["vat_override"] is None for p in rebuilt["packages"])
+    assert all(f["vat_override"] is None for f in rebuilt["fee_lines"])
+
+    v8 = migrate_v7_to_v8(source)
 
     assert len(v8.cost_plan.packages) == 2
     assert all(p.vat_override is None for p in v8.cost_plan.packages)
     assert len(v8.cost_plan.fee_lines) == 8
     assert all(f.vat_override is None for f in v8.cost_plan.fee_lines)
+    assert len(v8.cost_plan.contingency) == 3
 
-    dumped = v8.cost_plan.model_dump()
-    assert len(dumped["contingency"]) == 3
-    for row in dumped["contingency"]:
-        assert "basis" not in row
-        assert "package_ids" not in row
     # The surviving mechanism -- the package's own tag -- is retained.
     assert [p.contingency_class for p in v8.cost_plan.packages] == ["general", "abnormal"]
     assert [c.name for c in v8.cost_plan.contingency] == [
         "general", "existing_building", "abnormal",
     ]
+
+
+def test_v7_to_v8_keeps_a_vat_block_the_document_already_carries(v1_doc):
+    """Fix round 2, Minor 10. migrate_v7_to_v8 mirrors migrate_v6_to_v7's
+    `existing_plan`: a block already on the document is KEPT rather than
+    overwritten, so a mistagged row does not lose data here.
+
+    That branch bypasses the inert write the identity gate assumes, so it needs
+    its own test -- a v7-tagged document carrying a stray, LIVE `vat` block must
+    come through with that block intact, not silently reset to DEFAULT_VAT.
+    (The document is still refused as v8 by is_v8, which gates on the container:
+    see test_is_v8_gates_on_the_container_never_on_the_block.)"""
+    source = _v7(v1_doc).model_dump(mode="json")
+    stray = DEFAULT_VAT.model_dump(mode="json")
+    stray["registered"] = True
+    stray["return_frequency"] = "monthly"
+    stray["treatments"][1]["rate_pct"] = 20.0
+    source["vat"] = stray
+
+    v8 = migrate_v7_to_v8(source)
+
+    assert v8.vat.registered is True
+    assert v8.vat.return_frequency == "monthly"
+    assert v8.vat.treatments[1].rate_pct == 20.0
+    # Non-vacuity: this is NOT what the inert default would have produced.
+    assert v8.vat.model_dump() != DEFAULT_VAT.model_dump()
 
 
 def test_v7_to_v8_refuses_to_double_migrate(v1_doc):
@@ -405,12 +479,22 @@ def _issue_keys(issues) -> list[tuple[str, str, str]]:
     return sorted((i.severity, i.field, i.message) for i in issues)
 
 
-#: Sec 17.9's inert-engine disclosure. (severity, field) only -- an ERROR on
-#: `vat.registered` (the purchase-VAT-chargeable rule) is NOT exempt.
-_MIGRATION_DISCLOSURE = ("warning", "vat.registered")
+#: Sec 17.9's inert-engine disclosure, pinned as the WHOLE issue triple rather
+#: than a (severity, field) pair. Keying on the pair and probing with `any`
+#: would swallow a SECOND, different warning on `vat.registered` -- the
+#: exemption has to name one message, not a field. An ERROR on `vat.registered`
+#: (the purchase-VAT-chargeable rule) is not exempt either way.
+_MIGRATION_DISCLOSURE = (
+    "warning",
+    "vat.registered",
+    "The VAT engine is switched off (vat.registered: false), but this document has a "
+    "non-zero construction cost. Input VAT on construction and fees will be reported as "
+    "zero throughout, including any that would otherwise be recoverable.",
+)
 
 
-def _assert_issue_sets_agree(before, after, name: str):
+def _assert_issue_sets_agree(before, after, name: str) -> list:
+    """Returns the exempted additions, so callers can assert non-vacuity."""
     added = [i for i in after if i not in before]
     removed = [i for i in before if i not in after]
 
@@ -428,11 +512,17 @@ def _assert_issue_sets_agree(before, after, name: str):
         f"  removed: {[i for i in errors_before if i not in errors_after]}"
     )
 
-    unexpected = [i for i in added if (i[0], i[1]) != _MIGRATION_DISCLOSURE]
+    unexpected = [i for i in added if i != _MIGRATION_DISCLOSURE]
     assert unexpected == [], (
         f"{name}: migration to v8 added a validation issue other than Sec 17.9's "
         f"inert-engine disclosure\n  added: {unexpected}"
     )
+
+    exempted = [i for i in added if i == _MIGRATION_DISCLOSURE]
+    assert len(exempted) <= 1, (
+        f"{name}: the Sec 17.9 exemption covers at most ONE issue, got {exempted}"
+    )
+    return exempted
 
 
 def test_v8_migration_adds_and_removes_no_validation_issue():
@@ -443,12 +533,12 @@ def test_v8_migration_adds_and_removes_no_validation_issue():
         before = _issue_keys(validate_inputs(parse_calculator_inputs(doc["inputs"])))
         migrated = migrate_inputs_to_v8(doc["inputs"])
         after = _issue_keys(validate_inputs(migrated))
-        _assert_issue_sets_agree(before, after, name)
+        exempted = _assert_issue_sets_agree(before, after, name)
 
         # Cross-check the exemption against Sec 17.9's own condition rather than
         # trusting it: the disclosure must appear exactly where a non-zero
         # construction cost makes it true, and nowhere else.
-        got_disclosure = any((i[0], i[1]) == _MIGRATION_DISCLOSURE for i in after)
+        got_disclosure = len(exempted) == 1
         has_construction = migrated.conversion_costs.total_construction_sqm > 0
         assert got_disclosure == has_construction, (
             f"{name}: Sec 17.9's inert-engine disclosure fired={got_disclosure} but the "
@@ -462,15 +552,22 @@ def test_v8_migration_adds_and_removes_no_validation_issue():
     assert disclosed > 0
 
 
-def test_v8_migration_adds_no_validation_issue_to_a_one_month_document():
+@pytest.mark.parametrize("term_months", [1, 2])
+def test_v8_migration_adds_no_validation_issue_to_a_short_term_document(term_months):
     """The synthetic case the fixture corpus does not contain, and the exact
     shape R38 was written for: `first_period_end_month` defaults to 2, so a
-    1-month term is the document where an ungated return-cycle bound fires.
+    short term is the document where an ungated return-cycle bound fires.
 
-    Deleting the `registered` gate in validation.py was confirmed to fail this
-    test naming `vat.first_period_end_month` -- see task-10-report.md."""
+    BOTH terms, per spec Sec 17.11 (R39). Term 2 is the `>=`-versus-`>`
+    boundary: the migration writes `first_period_end_month: 2`, so a rule
+    re-weakened to `> term_months`, or a gate re-narrowed to something like
+    `registered or term_months >= 2`, FAILS at term 2 and PASSES at term 1. A
+    term-1-only case would let either regression back in.
+
+    Un-gating the rule in validation.py was confirmed to fail this test naming
+    `vat.first_period_end_month` -- see task-10-report.md."""
     v7 = migrate_inputs_to_v7({"inputs_version": 1})
-    v7.finance = v7.finance.model_copy(update={"term_months": 1})
+    v7.finance = v7.finance.model_copy(update={"term_months": term_months})
     source = v7.model_dump(mode="json")
 
     before = _issue_keys(validate_inputs(parse_calculator_inputs(source)))
@@ -481,7 +578,8 @@ def test_v8_migration_adds_no_validation_issue_to_a_one_month_document():
     # bound would fire, on a term short enough to trip it.
     assert migrated.vat.registered is False
     assert migrated.vat.first_period_end_month == 2
-    assert migrated.finance.term_months == 1
+    assert migrated.finance.term_months == term_months
+    assert migrated.vat.first_period_end_month >= term_months
 
-    _assert_issue_sets_agree(before, after, "synthetic 1-month document")
+    _assert_issue_sets_agree(before, after, f"synthetic {term_months}-month document")
     assert not any(field == "vat.first_period_end_month" for _, field, _ in after)
