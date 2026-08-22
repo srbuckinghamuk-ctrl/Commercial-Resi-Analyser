@@ -815,7 +815,6 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
         } else {
           programmeDerivation = derivation;
           const globalFinish = derivation.finish_month;
-          const overrun = globalFinish - term;
 
           for (const dp of derivation.phases) {
             const field = phaseField(dp.id);
@@ -827,10 +826,20 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
               err(field, `Phase '${dp.id}' resolves to start month ${dp.start_month}, before month 0 (over-acceleration).`);
             }
 
-            // Overrun — ALL phases.
+            // Overrun — ALL phases. The first clause ("Programme finishes
+            // month N") is a fact about the whole programme, so it always
+            // quotes the GLOBAL finish; the second clause names THIS phase,
+            // so its overrun quantity must be THIS phase's own — fix round 1,
+            // Finding 1: a non-terminal breaching phase (finish(p) > term but
+            // finish(p) < globalFinish) previously had the global overrun
+            // (belonging to whichever phase sets globalFinish) spliced into
+            // its own sentence, which understates or overstates its true
+            // lateness whenever it is not the phase defining the programme's
+            // end.
             const overrunBreach = isMilestone ? dp.start_month > term - 1 : dp.finish_month > term;
             if (overrunBreach) {
-              err(field, `Programme finishes month ${globalFinish}; facility term is ${term}. Phase '${dp.label}' ends ${overrun} months after maturity.`);
+              const ownOverrun = isMilestone ? dp.start_month - (term - 1) : dp.finish_month - term;
+              err(field, `Programme finishes month ${globalFinish}; facility term is ${term}. Phase '${dp.label}' ends ${ownOverrun} months after maturity.`);
             }
 
             // Sale tail — the PRE-COMPLETION codes only (spec §6.1's existing

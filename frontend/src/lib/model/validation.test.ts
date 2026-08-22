@@ -1863,11 +1863,34 @@ describe('programme network validation — spec §18.8', () => {
     expect(e.some((i) => i.field === 'programme.phases' && /→/.test(i.message))).toBe(true);
   });
 
+  it('GUARD 3: a cyclic document errors; its acyclic twin, differing by ONE dependency, does not', () => {
+    // The twin must CARRY a dependency, not merely lack the cycle -- otherwise
+    // an over-eager detector that rejected every predecessor edge still
+    // passes. Every other clean-document assertion in this suite uses a
+    // dependency-free network, so without this pairing nothing distinguishes
+    // "no cycle" from "no dependencies at all".
+    const cyclic = docWith([
+      phase('a', 'planning', 2, [{ phase_id: 'b', type: 'FS', lag_months: 0 }]),
+      phase('b', 'conditions', 2, [{ phase_id: 'a', type: 'FS', lag_months: 0 }]),
+    ]);
+    const acyclic = docWith([
+      phase('a', 'planning', 2, [{ phase_id: 'b', type: 'FS', lag_months: 0 }]),
+      phase('b', 'conditions', 2),
+    ]);
+    expect(errs(cyclic).some((i) => i.field === 'programme.phases' && /→/.test(i.message))).toBe(true);
+    expect(errs(acyclic)).toEqual([]);
+  });
+
   it('rejects a negative duration, lag or start_offset but ALLOWS a negative slip', () => {
-    expect(errs(docWith([phase('a', 'planning', -1)])).length).toBeGreaterThan(0);
-    expect(errs(docWith([phase('a', 'planning', 2, [], { start_offset: -1 })])).length).toBeGreaterThan(0);
+    // Fix round 1, Finding 6: field + message fragment, not a bare length
+    // check that any unrelated error would also satisfy.
+    expect(errs(docWith([phase('a', 'planning', -1)]))
+      .some((i) => i.field === 'programme.phases.a' && /duration_months cannot be negative/.test(i.message))).toBe(true);
+    expect(errs(docWith([phase('a', 'planning', 2, [], { start_offset: -1 })]))
+      .some((i) => i.field === 'programme.phases.a' && /start_offset cannot be negative/.test(i.message))).toBe(true);
     expect(errs(docWith([phase('a', 'planning', 2, [{ phase_id: 'a2', type: 'FS', lag_months: -1 }]),
-      phase('a2', 'design', 1)])).length).toBeGreaterThan(0);
+      phase('a2', 'design', 1)]))
+      .some((i) => i.field === 'programme.phases.a' && /lag_months cannot be negative/.test(i.message))).toBe(true);
     // signed slip is legal (§18.2) as long as the resolved start stays >= 0
     expect(errs(docWith([phase('a', 'planning', 2, [], { start_offset: 3, slip_months: -1 })]))).toEqual([]);
   });
@@ -1896,6 +1919,42 @@ describe('programme network validation — spec §18.8', () => {
     expect(errs(d).some((i) => /milestone/.test(i.message))).toBe(true);
   });
 
+  it('fix round 1, Finding 5: the ABSENT-phase arm of the cost package rule, not only the milestone arm', () => {
+    const d = docWith([phase('a', 'construction', 4)]);
+    d.cost_plan = { ...detailedCostPlan(), packages: [{ ...detailedCostPlan().packages[0], phase_id: 'ghost' }] };
+    expect(errs(d).some((i) => i.field === 'cost_plan.packages[0].phase_id'
+      && /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
+  it('fix round 1, Finding 5: the fee_lines[].phase_id arm (milestone AND absent phase)', () => {
+    const fee = (overrides: Partial<FeeLine> = {}): FeeLine => ({
+      id: 'fee-x', code: 'other', category: 'professional', label: 'X',
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
+      vat_override: null, phase_id: null, ...overrides,
+    });
+    const milestoneDoc = docWith([phase('a', 'construction', 4), phase('pc', 'practical_completion', 0)]);
+    milestoneDoc.cost_plan = { ...detailedCostPlan(), fee_lines: [fee({ phase_id: 'pc' })] };
+    expect(errs(milestoneDoc).some((i) => i.field === 'cost_plan.fee_lines[0].phase_id'
+      && /milestone/.test(i.message))).toBe(true);
+
+    const absentDoc = docWith([phase('a', 'construction', 4)]);
+    absentDoc.cost_plan = { ...detailedCostPlan(), fee_lines: [fee({ phase_id: 'ghost' })] };
+    expect(errs(absentDoc).some((i) => i.field === 'cost_plan.fee_lines[0].phase_id'
+      && /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
+  it('fix round 1, Finding 5: rejects a refinance anchor naming an absent phase', () => {
+    const d = docWith([phase('a', 'planning', 2)]);
+    d.exit_strategy = { ...d.exit_strategy, route: 'retain_all' };
+    d.refinance = {
+      month_offset: 0, investment_value_pence: 0, ltv_pct: 50,
+      arrangement_fee_pence: 0, legal_costs_pence: 0,
+      anchor: { phase_id: 'ghost', offset_months: 0 },
+    };
+    expect(errs(d).some((i) => i.field === 'refinance.anchor'
+      && /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
   it('rejects an empty phases array', () => {
     expect(errs(docWith([])).some((i) => i.field === 'programme.phases')).toBe(true);
   });
@@ -1909,6 +1968,54 @@ describe('programme network validation — spec §18.8', () => {
     expect(overrun).toBeDefined();
     expect(overrun!.message).toContain("Phase 'm'");
     expect(overrun!.message).toContain('6 months'); // finish 24 vs term 18
+  });
+
+  it('fix round 1, Finding 1: TWO breaching phases each get their OWN overrun figure', () => {
+    // Two independent (non-chained) phases, both past term=18: 'a' finishes
+    // 20 (own overrun 2), 'b' finishes 30 (own overrun 12, and 'b' is the
+    // phase that sets the programme's global finish). Splicing the GLOBAL
+    // overrun into every breaching phase's sentence would give 'a' the same
+    // "12 months" as 'b' -- wrong, since 'a' itself is only 2 months late.
+    const e = errs(docWith([
+      phase('a', 'construction', 20, [], { start_offset: 0 }),
+      phase('b', 'marketing', 30, [], { start_offset: 0 }),
+    ], 18));
+    const aOverrun = e.find((i) => i.field === 'programme.phases.a' && /after maturity/.test(i.message));
+    const bOverrun = e.find((i) => i.field === 'programme.phases.b' && /after maturity/.test(i.message));
+    expect(aOverrun).toBeDefined();
+    expect(bOverrun).toBeDefined();
+    expect(aOverrun!.message).toContain('Programme finishes month 30');
+    expect(aOverrun!.message).toContain("Phase 'a' ends 2 months after maturity");
+    expect(bOverrun!.message).toContain('Programme finishes month 30');
+    expect(bOverrun!.message).toContain("Phase 'b' ends 12 months after maturity");
+  });
+
+  it('fix round 1, Finding 3: OVERRUN milestone arm — legal at start = term-1, breaches one month later', () => {
+    const legal = docWith([
+      phase('base', 'construction', 1),
+      phase('a', 'unit_completions', 0, [], { start_offset: 23 }),
+    ], 24);
+    expect(errs(legal).some((i) => /after maturity/.test(i.message))).toBe(false);
+
+    const breach = docWith([
+      phase('base', 'construction', 1),
+      phase('a', 'unit_completions', 0, [], { start_offset: 24 }),
+    ], 24);
+    expect(errs(breach).some((i) => i.field === 'programme.phases.a' && /after maturity/.test(i.message))).toBe(true);
+  });
+
+  it('fix round 1, Finding 3: TAIL milestone arm — legal at start = term-2, breaches one month later', () => {
+    const legal = docWith([
+      phase('base', 'construction', 1),
+      phase('pc', 'practical_completion', 0, [], { start_offset: 22 }),
+    ], 24);
+    expect(errs(legal).some((i) => /sale tail/.test(i.message))).toBe(false);
+
+    const breach = docWith([
+      phase('base', 'construction', 1),
+      phase('pc', 'practical_completion', 0, [], { start_offset: 23 }),
+    ], 24);
+    expect(errs(breach).some((i) => i.field === 'programme.phases.pc' && /sale tail/.test(i.message))).toBe(true);
   });
 
   it('§18.8 TAIL: binds pre-completion codes and NOT marketing', () => {
@@ -1926,6 +2033,10 @@ describe('programme network validation — spec §18.8', () => {
   it('§18.8 TAIL: `other` gets the weaker overrun rule, not the tail rule', () => {
     expect(errs(docWith([phase('o', 'other', 23)], 24))
       .some((i) => /sale tail/.test(i.message))).toBe(false);
+    // Fix round 1, Finding 4: pin what "weaker" MEANS -- 'other' is exempt
+    // from the tail rule but not from the overrun rule, which still fires.
+    const e = errs(docWith([phase('o', 'other', 25)], 24));
+    expect(e.some((i) => i.field === 'programme.phases.o' && /after maturity/.test(i.message))).toBe(true);
   });
 
   it('a migrated three-phase network produces the SAME tail issue as its v8 twin', () => {
