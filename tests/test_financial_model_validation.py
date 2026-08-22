@@ -13,12 +13,16 @@ from app.financial_model import run_appraisal
 from app.financial_model.areas import DEFAULT_AREA_BRIDGE
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import (
+    PROGRAMME_FIELD_ALIASES,
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
+    migrate_inputs_to_v8,
+    migrate_inputs_to_v9,
     migrate_v2_to_v3,
     migrate_v6_to_v7,
+    migrate_v8_to_v9,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
@@ -29,15 +33,29 @@ from app.financial_model.types import (
     CalculatorInputsV6,
     CalculatorInputsV7,
     CalculatorInputsV8,
+    CalculatorInputsV9,
+    CategoryPhaseIds,
     ContingencyClass,
     CostPackage,
+    CostPlanInputs,
+    Dependency,
     EquitySource,
     FeeLine,
     LenderValuation,
+    Phase,
+    PhaseAnchor,
+    ProgrammeInputs,
+    ProgrammeNetwork,
+    ProgrammePackage,
+    ProgrammePackages,
     ProposedUnit,
     ProposedUnitV6,
     RefinanceInputs,
+    RefinanceInputsV9,
     RetainedUnit,
+    SalesPhasingInputsV9,
+    SalesPhasingTrancheV9,
+    SimpleSpendCurve,
     UnitMixInputsV6,
     VatOverride,
 )
@@ -1779,4 +1797,431 @@ class TestVatValidationWarnings:
         issues = validate_inputs(inputs)
         assert not any(
             i.field == "vat.repayment_lag_months" and i.severity == "warning" for i in issues
+        )
+
+
+# --- R12 Sec 18.8 -- v9 programme network validation (Task 10) -------------
+#
+# Python twin of validation.test.ts's 'programme network validation --
+# spec Sec18.8' and 'anchors and scenario slip -- Sec18.6/18.8/18.9' describe
+# blocks. Both implementations must agree with the spec, not merely with each
+# other -- see the module docstring at the top of this file.
+
+SL = SimpleSpendCurve(kind="straight_line")
+
+
+def v9_phase(pid, code, duration, preds=(), *, start_offset=0, slip=0) -> Phase:
+    """Mirrors validation.test.ts's `phase()` helper (itself a mirror of
+    programme.test.ts's own), and test_financial_model_programme.py's `phase()`
+    Python twin exactly: a phase with no overrides is predecessor-free, at
+    start_offset 0, with no slip."""
+    return Phase(
+        id=pid, code=code, label=pid, duration_months=duration,
+        slip_months=slip, start_offset=start_offset, curve=SL,
+        predecessors=list(preds),
+    )
+
+
+def v9_dep(pid, type_="FS", lag=0) -> Dependency:
+    return Dependency(phase_id=pid, type=type_, lag_months=lag)
+
+
+def v9_doc_with(
+    phases: list[Phase], term: int = 24, category_phase_ids: CategoryPhaseIds | None = None,
+) -> CalculatorInputsV9:
+    """A v9 document carrying the given phases as its programme network. The
+    Python twin of validation.test.ts's `docWith`. `category_phase_ids`
+    defaults every category onto `phases[0]` -- the tests that care about
+    `category_phase_ids` pass it explicitly."""
+    d = migrate_inputs_to_v9({})
+    d.finance = d.finance.model_copy(update={"term_months": term})
+    first = phases[0].id if phases else "x"
+    d.programme = ProgrammeNetwork(
+        anchor_month=None,
+        phases=phases,
+        category_phase_ids=category_phase_ids or CategoryPhaseIds(
+            construction=first, professional=first, statutory=first,
+        ),
+    )
+    return d
+
+
+def v9_detailed_cost_plan() -> CostPlanInputs:
+    """A minimal, structurally-valid detailed cost plan -- one package, no fee
+    lines -- for the tests that tag a cost line onto a phase. The Python twin
+    of validation.test.ts's `detailedCostPlan`."""
+    return CostPlanInputs(
+        mode="detailed",
+        packages=[CostPackage(
+            id="pkg-1", code="structure", label="Structure", amount_pence=1_000_000,
+            contingency_class="general", lender_eligible=True, notes="",
+        )],
+        contingency=[
+            ContingencyClass(name="general", pct=5),
+            ContingencyClass(name="existing_building", pct=0),
+            ContingencyClass(name="abnormal", pct=0),
+        ],
+        fee_lines=[],
+    )
+
+
+def v9_errs(d) -> list:
+    return [i for i in validate_inputs(d) if i.severity == "error"]
+
+
+class TestProgrammeNetworkValidation:
+    """Python twin of validation.test.ts's 'programme network validation --
+    spec Sec18.8' describe block (R12 Task 10)."""
+
+    def test_rejects_a_duplicate_phase_id(self):
+        e = v9_errs(v9_doc_with([v9_phase("a", "planning", 2), v9_phase("a", "design", 2)]))
+        assert any(
+            i.field == "programme.phases.a" and "Duplicate phase id" in i.message for i in e
+        )
+
+    def test_rejects_a_dependency_naming_an_absent_phase(self):
+        e = v9_errs(v9_doc_with([v9_phase("a", "planning", 2, [v9_dep("ghost")])]))
+        assert any('no phase with id "ghost"' in i.message for i in e)
+
+    def test_rejects_a_self_reference(self):
+        e = v9_errs(v9_doc_with([v9_phase("a", "planning", 2, [v9_dep("a")])]))
+        assert any("cannot depend on itself" in i.message for i in e)
+
+    def test_names_the_cycle_in_order(self):
+        e = v9_errs(v9_doc_with([
+            v9_phase("a", "planning", 2, [v9_dep("b")]),
+            v9_phase("b", "conditions", 2, [v9_dep("a")]),
+        ]))
+        assert any(i.field == "programme.phases" and "→" in i.message for i in e)
+
+    def test_guard_3_a_cyclic_document_errors_its_acyclic_twin_does_not(self):
+        """The twin must CARRY a dependency, not merely lack the cycle --
+        otherwise an over-eager detector that rejected every predecessor edge
+        still passes. Every other clean-document assertion in this suite uses
+        a dependency-free network, so without this pairing nothing
+        distinguishes "no cycle" from "no dependencies at all"."""
+        cyclic = v9_doc_with([
+            v9_phase("a", "planning", 2, [v9_dep("b")]),
+            v9_phase("b", "conditions", 2, [v9_dep("a")]),
+        ])
+        acyclic = v9_doc_with([
+            v9_phase("a", "planning", 2, [v9_dep("b")]),
+            v9_phase("b", "conditions", 2),
+        ])
+        assert any(i.field == "programme.phases" and "→" in i.message for i in v9_errs(cyclic))
+        assert v9_errs(acyclic) == []
+
+    def test_rejects_negative_duration_lag_or_start_offset_but_allows_a_negative_slip(self):
+        # Fix round 1, Finding 6: field + message fragment, not a bare length
+        # check that any unrelated error would also satisfy.
+        assert any(
+            i.field == "programme.phases.a" and "duration_months cannot be negative" in i.message
+            for i in v9_errs(v9_doc_with([v9_phase("a", "planning", -1)]))
+        )
+        assert any(
+            i.field == "programme.phases.a" and "start_offset cannot be negative" in i.message
+            for i in v9_errs(v9_doc_with([v9_phase("a", "planning", 2, start_offset=-1)]))
+        )
+        assert any(
+            i.field == "programme.phases.a" and "lag_months cannot be negative" in i.message
+            for i in v9_errs(v9_doc_with([
+                v9_phase("a", "planning", 2, [v9_dep("a2", lag=-1)]),
+                v9_phase("a2", "design", 1),
+            ]))
+        )
+        # signed slip is legal (Sec18.2) as long as the resolved start stays >= 0
+        assert v9_errs(v9_doc_with([v9_phase("a", "planning", 2, start_offset=3, slip=-1)])) == []
+
+    def test_rejects_a_fractional_slip_is_rejected_by_pydantic_at_parse(self):
+        """CRITICAL 1b (textual parity with validation.ts): validation.py
+        gained a Number.isInteger-equivalent check for textual parity, but it
+        is unreachable in practice here -- Phase.slip_months is typed `int`,
+        so Pydantic already rejects a fractional value at parse (a 422),
+        before validate_inputs ever runs. Mirrors TestV4ProgrammeValidation's
+        identically-reasoned fractional-duration test above."""
+        with pytest.raises(pydantic.ValidationError):
+            v9_phase("a", "planning", 2, slip=1.5)
+
+    def test_rejects_over_acceleration_below_month_0_rather_than_clamping(self):
+        e = v9_errs(v9_doc_with([v9_phase("a", "planning", 2, start_offset=1, slip=-3)]))
+        assert any(i.field == "programme.phases.a" and "before month 0" in i.message for i in e)
+
+    def test_rejects_category_phase_ids_pointing_at_an_absent_phase_or_a_milestone(self):
+        ms = [v9_phase("a", "construction", 4), v9_phase("pc", "practical_completion", 0)]
+        ghost = v9_doc_with(
+            ms, category_phase_ids=CategoryPhaseIds(construction="ghost", professional="a", statutory="a"),
+        )
+        assert any(i.field == "programme.category_phase_ids.construction" for i in v9_errs(ghost))
+
+        milestone = v9_doc_with(
+            ms, category_phase_ids=CategoryPhaseIds(construction="pc", professional="a", statutory="a"),
+        )
+        assert any("milestone" in i.message for i in v9_errs(milestone))
+
+    def test_rejects_a_cost_line_tagged_to_a_milestone_or_an_absent_phase(self):
+        d = v9_doc_with([v9_phase("a", "construction", 4), v9_phase("pc", "practical_completion", 0)])
+        cp = v9_detailed_cost_plan()
+        cp.packages = [cp.packages[0].model_copy(update={"phase_id": "pc"})]
+        d.cost_plan = cp
+        assert any("milestone" in i.message for i in v9_errs(d))
+
+    def test_fix_round_1_finding_5_absent_phase_arm_of_the_cost_package_rule(self):
+        d = v9_doc_with([v9_phase("a", "construction", 4)])
+        cp = v9_detailed_cost_plan()
+        cp.packages = [cp.packages[0].model_copy(update={"phase_id": "ghost"})]
+        d.cost_plan = cp
+        e = v9_errs(d)
+        assert any(
+            i.field == "cost_plan.packages[0].phase_id" and 'no phase with id "ghost"' in i.message
+            for i in e
+        )
+
+    def test_fix_round_1_finding_5_fee_lines_phase_id_arm_milestone_and_absent_phase(self):
+        def fee(**overrides) -> FeeLine:
+            base = dict(
+                id="fee-x", code="other", category="professional", label="X",
+                basis="fixed", amount_pence=1000, pct=0, per_dwelling=False,
+            )
+            base.update(overrides)
+            return FeeLine(**base)
+
+        milestone_doc = v9_doc_with([v9_phase("a", "construction", 4), v9_phase("pc", "practical_completion", 0)])
+        milestone_cp = v9_detailed_cost_plan()
+        milestone_cp.fee_lines = [fee(phase_id="pc")]
+        milestone_doc.cost_plan = milestone_cp
+        assert any(
+            i.field == "cost_plan.fee_lines[0].phase_id" and "milestone" in i.message
+            for i in v9_errs(milestone_doc)
+        )
+
+        absent_doc = v9_doc_with([v9_phase("a", "construction", 4)])
+        absent_cp = v9_detailed_cost_plan()
+        absent_cp.fee_lines = [fee(phase_id="ghost")]
+        absent_doc.cost_plan = absent_cp
+        assert any(
+            i.field == "cost_plan.fee_lines[0].phase_id" and 'no phase with id "ghost"' in i.message
+            for i in v9_errs(absent_doc)
+        )
+
+    def test_fix_round_1_finding_5_rejects_a_refinance_anchor_naming_an_absent_phase(self):
+        d = v9_doc_with([v9_phase("a", "planning", 2)])
+        d.exit_strategy = d.exit_strategy.model_copy(update={"route": "retain_all"})
+        d.refinance = RefinanceInputsV9(
+            month_offset=0, investment_value_pence=0, ltv_pct=50,
+            arrangement_fee_pence=0, legal_costs_pence=0,
+            anchor=PhaseAnchor(phase_id="ghost", offset_months=0),
+        )
+        e = v9_errs(d)
+        assert any(
+            i.field == "refinance.anchor" and 'no phase with id "ghost"' in i.message for i in e
+        )
+
+    def test_rejects_an_empty_phases_array(self):
+        assert any(i.field == "programme.phases" for i in v9_errs(v9_doc_with([])))
+
+    def test_overrun_names_the_phase_and_the_overrun_in_months(self):
+        e = v9_errs(v9_doc_with([
+            v9_phase("c", "construction", 9),
+            v9_phase("m", "marketing", 15, [v9_dep("c")]),
+        ], term=18))
+        overrun = next((i for i in e if "after maturity" in i.message), None)
+        assert overrun is not None
+        assert "Phase 'm'" in overrun.message
+        assert "6 months" in overrun.message  # finish 24 vs term 18
+
+    def test_fix_round_1_finding_1_two_breaching_phases_each_get_their_own_overrun_figure(self):
+        # Two independent (non-chained) phases, both past term=18: 'a' finishes
+        # 20 (own overrun 2), 'b' finishes 30 (own overrun 12, and 'b' is the
+        # phase that sets the programme's global finish). Splicing the GLOBAL
+        # overrun into every breaching phase's sentence would give 'a' the
+        # same "12 months" as 'b' -- wrong, since 'a' itself is only 2 months
+        # late.
+        e = v9_errs(v9_doc_with([
+            v9_phase("a", "construction", 20, start_offset=0),
+            v9_phase("b", "marketing", 30, start_offset=0),
+        ], term=18))
+        a_overrun = next((i for i in e if i.field == "programme.phases.a" and "after maturity" in i.message), None)
+        b_overrun = next((i for i in e if i.field == "programme.phases.b" and "after maturity" in i.message), None)
+        assert a_overrun is not None
+        assert b_overrun is not None
+        assert "Programme finishes month 30" in a_overrun.message
+        assert "Phase 'a' ends 2 months after maturity" in a_overrun.message
+        assert "Programme finishes month 30" in b_overrun.message
+        assert "Phase 'b' ends 12 months after maturity" in b_overrun.message
+
+    def test_fix_round_1_finding_3_overrun_milestone_arm_boundary(self):
+        """Legal at start = term-1, breaches one month later."""
+        legal = v9_doc_with([
+            v9_phase("base", "construction", 1),
+            v9_phase("a", "unit_completions", 0, start_offset=23),
+        ], term=24)
+        assert not any("after maturity" in i.message for i in v9_errs(legal))
+
+        breach = v9_doc_with([
+            v9_phase("base", "construction", 1),
+            v9_phase("a", "unit_completions", 0, start_offset=24),
+        ], term=24)
+        assert any(
+            i.field == "programme.phases.a" and "after maturity" in i.message
+            for i in v9_errs(breach)
+        )
+
+    def test_fix_round_1_finding_3_tail_milestone_arm_boundary(self):
+        """Legal at start = term-2, breaches one month later."""
+        legal = v9_doc_with([
+            v9_phase("base", "construction", 1),
+            v9_phase("pc", "practical_completion", 0, start_offset=22),
+        ], term=24)
+        assert not any("sale tail" in i.message for i in v9_errs(legal))
+
+        breach = v9_doc_with([
+            v9_phase("base", "construction", 1),
+            v9_phase("pc", "practical_completion", 0, start_offset=23),
+        ], term=24)
+        assert any(
+            i.field == "programme.phases.pc" and "sale tail" in i.message
+            for i in v9_errs(breach)
+        )
+
+    def test_tail_binds_pre_completion_codes_and_not_marketing(self):
+        # construction (finish 24) breaches the tail -- the boundary is finish
+        # <= term - 1 = 23, so finish 23 (duration 23) is exactly LEGAL;
+        # duration 24 is the first illegal window.
+        assert any(
+            "sale tail" in i.message
+            for i in v9_errs(v9_doc_with([v9_phase("c", "construction", 24)], term=24))
+        )
+        # ...but marketing finishing there does not
+        assert not any(
+            "sale tail" in i.message
+            for i in v9_errs(v9_doc_with([v9_phase("m", "marketing", 23)], term=24))
+        )
+
+    def test_tail_other_gets_the_weaker_overrun_rule_not_the_tail_rule(self):
+        assert not any(
+            "sale tail" in i.message
+            for i in v9_errs(v9_doc_with([v9_phase("o", "other", 23)], term=24))
+        )
+        # Fix round 1, Finding 4: pin what "weaker" MEANS -- 'other' is exempt
+        # from the tail rule but not from the overrun rule, which still fires.
+        e = v9_errs(v9_doc_with([v9_phase("o", "other", 25)], term=24))
+        assert any(
+            i.field == "programme.phases.o" and "after maturity" in i.message for i in e
+        )
+
+    def test_a_migrated_three_phase_network_produces_the_same_tail_issue_as_its_v8_twin(self):
+        """This is the property Task 8's alias map depends on. Asserted here
+        too, at the rule, so a scope change to PRE_COMPLETION_CODES fails
+        twice."""
+        v8 = migrate_inputs_to_v8({})
+        v8.finance = v8.finance.model_copy(update={"term_months": 6})
+        v8.programme = ProgrammeInputs(
+            anchor_month=None,
+            packages=ProgrammePackages(
+                construction=ProgrammePackage(start_offset=0, duration_months=6, curve=SL),
+                professional=ProgrammePackage(start_offset=0, duration_months=1, curve=SL),
+                statutory=ProgrammePackage(start_offset=0, duration_months=1, curve=SL),
+            ),
+        )
+        before_fields = sorted(i.field for i in validate_inputs(v8))
+        after_fields = sorted(i.field for i in validate_inputs(migrate_v8_to_v9(v8)))
+        assert after_fields == sorted(PROGRAMME_FIELD_ALIASES.get(f, f) for f in before_fields)
+
+
+def _v9_network_doc(term: int = 24) -> CalculatorInputsV9:
+    """Three independent (non-chained) phases so that slipping one does not
+    cascade a start onto the others through a dependency -- the crossing test
+    below needs a genuine crossing, not one the derivation would have
+    propagated for it. The Python twin of validation.test.ts's `networkDoc`."""
+    return v9_doc_with([
+        v9_phase("planning", "planning", 3),
+        v9_phase("unit_completions", "unit_completions", 0, start_offset=10),
+        v9_phase("sales", "sales", 5, start_offset=11),
+    ], term)
+
+
+def _v9_doc_with_tranches(trs: list[dict]) -> CalculatorInputsV9:
+    d = _v9_network_doc()
+    d.sales_phasing = SalesPhasingInputsV9(tranches=[
+        SalesPhasingTrancheV9(
+            month_offset=t["month_offset"], pct_of_gross_receipts=t["pct_of_gross_receipts"],
+            anchor=t.get("anchor"),
+        )
+        for t in trs
+    ])
+    return d
+
+
+def _v9_with_slip(d: CalculatorInputsV9, phase_id: str, months: int) -> CalculatorInputsV9:
+    new_phases = [
+        p.model_copy(update={"slip_months": p.slip_months + months}) if p.id == phase_id else p
+        for p in d.programme.phases
+    ]
+    d2 = d.model_copy()
+    d2.programme = d.programme.model_copy(update={"phases": new_phases})
+    return d2
+
+
+class TestAnchorsAndScenarioSlip:
+    """Python twin of validation.test.ts's 'anchors and scenario slip --
+    Sec18.6/18.8/18.9' describe block (R12 Task 10)."""
+
+    def test_rejects_an_anchor_naming_an_absent_phase(self):
+        d = _v9_doc_with_tranches([
+            {"anchor": PhaseAnchor(phase_id="ghost", offset_months=0), "month_offset": 0, "pct_of_gross_receipts": 100},
+        ])
+        e = v9_errs(d)
+        assert any(
+            i.field == "sales_phasing.tranches[0].anchor" and 'no phase with id "ghost"' in i.message
+            for i in e
+        )
+
+    def test_rejects_resolved_tranche_months_that_are_not_strictly_increasing(self):
+        # Two tranches anchored to DIFFERENT phases can cross when one slips.
+        # The rule reads the resolved months, not the entered ones -- a
+        # document whose entered offsets ascend can still resolve out of
+        # order.
+        d = _v9_doc_with_tranches([
+            {
+                "anchor": PhaseAnchor(phase_id="unit_completions", offset_months=0),
+                "month_offset": 0, "pct_of_gross_receipts": 40,
+            },
+            {
+                "anchor": PhaseAnchor(phase_id="sales", offset_months=0),
+                "month_offset": 0, "pct_of_gross_receipts": 60,
+            },
+        ])
+        crossed = _v9_with_slip(d, "unit_completions", 9)  # pushes tranche 0 past tranche 1
+        assert any(
+            i.field == "sales_phasing.tranches[1]" and "strictly increasing" in i.message
+            for i in v9_errs(crossed)
+        )
+        # Negative control: unslipped, the same document is clean.
+        assert v9_errs(d) == []
+
+    def test_rejects_a_scenario_phase_slip_phase_id_naming_an_absent_phase(self):
+        d = _v9_network_doc()
+        d.scenarios.downside = d.scenarios.downside.model_copy(
+            update={"phase_slip_phase_id": "ghost", "phase_slip_months": 3},
+        )
+        e = v9_errs(d)
+        assert any(
+            i.field == "scenarios.downside.phase_slip_phase_id"
+            and 'no phase with id "ghost"' in i.message
+            for i in e
+        )
+
+    def test_rejects_a_scenario_phase_slip_phase_id_set_while_programme_is_none(self):
+        # A slip with nothing to slip must not be a silent no-op -- that is
+        # what would make the lever look live while doing nothing (Sec18.9).
+        d = migrate_inputs_to_v9({})
+        d.programme = None
+        d.scenarios.downside = d.scenarios.downside.model_copy(
+            update={"phase_slip_phase_id": "planning", "phase_slip_months": 3},
+        )
+        e = v9_errs(d)
+        assert any(
+            i.field == "scenarios.downside.phase_slip_phase_id"
+            and "has no programme network" in i.message
+            for i in e
         )
