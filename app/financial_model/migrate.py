@@ -29,6 +29,7 @@ from .types import (
     CalculatorInputsV6,
     CalculatorInputsV7,
     CalculatorInputsV8,
+    CalculatorInputsV9,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -910,7 +911,7 @@ def migrate_inputs_to_v6(
     return migrate_v5_to_v6(migrate_inputs_to_v5(snapshot, project))
 
 
-# --- Release 10 (calc 2.8.0 -> next): the cost plan (spec Sec 16) -----------
+# --- Release 10 (calc 2.8.0 -> 2.9.0): the cost plan (spec Sec 16) ----------
 
 
 def is_v7(snapshot: dict[str, Any]) -> bool:
@@ -1023,7 +1024,7 @@ def migrate_inputs_to_v7(
     return migrate_v6_to_v7(migrate_inputs_to_v6(snapshot, project))
 
 
-# --- Release 11 (calc 2.9.0 -> next): VAT and TOGC (spec Sec 17.11) ---------
+# --- Release 11 (calc 2.9.0 -> 2.10.0): VAT and TOGC (spec Sec 17.11) -------
 
 
 def is_v8(snapshot: dict[str, Any]) -> bool:
@@ -1186,3 +1187,276 @@ def migrate_inputs_to_v8(
             "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
         })
     return migrate_v7_to_v8(migrate_inputs_to_v7(snapshot, project))
+
+
+# --- Release 12 (calc 2.10.0 -> 2.11.0): the dated, dependent programme -----
+# (spec Sec 18.7) --------------------------------------------------------
+
+
+def is_v9(snapshot: dict[str, Any]) -> bool:
+    """A v9 document has the same finance shape as v2-v8, discriminated by
+    inputs_version == 9. Port of isV9.
+
+    TS keeps `isV9` module-private (no `export`); Python keeps the same
+    public-by-default naming convention every other `is_vN` in this module
+    already uses (`is_v7`, `is_v8`), since Python has no equivalent
+    per-symbol export boundary to preserve.
+    """
+    finance = snapshot.get("finance")
+    return (
+        snapshot.get("inputs_version") == 9
+        and isinstance(finance, dict)
+        and "committed_net_facility_pence" in finance
+    )
+
+
+#: Spec Sec 18.7. Mirror of migrate.ts's PACKAGE_TO_PHASE. The three v8
+#: packages, in fixed order, and the phase (code, label) each becomes. The KEY
+#: is also the phase `id` the migration writes -- Task 8's validation-identity
+#: alias map is bounded by that equality, and asserts this dict has exactly
+#: three entries. Do not add a fourth.
+PACKAGE_TO_PHASE: dict[str, tuple[str, str]] = {
+    "construction": ("construction", "Construction"),
+    "professional": ("design", "Professional"),
+    "statutory": ("planning", "Statutory"),
+}
+
+#: Sec 18.7's ONE exemption to the validation-identity gate, DERIVED from the
+#: map above rather than restated beside it. Port of PROGRAMME_FIELD_ALIASES.
+#: The v8 sale-tail rule reports its field as `programme.packages.<name>`;
+#: the v9 rule reports `programme.phases.<id>`; migration assigns
+#: `id = <name>`, which is the only reason they correspond.
+#:
+#: Deriving it is the bound. A hand-written second dict could gain a fourth
+#: entry without anything failing; this one cannot have an entry that
+#: PACKAGE_TO_PHASE does not license, and Task 8's three-entry assertion
+#: therefore constrains both objects at once.
+PROGRAMME_FIELD_ALIASES: dict[str, str] = {
+    f"programme.packages.{name}": f"programme.phases.{name}" for name in PACKAGE_TO_PHASE
+}
+
+
+def _v9_programme_network(programme: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The `programme` half of the v8 -> v9 write. Port of the IIFE inside
+    migrateV8toV9 that builds `ProgrammeNetwork`.
+
+    Each of the three v8 packages becomes a PREDECESSOR-FREE phase carrying
+    its old `start_offset`, `duration_months` and `curve` verbatim, with
+    `id` equal to the package name and `code`/`label` from PACKAGE_TO_PHASE.
+    A predecessor-free phase's derived start IS its `start_offset` floor
+    (spec Sec 18.1), so every window is identical to the v8 window for every
+    curve and every term -- this function's entire safety claim.
+
+    `category_phase_ids` is DERIVED from the phases just built, not
+    hand-written -- `id == package name` is what makes this correct, the
+    same discipline PROGRAMME_FIELD_ALIASES applies to its own dict above.
+    """
+    if programme is None:
+        return None
+    packages = programme.get("packages") or {}
+    phases: list[dict[str, Any]] = []
+    for name, (code, label) in PACKAGE_TO_PHASE.items():
+        pkg = packages.get(name)
+        # Loud and NAMED: a stored `programme` missing one of its three
+        # packages is malformed data, not a shape this function's caller can
+        # rule out (a hand-edited or hand-crafted stored row is not bound by
+        # any type checker). An anonymous AttributeError/KeyError reading
+        # `pkg["duration_months"]` off `None` here would send whoever hits
+        # this hunting through a stack trace instead of straight to the
+        # missing key.
+        if pkg is None:
+            raise ValueError(f'migrate_v8_to_v9: stored programme is missing its "{name}" package')
+        phases.append({
+            "id": name,
+            "code": code,
+            "label": label,
+            "duration_months": pkg["duration_months"],
+            "slip_months": 0,
+            "start_offset": pkg["start_offset"],
+            "curve": pkg["curve"],
+            "predecessors": [],
+        })
+    category_phase_ids = {p["id"]: p["id"] for p in phases}
+    return {
+        "anchor_month": programme.get("anchor_month"),
+        "phases": phases,
+        "category_phase_ids": category_phase_ids,
+    }
+
+
+def _v9_cost_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """The cost-plan half of the v8 -> v9 write: `phase_id: None` on every
+    package and fee line. Extracted (mirroring `_v8_cost_plan`) so the
+    PRE-VALIDATION dict can be asserted on directly in
+    tests/test_migrate_v9.py -- both `CostPackage.phase_id` and
+    `FeeLine.phase_id` already default to `None` (Task 5), so asserting
+    against a *validated* `CalculatorInputsV9` would pass even with this
+    function's writes deleted entirely (Pydantic supplies the same default).
+    Only the dict this function returns, inspected before validation, can
+    actually distinguish "the migration wrote None" from "the field defaulted
+    to None"."""
+    out = dict(plan or {})
+    if out.get("packages") is not None:
+        out["packages"] = [{**p, "phase_id": None} for p in out["packages"]]
+    if out.get("fee_lines") is not None:
+        out["fee_lines"] = [{**f, "phase_id": None} for f in out["fee_lines"]]
+    return out
+
+
+def _v9_sales_phasing(sales_phasing: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The sales-phasing half of the v8 -> v9 write: `anchor: None` on every
+    tranche. Extracted for the same reason as `_v9_cost_plan` above --
+    `SalesPhasingTrancheV9.anchor` already defaults to `None` (Task 5), so
+    only the pre-validation dict this function returns can distinguish a
+    written value from a field default."""
+    if sales_phasing is None:
+        return None
+    return {"tranches": [{**t, "anchor": None} for t in (sales_phasing.get("tranches") or [])]}
+
+
+def _v9_refinance(refinance: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The refinance half of the v8 -> v9 write: `anchor: None`. Extracted for
+    the same reason as `_v9_sales_phasing` above."""
+    if refinance is None:
+        return None
+    return {**refinance, "anchor": None}
+
+
+def _v9_scenarios(scenarios: dict[str, Any] | None) -> dict[str, Any]:
+    """The scenarios half of the v8 -> v9 write: `phase_slip_phase_id: None`
+    and `phase_slip_months: 0` on all four scenarios. Extracted for the same
+    reason as `_v9_cost_plan` above -- `ScenarioOverrides` already defaults
+    both fields (Task 5), so only the pre-validation dict this function
+    returns can distinguish a written value from a field default."""
+    out = dict(scenarios or {})
+    for key in ("base", "upside", "downside", "severe"):
+        s = dict(out.get(key) or {})
+        s["phase_slip_phase_id"] = None
+        s["phase_slip_months"] = 0
+        out[key] = s
+    return out
+
+
+def migrate_v8_to_v9(v8: dict[str, Any] | CalculatorInputsV8) -> CalculatorInputsV9:
+    """Upgrades a v8 document to v9 by stamping ``inputs_version: 9``, converting
+    the v8 three-package programme to a precedence network, and writing five
+    additive no-ops. Port of migrateV8toV9 (spec Sec 18.7).
+
+    Purely additive by construction: every new value is a written ``None`` or
+    ``0``, and each migrated phase is PREDECESSOR-FREE (see
+    ``_v9_programme_network``), so no migrated appraisal's computed values
+    move.
+
+    The five additive no-ops:
+      - ``phase_id: None`` on every cost package and fee line (``_v9_cost_plan``)
+      - ``anchor: None`` on every sales-phasing tranche (``_v9_sales_phasing``)
+        and on refinance (``_v9_refinance``)
+      - ``phase_slip_phase_id: None`` and ``phase_slip_months: 0`` on all four
+        scenarios (``_v9_scenarios``)
+
+    Input is accepted as either a plain dict or an already-validated Pydantic
+    model, exactly as migrate_v7_to_v8 accepts both.
+
+    Precondition: `v8` must not already be a v9 document -- this guards
+    against double-migration (idempotence), same as migrate_v7_to_v8.
+    """
+    if isinstance(v8, CalculatorInputsV9):
+        raise ValueError("migrate_v8_to_v9: input is already a v9 document")
+    if isinstance(v8, BaseModel):
+        doc = v8.model_dump(mode="json")
+    else:
+        if is_v9(v8):
+            raise ValueError("migrate_v8_to_v9: input is already a v9 document")
+        doc = dict(v8)
+
+    doc["programme"] = _v9_programme_network(doc.get("programme"))
+    doc["cost_plan"] = _v9_cost_plan(doc.get("cost_plan"))
+    doc["sales_phasing"] = _v9_sales_phasing(doc.get("sales_phasing"))
+    doc["refinance"] = _v9_refinance(doc.get("refinance"))
+    doc["scenarios"] = _v9_scenarios(doc.get("scenarios"))
+
+    doc["inputs_version"] = 9
+    return CalculatorInputsV9.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V9 = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+
+def migrate_inputs_to_v9(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV9:
+    """Normalises any stored snapshot (v1-v9) to v9. Port of migrateInputsToV9,
+    and structurally identical to migrate_inputs_to_v8 above: an already-v9
+    document is merged field-by-field onto v9 defaults so a field added to the
+    schema after the row was saved is default-filled rather than raising at this
+    boundary or under-filling; anything older routes through the existing chain.
+
+    The two refusals below are R8's hardest-won guard, carried forward. R8
+    shipped ``migrate_inputs_to_v4`` without a v5 guard; a v5 document satisfied
+    none of the is_vN checks, fell all the way through to ``migrate_inputs``'s
+    v1 fallback, and was silently corrupted -- fields dropped, a *confirmed*
+    equity source replaced by an unconfirmed stub with a different amount, the
+    facility rebuilt from ``ltv_pct`` -- while the API returned 201. An
+    unrecognised version must fail loudly.
+
+    The version predicate is MEMBERSHIP OF THE DECLARED TUPLE, deliberately.
+    R10 found a predicate loosened from ``== 6`` to ``!= 5`` -- the literal
+    negation of the set's own definition -- so it could never fail;
+    tests/test_migrate_v9.py tests this one with a document tagged 10, the
+    neighbour that catches that shape.
+
+    As in migrate_inputs_to_v8, a document declaring ``inputs_version``
+    2/3/4/5/6/7/8 that fails ITS OWN structural check is deliberately NOT
+    refused: that stays the existing, tested, permissive v1-fallback
+    behaviour. Only an entirely unplaceable version number, or a version-9
+    tag that is not structurally v9, is refused here.
+    """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V9:
+        raise ValueError(
+            f"migrate_inputs_to_v9: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V9}, or absent for a v1 document)"
+        )
+    if version == 9 and not is_v9(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v9: inputs_version is 9 but the document fails "
+            "the v9 structural check (finance is not a dict, or is missing "
+            "committed_net_facility_pence) -- refusing to silently reinterpret "
+            "it via the v1 fallback path"
+        )
+    if is_v9(snapshot):
+        defaults = migrate_v8_to_v9(
+            migrate_v7_to_v8(
+                migrate_v6_to_v7(
+                    migrate_v5_to_v6(
+                        migrate_v4_to_v5(
+                            migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                        ),
+                    ),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV9.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 9,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            # Mirrors the cost_plan/vat merges above and the TS port's explicit
+            # `programme: saved.programme ?? null` line. Given the shallow
+            # `**_merge_saved_onto_defaults(defaults, snapshot)` spread above
+            # already carries a PRESENT `programme`/`sales_phasing`/`refinance`
+            # key through from `snapshot`, these three lines are currently
+            # redundant for any snapshot produced by `model_dump` (confirmed:
+            # removing them does not fail
+            # tests/test_migrate_v9.py's merge-branch test). They are kept as
+            # a defensive, self-documenting mirror of the cost_plan/vat lines
+            # above -- if `_merge_saved_onto_defaults` is ever narrowed to an
+            # explicit key allowlist that omits these three (exactly the R10/
+            # R11 defect shape), THIS is what still carries a saved network
+            # through rather than reverting to the default document's None.
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+        })
+    return migrate_v8_to_v9(migrate_inputs_to_v8(snapshot, project))
