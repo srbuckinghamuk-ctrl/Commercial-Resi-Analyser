@@ -732,7 +732,22 @@ def test_absolute_profit_pence_under_a_single_phase_slip_setting_pinned_cross_en
 
 
 def test_guard_7_all_five_levers_compose_order_independently():
-    """Spec Sec 13 guard 7."""
+    """Spec Sec 13 guard 7.
+
+    Task 16 falsifiability audit. Order-independence holds today because
+    every lever reads/writes a DISJOINT slice of the document (gdv ->
+    unit_mix, construction_cost -> conversion_costs/cost_plan,
+    timeline/interest_rate -> finance, phase_slip -> programme), so no
+    lever's output can depend on which OTHER lever ran first. Single-line
+    change that breaks that and kills this guard: apply_scenario.py's
+    `out.finance.annual_interest_rate_pct = (inputs.finance
+    .annual_interest_rate_pct + overrides.interest_rate_adjustment_pct)` ->
+    the same expression plus `+ (inputs.finance.term_months - 20) * 0.01`
+    (interest now reads the term field the `timeline` lever writes, coupling
+    the two). Verified: applying `timeline` before `interest_rate` in the
+    fold now gives a different profit_pence than applying it after --
+    reverted after confirming the guard, and the rest of this file, pass
+    again clean."""
     doc = _network_doc(20)
     levers = {"gdv": 5, "construction_cost": -3, "timeline": 2, "interest_rate": 1, "phase_slip": 2}
     orders = [

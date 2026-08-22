@@ -543,6 +543,12 @@ describe('phase-driven spend — §18.5', () => {
     expect(s.totals.construction_pence).toBe(44_000_000);
   });
 
+  // Task 16 falsifiability audit. Single-line change that kills this guard:
+  // `resolvedPhaseId`'s `return phaseId ?? network.category_phase_ids[category];`
+  // -> `return phaseId ?? network.category_phase_ids.construction;` (every
+  // category silently reads the construction map entry). Verified: `a`'s and
+  // `b`'s professional_pence arrays become identical — reverted after
+  // confirming the guard, and the rest of this file, pass again clean.
   it('GUARD 5: repointing category_phase_ids.professional changes the spend profile', () => {
     // Two documents identical but for the map. Without this, the map could be
     // read by nothing and every other test would still pass.
@@ -620,6 +626,41 @@ describe('phase-driven spend — §18.5', () => {
     expect(v9.programme).toBeNull();
     expect(buildSchedule(v9)).toEqual(buildSchedule(v8));
     expect(buildSchedule(v9).programme).toBeNull();
+  });
+
+  it('Ruling A: a v9 network document is NOT silently treated as auto-windows', () => {
+    // Earlier tasks left deliberate scaffolding (three `'packages' in`
+    // narrowings, since removed) that would have made a v9 document carrying
+    // a POPULATED network silently fall through to the §6 auto-window path
+    // here — programme ignored, no error, no warning. This guard asserts the
+    // real network arm: a non-null `programme` result block, and spend that
+    // follows the NETWORK'S windows, not §6's formula, in absolute months.
+    const withNetwork = baseNetworkDoc(); // design[0,2), strip_out[0,2), construction[4,8), term 12
+    const s = buildSchedule(withNetwork);
+
+    expect(s.programme).not.toBeNull();
+    expect(s.programme!.finish_month).toBe(8); // construction's own finish sets the programme end
+    expect(s.programme!.critical_path).toEqual(['construction']); // the only phase with zero float
+
+    // Absolute months: construction spend lands in the NETWORK's window [4,8) —
+    // matching the "headline totals spread over the phase named by
+    // category_phase_ids.construction" test above — not §6's auto formula,
+    // which for a 12-month term would start spend at month 1 (established by
+    // "spreads construction over months 1..term-2" above: 4,400,000p).
+    const c = s.uses.map((u) => u.construction_pence);
+    expect(c[1]).toBe(0);
+    expect(c.slice(4, 8)).toEqual([11_000_000, 11_000_000, 11_000_000, 11_000_000]);
+    expect(c[8]).toBe(0);
+
+    // Direct negative control, same document minus the network: an otherwise
+    // identical document with `programme: null` DOES take the auto path and
+    // DOES put spend at month 1 — proving the two arms are genuinely
+    // different code paths, not the same numbers by coincidence.
+    const withoutNetwork = { ...withNetwork, programme: null };
+    const auto = buildSchedule(withoutNetwork);
+    expect(auto.programme).toBeNull();
+    expect(auto.uses.map((u) => u.construction_pence)).not.toEqual(c);
+    expect(auto.uses[1].construction_pence).toBe(4_400_000);
   });
 
   /**
@@ -714,6 +755,12 @@ describe('phase-driven spend — §18.5', () => {
     return c;
   }
 
+  // Task 16 falsifiability audit. Single-line change that kills this guard:
+  // schedule.ts's `placeInPhase`, `const start = derived?.start_month ?? 0;`
+  // -> `const start = 0;` (severing the derived network's start month from
+  // where spend actually lands). Verified: peak_debt_pence becomes
+  // 215,499,206 instead of the pinned 318,466,555 — reverted after confirming
+  // the guard, and the rest of this file, pass again clean.
   it('GUARD 2: slipping a critical phase moves the successor start AND peak debt/interest, absolutely', () => {
     const baseDoc = guard2Doc();
     const slippedDoc = withPlanningSlip(guard2Doc(), 3);
@@ -898,6 +945,15 @@ function withSlip(d: CalculatorInputsV9, phaseId: string, months: number): Calcu
 }
 
 describe('exit anchors — §18.6, guard 4', () => {
+  // Task 16 falsifiability audit. Single-line change that kills BOTH guard-4
+  // tests below: `resolveAnchorMonth`'s `if (anchor == null) return
+  // monthOffset;` -> `if (true) return monthOffset;`, making every anchor a
+  // no-op. Verified: the zero-slip identity test fails (the anchored doc's
+  // month_offset defaults to 0, not 14, so it no longer matches its absolute
+  // twin) AND the divergence test fails (the anchored receipt becomes all
+  // zero at month 17, since it never resolves off unit_completions) —
+  // reverted after confirming both guards, and the rest of this file, pass
+  // again clean.
   it('an anchored tranche and its absolute twin are IDENTICAL at zero slip', () => {
     const anchored = docWithTranche({ anchor: { phase_id: 'unit_completions', offset_months: 0 }, month_offset: 0 });
     const absolute = docWithTranche({ anchor: null, month_offset: 14 }); // = unit_completions start
@@ -912,10 +968,23 @@ describe('exit anchors — §18.6, guard 4', () => {
     const absolute = withSlip(docWithTranche({ anchor: null, month_offset: 14 }), 'planning', 3);
     expect(buildSchedule(anchored).receipts).not.toEqual(buildSchedule(absolute).receipts);
     // absolute, not directional: planning [0,3)->slip 3->[3,6); unit_completions
-    // floor = finish(planning) + 11 = 6 + 11 = 17.
-    expect(buildSchedule(anchored).receipts[17].gross_sale_pence).toBeGreaterThan(0);
-    // unanchored: month_offset is untouched by any phase's slip.
-    expect(buildSchedule(absolute).receipts[14].gross_sale_pence).toBeGreaterThan(0);
+    // floor = finish(planning) + 11 = 6 + 11 = 17. Exact pence, not merely
+    // "> 0" (Task 13's carried gap, closed here) — a "> 0" check at these
+    // indices would still pass if the anchored receipt landed at the RIGHT
+    // month but the WRONG amount. 4 units x 30,000,000p = 120,000,000p gross;
+    // 1.5% agent fee = 1,800,000p; selling legal 400,000p flat (baseInputs());
+    // the sole 100%-of-gross tranche is also the LAST tranche, so it absorbs
+    // the whole total rather than a pro-rata share.
+    expect(buildSchedule(anchored).receipts[17]).toEqual({
+      gross_sale_pence: 120_000_000, agent_fee_pence: 1_800_000,
+      selling_legal_pence: 400_000, vat_reclaim_pence: 0,
+    });
+    // unanchored: month_offset is untouched by any phase's slip. Same total —
+    // the two docs sell the same units — landing at the UNslipped month 14.
+    expect(buildSchedule(absolute).receipts[14]).toEqual({
+      gross_sale_pence: 120_000_000, agent_fee_pence: 1_800_000,
+      selling_legal_pence: 400_000, vat_reclaim_pence: 0,
+    });
   });
 
   it('a tranche may anchor to a MILESTONE', () => {

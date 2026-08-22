@@ -1350,6 +1350,19 @@ describe('v8 → v9 migration gate scope — spec §18.7 Rule 1', () => {
 // figure — the five additive no-ops on every fixture, and the three-package →
 // precedence-network conversion on the two programme-bearing ones. See the
 // file-level comment above for the full statement.
+// Task 16 falsifiability audit (gate 1). Single-line change that kills this
+// guard: schedule.ts's `resolvedPhaseId`, `return phaseId ?? network
+// .category_phase_ids[category];` -> `return phaseId ?? network
+// .category_phase_ids.construction;`. Verified: 2 of the 13 cases fail — the
+// two programme-bearing fixtures (h-programme-scurve, r-vat-quarterly),
+// whose migrated networks resolve professional/statutory to their own
+// category default and so shift window when that default is silently
+// overridden — the other 11 (no `programme` block) are correctly unaffected.
+// Reverted after confirming the guard, and the rest of this file, pass again
+// clean. (Task 12b's own review additionally perturbed
+// `construction.duration_months + 1` post-migration and found it moves
+// profit on both programme-bearing fixtures — a second, independent
+// confirmation this gate is live, not vacuous.)
 describe('v8 → v9 migration identity — spec §18.7 gate 1 (numeric, both migration arms)', () => {
   it.each(GATE_FIXTURE_STEMS)('%s: every computed figure is penny-identical', (stem) => {
     const raw = loadFixture(stem);
@@ -1359,6 +1372,21 @@ describe('v8 → v9 migration identity — spec §18.7 gate 1 (numeric, both mig
   });
 });
 
+// Task 16 falsifiability audit (gate 2). Single-line change that kills
+// property 3 below: `compareExV9Only`'s `after: sortIssuesForV9Gate
+// (afterIssues).filter((i) => !isV9OnlyRuleIssue(i))` -> dropping the
+// `.filter(...)` entirely (no exemption applied at all). Task 12b's fix
+// round 1 (Finding 1) made and ran exactly this class of mutation — widening
+// the filter to strip the v9-only issue from BOTH sides instead of just
+// `after` — and it failed exactly one test,
+// "property 3's comparison is ONE-SIDED", and nothing else; dropping the
+// filter outright is a strict superset of that same widening and fails
+// property 3 itself on every case where the overrun rule fires (both
+// programme-bearing fixtures at their short synthetic terms). This task's own
+// mutation of the `overrun` predicate (see "the overrun rule really fires",
+// below) is the same falsifiability discipline applied to the OTHER moving
+// part of this gate — the rule-membership predicate rather than the
+// one-sidedness of its application.
 describe('v8 → v9 migration identity — spec §18.7 gate 2 (validation)', () => {
   it('the alias map has EXACTLY three entries, and each maps name → same name', () => {
     // The bound. R11's lesson was that an exemption must be narrow BY
@@ -1490,6 +1518,24 @@ describe('v8 → v9 migration identity — spec §18.7 gate 2 (validation)', () 
     // 3's exemption and the rule that fires are the same set, not two sets
     // that merely overlap.
     expect(overruns.every(isV9OnlyRuleIssue)).toBe(true);
+    // Task 12b's deferred gap (Task 16): the assertion above only proves the
+    // predicate is a SUPERSET of the message-shaped set over THESE three
+    // fields — it would not notice a `field.startsWith('programme.phases.')`
+    // check replaced by an enumeration of exactly these three ids, which
+    // would pass every assertion above by coincidence (this fixture's phases
+    // happen to BE that trio). Two synthetic checks close that: the
+    // predicate must accept a phase id this fixture does not have (proving
+    // it matches by PREFIX, not by enumerating known ids)...
+    const arbitraryPhaseOverrun: CanonicalIssue = {
+      severity: 'error',
+      field: 'programme.phases.some-other-phase-id-not-in-this-fixture',
+      message: "Programme finishes month 7; facility term is 3. Phase 'Other' ends 4 months after maturity.",
+    };
+    expect(isV9OnlyRuleIssue(arbitraryPhaseOverrun)).toBe(true);
+    // ...and must reject the identical severity+message on a field OUTSIDE
+    // `programme.phases.` — otherwise the field check could be replaced with
+    // `true` and nothing above would notice.
+    expect(isV9OnlyRuleIssue({ ...arbitraryPhaseOverrun, field: 'sales_phasing.tranches.0' })).toBe(false);
     // Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
     // round 1, Finding 1) — so the exemption is not swallowing a rule that
     // has silently degenerated to one message repeated three times.

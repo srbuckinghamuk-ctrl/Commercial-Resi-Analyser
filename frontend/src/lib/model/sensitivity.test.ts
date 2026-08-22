@@ -782,6 +782,20 @@ describe('phase_slip lever — §18.9', () => {
     expect(metrics.profit_pence).toBe(20_633_313);
   });
 
+  // Task 16 falsifiability audit. Order-independence holds today because
+  // every lever reads/writes a DISJOINT slice of the document (gdv ->
+  // unit_mix, construction_cost -> conversion_costs/cost_plan,
+  // timeline/interest_rate -> finance, phase_slip -> programme), so no
+  // lever's output can depend on which OTHER lever ran first. Single-line
+  // change that breaks that and kills this guard: apply-scenario.ts's
+  // `annual_interest_rate_pct: inputs.finance.annual_interest_rate_pct +
+  // overrides.interest_rate_adjustment_pct,` -> the same expression plus
+  // `+ (inputs.finance.term_months - 20) * 0.01` (interest now reads the
+  // term field the `timeline` lever writes, coupling the two). Verified:
+  // applying `timeline` before `interest_rate` in the fold now gives a
+  // different profit_pence (26,182,556) than applying it after
+  // (26,219,298) — reverted after confirming the guard, and the rest of
+  // this file, pass again clean.
   it('GUARD 7: all FIVE levers compose order-independently (spec §13 guard 7)', () => {
     const doc = networkDoc(20);
     const levers: Record<SensitivityLever, number> = {

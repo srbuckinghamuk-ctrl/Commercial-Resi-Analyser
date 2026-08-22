@@ -28,6 +28,7 @@ from app.financial_model.schedule import (
     build_schedule,
     resolved_phase_id,
     unit_ancillary_value_pence,
+    MonthReceipts,
 )
 from app.financial_model.types import (
     AreaBridgeInputs,
@@ -683,6 +684,12 @@ class TestPhaseDrivenSpend:
         assert c[8] == 0
         assert s.totals.construction_pence == 44_000_000
 
+    # Task 16 falsifiability audit. Single-line change that kills this guard:
+    # `resolved_phase_id`'s `return getattr(network.category_phase_ids,
+    # category)` -> `return network.category_phase_ids.construction` (every
+    # category silently reads the construction map entry). Verified: `a`'s
+    # and `b`'s professional_pence lists become identical -- reverted after
+    # confirming the guard, and the rest of this file, pass again clean.
     def test_guard_5_repointing_category_phase_ids_professional_changes_the_spend_profile(self):
         # Two documents identical but for the map. Without this, the map
         # could be read by nothing and every other test would still pass.
@@ -762,6 +769,42 @@ class TestPhaseDrivenSpend:
         assert v9.programme is None
         assert build_schedule(v9) == build_schedule(v8)
         assert build_schedule(v9).programme is None
+
+    def test_ruling_a_a_v9_network_document_is_not_silently_treated_as_auto_windows(self):
+        """Earlier tasks left deliberate scaffolding (three `'packages' in`
+        narrowings, since removed) that would have made a v9 document
+        carrying a POPULATED network silently fall through to the Sec6
+        auto-window path here -- programme ignored, no error, no warning.
+        This guard asserts the real network arm: a non-null `programme`
+        result block, and spend that follows the NETWORK'S windows, not
+        Sec6's formula, in absolute months. Mirrors schedule.test.ts's
+        identically-named test."""
+        with_network = _base_network_doc()  # design[0,2), strip_out[0,2), construction[4,8), term 12
+        s = build_schedule(with_network)
+
+        assert s.programme is not None
+        assert s.programme.finish_month == 8  # construction's own finish sets the programme end
+        assert s.programme.critical_path == ["construction"]  # the only phase with zero float
+
+        # Absolute months: construction spend lands in the NETWORK's window
+        # [4,8) -- matching the "headline totals spread..." test above -- not
+        # Sec6's auto formula, which for a 12-month term would start spend at
+        # month 1 (established above: 4,400,000p).
+        c = [u.construction_pence for u in s.uses]
+        assert c[1] == 0
+        assert c[4:8] == [11_000_000, 11_000_000, 11_000_000, 11_000_000]
+        assert c[8] == 0
+
+        # Direct negative control, same document minus the network: an
+        # otherwise identical document with `programme=None` DOES take the
+        # auto path and DOES put spend at month 1 -- proving the two arms are
+        # genuinely different code paths, not the same numbers by
+        # coincidence.
+        without_network = with_network.model_copy(update={"programme": None})
+        auto = build_schedule(without_network)
+        assert auto.programme is None
+        assert [u.construction_pence for u in auto.uses] != c
+        assert auto.uses[1].construction_pence == 4_400_000
 
     def test_guard_finding_1_two_lines_in_one_category_resolving_to_the_same_phase_are_one_spread(self):
         # 1,000,000p + 1,000,000p = 2,000,000p over 3 months, straight-line.
@@ -894,6 +937,12 @@ def _with_planning_slip(doc: CalculatorInputsV9, months: int) -> CalculatorInput
 
 
 class TestGuard2Propagation:
+    # Task 16 falsifiability audit. Single-line change that kills this guard:
+    # schedule.py's `start = derived.start_month if derived is not None else
+    # 0` -> `start = 0` (severing the derived network's start month from
+    # where spend actually lands). Verified: peak_debt_pence becomes
+    # 215,499,206 instead of the pinned 318,466,555 -- reverted after
+    # confirming the guard, and the rest of this file, pass again clean.
     def test_slipping_a_critical_phase_moves_the_successor_start_and_peak_debt_interest_absolutely(self):
         base_doc = _guard2_doc()
         slipped_doc = _with_planning_slip(_guard2_doc(), 3)
@@ -1006,6 +1055,15 @@ def _with_slip(doc: CalculatorInputsV9, phase_id: str, months: int) -> Calculato
 class TestExitAnchors:
     """Spec Sec 18.6, guard 4."""
 
+    # Task 16 falsifiability audit. Single-line change that kills BOTH
+    # guard-4 tests below: `resolve_anchor_month`'s `if anchor is None:
+    # return month_offset` -> `if True: return month_offset`, making every
+    # anchor a no-op. Verified: the zero-slip identity test fails (the
+    # anchored doc's month_offset defaults to 0, not 14, so it no longer
+    # matches its absolute twin) AND the divergence test fails (the anchored
+    # receipt becomes all zero at month 17, since it never resolves off
+    # unit_completions) -- reverted after confirming both guards, and the
+    # rest of this file, pass again clean.
     def test_an_anchored_tranche_and_its_absolute_twin_are_identical_at_zero_slip(self):
         anchored = _doc_with_tranche(PhaseAnchor(phase_id="unit_completions", offset_months=0), 0)
         absolute = _doc_with_tranche(None, 14)  # = unit_completions start
@@ -1020,10 +1078,25 @@ class TestExitAnchors:
         absolute = _with_slip(_doc_with_tranche(None, 14), "planning", 3)
         assert build_schedule(anchored).receipts != build_schedule(absolute).receipts
         # Absolute, not directional: planning [0,3) -> slip 3 -> [3,6);
-        # unit_completions floor = finish(planning) + 11 = 6 + 11 = 17.
-        assert build_schedule(anchored).receipts[17].gross_sale_pence > 0
-        # Unanchored: month_offset is untouched by any phase's slip.
-        assert build_schedule(absolute).receipts[14].gross_sale_pence > 0
+        # unit_completions floor = finish(planning) + 11 = 6 + 11 = 17. Exact
+        # pence, not merely "> 0" (Task 13's carried gap, closed here) -- a
+        # "> 0" check at these indices would still pass if the anchored
+        # receipt landed at the RIGHT month but the WRONG amount. 4 units x
+        # 30,000,000p = 120,000,000p gross; 1.5% agent fee = 1,800,000p;
+        # selling legal 400,000p flat (_base_inputs_v2()); the sole
+        # 100%-of-gross tranche is also the LAST tranche, so it absorbs the
+        # whole total rather than a pro-rata share.
+        assert build_schedule(anchored).receipts[17] == MonthReceipts(
+            gross_sale_pence=120_000_000, agent_fee_pence=1_800_000,
+            selling_legal_pence=400_000, vat_reclaim_pence=0,
+        )
+        # Unanchored: month_offset is untouched by any phase's slip. Same
+        # total -- the two docs sell the same units -- landing at the
+        # UNslipped month 14.
+        assert build_schedule(absolute).receipts[14] == MonthReceipts(
+            gross_sale_pence=120_000_000, agent_fee_pence=1_800_000,
+            selling_legal_pence=400_000, vat_reclaim_pence=0,
+        )
 
     def test_a_tranche_may_anchor_to_a_milestone(self):
         # practical_completion + 2 -- the canonical case, and exactly why

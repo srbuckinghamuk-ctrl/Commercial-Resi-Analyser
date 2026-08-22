@@ -1,7 +1,7 @@
 import copy
 import json
 import re
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -707,13 +707,43 @@ def test_v9_migration_gate_1_every_computed_figure_is_penny_identical(path: Path
     computed figure -- the five additive no-ops on every fixture, and the
     three-package -> precedence-network conversion on the two
     programme-bearing ones. See the module-level comment above for the full
-    statement."""
+    statement.
+
+    Task 16 falsifiability audit. Single-line change that kills this guard:
+    schedule.py's `resolved_phase_id`, `return getattr(network
+    .category_phase_ids, category)` -> `return network.category_phase_ids
+    .construction`. Verified: 2 of the 13 cases fail -- the two
+    programme-bearing fixtures (h-programme-scurve, r-vat-quarterly), whose
+    migrated networks resolve professional/statutory to their own category
+    default and so shift window when that default is silently overridden --
+    the other 11 (no `programme` block) are correctly unaffected. Reverted
+    after confirming the guard, and the rest of this file, pass again clean.
+    (Task 12b's own review additionally perturbed
+    `construction.duration_months + 1` post-migration and found it moves
+    profit on both programme-bearing fixtures -- a second, independent
+    confirmation this gate is live, not vacuous.)"""
     doc = _load_fixture(path)
     before = run_appraisal(migrate_inputs_to_v8(doc["inputs"]))
     after = run_appraisal(migrate_inputs_to_v9(doc["inputs"]))
     assert _strip_version_fields(after) == _strip_version_fields(before)
 
 
+# Task 16 falsifiability audit (gate 2). Single-line change that kills
+# property 3 below: `_compare_ex_v9_only`'s `after = sorted(tuple(c) for c in
+# map(_canonical_issue, after_issues) if not _is_v9_only_rule_issue(c))` ->
+# dropping the `if not _is_v9_only_rule_issue(c)` filter entirely (no
+# exemption applied at all). Task 12b's fix round 1 (Finding 1) made and ran
+# exactly this class of mutation -- widening the filter to strip the v9-only
+# issue from BOTH sides instead of just `after` -- and it failed exactly one
+# test, `test_v9_migration_gate_2_property_3_comparison_is_one_sided`, and
+# nothing else; dropping the filter outright is a strict superset of that
+# same widening and fails property 3 itself on every case where the overrun
+# rule fires (both programme-bearing fixtures at their short synthetic
+# terms). This task's own mutation of the `overrun` predicate (see
+# `test_v9_migration_gate_2_the_overrun_rule_really_fires`, below) is the
+# same falsifiability discipline applied to the OTHER moving part of this
+# gate -- the rule-membership predicate rather than the one-sidedness of its
+# application.
 def test_programme_field_aliases_has_exactly_three_entries_and_each_maps_name_to_same_name() -> None:
     """The bound. R11's lesson was that an exemption must be narrow BY
     CONSTRUCTION, not by intention -- this test is the construction, and
@@ -873,6 +903,29 @@ def test_v9_migration_gate_2_the_overrun_rule_really_fires() -> None:
     # 3's exemption and the rule that fires are the same set, not two sets that
     # merely overlap.
     assert all(_is_v9_only_rule_issue(i) for i in overruns)
+    # Task 12b's deferred gap (Task 16): the assertion above only proves the
+    # predicate is a SUPERSET of the message-shaped set over THESE three
+    # fields -- it would not notice a `field.startswith("programme.phases.")`
+    # check replaced by an enumeration of exactly these three ids, which would
+    # pass every assertion above by coincidence (this fixture's phases happen
+    # to BE that trio). Two synthetic checks close that: the predicate must
+    # accept a phase id this fixture does not have (proving it matches by
+    # PREFIX, not by enumerating known ids)...
+    arbitrary_phase_overrun = ValidationIssue(
+        severity="error",
+        field="programme.phases.some-other-phase-id-not-in-this-fixture",
+        message=(
+            "Programme finishes month 7; facility term is 3. "
+            "Phase 'Other' ends 4 months after maturity."
+        ),
+    )
+    assert _is_v9_only_rule_issue(arbitrary_phase_overrun)
+    # ...and must reject the identical severity+message on a field OUTSIDE
+    # `programme.phases.` -- otherwise the field check could be replaced with
+    # `True` and nothing above would notice.
+    assert not _is_v9_only_rule_issue(
+        replace(arbitrary_phase_overrun, field="sales_phasing.tranches.0")
+    )
     # Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
     # round 1, Finding 1) -- so the exemption is not swallowing a rule that has
     # silently degenerated to one message repeated three times.

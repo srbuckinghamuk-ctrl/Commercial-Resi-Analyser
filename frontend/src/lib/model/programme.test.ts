@@ -190,6 +190,14 @@ describe('float and the critical path — §18.4', () => {
     expect(d.finish_month).toBe(13);
   });
 
+  // Task 16 falsifiability audit. Single-line change that kills GUARD 1a and
+  // GUARD 1b together: programme.ts's forward pass, `floor = Math.max(floor,
+  // ref + d.lag_months)` -> `Math.min(...)`. Verified by actually making the
+  // change: 1a's finish_month becomes 9 (not 13), 1b's becomes 9 (not 16),
+  // and "the fixture used by GUARD 1 really does contain a phase with
+  // non-zero float" fails too (every phase becomes equally critical) —
+  // reverted after confirming both guards, and every other test in this
+  // file, pass again clean.
   it('GUARD 1a: slipping a phase WITH float does not move the programme finish', () => {
     const n = slackNet();
     n.phases[1].slip_months = 2; // b has exactly 2 months of float
@@ -229,6 +237,10 @@ describe('float and the critical path — §18.4', () => {
     expect(d.finish_month).toBe(10);
     expect(d.byId.b.total_float_months).toBe(2); // b could start at 8
     expect(d.byId.a.total_float_months).toBe(0);
+    // Task 2's carried gap (Task 16): the regression this test guards
+    // corrupted the critical_path SHAPE, not only the float number, and the
+    // float assertions above would not have caught that on their own.
+    expect(d.critical_path).toEqual(['a']);
   });
 
   it('a trailing milestone is on the critical path', () => {

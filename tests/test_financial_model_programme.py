@@ -179,6 +179,13 @@ def test_float_and_critical_path():
     assert d.finish_month == 13
 
 
+# Task 16 falsifiability audit. Single-line change that kills both guards
+# below: programme.py's forward pass, `floor = max(floor, _ref(...) +
+# d.lag_months)` -> `min(...)`. Verified by actually making the change: 1a's
+# finish_month becomes 9 (not 13), 1b's becomes 9 (not 16), and
+# test_guard_1_fixture_really_contains_a_slack_phase fails too (every phase
+# becomes equally critical) -- reverted after confirming both guards, and
+# every other test in this file, pass again clean.
 def test_guard_1a_slipping_slack_does_not_move_the_finish():
     n = slack_net()
     n.phases[1].slip_months = 2

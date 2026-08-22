@@ -57,6 +57,7 @@ from app.financial_model.types import (
     SalesPhasingTrancheV9,
     SimpleSpendCurve,
     UnitMixInputsV6,
+    UserDefinedSpendCurve,
     VatOverride,
 )
 from app.financial_model.validation import reconcile, validate_inputs
@@ -1894,6 +1895,14 @@ class TestProgrammeNetworkValidation:
         ]))
         assert any(i.field == "programme.phases" and "→" in i.message for i in e)
 
+    # Task 16 falsifiability audit. Single-line change that kills this guard --
+    # the exact "over-eager detector" the guard's own docstring names:
+    # validation.py's `if derivation.cycle is not None:` -> `if True:`, which
+    # makes every network (cyclic or not) take the cycle-error branch.
+    # Verified: the acyclic twin now raises a TypeError inside validate_inputs
+    # (its `derivation.cycle` is None, so `' → '.join(derivation.cycle)`
+    # crashes) rather than passing clean -- reverted after confirming the
+    # guard, and the rest of this file, pass again clean.
     def test_guard_3_a_cyclic_document_errors_its_acyclic_twin_does_not(self):
         """The twin must CARRY a dependency, not merely lack the cycle --
         otherwise an over-eager detector that rejected every predecessor edge
@@ -2018,6 +2027,56 @@ class TestProgrammeNetworkValidation:
 
     def test_rejects_an_empty_phases_array(self):
         assert any(i.field == "programme.phases" for i in v9_errs(v9_doc_with([])))
+
+    # Task 10's carried gap (Task 16): the four Sec6.1 user_defined rules are
+    # evaluated per phase (validation.py, mirroring validation.ts:759-765) but
+    # had NO v9 network test in either engine -- only the v4
+    # `programme.packages` arm (TestV4ProgrammeValidation, above) was
+    # covered. The mirror was faithful (TS's gap is identical, closed
+    # alongside this one), so the gap was real on both sides, not merely
+    # under-ported. Field + exact message, not a bare length check any
+    # unrelated error would also satisfy.
+    @staticmethod
+    def _with_weights(weights: list[float]) -> CalculatorInputsV9:
+        phase = Phase(
+            id="a", code="planning", label="a", duration_months=4,
+            slip_months=0, start_offset=0,
+            curve=UserDefinedSpendCurve(kind="user_defined", weights=weights),
+            predecessors=[],
+        )
+        return v9_doc_with([phase])
+
+    def test_rejects_user_defined_weights_whose_length_ne_duration(self):
+        e = v9_errs(self._with_weights([1, 1]))  # duration is 4, only 2 weights supplied
+        assert any(
+            i.field == "programme.phases.a"
+            and i.message == "user_defined weights must have one entry per window month."
+            for i in e
+        )
+
+    def test_rejects_non_finite_user_defined_weights_on_a_network_phase(self):
+        e = v9_errs(self._with_weights([1, float("nan"), 1, 1]))
+        assert any(
+            i.field == "programme.phases.a"
+            and i.message == "user_defined weights must be finite numbers."
+            for i in e
+        )
+
+    def test_rejects_a_negative_user_defined_weight_on_a_network_phase(self):
+        e = v9_errs(self._with_weights([1, -1, 1, 1]))
+        assert any(
+            i.field == "programme.phases.a"
+            and i.message == "user_defined weights cannot be negative."
+            for i in e
+        )
+
+    def test_rejects_user_defined_weights_that_sum_to_le_0_on_a_network_phase(self):
+        e = v9_errs(self._with_weights([0, 0, 0, 0]))
+        assert any(
+            i.field == "programme.phases.a"
+            and i.message == "user_defined weights must sum to more than zero."
+            for i in e
+        )
 
     def test_overrun_names_the_phase_and_the_overrun_in_months(self):
         e = v9_errs(v9_doc_with([

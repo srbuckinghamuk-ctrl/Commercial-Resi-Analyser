@@ -1863,6 +1863,14 @@ describe('programme network validation — spec §18.8', () => {
     expect(e.some((i) => i.field === 'programme.phases' && /→/.test(i.message))).toBe(true);
   });
 
+  // Task 16 falsifiability audit. Single-line change that kills this guard —
+  // the exact "over-eager detector" the guard's own comment names:
+  // validation.ts's `if ('cycle' in derivation) {` -> `if (true) {`, which
+  // makes every network (cyclic or not) take the cycle-error branch.
+  // Verified: the acyclic twin now throws inside validateInputs (its
+  // `derivation.cycle` is undefined, so `.join('→')` crashes) rather than
+  // passing clean — reverted after confirming the guard, and the rest of
+  // this file, pass again clean.
   it('GUARD 3: a cyclic document errors; its acyclic twin, differing by ONE dependency, does not', () => {
     // The twin must CARRY a dependency, not merely lack the cycle -- otherwise
     // an over-eager detector that rejected every predecessor edge still
@@ -1957,6 +1965,40 @@ describe('programme network validation — spec §18.8', () => {
 
   it('rejects an empty phases array', () => {
     expect(errs(docWith([])).some((i) => i.field === 'programme.phases')).toBe(true);
+  });
+
+  // Task 10's carried gap (Task 16): the four §6.1 user_defined rules are
+  // evaluated per phase (validation.ts:759-765) but had NO v9 network test in
+  // either engine — only the v4 `programme.packages` arm above was covered.
+  // The mirror was faithful (Python's gap is identical, closed alongside this
+  // one), so the gap was real on both sides, not merely under-ported. Field +
+  // exact message, not a bare length check any unrelated error would also
+  // satisfy.
+  const withWeights = (weights: number[]) =>
+    docWith([phase('a', 'planning', 4, [], { curve: { kind: 'user_defined', weights } })]);
+
+  it('rejects user_defined weights whose length != duration', () => {
+    expect(errs(withWeights([1, 1])) // duration is 4, only 2 weights supplied
+      .some((i) => i.field === 'programme.phases.a'
+        && i.message === 'user_defined weights must have one entry per window month.')).toBe(true);
+  });
+
+  it('rejects non-finite user_defined weights', () => {
+    expect(errs(withWeights([1, NaN, 1, 1]))
+      .some((i) => i.field === 'programme.phases.a'
+        && i.message === 'user_defined weights must be finite numbers.')).toBe(true);
+  });
+
+  it('rejects a negative user_defined weight', () => {
+    expect(errs(withWeights([1, -1, 1, 1]))
+      .some((i) => i.field === 'programme.phases.a'
+        && i.message === 'user_defined weights cannot be negative.')).toBe(true);
+  });
+
+  it('rejects user_defined weights that sum to <= 0', () => {
+    expect(errs(withWeights([0, 0, 0, 0]))
+      .some((i) => i.field === 'programme.phases.a'
+        && i.message === 'user_defined weights must sum to more than zero.')).toBe(true);
   });
 
   it('§18.8 OVERRUN: names the phase and the overrun in months', () => {
