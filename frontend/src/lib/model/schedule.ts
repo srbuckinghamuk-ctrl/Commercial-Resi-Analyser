@@ -76,58 +76,91 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   let programmeResult: Schedule['programme'] = null;
 
   if (network != null) {
-    // §18.5. The ONE resolution rule places every resolved total over ITS OWN
-    // phase's derived window, with that phase's curve. The auto/legacy arms'
-    // month-0 lump (`uses[0].statutory_pence += priorApproval`, below) is
-    // deliberately NOT applied here — §18.5's second surviving anchor is
-    // decided per LINE, not per category: an untagged prior_approval fee
-    // stays pinned at month 0, but a tagged one must be free to leave, and a
-    // single lump sum can't tell those two cases apart.
+    // §18.5 (amended, fix round 1 Finding 1). The ONE resolution rule places
+    // every resolved amount into a BUCKET keyed by (resolved phase, category);
+    // each bucket's TOTAL spreads once over that phase's window with that
+    // phase's curve. Two lines resolving to the same phase in the same
+    // category are one spread of their combined total, not two spreads
+    // summed — summed spreads round independently and can disagree with a
+    // single spread of the sum by a few pence, which breaks the v8->v9
+    // migration identity gate on any document whose amounts don't happen to
+    // divide evenly. When every line resolves to its category default —
+    // exactly what migration produces, since it writes no per-line phase_id —
+    // the bucket total IS the category total and this is bit-identical to
+    // the legacy arm's single `spreadByCurve(categoryTotal, …)` call.
+    //
+    // The auto/legacy arms' month-0 lump (`uses[0].statutory_pence +=
+    // priorApproval`, below) is deliberately NOT applied here — §18.5's
+    // second surviving anchor is a placement decision, not a rounding one,
+    // and stays keyed per LINE: an untagged prior_approval fee is pinned to
+    // month 0 and never enters a bucket; a tagged one joins its phase's
+    // bucket like any other line. A category-level lump can't tell those two
+    // cases apart.
     const derivation = derivePhases(network);
     const phaseById = new Map(network.phases.map((p) => [p.id, p]));
     // Defensive, mirroring the legacy arm's belt-and-braces clamp below:
     // unreachable for any document that passes validation — a cycle, or a
     // phase_id / category_phase_ids entry naming an absent phase, are hard
     // validation errors owned by validation.ts, not this file. Degrades to a
-    // defined month-0, one-month placement instead of crashing an
-    // unvalidated caller.
+    // defined month-0, ONE-month placement instead of crashing an
+    // unvalidated caller — `Math.max(1, …)`, not a bare `?? 1`, because a
+    // resolvable milestone (duration_months === 0, itself only reachable pre-
+    // validation) is not nullish and would otherwise pass 0 through, and
+    // `spreadByCurve` returns `[]` for a non-positive duration, silently
+    // dropping the money instead of degrading to a defined placement.
     const placeInPhase = (total: number, phaseId: string, add: (m: number, v: number) => void) => {
       const phase = phaseById.get(phaseId);
       const derived = !('cycle' in derivation) ? derivation.byId[phaseId] : undefined;
       const start = derived?.start_month ?? 0;
-      const duration = derived?.duration_months ?? 1;
+      const duration = Math.max(1, derived?.duration_months ?? 1);
       const curve = phase?.curve ?? { kind: 'straight_line' as const };
       spreadByCurve(total, duration, curve)
         .forEach((v, i) => add(Math.min(Math.max(0, Math.floor(start + i)), term - 1), v));
     };
 
-    // Construction: each package's own amount lands in its resolved phase.
-    // The remainder — contingency and compliance, or a headline document's
-    // WHOLE total, since headline mode carries no package rows at all — is
-    // not itself a "line" and always resolves through the category default.
+    const addToBucket = (bucket: Map<string, number>, phaseId: string, amount: number) => {
+      bucket.set(phaseId, (bucket.get(phaseId) ?? 0) + amount);
+    };
+
+    // Construction: each package's own amount joins its resolved phase's
+    // bucket. The remainder — contingency and compliance, or a headline
+    // document's WHOLE total, since headline mode carries no package rows at
+    // all — is not itself a "line" and always resolves through the category
+    // default, joining whichever bucket that is.
+    const constructionBuckets = new Map<string, number>();
     let constructionRemainder = constructionTotal;
     costPlan.packages.forEach((pkg) => {
       const id = resolvedPhaseId(pkg.phase_id, 'construction', network);
-      placeInPhase(pkg.amount_pence, id, (m, v) => { uses[m].construction_pence += v; });
+      addToBucket(constructionBuckets, id, pkg.amount_pence);
       constructionRemainder -= pkg.amount_pence;
     });
-    placeInPhase(
-      constructionRemainder, resolvedPhaseId(null, 'construction', network),
-      (m, v) => { uses[m].construction_pence += v; },
-    );
+    addToBucket(constructionBuckets, resolvedPhaseId(null, 'construction', network), constructionRemainder);
 
-    // Professional and statutory: every fee line sums exactly to its
-    // category total (computeCostPlan's totalFor()), so no remainder term is
-    // needed here.
+    // Professional and statutory: every fee line (other than an untagged
+    // prior_approval, carved out per line above) joins its resolved phase's
+    // bucket in its own category. The buckets across both categories sum to
+    // computeCostPlan's own professional/statutory totals exactly, since
+    // every fee line is accounted for exactly once — either the month-0
+    // carve-out or a bucket.
+    const professionalBuckets = new Map<string, number>();
+    const statutoryBuckets = new Map<string, number>();
     costPlan.fees.forEach((fee) => {
       if (fee.code === 'prior_approval' && fee.phase_id == null) {
         uses[0].statutory_pence += fee.amount_pence;
         return;
       }
-      const add = fee.category === 'professional'
-        ? (m: number, v: number) => { uses[m].professional_pence += v; }
-        : (m: number, v: number) => { uses[m].statutory_pence += v; };
-      placeInPhase(fee.amount_pence, resolvedPhaseId(fee.phase_id, fee.category, network), add);
+      const bucket = fee.category === 'professional' ? professionalBuckets : statutoryBuckets;
+      addToBucket(bucket, resolvedPhaseId(fee.phase_id, fee.category, network), fee.amount_pence);
+    });
+
+    constructionBuckets.forEach((total, id) => {
+      placeInPhase(total, id, (m, v) => { uses[m].construction_pence += v; });
+    });
+    professionalBuckets.forEach((total, id) => {
+      placeInPhase(total, id, (m, v) => { uses[m].professional_pence += v; });
+    });
+    statutoryBuckets.forEach((total, id) => {
+      placeInPhase(total, id, (m, v) => { uses[m].statutory_pence += v; });
     });
 
     // §18.10: a derived block is only ever produced for a document that

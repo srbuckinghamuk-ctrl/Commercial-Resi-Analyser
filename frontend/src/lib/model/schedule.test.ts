@@ -12,6 +12,7 @@ import type { ProposedUnitV6 } from '../conversion-types';
 import { costPlanFromLegacyCosts, defaultContingencyClasses } from './cost-plan';
 import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 import { runAppraisal } from './index';
+import { validateInputs } from './validation';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -526,13 +527,18 @@ function baseNetworkDoc(): CalculatorInputsV9 {
 
 describe('phase-driven spend — §18.5', () => {
   it('headline totals spread over the phase named by category_phase_ids.construction', () => {
-    // construction phase occupies [4,8) — ABSOLUTE months 4,5,6,7.
+    // construction phase occupies [4,8) — ABSOLUTE months 4,5,6,7. Total is
+    // 44,000,000p (400 sqm x 100,000p/sqm base build + 10% contingency, from
+    // baseInputs()' conversion_costs — the same figure the top-of-file
+    // "spreads construction over months 1..term-2" test establishes), which
+    // divides the 4-month straight-line window evenly: 11,000,000p/month,
+    // no residue.
     const s = buildSchedule(baseNetworkDoc());
     const c = s.uses.map((u) => u.construction_pence);
     expect(c.slice(0, 4)).toEqual([0, 0, 0, 0]);
-    expect(c.slice(4, 8).every((v) => v > 0)).toBe(true);
-    expect(c.slice(4, 8).reduce((a, b) => a + b, 0)).toBe(s.totals.construction_pence);
+    expect(c.slice(4, 8)).toEqual([11_000_000, 11_000_000, 11_000_000, 11_000_000]);
     expect(c[8]).toBe(0);
+    expect(s.totals.construction_pence).toBe(44_000_000);
   });
 
   it('GUARD 5: repointing category_phase_ids.professional changes the spend profile', () => {
@@ -624,38 +630,48 @@ describe('phase-driven spend — §18.5', () => {
    * line over 3 months = 100,000,000p/month exactly, no rounding residue).
    * Facility: rolled-up interest at 12%pa (1%/month), 0% arrangement/exit fee,
    * 100% development-cost advance, a facility ceiling far above anything drawn.
-   * retain_all / 8-month term: no sale, no repayment before the final month,
+   * retain_all / 9-month term: no sale, no repayment before the final month,
    * so the balance is monotonic and the final month's pre-repayment balance
    * IS the peak.
    *
+   * term_months is 9, not 8 (fix round 1, Finding 2): with an 8-month term the
+   * SLIPPED case's construction window is [5,8), and `construction` is a
+   * PRE_COMPLETION code, so validation's sale-tail rule
+   * (`finish_month > term - 1`, spec §6) fires — 8 > 7. That pinned figures
+   * for a document the product refuses to accept. At 9 months, finish 8 is
+   * not > term-1 (8), so both documents below are asserted validation-clean.
+   *
    * BASE (planning start 0, finish 2 -> construction start 2, finish 5;
    * draws at months 2,3,4; rolled-up interest at 1%/month on the RUNNING
-   * balance, i.e. interest_m = round((opening_m + draw_m) * 0.01)):
+   * balance, i.e. interest_m = round((opening_m + draw_m) * 0.01); one more
+   * idle compounding month than an 8-month term would have had, m5..m8):
    *   m0-1: opening 0, draw 0, interest 0, balance 0.
    *   m2: opening 0,           draw 100,000,000 -> interest   1,000,000 -> balance 101,000,000
    *   m3: opening 101,000,000, draw 100,000,000 -> interest   2,010,000 -> balance 203,010,000
    *   m4: opening 203,010,000, draw 100,000,000 -> interest   3,030,100 -> balance 306,040,100
    *   m5: opening 306,040,100, draw 0            -> interest   3,060,401 -> balance 309,100,501
    *   m6: opening 309,100,501, draw 0            -> interest   3,091,005 -> balance 312,191,506
-   *   m7: opening 312,191,506, draw 0            -> interest   3,121,915 -> balance 315,313,421 (peak, final month)
-   *   total interest = 1,000,000+2,010,000+3,030,100+3,060,401+3,091,005+3,121,915 = 15,313,421
-   *   (identity check: 300,000,000 draws + 15,313,421 interest = 315,313,421 = peak, matches)
+   *   m7: opening 312,191,506, draw 0            -> interest   3,121,915 -> balance 315,313,421
+   *   m8: opening 315,313,421, draw 0            -> interest   3,153,134 -> balance 318,466,555 (peak, final month)
+   *   total interest = 1,000,000+2,010,000+3,030,100+3,060,401+3,091,005+3,121,915+3,153,134 = 18,466,555
+   *   (identity check: 300,000,000 draws + 18,466,555 interest = 318,466,555 = peak, matches)
    *
    * SLIPPED (planning.slip_months = +3: start 3, finish 5 -> construction
-   * start 5, finish 8; draws at months 5,6,7 — the LAST three months of the
-   * 8-month term, so the peak is captured at m7 with no idle post-draw months):
+   * start 5, finish 8; draws at months 5,6,7, leaving ONE idle compounding
+   * month, m8, before the peak is captured at the 9-month term's final month):
    *   m0-4: balance 0.
    *   m5: opening 0,           draw 100,000,000 -> interest 1,000,000 -> balance 101,000,000
    *   m6: opening 101,000,000, draw 100,000,000 -> interest 2,010,000 -> balance 203,010,000
-   *   m7: opening 203,010,000, draw 100,000,000 -> interest 3,030,100 -> balance 306,040,100 (peak, final month)
-   *   total interest = 1,000,000+2,010,000+3,030,100 = 6,040,100
-   *   (identity check: 300,000,000 draws + 6,040,100 interest = 306,040,100 = peak, matches)
+   *   m7: opening 203,010,000, draw 100,000,000 -> interest 3,030,100 -> balance 306,040,100
+   *   m8: opening 306,040,100, draw 0            -> interest 3,060,401 -> balance 309,100,501 (peak, final month)
+   *   total interest = 1,000,000+2,010,000+3,030,100+3,060,401 = 9,100,501
+   *   (identity check: 300,000,000 draws + 9,100,501 interest = 309,100,501 = peak, matches)
    */
   function guard2Doc(): CalculatorInputsV9 {
     const v9 = migrateToV9(baseInputs());
     v9.finance = {
       ...v9.finance,
-      term_months: 8,
+      term_months: 9,
       annual_interest_rate_pct: 12,
       arrangement_fee_pct: 0,
       exit_fee_pct: 0,
@@ -697,8 +713,16 @@ describe('phase-driven spend — §18.5', () => {
   }
 
   it('GUARD 2: slipping a critical phase moves the successor start AND peak debt/interest, absolutely', () => {
-    const base = runAppraisal(guard2Doc());
-    const slipped = runAppraisal(withPlanningSlip(guard2Doc(), 3));
+    const baseDoc = guard2Doc();
+    const slippedDoc = withPlanningSlip(guard2Doc(), 3);
+
+    // Fix round 1, Finding 2: the pinned figures below describe a document
+    // the product actually accepts — not a state validation rejects.
+    expect(validateInputs(baseDoc).filter((i) => i.severity === 'error')).toEqual([]);
+    expect(validateInputs(slippedDoc).filter((i) => i.severity === 'error')).toEqual([]);
+
+    const base = runAppraisal(baseDoc);
+    const slipped = runAppraisal(slippedDoc);
 
     const startOf = (r: typeof base, id: string) =>
       r.schedule.programme!.phases.find((p) => p.id === id)!.start_month;
@@ -707,14 +731,88 @@ describe('phase-driven spend — §18.5', () => {
     expect(startOf(slipped, 'construction')).toBe(5);
 
     // Hand-derived above — not read off a prior run of this code.
-    expect(base.metrics.peak_debt_pence).toBe(315_313_421);
-    expect(base.model.totals.interest_pence).toBe(15_313_421);
-    expect(slipped.metrics.peak_debt_pence).toBe(306_040_100);
-    expect(slipped.model.totals.interest_pence).toBe(6_040_100);
+    expect(base.metrics.peak_debt_pence).toBe(318_466_555);
+    expect(base.model.totals.interest_pence).toBe(18_466_555);
+    expect(slipped.metrics.peak_debt_pence).toBe(309_100_501);
+    expect(slipped.model.totals.interest_pence).toBe(9_100_501);
 
     // Absolute, not directional — R11 shipped a direction-only guard that was
     // blind to a constant added to both sides.
     expect(slipped.metrics.peak_debt_pence).not.toBe(base.metrics.peak_debt_pence);
     expect(slipped.model.totals.interest_pence).not.toBe(base.model.totals.interest_pence);
+  });
+
+  it('GUARD (Finding 1): two lines in one category resolving to the same phase are one spread of their combined total', () => {
+    // 1,000,000p + 1,000,000p = 2,000,000p over 3 months, straight-line.
+    // Per-line spreading would give [333,333,333,333,334] summed to
+    // [666,666, 666,666, 666,668]. Bucketing the combined 2,000,000p gives a
+    // SINGLE spread: round(2,000,000/3)=666,667 for the first two months,
+    // the third absorbs the residue: 2,000,000 - 2*666,667 = 666,666.
+    const doc = baseNetworkDoc();
+    doc.programme!.phases[2].duration_months = 3; // construction [4,7)
+    doc.cost_plan = {
+      mode: 'detailed',
+      packages: [
+        { id: 'p1', code: 'structure', label: 'Structure A', amount_pence: 1_000_000,
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+        { id: 'p2', code: 'envelope', label: 'Structure B', amount_pence: 1_000_000,
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+      ],
+      contingency: defaultContingencyClasses(0),
+      fee_lines: [],
+    };
+    const s = buildSchedule(doc);
+    expect(s.uses[4].construction_pence).toBe(666_667);
+    expect(s.uses[5].construction_pence).toBe(666_667);
+    expect(s.uses[6].construction_pence).toBe(666_666);
+    expect(s.totals.construction_pence).toBe(2_000_000);
+  });
+
+  it('GUARD (Finding 3): the phase\'s own curve is actually used, not a hardcoded straight line', () => {
+    // s_curve raised-cosine weights for a 3-month window: cum(k) =
+    // (1-cos(pi*k/3))/2 -> cum(1)=0.25, cum(2)=0.75, cum(3)=1, so
+    // w=[0.25, 0.5, 0.25]. Against the 2,800,000p professional total
+    // (baseInputs()' architect+structural+mande+planning_consultant, all
+    // other_professional_fees_pence=0): 700,000 / 1,400,000 / 700,000 exactly
+    // — a straight-line spread over 3 months would instead give three equal
+    // shares (~933,333 each), so this distinguishes the two unambiguously.
+    const doc = baseNetworkDoc();
+    const design = doc.programme!.phases.find((p) => p.id === 'design')!;
+    design.duration_months = 3;
+    design.curve = { kind: 's_curve' };
+    // professional -> design already the default in baseNetworkDoc().
+    const s = buildSchedule(doc);
+    expect(s.uses[0].professional_pence).toBe(700_000);
+    expect(s.uses[1].professional_pence).toBe(1_400_000);
+    expect(s.uses[2].professional_pence).toBe(700_000);
+    expect(s.totals.professional_pence).toBe(2_800_000);
+  });
+
+  it('a detailed-mode FEE-LINE phase_id override lands in its own window, not the category default', () => {
+    // Finding 5: only a package override was covered; fee lines take the
+    // same `resolvedPhaseId` path and need their own guard.
+    const doc = baseNetworkDoc();
+    doc.cost_plan.mode = 'detailed';
+    doc.cost_plan.fee_lines = doc.cost_plan.fee_lines.map((f) => (
+      f.code === 'architect' ? { ...f, phase_id: 'strip_out' } : f
+    ));
+    const architectAmount = doc.cost_plan.fee_lines.find((f) => f.code === 'architect')!.amount_pence;
+    const s = buildSchedule(doc);
+    // strip_out window is months 0-1; the tagged fee's whole amount lands there,
+    // and none of it lands in the category default (design, [0,2) too, but
+    // asserted via the totals split instead since the windows coincide here).
+    expect(s.uses[0].professional_pence + s.uses[1].professional_pence)
+      .toBeGreaterThanOrEqual(architectAmount);
+    // Isolate precisely: re-run with every OTHER professional fee zeroed so
+    // strip_out's professional total is exactly the tagged architect fee.
+    const isolated = baseNetworkDoc();
+    isolated.cost_plan.mode = 'detailed';
+    isolated.cost_plan.fee_lines = isolated.cost_plan.fee_lines.map((f) => (
+      f.code === 'architect' ? { ...f, phase_id: 'strip_out' }
+        : f.category === 'professional' ? { ...f, amount_pence: 0, pct: 0 } : f
+    ));
+    const s2 = buildSchedule(isolated);
+    expect(s2.uses[0].professional_pence + s2.uses[1].professional_pence).toBe(architectAmount);
+    expect(s2.totals.professional_pence).toBe(architectAmount);
   });
 });
