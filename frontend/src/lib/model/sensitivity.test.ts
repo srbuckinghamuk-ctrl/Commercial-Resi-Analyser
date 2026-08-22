@@ -8,8 +8,11 @@ import {
 import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
+import { migrateInputsToV9 } from './migrate';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
-import type { AnyCalculatorInputs, SalesPhasingInputs } from './finance-types';
+import type { AnyCalculatorInputs, SalesPhasingInputs, CalculatorInputsV9 } from './finance-types';
+import type { Phase } from './programme';
+import type { ScenarioOverrides } from '../conversion-types';
 
 /** A deep copy of the defaults, so a test that mutates one field cannot leak into another. */
 function config(overrides: Partial<SensitivityConfig> = {}): SensitivityConfig {
@@ -60,7 +63,7 @@ describe('sensitivity defaults (spec §12.3, §12.4)', () => {
   });
 
   it('pins the tie-break lever order', () => {
-    expect(LEVER_ORDER).toEqual(['gdv', 'construction_cost', 'timeline', 'interest_rate']);
+    expect(LEVER_ORDER).toEqual(['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip']);
   });
 
   it('accepts the defaults without complaint', () => {
@@ -621,5 +624,371 @@ describe('runSensitivity — §12.7 cell validity', () => {
     expect(bars[bars.length - 1].lever).toBe('timeline');
     // The high endpoint lengthens the programme, so it stays measured.
     expect(timeline.high.validation_errors).toEqual([]);
+  });
+});
+
+// ── R12 Task 14: the phase_slip lever (spec §18.9, guard 7) ──
+
+/** Mirrors validation.test.ts's own `phase()` helper exactly — a phase with no
+ *  overrides is predecessor-free, at `start_offset` 0, with no slip. */
+function phase(
+  id: string, code: Phase['code'], duration: number,
+  preds: Phase['predecessors'] = [], extra: Partial<Phase> = {},
+): Phase {
+  return {
+    id, code, label: id,
+    duration_months: duration, slip_months: 0, start_offset: 0,
+    curve: { kind: 'straight_line' }, predecessors: preds, ...extra,
+  };
+}
+
+/**
+ * Fixture F (a valid, levered development-finance deal already used throughout this
+ * file) migrated to v9 and given a small two-phase network: `planning` (2 months)
+ * then `construction` (8 months, FS off `planning`). Baseline occupies months 0-9
+ * inside a `term`-month facility, leaving `term − 10` months of headroom before the
+ * sale-tail boundary for tests that need slack to slip a phase without also tripping
+ * the overrun/tail rules that are somebody else's task, not this one's.
+ */
+function networkDoc(term = 12): CalculatorInputsV9 {
+  const base = migrateInputsToV9(fixtureFInputs() as unknown as Record<string, unknown>);
+  const phases: Phase[] = [
+    phase('planning', 'planning', 2),
+    phase('construction', 'construction', 8, [{ phase_id: 'planning', type: 'FS', lag_months: 0 }]),
+  ];
+  return {
+    ...base,
+    finance: { ...base.finance, term_months: term },
+    programme: {
+      anchor_month: null,
+      phases,
+      category_phase_ids: {
+        construction: 'construction', professional: 'planning', statutory: 'planning',
+      },
+    },
+  };
+}
+
+/** Sets a phase's `slip_months` directly (not via `applyScenario`), for tests that
+ *  need a BASE-CASE slip already recorded on the document before a lever stresses it. */
+function withSlip(doc: CalculatorInputsV9, phaseId: string, months: number): CalculatorInputsV9 {
+  return {
+    ...doc,
+    programme: {
+      ...doc.programme!,
+      phases: doc.programme!.phases.map((p) => (
+        p.id === phaseId ? { ...p, slip_months: p.slip_months + months } : p
+      )),
+    },
+  };
+}
+
+const ZERO_OVERRIDES: ScenarioOverrides = {
+  label: '',
+  gdv_adjustment_pct: 0,
+  construction_cost_adjustment_pct: 0,
+  timeline_adjustment_months: 0,
+  interest_rate_adjustment_pct: 0,
+  phase_slip_phase_id: null,
+  phase_slip_months: 0,
+};
+
+/** Applies all five §12.1/§18.9 levers to `doc` via `applyScenario`, once per lever,
+ *  in `order` — the same "one call per setting, in sequence" shape `runSensitivity`
+ *  itself now uses internally (sensitivity.ts's `measure`). */
+function applyInOrder(
+  doc: AnyCalculatorInputs,
+  order: SensitivityLever[],
+  levers: Record<SensitivityLever, number>,
+  phaseTargets: Partial<Record<SensitivityLever, string>> = {},
+): AnyCalculatorInputs {
+  return order.reduce((d, lever) => applyScenario(d, {
+    ...ZERO_OVERRIDES,
+    gdv_adjustment_pct: lever === 'gdv' ? levers.gdv : 0,
+    construction_cost_adjustment_pct: lever === 'construction_cost' ? levers.construction_cost : 0,
+    timeline_adjustment_months: lever === 'timeline' ? levers.timeline : 0,
+    interest_rate_adjustment_pct: lever === 'interest_rate' ? levers.interest_rate : 0,
+    phase_slip_phase_id: lever === 'phase_slip' ? (phaseTargets.phase_slip ?? null) : null,
+    phase_slip_months: lever === 'phase_slip' ? levers.phase_slip : 0,
+  }), doc);
+}
+
+describe('phase_slip lever — §18.9', () => {
+  it('applyScenario adds the slip ADDITIVELY to the named phase only', () => {
+    // Hand-derived: planning already carries a base-case slip of 1 month; the
+    // override adds 3 more. 1 + 3 = 4. construction is not the named phase, so its
+    // slip stays at the 0 the fixture starts it at.
+    const doc = withSlip(networkDoc(), 'planning', 1);
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 3,
+    });
+    expect(out.programme!.phases.find((p) => p.id === 'planning')!.slip_months).toBe(4);
+    expect(out.programme!.phases.find((p) => p.id === 'construction')!.slip_months).toBe(0);
+  });
+
+  it('a null phase_slip_phase_id matches no phase — the migration no-op', () => {
+    const doc = networkDoc();
+    const out = applyScenario(doc, ZERO_OVERRIDES);
+    expect(out.programme).toEqual(doc.programme);
+  });
+
+  it('GUARD 7: all FIVE levers compose order-independently (spec §13 guard 7)', () => {
+    const doc = networkDoc(20);
+    const levers: Record<SensitivityLever, number> = {
+      gdv: 5, construction_cost: -3, timeline: 2, interest_rate: 1, phase_slip: 2,
+    };
+    const orders: SensitivityLever[][] = [
+      ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip'],
+      ['phase_slip', 'interest_rate', 'timeline', 'construction_cost', 'gdv'],
+      ['timeline', 'phase_slip', 'gdv', 'interest_rate', 'construction_cost'],
+      ['construction_cost', 'gdv', 'phase_slip', 'timeline', 'interest_rate'],
+      ['interest_rate', 'gdv', 'timeline', 'phase_slip', 'construction_cost'],
+    ];
+    const results = orders.map((order) => runAppraisal(
+      applyInOrder(doc, order, levers, { phase_slip: 'planning' }),
+    ).metrics);
+
+    for (const r of results.slice(1)) {
+      expect(r.profit_pence).toBe(results[0].profit_pence);
+      expect(r.peak_debt_pence).toBe(results[0].peak_debt_pence);
+      expect(r.finance_costs_pence).toBe(results[0].finance_costs_pence);
+    }
+
+    // Negative control (per R11's ordering-guard lesson, §13): a fixture the levers
+    // don't actually move would prove order-independence vacuously. Dropping
+    // phase_slip from the combination must change the result — proof this fixture,
+    // and this lever, are both live.
+    const withoutPhaseSlip = runAppraisal(
+      applyInOrder(doc, orders[0], { ...levers, phase_slip: 0 }, {}),
+    ).metrics;
+    expect(withoutPhaseSlip.profit_pence).not.toBe(results[0].profit_pence);
+  });
+
+  it('a matrix cell where rows AND cols are both phase_slip applies BOTH targets', () => {
+    // §18.9: two phase_slip axes may target different phases at once. The matrix
+    // builder must thread both settings into the same measurement, not silently
+    // keep only one (the failure mode a single-key `{ phase_slip: value }` record
+    // would have had). Verified against an independently-built reference: applying
+    // both overrides via two sequential `applyScenario` calls and appraising
+    // directly, exactly as a caller combining two single-phase scenarios by hand
+    // would — the same cross-check method the "worst corner" facility-invariance
+    // test above uses.
+    const doc = networkDoc(20);
+    const result = runSensitivity(doc, {
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [1] },
+      cols: { lever: 'phase_slip', phase_id: 'construction', steps: [2] },
+      tornado: [],
+    });
+    const cell = result.matrix[0][0];
+    expect(cell.validation_errors).toEqual([]);
+
+    const reference = applyScenario(
+      applyScenario(doc, { ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 1 }),
+      { ...ZERO_OVERRIDES, phase_slip_phase_id: 'construction', phase_slip_months: 2 },
+    );
+    const expected = runAppraisal(reference).metrics;
+    expect(cell.profit_pence).toBe(expected.profit_pence);
+    expect(cell.peak_debt_pence).toBe(expected.peak_debt_pence);
+
+    // Negative control: a cell applying only the ROWS target must differ — proof the
+    // combined cell is not silently dropping the COLS target.
+    const onlyRows = runAppraisal(
+      applyScenario(doc, { ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 1 }),
+    ).metrics;
+    expect(cell.profit_pence).not.toBe(onlyRows.profit_pence);
+  });
+
+  it('a phase_slip tornado bar measures both signed endpoints (§18.9)', () => {
+    const doc = networkDoc(20);
+    const result = runSensitivity(doc, {
+      rows: { lever: 'gdv', phase_id: null, steps: [0] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0] },
+      tornado: [{ lever: 'phase_slip', phase_id: 'construction', low: -2, high: 2 }],
+    });
+    const bar = result.tornado.find((b) => b.lever === 'phase_slip')!;
+    expect(bar.phase_id).toBe('construction');
+    expect(bar.low.validation_errors).toEqual([]);
+    expect(bar.high.validation_errors).toEqual([]);
+    expect(bar.span_pence).not.toBeNull();
+    // The signed lever must move the document in each direction, and differently —
+    // an unsigned or no-op implementation would collapse one or both of these.
+    expect(bar.low.profit_pence).not.toBe(result.base.profit_pence);
+    expect(bar.high.profit_pence).not.toBe(result.base.profit_pence);
+    expect(bar.low.profit_pence).not.toBe(bar.high.profit_pence);
+  });
+
+  it('rows and cols may both be phase_slip when they target DIFFERENT phases', () => {
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [0, 3] },
+      cols: { lever: 'phase_slip', phase_id: 'construction', steps: [0, 3] },
+      tornado: [],
+    }, networkDoc());
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('still rejects two phase_slip axes targeting the SAME phase, as a duplicate', () => {
+    // Negative control for the test above: the pair check must still catch a real
+    // duplicate, not merely stop rejecting every phase_slip/phase_slip combination.
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [0, 3] },
+      cols: { lever: 'phase_slip', phase_id: 'planning', steps: [0, 3] },
+      tornado: [],
+    }, networkDoc());
+    expect(issues.some((i) => i.field === 'sensitivity.cols.lever')).toBe(true);
+  });
+
+  it('the tornado may carry two phase_slip bars targeting different phases', () => {
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'gdv', phase_id: null, steps: [0] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0] },
+      tornado: [
+        { lever: 'phase_slip', phase_id: 'planning', low: -1, high: 1 },
+        { lever: 'phase_slip', phase_id: 'construction', low: -1, high: 1 },
+      ],
+    }, networkDoc());
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('rejects two tornado bars targeting the SAME phase, as a duplicate', () => {
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'gdv', phase_id: null, steps: [0] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0] },
+      tornado: [
+        { lever: 'phase_slip', phase_id: 'planning', low: -1, high: 1 },
+        { lever: 'phase_slip', phase_id: 'planning', low: -2, high: 2 },
+      ],
+    }, networkDoc());
+    expect(issues.some((i) => /appears more than once/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a phase_slip axis with a null phase_id, and a non-phase_slip axis with one set', () => {
+    const bad1 = validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: null, steps: [0, 3] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      tornado: [],
+    });
+    expect(bad1.some((i) => i.field === 'sensitivity.rows.phase_id')).toBe(true);
+
+    const bad2 = validateSensitivityConfig({
+      rows: { lever: 'gdv', phase_id: 'planning', steps: [0, 5] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0, 5] },
+      tornado: [],
+    });
+    expect(bad2.some((i) => i.field === 'sensitivity.rows.phase_id')).toBe(true);
+  });
+
+  it('rejects a phase_slip tornado range with a null phase_id, and a non-phase_slip one with one set', () => {
+    const bad1 = validateSensitivityConfig({
+      rows: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0, 5] },
+      tornado: [{ lever: 'phase_slip', phase_id: null, low: -1, high: 1 }],
+    });
+    expect(bad1.some((i) => i.field === 'sensitivity.tornado' && /needs a phase_id/.test(i.message))).toBe(true);
+
+    const bad2 = validateSensitivityConfig({
+      rows: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0, 5] },
+      tornado: [{ lever: 'timeline', phase_id: 'planning', low: -1, high: 1 }],
+    });
+    expect(bad2.some((i) => i.field === 'sensitivity.tornado' && /only meaningful for the phase_slip lever/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a phase_slip axis naming a phase the document does not carry', () => {
+    const e = validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: 'ghost', steps: [0, 3] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      tornado: [],
+    }, networkDoc());
+    expect(e.some((i) => /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
+  it('accepts a phase_slip axis when no document is supplied to check against', () => {
+    // Without a document, the phase-existence half of the rule cannot run — this is
+    // the pre-R12-caller compatibility path, not a loosening of the required-target
+    // rule (still enforced, and pinned above).
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: 'ghost', steps: [0, 3] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      tornado: [],
+    });
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  // §12.6's fractional-step rule extends verbatim to phase_slip (spec §18.9: "the
+  // integer-steps rule that timeline already has"), so it is pinned at the SAME
+  // field the timeline rule uses (`sensitivity.rows.steps`), not `.lever`.
+  it('rejects a fractional phase_slip step, as timeline already does', () => {
+    const e = validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [0, 1.5] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      tornado: [],
+    }, networkDoc());
+    expect(e.some((i) => i.field === 'sensitivity.rows.steps')).toBe(true);
+  });
+
+  it('rejects a fractional phase_slip tornado bound', () => {
+    const e = validateSensitivityConfig({
+      rows: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      cols: { lever: 'construction_cost', phase_id: null, steps: [0, 5] },
+      tornado: [{ lever: 'phase_slip', phase_id: 'planning', low: -1, high: 1.5 }],
+    }, networkDoc());
+    expect(e.some((i) => i.field === 'sensitivity.tornado' && /whole months/.test(i.message))).toBe(true);
+  });
+
+  it('accepts a whole-month phase_slip axis targeting a real phase', () => {
+    expect(validateSensitivityConfig({
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [-2, 0, 2] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0, 5] },
+      tornado: [],
+    }, networkDoc())).toEqual([]);
+  });
+
+  // §12.7's existing cell-validity machinery, unchanged — the fixture is new, and
+  // both directions are the point of the whole lever (spec §18.9).
+  it('an overrunning phase_slip produces an INVALID CELL, not a wrong number', () => {
+    // Hand-derived: construction's unslipped start is 2 (planning finishes month 2).
+    // +24 months of slip pushes its start to 26 and its finish to 34 — 22 months
+    // past the 12-month term, an overrun naming the phase.
+    const result = runSensitivity(networkDoc(12), {
+      rows: { lever: 'phase_slip', phase_id: 'construction', steps: [24] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0] },
+      tornado: [],
+    });
+    const cell = result.matrix[0][0];
+    expect(cell.profit_pence).toBeNull();
+    expect(cell.validation_errors.some((e) => /after maturity/.test(e.message))).toBe(true);
+  });
+
+  it('an over-accelerating phase_slip also produces an invalid cell', () => {
+    // Hand-derived: planning is predecessor-free at start_offset 0, so its unslipped
+    // start is 0. A −24 slip resolves its start to −24, before month 0.
+    const result = runSensitivity(networkDoc(12), {
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [-24] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0] },
+      tornado: [],
+    });
+    const cell = result.matrix[0][0];
+    expect(cell.profit_pence).toBeNull();
+    expect(cell.validation_errors.some((e) => /before month 0/.test(e.message))).toBe(true);
+  });
+
+  it('rejects a phase_slip cell on a programme == null document as a lever misconfiguration', () => {
+    // §18.9: phase_slip on a programme = null document has no field to write, and is
+    // rejected at validation, never silently ignored.
+    const doc: AnyCalculatorInputs = { ...networkDoc(), programme: null };
+    expect(() => runSensitivity(doc, {
+      rows: { lever: 'phase_slip', phase_id: 'planning', steps: [1] },
+      cols: { lever: 'gdv', phase_id: null, steps: [0] },
+      tornado: [],
+    })).toThrow(InvalidSensitivityConfigError);
+  });
+
+  it('leaves finance and equity_sources untouched — §12.2 facility invariance', () => {
+    const doc = withSlip(networkDoc(), 'planning', 1);
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 6,
+    });
+    expect(out.finance).toEqual(doc.finance);
+    expect(out.equity_sources).toEqual(doc.equity_sources);
   });
 });

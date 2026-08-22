@@ -80,6 +80,25 @@ export function applyScenario<T extends AnyCalculatorInputs>(
       annual_interest_rate_pct:
         inputs.finance.annual_interest_rate_pct + overrides.interest_rate_adjustment_pct,
     },
+    // R12 spec §18.9. ADDITIVE, not assignment: a base-case slip already recorded
+    // on the document is stressed FROM its recorded position rather than
+    // overwritten by it. A `phase_slip_phase_id` of `null` matches no phase,
+    // which is what makes the v9 migration default (§18.7) a no-op by
+    // construction. Gated on `'phases' in inputs.programme`, not on
+    // `inputs_version >= 9`, so a v4-v8 document carrying the legacy
+    // `{ packages }` shape is left untouched rather than crashing on a field
+    // that shape does not have — the lever writes nothing when there is
+    // nothing of the right shape to write to.
+    ...(('programme' in inputs) && inputs.programme != null && 'phases' in inputs.programme ? {
+      programme: {
+        ...inputs.programme,
+        phases: inputs.programme.phases.map((p) => (
+          p.id === overrides.phase_slip_phase_id
+            ? { ...p, slip_months: p.slip_months + overrides.phase_slip_months }
+            : p
+        )),
+      },
+    } : {}),
     // The spread above already carries `inputs_version`/`lender_valuation` (v3) or their
     // absence (v2) through unchanged; TS can't verify a generic spread-and-override
     // reproduces exactly T, so this cast documents what the runtime shape guarantees.

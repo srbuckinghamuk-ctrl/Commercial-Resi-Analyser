@@ -22,8 +22,16 @@ from app.financial_model.sensitivity import (
     run_sensitivity,
     validate_sensitivity_config,
 )
-from app.financial_model.migrate import migrate_inputs_to_v8
-from app.financial_model.types import ScenarioOverrides, parse_calculator_inputs
+from app.financial_model.migrate import migrate_inputs_to_v8, migrate_inputs_to_v9
+from app.financial_model.types import (
+    CategoryPhaseIds,
+    Dependency,
+    Phase,
+    ProgrammeNetwork,
+    ScenarioOverrides,
+    SimpleSpendCurve,
+    parse_calculator_inputs,
+)
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 FIXTURE_I = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "i-phased-sales.json"
@@ -70,7 +78,9 @@ def test_default_tornado_matches_the_spec():
 
 
 def test_lever_order_matches_the_spec():
-    assert list(LEVER_ORDER) == ["gdv", "construction_cost", "timeline", "interest_rate"]
+    assert list(LEVER_ORDER) == [
+        "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+    ]
 
 
 def test_defaults_validate_clean():
@@ -576,3 +586,347 @@ def test_does_not_measure_default_tornado_low_endpoint_of_phased_sales_deal():
     assert bars[-1].lever == "timeline"
     # The high endpoint lengthens the programme, so it stays measured.
     assert timeline.high.validation_errors == []
+
+
+# --- R12 Task 14: the phase_slip lever (spec Sec 18.9, guard 7) ------------
+#
+# Python twin of sensitivity.test.ts's 'phase_slip lever -- Sec18.9' describe block.
+
+SL = SimpleSpendCurve(kind="straight_line")
+
+
+def _v9_phase(pid, code, duration, preds=(), *, start_offset=0, slip=0) -> Phase:
+    """Mirrors test_financial_model_programme.py's own phase() helper: a phase
+    with no overrides is predecessor-free, at start_offset 0, with no slip."""
+    return Phase(
+        id=pid, code=code, label=pid, duration_months=duration,
+        slip_months=slip, start_offset=start_offset, curve=SL,
+        predecessors=list(preds),
+    )
+
+
+def _network_doc(term: int = 12):
+    """Fixture F (already used throughout this file) migrated to v9 and given a
+    small two-phase network: planning (2 months) then construction (8 months, FS
+    off planning). Mirrors sensitivity.test.ts's own networkDoc() exactly."""
+    base = migrate_inputs_to_v9(json.loads(FIXTURE_F.read_text(encoding="utf-8"))["inputs"])
+    phases = [
+        _v9_phase("planning", "planning", 2),
+        _v9_phase("construction", "construction", 8, [Dependency(phase_id="planning", type="FS", lag_months=0)]),
+    ]
+    base.finance = base.finance.model_copy(update={"term_months": term})
+    base.programme = ProgrammeNetwork(
+        anchor_month=None,
+        phases=phases,
+        category_phase_ids=CategoryPhaseIds(
+            construction="construction", professional="planning", statutory="planning",
+        ),
+    )
+    return base
+
+
+def _with_slip(doc, phase_id: str, months: int):
+    """Sets a phase's slip_months directly (not via apply_scenario), for tests that
+    need a BASE-CASE slip already recorded before a lever stresses it."""
+    d = doc.model_copy(deep=True)
+    for p in d.programme.phases:
+        if p.id == phase_id:
+            p.slip_months += months
+    return d
+
+
+_ZERO_OVERRIDES = dict(
+    label="", gdv_adjustment_pct=0, construction_cost_adjustment_pct=0,
+    timeline_adjustment_months=0, interest_rate_adjustment_pct=0,
+    phase_slip_phase_id=None, phase_slip_months=0,
+)
+
+
+def _apply_in_order(doc, order, levers: dict, phase_targets: dict | None = None):
+    """Applies all five Sec 12.1/Sec 18.9 levers to doc via apply_scenario, once
+    per lever, in order -- the same "one call per setting, in sequence" shape
+    run_sensitivity itself now uses internally (sensitivity.py's _measure)."""
+    phase_targets = phase_targets or {}
+    d = doc
+    for lever in order:
+        overrides = dict(_ZERO_OVERRIDES)
+        if lever == "gdv":
+            overrides["gdv_adjustment_pct"] = levers["gdv"]
+        elif lever == "construction_cost":
+            overrides["construction_cost_adjustment_pct"] = levers["construction_cost"]
+        elif lever == "timeline":
+            overrides["timeline_adjustment_months"] = levers["timeline"]
+        elif lever == "interest_rate":
+            overrides["interest_rate_adjustment_pct"] = levers["interest_rate"]
+        elif lever == "phase_slip":
+            overrides["phase_slip_phase_id"] = phase_targets.get("phase_slip")
+            overrides["phase_slip_months"] = levers["phase_slip"]
+        d = apply_scenario(d, ScenarioOverrides(**overrides))
+    return d
+
+
+def test_apply_scenario_adds_the_slip_additively_to_the_named_phase_only():
+    # Hand-derived: planning already carries a base-case slip of 1 month; the
+    # override adds 3 more. 1 + 3 = 4. construction is not the named phase, so its
+    # slip stays at the 0 the fixture starts it at.
+    doc = _with_slip(_network_doc(), "planning", 1)
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["phase_slip_phase_id"] = "planning"
+    overrides["phase_slip_months"] = 3
+    out = apply_scenario(doc, ScenarioOverrides(**overrides))
+    assert next(p for p in out.programme.phases if p.id == "planning").slip_months == 4
+    assert next(p for p in out.programme.phases if p.id == "construction").slip_months == 0
+
+
+def test_null_phase_slip_phase_id_matches_no_phase_the_migration_no_op():
+    doc = _network_doc()
+    out = apply_scenario(doc, ScenarioOverrides(**_ZERO_OVERRIDES))
+    assert out.programme == doc.programme
+
+
+def test_guard_7_all_five_levers_compose_order_independently():
+    """Spec Sec 13 guard 7."""
+    doc = _network_doc(20)
+    levers = {"gdv": 5, "construction_cost": -3, "timeline": 2, "interest_rate": 1, "phase_slip": 2}
+    orders = [
+        ["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip"],
+        ["phase_slip", "interest_rate", "timeline", "construction_cost", "gdv"],
+        ["timeline", "phase_slip", "gdv", "interest_rate", "construction_cost"],
+        ["construction_cost", "gdv", "phase_slip", "timeline", "interest_rate"],
+        ["interest_rate", "gdv", "timeline", "phase_slip", "construction_cost"],
+    ]
+    results = [
+        run_appraisal(_apply_in_order(doc, order, levers, {"phase_slip": "planning"})).metrics
+        for order in orders
+    ]
+    for r in results[1:]:
+        assert r.profit_pence == results[0].profit_pence
+        assert r.peak_debt_pence == results[0].peak_debt_pence
+        assert r.finance_costs_pence == results[0].finance_costs_pence
+
+    # Negative control (per R11's ordering-guard lesson, Sec 13): a fixture the
+    # levers don't actually move would prove order-independence vacuously.
+    without_phase_slip = run_appraisal(
+        _apply_in_order(doc, orders[0], {**levers, "phase_slip": 0}, {})
+    ).metrics
+    assert without_phase_slip.profit_pence != results[0].profit_pence
+
+
+def test_matrix_cell_with_both_axes_phase_slip_applies_both_targets():
+    """Sec 18.9: two phase_slip axes may target different phases at once. The
+    matrix builder must thread both settings into the same measurement, not
+    silently keep only one. Verified against an independently-built reference:
+    applying both overrides via two sequential apply_scenario calls and
+    appraising directly."""
+    doc = _network_doc(20)
+    result = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[1]),
+        cols=SensitivityAxis(lever="phase_slip", phase_id="construction", steps=[2]),
+        tornado=[],
+    ))
+    cell = result.matrix[0][0]
+    assert cell.validation_errors == []
+
+    o1 = dict(_ZERO_OVERRIDES); o1["phase_slip_phase_id"] = "planning"; o1["phase_slip_months"] = 1
+    o2 = dict(_ZERO_OVERRIDES); o2["phase_slip_phase_id"] = "construction"; o2["phase_slip_months"] = 2
+    reference = apply_scenario(apply_scenario(doc, ScenarioOverrides(**o1)), ScenarioOverrides(**o2))
+    expected = run_appraisal(reference).metrics
+    assert cell.profit_pence == expected.profit_pence
+    assert cell.peak_debt_pence == expected.peak_debt_pence
+
+    only_rows = run_appraisal(apply_scenario(doc, ScenarioOverrides(**o1))).metrics
+    assert cell.profit_pence != only_rows.profit_pence
+
+
+def test_phase_slip_tornado_bar_measures_both_signed_endpoints():
+    doc = _network_doc(20)
+    result = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[TornadoRange(lever="phase_slip", phase_id="construction", low=-2, high=2)],
+    ))
+    bar = next(b for b in result.tornado if b.lever == "phase_slip")
+    assert bar.phase_id == "construction"
+    assert bar.low.validation_errors == []
+    assert bar.high.validation_errors == []
+    assert bar.span_pence is not None
+    assert bar.low.profit_pence != result.base.profit_pence
+    assert bar.high.profit_pence != result.base.profit_pence
+    assert bar.low.profit_pence != bar.high.profit_pence
+
+
+def test_rows_and_cols_may_both_be_phase_slip_targeting_different_phases():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[0, 3]),
+        cols=SensitivityAxis(lever="phase_slip", phase_id="construction", steps=[0, 3]),
+        tornado=[],
+    ), _network_doc())
+    assert [i for i in issues if i.severity == "error"] == []
+
+
+def test_still_rejects_two_phase_slip_axes_targeting_the_same_phase():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[0, 3]),
+        cols=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[0, 3]),
+        tornado=[],
+    ), _network_doc())
+    assert any(i.field == "sensitivity.cols.lever" for i in issues)
+
+
+def test_tornado_may_carry_two_phase_slip_bars_targeting_different_phases():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[
+            TornadoRange(lever="phase_slip", phase_id="planning", low=-1, high=1),
+            TornadoRange(lever="phase_slip", phase_id="construction", low=-1, high=1),
+        ],
+    ), _network_doc())
+    assert [i for i in issues if i.severity == "error"] == []
+
+
+def test_rejects_two_tornado_bars_targeting_the_same_phase():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[
+            TornadoRange(lever="phase_slip", phase_id="planning", low=-1, high=1),
+            TornadoRange(lever="phase_slip", phase_id="planning", low=-2, high=2),
+        ],
+    ), _network_doc())
+    assert any("appears more than once" in i.message for i in issues)
+
+
+def test_rejects_a_phase_slip_axis_with_null_phase_id_and_a_non_phase_slip_axis_with_one_set():
+    bad1 = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id=None, steps=[0, 3]),
+        cols=SensitivityAxis(lever="gdv", phase_id=None, steps=[0, 5]),
+        tornado=[],
+    ))
+    assert any(i.field == "sensitivity.rows.phase_id" for i in bad1)
+
+    bad2 = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", phase_id="planning", steps=[0, 5]),
+        cols=SensitivityAxis(lever="construction_cost", phase_id=None, steps=[0, 5]),
+        tornado=[],
+    ))
+    assert any(i.field == "sensitivity.rows.phase_id" for i in bad2)
+
+
+def test_rejects_a_phase_slip_tornado_range_with_null_phase_id_and_a_non_phase_slip_one_with_one_set():
+    bad1 = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0, 5]),
+        tornado=[TornadoRange(lever="phase_slip", phase_id=None, low=-1, high=1)],
+    ))
+    assert any(
+        i.field == "sensitivity.tornado" and "needs a phase_id" in i.message for i in bad1
+    )
+
+    bad2 = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0, 5]),
+        tornado=[TornadoRange(lever="timeline", phase_id="planning", low=-1, high=1)],
+    ))
+    assert any(
+        i.field == "sensitivity.tornado" and "only meaningful for the phase_slip lever" in i.message
+        for i in bad2
+    )
+
+
+def test_rejects_a_phase_slip_axis_naming_a_phase_the_document_does_not_carry():
+    e = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="ghost", steps=[0, 3]),
+        cols=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        tornado=[],
+    ), _network_doc())
+    assert any('no phase with id "ghost"' in i.message for i in e)
+
+
+def test_accepts_a_phase_slip_axis_when_no_document_is_supplied_to_check_against():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="ghost", steps=[0, 3]),
+        cols=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        tornado=[],
+    ))
+    assert [i for i in issues if i.severity == "error"] == []
+
+
+def test_rejects_a_fractional_phase_slip_step_as_timeline_already_does():
+    """Sec 12.6's fractional-step rule extends verbatim to phase_slip (spec Sec18.9:
+    'the integer-steps rule that timeline already has'), pinned at the SAME field
+    the timeline rule uses (sensitivity.rows.steps)."""
+    e = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[0, 1.5]),
+        cols=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        tornado=[],
+    ), _network_doc())
+    assert any(i.field == "sensitivity.rows.steps" for i in e)
+
+
+def test_rejects_a_fractional_phase_slip_tornado_bound():
+    e = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0, 5]),
+        tornado=[TornadoRange(lever="phase_slip", phase_id="planning", low=-1, high=1.5)],
+    ), _network_doc())
+    assert any(i.field == "sensitivity.tornado" and "whole months" in i.message for i in e)
+
+
+def test_accepts_a_whole_month_phase_slip_axis_targeting_a_real_phase():
+    assert validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[-2, 0, 2]),
+        cols=SensitivityAxis(lever="gdv", steps=[0, 5]),
+        tornado=[],
+    ), _network_doc()) == []
+
+
+def test_overrunning_phase_slip_produces_an_invalid_cell_not_a_wrong_number():
+    """Sec 12.7's existing cell-validity machinery, unchanged -- the fixture is
+    new. Hand-derived: construction's unslipped start is 2 (planning finishes
+    month 2). +24 months of slip pushes its start to 26 and its finish to 34 --
+    22 months past the 12-month term, an overrun naming the phase."""
+    result = run_sensitivity(_network_doc(12), SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="construction", steps=[24]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    ))
+    cell = result.matrix[0][0]
+    assert cell.profit_pence is None
+    assert any("after maturity" in e.message for e in cell.validation_errors)
+
+
+def test_over_accelerating_phase_slip_also_produces_an_invalid_cell():
+    """Hand-derived: planning is predecessor-free at start_offset 0, so its
+    unslipped start is 0. A -24 slip resolves its start to -24, before month 0."""
+    result = run_sensitivity(_network_doc(12), SensitivityConfig(
+        rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[-24]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    ))
+    cell = result.matrix[0][0]
+    assert cell.profit_pence is None
+    assert any("before month 0" in e.message for e in cell.validation_errors)
+
+
+def test_rejects_a_phase_slip_cell_on_a_programme_none_document_as_lever_misconfiguration():
+    """Sec 18.9: phase_slip on a programme = None document has no field to write,
+    and is rejected at validation, never silently ignored."""
+    doc = _network_doc().model_copy(update={"programme": None})
+    with pytest.raises(InvalidSensitivityConfigError):
+        run_sensitivity(doc, SensitivityConfig(
+            rows=SensitivityAxis(lever="phase_slip", phase_id="planning", steps=[1]),
+            cols=SensitivityAxis(lever="gdv", steps=[0]),
+            tornado=[],
+        ))
+
+
+def test_phase_slip_leaves_finance_and_equity_sources_untouched():
+    """Sec 12.2 facility invariance."""
+    doc = _with_slip(_network_doc(), "planning", 1)
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["phase_slip_phase_id"] = "planning"
+    overrides["phase_slip_months"] = 6
+    out = apply_scenario(doc, ScenarioOverrides(**overrides))
+    assert out.finance == doc.finance
+    assert out.equity_sources == doc.equity_sources

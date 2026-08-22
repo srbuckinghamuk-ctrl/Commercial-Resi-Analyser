@@ -16,6 +16,11 @@ export const LEVER_LABEL: Record<SensitivityLever, string> = {
   construction_cost: 'Construction cost',
   timeline: 'Timeline',
   interest_rate: 'Interest rate',
+  // R12 spec §18.9. The fifth lever; the page does not yet offer a phase picker
+  // for it (that is later UI work), but every exhaustive lookup keyed on
+  // SensitivityLever must still resolve a label for a bar the engine can now
+  // return.
+  phase_slip: 'Phase slip',
 };
 
 /**
@@ -29,6 +34,7 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   construction_cost: 'Cost',
   timeline: 'Timeline',
   interest_rate: 'Rate',
+  phase_slip: 'Slip',
 };
 
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
@@ -44,7 +50,8 @@ function signed(value: number, decimals: number): string {
 export function formatStepLabel(lever: SensitivityLever, step: number): string {
   const text = signed(step, decimalsFor(lever));
   if (lever === 'gdv' || lever === 'construction_cost') return `${text}%`;
-  if (lever === 'timeline') return `${text} months`;
+  // R12 spec §18.9: phase_slip is months, same unit as timeline.
+  if (lever === 'timeline' || lever === 'phase_slip') return `${text} months`;
   return `${text} pp`;
 }
 
@@ -54,7 +61,7 @@ export function formatRangeLabel(lever: SensitivityLever, low: number, high: num
   if (lever === 'gdv' || lever === 'construction_cost') {
     return `${signed(low, d)}% to ${signed(high, d)}%`;
   }
-  const unit = lever === 'timeline' ? 'months' : 'pp';
+  const unit = lever === 'timeline' || lever === 'phase_slip' ? 'months' : 'pp';
   return `${signed(low, d)} to ${signed(high, d)} ${unit}`;
 }
 

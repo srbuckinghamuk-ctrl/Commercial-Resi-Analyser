@@ -66,4 +66,17 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
         inputs.finance.annual_interest_rate_pct + overrides.interest_rate_adjustment_pct
     )
 
+    # R12 spec Sec 18.9. ADDITIVE, not assignment: a base-case slip already recorded
+    # on the document is stressed FROM its recorded position rather than overwritten
+    # by it. `phase_slip_phase_id` of None matches no phase, which is what makes the
+    # v9 migration default (Sec 18.7) a no-op by construction. Gated on `hasattr(...,
+    # "phases")`, mirroring the TS twin's `'phases' in inputs.programme` -- a v4-v8
+    # document's legacy ProgrammeInputs (`{ packages }`) has no `phases` attribute,
+    # so the lever writes nothing when there is nothing of the right shape to write to.
+    programme = getattr(out, "programme", None)
+    if programme is not None and hasattr(programme, "phases"):
+        for phase in programme.phases:
+            if phase.id == overrides.phase_slip_phase_id:
+                phase.slip_months += overrides.phase_slip_months
+
     return out
