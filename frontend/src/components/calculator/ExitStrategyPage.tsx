@@ -1,11 +1,11 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
-import type { CalculatorInputsV7, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
+import type { CalculatorInputsV8, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV7;
-  onChange: (partial: Partial<CalculatorInputsV7>) => void;
+  inputs: CalculatorInputsV8;
+  onChange: (partial: Partial<CalculatorInputsV8>) => void;
   run: AppraisalRun;
 }
 
@@ -92,7 +92,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   // a block valid (e.g. blended for both, or retain_all for refinance) leaves
   // it untouched.
   const selectRoute = (route: ExitRoute) => {
-    const partial: Partial<CalculatorInputsV7> = { exit_strategy: { ...exit, route } };
+    const partial: Partial<CalculatorInputsV8> = { exit_strategy: { ...exit, route } };
     if (route === 'retain_all') partial.sales_phasing = null;
     if (route === 'sell_all') partial.refinance = null;
     onChange(partial);
@@ -121,7 +121,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>11. Exit Strategy</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>12. Exit Strategy</h3>
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
         {(['sell_all', 'retain_all', 'blended'] as ExitRoute[]).map((route) => (

@@ -3,7 +3,7 @@ import type {
 } from '../conversion-types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV6, CalculatorInputsV7,
+  CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs,
 } from './finance-types';
@@ -14,6 +14,7 @@ import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import { DEFAULT_AREA_BRIDGE } from './areas';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { costPlanFromLegacyCosts } from './cost-plan';
+import { defaultVatInputs } from './vat';
 
 function isV2(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV2 {
   return snapshot.inputs_version === 2 && typeof snapshot.finance === 'object' && snapshot.finance !== null
@@ -132,7 +133,13 @@ export function migrateInputs(
     ...((v1.finance ?? {}) as Partial<FinanceInputs>),
   };
   const costBeforeFinance =
-    calculateTotalAcquisitionCost(acquisition) +
+    // v1 has no VAT block at all, so the chargeable consideration IS the price
+    // (§17.7). Passed as the half-built document the accessor needs, rather than
+    // by fabricating a branded number here. `vat: undefined` is written out
+    // rather than omitted (ruling R28): the member is required-but-nullable, so
+    // "this document has no VAT block" is a declaration a reader and a grep can
+    // both see, not an absence that could equally be an oversight.
+    calculateTotalAcquisitionCost({ acquisition, vat: undefined }) +
     // v1 migration runs before the areas block exists, so the manual field IS
     // the area here — passed explicitly rather than read inside the callee.
     calculateTotalConstructionCost(conversion_costs, conversion_costs.total_construction_sqm) +
@@ -678,4 +685,143 @@ export function migrateInputsToV7(
     };
   }
   return migrateV6toV7(migrateInputsToV6(snapshot, project));
+}
+
+/** A v8 document has the same finance shape as v2–v7, discriminated by
+ *  inputs_version === 8.
+ *
+ *  Gates on the CONTAINER, never on the presence of a `vat` block. Python's
+ *  `revalidate_instances='never'` lets a CalculatorInputsV7 hold a v8
+ *  sub-block, so "has a vat key" would answer a different question from "is a
+ *  v8 document" and the two engines would disagree about the same row. */
+export function isV8(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV8 {
+  return snapshot.inputs_version === 8
+    && typeof snapshot.finance === 'object' && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/**
+ * R11 (spec §17.11). Adds the VAT block. Purely additive by construction: the
+ * block is written `registered: false`, which drives `resolveVatTreatment` to
+ * INERT and `chargeableConsiderationPence` back to the exclusive price — so no
+ * migrated appraisal's computed values move. The same block `DEFAULT_VAT`
+ * gives a brand-new document, via the one `defaultVatInputs()` construction,
+ * so the two engines' v-defaults re-converge (conversion-defaults.ts:365).
+ *
+ * Two things are also SUBTRACTED, and only here:
+ *
+ *  - every package's and every fee line's `vat_override` is written null. The
+ *    field arrived with R11 (Task 1) and no stored row can legitimately carry
+ *    one, so `null` is the migration's assertion, not a preserved value.
+ *  - §17.8's deleted contingency fields, `basis` and `package_ids`. Every row
+ *    R10 persisted carries them and nothing else ever removes them; the
+ *    `contingency_class` TAG is the surviving mechanism and is retained.
+ *
+ * Precondition: `v7` must not already be a v8 document — this guards against
+ * double-migration (idempotence), same as migrateV6toV7.
+ */
+export function migrateV7toV8(v7: CalculatorInputsV7): CalculatorInputsV8 {
+  if (isV8(v7 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV7toV8: input is already a v8 document');
+  }
+  const { inputs_version: _v7Version, cost_plan, ...rest } = v7;
+  // Mirrors migrateV6toV7's `existingPlan`: a block already on the document is
+  // kept rather than overwritten, so a mistagged row does not lose data here.
+  const existingVat = (v7 as unknown as Partial<CalculatorInputsV8>).vat;
+  return {
+    ...rest,
+    inputs_version: 8,
+    cost_plan: {
+      ...cost_plan,
+      packages: cost_plan.packages.map((p) => ({ ...p, vat_override: null })),
+      // Rebuilt from the two surviving fields rather than spread, which is what
+      // actually DROPS `basis` and `package_ids` off a stored R10 row.
+      contingency: cost_plan.contingency.map((c) => ({ name: c.name, pct: c.pct })),
+      fee_lines: cost_plan.fee_lines.map((f) => ({ ...f, vat_override: null })),
+    },
+    vat: existingVat ?? defaultVatInputs(),
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V8: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8];
+
+/**
+ * Normalises any stored snapshot (v1–v8) to v8. Mirrors migrateInputsToV7's
+ * shape exactly.
+ *
+ * The two refusals below are R8's hardest-won guard, carried forward. R8
+ * shipped `migrateInputsToV4` without a v5 guard; a v5 document satisfied none
+ * of the isVN checks, fell all the way through to the v1 fallback, and was
+ * silently corrupted — fields dropped, a *confirmed* equity source replaced by
+ * an unconfirmed stub with a different amount, the facility rebuilt from
+ * `ltv_pct` — while returning 201. An unrecognised version must fail loudly.
+ *
+ * The version predicate is MEMBERSHIP OF THE DECLARED TUPLE, deliberately.
+ * R10 found a predicate loosened from `=== 6` to `!== 5` — the literal negation
+ * of the set's own definition — so it could never fail; `migrate.test.ts` tests
+ * this one with a document tagged 9, the neighbour that catches that shape.
+ */
+export function migrateInputsToV8(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV8 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V8.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV8: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V8.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 8 && !isV8(snapshot)) {
+    throw new Error(
+      'migrateInputsToV8: inputs_version is 8 but the document fails the v8 structural check '
+      + '(finance is not an object, or is missing committed_net_facility_pence) -- refusing to '
+      + 'silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV8(snapshot)) {
+    const defaults = migrateV7toV8(migrateV6toV7(migrateV5toV6(
+      migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)))),
+    )));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV8>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 8,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      // R10 found the cost_plan line above was a merge nobody had ever deleted
+      // to check; without it a stored row computed zero contingency. This one is
+      // the same shape and carries the same risk: without it a saved
+      // `registered: true` row would come back with the six treatment rows
+      // reset to the inert default and price no VAT at all.
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+    };
+  }
+  return migrateV7toV8(migrateInputsToV7(snapshot, project));
 }

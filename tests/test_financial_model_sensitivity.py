@@ -22,6 +22,7 @@ from app.financial_model.sensitivity import (
     run_sensitivity,
     validate_sensitivity_config,
 )
+from app.financial_model.migrate import migrate_inputs_to_v8
 from app.financial_model.types import ScenarioOverrides, parse_calculator_inputs
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
@@ -332,6 +333,51 @@ def test_position_leaving_exactly_one_month_is_measured():
 
     assert cell.validation_errors == []
     assert cell.profit_pence is not None
+
+
+@pytest.mark.parametrize("step,measured", [(-12, False), (-11, True), (-10, True)])
+def test_cell_validity_is_unchanged_on_a_migrated_v8_document(step, measured):
+    """Ruling R38, and the Python half of the defect the TS suite caught first.
+
+    Until R11 this file fed `run_sensitivity` a v5/v6/v7 fixture, so it never
+    exercised a `vat` block at all -- Python was green here by ACCIDENT, not for
+    the same reason as its TS twin (SensitivityPage.test.tsx, whose `buildInputs`
+    does migrate to v8). Once the server stores v8 every document it sees carries
+    the block, and the ungated return-cycle bound made a derived term of 1 or 2
+    months an ERROR position: -11 and -10 would have flipped from measured to
+    unmeasured, naming `vat.first_period_end_month`.
+
+    Steps -11 and -10 are BOTH here deliberately: the migration writes
+    `first_period_end_month: 2`, so the ungated rule bit at term 1 AND term 2,
+    and a test covering only term 1 would have left half the regression
+    unguarded. -12 (term 0) stays unmeasured, on `finance.term_months` -- the
+    gate defers a rule about a dormant cycle, it does not make short terms
+    valid."""
+    v8 = migrate_inputs_to_v8(json.loads(FIXTURE_F.read_text(encoding="utf-8"))["inputs"])
+    assert v8.inputs_version == 8
+    assert v8.vat.registered is False
+    assert v8.vat.first_period_end_month == 2
+
+    config = _config()
+    config.rows = SensitivityAxis(lever="timeline", steps=[step])
+    config.cols = SensitivityAxis(lever="gdv", steps=[0])
+    cell = run_sensitivity(v8, config).matrix[0][0]
+
+    assert not any(e.field == "vat.first_period_end_month" for e in cell.validation_errors)
+    if measured:
+        assert cell.validation_errors == []
+        assert cell.profit_pence is not None
+    else:
+        assert any(e.field == "finance.term_months" for e in cell.validation_errors)
+        assert cell.profit_pence is None
+
+    # And the v8 document measures identically to the v7 one it was migrated
+    # from -- the migration changed nothing this suite can see.
+    v7_cell = run_sensitivity(_inputs(), config).matrix[0][0]
+    assert cell.profit_pence == v7_cell.profit_pence
+    assert [e.field for e in cell.validation_errors] == [
+        e.field for e in v7_cell.validation_errors
+    ]
 
 
 def test_warnings_do_not_invalidate_a_position():

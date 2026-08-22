@@ -5,11 +5,14 @@ import {
   migrateV4toV5, migrateInputsToV5,
   migrateV5toV6, migrateInputsToV6,
   migrateV6toV7, migrateInputsToV7,
+  migrateV7toV8, migrateInputsToV8, isV8,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
+  CalculatorInputsV7,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
+import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
 
 const V1_SNAPSHOT = {
   project_id: 'p1',
@@ -457,7 +460,6 @@ describe('migrateV6toV7 (R10 spec §4)', () => {
     v6.conversion_costs = { ...v6.conversion_costs, contingency_pct: 12.5 };
     const v7 = migrateV6toV7(v6);
     expect(v7.cost_plan.contingency.map((c) => c.pct)).toEqual([12.5, 0, 0]);
-    expect(v7.cost_plan.contingency.every((c) => c.basis === 'all_packages')).toBe(true);
   });
 
   it('converts all eight fee fields to fixed lines with the CORRECT categories', () => {
@@ -501,5 +503,213 @@ describe('migrateInputsToV7 refusals (R8 carry-forward)', () => {
   it('refuses a document tagged 7 that fails the structural check', () => {
     expect(() => migrateInputsToV7({ inputs_version: 7, finance: 'not an object' }))
       .toThrow(/fails the v7 structural check/);
+  });
+});
+
+// --- R11 spec §17.11 — v8, the VAT block, and the persistence boundary ------
+
+function someV7Document(): CalculatorInputsV7 {
+  return migrateV6toV7(migrateV5toV6(migrateV4toV5(migrateV3toV4(
+    migrateV2toV3(defaultCalculatorInputsV2())))));
+}
+
+/**
+ * A v7 document with a real package schedule and, on its contingency classes,
+ * the two fields §17.8 deletes from the INPUT. They are spelled here as extra
+ * keys on a v7-typed object because that is exactly how they exist in the wild:
+ * every row R10 persisted carries them, and the v8 migration is the only thing
+ * that ever removes them.
+ */
+function detailedV7Document(): CalculatorInputsV7 {
+  const v7 = someV7Document();
+  return {
+    ...v7,
+    cost_plan: {
+      mode: 'detailed',
+      packages: [
+        {
+          id: 'pkg-structure', code: 'structure', label: 'Structure',
+          amount_pence: 20_000_000, contingency_class: 'general',
+          lender_eligible: true, notes: '',
+          // Deliberately NON-null on both a package and a fee line below. A
+          // fixture whose overrides were already null would make "the migration
+          // nulls every override" vacuously true — the exact shape of blindness
+          // R9 recorded against a gate that could not fail.
+          vat_override: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+        },
+        {
+          id: 'pkg-envelope', code: 'envelope', label: 'Envelope',
+          amount_pence: 10_000_000, contingency_class: 'existing_building',
+          lender_eligible: true, notes: '', vat_override: null,
+        },
+      ],
+      contingency: v7.cost_plan.contingency.map((c) => ({
+        ...c,
+        basis: 'selected_packages',
+        package_ids: ['pkg-structure'],
+      })) as typeof v7.cost_plan.contingency,
+      fee_lines: v7.cost_plan.fee_lines.map((f, i) => (
+        i === 0
+          ? { ...f, vat_override: { rate_pct: 20, recoverable_pct: 0, recovery_basis: 'blocked' as const } }
+          : f
+      )),
+    },
+  };
+}
+
+describe('migrateV7toV8 (R11 spec §17.11)', () => {
+  it('writes an inert VAT block, so no existing appraisal moves', () => {
+    const v8 = migrateV7toV8(someV7Document());
+    expect(v8.inputs_version).toBe(8);
+    expect(v8.vat.registered).toBe(false);
+    expect(v8.vat.treatments.map((t) => t.category)).toEqual([...VAT_CHARGE_CATEGORIES]);
+    expect(v8.vat.treatments.every((t) => t.rate_pct === 0 && t.recoverable_pct === 0)).toBe(true);
+    expect(v8.vat.treatments.every(
+      (t) => t.recovery_basis === 'unconfirmed' && t.evidence_status === 'unconfirmed',
+    )).toBe(true);
+    expect(v8.vat.purchase.vendor_opted_to_tax).toBe(false);
+    expect(v8.vat.purchase.togc_treatment).toBe('unconfirmed');
+  });
+
+  it('nulls every line override and drops the deleted contingency fields', () => {
+    const source = detailedV7Document();
+    // Non-vacuity: the input really does carry what the migration must remove.
+    expect(source.cost_plan.packages[0].vat_override).not.toBeNull();
+    expect(source.cost_plan.fee_lines[0].vat_override).not.toBeNull();
+    expect('basis' in source.cost_plan.contingency[0]).toBe(true);
+
+    const v8 = migrateV7toV8(source);
+    expect(v8.cost_plan.packages).toHaveLength(2);
+    expect(v8.cost_plan.packages.every((p) => p.vat_override === null)).toBe(true);
+    expect(v8.cost_plan.fee_lines).toHaveLength(8);
+    expect(v8.cost_plan.fee_lines.every((f) => f.vat_override === null)).toBe(true);
+    expect(v8.cost_plan.contingency).toHaveLength(3);
+    for (const c of v8.cost_plan.contingency) {
+      expect('basis' in c).toBe(false);
+      expect('package_ids' in c).toBe(false);
+    }
+    // The tags themselves are RETAINED — they are the surviving mechanism.
+    expect(v8.cost_plan.packages.map((p) => p.contingency_class))
+      .toEqual(['general', 'existing_building']);
+    expect(v8.cost_plan.contingency.map((c) => c.name))
+      .toEqual(['general', 'existing_building', 'abnormal']);
+  });
+
+  it('refuses a document that is already v8', () => {
+    const v8 = migrateV7toV8(someV7Document());
+    expect(() => migrateV7toV8(v8 as never)).toThrow(/already a v8 document/);
+  });
+
+  // Fix round 2, Minor 10. `existingVat` mirrors migrateV6toV7's `existingPlan`:
+  // a block already on the document is KEPT rather than overwritten, so a
+  // mistagged row does not lose data here. That branch bypasses the inert write
+  // the identity gate assumes, so it needs its own test — the corpus-wide gate
+  // only ever sees documents that take the other branch.
+  it('keeps a VAT block the v7 document already carries, rather than resetting it', () => {
+    const source = {
+      ...someV7Document(),
+      vat: {
+        ...defaultVatInputs(),
+        registered: true,
+        return_frequency: 'monthly' as const,
+        treatments: defaultVatTreatments().map(
+          (t, i) => (i === 1 ? { ...t, rate_pct: 20 } : t),
+        ),
+      },
+    };
+
+    const v8 = migrateV7toV8(source as never);
+
+    expect(v8.vat.registered).toBe(true);
+    expect(v8.vat.return_frequency).toBe('monthly');
+    expect(v8.vat.treatments[1].rate_pct).toBe(20);
+    // Non-vacuity: this is NOT what the inert default would have produced.
+    expect(v8.vat).not.toEqual(defaultVatInputs());
+    // And the container gate is unmoved by the stray block — it is still a v7
+    // document until inputs_version says otherwise.
+    expect(isV8(source as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it('hands back an independently mutable VAT block, not the shared default', () => {
+    const a = migrateV7toV8(someV7Document());
+    const b = migrateV7toV8(someV7Document());
+    a.vat.registered = true;
+    a.vat.purchase.vendor_opted_to_tax = true;
+    expect(b.vat.registered).toBe(false);
+    expect(b.vat.purchase.vendor_opted_to_tax).toBe(false);
+  });
+});
+
+describe('migrateInputsToV8 refusals (R8 carry-forward)', () => {
+  it('refuses an unrecognised version rather than falling through to the v1 path', () => {
+    // Tagged 9, one past the declared tuple. R10 found a predicate loosened
+    // from `=== 6` to `!== 5` — the literal negation of the set's own
+    // definition, which could never fail.
+    //
+    // The regex names migrateInputsToV8 DELIBERATELY. A bare
+    // /unrecognised inputs_version/ passes for the wrong reason and cannot
+    // catch that defect at all: a v8 predicate that never fires falls through
+    // to `migrateV7toV8(migrateInputsToV7(...))`, and migrateInputsToV7's OWN
+    // predicate then refuses 9 with a message the loose regex still matches.
+    // Watched failing with the predicate replaced by an always-false one, which
+    // the loose regex did not catch.
+    expect(() => migrateInputsToV8({ inputs_version: 9 } as never))
+      .toThrow(/migrateInputsToV8: unrecognised inputs_version 9/);
+    expect(() => migrateInputsToV8({ inputs_version: 99 } as never))
+      .toThrow(/migrateInputsToV8: unrecognised inputs_version 99/);
+  });
+
+  it('accepts every version in the declared tuple', () => {
+    for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const doc = { ...someV7Document(), inputs_version: version } as unknown as Record<string, unknown>;
+      expect(migrateInputsToV8(doc).inputs_version).toBe(8);
+    }
+  });
+
+  it('refuses a document tagged v8 that fails the structural check', () => {
+    expect(() => migrateInputsToV8({ inputs_version: 8, finance: 'nope' } as never))
+      .toThrow(/fails the v8 structural check/);
+  });
+});
+
+describe('migrateInputsToV8 merge-onto-defaults branch', () => {
+  function someV8Snapshot(): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(migrateV7toV8(someV7Document()))) as Record<string, unknown>;
+  }
+
+  it('deep-merges a saved vat block onto defaults', () => {
+    // R10 found a cost_plan deep-merge nobody had deleted to check; without it a
+    // stored row computed zero contingency. Same shape, same check.
+    const merged = migrateInputsToV8({
+      ...someV8Snapshot(), vat: { registered: true },
+    } as never);
+    expect(merged.vat.registered).toBe(true);
+    expect(merged.vat.treatments).toHaveLength(6);
+    expect(merged.vat.return_frequency).toBe('quarterly');
+    expect(merged.vat.purchase.togc_treatment).toBe('unconfirmed');
+  });
+
+  it('carries a saved vat block through untouched', () => {
+    const snapshot = someV8Snapshot();
+    const saved = {
+      ...snapshot,
+      vat: {
+        ...(snapshot.vat as Record<string, unknown>),
+        registered: true,
+        return_frequency: 'monthly',
+        first_period_end_month: 0,
+      },
+    };
+    const merged = migrateInputsToV8(saved as never);
+    expect(merged.vat.registered).toBe(true);
+    expect(merged.vat.return_frequency).toBe('monthly');
+    expect(merged.vat.first_period_end_month).toBe(0);
+  });
+
+  it('still deep-merges cost_plan, as v7 did', () => {
+    const snapshot = someV8Snapshot();
+    const merged = migrateInputsToV8({ ...snapshot, cost_plan: { mode: 'detailed' } } as never);
+    expect(merged.cost_plan.mode).toBe('detailed');
+    expect(merged.cost_plan.contingency).toHaveLength(3);
   });
 });

@@ -4,8 +4,9 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV7 } from '../../lib/model';
-import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV8 } from '../../lib/model';
+import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
+import { penceToPounds } from '../../lib/format';
 
 // Same fixture directory the shared golden-fixtures test reads from (frontend/src/lib/model/golden-fixtures.test.ts)
 // — fixture G is the Release 2b lender-valuation fixture (spec §3.2), used here as the
@@ -16,10 +17,26 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // version the file actually holds rather than the v4 it used to claim.
 const fixtureG = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV7 };
+) as { inputs: CalculatorInputsV8 };
+
+// R11 spec §17.13 (ruling R45). The pinned VAT fixture itself is fully
+// recoverable (total_irrecoverable_pence 0 by construction, so the §17.5
+// invariant can pin against it) — not useful for proving the caveat renders.
+// A deep clone with construction's recoverable_pct lowered produces a real
+// irrecoverable figure without touching the fixture on disk.
+const vatFixture = JSON.parse(
+  readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
+) as { inputs: CalculatorInputsV8 };
+
+function inputsWithIrrecoverableVat(): CalculatorInputsV8 {
+  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV8;
+  const construction = cloned.vat.treatments.find((t) => t.category === 'construction')!;
+  construction.recoverable_pct = 50;
+  return cloned;
+}
 
 describe('AppraisalSummaryPage — null lender state', () => {
-  const inputs = defaultCalculatorInputsV7();
+  const inputs = defaultCalculatorInputsV8();
   const run = runAppraisal(inputs);
 
   it('renders the existing not-available treatment for lender GDV and LTGDV lender', () => {
@@ -85,5 +102,39 @@ describe('AppraisalSummaryPage — populated (fixture G)', () => {
     expect(run.metrics.cost_to_complete?.first_shortfall_month).toBeNull();
     expect(run.metrics.cost_to_complete?.max_shortfall_pence).toBe(0);
     expect(screen.getByText('None')).toBeInTheDocument();
+  });
+
+  it('does NOT carry the VAT caveat on Net/Gross LTC when there is no irrecoverable VAT', () => {
+    // fixture G carries no vat block at all -- registered is false via the
+    // migrated default, so total_irrecoverable_pence is 0 and neither
+    // tooltip should mention it (spec §17.13, ruling R45).
+    expect(run.metrics.vat.total_irrecoverable_pence).toBe(0);
+    render(<AppraisalSummaryPage inputs={fixtureG.inputs} run={run} onChange={vi.fn()} />);
+    const netLtc = screen.getByText('Net LTC').closest('[title]') as HTMLElement;
+    const grossLtc = screen.getByText('Gross LTC').closest('[title]') as HTMLElement;
+    expect(netLtc.getAttribute('title')).not.toMatch(/irrecoverable/i);
+    expect(grossLtc.getAttribute('title')).not.toMatch(/irrecoverable/i);
+  });
+});
+
+describe('AppraisalSummaryPage — VAT LTC caveat (spec §17.13, ruling R34/R45)', () => {
+  const inputs = inputsWithIrrecoverableVat();
+  const run = runAppraisal(inputs);
+
+  it('has a real irrecoverable figure on this document (precondition)', () => {
+    expect(run.metrics.vat.total_irrecoverable_pence).toBeGreaterThan(0);
+  });
+
+  it('puts the VAT caveat, reading the irrecoverable figure from run.metrics, on BOTH the Net LTC and Gross LTC tooltips', () => {
+    render(<AppraisalSummaryPage inputs={inputs} run={run} onChange={vi.fn()} />);
+    const irrecoverable = penceToPounds(run.metrics.vat.total_irrecoverable_pence);
+
+    const netLtc = screen.getByText('Net LTC').closest('[title]') as HTMLElement;
+    const grossLtc = screen.getByText('Gross LTC').closest('[title]') as HTMLElement;
+
+    expect(netLtc.getAttribute('title')).toContain(irrecoverable);
+    expect(netLtc.getAttribute('title')).toMatch(/Net LTC excludes/);
+    expect(grossLtc.getAttribute('title')).toContain(irrecoverable);
+    expect(grossLtc.getAttribute('title')).toMatch(/Gross LTC includes/);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveMetrics, pct, breakevenFlags } from './metrics';
+import { deriveMetrics, pct, breakevenFlags, VAT_COUNTERFACTUAL_TAX_REASON } from './metrics';
 import { runLedger } from './monthly-engine';
 import { runAppraisal, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6 } from './index';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV7, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
@@ -7,20 +7,37 @@ import { DEFAULT_AREA_BRIDGE } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, EquitySource, FacilityTerms,
-  MonthReceipts, MonthUses, Schedule,
+  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8, EquitySource,
+  FacilityTerms, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
+import type { VatResult } from './vat';
+import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
 function uses(partial: Partial<MonthUses>): MonthUses {
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0, ...partial,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0, ...partial,
   };
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
-  return { gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, ...partial };
+  return {
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0, ...partial,
+  };
+}
+// R11: no test in this file exercises VAT — an inert result of the schedule's
+// own length, mirroring vat.ts's inertVat() shape exactly.
+function emptyVat(termMonths: number): VatResult {
+  return {
+    registered: false, charges: [], periods: [],
+    months: Array.from({ length: termMonths }, (_, month) => (
+      { month, incurred_pence: 0, reclaimed_pence: 0, carry_pence: 0 }
+    )),
+    total_input_vat_pence: 0, total_recoverable_pence: 0, total_irrecoverable_pence: 0,
+    total_reclaimed_pence: 0, receivable_at_maturity_pence: 0, peak_carry_pence: 0, peak_carry_month: null,
+    purchase_vat_pence: 0, purchase_vat_chargeable: false, purchase_evidence_status: 'unconfirmed',
+  };
 }
 function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
   const sum = (f: (x: MonthUses) => number) => u.reduce((a, x) => a + f(x), 0);
@@ -37,7 +54,11 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       gdv_pence: grossSales, retained_value_pence: 0,
       cost_before_finance_ex_selling_pence:
         sum((x) => x.acquisition_pence + x.construction_pence + x.professional_pence + x.statutory_pence),
+      vat_pence: sum((x) => x.vat_pence),
+      vat_reclaim_pence: r.reduce((a, x) => a + x.vat_reclaim_pence, 0),
+      irrecoverable_vat_pence: 0,
     },
+    vat: emptyVat(u.length),
   };
 }
 
@@ -742,25 +763,383 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         packages: [
           { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
             amount_pence: 1_000_000, contingency_class: 'existing_building',
-            lender_eligible: true, notes: '' },
+            lender_eligible: true, notes: '', vat_override: null },
           { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
-            contingency_class: 'general', lender_eligible: true, notes: '' },
+            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null },
         ],
         contingency: [
-          { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 15, basis: 'selected_packages', package_ids: ['p1'] },
-          { name: 'abnormal', pct: 2.5, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 15 },
+          { name: 'abnormal', pct: 2.5 },
         ],
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false },
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
           { id: 'f2', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null },
         ],
       },
     });
     expect(run.metrics.cost_plan.construction_total_pence).toBe(run.schedule.totals.construction_pence);
     expect(run.metrics.cost_plan.professional_total_pence).toBe(run.schedule.totals.professional_pence);
     expect(run.metrics.cost_plan.statutory_total_pence).toBe(run.schedule.totals.statutory_pence);
+  });
+});
+
+// ── R11 (spec §17.5, §17.12): VAT in the headline numbers ─────────────────────
+
+/** The release's primary invariant needs a document where the VAT is genuinely
+ *  FUNDED, not gapped: §17.6 keeps VAT out of the development-cost advance base,
+ *  so from month 1 onwards the facility can never draw against it and any VAT
+ *  the equity does not meet becomes a visible `vat_funding_gap` rather than a
+ *  carried balance. Two facts make this document gap-free while still charging
+ *  real carry interest:
+ *
+ *  - every cost lands in month 0, where the day-one advance is capped at the
+ *    month's whole `cashUses` (VAT included — monthly-engine.ts's eligible-base
+ *    cap governs months 1+, not month 0), so the VAT is drawn on the facility
+ *    and carries at 12% until the month-3 reclaim clears it;
+ *  - a small committed equity source covers the selling VAT that lands in the
+ *    disposal month, which has no eligible spend to draw against.
+ *
+ *  The ledger is asserted flag-free on both sides below, so a later change that
+ *  reintroduces a gap fails loudly instead of quietly weakening the invariant. */
+function vatInvariantDocument(opts: {
+  registered?: boolean; recoverablePct?: number;
+} = {}): CalculatorInputsV8 {
+  const registered = opts.registered ?? true;
+  const recoverablePct = opts.recoverablePct ?? 100;
+  const v7 = defaultCalculatorInputsV7();
+  return {
+    ...v7,
+    inputs_version: 8,
+    acquisition: { ...v7.acquisition, purchase_price_pence: 20_000_000 },
+    equity_sources: [{
+      id: 'e1', classification: 'cash', amount_pence: 5_000_000, timing_month: 0,
+      repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+    }],
+    unit_mix: {
+      units: [1, 2, 3, 4].map((n) => ({
+        id: `u${n}`, type: '1bed' as const, floor_area_sqm: 50,
+        estimated_value_pence: 60_000_000, comparable_notes: '',
+        ancillary: { ...DEFAULT_UNIT_ANCILLARY },
+      })),
+    },
+    conversion_costs: {
+      ...v7.conversion_costs,
+      construction_cost_per_sqm_pence: 100_000,
+      total_construction_sqm: 1_000,
+      contingency_pct: 0,
+    },
+    finance: {
+      ...v7.finance,
+      funding_source: 'development_finance',
+      day_one_advance_pence: 400_000_000,
+      committed_net_facility_pence: 500_000_000,
+      committed_gross_facility_pence: 600_000_000,
+      annual_interest_rate_pct: 12,
+      interest_type: 'rolled_up',
+      arrangement_fee_pct: 0,
+      exit_fee_pct: 1,
+      exit_fee_basis: 'committed_gross_facility',
+      sales_sweep_pct: 100,
+      broker_fee_pence: 250_000,
+      lender_legal_fee_pence: 150_000,
+      valuation_fee_pence: 100_000,
+      monitoring_surveyor_fee_pence: 50_000,
+      term_months: 7,
+    },
+    programme: {
+      anchor_month: null,
+      packages: {
+        construction: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' } },
+        professional: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' } },
+        statutory: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' } },
+      },
+    },
+    vat: {
+      ...DEFAULT_VAT,
+      registered,
+      // Every category at 20%, exactly as §17.5's invariant specifies. The
+      // acquisition line stays inert because the vendor has not opted to tax
+      // (DEFAULT_VAT.purchase), so the chargeable consideration — and with it
+      // the acquisition tax and the acquisition cost line — is identical on
+      // both sides of the comparison, and the profit difference is the carry
+      // and nothing else.
+      treatments: defaultVatTreatments().map((t) => ({
+        ...t,
+        rate_pct: 20,
+        recoverable_pct: recoverablePct,
+        recovery_basis: 'zero_rated_sale' as const,
+      })),
+    },
+  };
+}
+
+describe('§17.5 — the release’s primary invariant', () => {
+  it('fully recoverable VAT moves no cost line, and moves profit only by carry interest', () => {
+    // §17.5's primary guard. It fails in all three directions: VAT leaking into
+    // a cost base, irrecoverable VAT computed off a rounding residue, or a
+    // reclaim going missing.
+    const on = runAppraisal(vatInvariantDocument({ registered: true, recoverablePct: 100 }));
+    const off = runAppraisal(vatInvariantDocument({ registered: false }));
+
+    // The document is gap-free on both sides: a `vat_funding_gap` would mean
+    // part of the VAT never reached the ledger, which would weaken every
+    // assertion below into a tautology.
+    expect(on.model.flags).toEqual([]);
+    expect(off.model.flags).toEqual([]);
+    expect(on.schedule.vat.total_input_vat_pence).toBeGreaterThan(0);
+
+    // The "reclaim goes missing" direction, made falsifiable. Without these two
+    // the invariant is NOT three-way: deleting the reclaim raises the `on` run's
+    // interest, so `financeDelta > 0` still holds, and the profit relation below
+    // is an accounting identity that holds either way. These assert the ledger
+    // actually received every recoverable penny the VAT engine booked.
+    expect(on.model.totals.vat_reclaim_pence).toBe(on.schedule.vat.total_reclaimed_pence);
+    expect(on.model.totals.vat_reclaim_pence).toBeGreaterThan(0);
+    // At 100% recoverable, everything reclaimed inside the term is everything
+    // charged less whatever falls due after it (§17.4 — never clamped in).
+    expect(on.schedule.vat.total_reclaimed_pence + on.schedule.vat.receivable_at_maturity_pence)
+      .toBe(on.schedule.vat.total_input_vat_pence);
+    expect(off.model.totals.vat_reclaim_pence).toBe(0);
+
+    expect(on.metrics.construction_cost_pence).toBe(off.metrics.construction_cost_pence);
+    expect(on.metrics.professional_fees_pence).toBe(off.metrics.professional_fees_pence);
+    expect(on.metrics.statutory_costs_pence).toBe(off.metrics.statutory_costs_pence);
+    expect(on.metrics.selling_costs_pence).toBe(off.metrics.selling_costs_pence);
+    expect(on.metrics.cost_plan).toEqual(off.metrics.cost_plan);
+
+    expect(on.metrics.irrecoverable_vat_pence).toBe(0);
+
+    const financeDelta = on.metrics.finance_costs_pence - off.metrics.finance_costs_pence;
+    expect(financeDelta).toBeGreaterThan(0);              // carrying VAT costs money
+    expect(off.metrics.profit_pence - on.metrics.profit_pence).toBe(financeDelta);
+  });
+
+  it('defines vat_carry_interest_pence as the counterfactual, not an apportionment', () => {
+    const on = runAppraisal(vatInvariantDocument({ registered: true, recoverablePct: 100 }));
+    const off = runAppraisal(vatInvariantDocument({ registered: false }));
+    // §17.12's definition, stated literally: total interest as given, less total
+    // interest with `vat.registered` forced false.
+    expect(on.metrics.vat_carry_interest_pence)
+      .toBe(on.model.totals.interest_pence - off.model.totals.interest_pence);
+    // …and on this document that IS the whole finance-cost movement — the
+    // arrangement fee, the ancillary fees and a committed-gross-facility exit
+    // fee are all VAT-independent — which is what pins §17.12's definition to
+    // §17.5's invariant above. Where the exit fee is charged on PEAK DEBT the
+    // two can separate, and the spec's claim that they are "the same quantity"
+    // holds only for the VAT-independent fee bases this document uses.
+    expect(on.metrics.vat_carry_interest_pence)
+      .toBe(on.metrics.finance_costs_pence - off.metrics.finance_costs_pence);
+    // A disclosure of a SLICE of finance costs, never an addition to them.
+    expect(on.metrics.total_development_cost_pence)
+      .toBe(on.metrics.cost_before_finance_pence + on.metrics.finance_costs_pence);
+  });
+
+  it('reports zero carry interest for an unregistered document', () => {
+    const off = runAppraisal(vatInvariantDocument({ registered: false }));
+    expect(off.metrics.vat_carry_interest_pence).toBe(0);
+    expect(off.metrics.irrecoverable_vat_pence).toBe(0);
+    expect(off.metrics.vat.registered).toBe(false);
+  });
+
+  it('charges irrecoverable VAT to cost before finance, on its own line', () => {
+    const on = runAppraisal(vatInvariantDocument({ registered: true, recoverablePct: 0 }));
+    const off = runAppraisal(vatInvariantDocument({ registered: false }));
+    expect(on.metrics.irrecoverable_vat_pence).toBeGreaterThan(0);
+    expect(on.metrics.irrecoverable_vat_pence).toBe(on.schedule.vat.total_irrecoverable_pence);
+    // §17.5's one-direction rule: NOT folded back into the construction line.
+    expect(on.metrics.construction_cost_pence).toBe(off.metrics.construction_cost_pence);
+    expect(on.metrics.cost_plan).toEqual(off.metrics.cost_plan);
+    expect(on.metrics.cost_before_finance_pence)
+      .toBe(off.metrics.cost_before_finance_pence + on.metrics.irrecoverable_vat_pence);
+  });
+
+  it('publishes the whole VatResult on the appraisal result', () => {
+    const on = runAppraisal(vatInvariantDocument({ registered: true, recoverablePct: 100 }));
+    // The result's `vat` is the schedule's, not a second derivation: §17.5 runs
+    // the engine once, in one direction.
+    expect(on.metrics.vat).toBe(on.schedule.vat);
+    expect(on.metrics.vat.registered).toBe(true);
+    expect(on.metrics.vat.peak_carry_pence).toBeGreaterThan(0);
+  });
+});
+
+/** Ruling R24. The same document under phased sales, with the day-one advance
+ *  capped BELOW the month's cash uses so the draw schedule is byte-identical
+ *  with and without VAT (committed equity absorbs the VAT outflow instead).
+ *  That isolates the one thing under test: the reclaim the ledger repays from
+ *  and the phased solver, before this task, had no term for. */
+function phasedVatDocument(registered: boolean): CalculatorInputsV8 {
+  const base = vatInvariantDocument({ registered, recoverablePct: 100 });
+  return {
+    ...base,
+    equity_sources: [{
+      id: 'e1', classification: 'cash', amount_pence: 60_000_000, timing_month: 0,
+      repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+    }],
+    finance: { ...base.finance, day_one_advance_pence: 100_000_000 },
+    sales_phasing: { tranches: [
+      { month_offset: 5, pct_of_gross_receipts: 60 },
+      { month_offset: 6, pct_of_gross_receipts: 40 },
+    ] },
+  };
+}
+
+describe('ruling R24 — the phased senior break-even sees the VAT reclaim', () => {
+  it('solves a strictly lower break-even when a reclaim repays the facility', () => {
+    const withReclaim = runAppraisal(phasedVatDocument(true));
+    const without = runAppraisal(phasedVatDocument(false));
+
+    // The comparison is only meaningful if the two runs drew identically — the
+    // reclaim must be the ONLY difference the solver sees. Asserted, not assumed.
+    expect(withReclaim.model.months.map((m) => m.draw_pence + m.capitalised_fees_pence))
+      .toEqual(without.model.months.map((m) => m.draw_pence + m.capitalised_fees_pence));
+    expect(withReclaim.model.flags).toEqual([]);
+    expect(without.model.flags).toEqual([]);
+    expect(withReclaim.model.totals.vat_reclaim_pence).toBeGreaterThan(0);
+    expect(without.model.totals.vat_reclaim_pence).toBe(0);
+
+    // A comparison, never an absolute: an absolute literal here would pin
+    // whatever the solver happens to produce rather than the rule under test.
+    expect(withReclaim.metrics.senior_breakeven_pence).not.toBeNull();
+    expect(without.metrics.senior_breakeven_pence).not.toBeNull();
+    expect(withReclaim.metrics.senior_breakeven_pence as number)
+      .toBeLessThan(without.metrics.senior_breakeven_pence as number);
+  });
+
+  it('reports a NEGATIVE carry unclamped where the reclaim repays other borrowing (R32)', () => {
+    // §17.12 R32. Equity funds the VAT outflow on this document, but the reclaim
+    // sweeps 100% to senior debt (§17.6) — so it repays borrowing that funded
+    // OTHER costs and the facility ends smaller than it would have been without
+    // VAT. Carrying VAT SAVED interest here. Nothing clamps the figure today and
+    // nothing may: a `Math.max(0, …)` added later would pass every other test in
+    // this file, which is exactly why this one exists.
+    const withReclaim = runAppraisal(phasedVatDocument(true));
+    const without = runAppraisal(phasedVatDocument(false));
+    expect(withReclaim.metrics.vat_carry_interest_pence).toBeLessThan(0);
+    expect(withReclaim.metrics.vat_carry_interest_pence)
+      .toBe(withReclaim.model.totals.interest_pence - without.model.totals.interest_pence);
+  });
+});
+
+/** Ruling R33 / R31. `vatInvariantDocument` with the vendor opted to tax and TOGC
+ *  not applying, so purchase VAT is chargeable (§17.7) and the acquisition tax is
+ *  charged on the VAT-INCLUSIVE consideration. This is the document class where a
+ *  naive `registered: false` counterfactual goes wrong, and it had no coverage
+ *  before this fix.
+ *
+ *  `pinnedTaxPence` reproduces R33's own pin — `acquisition_tax_override_pence`
+ *  set to the as-given tax — so a test can build the counterfactual the engine
+ *  builds and compare against it. Only `override_pence` reaches a figure; the
+ *  reason is provenance, and the real constant is imported so both sites grep
+ *  together. */
+function optedVatDocument(
+  registered: boolean, pinnedTaxPence: number | null = null,
+): CalculatorInputsV8 {
+  const base = vatInvariantDocument({ registered, recoverablePct: 100 });
+  return {
+    ...base,
+    acquisition: {
+      ...base.acquisition,
+      purchase_price_pence: 50_000_000,
+      acquisition_tax_override_pence: pinnedTaxPence,
+      acquisition_tax_override_reason:
+        pinnedTaxPence === null ? '' : VAT_COUNTERFACTUAL_TAX_REASON,
+    },
+    vat: {
+      ...base.vat,
+      purchase: {
+        ...base.vat.purchase,
+        vendor_opted_to_tax: true,
+        togc_treatment: 'does_not_apply',
+      },
+    },
+  };
+}
+
+describe('ruling R33 — the counterfactual holds the acquisition tax fixed', () => {
+  it('excludes the SDLT-on-VAT uplift’s financing from the carry', () => {
+    const on = runAppraisal(optedVatDocument(true));
+    // The document really is the one under test: tax charged on the
+    // VAT-inclusive consideration, not the price.
+    expect(on.metrics.chargeable_consideration_pence).toBe(60_000_000);
+    expect(on.metrics.irrecoverable_vat_pence).toBe(0);
+
+    // The NAIVE counterfactual — `registered: false` and nothing else. It reads
+    // like the spec's own words but `chargeableConsiderationPence` calls
+    // `resolveVatTreatment`, which returns INERT when unregistered, so the
+    // consideration collapses to the exclusive price and the acquisition COST
+    // falls with it. Its interest difference is therefore contaminated by the
+    // financing of a tax delta that has nothing to do with the VAT cash cycle.
+    const naive = runAppraisal(optedVatDocument(false));
+    expect(naive.metrics.acquisition_cost_pence)
+      .toBeLessThan(on.metrics.acquisition_cost_pence);
+    const naiveDelta = on.model.totals.interest_pence - naive.model.totals.interest_pence;
+
+    // R33's counterfactual: same forcing, plus the acquisition tax pinned to the
+    // as-given figure. Acquisition cost is then identical on both sides.
+    const pinned = runAppraisal(optedVatDocument(false, on.metrics.acquisition_tax_pence));
+    expect(pinned.metrics.acquisition_cost_pence).toBe(on.metrics.acquisition_cost_pence);
+    expect(pinned.model.flags).toEqual([]);
+    expect(on.model.flags).toEqual([]);
+
+    // The reported carry is R33's, not the naive one — and the pin is doing real
+    // work here, not merely agreeing by luck.
+    expect(on.metrics.vat_carry_interest_pence)
+      .toBe(on.model.totals.interest_pence - pinned.model.totals.interest_pence);
+    expect(on.metrics.vat_carry_interest_pence).toBeLessThan(naiveDelta);
+    expect(naiveDelta - on.metrics.vat_carry_interest_pence).toBeGreaterThan(0);
+  });
+
+  it('keeps §17.5’s profit identity on an opted document', () => {
+    // Measured against R33's own counterfactual, which is the only comparison
+    // the identity is stated over: the naive one changes a COST line (the
+    // acquisition tax), so Δprofit there exceeds Δfinance_costs by the tax delta.
+    const on = runAppraisal(optedVatDocument(true));
+    const pinned = runAppraisal(optedVatDocument(false, on.metrics.acquisition_tax_pence));
+
+    expect(on.metrics.construction_cost_pence).toBe(pinned.metrics.construction_cost_pence);
+    expect(on.metrics.cost_before_finance_pence).toBe(pinned.metrics.cost_before_finance_pence);
+
+    const financeDelta = on.metrics.finance_costs_pence - pinned.metrics.finance_costs_pence;
+    expect(financeDelta).toBeGreaterThan(0);
+    expect(pinned.metrics.profit_pence - on.metrics.profit_pence).toBe(financeDelta);
+    // Fee bases are VAT-independent on this document, so R31's first case holds:
+    // Δprofit === Δfinance_costs === vat_carry_interest_pence.
+    expect(on.metrics.vat_carry_interest_pence).toBe(financeDelta);
+  });
+});
+
+describe('ruling R31 — carry interest and profit impact are two quantities', () => {
+  it('separates them when the exit fee is charged on peak debt', () => {
+    // With `exit_fee_basis: 'peak_debt'`, carrying VAT raises peak debt, which
+    // raises the exit fee — so finance costs rise by MORE than interest alone and
+    // profit falls by more than `vat_carry_interest_pence` reports. Both figures
+    // are correct; they answer different questions. Without this test the
+    // divergence is latent and a later change that quietly redefined either one
+    // would be invisible.
+    const peakDebtDoc = (registered: boolean): CalculatorInputsV8 => {
+      const base = vatInvariantDocument({ registered, recoverablePct: 100 });
+      return { ...base, finance: { ...base.finance, exit_fee_basis: 'peak_debt' } };
+    };
+    const on = runAppraisal(peakDebtDoc(true));
+    const off = runAppraisal(peakDebtDoc(false));
+    expect(on.model.flags).toEqual([]);
+    expect(off.model.flags).toEqual([]);
+
+    // The mechanism, asserted rather than assumed: VAT really does move peak debt
+    // and the exit fee with it.
+    expect(on.model.peak_debt_pence).toBeGreaterThan(off.model.peak_debt_pence);
+    expect(on.model.totals.exit_fee_pence).toBeGreaterThan(off.model.totals.exit_fee_pence);
+
+    const financeDelta = on.metrics.finance_costs_pence - off.metrics.finance_costs_pence;
+    expect(off.metrics.profit_pence - on.metrics.profit_pence).toBe(financeDelta);
+    expect(financeDelta).toBeGreaterThan(on.metrics.vat_carry_interest_pence);
+    // …and the carry is still exactly the interest difference, unchanged by the
+    // fee basis.
+    expect(on.metrics.vat_carry_interest_pence)
+      .toBe(on.model.totals.interest_pence - off.model.totals.interest_pence);
   });
 });

@@ -17,9 +17,14 @@ from .breakeven import (
 )
 from .cost_plan import CostPlanResult, compute_cost_plan
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
-from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct
+from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, run_ledger
 from .lender_valuation import compute_lender_gdv
-from .schedule import Schedule, calculate_gdv_breakdown
+# Sec 17.12's counterfactual runs the pipeline's first two stages a second time.
+# Imported HERE rather than reached through run_appraisal, which is what makes the
+# recursion impossible by construction: __init__.py imports this module, so there
+# is no edge back -- derive_metrics can never re-enter itself.
+from .schedule import Schedule, build_schedule, calculate_gdv_breakdown
+from .vat import VatResult, chargeable_consideration_pence
 from .acquisition_tax import AcquisitionTaxResult, calculate_acquisition_tax, resolve_acquisition_date
 from .types import (
     CALC_VERSION,
@@ -120,6 +125,12 @@ class AppraisalResultV2:
     # Spec Sec 14 (R8) -- the full derivation: regime, band breakdown, surcharge,
     # band-set effective date, table version, source and override provenance.
     acquisition_tax: AcquisitionTaxResult
+    # R11 spec Sec 17.7 -- the figure the acquisition tax was actually charged
+    # on: the price PLUS any chargeable purchase VAT. Equal to
+    # acquisition.purchase_price_pence unless the vendor has opted to tax and
+    # TOGC does not apply. Disclosed rather than left implicit, so the tax base
+    # is visible in the result instead of buried inside a tax figure.
+    chargeable_consideration_pence: int
     # DEPRECATED (R8): a jurisdiction-neutral figure under an England/NI-only
     # name. Carries the identical value to acquisition_tax_pence; retained only
     # so pre-R8 report and export readers keep working. Removed in R16.
@@ -135,6 +146,13 @@ class AppraisalResultV2:
     # contingency class with its base, every fee line with its base. The UI
     # and the report read cost from here and never recompute one.
     cost_plan: CostPlanResult
+    # R11 spec Sec 17.12 -- the full VAT derivation: per-category resolved
+    # treatment, per-month VAT out, per-month reclaim, the carry vector, peak
+    # carry and its month, total input VAT, total reclaimed, total irrecoverable,
+    # and receivable_at_maturity_pence. This is the SCHEDULE's vat, republished
+    # here rather than recomputed: Sec 17.5 runs the engine once, in one
+    # direction. Every consumer reads VAT from here and never calls compute_vat.
+    vat: VatResult
     # R9 spec Sec 3.1 -- GDV excluding ancillary. This is the pre-R9 figure,
     # kept so a variance against it stays expressible.
     gdv_internal_pence: int
@@ -146,8 +164,27 @@ class AppraisalResultV2:
     professional_fees_pence: int
     statutory_costs_pence: int
     selling_costs_pence: int
+    # R11 spec Sec 17.5 -- VAT the scheme cannot recover, on its OWN line and
+    # added to cost_before_finance_pence (and so to TDC and to profit).
+    # Deliberately NOT folded back into construction_cost_pence, however natural
+    # that reads: compute_vat reads the cost plan, so a VAT figure entering a
+    # cost base is the one move that could make the engine cyclic. Equal to
+    # vat.total_irrecoverable_pence.
+    irrecoverable_vat_pence: int
     cost_before_finance_pence: int
     finance_costs_pence: int
+    # R11 spec Sec 17.12 -- the finance cost attributable to carrying recoverable
+    # VAT. A DISCLOSURE OF A SLICE of finance_costs_pence, not an addition to it:
+    # the interest is already there, charged by the ledger on a balance the VAT
+    # outflow raised, and adding it again would double count.
+    #
+    # Defined by an explicit counterfactual, never by apportioning interest
+    # across balances: total interest with the document as given, less total
+    # interest from the same document with vat.registered forced false. That is
+    # the same quantity Sec 17.5's primary invariant measures wherever the
+    # facility's fee bases are VAT-independent, so the two pin each other. 0 for
+    # a document with no VAT block, or one that is not registered.
+    vat_carry_interest_pence: int
     total_development_cost_pence: int
     profit_pence: int
     profit_is_unrealised: bool
@@ -234,6 +271,85 @@ def breakeven_flags(
     return out
 
 
+VAT_COUNTERFACTUAL_TAX_REASON = (
+    "R33 VAT carry counterfactual - acquisition tax held at the as-given figure"
+)
+"""Ruling R33 -- the reason stamped on the counterfactual document's
+acquisition-tax override. It never reaches a user: the counterfactual is a
+throwaway document built inside vat_carry_interest_pence, never validated, never
+persisted and never rendered. Named rather than inlined so a grep for it finds
+the one site that writes an override the user did not ask for."""
+
+
+def vat_carry_interest_pence(
+    inputs: AnyCalculatorInputs, model: MonthlyModel, acquisition_tax_pence: int,
+) -> int:
+    """Sec 17.12 -- vat_carry_interest_pence, by the counterfactual and by nothing
+    else. Mirrors vatCarryInterestPence in metrics.ts.
+
+    Total interest with the document as given, less total interest from the same
+    document with vat.registered forced false. It is a DISCLOSURE OF A SLICE of
+    finance_costs_pence, not an addition to it: the ledger has already charged
+    this interest, on a balance the VAT outflow raised.
+
+    Deliberately NOT an apportionment of interest across balances. An
+    apportionment is free to disagree with Sec 17.5's primary invariant ("profit
+    moves only by the carry interest"), and the two tests exist precisely to pin
+    each other; only the counterfactual makes them the same quantity.
+
+    THE RECURSION GUARD IS STRUCTURAL, NOT A FLAG. This helper calls
+    build_schedule and run_ledger directly -- it never calls run_appraisal or
+    derive_metrics -- so the counterfactual run cannot itself compute a
+    counterfactual. The early return below closes the same door a second time:
+    the counterfactual document is unregistered, so were it ever passed back
+    through here it would answer 0 without running anything.
+
+    THE COUNTERFACTUAL HOLDS THE ACQUISITION TAX FIXED (ruling R33). VAT imposes
+    two costs and only one of them is carry: a TIMING cost (money out, money back
+    later, interest on the gap) and a PERMANENT one -- acquisition tax charged on
+    the VAT-inclusive consideration (Sec 17.7), which never comes back.
+
+    Forcing registered=False alone removes both. chargeable_consideration_pence
+    DOES read `registered` -- it calls resolve_vat_treatment, which returns INERT
+    for an unregistered document, so the acquisition rate goes to 0 and the
+    consideration collapses back to the exclusive price. On any
+    vendor_opted_to_tax document the counterfactual would then carry a smaller
+    month-0 outflow, draw less and pay less interest for a reason that is not the
+    VAT cash cycle: the carry would be overstated by the interest on the
+    SDLT-on-VAT uplift, and Sec 17.5's dProfit == dFinance_costs identity would
+    fail because the counterfactual's cost-before-finance fell by the tax delta
+    too.
+
+    So the counterfactual pins its acquisition tax to the tax the real document
+    was charged, through the existing acquisition_tax_override_pence mechanism
+    with a reason naming the counterfactual. Acquisition cost is then identical
+    on both sides and the difference is exactly the VAT cash cycle -- including
+    the carry on purchase VAT itself, which IS a timing cost and does belong. The
+    permanent cost is not hidden: chargeable_consideration_pence and the
+    acquisition tax disclose it, which is where a reader looks for a cost that
+    never comes back.
+    """
+    # Structural, exactly as compute_vat and chargeable_consideration_pence read
+    # it: a pre-v8 document has no `vat` block at all and must be inert.
+    vat = getattr(inputs, "vat", None)
+    if vat is None or not vat.registered:
+        return 0
+    counterfactual = inputs.model_copy(deep=True)
+    counterfactual.vat.registered = False
+    # R33. build_schedule charges acquisition tax through its own site
+    # (calculate_total_acquisition_cost), which reads this override exactly as
+    # derive_metrics does -- so pinning it here holds BOTH tax sites at the
+    # as-given figure and the month-0 acquisition outflow is identical on both
+    # sides. Where the real document already carries an override this is a no-op:
+    # acquisition_tax_pence is that same override. A `vat` block only exists on a
+    # v8 document, which subclasses V5, so the override fields are always present.
+    counterfactual.acquisition.acquisition_tax_override_pence = acquisition_tax_pence
+    counterfactual.acquisition.acquisition_tax_override_reason = VAT_COUNTERFACTUAL_TAX_REASON
+    cf_schedule = build_schedule(counterfactual)
+    cf_model = run_ledger(cf_schedule, counterfactual.finance, counterfactual.equity_sources)
+    return model.totals.interest_pence - cf_model.totals.interest_pence
+
+
 def derive_metrics(
     inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ) -> AppraisalResultV2:
@@ -272,8 +388,10 @@ def derive_metrics(
     # preserves their figures to the penny.
     #
     # Fix round 2: the gate is on the *acquisition block*, not on the container.
-    # schedule.py's calculate_total_acquisition_cost is handed the block alone and
-    # can only gate on it, and the two sites must use the identical predicate or
+    # schedule.py's calculate_total_acquisition_cost gates on the block too --
+    # R11 widened its parameter to the whole document (spec Sec 17.7), but it
+    # still reads `inputs.acquisition` and tests THAT, exactly as this site
+    # does -- and the two sites must use the identical predicate or
     # they can disagree -- Pydantic's default revalidate_instances='never' lets a
     # CalculatorInputsV4 hold an AcquisitionInputsV5, at which point a
     # container-level gate here reports SDLT while the schedule charges LTT. Not
@@ -292,7 +410,17 @@ def derive_metrics(
     # sites cannot drift.
     date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
     acquisition_tax = calculate_acquisition_tax(
-        consideration_pence=acq.purchase_price_pence,
+        # Sec 17.7: the VAT-INCLUSIVE consideration, never the raw price.
+        #
+        # Spelled as the CALL rather than through an intermediate variable, and
+        # deliberately not mirroring metrics.ts, which holds the figure in a
+        # local. TypeScript can: the value is branded, and the brand flows
+        # through the variable. Python has no nominal type, so the AST guard in
+        # tests/test_accessor_guard.py requires the accessor call AT the
+        # keyword -- an intermediate Name is precisely the laundering shape the
+        # brand exists to defeat, and one a scan cannot tell from a raw price.
+        # The accessor is pure, so the second call below is the same figure.
+        consideration_pence=chargeable_consideration_pence(inputs),
         jurisdiction=jurisdiction,
         basis="non_residential",
         date=date,
@@ -300,8 +428,22 @@ def derive_metrics(
         override_reason=acq.acquisition_tax_override_reason if is_v5 else None,
     )
     sdlt = acquisition_tax.total_pence
-    cost_before_finance = t.cost_before_finance_ex_selling_pence + t.selling_costs_pence
+    # Sec 17.5. Irrecoverable VAT is a cost of the scheme, and it enters
+    # cost-before-finance on its OWN line -- never folded back into
+    # construction_cost_pence, however natural that reads. compute_vat reads the
+    # cost plan, so a VAT figure entering a cost base is the one move that could
+    # make the engine cyclic; keeping it here, downstream of every base, is what
+    # makes a cycle impossible by construction rather than merely detected.
+    # Read off the schedule TOTALS, the same t.* every other cost line in this
+    # block reads. schedule.vat.total_irrecoverable_pence carries the identical
+    # figure, but one number with two read paths is the shape drift starts from.
+    irrecoverable_vat = t.irrecoverable_vat_pence
+    cost_before_finance = (
+        t.cost_before_finance_ex_selling_pence + t.selling_costs_pence + irrecoverable_vat
+    )
     finance_costs = model.totals.finance_costs_pence
+    # Sec 17.12. A slice of finance_costs above, disclosed -- never added to it.
+    vat_carry_interest = vat_carry_interest_pence(inputs, model, sdlt)
     tdc = cost_before_finance + finance_costs
     gross_receipts = t.gross_sales_pence
     profit = gross_receipts + t.retained_value_pence - tdc
@@ -401,6 +543,16 @@ def derive_metrics(
                     draws_and_fees_pence=[
                         mm.draw_pence + mm.capitalised_fees_pence for mm in model.months
                     ],
+                    # R11 ruling R24. The ledger repays senior debt from the VAT
+                    # reclaim (Sec 17.6), so a replay with no reclaim term solves
+                    # for a break-even sale price the deal does not need -- a
+                    # wrong financial number, not a cosmetic gap. Frozen from the
+                    # actual run, exactly like the draws above: a reclaim returns
+                    # an advance, so it does not scale with the sale price being
+                    # solved for. (The static path above needs no equivalent:
+                    # redemption_balance_at_disposal_pence is captured after the
+                    # reclaim -- ruling R23.)
+                    vat_reclaims_pence=[mm.vat_reclaim_pence for mm in model.months],
                     monthly_rate=inputs.finance.annual_interest_rate_pct / 100 / 12,
                     rolled_up=inputs.finance.interest_type == "rolled_up",
                     sales_sweep_pct=inputs.finance.sales_sweep_pct,
@@ -460,19 +612,26 @@ def derive_metrics(
         acquisition_cost_pence=t.acquisition_pence,
         acquisition_tax_pence=sdlt,
         acquisition_tax=acquisition_tax,
+        chargeable_consideration_pence=chargeable_consideration_pence(inputs),
         # DEPRECATED (R8) -- use acquisition_tax_pence. Removed in R16.
         sdlt_pence=sdlt,
         area_bridge=bridge,
         developed_area_sqm=bridge.developed_area_sqm,
         cost_plan=cost_plan,
+        # Sec 17.12. The SCHEDULE's VatResult, republished -- not a second
+        # derivation. Sec 17.5 runs the VAT engine once, in one direction, and
+        # every consumer reads the answer from here.
+        vat=schedule.vat,
         gdv_internal_pence=gdv_parts.internal_pence,
         gdv_ancillary_pence=gdv_parts.ancillary_pence,
         construction_cost_pence=t.construction_pence,
         professional_fees_pence=t.professional_pence,
         statutory_costs_pence=t.statutory_pence,
         selling_costs_pence=t.selling_costs_pence,
+        irrecoverable_vat_pence=irrecoverable_vat,
         cost_before_finance_pence=cost_before_finance,
         finance_costs_pence=finance_costs,
+        vat_carry_interest_pence=vat_carry_interest,
         total_development_cost_pence=tdc,
         profit_pence=profit,
         profit_is_unrealised=profit_is_unrealised,

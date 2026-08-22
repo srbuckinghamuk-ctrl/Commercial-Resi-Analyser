@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, EligibilityAssessment } from '../../types';
 import type { DealSpiderInputs } from '../../lib/conversion-types';
-import type { CalculatorInputsV7 } from '../../lib/model';
+import type { CalculatorInputsV8 } from '../../lib/model';
 import {
   CLASS_MA_AXES,
   computeSpider,
@@ -14,8 +14,8 @@ import { getEligibility } from '../../lib/api';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV7;
-  onChange: (partial: Partial<CalculatorInputsV7>) => void;
+  inputs: CalculatorInputsV8;
+  onChange: (partial: Partial<CalculatorInputsV8>) => void;
   project: Project;
 }
 
@@ -122,7 +122,7 @@ export default function DealSpiderPage({ inputs, onChange, project }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 4 }}>13. Deal Spider</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 4 }}>14. Deal Spider</h3>
       <p style={{ color: '#64748b', fontSize: 13, marginBottom: 20 }}>
         9-axis Class MA risk profile. Every axis is normalised to 0–5 with outward always better.
         Axes marked † are provisional — an eligibility check behind them is unverified.

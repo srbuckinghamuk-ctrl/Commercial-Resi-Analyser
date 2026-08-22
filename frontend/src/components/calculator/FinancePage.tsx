@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type {
-  CalculatorInputsV7, AppraisalRun, FacilityTerms, EquitySource, LenderValuation,
+  CalculatorInputsV8, AppraisalRun, FacilityTerms, EquitySource, LenderValuation,
   FundingSource, InterestType, ArrangementFeeBasis, ExitFeeBasis, EquityDrawRule,
   EquityClassification, EvidenceStatus,
 } from '../../lib/model';
@@ -10,8 +10,8 @@ import ReconciliationStrip from './ReconciliationStrip';
 import LenderValuationCard from './LenderValuationCard';
 
 interface Props {
-  inputs: CalculatorInputsV7;
-  onChange: (partial: Partial<CalculatorInputsV7>) => void;
+  inputs: CalculatorInputsV8;
+  onChange: (partial: Partial<CalculatorInputsV8>) => void;
   run: AppraisalRun;
 }
 
@@ -177,7 +177,7 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>5. Finance Structure</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>6. Finance Structure</h3>
 
       <ReconciliationStrip run={run} />
 

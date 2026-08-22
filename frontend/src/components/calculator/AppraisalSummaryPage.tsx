@@ -1,12 +1,12 @@
-import type { AppraisalRun, CalculatorInputsV7 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV8 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import CostToCompleteCard from './CostToCompleteCard';
 
 interface Props {
-  inputs: CalculatorInputsV7;
-  onChange: (partial: Partial<CalculatorInputsV7>) => void;
+  inputs: CalculatorInputsV8;
+  onChange: (partial: Partial<CalculatorInputsV8>) => void;
   run: AppraisalRun;
 }
 
@@ -46,7 +46,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * null, whether because no lender valuation was recorded or because a recorded one could not
  * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
  * surfaces the distinction via its own validation messages). */
-function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV7; run: AppraisalRun }) {
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV8; run: AppraisalRun }) {
   const { metrics } = run;
   const lv = inputs.lender_valuation;
 
@@ -103,10 +103,20 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
   // R8 Task 11: the acquisition tax line is not SDLT on a Scottish or Welsh
   // document. Name the regime the engine actually charged.
   const regime = metrics.acquisition_tax.regime;
+  // R11 spec §17.13 (ruling R34, R45). Net LTC's denominator excludes
+  // irrecoverable VAT (it is not advance-eligible, §17.6); Gross LTC's TDC
+  // includes it (§17.5). Printed side by side unexplained, the two would read
+  // as a bug. The memo already states this (export-investment-memo.ts); this
+  // is the same caveat on the page a user actually looks at, read from
+  // run.metrics rather than recomputed, and shown only when there is
+  // irrecoverable VAT for it to explain.
+  const vatCaveat = metrics.vat.total_irrecoverable_pence > 0
+    ? ` Net LTC excludes the ${penceToPounds(metrics.vat.total_irrecoverable_pence)} of irrecoverable VAT in this appraisal; Gross LTC includes it — the two are not directly comparable.`
+    : '';
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>8. Appraisal Summary</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>9. Appraisal Summary</h3>
 
       <ReconciliationStrip run={run} />
 
@@ -225,12 +235,12 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
         <MetricCard
           label="Net LTC"
           value={pctOrNa(metrics.net_ltc_pct)}
-          tooltip="§5.4: numerator = cumulative net senior advances (principal draws + capitalised non-interest fees, excludes rolled-up interest). Denominator = development cost before disposal and finance."
+          tooltip={`§5.4: numerator = cumulative net senior advances (principal draws + capitalised non-interest fees, excludes rolled-up interest). Denominator = development cost before disposal and finance.${vatCaveat}`}
         />
         <MetricCard
           label="Gross LTC"
           value={pctOrNa(metrics.gross_ltc_pct)}
-          tooltip="§5.5: numerator = peak gross senior debt. Denominator = TDC (§3.10)."
+          tooltip={`§5.5: numerator = peak gross senior debt. Denominator = TDC (§3.10).${vatCaveat}`}
         />
         <MetricCard
           label="LTGDV"

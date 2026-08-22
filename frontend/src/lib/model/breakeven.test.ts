@@ -211,6 +211,7 @@ describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
   // two tranches 50/50 in months 2 and 3; no agent fee/legal/enforcement; 100% sweep.
   const base = (): PhasedSeniorBreakevenTerms => ({
     draws_and_fees_pence: [10_000_000, 0, 0, 0],
+    vat_reclaims_pence: [0, 0, 0, 0],   // R24: no VAT in this shape — the reclaim tests are below
     monthly_rate: 0.02,
     rolled_up: true,
     sales_sweep_pct: 100,
@@ -286,6 +287,7 @@ describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
   function nonZeroFeeBase(exitFeeBasis: FacilityTerms['exit_fee_basis']): PhasedSeniorBreakevenTerms {
     return {
       draws_and_fees_pence: [1_000_000, 0, 0, 0],
+      vat_reclaims_pence: [0, 0, 0, 0],   // R24: no VAT in this shape
       monthly_rate: 0.01,
       rolled_up: true,
       sales_sweep_pct: 100,
@@ -323,5 +325,153 @@ describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
     const exact = g as number;
     expect(phasedReplayRedeems(t, exact)).toBe(true);
     expect(phasedReplayRedeems(t, exact - 1)).toBe(false);
+  });
+});
+
+describe('ruling R24 — the phased replay applies the VAT reclaim (spec §17.6)', () => {
+  /** Four months, 10,000,000 drawn at month 0 at 2%/mo rolled up, two 50/50
+   *  tranches in months 2 and 3, no fees. Identical to the file's `base()`
+   *  except for the reclaim under test, so the comparison below isolates it. */
+  const reclaimBase = (reclaims: number[]): PhasedSeniorBreakevenTerms => ({
+    draws_and_fees_pence: [10_000_000, 0, 0, 0],
+    vat_reclaims_pence: reclaims,
+    monthly_rate: 0.02,
+    rolled_up: true,
+    sales_sweep_pct: 100,
+    tranches: [
+      { month_offset: 2, pct_of_gross_receipts: 50 },
+      { month_offset: 3, pct_of_gross_receipts: 50 },
+    ],
+    selling_agent_fee_pct: 0,
+    selling_legal_fee_pence: 0,
+    enforcement_cost_assumption_pence: 0,
+    finance: { ...TERMS_FEE_FREE },
+    committed_gross_facility_pence: 0,
+  });
+
+  it('solves a strictly lower break-even when a reclaim repays part of the balance', () => {
+    // A comparison, not an absolute: an absolute literal would pin whatever the
+    // solver happens to produce rather than the rule under test. The ledger
+    // repays from the reclaim, so a replay that ignores it solves for a sale
+    // price the deal does not actually need.
+    const without = solveSeniorBreakevenPhased(reclaimBase([0, 0, 0, 0]));
+    const withReclaim = solveSeniorBreakevenPhased(reclaimBase([0, 2_000_000, 0, 0]));
+    expect(without).not.toBeNull();
+    expect(withReclaim).not.toBeNull();
+    expect(withReclaim as number).toBeLessThan(without as number);
+  });
+
+  it('an earlier reclaim beats a later one (timing of interest, NOT the ordering rule)', () => {
+    // Named for what it actually pins. On this fee-free shape both the reclaim
+    // arm and the tranche arm are plain subtractions from the same opening
+    // balance, so neither clamp binds and the month's closing balance is
+    // identical whichever order they run in — this cannot falsify R24's
+    // ordering requirement, and the test below is what does.
+    const sameMonth = solveSeniorBreakevenPhased(reclaimBase([0, 0, 2_000_000, 0]));
+    const monthLater = solveSeniorBreakevenPhased(reclaimBase([0, 0, 0, 2_000_000]));
+    expect(sameMonth).not.toBeNull();
+    expect(monthLater).not.toBeNull();
+    // Earlier is cheaper: the month-2 reclaim also saves a month of interest on
+    // what it repays, so it must solve strictly lower than the month-3 one.
+    expect(sameMonth as number).toBeLessThan(monthLater as number);
+    // …and both must beat the reclaim-free trajectory.
+    expect(monthLater as number)
+      .toBeLessThan(solveSeniorBreakevenPhased(reclaimBase([0, 0, 0, 0])) as number);
+  });
+
+  it('applies the reclaim BEFORE the tranche sweep (watched failing on order)', () => {
+    // R24's actual ordering rule, on a shape where the order CHANGES the outcome.
+    // The lever is `exit_fee_basis: 'redemption_balance'`: the fee is a function
+    // of the balance the arm meets, so whichever arm runs first pays a fee on the
+    // FULL balance and the other pays on the reduced one. Interest is switched
+    // off (rate 0, not rolled up) so every figure below is exact arithmetic.
+    //
+    //   month 0: draw 1,000,000        -> balance 1,000,000
+    //   month 1: reclaim 700,000 and one tranche, 100% sweep, no selling costs
+    //            so the sweep is G itself. Exit fee = 20% of the balance met.
+    //
+    //   correct order (reclaim first): fee = 200,000; 700,000 < 1,200,000 so the
+    //     reclaim is partial and repays 700,000 - 200,000 = 500,000, leaving
+    //     500,000. The sweep then meets fee = 100,000 and redeems iff
+    //     G >= 600,000.
+    //   wrong order (sweep first): fee = 200,000; the sweep repays G - 200,000,
+    //     leaving 1,200,000 - G. The reclaim then meets fee = 20% of that and
+    //     redeems iff 700,000 >= 1.2 x (1,200,000 - G), i.e. G >= 616,667.
+    //
+    // WATCHED FAILING: move the reclaim block below the tranche sweep in
+    // breakeven.ts and G = 600,000 leaves 20,000 outstanding — the assertion
+    // below flips to false. The whole window [600,000, 616,666] separates the
+    // two orders, so the guard has 16,667 pence of margin, not one.
+    const t: PhasedSeniorBreakevenTerms = {
+      draws_and_fees_pence: [1_000_000, 0],
+      vat_reclaims_pence: [0, 700_000],
+      monthly_rate: 0,
+      rolled_up: false,
+      sales_sweep_pct: 100,
+      tranches: [{ month_offset: 1, pct_of_gross_receipts: 100 }],
+      selling_agent_fee_pct: 0,
+      selling_legal_fee_pence: 0,
+      enforcement_cost_assumption_pence: 0,
+      finance: { ...TERMS_FEE_FREE, exit_fee_pct: 20, exit_fee_basis: 'redemption_balance' },
+      committed_gross_facility_pence: 0,
+    };
+    expect(phasedReplayRedeems(t, 600_000)).toBe(true);    // false under the wrong order
+    expect(phasedReplayRedeems(t, 599_999)).toBe(false);   // and tight from below
+    expect(solveSeniorBreakevenPhased(t)).toBe(600_000);
+    // The far side of the window: the wrong order's own boundary must already be
+    // comfortably feasible under the right one.
+    expect(phasedReplayRedeems(t, 616_667)).toBe(true);
+  });
+
+  it('a reclaim that clears the balance outright needs no sale price at all', () => {
+    // §17.6: a full reclaim redeems on the same terms as any other full
+    // redemption. Once redeemed, no tranche receipt is needed to redeem again.
+    const g = solveSeniorBreakevenPhased(reclaimBase([0, 20_000_000, 0, 0]));
+    expect(g).toBe(0);
+    expect(phasedReplayRedeems(reclaimBase([0, 20_000_000, 0, 0]), 0)).toBe(true);
+  });
+
+  it('does not sweep the reclaim through sales_sweep_pct', () => {
+    // §17.6: the reclaim returns a specific advance rather than realising an
+    // asset, so it is applied WHOLE. Halving the sweep must leave a
+    // reclaim-only trajectory's redemption untouched.
+    const full = { ...reclaimBase([0, 20_000_000, 0, 0]), sales_sweep_pct: 100 };
+    const halved = { ...reclaimBase([0, 20_000_000, 0, 0]), sales_sweep_pct: 50 };
+    expect(phasedReplayRedeems(full, 0)).toBe(true);
+    expect(phasedReplayRedeems(halved, 0)).toBe(true);
+  });
+
+  it('monotonicity survives a reclaim landing between two tranches (the fee reserve, watched failing)', () => {
+    // The reclaim does not move with G, but the BALANCE it meets does the moment
+    // a tranche precedes it — so the ledger's own clamp reintroduces exactly the
+    // discontinuity §5.11's fee reserve exists to remove, one month earlier.
+    // This shape has been WATCHED FAILING: swap the reclaim arm in breakeven.ts
+    // for the ledger's clamp (`applied = min(reclaim, balance)`, falling back to
+    // `reclaim − fee` only when that would exactly clear the balance) and the
+    // solver returns 10,015,752 while G values in [10,064,448, 10,064,789] do
+    // NOT redeem — the scan below fails at d = 49,000. A guard nobody has
+    // watched fail is not a guard.
+    const t: PhasedSeniorBreakevenTerms = {
+      ...reclaimBase([0, 0, 500_000, 0]),
+      tranches: [
+        { month_offset: 1, pct_of_gross_receipts: 99 },
+        { month_offset: 3, pct_of_gross_receipts: 1 },
+      ],
+      finance: { ...TERMS_FEE_FREE, exit_fee_pct: 5, exit_fee_basis: 'committed_gross_facility' },
+      committed_gross_facility_pence: 1_000_000,   // fixed basis → fee = 50,000 regardless
+    };
+    const g = solveSeniorBreakevenPhased(t);
+    expect(g).not.toBeNull();
+    const exact = g as number;
+    expect(phasedReplayRedeems(t, exact)).toBe(true);
+    expect(phasedReplayRedeems(t, exact - 1)).toBe(false);
+    // Feasibility must never go true → false as G grows: the bisection's
+    // correctness depends on it, and a hole above the solved boundary means the
+    // reported break-even is UNDERSTATED — a price that does not redeem.
+    // Step 100, not 500: the hole this guards is 342 pence wide, so a 500-step
+    // scan cleared it by a 37-pence margin — a margin, not a guarantee.
+    for (let d = 0; d <= 200_000; d += 100) {
+      expect(phasedReplayRedeems(t, exact + d)).toBe(true);
+    }
   });
 });

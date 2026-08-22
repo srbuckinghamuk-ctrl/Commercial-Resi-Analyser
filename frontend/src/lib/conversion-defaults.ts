@@ -14,9 +14,10 @@ import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV6, CalculatorInputsV7, EquitySource, FacilityTerms,
+  CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
+import { defaultVatInputs } from './model/vat';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -372,5 +373,29 @@ export function defaultCalculatorInputsV7(project?: {
     ...defaultCalculatorInputsV6(project),
     inputs_version: 7,
     cost_plan: costPlanFromLegacyCosts(DEFAULT_CONVERSION_COSTS),
+  };
+}
+
+/**
+ * v8 defaults (R11 Task 10, spec §17.11): the document a freshly opened
+ * calculator starts on, now carrying the VAT block.
+ *
+ * `vat` goes through `defaultVatInputs()` -- the SAME construction
+ * `migrateV7toV8` uses -- so a brand-new document and a migrated one get the
+ * identical block, exactly as `cost_plan` above shares one construction with
+ * `migrateV6toV7`. §17.11 makes that a requirement, not a tidiness: the block
+ * is `registered: false`, so the feature ships opt-in and no migrated appraisal
+ * moves, and the claim above that the two engines' v-defaults re-converge --
+ * Python reaches the same document through `migrate_inputs_to_v8({})`, whose
+ * `CalculatorInputsV8.vat` default_factory is `DEFAULT_VAT.model_copy(deep=True)`
+ * -- stays true one version on.
+ */
+export function defaultCalculatorInputsV8(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV8 {
+  return {
+    ...defaultCalculatorInputsV7(project),
+    inputs_version: 8,
+    vat: defaultVatInputs(),
   };
 }

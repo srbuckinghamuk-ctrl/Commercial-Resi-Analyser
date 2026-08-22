@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import { migrateInputsToV7 } from './migrate';
+import { migrateInputsToV8 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
@@ -62,7 +62,10 @@ function variants(
   // refuses a v7 document (fixture Q), since producing one would mean dropping
   // `cost_plan`. The corpus now mixes v5, v6 and v7 documents, and migrateInputsToV7
   // accepts all three.
-  const programmed = migrateInputsToV7(clone() as unknown as Record<string, unknown>);
+  // R11: widened once more, to v8 — migrateInputsToV7 refuses a v8 document (fixture
+  // R) by the same design, since producing one would mean dropping `vat`.
+  // migrateInputsToV8 accepts all four versions (upgrade, upgrade, upgrade, merge).
+  const programmed = migrateInputsToV8(clone() as unknown as Record<string, unknown>);
   programmed.programme = programmeForTerm(programmed.finance.term_months);
   return [
     { label: 'base', inputs },
@@ -138,12 +141,23 @@ describe('model invariants hold for every fixture and variant', () => {
         // Task 6 correction (spec §7): monthly uses_total_pence includes month-0 ancillary
         // fees but NOT the capitalised arrangement fee, while TDC (from metrics) does
         // include it — so the identity needs an explicit + capitalised_fees_pence term.
+        //
+        // R11 correction (spec §17.5/§17.6, fixture R): `uses_total_pence` carries
+        // `m.vat_pence`, the FULL gross input VAT charged that month — but TDC only
+        // ever carries the IRRECOVERABLE slice forward (`irrecoverable_vat_pence`,
+        // folded into cost_before_finance). The recoverable slice comes back as
+        // `vat_reclaim_pence`, a repayment, not a cost, so it must be netted out here
+        // or this identity over-counts by exactly `vat.total_recoverable_pence` —
+        // confirmed against fixture R, where it was zero for every one of the twelve
+        // pre-VAT fixtures (registered: false, nothing to recover) and this term was
+        // vacuously zero throughout, so the gap went unseen until now.
         it('TDC equals the sum of all monthly uses plus rolled interest, capitalised fees and exit fee', () => {
           const monthlyUses = run.model.months.reduce((a, m) => a + m.uses_total_pence, 0);
           const rolled = run.model.months.reduce((a, m) => a + m.interest_capitalised_pence, 0);
           const serviced2 = run.model.months.reduce((a, m) => a + m.interest_serviced_pence, 0);
           expect(run.metrics.total_development_cost_pence).toBe(
-            monthlyUses + rolled + serviced2 + run.metrics.selling_costs_pence
+            monthlyUses - run.metrics.vat.total_recoverable_pence
+            + rolled + serviced2 + run.metrics.selling_costs_pence
             + run.model.totals.exit_fee_pence + run.model.totals.capitalised_fees_pence);
         });
       });

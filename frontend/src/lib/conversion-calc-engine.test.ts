@@ -33,7 +33,7 @@ describe('calculateBrokerFee', () => {
       other_acquisition_costs_pence: 0,
     };
     const brokerFee = calculateBrokerFee(acq.purchase_price_pence, acq.broker_fee_pct);
-    expect(calculateTotalAcquisitionCost(acq)).toBe(
+    expect(calculateTotalAcquisitionCost({ acquisition: acq, vat: undefined })).toBe(
       acq.purchase_price_pence + 1_450_000 + acq.legal_fees_pence + acq.survey_cost_pence
       + brokerFee + acq.other_acquisition_costs_pence,
     );
@@ -66,7 +66,7 @@ describe('calculateTotalAcquisitionCost', () => {
     // SDLT on £500k: £14,500 = 1,450,000 pence
     // Broker: 1% of £500k = £5,000 = 500,000 pence
     // Total: 50,000,000 + 1,450,000 + 500,000 + 300,000 + 500,000 = 52,750,000
-    const result = calculateTotalAcquisitionCost(acq);
+    const result = calculateTotalAcquisitionCost({ acquisition: acq, vat: undefined });
     expect(result).toBe(52_750_000);
   });
 });

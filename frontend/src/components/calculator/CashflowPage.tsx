@@ -1,11 +1,11 @@
-import type { AppraisalRun, CalculatorInputsV7 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV8 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 
 interface Props {
-  inputs: CalculatorInputsV7;
-  onChange: (partial: Partial<CalculatorInputsV7>) => void;
+  inputs: CalculatorInputsV8;
+  onChange: (partial: Partial<CalculatorInputsV8>) => void;
   run: AppraisalRun;
 }
 
@@ -50,7 +50,15 @@ export default function CashflowPage({ run }: Props) {
     return `${spendClause}${disposalClause}${refinanceClause}; see calculation specification §4.4–§6.1.`;
   })();
 
+  // R11 Task 14 (spec §17.13, ruling R25). `uses_total_pence` has silently
+  // included gross VAT since Task 6 -- the figure moved with no label change
+  // and no disclosure. This SUM is still a legitimate aggregate of an
+  // already-VAT-inclusive per-month figure the engine produced (not a new VAT
+  // computation), but the column header below now says so, and the VAT
+  // component is disclosed on its own line, read from `run.metrics.vat` --
+  // never recomputed here.
   const costsTotal = model.months.reduce((s, m) => s + m.uses_total_pence, 0);
+  const vatIncludedInCosts = run.metrics.vat.total_input_vat_pence;
   const netReceiptsTotal = model.months.reduce((s, m) => s + m.net_receipts_pence, 0);
   const equityInTotal = model.totals.equity_contributed_pence + model.totals.additional_equity_pence;
   const hasRefi = model.months.some((m) => m.refinance_proceeds_pence > 0);
@@ -58,11 +66,19 @@ export default function CashflowPage({ run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>7. Cashflow Projection</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 16 }}>8. Cashflow Projection</h3>
 
       <ReconciliationStrip run={run} />
 
       <p style={{ color: '#64748b', fontSize: 12, marginBottom: 20 }}>{assumptionsNote}</p>
+
+      {vatIncludedInCosts > 0 && (
+        <p style={{ color: '#64748b', fontSize: 12, marginBottom: 20 }}>
+          &quot;Costs&quot; below is VAT-inclusive: of the {penceToPounds(costsTotal)} total,{' '}
+          {penceToPounds(vatIncludedInCosts)} is input VAT (spec §17.6, ruling R25) -- see the VAT
+          page for the reclaim schedule.
+        </p>
+      )}
 
       <div style={{ display: 'flex', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
         <div style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', flex: 1, minWidth: 160 }}>
@@ -85,7 +101,7 @@ export default function CashflowPage({ run }: Props) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
-              {['Month', 'Costs', 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
+              {['Month', 'Costs (VAT-incl.)', 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
                 'Undrawn net', 'Headroom', 'Receipts (net)', ...(hasRefi ? ['Refi proceeds'] : []),
                 'Repayment', 'Distribution', 'Gap'].map((h) => (
                 <th key={h} style={th}>{h}</th>

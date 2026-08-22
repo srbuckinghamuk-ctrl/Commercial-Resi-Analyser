@@ -28,6 +28,7 @@ from app.financial_model.types import (
     CalculatorInputsV4,
     CalculatorInputsV6,
     CalculatorInputsV7,
+    CalculatorInputsV8,
     ContingencyClass,
     CostPackage,
     EquitySource,
@@ -36,9 +37,12 @@ from app.financial_model.types import (
     ProposedUnit,
     ProposedUnitV6,
     RefinanceInputs,
+    RetainedUnit,
     UnitMixInputsV6,
+    VatOverride,
 )
 from app.financial_model.validation import reconcile, validate_inputs
+from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_vat_treatments
 
 
 def base_inputs() -> CalculatorInputsV2:
@@ -939,6 +943,51 @@ def make_v7_inputs(
     return v7
 
 
+def make_v8_inputs(
+    *,
+    cost_plan: dict | None = None,
+    conversion_costs: dict | None = None,
+    finance: dict | None = None,
+    exit_strategy: dict | None = None,
+) -> CalculatorInputsV8:
+    """R11 (Task 9, spec Sec 17.9). A v8 document built on make_v7_inputs --
+    there is no migrate_v7_to_v8 yet (Task 10 lands it), so the `vat` block is
+    added directly from DEFAULT_VAT here via model_dump()/model_validate(),
+    mirroring _build_worked_vat_case's approach in test_vat.py. The Python twin
+    of validation.test.ts's makeV8Inputs.
+
+    The model_dump()/model_validate() roundtrip that adds the vat block runs
+    on the UNMODIFIED v7 defaults, deliberately BEFORE the cost_plan/
+    conversion_costs/finance/exit_strategy overrides are applied:
+    model_validate() (unlike model_copy(update=...)) DOES enforce Field(ge=0),
+    so applying a deliberately out-of-bounds override (e.g. a package's
+    vat_override.rate_pct = -1) before that roundtrip would raise a
+    pydantic.ValidationError inside this helper instead of ever reaching
+    validate_inputs.
+
+    Callers set `vat.registered`, `vat.treatments`, `vat.purchase`,
+    `vat.first_period_end_month` and `vat.repayment_lag_months` by mutating the
+    returned object's `.vat` attribute directly after construction -- pydantic
+    models here are NOT `validate_assignment`, so this is the same established
+    idiom as `_negative_area` and line 869's `inputs.conversion_costs.total_construction_sqm
+    = -1` above, and it is what lets a test express an out-of-bounds value that
+    Field(ge=0) would otherwise reject at construction time."""
+    v7 = make_v7_inputs()
+    data = v7.model_dump()
+    data["inputs_version"] = 8
+    data["vat"] = DEFAULT_VAT.model_dump()
+    v8 = CalculatorInputsV8.model_validate(data)
+    if conversion_costs is not None:
+        v8.conversion_costs = v8.conversion_costs.model_copy(update=conversion_costs)
+    if cost_plan is not None:
+        v8.cost_plan = v8.cost_plan.model_copy(update=cost_plan)
+    if finance is not None:
+        v8.finance = v8.finance.model_copy(update=finance)
+    if exit_strategy is not None:
+        v8.exit_strategy = v8.exit_strategy.model_copy(update=exit_strategy)
+    return v8
+
+
 def _pkg(**overrides) -> CostPackage:
     """`model_construct` bypasses Pydantic validation (CostPackage.amount_pence
     carries `Field(ge=0)`) -- the same idiom `_negative_area` above uses to pin
@@ -968,9 +1017,9 @@ def _three_classes(*, general=None, existing_building=None, abnormal=None) -> li
     for the same reason as `_pkg` (ContingencyClass.pct carries `Field(ge=0)`,
     and the negative-pct rule pins the defense-in-depth check)."""
     defaults = {
-        "general": dict(name="general", pct=10, basis="all_packages", package_ids=[]),
-        "existing_building": dict(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
-        "abnormal": dict(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+        "general": dict(name="general", pct=10),
+        "existing_building": dict(name="existing_building", pct=0),
+        "abnormal": dict(name="abnormal", pct=0),
     }
     overrides = {"general": general, "existing_building": existing_building, "abnormal": abnormal}
     for key, override in overrides.items():
@@ -1070,44 +1119,6 @@ class TestCostPlanValidation:
             "fee_lines": [_fee_line(id="a"), _fee_line(id="b")],
         }))
         assert not any(i.field == "cost_plan.fee_lines" and "unique" in i.message for i in valid)
-
-    def test_hard_errors_when_a_selected_packages_contingency_names_an_unknown_package_id(self):
-        invalid = validate_inputs(make_v7_inputs(cost_plan={
-            "mode": "detailed",
-            "packages": [_pkg(id="pkg-1")],
-            "contingency": _three_classes(
-                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": ["no-such-id"]},
-            ),
-        }))
-        assert any(
-            i.severity == "error" and i.field == "cost_plan.contingency[1].package_ids" for i in invalid
-        )
-
-        valid = validate_inputs(make_v7_inputs(cost_plan={
-            "mode": "detailed",
-            "packages": [_pkg(id="pkg-1")],
-            "contingency": _three_classes(
-                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": ["pkg-1"]},
-            ),
-        }))
-        assert not any(i.field == "cost_plan.contingency[1].package_ids" for i in valid)
-
-    def test_hard_errors_when_a_selected_packages_contingency_names_no_packages_but_carries_a_pct(self):
-        invalid = validate_inputs(make_v7_inputs(cost_plan={
-            "contingency": _three_classes(
-                existing_building={"pct": 5, "basis": "selected_packages", "package_ids": []},
-            ),
-        }))
-        assert any(
-            i.severity == "error" and i.field == "cost_plan.contingency[1].package_ids" for i in invalid
-        )
-
-        valid = validate_inputs(make_v7_inputs(cost_plan={
-            "contingency": _three_classes(
-                existing_building={"pct": 0, "basis": "selected_packages", "package_ids": []},
-            ),
-        }))
-        assert not any(i.field == "cost_plan.contingency[1].package_ids" for i in valid)
 
     def test_hard_errors_when_there_are_not_exactly_three_contingency_classes(self):
         invalid = validate_inputs(make_v7_inputs(cost_plan={
@@ -1227,6 +1238,38 @@ class TestCostPlanValidation:
         }))
         assert not any(i.field == "cost_plan.fee_lines[0].category" for i in valid)
 
+    def test_warns_not_errors_when_detailed_mode_non_general_contingency_has_no_tagged_package(self):
+        """R11 ruling R46. Python twin of the same-named test in
+        validation.test.ts."""
+        invalid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(contingency_class="general")],
+            "contingency": _three_classes(general={"pct": 5}, abnormal={"pct": 8}),
+        }))
+        assert any(
+            i.severity == "warning" and i.field == "cost_plan.contingency[2].pct" for i in invalid
+        )
+        # R46 is a deliberate warning, not a hard error -- an error would
+        # repeat R38's defect by turning a migrated document's state into a
+        # hard error that silently downgrades a report to DRAFT.
+        assert not any(
+            i.severity == "error" and i.field == "cost_plan.contingency[2].pct" for i in invalid
+        )
+
+        valid = validate_inputs(make_v7_inputs(cost_plan={
+            "mode": "detailed",
+            "packages": [_pkg(contingency_class="abnormal")],
+            "contingency": _three_classes(general={"pct": 5}, abnormal={"pct": 8}),
+        }))
+        assert not any(i.field == "cost_plan.contingency[2].pct" for i in valid)
+
+    def test_does_not_warn_r46_in_headline_mode(self):
+        invalid = validate_inputs(make_v7_inputs(
+            conversion_costs={"total_construction_sqm": 100},
+            cost_plan={"mode": "headline", "contingency": _three_classes(general={"pct": 5}, abnormal={"pct": 8})},
+        ))
+        assert not any(i.field.startswith("cost_plan.contingency[2]") for i in invalid)
+
     def test_warns_when_contingency_exceeds_50pct_of_the_base_build_cost(self):
         invalid = validate_inputs(make_v7_inputs(
             conversion_costs={"total_construction_sqm": 100},
@@ -1260,4 +1303,480 @@ class TestCostPlanValidation:
         ))
         assert not any(
             i.severity == "warning" and i.field == "cost_plan.fee_lines[0].basis" for i in valid
+        )
+
+
+def _treatments(**overrides: dict) -> list:
+    """Builds the six-row `treatments` list from the production default,
+    applying a partial patch to the named category's row only -- keyword name
+    IS the category, e.g. `_treatments(construction={"rate_pct": -1})`. Every
+    other row (and the order) stays exactly as `default_vat_treatments()`
+    produces it. `model_copy(update=...)` does not validate (see
+    `make_v7_inputs`'s docstring above), which is what lets a row carry an
+    out-of-bounds value that `Field(ge=0)` would otherwise reject. Python twin
+    of validation.test.ts's `vatTreatments()`."""
+    return [
+        t.model_copy(update=overrides[t.category]) if t.category in overrides else t
+        for t in default_vat_treatments()
+    ]
+
+
+def _override(**overrides) -> VatOverride:
+    """`model_construct` bypasses Pydantic validation (VatOverride.rate_pct/
+    recoverable_pct carry `Field(ge=0)`) -- the same idiom as `_pkg`/
+    `_fee_line` above."""
+    base = dict(rate_pct=0, recoverable_pct=0, recovery_basis="unconfirmed")
+    base.update(overrides)
+    return VatOverride.model_construct(**base)
+
+
+class TestVatValidationHardErrors:
+    """R11 (Task 9, spec Sec 17.9). Python twin of the 'R11 -- VAT validation
+    (spec Sec17.9)' describe block in validation.test.ts -- same fields,
+    severities and gating logic. Ruling R27's pre-existing
+    'registered: false while purchase VAT is chargeable' hard error (Task 7)
+    already sits in validate_inputs alongside these and is covered by its own
+    six tests in test_vat.py; it is not re-tested here."""
+
+    def test_does_not_gain_a_vat_issue_on_a_pre_v8_document_no_vat_attribute(self):
+        issues = validate_inputs(make_v7_inputs())
+        assert [
+            i for i in issues if i.field.startswith("vat.") or "vat_override" in i.field
+        ] == []
+
+    def test_produces_no_vat_issue_on_the_all_defaults_v8_document(self):
+        issues = validate_inputs(make_v8_inputs())
+        assert [
+            i for i in issues if i.field.startswith("vat.") or "vat_override" in i.field
+        ] == []
+
+    def test_hard_errors_on_a_package_vat_override_in_headline_mode(self):
+        inputs = make_v8_inputs(cost_plan={
+            "mode": "headline", "packages": [_pkg(vat_override=_override())],
+        })
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages[0].vat_override" for i in invalid
+        )
+
+        # Fix round 1 (minor 3): the near-miss of the actual precondition is the
+        # SAME override present in DETAILED mode, not the override removed
+        # entirely -- that changes only the one field the rule actually gates on.
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override())],
+        }))
+        assert not any(i.field == "cost_plan.packages[0].vat_override" for i in valid)
+
+    def test_hard_errors_on_a_fee_line_vat_override_in_headline_mode(self):
+        inputs = make_v8_inputs(cost_plan={
+            "mode": "headline", "fee_lines": [_fee_line(vat_override=_override())],
+        })
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.fee_lines[0].vat_override" for i in invalid
+        )
+
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "fee_lines": [_fee_line(vat_override=_override())],
+        }))
+        assert not any(i.field == "cost_plan.fee_lines[0].vat_override" for i in valid)
+
+    def test_hard_errors_when_a_treatment_row_rate_pct_is_negative(self):
+        idx = VAT_CHARGE_CATEGORIES.index("construction")
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = _treatments(construction={"rate_pct": -1})
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == f"vat.treatments[{idx}].rate_pct" for i in invalid
+        )
+
+        valid_inputs = make_v8_inputs()
+        valid_inputs.vat.treatments = _treatments(construction={"rate_pct": 20})
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == f"vat.treatments[{idx}].rate_pct" for i in valid)
+
+    def test_hard_errors_when_a_treatment_row_rate_pct_exceeds_100(self):
+        idx = VAT_CHARGE_CATEGORIES.index("construction")
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = _treatments(construction={"rate_pct": 101})
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == f"vat.treatments[{idx}].rate_pct" for i in invalid
+        )
+
+        valid_inputs = make_v8_inputs()
+        valid_inputs.vat.treatments = _treatments(construction={"rate_pct": 100})
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == f"vat.treatments[{idx}].rate_pct" for i in valid)
+
+    def test_hard_errors_when_a_package_vat_override_rate_pct_is_negative(self):
+        inputs = make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(rate_pct=-1))],
+        })
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages[0].vat_override.rate_pct"
+            for i in invalid
+        )
+
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(rate_pct=20))],
+        }))
+        assert not any(i.field == "cost_plan.packages[0].vat_override.rate_pct" for i in valid)
+
+    def test_hard_errors_when_a_package_vat_override_rate_pct_exceeds_100(self):
+        inputs = make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(rate_pct=101))],
+        })
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages[0].vat_override.rate_pct"
+            for i in invalid
+        )
+
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(rate_pct=100))],
+        }))
+        assert not any(i.field == "cost_plan.packages[0].vat_override.rate_pct" for i in valid)
+
+    def test_hard_errors_when_a_treatment_row_recoverable_pct_is_negative(self):
+        idx = VAT_CHARGE_CATEGORIES.index("construction")
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = _treatments(construction={"recoverable_pct": -1})
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == f"vat.treatments[{idx}].recoverable_pct" for i in invalid
+        )
+
+        valid_inputs = make_v8_inputs()
+        valid_inputs.vat.treatments = _treatments(construction={"recoverable_pct": 50})
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == f"vat.treatments[{idx}].recoverable_pct" for i in valid)
+
+    def test_hard_errors_when_a_treatment_row_recoverable_pct_exceeds_100(self):
+        idx = VAT_CHARGE_CATEGORIES.index("construction")
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = _treatments(construction={"recoverable_pct": 101})
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == f"vat.treatments[{idx}].recoverable_pct" for i in invalid
+        )
+
+        valid_inputs = make_v8_inputs()
+        valid_inputs.vat.treatments = _treatments(construction={"recoverable_pct": 100})
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == f"vat.treatments[{idx}].recoverable_pct" for i in valid)
+
+    def test_hard_errors_when_a_package_vat_override_recoverable_pct_is_negative(self):
+        inputs = make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(recoverable_pct=-1))],
+        })
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages[0].vat_override.recoverable_pct"
+            for i in invalid
+        )
+
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(recoverable_pct=50))],
+        }))
+        assert not any(i.field == "cost_plan.packages[0].vat_override.recoverable_pct" for i in valid)
+
+    def test_hard_errors_when_a_package_vat_override_recoverable_pct_exceeds_100(self):
+        inputs = make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(recoverable_pct=101))],
+        })
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == "cost_plan.packages[0].vat_override.recoverable_pct"
+            for i in invalid
+        )
+
+        valid = validate_inputs(make_v8_inputs(cost_plan={
+            "mode": "detailed", "packages": [_pkg(vat_override=_override(recoverable_pct=100))],
+        }))
+        assert not any(i.field == "cost_plan.packages[0].vat_override.recoverable_pct" for i in valid)
+
+    def test_hard_errors_when_a_treatments_category_is_missing(self):
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = [
+            t for t in default_vat_treatments() if t.category != "lender_ancillary"
+        ]
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.treatments" for i in invalid)
+
+        valid = validate_inputs(make_v8_inputs())
+        assert not any(i.field == "vat.treatments" for i in valid)
+
+    def test_hard_errors_when_a_treatments_category_is_duplicated(self):
+        treatments = default_vat_treatments()
+        treatments[5] = treatments[5].model_copy(update={"category": "acquisition"})
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = treatments
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.treatments" for i in invalid)
+
+        valid = validate_inputs(make_v8_inputs())
+        assert not any(i.field == "vat.treatments" for i in valid)
+
+    def test_hard_errors_when_the_six_categories_are_present_but_out_of_order(self):
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = list(reversed(default_vat_treatments()))
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.treatments" for i in invalid)
+
+        valid = validate_inputs(make_v8_inputs())
+        assert not any(i.field == "vat.treatments" for i in valid)
+
+    # --- The two RETURN-CYCLE bounds (ruling R38, spec Sec 17.11).
+    #
+    # These four cases were originally written on make_v8_inputs() unmodified,
+    # i.e. on `registered: False` documents. That was asserting the wrong
+    # thing: a rule about a LIVE return cycle has to be tested on a document
+    # whose cycle is live. Written that way they also pinned the defect R38
+    # exists to fix -- the migration writes `first_period_end_month: 2` onto
+    # EVERY document, so an ungated rule made every stored appraisal with
+    # `term_months <= 2` a hard error, and a hard error marks the report DRAFT.
+    #
+    # `_registered_v8` therefore switches the engine on, and the two
+    # `..._is_not_validated_while_the_engine_is_dormant` cases below pin the
+    # gate itself in the other direction.
+
+    @staticmethod
+    def _registered_v8(**kwargs):
+        inputs = make_v8_inputs(**kwargs)
+        inputs.vat.registered = True
+        return inputs
+
+    def test_hard_errors_when_first_period_end_month_is_negative(self):
+        inputs = self._registered_v8()
+        inputs.vat.first_period_end_month = -1
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.first_period_end_month" for i in invalid)
+
+        valid_inputs = self._registered_v8()
+        valid_inputs.vat.first_period_end_month = 0
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == "vat.first_period_end_month" for i in valid)
+
+    def test_hard_errors_when_first_period_end_month_is_at_or_past_term_months(self):
+        inputs = self._registered_v8(finance={"term_months": 3})
+        inputs.vat.first_period_end_month = 3
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.first_period_end_month" for i in invalid)
+
+        valid_inputs = self._registered_v8(finance={"term_months": 3})
+        valid_inputs.vat.first_period_end_month = 2
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == "vat.first_period_end_month" for i in valid)
+
+    def test_first_period_end_month_is_not_validated_while_the_engine_is_dormant(self):
+        """R38. The migration's own write -- `first_period_end_month: 2` on a
+        1-month term -- must produce NO issue while `registered` is false.
+        Ungated this was a hard error, which makes `report_safe` false and
+        marks the report DRAFT: an "inert" migration would have silently
+        downgraded every short-term appraisal in the database."""
+        inputs = make_v8_inputs(finance={"term_months": 1})
+        assert inputs.vat.registered is False
+        assert inputs.vat.first_period_end_month == 2
+        assert not any(i.field == "vat.first_period_end_month" for i in validate_inputs(inputs))
+
+        # And the moment the document registers, the error arrives -- which is
+        # the right moment for it. The gate defers the rule, it does not
+        # delete it.
+        inputs.vat.registered = True
+        assert any(
+            i.severity == "error" and i.field == "vat.first_period_end_month"
+            for i in validate_inputs(inputs)
+        )
+
+    def test_hard_errors_when_repayment_lag_months_is_negative(self):
+        inputs = self._registered_v8()
+        inputs.vat.repayment_lag_months = -1
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.repayment_lag_months" for i in invalid)
+
+        valid_inputs = self._registered_v8()
+        valid_inputs.vat.repayment_lag_months = 0
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == "vat.repayment_lag_months" for i in valid)
+
+    def test_hard_errors_when_repayment_lag_months_exceeds_6(self):
+        inputs = self._registered_v8()
+        inputs.vat.repayment_lag_months = 7
+        invalid = validate_inputs(inputs)
+        assert any(i.severity == "error" and i.field == "vat.repayment_lag_months" for i in invalid)
+
+        valid_inputs = self._registered_v8()
+        valid_inputs.vat.repayment_lag_months = 6
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == "vat.repayment_lag_months" for i in valid)
+
+    def test_repayment_lag_months_is_not_validated_while_the_engine_is_dormant(self):
+        """R38's second gated field. Tested with a value that is nonsense in
+        any state (7 > the 6-month cap) so this cannot pass merely because the
+        default happens to be in range."""
+        inputs = make_v8_inputs()
+        inputs.vat.repayment_lag_months = 7
+        assert inputs.vat.registered is False
+        assert not any(i.field == "vat.repayment_lag_months" for i in validate_inputs(inputs))
+
+        inputs.vat.registered = True
+        assert any(
+            i.severity == "error" and i.field == "vat.repayment_lag_months"
+            for i in validate_inputs(inputs)
+        )
+
+    def test_hard_errors_when_togc_applies_with_a_non_zero_acquisition_rate(self):
+        acq_idx = VAT_CHARGE_CATEGORIES.index("acquisition")
+        inputs = make_v8_inputs()
+        inputs.vat.treatments = _treatments(acquisition={"rate_pct": 20})
+        inputs.vat.purchase.togc_treatment = "applies"
+        inputs.vat.purchase.vendor_opted_to_tax = True
+        invalid = validate_inputs(inputs)
+        assert any(
+            i.severity == "error" and i.field == f"vat.treatments[{acq_idx}].rate_pct" for i in invalid
+        )
+
+        valid_inputs = make_v8_inputs()
+        valid_inputs.vat.treatments = _treatments(acquisition={"rate_pct": 0})
+        valid_inputs.vat.purchase.togc_treatment = "applies"
+        valid_inputs.vat.purchase.vendor_opted_to_tax = True
+        valid = validate_inputs(valid_inputs)
+        assert not any(i.field == f"vat.treatments[{acq_idx}].rate_pct" for i in valid)
+
+
+class TestVatValidationWarnings:
+    """R11 (Task 9, spec Sec 17.9). Every case here must appear on
+    validate_inputs/run.validation and NOT on reconcile().issues, which
+    carries only errors bar one 'model' warning -- see the module note above
+    validate_inputs. Python twin of the 'R11 -- VAT warnings (spec Sec17.9)'
+    describe block in validation.test.ts."""
+
+    @staticmethod
+    def _assert_warning_channel(inputs: CalculatorInputsV8, field_name: str) -> None:
+        issues = validate_inputs(inputs)
+        assert any(i.severity == "warning" and i.field == field_name for i in issues)
+
+        schedule = build_schedule(inputs)
+        model = run_ledger(schedule, inputs.finance, inputs.equity_sources)
+        rec_issues = reconcile(inputs, schedule, model).issues
+        assert not any(i.field == field_name for i in rec_issues)
+
+    def test_warns_on_zero_rated_sale_with_a_retain_all_exit(self):
+        idx = VAT_CHARGE_CATEGORIES.index("selling")
+        inputs = make_v8_inputs(exit_strategy={"route": "retain_all"})
+        inputs.vat.registered = True
+        inputs.vat.treatments = _treatments(
+            selling={"rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale"},
+        )
+        self._assert_warning_channel(inputs, f"vat.treatments[{idx}].recovery_basis")
+
+    def test_warns_on_zero_rated_sale_with_a_blended_exit_retaining_one_unit(self):
+        idx = VAT_CHARGE_CATEGORIES.index("selling")
+        inputs = make_v8_inputs(exit_strategy={
+            "route": "blended",
+            "retained_units": [RetainedUnit(unit_id="u1", monthly_rent_pence=1000)],
+        })
+        inputs.vat.registered = True
+        inputs.vat.treatments = _treatments(
+            selling={"rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale"},
+        )
+        self._assert_warning_channel(inputs, f"vat.treatments[{idx}].recovery_basis")
+
+    def test_does_not_warn_on_zero_rated_sale_with_a_sell_all_exit(self):
+        idx = VAT_CHARGE_CATEGORIES.index("selling")
+        inputs = make_v8_inputs(exit_strategy={"route": "sell_all"})
+        inputs.vat.registered = True
+        inputs.vat.treatments = _treatments(
+            selling={"rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale"},
+        )
+        issues = validate_inputs(inputs)
+        assert not any(i.field == f"vat.treatments[{idx}].recovery_basis" for i in issues)
+
+    # Fix round 1 (Ruling R35). A VatOverride carries its OWN recovery_basis --
+    # exactly the same unsafe assumption is expressible on a package or fee
+    # line, and a scan of vat.treatments alone never sees it. Two more cases,
+    # making this rule's total four, not two.
+    def test_warns_on_a_package_override_recovered_as_zero_rated_sale(self):
+        inputs = make_v8_inputs(
+            cost_plan={
+                "mode": "detailed",
+                "packages": [_pkg(vat_override=_override(
+                    rate_pct=20, recoverable_pct=100, recovery_basis="zero_rated_sale",
+                ))],
+            },
+            exit_strategy={"route": "retain_all"},
+        )
+        inputs.vat.registered = True
+        self._assert_warning_channel(inputs, "cost_plan.packages[0].vat_override.recovery_basis")
+
+    def test_warns_on_a_fee_line_override_recovered_as_zero_rated_sale(self):
+        inputs = make_v8_inputs(
+            cost_plan={
+                "mode": "detailed",
+                "fee_lines": [_fee_line(vat_override=_override(
+                    rate_pct=20, recoverable_pct=100, recovery_basis="zero_rated_sale",
+                ))],
+            },
+            exit_strategy={"route": "retain_all"},
+        )
+        inputs.vat.registered = True
+        self._assert_warning_channel(inputs, "cost_plan.fee_lines[0].vat_override.recovery_basis")
+
+    def test_does_not_warn_on_a_package_override_recovered_as_zero_rated_sale_when_no_unit_is_retained(self):
+        inputs = make_v8_inputs(
+            cost_plan={
+                "mode": "detailed",
+                "packages": [_pkg(vat_override=_override(
+                    rate_pct=20, recoverable_pct=100, recovery_basis="zero_rated_sale",
+                ))],
+            },
+            exit_strategy={"route": "sell_all"},
+        )
+        inputs.vat.registered = True
+        issues = validate_inputs(inputs)
+        assert not any(i.field == "cost_plan.packages[0].vat_override.recovery_basis" for i in issues)
+
+    def test_warns_when_togc_applies_but_the_vendor_has_not_opted_to_tax(self):
+        inputs = make_v8_inputs()
+        inputs.vat.purchase.togc_treatment = "applies"
+        inputs.vat.purchase.vendor_opted_to_tax = False
+        self._assert_warning_channel(inputs, "vat.purchase.togc_treatment")
+
+        valid_inputs = make_v8_inputs()
+        valid_inputs.vat.purchase.togc_treatment = "does_not_apply"
+        valid_inputs.vat.purchase.vendor_opted_to_tax = False
+        valid = validate_inputs(valid_inputs)
+        assert not any(
+            i.field == "vat.purchase.togc_treatment" and i.severity == "warning" for i in valid
+        )
+
+    def test_warns_when_registered_is_false_but_construction_cost_is_non_zero(self):
+        inputs = make_v8_inputs(conversion_costs={
+            "construction_cost_per_sqm_pence": 100_000, "total_construction_sqm": 100,
+        })
+        self._assert_warning_channel(inputs, "vat.registered")
+
+        valid = validate_inputs(make_v8_inputs())
+        assert not any(i.field == "vat.registered" and i.severity == "warning" for i in valid)
+
+    def test_warns_when_the_final_vat_return_period_reclaim_falls_outside_the_term(self):
+        # Ruling R4: derived from vat_return_periods(vat, term_months), gated on
+        # a non-zero resolved rate -- never from the RESULT field
+        # vat.receivable_at_maturity_pence, which validate_inputs cannot see.
+        inputs = make_v8_inputs(finance={"term_months": 3})
+        inputs.vat.registered = True
+        inputs.vat.treatments = _treatments(construction={"rate_pct": 20})
+        self._assert_warning_channel(inputs, "vat.repayment_lag_months")
+
+    def test_does_not_warn_where_the_resolved_rate_is_zero_even_though_structurally_out_of_term(self):
+        # Same term/lag/frequency as the case above -- the final period's
+        # reclaim is still None -- but every treatment rate is 0 (the default),
+        # so there is nothing to reclaim and the gate must hold.
+        inputs = make_v8_inputs(finance={"term_months": 3})
+        inputs.vat.registered = True
+        issues = validate_inputs(inputs)
+        assert not any(
+            i.field == "vat.repayment_lag_months" and i.severity == "warning" for i in issues
         )

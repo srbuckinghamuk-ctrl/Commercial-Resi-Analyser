@@ -38,7 +38,7 @@ const savedRecord: FinancialAppraisal = {
   project_id: qaProject.id,
   name: 'Stonegate appraisal',
   inputs_snapshot: {},
-  calc_version: '2.9.0',
+  calc_version: '2.10.0',
   inputs_version: 4,
   status: 'reconciled',
   input_hash: 'a'.repeat(64),
@@ -164,7 +164,7 @@ describe('investment memorandum release gate', () => {
       expect(text).toContain(savedRecord.id);
       expect(text).toContain(savedRecord.outputs_hash!);
       expect(text).toContain(savedRecord.audit_hash!);
-      expect(text).toContain('2.9.0');
+      expect(text).toContain('2.10.0');
       expect(text).toContain('Europe/London');
       // Fix round 1 (item 4): the row's value, which survived being replaced by
       // 'n/a'. Asserted adjacent to its own label so it cannot be satisfied by
@@ -203,7 +203,18 @@ describe('investment memorandum release gate', () => {
       // to be chased through the report tests.
       expect(countOccurrences(prose, `(assumption table version ${TAX_TABLE_VERSION})`)).toBe(1);
       expect(countOccurrences(prose, `(table ${TAX_TABLE_VERSION})`)).toBe(1);
-      expect(prose).toContain('VAT is not modelled as a cash flow');
+      // R11 (spec §17.13). This assertion used to pin "VAT is not modelled as
+      // a cash flow" — false the moment the VAT engine shipped (Task 12). The
+      // gate now pins §17.13's actual residual scope: no computed
+      // partial-exemption engine, no separate VAT facility, no capital goods
+      // scheme, no TOGC conditions assessment, and out-of-term reclaims
+      // reported as receivable rather than as cash.
+      expect(prose).toContain('not a computed partial-exemption');
+      expect(prose).toContain('no separate VAT facility');
+      expect(prose).toContain('No capital goods scheme, option-to-tax revocation or self-supply charge');
+      expect(prose).toContain('not tested against the conditions for relief');
+      expect(prose).toContain('reported as receivable and is not credited to the cash flow');
+      expect(prose).not.toContain('VAT is not modelled as a cash flow');
       expect(prose).toContain('not a credit paper');
     });
   });

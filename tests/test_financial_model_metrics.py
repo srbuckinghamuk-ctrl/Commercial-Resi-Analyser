@@ -11,7 +11,11 @@ import pytest
 from app.financial_model import run_appraisal
 from app.financial_model.areas import DEFAULT_AREA_BRIDGE
 from app.financial_model.engine import money_round, pct, run_ledger
-from app.financial_model.metrics import breakeven_flags, derive_metrics
+from app.financial_model.metrics import (
+    VAT_COUNTERFACTUAL_TAX_REASON,
+    breakeven_flags,
+    derive_metrics,
+)
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import (
     default_calculator_inputs_v2,
@@ -27,6 +31,7 @@ from app.financial_model.schedule import (
     ScheduleRefinance,
     ScheduleTotals,
 )
+from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
 from app.financial_model.types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
@@ -35,6 +40,7 @@ from app.financial_model.types import (
     CalculatorInputsV4,
     CalculatorInputsV5,
     CalculatorInputsV6,
+    CalculatorInputsV8,
     CostPlanInputs,
     EquitySource,
     ExitStrategyInputs,
@@ -47,6 +53,7 @@ from app.financial_model.types import (
     UnitMixInputs,
     UnitMixInputsV6,
 )
+from app.financial_model.vat import VatMonthLine, VatResult
 
 # --- helpers copied verbatim from test_financial_model_engine.py ---
 
@@ -58,16 +65,34 @@ def replace(model: FacilityTerms, **overrides) -> FacilityTerms:
 def uses(**partial) -> MonthUses:
     base = dict(
         acquisition_pence=0, construction_pence=0, professional_pence=0,
-        statutory_pence=0, lender_ancillary_fees_pence=0,
+        statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
     )
     base.update(partial)
     return MonthUses(**base)
 
 
 def receipts(**partial) -> MonthReceipts:
-    base = dict(gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0)
+    base = dict(
+        gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0, vat_reclaim_pence=0,
+    )
     base.update(partial)
     return MonthReceipts(**base)
+
+
+# R11: no test in this file exercises VAT -- an inert result of the schedule's
+# own length, mirroring vat.py's _inert_vat() shape exactly.
+def _empty_vat(term_months: int) -> VatResult:
+    return VatResult(
+        registered=False, charges=[], periods=[],
+        months=[
+            VatMonthLine(month=m, incurred_pence=0, reclaimed_pence=0, carry_pence=0)
+            for m in range(term_months)
+        ],
+        total_input_vat_pence=0, total_recoverable_pence=0, total_irrecoverable_pence=0,
+        total_reclaimed_pence=0, receivable_at_maturity_pence=0, peak_carry_pence=0,
+        peak_carry_month=None, purchase_vat_pence=0,
+        purchase_vat_chargeable=False, purchase_evidence_status="unconfirmed",
+    )
 
 
 def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
@@ -77,7 +102,7 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
     gross_sales = sum(x.gross_sale_pence for x in r)
     selling = sum(x.agent_fee_pence + x.selling_legal_pence for x in r)
     return Schedule(
-        term_months=len(u), uses=u, receipts=r,
+        term_months=len(u), uses=u, receipts=r, vat=_empty_vat(len(u)),
         totals=ScheduleTotals(
             acquisition_pence=sum_(lambda x: x.acquisition_pence),
             construction_pence=sum_(lambda x: x.construction_pence),
@@ -91,6 +116,9 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
                 lambda x: x.acquisition_pence + x.construction_pence
                 + x.professional_pence + x.statutory_pence
             ),
+            vat_pence=sum_(lambda x: x.vat_pence),
+            vat_reclaim_pence=sum(x.vat_reclaim_pence for x in r),
+            irrecoverable_vat_pence=0,
         ),
     )
 
@@ -714,9 +742,9 @@ class TestCostPlanOnResult:
                  "contingency_class": "general", "lender_eligible": True, "notes": ""},
             ],
             "contingency": [
-                {"name": "general", "pct": 5, "basis": "all_packages", "package_ids": []},
-                {"name": "existing_building", "pct": 15, "basis": "selected_packages", "package_ids": ["p1"]},
-                {"name": "abnormal", "pct": 2.5, "basis": "all_packages", "package_ids": []},
+                {"name": "general", "pct": 5},
+                {"name": "existing_building", "pct": 15},
+                {"name": "abnormal", "pct": 2.5},
             ],
             "fee_lines": [
                 {"id": "f1", "code": "architect", "category": "professional", "label": "Architect",
@@ -730,3 +758,374 @@ class TestCostPlanOnResult:
         assert run.metrics.cost_plan.construction_total_pence == run.schedule.totals.construction_pence
         assert run.metrics.cost_plan.professional_total_pence == run.schedule.totals.professional_pence
         assert run.metrics.cost_plan.statutory_total_pence == run.schedule.totals.statutory_pence
+
+
+# --- R11 (spec Sec 17.5, Sec 17.12): VAT in the headline numbers -------------
+#
+# Transliteration of metrics.test.ts's "Sec 17.5 -- the release's primary
+# invariant" and "ruling R24" describe blocks. Both engines must agree with the
+# rule, not merely with each other, so every assertion below is a relation the
+# spec states rather than a figure read off a run.
+
+
+def _vat_invariant_document(registered: bool = True, recoverable_pct: float = 100):
+    """The release's primary invariant needs a document where the VAT is
+    genuinely FUNDED, not gapped: Sec 17.6 keeps VAT out of the development-cost
+    advance base, so from month 1 onwards the facility can never draw against it
+    and any VAT the equity does not meet becomes a visible vat_funding_gap rather
+    than a carried balance. Two facts make this document gap-free while still
+    charging real carry interest:
+
+    - every cost lands in month 0, where the day-one advance is capped at the
+      month's whole cash uses (VAT included -- engine.py's eligible-base cap
+      governs months 1+, not month 0), so the VAT is drawn on the facility and
+      carries at 12% until the month-3 reclaim clears it;
+    - a small committed equity source covers the selling VAT that lands in the
+      disposal month, which has no eligible spend to draw against.
+
+    The ledger is asserted flag-free on both sides below, so a later change that
+    reintroduces a gap fails loudly instead of quietly weakening the invariant.
+
+    Mirrors vatInvariantDocument in metrics.test.ts.
+    """
+    doc = migrate_inputs_to_v7({}).model_dump()
+    doc["inputs_version"] = 8
+    doc["acquisition"] = {**doc["acquisition"], "purchase_price_pence": 20_000_000}
+    doc["equity_sources"] = [{
+        "id": "e1", "classification": "cash", "amount_pence": 5_000_000,
+        "timing_month": 0, "repayment_priority": 1, "evidence_status": "confirmed",
+        "notes": "",
+    }]
+    doc["unit_mix"] = {"units": [
+        {
+            "id": f"u{n}", "type": "1bed", "floor_area_sqm": 50,
+            "estimated_value_pence": 60_000_000, "comparable_notes": "",
+        }
+        for n in (1, 2, 3, 4)
+    ]}
+    doc["conversion_costs"] = {
+        **doc["conversion_costs"],
+        "construction_cost_per_sqm_pence": 100_000,
+        "total_construction_sqm": 1_000,
+        "contingency_pct": 0,
+    }
+    doc["finance"] = {
+        **doc["finance"],
+        "funding_source": "development_finance",
+        "day_one_advance_pence": 400_000_000,
+        "committed_net_facility_pence": 500_000_000,
+        "committed_gross_facility_pence": 600_000_000,
+        "annual_interest_rate_pct": 12,
+        "interest_type": "rolled_up",
+        "arrangement_fee_pct": 0,
+        "exit_fee_pct": 1,
+        "exit_fee_basis": "committed_gross_facility",
+        "sales_sweep_pct": 100,
+        "broker_fee_pence": 250_000,
+        "lender_legal_fee_pence": 150_000,
+        "valuation_fee_pence": 100_000,
+        "monitoring_surveyor_fee_pence": 50_000,
+        "term_months": 7,
+        # migrate_inputs_to_v7({}) produces a MIGRATED document, which carries
+        # requires_confirmation True and so a standing amber flag. The TS mirror
+        # starts from defaultCalculatorInputsV7(), a fresh one. Cleared here so
+        # the two engines run the identical document and the flag-free assertions
+        # below stay strong in both.
+        "requires_confirmation": False,
+    }
+    doc["programme"] = {
+        "anchor_month": None,
+        "packages": {
+            "construction": {
+                "start_offset": 0, "duration_months": 1,
+                "curve": {"kind": "straight_line"},
+            },
+            "professional": {
+                "start_offset": 0, "duration_months": 1,
+                "curve": {"kind": "straight_line"},
+            },
+            "statutory": {
+                "start_offset": 0, "duration_months": 1,
+                "curve": {"kind": "straight_line"},
+            },
+        },
+    }
+    # Every category at 20%, exactly as Sec 17.5's invariant specifies. The
+    # acquisition line stays inert because the vendor has not opted to tax
+    # (DEFAULT_VAT.purchase), so the chargeable consideration -- and with it the
+    # acquisition tax and the acquisition cost line -- is identical on both sides
+    # of the comparison, and the profit difference is the carry and nothing else.
+    block = DEFAULT_VAT.model_dump()
+    block["registered"] = registered
+    block["treatments"] = [
+        t.model_copy(update={
+            "rate_pct": 20,
+            "recoverable_pct": recoverable_pct,
+            "recovery_basis": "zero_rated_sale",
+        }).model_dump()
+        for t in default_vat_treatments()
+    ]
+    doc["vat"] = block
+    return CalculatorInputsV8.model_validate(doc)
+
+
+def test_fully_recoverable_vat_moves_no_cost_line_and_moves_profit_only_by_carry():
+    # Sec 17.5's primary guard. It fails in all three directions: VAT leaking
+    # into a cost base, irrecoverable VAT computed off a rounding residue, or a
+    # reclaim going missing.
+    on = run_appraisal(_vat_invariant_document(registered=True, recoverable_pct=100))
+    off = run_appraisal(_vat_invariant_document(registered=False))
+
+    # The document is gap-free on both sides: a vat_funding_gap would mean part
+    # of the VAT never reached the ledger, which would weaken every assertion
+    # below into a tautology.
+    assert on.model.flags == []
+    assert off.model.flags == []
+    assert on.schedule.vat.total_input_vat_pence > 0
+
+    # The "reclaim goes missing" direction, made falsifiable. Without these two
+    # the invariant is NOT three-way: deleting the reclaim raises the `on` run's
+    # interest, so finance_delta > 0 still holds, and the profit relation below is
+    # an accounting identity that holds either way. These assert the ledger
+    # actually received every recoverable penny the VAT engine booked.
+    assert on.model.totals.vat_reclaim_pence == on.schedule.vat.total_reclaimed_pence
+    assert on.model.totals.vat_reclaim_pence > 0
+    # At 100% recoverable, everything reclaimed inside the term is everything
+    # charged less whatever falls due after it (Sec 17.4 -- never clamped in).
+    assert (
+        on.schedule.vat.total_reclaimed_pence + on.schedule.vat.receivable_at_maturity_pence
+        == on.schedule.vat.total_input_vat_pence
+    )
+    assert off.model.totals.vat_reclaim_pence == 0
+
+    assert on.metrics.construction_cost_pence == off.metrics.construction_cost_pence
+    assert on.metrics.professional_fees_pence == off.metrics.professional_fees_pence
+    assert on.metrics.statutory_costs_pence == off.metrics.statutory_costs_pence
+    assert on.metrics.selling_costs_pence == off.metrics.selling_costs_pence
+    assert on.metrics.cost_plan == off.metrics.cost_plan
+
+    assert on.metrics.irrecoverable_vat_pence == 0
+
+    finance_delta = on.metrics.finance_costs_pence - off.metrics.finance_costs_pence
+    assert finance_delta > 0  # carrying VAT costs money
+    assert off.metrics.profit_pence - on.metrics.profit_pence == finance_delta
+
+
+def test_vat_carry_interest_is_the_counterfactual_not_an_apportionment():
+    on = run_appraisal(_vat_invariant_document(registered=True, recoverable_pct=100))
+    off = run_appraisal(_vat_invariant_document(registered=False))
+    # Sec 17.12's definition, stated literally: total interest as given, less
+    # total interest with vat.registered forced false.
+    assert on.metrics.vat_carry_interest_pence == (
+        on.model.totals.interest_pence - off.model.totals.interest_pence
+    )
+    # ...and on this document that IS the whole finance-cost movement -- the
+    # arrangement fee, the ancillary fees and a committed-gross-facility exit fee
+    # are all VAT-independent -- which is what pins Sec 17.12's definition to
+    # Sec 17.5's invariant above. Where the exit fee is charged on PEAK DEBT the
+    # two can separate, and the spec's claim that they are "the same quantity"
+    # holds only for the VAT-independent fee bases this document uses.
+    assert on.metrics.vat_carry_interest_pence == (
+        on.metrics.finance_costs_pence - off.metrics.finance_costs_pence
+    )
+    # A disclosure of a SLICE of finance costs, never an addition to them.
+    assert on.metrics.total_development_cost_pence == (
+        on.metrics.cost_before_finance_pence + on.metrics.finance_costs_pence
+    )
+
+
+def test_an_unregistered_document_reports_zero_carry_interest():
+    off = run_appraisal(_vat_invariant_document(registered=False))
+    assert off.metrics.vat_carry_interest_pence == 0
+    assert off.metrics.irrecoverable_vat_pence == 0
+    assert off.metrics.vat.registered is False
+
+
+def test_irrecoverable_vat_is_charged_to_cost_before_finance_on_its_own_line():
+    on = run_appraisal(_vat_invariant_document(registered=True, recoverable_pct=0))
+    off = run_appraisal(_vat_invariant_document(registered=False))
+    assert on.metrics.irrecoverable_vat_pence > 0
+    assert on.metrics.irrecoverable_vat_pence == on.schedule.vat.total_irrecoverable_pence
+    # Sec 17.5's one-direction rule: NOT folded back into the construction line.
+    assert on.metrics.construction_cost_pence == off.metrics.construction_cost_pence
+    assert on.metrics.cost_plan == off.metrics.cost_plan
+    assert on.metrics.cost_before_finance_pence == (
+        off.metrics.cost_before_finance_pence + on.metrics.irrecoverable_vat_pence
+    )
+
+
+def test_the_whole_vat_result_is_published_on_the_appraisal_result():
+    on = run_appraisal(_vat_invariant_document(registered=True, recoverable_pct=100))
+    # The result's vat is the schedule's, not a second derivation: Sec 17.5 runs
+    # the engine once, in one direction.
+    assert on.metrics.vat is on.schedule.vat
+    assert on.metrics.vat.registered is True
+    assert on.metrics.vat.peak_carry_pence > 0
+
+
+def _phased_vat_document(registered: bool):
+    """Ruling R24. The same document under phased sales, with the day-one advance
+    capped BELOW the month's cash uses so the draw schedule is byte-identical
+    with and without VAT (committed equity absorbs the VAT outflow instead). That
+    isolates the one thing under test: the reclaim the ledger repays from and the
+    phased solver, before this task, had no term for. Mirrors phasedVatDocument
+    in metrics.test.ts."""
+    doc = _vat_invariant_document(registered=registered, recoverable_pct=100).model_dump()
+    doc["equity_sources"] = [{
+        "id": "e1", "classification": "cash", "amount_pence": 60_000_000,
+        "timing_month": 0, "repayment_priority": 1, "evidence_status": "confirmed",
+        "notes": "",
+    }]
+    doc["finance"] = {**doc["finance"], "day_one_advance_pence": 100_000_000}
+    doc["sales_phasing"] = {"tranches": [
+        {"month_offset": 5, "pct_of_gross_receipts": 60},
+        {"month_offset": 6, "pct_of_gross_receipts": 40},
+    ]}
+    return CalculatorInputsV8.model_validate(doc)
+
+
+def test_the_phased_senior_breakeven_sees_the_vat_reclaim():
+    with_reclaim = run_appraisal(_phased_vat_document(True))
+    without = run_appraisal(_phased_vat_document(False))
+
+    # The comparison is only meaningful if the two runs drew identically -- the
+    # reclaim must be the ONLY difference the solver sees. Asserted, not assumed.
+    assert [m.draw_pence + m.capitalised_fees_pence for m in with_reclaim.model.months] == [
+        m.draw_pence + m.capitalised_fees_pence for m in without.model.months
+    ]
+    assert with_reclaim.model.flags == []
+    assert without.model.flags == []
+    assert with_reclaim.model.totals.vat_reclaim_pence > 0
+    assert without.model.totals.vat_reclaim_pence == 0
+
+    # A comparison, never an absolute: an absolute literal here would pin
+    # whatever the solver happens to produce rather than the rule under test.
+    assert with_reclaim.metrics.senior_breakeven_pence is not None
+    assert without.metrics.senior_breakeven_pence is not None
+    assert with_reclaim.metrics.senior_breakeven_pence < without.metrics.senior_breakeven_pence
+
+
+def test_the_carry_is_reported_negative_and_unclamped():
+    # Sec 17.12 R32. Equity funds the VAT outflow on this document, but the
+    # reclaim sweeps 100% to senior debt (Sec 17.6) -- so it repays borrowing that
+    # funded OTHER costs and the facility ends smaller than it would have been
+    # without VAT. Carrying VAT SAVED interest here. Nothing clamps the figure
+    # today and nothing may: a max(0, ...) added later would pass every other test
+    # in this file, which is exactly why this one exists.
+    with_reclaim = run_appraisal(_phased_vat_document(True))
+    without = run_appraisal(_phased_vat_document(False))
+    assert with_reclaim.metrics.vat_carry_interest_pence < 0
+    assert with_reclaim.metrics.vat_carry_interest_pence == (
+        with_reclaim.model.totals.interest_pence - without.model.totals.interest_pence
+    )
+
+
+def _opted_vat_document(registered: bool, pinned_tax_pence: int | None = None):
+    """Ruling R33 / R31. _vat_invariant_document with the vendor opted to tax and
+    TOGC not applying, so purchase VAT is chargeable (Sec 17.7) and the
+    acquisition tax is charged on the VAT-INCLUSIVE consideration. This is the
+    document class where a naive registered=False counterfactual goes wrong, and
+    it had no coverage before this fix.
+
+    pinned_tax_pence reproduces R33's own pin -- acquisition_tax_override_pence
+    set to the as-given tax -- so a test can build the counterfactual the engine
+    builds and compare against it. Only override_pence reaches a figure; the
+    reason is provenance, and the real constant is imported so both sites grep
+    together. Mirrors optedVatDocument in metrics.test.ts."""
+    doc = _vat_invariant_document(registered=registered, recoverable_pct=100).model_dump()
+    doc["acquisition"] = {
+        **doc["acquisition"],
+        "purchase_price_pence": 50_000_000,
+        "acquisition_tax_override_pence": pinned_tax_pence,
+        "acquisition_tax_override_reason": (
+            "" if pinned_tax_pence is None else VAT_COUNTERFACTUAL_TAX_REASON
+        ),
+    }
+    doc["vat"] = {**doc["vat"], "purchase": {
+        **doc["vat"]["purchase"],
+        "vendor_opted_to_tax": True,
+        "togc_treatment": "does_not_apply",
+    }}
+    return CalculatorInputsV8.model_validate(doc)
+
+
+def test_the_counterfactual_excludes_the_sdlt_on_vat_uplifts_financing():
+    on = run_appraisal(_opted_vat_document(True))
+    # The document really is the one under test: tax charged on the VAT-inclusive
+    # consideration, not the price.
+    assert on.metrics.chargeable_consideration_pence == 60_000_000
+    assert on.metrics.irrecoverable_vat_pence == 0
+
+    # The NAIVE counterfactual -- registered=False and nothing else. It reads like
+    # the spec's own words but chargeable_consideration_pence calls
+    # resolve_vat_treatment, which returns INERT when unregistered, so the
+    # consideration collapses to the exclusive price and the acquisition COST
+    # falls with it. Its interest difference is therefore contaminated by the
+    # financing of a tax delta that has nothing to do with the VAT cash cycle.
+    naive = run_appraisal(_opted_vat_document(False))
+    assert naive.metrics.acquisition_cost_pence < on.metrics.acquisition_cost_pence
+    naive_delta = on.model.totals.interest_pence - naive.model.totals.interest_pence
+
+    # R33's counterfactual: same forcing, plus the acquisition tax pinned to the
+    # as-given figure. Acquisition cost is then identical on both sides.
+    pinned = run_appraisal(_opted_vat_document(False, on.metrics.acquisition_tax_pence))
+    assert pinned.metrics.acquisition_cost_pence == on.metrics.acquisition_cost_pence
+    assert pinned.model.flags == []
+    assert on.model.flags == []
+
+    # The reported carry is R33's, not the naive one -- and the pin is doing real
+    # work here, not merely agreeing by luck.
+    assert on.metrics.vat_carry_interest_pence == (
+        on.model.totals.interest_pence - pinned.model.totals.interest_pence
+    )
+    assert on.metrics.vat_carry_interest_pence < naive_delta
+
+
+def test_the_profit_identity_holds_on_an_opted_document():
+    # Measured against R33's own counterfactual, which is the only comparison the
+    # identity is stated over: the naive one changes a COST line (the acquisition
+    # tax), so dProfit there exceeds dFinance_costs by the tax delta.
+    on = run_appraisal(_opted_vat_document(True))
+    pinned = run_appraisal(_opted_vat_document(False, on.metrics.acquisition_tax_pence))
+
+    assert on.metrics.construction_cost_pence == pinned.metrics.construction_cost_pence
+    assert on.metrics.cost_before_finance_pence == pinned.metrics.cost_before_finance_pence
+
+    finance_delta = on.metrics.finance_costs_pence - pinned.metrics.finance_costs_pence
+    assert finance_delta > 0
+    assert pinned.metrics.profit_pence - on.metrics.profit_pence == finance_delta
+    # Fee bases are VAT-independent on this document, so R31's first case holds:
+    # dProfit == dFinance_costs == vat_carry_interest_pence.
+    assert on.metrics.vat_carry_interest_pence == finance_delta
+
+
+def test_carry_interest_and_profit_impact_separate_on_a_peak_debt_exit_fee():
+    # Ruling R31. With exit_fee_basis='peak_debt', carrying VAT raises peak debt,
+    # which raises the exit fee -- so finance costs rise by MORE than interest
+    # alone and profit falls by more than vat_carry_interest_pence reports. Both
+    # figures are correct; they answer different questions. Without this test the
+    # divergence is latent and a later change that quietly redefined either one
+    # would be invisible.
+    def peak_debt_doc(registered: bool):
+        doc = _vat_invariant_document(registered=registered, recoverable_pct=100).model_dump()
+        doc["finance"] = {**doc["finance"], "exit_fee_basis": "peak_debt"}
+        return CalculatorInputsV8.model_validate(doc)
+
+    on = run_appraisal(peak_debt_doc(True))
+    off = run_appraisal(peak_debt_doc(False))
+    assert on.model.flags == []
+    assert off.model.flags == []
+
+    # The mechanism, asserted rather than assumed: VAT really does move peak debt
+    # and the exit fee with it.
+    assert on.model.peak_debt_pence > off.model.peak_debt_pence
+    assert on.model.totals.exit_fee_pence > off.model.totals.exit_fee_pence
+
+    finance_delta = on.metrics.finance_costs_pence - off.metrics.finance_costs_pence
+    assert off.metrics.profit_pence - on.metrics.profit_pence == finance_delta
+    assert finance_delta > on.metrics.vat_carry_interest_pence
+    # ...and the carry is still exactly the interest difference, unchanged by the
+    # fee basis.
+    assert on.metrics.vat_carry_interest_pence == (
+        on.model.totals.interest_pence - off.model.totals.interest_pence
+    )

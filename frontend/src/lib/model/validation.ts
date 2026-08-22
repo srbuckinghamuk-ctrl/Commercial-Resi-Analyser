@@ -11,6 +11,7 @@ import { computeLenderGdv } from './lender-valuation';
 import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
 import { areaBridge } from './areas';
 import { computeCostPlan, FEE_CODE_CATEGORY } from './cost-plan';
+import { VAT_CHARGE_CATEGORIES, isPurchaseVatChargeable, vatReturnPeriods } from './vat';
 import { pct } from './pct';
 
 export interface ValidationIssue {
@@ -233,6 +234,10 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   // `areas` above: a pre-v7 document has no cost_plan block at all and must not
   // gain errors from a block introduced this release.
   const cp = 'cost_plan' in inputs ? inputs.cost_plan : null;
+  // R11 Task 9: hoisted out of the `if (cp != null)` block below so the VAT
+  // warning further down ("registered: false with non-zero construction cost")
+  // can read the resolved construction total without recomputing it.
+  let resolvedCostPlan: ReturnType<typeof computeCostPlan> | null = null;
   if (cp != null) {
     if (cp.mode === 'detailed') {
       if (cp.packages.length === 0) {
@@ -269,24 +274,39 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       err('cost_plan.fee_lines', 'Fee line ids must be unique.');
     }
 
-    const packageIds = new Set(cp.packages.map((p) => p.id));
-    cp.contingency.forEach((c, idx) => {
-      if (c.basis === 'selected_packages') {
-        if (c.package_ids.some((id) => !packageIds.has(id))) {
-          err(`cost_plan.contingency[${idx}].package_ids`,
-            'One or more package_ids do not match a package in this cost plan.');
-        }
-        if (c.package_ids.length === 0 && c.pct !== 0) {
-          err(`cost_plan.contingency[${idx}].package_ids`,
-            'A selected-packages contingency naming no packages cannot carry a non-zero percentage.');
-        }
-      }
-    });
-
     const contingencyNames = cp.contingency.map((c) => c.name);
     if (cp.contingency.length !== 3 || new Set(contingencyNames).size !== contingencyNames.length) {
       err('cost_plan.contingency',
         'A cost plan must have exactly three contingency classes, one per class name, with no repeats.');
+    }
+
+    // R11 ruling R46. §17.8 made the package tag live: in detailed mode,
+    // `existing_building`/`abnormal` resolve against Sigma(packages where
+    // contingency_class === name), not the whole base build. A document can
+    // carry a non-zero percentage on a class no package is tagged with --
+    // ConversionCostsPage renders all three percentages in both modes, and new
+    // packages default to `contingency_class: 'general'` -- so the resolved
+    // base is silently zero. This is a WARNING, not an error: the rule that
+    // used to catch this (a selected-packages contingency naming no packages
+    // cannot carry a non-zero percentage) was deleted this release, and an
+    // error here would repeat R38's defect -- a stored document already in
+    // this state would acquire a hard error on migration, making
+    // `report_safe` false and silently downgrading the report to DRAFT. Reads
+    // `cost_plan`, which exists at v7 as well as v8, so this fires
+    // identically before and after migration and does not touch the R38/R39
+    // regression gate (which permits exactly one warning addition, on
+    // `vat.registered`).
+    if (cp.mode === 'detailed') {
+      cp.contingency.forEach((c, idx) => {
+        if (c.name === 'general') return;
+        const hasTaggedPackage = cp.packages.some((p) => p.contingency_class === c.name);
+        if (c.pct !== 0 && !hasTaggedPackage) {
+          warn(`cost_plan.contingency[${idx}].pct`,
+            `Contingency class '${c.name}' has a non-zero percentage (${c.pct}%) but no package `
+            + `is tagged '${c.name}' — its resolved base is zero, so this contingency will `
+            + 'compute to zero.');
+        }
+      });
     }
 
     // Spec §3.2.1: in detailed mode, compliance is priced inside the
@@ -335,6 +355,7 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     // line), which is exactly what computeCostPlan already derives, so it is
     // reused here rather than re-implemented.
     const resolved = computeCostPlan(inputs, bridge.developed_area_sqm, inputs.unit_mix.units.length);
+    resolvedCostPlan = resolved;
     if (resolved.base_build_pence > 0 && resolved.contingency_total_pence > resolved.base_build_pence * 0.5) {
       warn('cost_plan.contingency',
         `Contingency (${resolved.contingency_total_pence} pence) exceeds 50% of the base build cost `
@@ -346,6 +367,240 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
           'This fee line resolves against a zero base and will compute to zero.');
       }
     });
+  }
+
+  // R11 spec §17.7 / §17.9 (ruling R27). Chargeability is a fact about the
+  // VENDOR; recovery is a fact about the BUYER. `vat.registered: false` is the
+  // engine's inert switch and the migration default — it is NOT a statement
+  // that the buyer is unregistered, and it must not be read as one.
+  //
+  // In the colliding state the model holds that VAT is due while
+  // `resolveVatTreatment` returns the inert 0% row, so
+  // `chargeableConsiderationPence` collapses back to the exclusive price and the
+  // acquisition tax is charged on a base that excludes VAT — the exact
+  // under-report §17.7 exists to remove, in the case where it costs MOST,
+  // because a buyer who cannot recover it bears the whole amount.
+  //
+  // The rejected alternative was sourcing `rate_pct` independently of
+  // `registered`. Identity-safe, but it makes one field mean two things in two
+  // places, and this release exists partly to stop that. Read structurally, like
+  // `cost_plan` and `areas` above: a pre-v8 document has no `vat` block at all.
+  const vatInputs = 'vat' in inputs ? inputs.vat : null;
+  if (vatInputs != null
+      && !vatInputs.registered
+      && isPurchaseVatChargeable(vatInputs.purchase)) {
+    err('vat.registered',
+      'Purchase VAT is chargeable (the vendor has opted to tax and TOGC does not apply), '
+      + 'but the VAT engine is switched off, so the acquisition tax would be charged on the '
+      + 'VAT-exclusive price. Set vat.registered to true and give the acquisition treatment '
+      + 'row the applicable rate. If the buyer cannot recover that VAT, set '
+      + "recoverable_pct: 0 and recovery_basis: 'blocked' — that models the position exactly: "
+      + 'VAT charged, none recovered, and the acquisition tax on the VAT-inclusive '
+      + 'consideration.');
+  }
+
+  // R11 spec §17.9 (Task 9). Every rule below is specified for a SET of
+  // fields — R10 twice shipped a rule covering three fields with a test named
+  // for one, leaving two unguarded while the suite looked complete. Each rule
+  // here loops its own field set rather than checking a single representative
+  // one. Gated on `vatInputs != null` throughout: a pre-v8 document has no
+  // `vat` block at all and must produce no VAT issue, full stop.
+  if (vatInputs != null) {
+    // Single structural read of `treatments`, reused by every check below —
+    // none of them resolve a charge or apply the override-over-category
+    // precedence (that stays resolveVatTreatment's alone, spec §17.2), so one
+    // exemption here covers the whole rule set rather than one per call site.
+    // eslint-disable-next-line no-restricted-syntax -- structural shape/bounds validation only (spec §17.9); never resolves a charge, so it does not re-implement resolveVatTreatment's precedence
+    const treatments = vatInputs.treatments;
+
+    // Fix round 1 (Ruling R35): computed here, ahead of the override loop
+    // below, so the zero-rated-sale warning can fire on an OVERRIDE's own
+    // recovery_basis in the same pass that already extracts it — a
+    // VatOverride carries its own recovery_basis, so the identical unsafe
+    // assumption (full recovery on a zero-rated first grant while retaining a
+    // unit for exempt residential letting) is expressible there too, and a
+    // scan of `treatments` alone never sees it.
+    const retainsAUnit = inputs.exit_strategy.route === 'retain_all'
+      || (inputs.exit_strategy.route === 'blended' && inputs.exit_strategy.retained_units.length > 0);
+
+    // Override in headline mode, rate_pct/recoverable_pct bounds, and the
+    // zero-rated-sale-with-retained-units warning — one pass over packages,
+    // one over fee lines, each reading `vat_override` exactly once into a
+    // local for the same reason as the `treatments` exemption above.
+    let anyOverrideNonZeroRate = false;
+    if (cp != null) {
+      cp.packages.forEach((p, idx) => {
+        // eslint-disable-next-line no-restricted-syntax -- see the `treatments` exemption above; same structural-validation reasoning for the override object
+        const override = p.vat_override;
+        if (override == null) return;
+        if (override.rate_pct !== 0) anyOverrideNonZeroRate = true;
+        if (cp.mode === 'headline') {
+          err(`cost_plan.packages[${idx}].vat_override`,
+            'A VAT override only applies in detailed mode — headline mode has no packages '
+            + 'to override. Remove the override, or switch to detailed mode.');
+        }
+        if (override.rate_pct < 0 || override.rate_pct > 100) {
+          err(`cost_plan.packages[${idx}].vat_override.rate_pct`, 'VAT override rate must be between 0 and 100%.');
+        }
+        if (override.recoverable_pct < 0 || override.recoverable_pct > 100) {
+          err(`cost_plan.packages[${idx}].vat_override.recoverable_pct`,
+            'VAT override recoverable percentage must be between 0 and 100%.');
+        }
+        if (retainsAUnit && override.recovery_basis === 'zero_rated_sale') {
+          warn(`cost_plan.packages[${idx}].vat_override.recovery_basis`,
+            'This override is recovered on the basis of a zero-rated first grant, but the exit '
+            + 'strategy retains at least one unit. Retained residential letting is an exempt '
+            + 'supply, so full recovery here is unsafe — check whether the recoverable '
+            + 'proportion should be restricted.');
+        }
+      });
+      cp.fee_lines.forEach((fl, idx) => {
+        // eslint-disable-next-line no-restricted-syntax -- see the `treatments` exemption above; same structural-validation reasoning for the override object
+        const override = fl.vat_override;
+        if (override == null) return;
+        if (override.rate_pct !== 0) anyOverrideNonZeroRate = true;
+        if (cp.mode === 'headline') {
+          err(`cost_plan.fee_lines[${idx}].vat_override`,
+            'A VAT override only applies in detailed mode — headline mode has no fee lines '
+            + 'to override individually. Remove the override, or switch to detailed mode.');
+        }
+        if (override.rate_pct < 0 || override.rate_pct > 100) {
+          err(`cost_plan.fee_lines[${idx}].vat_override.rate_pct`, 'VAT override rate must be between 0 and 100%.');
+        }
+        if (override.recoverable_pct < 0 || override.recoverable_pct > 100) {
+          err(`cost_plan.fee_lines[${idx}].vat_override.recoverable_pct`,
+            'VAT override recoverable percentage must be between 0 and 100%.');
+        }
+        if (retainsAUnit && override.recovery_basis === 'zero_rated_sale') {
+          warn(`cost_plan.fee_lines[${idx}].vat_override.recovery_basis`,
+            'This override is recovered on the basis of a zero-rated first grant, but the exit '
+            + 'strategy retains at least one unit. Retained residential letting is an exempt '
+            + 'supply, so full recovery here is unsafe — check whether the recoverable '
+            + 'proportion should be restricted.');
+        }
+      });
+    }
+
+    // rate_pct / recoverable_pct out of 0..100 on every treatment row.
+    treatments.forEach((t, idx) => {
+      if (t.rate_pct < 0 || t.rate_pct > 100) {
+        err(`vat.treatments[${idx}].rate_pct`, 'VAT rate must be between 0 and 100%.');
+      }
+      if (t.recoverable_pct < 0 || t.recoverable_pct > 100) {
+        err(`vat.treatments[${idx}].recoverable_pct`, 'Recoverable percentage must be between 0 and 100%.');
+      }
+    });
+
+    // `treatments` must hold exactly the six VAT_CHARGE_CATEGORIES, once each,
+    // in the declared order — schema, not a user-managed list (spec §17.1).
+    const categories = treatments.map((t) => t.category);
+    const shapeOk = categories.length === VAT_CHARGE_CATEGORIES.length
+      && VAT_CHARGE_CATEGORIES.every((c, i) => categories[i] === c);
+    if (!shapeOk) {
+      err('vat.treatments',
+        'Treatments must be exactly the six VAT charge categories, once each, in order: '
+        + `${VAT_CHARGE_CATEGORIES.join(', ')}.`);
+    }
+
+    // --- The two RETURN-CYCLE bounds. Both gated on `registered` (ruling R38,
+    // spec §17.11). A field that parameterises a DORMANT engine is not
+    // validated: with `registered: false` no return period is ever computed, so
+    // there is no cycle to be out of bounds.
+    //
+    // This is not a softening. It is the fix for a shipped defect. The
+    // migration gives EVERY document a `vat` block carrying
+    // `first_period_end_month: 2`, so ungated these rules turned every stored
+    // appraisal with `term_months <= 2` into a hard error on migration — and a
+    // hard error makes `report_safe` false, which marks the report DRAFT. An
+    // "inert" migration would have silently downgraded every short-term
+    // appraisal in the database.
+    //
+    // The bounds that stay UNCONDITIONAL above are the ones that are nonsense
+    // in any state: a negative rate, a negative recoverable proportion, a
+    // treatments array that is not the six categories. A document that later
+    // registers gets these two errors then, which is the right moment for them.
+    if (vatInputs.registered) {
+      // first_period_end_month must sit inside the modelled term.
+      if (vatInputs.first_period_end_month < 0 || vatInputs.first_period_end_month >= f.term_months) {
+        err('vat.first_period_end_month',
+          `First period end month must be between 0 and ${f.term_months - 1}.`);
+      }
+
+      // repayment_lag_months: HMRC's payment window, capped at a documented
+      // maximum rather than left open-ended.
+      if (vatInputs.repayment_lag_months < 0 || vatInputs.repayment_lag_months > 6) {
+        err('vat.repayment_lag_months', 'Repayment lag must be between 0 and 6 months.');
+      }
+    }
+
+    // §17.3: where TOGC applies, purchase VAT is nil regardless of the option
+    // to tax — that is the whole effect of a TOGC, and it must not be
+    // expressible as "TOGC applies AND the acquisition rate is non-zero".
+    const acqIdx = treatments.findIndex((t) => t.category === 'acquisition');
+    if (acqIdx !== -1
+        && vatInputs.purchase.togc_treatment === 'applies'
+        && treatments[acqIdx].rate_pct !== 0) {
+      err(`vat.treatments[${acqIdx}].rate_pct`,
+        'Where TOGC applies, purchase VAT is nil regardless of the option to tax — the '
+        + "acquisition treatment row's rate must be 0.");
+    }
+
+    // --- Warnings. Each carries real domain content, and each belongs on
+    // `run.validation` (this function's return), never on `reconcile().issues`
+    // (see the module note above `validateInputs`: that channel carries only
+    // errors, bar one `'model'` warning). ---
+
+    // The zero-rated first grant is what makes input VAT recoverable;
+    // retained residential letting is EXEMPT, so full recovery is unsafe.
+    // This is the single most likely real-world VAT error the model can catch.
+    // (`retainsAUnit` itself is computed above, ahead of the override loop,
+    // which also checks a package/fee-line override's own recovery_basis.)
+    if (retainsAUnit) {
+      treatments.forEach((t, idx) => {
+        if (t.recovery_basis === 'zero_rated_sale') {
+          warn(`vat.treatments[${idx}].recovery_basis`,
+            'This category is recovered on the basis of a zero-rated first grant, but the exit '
+            + 'strategy retains at least one unit. Retained residential letting is an exempt '
+            + 'supply, so full recovery here is unsafe — check whether the recoverable '
+            + 'proportion should be restricted.');
+        }
+      });
+    }
+
+    // Possible, but then the TOGC changes nothing and the finding is probably
+    // mis-entered.
+    if (vatInputs.purchase.togc_treatment === 'applies' && !vatInputs.purchase.vendor_opted_to_tax) {
+      warn('vat.purchase.togc_treatment',
+        'TOGC is marked as applying, but the vendor has not opted to tax — TOGC treatment '
+        + 'changes nothing where there is no option to tax to disapply, so this is probably '
+        + 'entered in error.');
+    }
+
+    // The engine is inert and the funding need is being reported as zero.
+    if (!vatInputs.registered && (resolvedCostPlan?.construction_total_pence ?? 0) !== 0) {
+      warn('vat.registered',
+        'The VAT engine is switched off (vat.registered: false), but this document has a '
+        + 'non-zero construction cost. Input VAT on construction and fees will be reported as '
+        + 'zero throughout, including any that would otherwise be recoverable.');
+    }
+
+    // Ruling R4: derived from vatReturnPeriods(vat, term_months) — an INPUT
+    // derivation — never from the RESULT field vat.receivable_at_maturity_pence,
+    // which validateInputs cannot see (it takes inputs only). Gated on a
+    // non-zero resolved rate so this cannot fire on a registered document that
+    // charges nothing: a zero-rated document has nothing to reclaim, in or out
+    // of term.
+    const anyNonZeroRate = treatments.some((t) => t.rate_pct !== 0) || anyOverrideNonZeroRate;
+    if (vatInputs.registered && anyNonZeroRate) {
+      const periods = vatReturnPeriods(vatInputs, f.term_months);
+      const finalPeriod = periods[periods.length - 1];
+      if (finalPeriod != null && finalPeriod.reclaim_month == null) {
+        warn('vat.repayment_lag_months',
+          'The final VAT return period\'s reclaim falls outside the modelled term and will not '
+          + 'appear in the cash flow — consider a shorter term, a shorter repayment lag, or '
+          + 'reporting the balance as a receivable.');
+      }
+    }
   }
 
   if (inputs.exit_strategy.route === 'blended' && inputs.exit_strategy.retained_units.length === 0) {
@@ -562,6 +817,15 @@ export function reconcile(
   // (netReceipts/repayment_pence never appear on either side of this identity either).
   // It still counts in full toward additional_equity_pence itself, the
   // additional_equity_required flag, equity contributed, and the equity cash-flow vector.
+  //
+  // R11 spec §17.6: the VAT reclaim is the THIRD such exclusion, on the same terms.
+  // This function needs no structural change for VAT. The VAT outflow enters
+  // uses_total_pence (monthly-engine.ts adds uses[m].vat_pence to cashUses) and is
+  // funded through the existing per-month loop by draws, equity or a visible gap;
+  // the reclaim repays, exactly as sale proceeds do. So, like sale-proceeds repayments
+  // and refinance-shortfall equity, model.totals.vat_reclaim_pence appears on NEITHER
+  // side. Over the term sources therefore fund the GROSS VAT outflow even though most
+  // of it returns — which is correct, and is the treatment sale proceeds already get.
   const sourcesTotal =
     model.totals.equity_contributed_pence
     + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence)

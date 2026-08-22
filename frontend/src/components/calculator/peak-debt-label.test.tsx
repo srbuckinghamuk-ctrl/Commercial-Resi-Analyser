@@ -4,8 +4,8 @@ import AppraisalSummaryPage from './AppraisalSummaryPage';
 import FinancePage from './FinancePage';
 import InvestorSummaryPage from './InvestorSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV7 } from '../../lib/model';
-import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV8 } from '../../lib/model';
+import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import type { Project } from '../../types';
 
 const PROJECT = {
@@ -18,8 +18,8 @@ const PROJECT = {
 } as unknown as Project;
 
 /** A development-finance deal whose peak debt lands on a known ledger month. */
-function anchoredInputs(anchor: string | null): CalculatorInputsV7 {
-  const inputs = defaultCalculatorInputsV7();
+function anchoredInputs(anchor: string | null): CalculatorInputsV8 {
+  const inputs = defaultCalculatorInputsV8();
   inputs.finance.funding_source = 'development_finance';
   inputs.finance.committed_net_facility_pence = 60_000_000;
   inputs.finance.term_months = 12;

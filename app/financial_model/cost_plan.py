@@ -110,17 +110,26 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
         else cc.fire_safety_pence + cc.sound_insulation_pence + cc.part_l_compliance_pence
     )
 
-    by_id = {p.id: p.amount_pence for p in plan.packages}
+    # R11 spec Sec 17.8. One mechanism: the package's own tag. basis/package_ids
+    # are gone from the input; the result keeps `basis` as a DERIVED description
+    # of the base, so the reported shape and every fixture's strings are
+    # unchanged.
+    #
+    # Headline mode gives every class the whole base build. There are no
+    # packages to tag, and the calculator renders all three percentages in both
+    # modes -- scoping by tag here would silently zero a live input path.
     contingency: list[ContingencyLine] = []
     for c in plan.contingency:
+        scoped = detailed and c.name != "general"
         base = (
-            base_build
-            if c.basis == "all_packages"
-            else sum(by_id.get(pid, 0) for pid in c.package_ids)
+            sum(p.amount_pence for p in packages if p.contingency_class == c.name)
+            if scoped
+            else base_build
         )
+        basis = "selected_packages" if scoped else "all_packages"
         contingency.append(
             ContingencyLine(
-                name=c.name, pct=c.pct, basis=c.basis,
+                name=c.name, pct=c.pct, basis=basis,
                 base_pence=base, amount_pence=money_round(base * c.pct / 100),
             )
         )

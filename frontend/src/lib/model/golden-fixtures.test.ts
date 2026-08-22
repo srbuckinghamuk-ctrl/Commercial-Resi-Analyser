@@ -2,8 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
-import { migrateInputsToV5, migrateInputsToV6, migrateInputsToV7 } from './migrate';
-import { costPlanFromLegacyCosts } from './cost-plan';
+import { validateInputs } from './validation';
+import type { ValidationIssue } from './validation';
+import {
+  migrateInputsToV5, migrateInputsToV6, migrateInputsToV7, migrateInputsToV8,
+} from './migrate';
+import { costPlanFromLegacyCosts, computeCostPlan } from './cost-plan';
+import { areaBridge } from './areas';
+import { VAT_CHARGE_CATEGORIES } from './vat';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -80,6 +86,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'o-ancillary-value',
   'p-scotland-levered',
   'q-detailed-cost-plan',
+  'r-vat-quarterly',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -147,6 +154,17 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
     r.metrics.cost_plan.fees.find((f) => f.basis === 'pct_of_base_build')?.base_pence ?? null,
   cost_plan_fee_pct_base_build_amount_pence: (r) =>
     r.metrics.cost_plan.fees.find((f) => f.basis === 'pct_of_base_build')?.amount_pence ?? null,
+  // R11 spec §17.4, fixture R: the schedule's own construction spend curve, pinned
+  // as a flat array so an explicit `programme` block (Ruling R16) that spread over
+  // the wrong number of months is caught directly, before trusting any VAT figure
+  // built on top of it.
+  uses_construction_pence: (r) => r.schedule.uses.map((u) => u.construction_pence),
+  // R11 spec §17.4's worked cycle, as three flat month-indexed arrays rather than
+  // reaching into `metrics.vat.months` (an array of objects) with a dotted path —
+  // the same reasoning as the six contingency/fee mappers above.
+  vat_months_incurred_pence: (r) => r.metrics.vat.months.map((m) => m.incurred_pence),
+  vat_months_reclaimed_pence: (r) => r.metrics.vat.months.map((m) => m.reclaimed_pence),
+  vat_months_carry_pence: (r) => r.metrics.vat.months.map((m) => m.carry_pence),
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -217,9 +235,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // which stops at 6 — so a v7 fixture asserts the v7 property in the loop below
   // instead of the v6 one.
   const v7Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 7);
+  // R11: symmetrically, migrateInputsToV7 refuses a v8 document by design (it would
+  // have to drop `vat` to produce one) -- see RECOGNISED_INPUTS_VERSIONS_V7, which
+  // stops at 7 -- so a v8 fixture asserts its own v8-specific properties instead of
+  // the v7 one, in the it.each tables further below.
+  const v8Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 8);
 
-  it('every fixture is v5, v6 or v7, and each group is non-empty', () => {
-    expect(v5Fixtures.length + v6Fixtures.length + v7Fixtures.length).toBe(appraisalFixtures.length);
+  it('every fixture is v5, v6, v7 or v8, and each group is non-empty', () => {
+    expect(
+      v5Fixtures.length + v6Fixtures.length + v7Fixtures.length + v8Fixtures.length,
+    ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
       'N — full area bridge, bridge-derived construction area, all-cash',
@@ -228,6 +253,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
     ]);
     expect(v7Fixtures.map((f) => f.name)).toEqual([
       'Q — detailed cost plan, three contingency classes, levered facility',
+    ]);
+    expect(v8Fixtures.map((f) => f.name)).toEqual([
+      'R — VAT quarterly return cycle, purchase VAT chargeable, levered facility',
     ]);
   });
 
@@ -248,8 +276,10 @@ describe('golden fixtures (shared with the Python engine)', () => {
 
   // R10: restricted to the pre-v7 fixtures (v5Fixtures ∪ v6Fixtures) — migrateInputsToV6
   // refuses a v7 document, mirroring the v5Fixtures restriction above. The stronger,
-  // corpus-wide statement is now the v7 loop immediately below.
-  for (const fx of appraisalFixtures.filter((f) => versionOf(f) !== 7)) {
+  // corpus-wide statement is now the v7 loop immediately below. R11 widens the
+  // exclusion to v7 or v8 -- migrateInputsToV6 refuses v8 by the same design
+  // (RECOGNISED_INPUTS_VERSIONS_V6 stops at 6).
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -263,9 +293,12 @@ describe('golden fixtures (shared with the Python engine)', () => {
     });
   }
 
-  for (const fx of appraisalFixtures) {
+  // R11: restricted to the pre-v8 fixtures -- migrateInputsToV7 refuses a v8
+  // document by design (RECOGNISED_INPUTS_VERSIONS_V7 stops at 7). Fixture R (v8)
+  // asserts its own identity guarantee in the v8 it.each table further below instead.
+  for (const fx of appraisalFixtures.filter((f) => versionOf(f) !== 8)) {
     // R10: the same identity guarantee one version further on, and the one that now
-    // covers the WHOLE corpus — migrateInputsToV7 accepts v5, v6 and v7 documents alike
+    // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
     // `cost_plan` through untouched, and a merge that silently reset it to
     // DEFAULT_COST_PLAN would move fixture Q's construction cost by 6,040,000p
@@ -321,7 +354,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -332,24 +365,26 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'O — ancillary value, blended exit, one unit sold and one retained',
       'P — Scottish acquisition, LBTT non-residential, development finance',
       'Q — detailed cost plan, three contingency classes, levered facility',
+      'R — VAT quarterly return cycle, purchase VAT chargeable, levered facility',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
-    // R10 widens the second reason from "version === 6" to "version === 6 or 7":
-    // fixture Q (v7) has no pre-R8 form for the same reason N/O/P (v6) do not —
-    // asPreR8Document stamps v3/v4, and migrating that back up would leave the R9
-    // areas/ancillary AND the R10 cost_plan blocks at their zeroed/legacy-derived
-    // defaults, a different document.
+    // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
+    // R11 widens it again to include 8: fixture R (v8), like fixture Q (v7) before
+    // it, has no pre-R8 form — asPreR8Document stamps v3/v4, and migrating that back
+    // up would leave the R9 areas/ancillary, the R10 cost_plan AND the R11 vat blocks
+    // at their zeroed/legacy-derived/inert defaults, a different document.
     //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
     // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
-    // so it is vacuously true for every member and can never fail. Enumerating 6/7
-    // keeps the check able to fail: it catches a fixture excluded for a THIRD,
-    // unstated reason (e.g. a future non-v5/v6/v7 fixture, or a change to
+    // so it is vacuously true for every member and can never fail. Enumerating 6/7/8
+    // keeps the check able to fail: it catches a fixture excluded for a FOURTH,
+    // unstated reason (e.g. a future non-v5/v6/v7/v8 fixture, or a change to
     // preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
-        jurisdictionOf(fx) !== 'england_ni' || versionOf(fx) === 6 || versionOf(fx) === 7,
+        jurisdictionOf(fx) !== 'england_ni'
+          || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -545,6 +580,28 @@ describe('golden fixtures (shared with the Python engine)', () => {
         cost_plan_fee_pct_base_build_amount_pence: 2820001,       // truly 2820000
       },
     },
+    // R11 (the same convention this block states): fixture R adds four new FLAT_KEYS
+    // array mappers (the schedule's construction spend curve, and the VAT engine's
+    // three month-indexed arrays). Each wrong value is a plausible REAL mistake — a
+    // shifted programme window, a swapped incurred-VAT month, the two periods'
+    // reclaims swapped, a one-pence slip at the peak carry — not an arbitrary wrong
+    // number, so a control failure reads as "found the wrong month/line" rather than
+    // "found a typo".
+    {
+      namePrefix: 'R — VAT quarterly',
+      wrongValues: {
+        // truly [0, 25000000, 25000000, 25000000, 25000000, 0, 0] — shifted one month
+        // later, the exact shape an unset `programme` block (auto windows) would give.
+        uses_construction_pence: [0, 0, 25000000, 25000000, 25000000, 25000000, 0],
+        // truly [10000000, 5000000, 5000000, 5000000, 5000000, 0, 0] — months 0/1 swapped.
+        vat_months_incurred_pence: [5000000, 10000000, 5000000, 5000000, 5000000, 0, 0],
+        // truly [0, 0, 0, 20000000, 0, 0, 10000000] — the two periods' reclaims swapped.
+        vat_months_reclaimed_pence: [0, 0, 0, 10000000, 0, 0, 20000000],
+        // truly [10000000, 15000000, 20000000, 5000000, 10000000, 10000000, 0] — the
+        // peak off by one penny.
+        vat_months_carry_pence: [10000000, 15000000, 19999999, 5000000, 10000000, 10000000, 0],
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -578,7 +635,8 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R10: restricted to the pre-v7 fixtures — migrateInputsToV6 refuses a v7 document
   // by design (RECOGNISED_INPUTS_VERSIONS_V6 stops at 6), mirroring the v5Fixtures/
   // v6Fixtures restriction above. The stronger, corpus-wide gate is the v7 table below.
-  it.each(appraisalFixtures.filter((f) => versionOf(f) !== 7).map((f) => f.name))(
+  // R11 widens the exclusion to v7 or v8 -- migrateInputsToV6 refuses v8 the same way.
+  it.each(appraisalFixtures.filter((f) => ![7, 8].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -637,9 +695,11 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // fix round 1, I2 — this comment previously claimed that mirror existed when it
   // did not; test_migrate_v7.py had no fixture-corpus scan, no run_appraisal call
   // and no before/after comparison until then). The same shape as the v6 table
-  // above, one version further on, and now corpus-wide again: migrateInputsToV7
-  // accepts v5, v6 and v7 documents alike (RECOGNISED_INPUTS_VERSIONS_V7 = 1–7).
-  it.each(appraisalFixtures.map((f) => f.name))(
+  // above, one version further on: migrateInputsToV7 accepts v5, v6 and v7
+  // documents alike (RECOGNISED_INPUTS_VERSIONS_V7 = 1–7), and refuses v8 by the
+  // same design (R11) -- fixture R (v8) is excluded here and gets its own gate in
+  // the v8 table below.
+  it.each(appraisalFixtures.filter((f) => versionOf(f) !== 8).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -671,6 +731,72 @@ describe('golden fixtures (shared with the Python engine)', () => {
     },
   );
 
+  // R11 Task 10 (spec §17.11) — the same acceptance gate one version further on,
+  // mirrored in tests/test_migrate_v8.py::test_v8_migration_moves_no_existing_figure.
+  //
+  // R9 recorded that a gate of this shape can be PROVABLY BLIND: where the
+  // migration synthesises a block no engine consumes, "the figures did not
+  // move" is guaranteed by construction and the gate cannot fail. Here the
+  // numeric half IS meaningful — the VAT engine is live and reads
+  // `vat.registered`, so a migration writing `registered: true` would move
+  // every fixture. But the numeric half alone still cannot tell a block written
+  // CORRECTLY from one written merely harmlessly, so the structural half below
+  // asserts what §17.11 actually specifies: six rows in declared order at zero,
+  // every override null, and the two deleted contingency fields gone.
+  //
+  // R11: restricted to the PRE-EXISTING (pre-v8) fixtures. Fixture R already IS a
+  // v8 document carrying a LIVE vat block, so migrateInputsToV8 takes the
+  // MERGE-onto-defaults branch for it rather than the inert upgrade write this
+  // gate is about -- the structural assertions below (`registered: false`, every
+  // rate 0) would fail for it not because the migration is wrong but because they
+  // are asserting the wrong claim about an already-registered document. Fixture
+  // R's own identity-through-merge property is asserted separately, below.
+  const preV8Fixtures = appraisalFixtures.filter((f) => versionOf(f) !== 8);
+
+  it.each(preV8Fixtures.map((f) => f.name))(
+    'migrating %s to v8 moves no computed figure, and writes the specified block',
+    (name) => {
+      const fx = preV8Fixtures.find((f) => f.name === name)!;
+      const before = runAppraisal(fx.inputs);
+      const migrated = migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>);
+      const after = runAppraisal(migrated);
+
+      expect(migrated.inputs_version).toBe(8);
+
+      // Structural half — §17.11's write, asserted directly.
+      expect(migrated.vat.registered).toBe(false);
+      expect(migrated.vat.treatments.map((t) => t.category)).toEqual([...VAT_CHARGE_CATEGORIES]);
+      expect(migrated.vat.treatments).toHaveLength(6);
+      for (const t of migrated.vat.treatments) {
+        expect(t.rate_pct).toBe(0);
+        expect(t.recoverable_pct).toBe(0);
+        expect(t.recovery_basis).toBe('unconfirmed');
+        expect(t.evidence_status).toBe('unconfirmed');
+      }
+      expect(migrated.vat.purchase.vendor_opted_to_tax).toBe(false);
+      expect(migrated.vat.purchase.togc_treatment).toBe('unconfirmed');
+      for (const p of migrated.cost_plan.packages) expect(p.vat_override).toBeNull();
+      for (const f of migrated.cost_plan.fee_lines) expect(f.vat_override).toBeNull();
+      for (const c of migrated.cost_plan.contingency) {
+        expect('basis' in c).toBe(false);
+        expect('package_ids' in c).toBe(false);
+      }
+      // Fixture Q is already v7 and carries a real package schedule; the merge
+      // branch must bring it through untouched apart from the two subtractions
+      // above, exactly as the v7 gate asserts for `cost_plan` as a whole.
+      if (versionOf(fx) === 7) {
+        const savedPlan = (fx.inputs as unknown as { cost_plan: { packages: unknown[] } }).cost_plan;
+        expect(migrated.cost_plan.packages).toHaveLength(savedPlan.packages.length);
+        expect(migrated.cost_plan.mode).toBe('detailed');
+      }
+
+      // Numeric half.
+      expect(after.metrics).toEqual(before.metrics);
+      expect(after.model).toEqual(before.model);
+      expect(after.schedule).toEqual(before.schedule);
+    },
+  );
+
   // Non-vacuity guard, mirroring test_migrate_v7.py::test_v7_migration_moves_no_
   // existing_figure's `assert len(names) == 12` (fix round 1, M5: this comment
   // previously said 12 while the Python side still said 11, because the true v7
@@ -679,7 +805,167 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // committed would silently shrink the it.each tables above to nothing rather
   // than failing.
   it('runs the migration identity gates over the whole pipeline corpus, not an empty one', () => {
-    expect(appraisalFixtures).toHaveLength(12);
+    expect(preV8Fixtures).toHaveLength(12);
+  });
+
+  // Fixture R's OWN identity guarantee: it is already v8, so migrateInputsToV8
+  // merges it onto v8 defaults (RECOGNISED_INPUTS_VERSIONS_V8 = 1–8) rather than
+  // writing the inert block, and that merge must carry its LIVE vat block through
+  // untouched -- exactly the claim the v6/v7 tables above assert for `areas` and
+  // `cost_plan` on a fixture that is already at the target version.
+  for (const fx of v8Fixtures) {
+    it(`${fx.name} — reproduces its metrics after migration to v8 (merge branch)`, () => {
+      const migrated = migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>);
+      expect(migrated.inputs_version).toBe(8);
+      expect(migrated.vat).toEqual((fx.inputs as unknown as { vat: unknown }).vat);
+      assertExpectedMetrics(runAppraisal(migrated), fx, `${fx.name}[migrated-to-v8]`);
+    });
+  }
+
+  // Ruling R38 (spec §17.11, "The migration must add no validation issue
+  // either"). Twin of tests/test_migrate_v8.py::test_v8_migration_adds_and_
+  // removes_no_validation_issue.
+  //
+  // The numeric gate above could never have caught R38's defect, because the
+  // figures genuinely did not move: the migration wrote
+  // `first_period_end_month: 2` onto every document while `registered: false`
+  // kept the engine dormant, so no number changed — and yet every stored
+  // appraisal with `term_months <= 2` acquired a HARD ERROR, which makes
+  // report_safe false and marks the report DRAFT.
+  //
+  // The assertion is "the SAME issues", not "no errors": a document that was
+  // already invalid must stay invalid in the same way.
+  //
+  // ONE exemption, named rather than absorbed into a loose comparison. §17.9
+  // SPECIFIES a warning for "`registered: false` with a non-zero construction
+  // cost". A pre-v8 document has no `vat` block and so no VAT issue at all, so
+  // that warning can only ever appear AFTER migration — unavoidable by
+  // construction, and the correct disclosure. It is confined to WARNINGS on
+  // that one field, because severity carries the consequence: an ERROR marks
+  // the report DRAFT, a warning does not. The ERROR set is compared with no
+  // exemption at all, and nothing may be REMOVED.
+  // Pinned as the WHOLE issue string, not a (severity, field) prefix. Keying on
+  // the pair and probing with `some` would swallow a SECOND, different warning
+  // on `vat.registered` -- the exemption has to name one message, not a field.
+  const MIGRATION_DISCLOSURE = 'warning vat.registered '
+    + 'The VAT engine is switched off (vat.registered: false), but this document has a '
+    + 'non-zero construction cost. Input VAT on construction and fees will be reported as '
+    + 'zero throughout, including any that would otherwise be recoverable.';
+
+  function issueKeys(issues: ValidationIssue[]): string[] {
+    return issues.map((i) => `${i.severity} ${i.field} ${i.message}`).sort();
+  }
+
+  /** Returns the exempted additions, so callers can assert non-vacuity. */
+  function assertIssueSetsAgree(before: string[], after: string[], name: string): string[] {
+    const removed = before.filter((i) => !after.includes(i));
+    expect(removed, `${name}: migration to v8 REMOVED a validation issue`).toEqual([]);
+
+    const errorsBefore = before.filter((i) => i.startsWith('error '));
+    const errorsAfter = after.filter((i) => i.startsWith('error '));
+    expect(
+      errorsAfter,
+      `${name}: migration to v8 changed the ERROR set — an error marks the report DRAFT (R38)`,
+    ).toEqual(errorsBefore);
+
+    const added = after.filter((i) => !before.includes(i));
+    const unexpected = added.filter((i) => i !== MIGRATION_DISCLOSURE);
+    expect(
+      unexpected,
+      `${name}: migration to v8 added an issue other than §17.9's inert-engine disclosure`,
+    ).toEqual([]);
+
+    const exempted = added.filter((i) => i === MIGRATION_DISCLOSURE);
+    expect(
+      exempted.length,
+      `${name}: the §17.9 exemption covers at most ONE issue`,
+    ).toBeLessThanOrEqual(1);
+    return exempted;
+  }
+
+  // R11: restricted to preV8Fixtures for the same reason as the numeric/structural
+  // gate above -- fixture R is already registered:true, so §17.9's "registered:
+  // false with non-zero construction cost" disclosure can never fire for it either
+  // side of the merge, and the cross-check below (which assumes every fixture here
+  // WAS registered:false pre-migration) would be asserting the wrong claim.
+  it.each(preV8Fixtures.map((f) => f.name))(
+    'migrating %s to v8 adds and removes no validation issue',
+    (name) => {
+      const fx = preV8Fixtures.find((f) => f.name === name)!;
+      const before = issueKeys(validateInputs(fx.inputs));
+      const migrated = migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>);
+      const after = issueKeys(validateInputs(migrated));
+
+      const exempted = assertIssueSetsAgree(before, after, name);
+
+      // Cross-check the exemption against §17.9's own condition rather than
+      // trusting it: the disclosure must appear exactly where a non-zero
+      // RESOLVED construction cost makes it true, and nowhere else.
+      //
+      // Minor 4 (whole-branch review): this used to check
+      // `migrated.conversion_costs.total_construction_sqm > 0`, which is a
+      // PROXY, not §17.9's own condition — validation.ts's warning actually
+      // reads `resolvedCostPlan.construction_total_pence !== 0`, and in
+      // detailed mode the base build is derived from `cost_plan.packages`,
+      // not from `total_construction_sqm` at all. The two quantities agree on
+      // every fixture in this corpus today (this is latent, not yet
+      // observed), so the proxy previously read as correct. Recomputed here
+      // exactly as validation.ts does, so a future fixture where the two
+      // diverge is actually caught.
+      const resolvedConstructionTotal = computeCostPlan(
+        migrated,
+        areaBridge(migrated).developed_area_sqm,
+        migrated.unit_mix.units.length,
+      ).construction_total_pence;
+      expect(exempted.length === 1)
+        .toBe(resolvedConstructionTotal !== 0);
+    },
+  );
+
+  // Non-vacuity, corpus-wide (spec §17.11 names it; the Python twin asserts
+  // `disclosed > 0`). `it.each` above runs one test per fixture, so none of them
+  // can see whether the carve-out is exercised ANYWHERE -- if §17.9's warning
+  // stopped firing entirely, every per-fixture case would still pass while the
+  // exemption silently became dead weight.
+  it('exercises the §17.9 exemption on at least one fixture, so the carve-out is not dead', () => {
+    const disclosed = preV8Fixtures.filter((fx) => {
+      const before = issueKeys(validateInputs(fx.inputs));
+      const after = issueKeys(validateInputs(
+        migrateInputsToV8(fx.inputs as unknown as Record<string, unknown>),
+      ));
+      return after.filter((i) => !before.includes(i)).includes(MIGRATION_DISCLOSURE);
+    });
+    expect(disclosed.length).toBeGreaterThan(0);
+  });
+
+  // The synthetic case the fixture corpus does not contain, and the exact shape
+  // R38 was written for: `first_period_end_month` defaults to 2, so a short term
+  // is the document where an ungated return-cycle bound fires.
+  //
+  // BOTH terms, per §17.11 (R39). Term 2 is the `>=`-versus-`>` boundary: the
+  // migration writes `first_period_end_month: 2`, so a rule re-weakened to
+  // `> term_months`, or a gate re-narrowed to something like
+  // `registered || term_months >= 2`, FAILS at term 2 and PASSES at term 1. A
+  // term-1-only case would let either regression back in.
+  it.each([1, 2])('adds no validation issue to a %i-month document (R38)', (termMonths) => {
+    const v7 = migrateInputsToV7({ inputs_version: 1 });
+    const source = JSON.parse(JSON.stringify({
+      ...v7, finance: { ...v7.finance, term_months: termMonths },
+    })) as Record<string, unknown>;
+
+    const before = issueKeys(validateInputs(source as unknown as AnyCalculatorInputs));
+    const migrated = migrateInputsToV8(source);
+    const after = issueKeys(validateInputs(migrated));
+
+    // Non-vacuity: the migrated document really does carry the block whose
+    // bound would fire, on a term short enough to trip it.
+    expect(migrated.vat.registered).toBe(false);
+    expect(migrated.vat.first_period_end_month).toBe(2);
+    expect(migrated.finance.term_months).toBe(termMonths);
+    expect(migrated.vat.first_period_end_month).toBeGreaterThanOrEqual(termMonths);
+
+    assertIssueSetsAgree(before, after, `synthetic ${termMonths}-month document`);
+    expect(after.some((i) => i.includes('vat.first_period_end_month'))).toBe(false);
   });
 });
 

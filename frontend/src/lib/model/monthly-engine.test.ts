@@ -8,15 +8,33 @@ import { DEFAULT_FACILITY_TERMS, defaultCalculatorInputsV2 } from '../conversion
 import type {
   CalculatorInputsV3, EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
+import type { VatResult } from './vat';
 
 function uses(partial: Partial<MonthUses>): MonthUses {
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0, ...partial,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0, ...partial,
   };
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
-  return { gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, ...partial };
+  return {
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0, ...partial,
+  };
+}
+// R11: the VAT block itself is never read by the ledger — the ledger reads only
+// `uses[m].vat_pence` and `receipts[m].vat_reclaim_pence`, which the VAT engine
+// writes back. So every schedule built here carries an inert result of the
+// schedule's own length, mirroring vat.ts's inertVat() shape exactly.
+function emptyVat(termMonths: number): VatResult {
+  return {
+    registered: false, charges: [], periods: [],
+    months: Array.from({ length: termMonths }, (_, month) => (
+      { month, incurred_pence: 0, reclaimed_pence: 0, carry_pence: 0 }
+    )),
+    total_input_vat_pence: 0, total_recoverable_pence: 0, total_irrecoverable_pence: 0,
+    total_reclaimed_pence: 0, receivable_at_maturity_pence: 0, peak_carry_pence: 0, peak_carry_month: null,
+    purchase_vat_pence: 0, purchase_vat_chargeable: false, purchase_evidence_status: 'unconfirmed',
+  };
 }
 function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
   const sum = (f: (x: MonthUses) => number) => u.reduce((a, x) => a + f(x), 0);
@@ -33,7 +51,11 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       gdv_pence: grossSales, retained_value_pence: 0,
       cost_before_finance_ex_selling_pence:
         sum((x) => x.acquisition_pence + x.construction_pence + x.professional_pence + x.statutory_pence),
+      vat_pence: sum((x) => x.vat_pence),
+      vat_reclaim_pence: r.reduce((a, x) => a + x.vat_reclaim_pence, 0),
+      irrecoverable_vat_pence: 0,
     },
+    vat: emptyVat(u.length),
   };
 }
 
@@ -428,5 +450,275 @@ describe('phased sweep mechanics (spec §4.4.1)', () => {
       expect(last.additional_equity_pence)
         .toBe(500_000 + last.repayment_pence + last.exit_fee_pence);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R11 spec §17.6 — VAT in the ledger: funding, sweep and redemption.
+// ---------------------------------------------------------------------------
+
+interface VatDocOpts {
+  /** `development_cost_advance_pct`. 100 makes the cap's *eligible base* the
+   *  only thing that can stop the draw — which is what makes the guard below
+   *  falsifiable. */
+  advancePct?: number;
+  /** Ruling R7: the advance-cap guard is built on ZERO committed equity. The
+   *  engine funds equity first, so an equity-rich document simply pays the VAT
+   *  out of equity and proves nothing about eligibility. */
+  committedEquityPence?: number;
+  salesSweepPct?: number;
+  /** true: the month-3 reclaim (30,000,000) covers the balance AND the exit
+   *  fee, so the reclaim redeems. false: a partial reclaim (10,000,000), and
+   *  the month-4 sale redeems instead. Both documents redeem exactly once, on
+   *  the same `committed_gross_facility` fee basis, so their total exit fees
+   *  are comparable. */
+  reclaimClearsBalance?: boolean;
+  /** Puts the 60,000,000 sale in month 3 alongside the reclaim instead of in
+   *  month 4, so the two compete for the same balance in the same month. */
+  sameMonthSaleAndReclaim?: boolean;
+  cash?: boolean;
+}
+
+/** A five-month VAT document, deliberately stripped of everything that is not
+ *  under test: 0% interest, no arrangement fee, no ancillary fees, no day-one
+ *  advance and nothing at all in month 0. What is left is
+ *
+ *    m1  25,000,000 construction + 5,000,000 VAT     (the funding question)
+ *    m3  a VAT reclaim                               (the sweep question)
+ *    m4  a 60,000,000 sale                           (the redemption question)
+ *
+ *  The eligible base for the development-cost advance is construction +
+ *  professional + statutory = 25,000,000, so at 100% the cap stops the draw at
+ *  the build and the 5,000,000 of VAT must come from equity or from a visible
+ *  gap. The exit fee is 1% of the 100,000,000 committed gross facility =
+ *  1,000,000, independent of which month redeems and of the balance then
+ *  outstanding. */
+function vatDocument(opts: VatDocOpts = {}) {
+  const reclaimClears = opts.reclaimClearsBalance ?? false;
+  const committedEquityPence = opts.committedEquityPence ?? 5_000_000;
+  const terms: FacilityTerms = {
+    ...DEFAULT_FACILITY_TERMS,
+    funding_source: opts.cash === true ? 'cash' : 'development_finance',
+    day_one_advance_pence: 0,
+    development_cost_advance_pct: opts.advancePct ?? 100,
+    committed_net_facility_pence: 100_000_000,
+    committed_gross_facility_pence: 100_000_000,
+    annual_interest_rate_pct: 0,
+    interest_type: 'rolled_up',
+    arrangement_fee_pct: 0,
+    exit_fee_pct: 1, exit_fee_basis: 'committed_gross_facility',
+    term_months: 5, equity_draw_rule: 'equity_first',
+    sales_sweep_pct: opts.salesSweepPct ?? 100,
+  };
+  const schedule = mkSchedule(
+    [
+      uses({}),
+      uses({ construction_pence: 25_000_000, vat_pence: 5_000_000 }),
+      uses({}), uses({}), uses({}),
+    ],
+    [
+      receipts({}), receipts({}), receipts({}),
+      receipts({
+        vat_reclaim_pence: reclaimClears ? 30_000_000 : 10_000_000,
+        gross_sale_pence: opts.sameMonthSaleAndReclaim === true ? 60_000_000 : 0,
+      }),
+      receipts({ gross_sale_pence: opts.sameMonthSaleAndReclaim === true ? 0 : 60_000_000 }),
+    ],
+  );
+  return {
+    schedule, terms,
+    equitySources: committedEquityPence > 0 ? equity(committedEquityPence) : [],
+  };
+}
+
+function runVatLedger(opts: VatDocOpts = {}) {
+  const d = vatDocument(opts);
+  return runLedger(d.schedule, d.terms, d.equitySources);
+}
+
+describe('VAT funding: ineligible for the development-cost advance (spec §17.6)', () => {
+  it('funds the build but never advances against the VAT', () => {
+    // THE GUARD (spec §17.6). Advance pct 100, zero committed equity. `eligible`
+    // is construction + professional + statutory = 25,000,000, so the cap stops
+    // the draw at the build and the VAT falls through to a visible gap.
+    //
+    // Add u.vat_pence to `eligible` in monthly-engine.ts and the cap becomes
+    // 30,000,000, the draw covers everything and the gap disappears — this
+    // assertion MUST break. Watched failing; see the task report.
+    const model = runVatLedger({ advancePct: 100, committedEquityPence: 0 });
+    const m1 = model.months[1];
+    expect(m1.uses_total_pence).toBe(30_000_000);   // 25,000,000 build + 5,000,000 VAT
+    expect(m1.draw_pence).toBe(25_000_000);         // the build only
+    expect(m1.funding_gap_pence).toBe(5_000_000);   // exactly the VAT
+  });
+
+  it('raises vat_funding_gap when neither equity nor headroom can fund the VAT', () => {
+    const model = runVatLedger({ advancePct: 100, committedEquityPence: 0 });
+    const flag = model.flags.find((f) => f.code === 'vat_funding_gap');
+    expect(flag).toBeDefined();
+    expect(flag?.severity).toBe('red');
+    expect(flag?.month).toBe(1);
+    expect(flag?.amount_pence).toBe(5_000_000);
+    // The generic gap flag still fires alongside it; the VAT one narrows it.
+    expect(model.flags.some((f) => f.code === 'funding_gap')).toBe(true);
+  });
+
+  it('funds the VAT from equity where equity is available', () => {
+    // The same document with equity committed: no gap, and the draw is still
+    // capped at the build. This is the narrative case; the guard above is the
+    // one that fails when eligibility is widened.
+    const model = runVatLedger({ advancePct: 100, committedEquityPence: 5_000_000 });
+    expect(model.months[1].funding_gap_pence).toBe(0);
+    expect(model.months[1].draw_pence).toBe(25_000_000);
+    expect(model.months[1].equity_contribution_pence).toBe(5_000_000);
+    expect(model.totals.equity_contributed_pence).toBeGreaterThan(0);
+    expect(model.flags.some((f) => f.code === 'vat_funding_gap')).toBe(false);
+  });
+
+  it('discloses the gross VAT cycle on the ledger totals', () => {
+    const model = runVatLedger();
+    expect(model.totals.vat_pence).toBe(5_000_000);
+    expect(model.totals.vat_reclaim_pence).toBe(10_000_000);
+  });
+});
+
+describe('VAT reclaims: sweep and redemption (spec §17.6)', () => {
+  it('applies a reclaim wholly to senior debt, ignoring sales_sweep_pct', () => {
+    const model = runVatLedger({ salesSweepPct: 50 });
+    const reclaimMonth = model.months[3];
+    expect(reclaimMonth.vat_reclaim_pence).toBe(10_000_000);
+    expect(reclaimMonth.repayment_pence).toBe(10_000_000);   // not 5,000,000
+    expect(reclaimMonth.gross_receipts_pence).toBe(0);       // never a sale receipt
+    expect(reclaimMonth.closing_balance_pence).toBe(15_000_000);
+  });
+
+  it('charges the exit fee exactly once when a reclaim clears the balance', () => {
+    // The trap (§17.6): the ledger charges the exit fee inside
+    // `if (balance > 0 && !isCash)` at the sales sweep. A reclaim that zeroes the
+    // balance without redeeming leaves the sale with nothing to do, and the fee
+    // is never charged and never carried — lost, with every total reconciling.
+    const clearedByReclaim = runVatLedger({ reclaimClearsBalance: true });
+    const clearedBySale = runVatLedger({ reclaimClearsBalance: false });
+    // Genuinely two different documents: the reclaim redeems in month 3 in one,
+    // the sale redeems in month 4 in the other.
+    expect(clearedByReclaim.months[3].closing_balance_pence).toBe(0);
+    expect(clearedBySale.months[3].closing_balance_pence).toBe(15_000_000);
+    expect(clearedByReclaim.months[3].exit_fee_pence).toBe(1_000_000);
+    expect(clearedBySale.months[4].exit_fee_pence).toBe(1_000_000);
+
+    expect(clearedByReclaim.totals.exit_fee_pence).toBeGreaterThan(0);
+    expect(clearedByReclaim.totals.exit_fee_pence).toBe(clearedBySale.totals.exit_fee_pence);
+    // Charged once, not twice: the month-4 sale finds the facility redeemed.
+    expect(clearedByReclaim.months[4].exit_fee_pence).toBe(0);
+    // Surplus over balance + fee distributes: 30,000,000 − 25,000,000 − 1,000,000.
+    expect(clearedByReclaim.months[3].distribution_pence).toBe(4_000_000);
+  });
+
+  it('does not redeem on a partial reclaim', () => {
+    const model = runVatLedger({ reclaimClearsBalance: false });
+    const reclaimMonth = model.months[3];
+    expect(reclaimMonth.exit_fee_pence).toBe(0);
+    expect(reclaimMonth.distribution_pence).toBe(0);
+    expect(model.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(false);
+  });
+
+  it('withholds discharge when a reclaim lands in the [balance, balance + fee) band', () => {
+    // Spec §17.6: a partial reclaim behaves "exactly like a partial sales
+    // sweep", and the sweep's §4.4 clamp exists precisely so a repayment that
+    // cannot also cover the fee never zeroes the balance. Balance 25,000,000,
+    // fee 1,000,000: a 25,500,000 reclaim must leave 500,000 outstanding rather
+    // than clear the facility with the fee uncharged.
+    const d = vatDocument();
+    d.schedule.receipts[3] = receipts({ vat_reclaim_pence: 25_500_000 });
+    const model = runLedger(d.schedule, d.terms, d.equitySources);
+    expect(model.months[3].exit_fee_pence).toBe(0);
+    expect(model.months[3].repayment_pence).toBe(24_500_000);
+    expect(model.months[3].closing_balance_pence).toBe(500_000);
+    expect(model.months[3].distribution_pence).toBe(1_000_000);   // the withheld residue
+    // The month-4 sale then redeems properly, and the fee is charged there.
+    expect(model.months[4].exit_fee_pence).toBe(1_000_000);
+    expect(model.totals.exit_fee_pence).toBe(1_000_000);
+  });
+
+  it('distributes the whole reclaim and repays nothing when the fee exceeds the balance', () => {
+    // The clamp's degenerate case: balance <= vatReclaim < fee, so
+    // `max(0, vatReclaim - fee)` is 0 -- nothing is repaid, the whole reclaim
+    // distributes, and the debt stays outstanding. This mirrors the pre-existing
+    // §4.4 sales-sweep clamp exactly and deliberately: a repayment that cannot
+    // also cover the exit fee must not discharge the facility, and the ledger
+    // would rather hand the cash to the developer than clear principal it cannot
+    // properly redeem. Documented here because neither clamp has ever had a test
+    // for this corner.
+    //
+    // Balance 500,000, exit fee 1,000,000 (1% of the committed gross facility,
+    // which does not shrink with the balance), reclaim 600,000.
+    const d = vatDocument({ committedEquityPence: 0 });
+    const schedule = mkSchedule(
+      [uses({}), uses({ construction_pence: 500_000 }), uses({}), uses({}), uses({})],
+      [
+        receipts({}), receipts({}), receipts({}),
+        receipts({ vat_reclaim_pence: 600_000 }),
+        receipts({ gross_sale_pence: 60_000_000 }),
+      ],
+    );
+    const model = runLedger(schedule, d.terms, d.equitySources);
+    expect(model.months[1].closing_balance_pence).toBe(500_000);
+    expect(model.months[3].repayment_pence).toBe(0);
+    expect(model.months[3].exit_fee_pence).toBe(0);
+    expect(model.months[3].distribution_pence).toBe(600_000);   // the whole reclaim
+    expect(model.months[3].closing_balance_pence).toBe(500_000);
+    // The month-4 sale redeems properly and charges the fee once.
+    expect(model.months[4].exit_fee_pence).toBe(1_000_000);
+    expect(model.months[4].repayment_pence).toBe(500_000);
+    expect(model.totals.exit_fee_pence).toBe(1_000_000);
+    expect(model.senior_outstanding_at_maturity_pence).toBe(0);
+  });
+
+  it('applies the reclaim before the sale, reducing the balance the sale must clear', () => {
+    // Ordering, not arithmetic: the same 10,000,000 arriving as a reclaim in
+    // month 3 leaves the month-4 sale only 15,000,000 to redeem.
+    const model = runVatLedger();
+    expect(model.months[4].repayment_pence).toBe(15_000_000);
+    expect(model.months[4].distribution_pence).toBe(60_000_000 - 15_000_000 - 1_000_000);
+    expect(model.senior_outstanding_at_maturity_pence).toBe(0);
+  });
+
+  it('captures the redemption balance AFTER the reclaim when both land in one month', () => {
+    // Ordering consequence worth pinning (spec §5.11 + §17.6): the reclaim is
+    // applied first, so the balance the disposal actually has to redeem — and
+    // therefore redemption_balance_at_disposal_pence and the §4.4.1 redemption
+    // schedule — is the post-reclaim 15,000,000, not the pre-reclaim 25,000,000.
+    // The field's own doc comment says "immediately before sale receipts are
+    // applied", and a reclaim is not a sale receipt.
+    const model = runVatLedger({ sameMonthSaleAndReclaim: true });
+    expect(model.months[3].vat_reclaim_pence).toBe(10_000_000);
+    expect(model.redemption_balance_at_disposal_pence).toBe(15_000_000);
+    expect(model.redemption_schedule).toEqual([{ month: 3, balance_pence: 15_000_000 }]);
+    // Reclaim 10,000,000 + sale repayment 15,000,000, one exit fee.
+    expect(model.months[3].repayment_pence).toBe(25_000_000);
+    expect(model.months[3].exit_fee_pence).toBe(1_000_000);
+    expect(model.months[3].closing_balance_pence).toBe(0);
+  });
+
+  it('distributes a reclaim to equity on a cash deal', () => {
+    const model = runVatLedger({ cash: true, committedEquityPence: 30_000_000 });
+    expect(model.months[3].distribution_pence).toBe(10_000_000);
+    expect(model.equity_cashflows_pence[3]).toBeGreaterThan(0);
+    expect(model.equity_cashflows_pence[3]).toBe(10_000_000);
+    expect(model.totals.finance_costs_pence).toBe(0);
+  });
+
+  it('keeps sources equal to uses to the penny with VAT live', () => {
+    // All three funding shapes: equity-funded VAT, a VAT funding gap, and a
+    // reclaim that redeems. The reclaim appears on neither side of the §7
+    // identity, exactly as sale-proceeds repayments do.
+    const shapes: VatDocOpts[] = [{}, { committedEquityPence: 0 }, { reclaimClearsBalance: true }];
+    for (const opts of shapes) {
+      const d = vatDocument(opts);
+      const model = runLedger(d.schedule, d.terms, d.equitySources);
+      const rec = reconcile(defaultCalculatorInputsV2(), d.schedule, model);
+      expect(rec.sources_equal_uses).toBe(true);
+      expect(rec.debt_rollforward_ok).toBe(true);
+    }
   });
 });

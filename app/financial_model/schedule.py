@@ -32,6 +32,12 @@ from .types import (
     ProgrammePackage,
     ProposedUnit,
 )
+from .vat import (
+    ConsiderationInputs,
+    VatResult,
+    chargeable_consideration_pence,
+    compute_vat,
+)
 
 
 def unit_ancillary_value_pence(u: ProposedUnit) -> int:
@@ -67,7 +73,7 @@ def calculate_gdv(units: list[ProposedUnit]) -> int:
     return calculate_gdv_breakdown(units).total_pence
 
 
-def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
+def calculate_total_acquisition_cost(inputs: ConsiderationInputs) -> int:
     """Spec Sec 3.3 -- the acquisition line of the cost stack, acquisition tax
     included.
 
@@ -78,13 +84,21 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     the report names. Both fixture suites and test_financial_model_metrics.py
     pin their equality.
 
-    ``acq`` is annotated with the base class, which AcquisitionInputsV5
+    ``inputs.acquisition`` is the base class, which AcquisitionInputsV5
     subclasses; the isinstance gate is Python's stand-in for the TS engine's
     ``'jurisdiction' in acq`` guard (the same pairing derive_metrics uses). A
     v2-v4 acquisition block carries none of the new fields, so it resolves to
     england_ni with a null date and no override -- byte-for-byte what
     calculate_commercial_sdlt returned before R8 deleted it.
+
+    R11 (spec Sec 17.7): it takes the DOCUMENT, not the acquisition block
+    alone, because the tax base is the VAT-inclusive consideration and that is
+    a fact about the document's VAT block. Mirrors calculateTotalAcquisitionCost
+    in conversion-calc-engine.ts, which changed the same way and for the same
+    reason -- there, because a branded ChargeableConsideration cannot be
+    obtained from the block alone.
     """
+    acq = inputs.acquisition
     is_v5 = isinstance(acq, AcquisitionInputsV5)
     jurisdiction = acq.jurisdiction if is_v5 else "england_ni"
     raw_date = acq.acquisition_date if is_v5 else None
@@ -95,7 +109,8 @@ def calculate_total_acquisition_cost(acq: AcquisitionInputs) -> int:
     # derive_metrics degrades identically so the two tax sites cannot drift.
     date = resolve_acquisition_date(jurisdiction, "non_residential", raw_date)
     sdlt = calculate_acquisition_tax(
-        consideration_pence=acq.purchase_price_pence,
+        # Sec 17.7: the VAT-INCLUSIVE consideration, never the raw price.
+        consideration_pence=chargeable_consideration_pence(inputs),
         jurisdiction=jurisdiction,
         basis="non_residential",
         date=date,
@@ -116,6 +131,10 @@ class MonthUses:
     professional_pence: int
     statutory_pence: int
     lender_ancillary_fees_pence: int
+    # R11 spec Sec 17.6. Written back from compute_vat's months[].incurred_pence
+    # after the uses/receipts lists are fully built -- never a source figure
+    # itself (Sec 17.5's one-direction rule).
+    vat_pence: int
 
 
 @dataclass
@@ -123,6 +142,10 @@ class MonthReceipts:
     gross_sale_pence: int
     agent_fee_pence: int
     selling_legal_pence: int
+    # R11 spec Sec 17.6. Written back from compute_vat's months[].reclaimed_pence.
+    # Deliberately NOT part of gross_sale_pence: it is not a sale receipt, so no
+    # GDV-, LTGDV- or break-even-denominated metric may read it.
+    vat_reclaim_pence: int
 
 
 @dataclass
@@ -136,6 +159,14 @@ class ScheduleTotals:
     gdv_pence: int
     retained_value_pence: int
     cost_before_finance_ex_selling_pence: int
+    # R11 spec Sec 17.6/Sec 17.5. vat_pence/vat_reclaim_pence disclose the gross
+    # VAT cycle; irrecoverable_vat_pence is the cost-plan-adjacent figure Task 8
+    # adds to cost-before-finance on its own line. None of these three feed
+    # cost_before_finance_ex_selling_pence above -- that would double count the
+    # very figure Task 8 adds downstream.
+    vat_pence: int
+    vat_reclaim_pence: int
+    irrecoverable_vat_pence: int
 
 
 @dataclass
@@ -150,11 +181,27 @@ class Schedule:
     uses: list[MonthUses]
     receipts: list[MonthReceipts]
     totals: ScheduleTotals
+    # R11 spec Sec 17.5/Sec 17.6. The full VAT result, computed strictly
+    # downstream of the finished uses/receipts lists and written back into them
+    # -- never the other way round.
+    vat: VatResult
     # Spec Sec 4.5 net refinance proceeds -- wired into the ledger in engine.py.
     # None when `refinance` inputs are None (the migration default; byte-identical
     # to calc 2.2.0). Defaulted so pre-existing direct-construction call sites
     # (tests) do not need to change.
     refinance: ScheduleRefinance | None = None
+
+
+@dataclass
+class _PartialSchedule:
+    """Structural stand-in for ``Pick<Schedule, 'term_months' | 'uses' |
+    'receipts'>`` -- compute_vat needs no more than this, and the real
+    Schedule does not exist yet at the point build_schedule calls it (Sec
+    17.6)."""
+
+    term_months: int
+    uses: list[MonthUses]
+    receipts: list[MonthReceipts]
 
 
 def spread_straight_line(total: int, months: int) -> list[int]:
@@ -171,19 +218,21 @@ def spread_straight_line(total: int, months: int) -> list[int]:
 def _empty_uses() -> MonthUses:
     return MonthUses(
         acquisition_pence=0, construction_pence=0, professional_pence=0,
-        statutory_pence=0, lender_ancillary_fees_pence=0,
+        statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
     )
 
 
 def _empty_receipts() -> MonthReceipts:
-    return MonthReceipts(gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0)
+    return MonthReceipts(
+        gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0, vat_reclaim_pence=0,
+    )
 
 
 def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     term = max(1, math.floor(inputs.finance.term_months))
     units = inputs.unit_mix.units
 
-    acquisition_total = calculate_total_acquisition_cost(inputs.acquisition)
+    acquisition_total = calculate_total_acquisition_cost(inputs)
     # R10 spec Sec 16. The cost stack is computed once, by the one engine that
     # serves both modes, and this is the only place the schedule learns the
     # three totals.
@@ -271,7 +320,7 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             # month (spec Sec 4.4).
             receipts[term - 1] = MonthReceipts(
                 gross_sale_pence=gross_sales, agent_fee_pence=agent_fee,
-                selling_legal_pence=selling_legal,
+                selling_legal_pence=selling_legal, vat_reclaim_pence=0,
             )
         else:
             # Spec Sec 4.4.1: tranche split with final-tranche residue absorption;
@@ -317,10 +366,23 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         )
 
     selling_costs = agent_fee + selling_legal if gross_sales > 0 else 0
+
+    # R11 spec Sec 17.6. VAT is computed from the finished spend profile and
+    # written back onto it. One pass, and strictly one-directional: nothing
+    # above this line reads VAT, so a VAT figure can never feed a base that
+    # feeds VAT (Sec 17.5). cost_before_finance_ex_selling_pence below must NOT
+    # gain VAT -- irrecoverable VAT enters cost-before-finance in Task 8, at the
+    # metrics layer, on its own line.
+    vat = compute_vat(inputs, cost_plan, _PartialSchedule(term_months=term, uses=uses, receipts=receipts))
+    for m, mo in enumerate(vat.months):
+        uses[m].vat_pence = mo.incurred_pence
+        receipts[m].vat_reclaim_pence = mo.reclaimed_pence
+
     return Schedule(
         term_months=term,
         uses=uses,
         receipts=receipts,
+        vat=vat,
         refinance=refinance,
         totals=ScheduleTotals(
             acquisition_pence=acquisition_total,
@@ -334,5 +396,8 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             cost_before_finance_ex_selling_pence=(
                 acquisition_total + construction_total + professional_total + statutory_total
             ),
+            vat_pence=vat.total_input_vat_pence,
+            vat_reclaim_pence=vat.total_reclaimed_pence,
+            irrecoverable_vat_pence=vat.total_irrecoverable_pence,
         ),
     )

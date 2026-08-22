@@ -46,6 +46,7 @@ export {
   isV5, migrateV4toV5, migrateInputsToV5,
   isV6, migrateV5toV6, migrateInputsToV6,
   isV7, migrateV6toV7, migrateInputsToV7,
+  isV8, migrateV7toV8, migrateInputsToV8,
 } from './migrate';
 export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
 export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
@@ -61,6 +62,15 @@ export { computeCostPlan } from './cost-plan';
 export type {
   CostPlanResult, CostPackageLine, ContingencyLine, FeeLineResult,
 } from './cost-plan';
+export {
+  DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments, defaultVatInputs,
+  resolveVatTreatment, isPurchaseVatChargeable, vatBasisGate,
+} from './vat';
+export type {
+  VatChargeCategory, RecoveryBasis, TogcTreatment, VatTreatment,
+  VatOverride, PurchaseVatInputs, VatInputs, ResolvedVatTreatment, VatCharge,
+  VatBasisGate,
+} from './vat';
 export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';

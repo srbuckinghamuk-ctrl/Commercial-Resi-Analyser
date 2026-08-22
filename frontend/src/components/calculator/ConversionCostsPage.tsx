@@ -1,13 +1,14 @@
 import type {
-  CalculatorInputsV7, AppraisalRun, AreaBasis,
+  CalculatorInputsV8, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
+  VatOverride, RecoveryBasis,
 } from '../../lib/model';
 import { COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES } from '../../lib/model';
 import { penceToPounds, penceToPoundsExact, humanise } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV7;
-  onChange: (partial: Partial<CalculatorInputsV7>) => void;
+  inputs: CalculatorInputsV8;
+  onChange: (partial: Partial<CalculatorInputsV8>) => void;
   run: AppraisalRun;
 }
 
@@ -66,6 +67,85 @@ function CostRow({ label, value, onChangeValue }: {
   );
 }
 
+const RECOVERY_BASES: readonly RecoveryBasis[] = [
+  'zero_rated_sale', 'partial_exemption', 'blocked', 'unconfirmed',
+];
+
+/** R11 Task 14 (spec §17.2 rule 3). Detailed-mode package and fee rows gain an
+ *  optional VAT override, and the schema is inert until something writes it --
+ *  the exact defect R10 shipped as `contingency_class`. Setting it writes the
+ *  full three-field object on that ONE row (never touching any other row);
+ *  clearing it writes `null`, never a zeroed object, so a cleared override is
+ *  indistinguishable from one that was never set (spec §17.1: `CostPackage
+ *  .vat_override`/`FeeLine.vat_override` are both `null` unless the user sets
+ *  one).
+ *
+ *  `override` is read directly off the package/fee line as a plain prop --
+ *  this control is the write-side editor of the mechanism, never a second
+ *  implementation of `resolveVatTreatment`'s override-over-category
+ *  precedence (spec §17.2 rule 1): it never compares the override against the
+ *  category row to decide which figure is charged, so the read is exempted at
+ *  this one call site (below) rather than file-wide, the same pattern this
+ *  file already uses for its one legitimate `total_construction_sqm` read. */
+function VatOverrideControl({ label, override, onSet, onClear }: {
+  label: string;
+  override: VatOverride | null;
+  onSet: (o: VatOverride) => void;
+  onClear: () => void;
+}) {
+  if (override === null) {
+    return (
+      <button
+        aria-label={`Add VAT override — ${label}`}
+        onClick={() => onSet({ rate_pct: 0, recoverable_pct: 0, recovery_basis: 'unconfirmed' })}
+        style={{ padding: '4px 10px', background: '#1e293b', border: '1px solid #1e3a5f', borderRadius: 4, color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}
+      >
+        + VAT override
+      </button>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ color: '#64748b', fontSize: 11 }}>VAT override</span>
+      <div style={{ position: 'relative', width: 70 }}>
+        <input
+          type="number"
+          aria-label={`${label} VAT override rate %`}
+          value={override.rate_pct}
+          onChange={(e) => onSet({ ...override, rate_pct: Number(e.target.value) })}
+          style={{ width: '100%', padding: '4px 8px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+        />
+        <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 12 }}>%</span>
+      </div>
+      <div style={{ position: 'relative', width: 70 }}>
+        <input
+          type="number"
+          aria-label={`${label} VAT override recoverable %`}
+          value={override.recoverable_pct}
+          onChange={(e) => onSet({ ...override, recoverable_pct: Number(e.target.value) })}
+          style={{ width: '100%', padding: '4px 8px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+        />
+        <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 12 }}>%</span>
+      </div>
+      <select
+        aria-label={`${label} VAT override recovery basis`}
+        value={override.recovery_basis}
+        onChange={(e) => onSet({ ...override, recovery_basis: e.target.value as RecoveryBasis })}
+        style={{ padding: '4px 8px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+      >
+        {RECOVERY_BASES.map((b) => <option key={b} value={b}>{humanise(b)}</option>)}
+      </select>
+      <button
+        aria-label={`Clear VAT override — ${label}`}
+        onClick={onClear}
+        style={{ padding: '4px 8px', background: '#1e293b', border: '1px solid #7f1d1d', borderRadius: 4, color: '#f87171', fontSize: 12, cursor: 'pointer' }}
+      >
+        Clear
+      </button>
+    </div>
+  );
+}
+
 function newPackage(): CostPackage {
   return {
     id: crypto.randomUUID(),
@@ -75,6 +155,7 @@ function newPackage(): CostPackage {
     contingency_class: 'general',
     lender_eligible: false,
     notes: '',
+    vat_override: null,
   };
 }
 
@@ -302,6 +383,17 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                 )}
               </>
             )}
+            {/* R11 Task 14 (spec §17.1/§17.2 rule 3). Detailed-mode only --
+                `FeeLine.vat_override` is hard-rejected in headline mode. */}
+            {costPlan.mode === 'detailed' && (
+              <VatOverrideControl
+                label={fee.label !== '' ? fee.label : fee.code}
+                // eslint-disable-next-line no-restricted-syntax -- legitimate write-side override editor (spec §17.2 rule 3); never compares against the category row, so it does not reimplement resolveVatTreatment's precedence -- see VatOverrideControl's doc comment above
+                override={fee.vat_override}
+                onSet={(o) => updateFeeLine(fee.id, { vat_override: o })}
+                onClear={() => updateFeeLine(fee.id, { vat_override: null })}
+              />
+            )}
           </div>
         );
       })}
@@ -408,20 +500,18 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                     style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                   />
                 </div>
-                {/* Final review I1 (spec §16.9). This field is recorded but NOT
-                    live: neither engine reads it when resolving a contingency
-                    class's base -- scoping runs entirely off each class's
-                    basis / package_ids below, which nothing in this page
-                    writes, so every class currently applies to all packages
-                    regardless of what is selected here. Labelled "(recorded)"
-                    plus a title tooltip so a user cannot reasonably infer the
-                    figure is live -- do not wire this control without reading
-                    §16.9 first. */}
+                {/* R11 spec §17.8. Live: scopes this package into its
+                    contingency class's base. `general`'s percentage always
+                    applies to the whole base build regardless of this
+                    selection; `existing_building` and `abnormal` apply only
+                    to packages tagged with that class, as an ADDITION on top
+                    of general -- see the Contingency block below and
+                    computeCostPlan's resolution rule. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ color: '#64748b', fontSize: 11 }}>Contingency class (recorded)</span>
+                  <span style={{ color: '#64748b', fontSize: 11 }}>Contingency class</span>
                   <select
-                    aria-label="Package contingency class (recorded only — does not narrow the contingency base in R10)"
-                    title="Recorded only in R10: this does not narrow which packages a contingency class's percentage applies to. Scoping is driven solely by each class's basis / package_ids, below, not by this selection."
+                    aria-label="Package contingency class"
+                    title="Scopes this package into its contingency class's base: existing_building and abnormal apply only to packages tagged with that class, as an addition on top of general (spec §17.8)."
                     value={pkg.contingency_class}
                     onChange={(e) => updatePackage(pkg.id, { contingency_class: e.target.value as ContingencyClassName })}
                     style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
@@ -439,6 +529,13 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                   />
                   Lender-eligible
                 </label>
+                <VatOverrideControl
+                  label={pkg.label !== '' ? pkg.label : pkg.code}
+                  // eslint-disable-next-line no-restricted-syntax -- legitimate write-side override editor (spec §17.2 rule 3); never compares against the category row, so it does not reimplement resolveVatTreatment's precedence -- see VatOverrideControl's doc comment above
+                  override={pkg.vat_override}
+                  onSet={(o) => updatePackage(pkg.id, { vat_override: o })}
+                  onClear={() => updatePackage(pkg.id, { vat_override: null })}
+                />
                 <button
                   onClick={() => removePackage(pkg.id)}
                   style={{ padding: '4px 10px', background: '#1e293b', border: '1px solid #7f1d1d', borderRadius: 4, color: '#f87171', fontSize: 13, cursor: 'pointer' }}
@@ -459,7 +556,11 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
 
       {/* R10 §3.3/§6. Both modes show the same three contingency rows: pct
           (editable), and the RESOLVED base and computed amount, read from
-          run.metrics.cost_plan.contingency -- never recomputed here. */}
+          run.metrics.cost_plan.contingency -- never recomputed here. R11 spec
+          §17.8: that base now comes from each package's own contingency_class
+          tag (detailed mode) or the whole base build (headline mode, or
+          `general` in either mode) -- resolved in cost-plan.ts, not on this
+          page. */}
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Contingency</h4>
       {CONTINGENCY_CLASS_NAMES.map((name) => {
         const line = result.contingency.find((c) => c.name === name);

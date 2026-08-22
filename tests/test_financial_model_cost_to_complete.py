@@ -20,6 +20,7 @@ from app.financial_model.types import (
     FacilityTerms,
     parse_calculator_inputs,
 )
+from app.financial_model.vat import VatMonthLine, VatResult
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -31,16 +32,34 @@ def replace(model: FacilityTerms, **overrides) -> FacilityTerms:
 def uses(**partial) -> MonthUses:
     base = dict(
         acquisition_pence=0, construction_pence=0, professional_pence=0,
-        statutory_pence=0, lender_ancillary_fees_pence=0,
+        statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
     )
     base.update(partial)
     return MonthUses(**base)
 
 
 def receipts(**partial) -> MonthReceipts:
-    base = dict(gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0)
+    base = dict(
+        gross_sale_pence=0, agent_fee_pence=0, selling_legal_pence=0, vat_reclaim_pence=0,
+    )
     base.update(partial)
     return MonthReceipts(**base)
+
+
+# R11: no test in this file exercises VAT -- an inert result of the schedule's
+# own length, mirroring vat.py's _inert_vat() shape exactly.
+def _empty_vat(term_months: int) -> VatResult:
+    return VatResult(
+        registered=False, charges=[], periods=[],
+        months=[
+            VatMonthLine(month=m, incurred_pence=0, reclaimed_pence=0, carry_pence=0)
+            for m in range(term_months)
+        ],
+        total_input_vat_pence=0, total_recoverable_pence=0, total_irrecoverable_pence=0,
+        total_reclaimed_pence=0, receivable_at_maturity_pence=0, peak_carry_pence=0,
+        peak_carry_month=None, purchase_vat_pence=0,
+        purchase_vat_chargeable=False, purchase_evidence_status="unconfirmed",
+    )
 
 
 def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
@@ -50,7 +69,7 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
     gross_sales = sum(x.gross_sale_pence for x in r)
     selling = sum(x.agent_fee_pence + x.selling_legal_pence for x in r)
     return Schedule(
-        term_months=len(u), uses=u, receipts=r,
+        term_months=len(u), uses=u, receipts=r, vat=_empty_vat(len(u)),
         totals=ScheduleTotals(
             acquisition_pence=sum_(lambda x: x.acquisition_pence),
             construction_pence=sum_(lambda x: x.construction_pence),
@@ -64,6 +83,9 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
                 lambda x: x.acquisition_pence + x.construction_pence
                 + x.professional_pence + x.statutory_pence
             ),
+            vat_pence=sum_(lambda x: x.vat_pence),
+            vat_reclaim_pence=sum(x.vat_reclaim_pence for x in r),
+            irrecoverable_vat_pence=0,
         ),
     )
 

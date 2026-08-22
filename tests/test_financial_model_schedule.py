@@ -4,6 +4,8 @@ describe blocks (Release 3a Task 4 / Release 3b Task 4, spec Sec 6.1 / Sec
 4.4.1, calc 2.2.0 / calc 2.3.0). Same scenarios, same expected arrays as the
 TS side.
 """
+from dataclasses import asdict
+
 from app.financial_model.areas import developed_area_sqm
 from app.financial_model.engine import money_round
 from app.financial_model.migrate import (
@@ -24,6 +26,8 @@ from app.financial_model.types import (
     AreaBridgeInputs,
     CalculatorInputsV3,
     CalculatorInputsV4,
+    CalculatorInputsV7,
+    CalculatorInputsV8,
     ContingencyClass,
     CostPackage,
     CostPlanInputs,
@@ -36,7 +40,9 @@ from app.financial_model.types import (
     UnitAncillary,
     UnitMixInputsV6,
     cost_plan_from_legacy_costs,
+    default_contingency_classes,
 )
+from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
 
 PROGRAMME = {
     "anchor_month": None,
@@ -402,9 +408,9 @@ class TestBuildScheduleFollowsCostPlanOverLegacyFields:
                 contingency_class="general", lender_eligible=True, notes="",
             )],
             contingency=[
-                ContingencyClass(name="general", pct=10, basis="all_packages", package_ids=[]),
-                ContingencyClass(name="existing_building", pct=0, basis="all_packages", package_ids=[]),
-                ContingencyClass(name="abnormal", pct=0, basis="all_packages", package_ids=[]),
+                ContingencyClass(name="general", pct=10),
+                ContingencyClass(name="existing_building", pct=0),
+                ContingencyClass(name="abnormal", pct=0),
             ],
             fee_lines=[
                 FeeLine(id="f1", code="architect", category="professional", label="Architect",
@@ -430,3 +436,122 @@ class TestBuildScheduleFollowsCostPlanOverLegacyFields:
         assert s.totals.professional_pence == 2_000_000
         # Cost plan: prior approval 5,000 x 4 units (20,000) + CIL/S106 (300,000).
         assert s.totals.statutory_pence == 320_000
+
+
+# ---------------------------------------------------------------------------
+# R11 Task 5 (spec Sec 17.6, schedule half). Port of schedule.test.ts's
+# 'buildSchedule VAT (spec Sec 17.6)' describe block. Reuses
+# _build_worked_vat_case's approach from test_vat.py (Sec 17.4's worked
+# cycle): construction is the only category bearing VAT by default, spread
+# months 1-4 by an EXPLICIT programme (the auto window spreads over
+# months 1..term-2 -- five months for a term of seven -- not the four the
+# worked cycle specifies), and quarterly returns with first_period_end_month:
+# 2 and repayment_lag_months: 1 (DEFAULT_VAT) give two reclaim periods over a
+# 7-month term: months 0-2 (reclaim m3) and months 3-5 (reclaim m6).
+# ---------------------------------------------------------------------------
+
+
+def _worked_vat_document(registered: bool = True) -> CalculatorInputsV8:
+    doc = migrate_inputs_to_v7({}).model_dump()
+    doc["inputs_version"] = 8
+    doc["conversion_costs"] = {
+        **doc["conversion_costs"],
+        "construction_cost_per_sqm_pence": 100_000,
+        "total_construction_sqm": 1_000,
+        "contingency_pct": 0,
+        "fire_safety_pence": 0,
+        "sound_insulation_pence": 0,
+        "part_l_compliance_pence": 0,
+    }
+    doc["cost_plan"] = {
+        "mode": "headline",
+        "packages": [],
+        "contingency": [c.model_dump() for c in default_contingency_classes(0)],
+        "fee_lines": [],
+    }
+    doc["finance"] = {
+        **doc["finance"],
+        "committed_net_facility_pence": 500_000_000,
+        "broker_fee_pence": 250_000,
+        "lender_legal_fee_pence": 150_000,
+        "valuation_fee_pence": 100_000,
+        "monitoring_surveyor_fee_pence": 50_000,
+        "term_months": 7,
+    }
+    doc["programme"] = {
+        "anchor_month": None,
+        "packages": {
+            "construction": {
+                "start_offset": 1, "duration_months": 4, "curve": {"kind": "straight_line"},
+            },
+            "professional": {
+                "start_offset": 1, "duration_months": 1, "curve": {"kind": "straight_line"},
+            },
+            "statutory": {
+                "start_offset": 1, "duration_months": 1, "curve": {"kind": "straight_line"},
+            },
+        },
+    }
+    treatments = []
+    for t in default_vat_treatments():
+        if t.category == "construction":
+            treatments.append(t.model_copy(update={
+                "rate_pct": 20, "recoverable_pct": 100, "recovery_basis": "zero_rated_sale",
+            }).model_dump())
+        else:
+            treatments.append(t.model_dump())
+    doc["vat"] = {**DEFAULT_VAT.model_dump(), "registered": registered, "treatments": treatments}
+    return CalculatorInputsV8.model_validate(doc)
+
+
+def _pre_v8_document() -> CalculatorInputsV7:
+    return migrate_inputs_to_v7({})
+
+
+class TestBuildScheduleVat:
+    def test_places_vat_out_on_the_spend_months_and_vat_back_on_the_reclaim_months(self):
+        schedule = build_schedule(_worked_vat_document())
+        assert [u.vat_pence for u in schedule.uses] == [
+            0, 5_000_000, 5_000_000, 5_000_000, 5_000_000, 0, 0,
+        ]
+        assert [r.vat_reclaim_pence for r in schedule.receipts] == [
+            0, 0, 0, 10_000_000, 0, 0, 10_000_000,
+        ]
+        assert schedule.totals.vat_pence == 20_000_000
+        assert schedule.totals.vat_reclaim_pence == 20_000_000
+
+    def test_leaves_every_non_vat_figure_identical_to_the_same_document_with_vat_off(self):
+        # Sec 17.5's one-direction rule, at the schedule boundary. Compared
+        # EXHAUSTIVELY BY EXCLUSION (ruling R21) rather than an enumerated
+        # field list: build a dict from each dataclass and pop the VAT keys,
+        # so a field added to MonthUses/MonthReceipts/ScheduleTotals in future
+        # is covered automatically, and a newly-leaking field fails this test
+        # without anyone remembering to update an allowlist here.
+        on = build_schedule(_worked_vat_document())
+        off = build_schedule(_worked_vat_document(registered=False))
+
+        def without(keys, items):
+            out = []
+            for item in items:
+                d = asdict(item)
+                for k in keys:
+                    d.pop(k, None)
+                out.append(d)
+            return out
+
+        assert without(["vat_pence"], on.uses) == without(["vat_pence"], off.uses)
+        assert (
+            without(["vat_reclaim_pence"], on.receipts)
+            == without(["vat_reclaim_pence"], off.receipts)
+        )
+        vat_total_keys = ["vat_pence", "vat_reclaim_pence", "irrecoverable_vat_pence"]
+        assert (
+            without(vat_total_keys, [on.totals])[0]
+            == without(vat_total_keys, [off.totals])[0]
+        )
+
+    def test_writes_zeroed_vat_lines_for_a_document_with_no_vat_block_at_all(self):
+        schedule = build_schedule(_pre_v8_document())
+        assert all(u.vat_pence == 0 for u in schedule.uses)
+        assert all(r.vat_reclaim_pence == 0 for r in schedule.receipts)
+        assert schedule.totals.vat_pence == 0

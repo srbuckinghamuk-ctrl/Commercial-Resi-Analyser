@@ -1,6 +1,6 @@
 # Financial Model — Test Cases
 
-**Status:** Authoritative test-case register for calculation specification `2.8.0` (see
+**Status:** Authoritative test-case register for calculation specification `2.10.0` (see
 `docs/financial-model/calculation-specification.md`). This document enumerates every
 golden fixture, ledger fixture, invariant and regression vector that pins the engine's
 behaviour, in both the TypeScript (frontend) and Python (backend) implementations, and
@@ -3382,3 +3382,153 @@ reader cannot mistake an invariant-checked figure for a hand-derived one.
 Fixture Q deliberately exercises no rounding boundary (every product in it is
 an exact whole-pence figure) — that discriminator is pinned separately by
 §16.1's `cost-plan.test.ts` case, not duplicated here.
+
+## 17. VAT and TOGC [R11 — calc 2.10.0]
+
+### 17.1 Golden fixture R — the pinned return cycle, plus a levered facility and chargeable purchase VAT
+
+`fixtures/financial-model/r-vat-quarterly.json` — the first v8-tagged
+fixture, and the one that pins §17.4's worked return cycle against a real
+document rather than the isolated illustrative table. `programme.packages.
+construction` is explicit (`start_offset 1, duration_months 4, straight_line`,
+Ruling R16), so `uses[].construction_pence` spreads evenly across months 1–4
+at 25,000,000p/month — asserted first, before trusting any VAT figure built
+on top of it (`golden-fixtures.test.ts`'s `uses_construction_pence` mapper).
+
+Quarterly returns, `first_period_end_month 2`, `repayment_lag_months 1`; only
+`acquisition` and `construction` carry a non-zero rate (20%, 100%
+recoverable, `zero_rated_sale`), so the fixture's month-by-month carry is
+hand-derivable as two additive streams (`vat_months_incurred_pence`,
+`vat_months_reclaimed_pence`, `vat_months_carry_pence`, each a flat
+month-indexed array rather than a dotted path into `metrics.vat.months`).
+Purchase VAT (vendor opted to tax, TOGC does not apply) lands in month 0,
+inside period 1's window alongside construction's first two months, giving
+peak carry £200,000 at month 2 — not the isolated table's £100,000, the
+difference being exactly the acquisition VAT (§17.4). `total_irrecoverable_
+pence` is `0` by construction (both configured categories are 100%
+recoverable), which is what lets fixture R also serve as one of the two
+documents the §17.5 invariant is proven against. The acquisition-tax uplift
+(§17.7) is pinned alongside it: SDLT on the VAT-exclusive £500,000 would be
+£14,500 against £19,500 on the VAT-inclusive £600,000, an uplift of exactly
+£5,000 (5% of the £100,000 acquisition VAT, both considerations sitting in
+the same top band).
+
+A quarterly-return, 7-month-term document with a non-zero rate necessarily
+produces a final return period (month 6 alone) whose reclaim falls outside
+the modelled term, so validation reports the expected `vat.repayment_lag_
+months` warning (§17.9) for this document — present by design, not a defect,
+and does not affect `report_safe`.
+
+Every cost-stack and VAT figure is hand-derived independently of both engines
+before either ran (worksheet in `task-11-report.md`); finance-dependent
+figures downstream of it (finance costs, `vat_carry_interest_pence`, peak
+debt, TDC and its two profit ratios) are invariant-cross-checked rather than
+hand-replayed, per fixture Q's precedent, and the fixture's own note states
+explicitly which list each figure belongs to.
+
+### 17.2 The profit-neutral invariant (spec §17.5)
+
+`metrics.test.ts`, `'fully recoverable VAT moves no cost line, and moves
+profit only by carry interest'` — the release's primary guard, proven in
+both directions: a document with every category at 20% and 100% recoverable
+produces `construction_cost_pence`/`professional_fees_pence`/`statutory_
+costs_pence`/`selling_costs_pence`/`cost_plan` byte-identical to its
+`registered: false` twin, `irrecoverable_vat_pence` exactly `0`, and
+`profit_pence` differing only by the change in `finance_costs_pence`. The
+Python twin runs the same comparison over the same fixtures.
+
+### 17.3 The ledger — advance ineligibility, the funding gap, and reclaim redemption (`monthly-engine.test.ts`)
+
+- `'funds the build but never advances against the VAT'` and `'raises vat_
+  funding_gap when neither equity nor headroom can fund the VAT'` — the
+  eligible base for the development-cost advance stays `construction +
+  professional + statutory` (§17.6); the guard is **watched fail** by adding
+  `vat_pence` to that base and confirming the assertion breaks (§16 "Guards
+  this release must watch fail").
+- `'funds the VAT from equity where equity is available'`, `'discloses the
+  gross VAT cycle on the ledger totals'`.
+- `'applies a reclaim wholly to senior debt, ignoring sales_sweep_pct'`,
+  `'applies the reclaim before the sale, reducing the balance the sale must
+  clear'`.
+- `'charges the exit fee exactly once when a reclaim clears the balance'` and
+  `'captures the redemption balance AFTER the reclaim when both land in one
+  month'` — a full reclaim redeems on exactly the same terms as any other
+  redemption; the fee total is asserted equal to the same document's fee when
+  the sale redeems instead.
+- `'does not redeem on a partial reclaim'`, `'withholds discharge when a
+  reclaim lands in the [balance, balance + fee) band'`, `'distributes the
+  whole reclaim and repays nothing when the fee exceeds the balance'`.
+- `'distributes a reclaim to equity on a cash deal'`.
+- `'keeps sources equal to uses to the penny with VAT live'` — §7's identity,
+  with the VAT reclaim as the third excluded flow.
+
+### 17.4 Validation (spec §17.9) — 22 hard-error cases and 10 warning cases (`validation.test.ts`, `describe('R11 — VAT validation ...')` / `describe('R11 — VAT warnings ...')`)
+
+Each hard-error rule is tested per field it governs rather than once per
+rule — R10 twice specified a rule for three fields and shipped a test named
+for one (§17.9's own note). Included: `vat_override` on a package or fee
+line under headline mode; out-of-range `rate_pct`/`recoverable_pct` on a
+treatment row and on an override, checked at both bounds; a `treatments`
+array that is not exactly the six categories once each in order; the
+return-cycle bounds (`first_period_end_month`, `repayment_lag_months`)
+gated on `registered: true` (R38) and absent on a pre-v8 document with no
+`vat` block at all; `togc_treatment: 'applies'` with a non-zero acquisition
+rate; and the unregistered-buyer collision of §17.7 (`registered: false`
+while purchase VAT is chargeable), asserted to name the correct modelling
+in its message. Warnings cover the zero-rated-sale-with-retained-unit case,
+`togc_treatment: 'applies'` with `vendor_opted_to_tax: false`, `registered:
+false` with non-zero construction cost, and `'warns when the final VAT
+return period reclaim falls outside the modelled term'`.
+
+### 17.5 The migration regression gate (R38, R39) — `golden-fixtures.test.ts` and `test_migrate_v8.py`
+
+`'migrating %s to v8 adds and removes no validation issue'` runs the whole
+corpus plus synthetic `term_months: 1` and `term_months: 2` documents through
+`validateInputs` before and after migration: the error set compared with no
+exemption, nothing removed at either severity, and the only permitted
+addition a warning on `vat.registered` cross-checked per fixture against its
+own firing condition with a non-vacuity assertion. Both term cases are
+required — the ungated rule this gate replaced bit at both, so a term-1-only
+case would have left half the regression unguarded. The Python mirror is
+`test_v8_migration_adds_and_removes_no_validation_issue` and
+`test_v8_migration_adds_no_validation_issue_to_a_short_term_document`
+(parametrised over `term_months in (1, 2)`). Numeric identity is the separate
+gate `'migrating %s to v8 moves no computed figure, and writes the specified
+block'` / `test_v8_migration_moves_no_existing_figure`, asserting the
+structural write (`registered: false`, six rows, every override `null`) as
+well as the figures.
+
+### 17.6 The spider's counterfactual counts only evidenced rates (R43) — `deal-spider.test.ts`, `describe('tax advantage axis')`
+
+`"takes its VAT component from the model, not from a 15% assumption"` and
+`'moves when only the VAT treatment changes, holding construction cost and
+SDLT fixed'` replace the pre-R11 hard-coded `construction_cost_pence × 0.15`.
+`describe("the UNCONFIRMED VAT caveat fires on any unconfirmed line, not
+vatBasisGate's materiality test")` is the absolute assertion §17.10 requires:
+a document with only `construction` configured produces exactly the
+construction-derived figure, with no contribution from the five untouched
+categories — a direction-only test cannot see a constant baked into both
+sides of a comparison. `'marks the VAT component "not modelled" rather than
+a silent zero when the document is not VAT-registered'` and `'captures SDLT
+saving + CIL offset as % of GDV when VAT is not registered (inert, so its
+component is a true zero...)'` cover the `registered: false` case.
+
+### 17.7 The LTC caveat on the summary page, not only the memo (Ruling R45) — `AppraisalSummaryPage.test.tsx`
+
+`'does NOT carry the VAT caveat on Net/Gross LTC when there is no
+irrecoverable VAT'` and `'puts the VAT caveat, reading the irrecoverable
+figure from run.metrics, on BOTH the Net LTC and Gross LTC tooltips'` — the
+Net LTC/Gross LTC tooltips read `metrics.vat.total_irrecoverable_pence`
+directly (never recompute it) and carry the caveat only when it is non-zero,
+mirroring `export-investment-memo.ts`'s existing memo section but on the
+page a user actually looks at.
+
+### 17.8 The single-accessor guard (spec §17.2) — `accessor-guard.test.ts`, `test_accessor_guard.py`
+
+`resolveVatTreatment`'s inputs (`vat.treatments`, every `vat_override`) and
+`chargeableConsiderationPence`'s six former call sites are covered by the
+same real-linter mechanism §15.4 and §16.3 established: the guard test runs
+ESLint's Node API and asserts `severity === 2`, not merely that a message
+appears, and pins the allowlist's exact contents. Every real-linter test in
+this file spawns a fresh ESLint instance and is therefore load-sensitive
+under the full suite — see the file's own `REAL_LINTER_TIMEOUT_MS` comment.

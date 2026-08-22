@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   TAX_TABLES, TAX_TABLE_VERSION, calculateAcquisitionTax, selectBandSet,
-  deriveJurisdiction, regimeFor,
+  deriveJurisdiction, regimeFor, asChargeableConsideration,
 } from './acquisition-tax';
 import type { Jurisdiction } from './acquisition-tax';
 
@@ -25,7 +25,7 @@ describe('non-residential acquisition tax by jurisdiction', () => {
 
   it.each(cases)('%s at %ip is %ip', (jurisdiction, price, expected) => {
     const r = calculateAcquisitionTax({
-      consideration_pence: price, jurisdiction,
+      consideration_pence: asChargeableConsideration(price), jurisdiction,
       basis: 'non_residential', date: '2026-08-17',
     });
     expect(r.total_pence).toBe(expected);
@@ -34,7 +34,7 @@ describe('non-residential acquisition tax by jurisdiction', () => {
   // GOV.UK's own worked example: £275,000 freehold commercial → £3,250.
   it('reproduces the GOV.UK worked example', () => {
     const r = calculateAcquisitionTax({
-      consideration_pence: 27_500_000, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(27_500_000), jurisdiction: 'england_ni',
       basis: 'non_residential', date: '2026-08-17',
     });
     expect(r.total_pence).toBe(325_000);
@@ -42,17 +42,17 @@ describe('non-residential acquisition tax by jurisdiction', () => {
 
   it('taxes nothing at or below the nil-rate threshold and one penny above it', () => {
     const at = calculateAcquisitionTax({
-      consideration_pence: 15_000_000, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(15_000_000), jurisdiction: 'england_ni',
       basis: 'non_residential', date: '2026-08-17',
     });
     expect(at.total_pence).toBe(0);
     const above = calculateAcquisitionTax({
-      consideration_pence: 15_000_001, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(15_000_001), jurisdiction: 'england_ni',
       basis: 'non_residential', date: '2026-08-17',
     });
     expect(above.total_pence).toBe(0); // 1p at 2% rounds to 0p
     const clear = calculateAcquisitionTax({
-      consideration_pence: 15_002_500, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(15_002_500), jurisdiction: 'england_ni',
       basis: 'non_residential', date: '2026-08-17',
     });
     expect(clear.total_pence).toBe(50);
@@ -61,7 +61,7 @@ describe('non-residential acquisition tax by jurisdiction', () => {
   it('returns zero for zero and negative consideration', () => {
     for (const p of [0, -1]) {
       const r = calculateAcquisitionTax({
-        consideration_pence: p, jurisdiction: 'england_ni',
+        consideration_pence: asChargeableConsideration(p), jurisdiction: 'england_ni',
         basis: 'non_residential', date: '2026-08-17',
       });
       expect(r.total_pence).toBe(0);
@@ -74,7 +74,7 @@ describe('residential higher rates', () => {
   // England: bands to 2,767,410p plus a 5% supplement on the whole 75,348,200p.
   it('adds England’s flat supplement on the whole consideration', () => {
     const r = calculateAcquisitionTax({
-      consideration_pence: YORK, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(YORK), jurisdiction: 'england_ni',
       basis: 'residential_higher', date: '2026-08-17',
     });
     expect(r.surcharge_pence).toBe(3_767_410);
@@ -83,7 +83,7 @@ describe('residential higher rates', () => {
 
   it('applies no supplement in Wales — the uplift is inside the bands', () => {
     const r = calculateAcquisitionTax({
-      consideration_pence: YORK, jurisdiction: 'wales',
+      consideration_pence: asChargeableConsideration(YORK), jurisdiction: 'wales',
       basis: 'residential_higher', date: '2026-08-17',
     });
     expect(r.surcharge_pence).toBe(0);
@@ -136,7 +136,7 @@ describe('band set selection', () => {
 describe('override', () => {
   it('replaces the total, preserves the computed figure, and records the reason', () => {
     const r = calculateAcquisitionTax({
-      consideration_pence: YORK, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(YORK), jurisdiction: 'england_ni',
       basis: 'non_residential', date: '2026-08-17',
       override_pence: 1_000_000, override_reason: 'Group relief claimed (FA2003 Sch 7).',
     });
@@ -148,7 +148,7 @@ describe('override', () => {
 
   it('reports no override when none is supplied', () => {
     const r = calculateAcquisitionTax({
-      consideration_pence: YORK, jurisdiction: 'england_ni',
+      consideration_pence: asChargeableConsideration(YORK), jurisdiction: 'england_ni',
       basis: 'non_residential', date: '2026-08-17',
     });
     expect(r.is_override).toBe(false);

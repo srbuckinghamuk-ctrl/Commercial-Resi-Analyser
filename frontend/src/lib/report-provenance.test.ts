@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { draftReason, documentStatus, buildProvenance } from './report-provenance';
 import type { DraftReason } from './report-provenance';
-import { runAppraisal, migrateInputsToV4, DEFAULT_AREA_BRIDGE } from './model';
-import type { AnyCalculatorInputs } from './model';
+import {
+  runAppraisal, migrateInputsToV4, DEFAULT_AREA_BRIDGE,
+  migrateV6toV7, migrateV7toV8, DEFAULT_VAT, defaultVatTreatments,
+} from './model';
+import type { AnyCalculatorInputs, CalculatorInputsV8 } from './model';
 import {
   qaProject, sellAllInputs, legacyV1Snapshot, welshInputs,
 } from './report-qa/memo-fixtures';
@@ -56,6 +59,137 @@ describe('tax basis in provenance (R8)', () => {
       .toBe('DRAFT');
     expect(documentStatus(reconciled, 'credit_approved', { taxBasisConfirmed: true }))
       .toBe('FINAL');
+  });
+});
+
+// Task 12, spec §17.10. `draftReason` stays pure -- it receives the VAT gate,
+// it does not compute one (that is `vatBasisGate` in model/vat.ts, tested on
+// its own terms there). Ordered immediately after `tax_basis_unconfirmed`:
+// the ordering rationale already written into `draftReason` applies
+// unchanged -- an unconfirmed VAT basis does not make the arithmetic wrong,
+// so it must not displace a reason saying the figures themselves may be, but
+// a reader must know the basis is unverified before they read an approval.
+describe('VAT basis in the draft gate (R11, spec §17.10)', () => {
+  const reconciled = { report_safe: true, senior_repaid: true };
+  const confirmedTax = { taxBasisConfirmed: true };
+
+  it('gates on an unconfirmed VAT basis that actually bears VAT', () => {
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax, { vatBasisConfirmed: false }))
+      .toBe('vat_basis_unconfirmed');
+  });
+
+  it('does not gate on an unconfirmed row that charges nothing', () => {
+    // "Material" means the category actually bears VAT (§17.10). No threshold
+    // constant is invented, and `registered: false` can never gate.
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax, { vatBasisConfirmed: true }))
+      .toBeNull();
+  });
+
+  it('orders below tax_basis_unconfirmed', () => {
+    expect(draftReason(reconciled, 'credit_approved', { taxBasisConfirmed: false }, { vatBasisConfirmed: false }))
+      .toBe('tax_basis_unconfirmed');
+  });
+
+  it('does not displace a more fundamental reason', () => {
+    expect(draftReason({ report_safe: false, senior_repaid: true }, 'credit_approved',
+      confirmedTax, { vatBasisConfirmed: false })).toBe('unreconciled');
+    expect(draftReason({ report_safe: true, senior_repaid: false }, 'credit_approved',
+      confirmedTax, { vatBasisConfirmed: false })).toBe('senior_not_repaid');
+  });
+
+  it('still reports not_approved when the VAT basis is confirmed', () => {
+    expect(draftReason(reconciled, null, confirmedTax, { vatBasisConfirmed: true }))
+      .toBe('not_approved');
+  });
+
+  // Fix round 1 (minor 1). The mirror image of the test above: with NO lender
+  // case AND an unconfirmed VAT basis, the reason must still be
+  // 'vat_basis_unconfirmed', not 'not_approved' — the two adjacent tests
+  // (this describe block's first case, and the one above) made this likely
+  // but neither actually pinned the ORDER at the no-lender-case boundary,
+  // which is exactly the shape R8's own "does not displace" test found worth
+  // a dedicated case for the tax-basis clause.
+  it('orders above not_approved with no lender case at all', () => {
+    expect(draftReason(reconciled, null, confirmedTax, { vatBasisConfirmed: false }))
+      .toBe('vat_basis_unconfirmed');
+  });
+
+  // The fourth argument was added after every existing call site was written.
+  // A default that did not preserve today's behaviour would silently change
+  // the meaning of every one-, two- and three-argument caller in the app.
+  it('keeps three-argument callers behaving exactly as before', () => {
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax)).toBeNull();
+    expect(draftReason(reconciled, null, confirmedTax)).toBe('not_approved');
+    expect(documentStatus(reconciled, 'credit_approved', confirmedTax)).toBe('FINAL');
+    expect(documentStatus(reconciled, null, confirmedTax)).toBe('DRAFT');
+  });
+
+  it('carries the reason through documentStatus', () => {
+    expect(documentStatus(reconciled, 'credit_approved', confirmedTax, { vatBasisConfirmed: false }))
+      .toBe('DRAFT');
+    expect(documentStatus(reconciled, 'credit_approved', confirmedTax, { vatBasisConfirmed: true }))
+      .toBe('FINAL');
+  });
+});
+
+describe('buildProvenance derives the VAT basis (R11, spec §17.10)', () => {
+  /** `welshInputs()` (v6, reconciled, evidenced tax basis) promoted to v8 and
+   *  given a registered VAT block with the construction category rated —
+   *  base build is non-zero, so the category's charge line is genuinely
+   *  material rather than vacuously zero. */
+  function vatInputs(evidence_status: 'confirmed' | 'unconfirmed'): CalculatorInputsV8 {
+    const v7 = migrateV6toV7(welshInputs());
+    const v8 = migrateV7toV8(v7);
+    return {
+      ...v8,
+      // R11 spec §17.6: VAT is deliberately NOT advance-eligible, so a facility
+      // draw alone cannot fund it past month 0 — only equity or gross headroom
+      // can. Widened to comfortably cover the VAT carry so THIS fixture stays
+      // about the draft GATE, not about facility/equity sizing (see
+      // monthly-engine.ts:159's "eligible" comment for why raising the
+      // facility limit alone does not fund this).
+      equity_sources: [{ ...v8.equity_sources[0], amount_pence: 900_000_000 }],
+      finance: {
+        ...v8.finance,
+        committed_net_facility_pence: 500_000_000,
+        committed_gross_facility_pence: 600_000_000,
+      },
+      vat: {
+        ...DEFAULT_VAT,
+        registered: true,
+        treatments: defaultVatTreatments().map((t) => (t.category === 'construction'
+          ? {
+              ...t, rate_pct: 20, recoverable_pct: 100,
+              recovery_basis: 'zero_rated_sale' as const, evidence_status,
+            }
+          : t)),
+      },
+    };
+  }
+
+  it('holds a document in DRAFT while a material VAT row is unconfirmed', () => {
+    const run = runAppraisal(vatInputs('unconfirmed'));
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.vatBasisConfirmed).toBe(false);
+    expect(prov.draftReason).toBe('vat_basis_unconfirmed');
+    expect(prov.documentStatus).toBe('DRAFT');
+  });
+
+  it('reaches FINAL once the bearing VAT row is confirmed', () => {
+    const run = runAppraisal(vatInputs('confirmed'));
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.vatBasisConfirmed).toBe(true);
+    expect(prov.draftReason).toBeNull();
+    expect(prov.documentStatus).toBe('FINAL');
+  });
+
+  it('never gates an unregistered document', () => {
+    // The migration default (vat.registered: false, every row unconfirmed) —
+    // an inert engine has no charge lines to have an opinion about.
+    const run = runAppraisal(migrateV7toV8(migrateV6toV7(welshInputs())));
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.vatBasisConfirmed).toBe(true);
+    expect(prov.draftReason).toBeNull();
   });
 });
 
@@ -151,15 +285,16 @@ describe('buildProvenance derives the tax basis (R8)', () => {
 describe('R9 — the area bridge does not gate the document', () => {
   const approvedStatus = 'credit_approved';
 
-  it('leaves the DraftReason union at its four R8 members', () => {
+  it('leaves the DraftReason union at its five R11 members', () => {
     // R8's memory records that the ORDER of this union is load-bearing and that
     // inverting it survived all 1070 tests while being production-reachable.
-    // R9 adds no member; this test is what makes that a decision rather than an
+    // R9 added no member; R11 adds exactly one ('vat_basis_unconfirmed', spec
+    // §17.10) and this test is what makes that a decision rather than an
     // omission somebody later "fixes".
     //
     // Review fix round 1 (Important 2): a `DraftReason[]` array only checks
     // that the listed literals are ASSIGNABLE to the union, not that they
-    // EXHAUST it — a fifth member added elsewhere would not fail that version
+    // EXHAUST it — a sixth member added elsewhere would not fail that version
     // of this test. A `Record` over the union requires every member as a key:
     // a missing (or, symmetrically, an extra-but-unlisted) member becomes a
     // compile error, which is what actually pins the deliberate non-change.
@@ -167,9 +302,10 @@ describe('R9 — the area bridge does not gate the document', () => {
       unreconciled: true,
       senior_not_repaid: true,
       tax_basis_unconfirmed: true,
+      vat_basis_unconfirmed: true,
       not_approved: true,
     };
-    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(4);
+    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(5);
   });
 
   it('keeps a document with a large unallocated balance FINAL when nothing else blocks it', () => {

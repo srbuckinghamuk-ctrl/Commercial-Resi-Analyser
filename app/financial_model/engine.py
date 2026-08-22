@@ -67,6 +67,14 @@ class LedgerMonth:
     funding_gap_pence: int
     gross_receipts_pence: int
     net_receipts_pence: int
+    # R11 spec Sec 17.6. The VAT reclaimed this month, applied to senior debt in
+    # full (ignoring sales_sweep_pct) and before the sales sweep and the Sec 4.5
+    # refinance event. Deliberately absent from gross_receipts_pence and
+    # net_receipts_pence: it returns a specific advance rather than realising an
+    # asset, so no GDV-, LTGDV- or break-even-denominated metric may read it.
+    # Where it exceeds the balance plus the exit fee, or where there is no
+    # facility, the excess falls into distribution_pence.
+    vat_reclaim_pence: int
     # Spec Sec 4.5 -- 0 for every month unless the refinance event fires in it.
     refinance_proceeds_pence: int
     distribution_pence: int
@@ -93,6 +101,13 @@ class MonthlyModelTotals:
     funding_gap_pence: int
     distributions_pence: int
     repayments_pence: int
+    # R11 spec Sec 17.6. The gross VAT cycle as the LEDGER saw it: vat_pence is
+    # the VAT funded through the per-month loop (part of uses_total_pence),
+    # vat_reclaim_pence the VAT swept back out. Disclosure only -- neither is a
+    # finance cost, and vat_reclaim_pence appears on neither side of Sec 7's
+    # sources-and-uses identity.
+    vat_pence: int
+    vat_reclaim_pence: int
 
 
 @dataclass
@@ -122,6 +137,20 @@ class MonthlyModel:
     flags: list[ModelFlag]
     # Developer equity cash-flow vector, one entry per month (- out, + in).
     equity_cashflows_pence: list[int] = field(default_factory=list)
+
+
+# R11 ruling R20. "Does this deal have a facility?" -- the single derivation of that
+# fact, owned by the module that spends it. The ledger gates the arrangement and
+# ancillary fees on it; compute_vat (vat.py) gates the lender_ancillary VAT base on
+# it, because VAT must not be charged on a fee no one pays. Both call THIS function:
+# derived twice, the two would drift the moment the gate gained a condition, and no
+# total would move to say so. Pinned by the "derives the facility gate ONCE" test,
+# which asserts the VAT base and the ledger's ancillary fees in one assertion.
+def has_facility(finance: FacilityTerms) -> bool:
+    return (
+        finance.funding_source != "cash"
+        and (finance.committed_net_facility_pence or 0) > 0
+    )
 
 
 # Exported (no leading underscore) for breakeven.py's caller (metrics.py): the exit fee due
@@ -178,7 +207,7 @@ def run_ledger(
         s.amount_pence for s in equity_sources
         if s.classification == "cash" and s.evidence_status != "rejected"
     )
-    has_facility = not is_cash and net_facility > 0
+    facility_exists = has_facility(finance)  # R20: derived once, above.
 
     # Arrangement fee: charged on commitment, capitalised in month 0 (spec Sec 3.9).
     arrangement_base = (
@@ -186,12 +215,12 @@ def run_ledger(
         else net_facility
     )
     arrangement_fee = (
-        money_round((arrangement_base * finance.arrangement_fee_pct) / 100) if has_facility else 0
+        money_round((arrangement_base * finance.arrangement_fee_pct) / 100) if facility_exists else 0
     )
     ancillary_fees = (
         finance.broker_fee_pence + finance.lender_legal_fee_pence
         + finance.valuation_fee_pence + finance.monitoring_surveyor_fee_pence
-        if has_facility else 0
+        if facility_exists else 0
     )
 
     flags: list[ModelFlag] = []
@@ -220,6 +249,11 @@ def run_ledger(
     total_gap = 0
     total_distributions = 0
     total_repayments = 0
+    # R11 spec Sec 17.6: the gross VAT cycle, disclosed on totals. Neither is a
+    # finance cost and neither enters Sec 7's identity (see reconcile() in
+    # validation.py).
+    total_vat = 0
+    total_vat_reclaim = 0
     reserve_exhausted_flagged = False
     facility_exceeded_flagged = False
     # Spec Sec 5.11: the disposal month's senior balance immediately before sale receipts
@@ -236,9 +270,13 @@ def run_ledger(
 
     for m in range(term):
         u = schedule.uses[m]
+        # R11 spec Sec 17.6: VAT is a real cash outflow in the month it is incurred,
+        # so it joins the month's cash uses alongside acquisition, construction,
+        # professional and statutory -- and is funded by the same waterfall below. It
+        # returns later as receipts[m].vat_reclaim_pence, which repays rather than funds.
         cash_uses = (
             u.acquisition_pence + u.construction_pence + u.professional_pence + u.statutory_pence
-            + (ancillary_fees if m == 0 else 0)
+            + u.vat_pence + (ancillary_fees if m == 0 else 0)
         )
 
         draw = 0
@@ -255,7 +293,7 @@ def run_ledger(
             return max(0, committed_equity - equity_used - equity_contribution)
 
         if m == 0:
-            if has_facility:
+            if facility_exists:
                 cap_fees = arrangement_fee
                 cum_net_used += cap_fees
                 if finance.day_one_advance_pence is not None:
@@ -276,7 +314,14 @@ def run_ledger(
             from_equity = min(cash_uses, equity_available())
             equity_contribution += from_equity
             remainder = cash_uses - from_equity
-            if remainder > 0 and has_facility:
+            if remainder > 0 and facility_exists:
+                # R11 spec Sec 17.6: u.vat_pence is DELIBERATELY absent from this base
+                # and its absence is load-bearing. Lenders do not advance against
+                # reclaimable VAT on the same terms as against build cost, so VAT falls
+                # to equity or to gross headroom and, where neither can meet it, to a
+                # visible vat_funding_gap. Adding u.vat_pence here raises the cap and
+                # silently funds the VAT from the facility -- "funds the build but never
+                # advances against the VAT" is the guard, and it has been watched failing.
                 eligible = u.construction_pence + u.professional_pence + u.statutory_pence
                 advance_cap = money_round((eligible * finance.development_cost_advance_pct) / 100)
                 undrawn_net = max(0, net_facility - cum_net_used)
@@ -320,21 +365,69 @@ def run_ledger(
             peak_debt_month = m
 
         r = schedule.receipts[m]
-        if not is_cash and r.gross_sale_pence > 0:
-            redemption_balance_at_disposal = balance
-            redemption_schedule.append(RedemptionEntry(month=m, balance_pence=balance))
-        net_receipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence
+        # Declared here, ahead of the VAT reclaim, so the reclaim, the sales sweep and
+        # the Sec 4.5 refinance all accumulate into the same three figures rather than
+        # shadowing or overwriting one another.
         repayment = 0
         exit_fee = 0
         distribution = 0
         refinance_proceeds = 0
+
+        # R11 spec Sec 17.6. A reclaim returns a specific advance, so it is applied
+        # whole (ignoring sales_sweep_pct) and it is applied FIRST -- it reduces the
+        # balance the sale and the refinance then have to clear, and so the balance
+        # recorded as this month's redemption balance below.
+        #
+        # A reclaim that fully clears the balance REDEEMS, on the same terms as any
+        # other full redemption. The intuitive rule -- "a reclaim is not a realisation,
+        # so it never redeems" -- silently loses the exit fee: the sale below charges
+        # it inside the "balance > 0 and not is_cash" branch, and a balance already
+        # zeroed by a reclaim takes neither branch. The accepted consequence is that a
+        # later draw re-opening the balance raises facility_redrawn_after_redemption,
+        # which is honest.
+        vat_reclaim = r.vat_reclaim_pence
+        if vat_reclaim > 0:
+            if balance > 0 and not is_cash:
+                fee = 0 if facility_redeemed else exit_fee_amount(finance, gross_facility, peak_debt, balance)
+                if vat_reclaim >= balance + fee:
+                    repayment += balance
+                    exit_fee += fee
+                    total_exit_fee += fee
+                    facility_redeemed = True
+                    distribution += vat_reclaim - balance - fee
+                    balance = 0
+                else:
+                    # A partial reclaim behaves exactly like a partial sales sweep,
+                    # including the Sec 4.4 clamp: a reclaim landing in
+                    # [balance, balance + fee) must not zero the balance, or the fee is
+                    # never charged and never carried.
+                    applied = min(vat_reclaim, balance)
+                    if applied == balance:
+                        applied = max(0, vat_reclaim - fee)
+                    repayment += applied
+                    balance -= applied
+                    distribution += vat_reclaim - applied
+            else:
+                # No facility left to repay (redeemed, or a cash deal): the reclaim
+                # flows to the developer, exactly as sale receipts already do.
+                distribution += vat_reclaim
+
+        if not is_cash and r.gross_sale_pence > 0:
+            redemption_balance_at_disposal = balance
+            redemption_schedule.append(RedemptionEntry(month=m, balance_pence=balance))
+        net_receipts = r.gross_sale_pence - r.agent_fee_pence - r.selling_legal_pence
         if net_receipts > 0:
             sweep_available = money_round((net_receipts * finance.sales_sweep_pct) / 100)
+            # Sale-attributable only: repayment/exit_fee may already carry a VAT
+            # reclaim, and the clamp below compares against the balance this sweep
+            # alone can clear.
+            sale_repayment = 0
+            sale_exit_fee = 0
             if balance > 0 and not is_cash:
                 fee = 0 if facility_redeemed else exit_fee_amount(finance, gross_facility, peak_debt, balance)
                 if sweep_available >= balance + fee:
-                    repayment = balance
-                    exit_fee = fee
+                    sale_repayment = balance
+                    sale_exit_fee = fee
                     total_exit_fee += fee
                     facility_redeemed = True
                     balance = 0
@@ -345,11 +438,13 @@ def run_ledger(
                     # balance via min() below while the fee silently vanishes (never
                     # charged, never carried) -- the exit fee must not be payable from
                     # a repayment that fully clears principal.
-                    repayment = min(sweep_available, balance)
-                    if repayment == balance:
-                        repayment = max(0, sweep_available - fee)
-                    balance -= repayment
-            distribution = net_receipts - repayment - exit_fee
+                    sale_repayment = min(sweep_available, balance)
+                    if sale_repayment == balance:
+                        sale_repayment = max(0, sweep_available - fee)
+                    balance -= sale_repayment
+            repayment += sale_repayment
+            exit_fee += sale_exit_fee
+            distribution += net_receipts - sale_repayment - sale_exit_fee
 
         # Spec Sec 4.5 refinance event -- fixed order: the sales sweep above ran first.
         refi = schedule.refinance
@@ -384,6 +479,8 @@ def run_ledger(
         total_gap += funding_gap
         total_distributions += distribution
         total_repayments += repayment + exit_fee
+        total_vat += u.vat_pence
+        total_vat_reclaim += vat_reclaim
 
         if funding_gap > 0 and not any(f.code == "funding_gap" for f in flags):
             flags.append(ModelFlag(
@@ -391,6 +488,24 @@ def run_ledger(
                 message=(
                     f"Funding gap from month {m}: committed equity and facility cannot "
                     "fund all costs. Overruns do not create facility."
+                ),
+            ))
+        # R11 spec Sec 17.6: VAT is ineligible for the development-cost advance, so a
+        # gap can open in a month whose build is fully advanced. Named separately from
+        # the generic flag above (both fire) because the cause and the remedy are
+        # different: this is working capital for the VAT carry, not an overrun. The
+        # VAT-attributable slice is the smaller of the residual gap and the month's VAT.
+        if (
+            funding_gap > 0 and u.vat_pence > 0
+            and not any(f.code == "vat_funding_gap" for f in flags)
+        ):
+            vat_gap = min(funding_gap, u.vat_pence)
+            flags.append(ModelFlag(
+                code="vat_funding_gap", severity="red", month=m, amount_pence=vat_gap,
+                message=(
+                    f"VAT funding gap from month {m}: {vat_gap} pence of VAT is "
+                    "unfunded. VAT is not eligible for the development-cost advance, "
+                    "so it must come from equity or gross facility headroom."
                 ),
             ))
         if (
@@ -423,7 +538,7 @@ def run_ledger(
             exit_fee_pence=exit_fee,
             repayment_pence=repayment,
             closing_balance_pence=balance,
-            undrawn_net_facility_pence=(net_facility - cum_net_used) if has_facility else None,
+            undrawn_net_facility_pence=(net_facility - cum_net_used) if facility_exists else None,
             facility_headroom_pence=(gross_facility - balance) if gross_facility > 0 else None,
             interest_reserve_remaining_pence=(
                 interest_reserve - cum_capitalised_interest if interest_reserve is not None else None
@@ -433,6 +548,7 @@ def run_ledger(
             funding_gap_pence=funding_gap,
             gross_receipts_pence=r.gross_sale_pence,
             net_receipts_pence=net_receipts,
+            vat_reclaim_pence=vat_reclaim,
             refinance_proceeds_pence=refinance_proceeds,
             distribution_pence=distribution,
         ))
@@ -483,6 +599,8 @@ def run_ledger(
             funding_gap_pence=total_gap,
             distributions_pence=total_distributions,
             repayments_pence=total_repayments,
+            vat_pence=total_vat,
+            vat_reclaim_pence=total_vat_reclaim,
         ),
         peak_debt_pence=peak_debt,
         peak_debt_month=peak_debt_month if peak_debt > 0 else None,

@@ -1,6 +1,7 @@
 import type { ProposedUnit, UnitType, DealSpiderInputs, AcquisitionInputs } from './conversion-types';
 import type { EligibilityAssessment } from '../types';
 import { calculateRlv } from './conversion-calc-engine';
+import { chargeableConsiderationPence } from './model/vat';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
 import { applyScenario } from './model/apply-scenario';
 import { runAppraisal } from './model';
@@ -180,8 +181,12 @@ export function computeSpider(
   const downsideMetrics = runAppraisal(applyScenario(inputs, inputs.scenarios.downside)).metrics;
   const priorApproval = scorePriorApproval(eligibility);
 
-  // Tax advantage
-  const price = inputs.acquisition.purchase_price_pence;
+  // Tax advantage. §17.7: BOTH regimes are charged on the same VAT-inclusive
+  // consideration — comparing a VAT-inclusive residential figure against a
+  // VAT-exclusive commercial one would manufacture an advantage out of the
+  // base, not the rates. Branded, so the intermediate variable this file used
+  // to launder the raw price through no longer type-checks.
+  const consideration = chargeableConsiderationPence(inputs);
   // R8 Task 7: both sides of this comparison must be the same regime, or the
   // score compares English residential rates against Scottish/Welsh commercial
   // ones. v2–v4 documents carry no jurisdiction at all — same `in` guard as
@@ -198,14 +203,61 @@ export function computeSpider(
   const residentialDate = resolveAcquisitionDate(jurisdiction, 'residential_higher', rawDate);
   const commercialDate = resolveAcquisitionDate(jurisdiction, 'non_residential', rawDate);
   const residentialSdlt = calculateAcquisitionTax({
-    consideration_pence: price, jurisdiction,
+    consideration_pence: consideration, jurisdiction,
     basis: 'residential_higher', date: residentialDate,
   }).total_pence;
   const commercialSdlt = calculateAcquisitionTax({
-    consideration_pence: price, jurisdiction,
+    consideration_pence: consideration, jurisdiction,
     basis: 'non_residential', date: commercialDate,
   }).total_pence;
-  const vatSaving = Math.round(metrics.construction_cost_pence * 0.15);
+  // Task 13 (spec §17.10). The hard-coded `construction_cost_pence * 0.15`
+  // guess is replaced by the modelled figure: the VAT actually saved against a
+  // standard-rated (UK 20%) counterfactual, less irrecoverable VAT and the VAT
+  // carry's own finance cost. Every term is read off the RESULT
+  // (`metrics.vat.charges[].net_base_pence`/`.vat_pence`, both already
+  // resolved by `computeVat`, plus `metrics.irrecoverable_vat_pence` and
+  // `metrics.vat_carry_interest_pence`) — none of `resolveVatTreatment`'s own
+  // rate/recoverable/rounding logic is re-derived here. R9 recorded three
+  // self-referential tests that recomputed the engine's own arithmetic and
+  // would have agreed with a bug in it forever; this keeps that door shut by
+  // construction, not by discipline.
+  //
+  // An unregistered (inert) document has `charges: []` and both metrics
+  // figures at 0 (vat.ts's `inertVat()`), so this resolves to exactly 0 — the
+  // true state ("VAT not modelled"), not a discovered "no tax advantage". The
+  // distinction is surfaced below via `taxAdvantageNote`, not silently dropped.
+  //
+  // Ruling R43 (fix round 1, spec §17.10 "the spider's counterfactual counts
+  // only evidenced rates"). Every category ships at `rate_pct: 0,
+  // evidence_status: 'unconfirmed'` by default and nothing forces a user to
+  // touch all six before setting `registered: true` — so "registered, one
+  // category ever configured" is a valid, likely state. A 0% rate nobody has
+  // filled in is arithmetically indistinguishable from a 0% rate someone
+  // determined, so an untouched category must NOT be scored as a 20% saving.
+  // The counterfactual therefore sums only charge lines whose
+  // `evidence_status` is `'confirmed'` — an unevidenced rate contributes
+  // nothing to a claimed saving, the same principle the rest of the release
+  // runs on.
+  const STANDARD_VAT_RATE_PCT = 20;
+  const grossVatSavedVsStandardRate = metrics.vat.charges
+    .filter((c) => c.evidence_status === 'confirmed')
+    .reduce(
+      (sum, c) => sum + (Math.round((c.net_base_pence * STANDARD_VAT_RATE_PCT) / 100) - c.vat_pence),
+      0,
+    );
+  // Ruling R47. The two deductions below are WHOLE-DOCUMENT figures — unlike
+  // `grossVatSavedVsStandardRate` above, they are NOT filtered to charge lines
+  // whose `evidence_status` is `'confirmed'`. That asymmetry is deliberate,
+  // not an oversight: `irrecoverable_vat_pence` and `vat_carry_interest_pence`
+  // are real costs of the whole VAT position however each line is evidenced —
+  // deducting only the confirmed share would UNDERSTATE them, since an
+  // unconfirmed rate can still be charging real, irrecoverable VAT today. So
+  // an unconfirmed line's irrecoverable VAT is deducted from a saving it was
+  // not allowed to contribute to above; that is the conservative direction
+  // for this figure to be asymmetric in, and it is why `taxAdvantageNote`
+  // below does not claim the two sides are treated alike.
+  const vatSaving =
+    grossVatSavedVsStandardRate - metrics.irrecoverable_vat_pence - metrics.vat_carry_interest_pence;
   const taxAdvantagePct =
     metrics.gdv_pence > 0
       ? ((residentialSdlt - commercialSdlt + vatSaving + spider.cil_offset_pence) /
@@ -213,7 +265,29 @@ export function computeSpider(
         100
       : 0;
 
-  // Acquisition headroom against max bid (RLV at the configured target return)
+  // Judgement calls 2 and 3 (task-13 brief, spec §17.10), R43-corrected:
+  // `vatBasisGate` is deliberately NOT reused here (fix round 1 — that
+  // instruction was wrong). `vatBasisGate` asks "does this document have
+  // MATERIAL unconfirmed VAT?" and correctly ignores a non-charging
+  // unconfirmed row, because for the §17.10 draft gate there is nothing at
+  // stake in a row that charges nothing. Here a non-charging unconfirmed row
+  // is EXACTLY where the phantom saving above is manufactured, so the axis
+  // asks a different question: is ANY charge line unevidenced, whether or not
+  // it currently charges? That is a second rule because it is a different
+  // predicate, not a duplicate of the first.
+  const anyChargeLineUnconfirmed = metrics.vat.charges.some((c) => c.evidence_status !== 'confirmed');
+  const taxAdvantageNote: string | null = !metrics.vat.registered
+    ? 'VAT saving not modelled: this document is not VAT-registered, so the figure above reflects SDLT and CIL only — it is not a confirmed zero tax advantage.'
+    : anyChargeLineUnconfirmed
+      ? 'VAT evidence UNCONFIRMED for at least one charge category (only confirmed rows count toward the saving above — irrecoverable VAT and its carry interest are still deducted in full, whatever their evidence status) — obtain specific tax advice before relying on this figure.'
+      : null;
+  const taxAdvantageProvisional = taxAdvantageNote !== null;
+
+  // Acquisition headroom against max bid (RLV at the configured target return).
+  // The PRICE here, not the chargeable consideration: this is what the buyer
+  // pays the vendor, stripped out of TDC so the residual is compared against a
+  // bid. §17.7 moves the tax BASE, not the price a bid is measured against.
+  const price = acq.purchase_price_pence;
   const totalCostExLand = metrics.total_development_cost_pence - price - metrics.sdlt_pence;
   const maxBid = calculateRlv(totalCostExLand, metrics.gdv_pence, spider.target_profit_on_cost_pct);
   const headroomPct = maxBid > 0 ? ((maxBid - price) / maxBid) * 100 : -100;
@@ -244,8 +318,14 @@ export function computeSpider(
     const raw = raws[def.id];
     const score = normaliseAxis(def, raw);
     const weight = spider.weights[def.id] ?? 1;
-    const provisional = def.id === 'prior_approval' ? priorApproval.provisional : false;
-    const note = def.id === 'prior_approval' ? priorApproval.note : null;
+    const provisional =
+      def.id === 'prior_approval' ? priorApproval.provisional
+      : def.id === 'tax_advantage' ? taxAdvantageProvisional
+      : false;
+    const note =
+      def.id === 'prior_approval' ? priorApproval.note
+      : def.id === 'tax_advantage' ? taxAdvantageNote
+      : null;
     if (provisional && note) caveats.push(`${def.short}: ${note}`);
     return {
       id: def.id,

@@ -15,7 +15,7 @@
  */
 import type { FinancialAppraisal } from '../types';
 import type { AppraisalRun, ReconciliationStatus } from './model';
-import { CALC_VERSION } from './model';
+import { CALC_VERSION, vatBasisGate } from './model';
 import type { Jurisdiction } from './tax/acquisition-tax';
 
 /** Where a lender case has reached. Populated from R14; null until then. */
@@ -81,6 +81,12 @@ export interface ReportProvenance {
    * number, which a credit paper must not hide.
    */
   taxBasisConfirmed: boolean;
+  /**
+   * R11, spec §17.10. True when no charge line that actually bears VAT
+   * (non-zero `vat_pence`) rests on an unconfirmed evidence status. Computed
+   * by `vatBasisGate` from the run's own `metrics.vat`, never re-derived here.
+   */
+  vatBasisConfirmed: boolean;
 }
 
 export interface ProvenanceOptions {
@@ -93,7 +99,8 @@ export interface ProvenanceOptions {
 }
 
 export type DraftReason =
-  | 'unreconciled' | 'senior_not_repaid' | 'tax_basis_unconfirmed' | 'not_approved';
+  | 'unreconciled' | 'senior_not_repaid' | 'tax_basis_unconfirmed'
+  | 'vat_basis_unconfirmed' | 'not_approved';
 
 /** What `draftReason` needs to know about the acquisition-tax basis. Defaulted
  *  so that a pre-R8 two-argument caller keeps its exact previous behaviour. */
@@ -102,6 +109,19 @@ export interface TaxBasisGate {
 }
 
 const TAX_BASIS_ASSUMED_CONFIRMED: TaxBasisGate = { taxBasisConfirmed: true };
+
+/**
+ * R11, spec §17.10. What `draftReason` needs to know about the VAT basis.
+ * `draftReason` stays pure — it receives this, it does not compute it; the
+ * computation is `vatBasisGate` (model/vat.ts), which reads the engine's own
+ * `VatResult`. Defaulted exactly as `TaxBasisGate` was added defaulted in R8,
+ * so no existing three-argument caller changes behaviour.
+ */
+export interface VatBasisGate {
+  vatBasisConfirmed: boolean;
+}
+
+const VAT_BASIS_ASSUMED_CONFIRMED: VatBasisGate = { vatBasisConfirmed: true };
 
 /**
  * Spec §13.3, extended by spec §14. A document is FINAL only when four separate
@@ -128,6 +148,7 @@ export function draftReason(
   reconciliation: Pick<ReconciliationStatus, 'report_safe' | 'senior_repaid'>,
   lenderCaseStatus: LenderCaseStatus | null,
   taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
+  vatBasis: VatBasisGate = VAT_BASIS_ASSUMED_CONFIRMED,
 ): DraftReason | null {
   if (!reconciliation.report_safe) return 'unreconciled';
   if (!reconciliation.senior_repaid) return 'senior_not_repaid';
@@ -136,6 +157,12 @@ export function draftReason(
   // the figures themselves may be. It sits above `not_approved` because a
   // reader needs to know the basis is unverified before they read an approval.
   if (!taxBasis.taxBasisConfirmed) return 'tax_basis_unconfirmed';
+  // R11 (spec §17.10). Sits immediately below the tax-basis clause: the same
+  // rationale applies unchanged — an unconfirmed VAT basis does not make the
+  // arithmetic wrong, so it must not displace a reason saying the figures
+  // themselves may be, but a reader must know the basis is unverified before
+  // they read an approval.
+  if (!vatBasis.vatBasisConfirmed) return 'vat_basis_unconfirmed';
   if (lenderCaseStatus === null || !APPROVED_STATUSES.includes(lenderCaseStatus)) return 'not_approved';
   return null;
 }
@@ -144,8 +171,9 @@ export function documentStatus(
   reconciliation: Pick<ReconciliationStatus, 'report_safe' | 'senior_repaid'>,
   lenderCaseStatus: LenderCaseStatus | null,
   taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
+  vatBasis: VatBasisGate = VAT_BASIS_ASSUMED_CONFIRMED,
 ): 'DRAFT' | 'FINAL' {
-  return draftReason(reconciliation, lenderCaseStatus, taxBasis) === null ? 'FINAL' : 'DRAFT';
+  return draftReason(reconciliation, lenderCaseStatus, taxBasis, vatBasis) === null ? 'FINAL' : 'DRAFT';
 }
 
 /**
@@ -239,7 +267,12 @@ export function buildProvenance(
   const reportSafe = run.reconciliation.report_safe;
   const seniorRepaid = run.reconciliation.senior_repaid;
   const taxBasisConfirmed = taxBasisConfirmedFor(run);
-  const reason = draftReason(run.reconciliation, lenderCaseStatus, { taxBasisConfirmed });
+  // R11 (spec §17.10, ruling R5). Computed from the run's own metrics.vat —
+  // draftReason receives the gate, it does not compute one.
+  const { vatBasisConfirmed } = vatBasisGate(run.metrics.vat);
+  const reason = draftReason(
+    run.reconciliation, lenderCaseStatus, { taxBasisConfirmed }, { vatBasisConfirmed },
+  );
   const storedCalcVersion = record?.calc_version ?? null;
   const runCalcVersion = run.metrics.calc_version || CALC_VERSION;
 
@@ -266,6 +299,7 @@ export function buildProvenance(
     jurisdiction: run.metrics.acquisition_tax.jurisdiction,
     jurisdictionRecorded: jurisdictionRecordedOn(run),
     taxBasisConfirmed,
+    vatBasisConfirmed,
   };
 }
 

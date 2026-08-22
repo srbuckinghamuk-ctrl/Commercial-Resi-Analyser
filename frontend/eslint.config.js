@@ -151,6 +151,82 @@ export default defineConfig([
             + 'run.metrics.cost_plan.contingency (model/cost-plan.ts). It resolves the '
             + 'detailed-mode package classes vs the legacy headline percentage (spec §16).',
         },
+        {
+          // R11 spec §17.2 rule 2 — single-accessor enforcement for the VAT
+          // block. The R10 post-mortem records a schema carrying two mechanisms
+          // for one fact, where the engines read one and the product wrote the
+          // other; `vat.treatments` plus a per-line `vat_override` is
+          // structurally capable of repeating it. `resolveVatTreatment` applies
+          // the precedence (override, else the category row) and is the only
+          // function that may see either. The same three read shapes as the
+          // cost-area and contingency selectors above, because a destructure or
+          // a computed access is a different AST node the member selector
+          // cannot match at all.
+          selector: "MemberExpression[property.name='treatments']",
+          message:
+            'Do not read vat.treatments directly — call resolveVatTreatment() from '
+            + 'model/vat.ts. It applies the line-override-then-category precedence and the '
+            + 'not-registered inert case (spec §17.2). If you are the VAT module, the type '
+            + 'definitions, migration or defaults, add this file to the allowlist in '
+            + 'eslint.config.js; any other genuinely legitimate raw read should be an '
+            + 'eslint-disable-next-line at the call site, not a file-wide exemption.',
+        },
+        {
+          selector: "ObjectPattern > Property[key.name='treatments']",
+          message:
+            'Do not destructure treatments out of the VAT block — call resolveVatTreatment() '
+            + 'from model/vat.ts (spec §17.2). Scoped to ObjectPattern: an ObjectExpression '
+            + 'property of the same name is a WRITE (defaults, migration output), which this '
+            + 'rule has never restricted.',
+        },
+        {
+          selector: "MemberExpression[computed=true][property.value='treatments']",
+          message:
+            'Do not read vat.treatments through a computed member access — call '
+            + 'resolveVatTreatment() from model/vat.ts (spec §17.2).',
+        },
+        {
+          // The other half of §17.2 rule 1. An override read outside the
+          // resolver is how the precedence gets re-implemented — and a second
+          // implementation of a precedence rule is R10's defect exactly.
+          selector: "MemberExpression[property.name='vat_override']",
+          message:
+            'Do not read a vat_override directly — call resolveVatTreatment() from '
+            + 'model/vat.ts, passing the override as the charge\'s `override` (spec §17.2). '
+            + 'It is the one site that applies the override-over-category precedence and '
+            + 'keeps evidence_status a category fact.',
+        },
+        {
+          selector: "ObjectPattern > Property[key.name='vat_override']",
+          message:
+            'Do not destructure vat_override out of a package or fee line — call '
+            + 'resolveVatTreatment() from model/vat.ts (spec §17.2).',
+        },
+        {
+          selector: "MemberExpression[computed=true][property.value='vat_override']",
+          message:
+            'Do not read a vat_override through a computed member access — call '
+            + 'resolveVatTreatment() from model/vat.ts (spec §17.2).',
+        },
+        {
+          // R11 spec §17.7 — the escape hatch out of the ChargeableConsideration
+          // brand. `asChargeableConsideration` is an exported function imported
+          // by name, so it appears as a bare Identifier, NOT a MemberExpression
+          // — the same shape as `selectBandSet` and `TAX_TABLES` above, and for
+          // the same reason. A MemberExpression selector here would lint clean
+          // and never fire (R9's recorded defect); verified against the real
+          // symbol, and watched failing, before being written here.
+          selector: "Identifier[name='asChargeableConsideration']",
+          message:
+            'Do not call asChargeableConsideration() to brand a raw number — call '
+            + 'chargeableConsiderationPence(inputs) from model/vat.ts, which adds purchase '
+            + 'VAT where the vendor has opted to tax and TOGC does not apply (spec §17.7). '
+            + 'SDLT, LBTT and LTT are all charged on the VAT-INCLUSIVE consideration, and '
+            + 'passing the exclusive price under-reports a PERMANENT cost. Only '
+            + 'acquisition-tax.ts (which declares the brand), vat.ts (which owns the '
+            + 'accessor), the document-constructing modules on the allowlist below, and '
+            + 'test files may call it.',
+        },
       ],
     },
   },
@@ -181,10 +257,21 @@ export default defineConfig([
     // Known limitation, recorded rather than glossed (spec §3.4): test files are
     // exempt because fixtures must construct the raw field, so a consumer defect
     // written inside a test file is not caught by this rule.
+    // R11 spec §17.2 rule 2: "the allowlist gains exactly one file" —
+    // src/lib/model/vat.ts, which OWNS `resolveVatTreatment` and
+    // `chargeableConsiderationPence`. It is the same category as areas.ts and
+    // cost-plan.ts, not a widening: it holds five legitimate raw reads (the
+    // resolver's `vat.treatments`, and computeVat's four collect-and-forward
+    // `vat_override` reads that hand the value straight to the resolver
+    // without interpreting it). accessor-guard.test.ts asserts this array's
+    // EXACT contents, so any future addition fails a test rather than
+    // silently un-guarding whatever else that file happens to read — R10
+    // found a widening whose guard test pinned the hole it had opened.
     files: [
       'src/lib/model/areas.ts',
       'src/lib/tax/acquisition-tax.ts',
       'src/lib/model/cost-plan.ts',
+      'src/lib/model/vat.ts',
       'src/lib/conversion-types.ts',
       'src/lib/model/finance-types.ts',
       'src/lib/model/migrate.ts',

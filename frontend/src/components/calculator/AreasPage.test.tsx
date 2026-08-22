@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import AreasPage from './AreasPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV7 } from '../../lib/model';
-import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV8 } from '../../lib/model';
+import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 
@@ -14,8 +14,8 @@ import type { ProposedUnitV6 } from '../../lib/conversion-types';
  * the same arithmetic the engine's own unit tests already lock down — this
  * page must render it, never recompute it.
  */
-function baseInputs(): CalculatorInputsV7 {
-  const inputs = defaultCalculatorInputsV7();
+function baseInputs(): CalculatorInputsV8 {
+  const inputs = defaultCalculatorInputsV8();
   return {
     ...inputs,
     areas: {
@@ -48,7 +48,7 @@ function unit(id: string, floor_area_sqm: number): ProposedUnitV6 {
 
 // available_for_units_sqm = 520 - 62 - 18 - 14 - 6 = 420.
 // Two 60 sqm units -> unit NIA 120 -> unallocated 420 - 120 = 300.
-const inputsFixture: CalculatorInputsV7 = {
+const inputsFixture: CalculatorInputsV8 = {
   ...baseInputs(),
   unit_mix: { units: [unit('u1', 60), unit('u2', 60)] },
 };
@@ -56,7 +56,7 @@ const runFixture = runAppraisal(inputsFixture);
 
 // Same building, an oversized schedule: 300 + 200 = 500 sqm of units against
 // 420 sqm available -> unallocated -80.
-const overfilledInputsFixture: CalculatorInputsV7 = {
+const overfilledInputsFixture: CalculatorInputsV8 = {
   ...baseInputs(),
   unit_mix: { units: [unit('u1', 300), unit('u2', 200)] },
 };
@@ -64,7 +64,7 @@ const overfilledRunFixture = runAppraisal(overfilledInputsFixture);
 
 // No existing building recorded at all -> every GIA-denominated ratio has a
 // zero denominator and must render as an em dash, not 0%.
-const zeroGiaInputsFixture: CalculatorInputsV7 = {
+const zeroGiaInputsFixture: CalculatorInputsV8 = {
   ...baseInputs(),
   areas: {
     ...baseInputs().areas,

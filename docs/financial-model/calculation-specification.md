@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.9.0`.
-**Date:** 19 August 2026
+**Status:** Authoritative. Calculation version `2.10.0`.
+**Date:** 21 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.10.0** — VAT and TOGC (§17, R11), with inputs v8 carrying a `vat` block: registration, a return cycle (monthly or quarterly, with a repayment lag), six fixed per-category treatment rows (rate, recoverable proportion, recovery basis, evidence status) resolved through one accessor, and a purchase/TOGC block that decides whether acquisition VAT is chargeable and whether the acquisition tax base is VAT-inclusive. **No existing computed value changed, with one named exception (ruling R46)** — migration writes `registered: false`, six zeroed treatment rows and an inert purchase block, which drives every resolved rate to zero and the chargeable consideration back to the exclusive price, so all twelve-plus golden fixtures (now thirteen, with the VAT worked cycle pinned as fixture R) reproduce every reported metric to the penny, and the gate is numeric **and** structural for the same reason §16.3's was (§17.11). §3.8 gains `irrecoverable_vat_pence` as a cost-before-finance component; §7 gains the VAT reclaim as a third flow excluded from both sides of the sources-and-uses identity, alongside sale-proceeds repayments and refinance-shortfall equity; §16.3's contingency base is now the package tag, mode-dependently, with the input fields `basis`/`package_ids` deleted (the *result* shape is unchanged). **The one figure this release does move**: §17.8 makes the package's `contingency_class` tag live, so a detailed-mode document carrying a non-zero percentage on `existing_building` or `abnormal` while no package carries that tag now resolves that class's base to zero, where before every class resolved against the whole base build regardless of tag — the same reachable shape §17.8's planted-divergence guard exists to catch, here on the validation side rather than the numeric one. §17.9 adds a **warning** naming it (not an error — see ruling R46, and the R38/R39 regression gate this does not touch, since it reads `cost_plan` which is unchanged either side of the v7→v8 boundary), and no fixture in the corpus is in that shape. §16.9 loses the `contingency_class`-not-live limitation (now resolved) and the "No VAT" limitation (now superseded by §17.13's own list, which is where a VAT limitation belongs from this release on).
 - **2.9.0** — cost plan modes (§16, R10), with inputs v7 carrying a `cost_plan` block: a `headline` mode (rate × area, unchanged) and a mutually exclusive `detailed` mode (a priced package schedule), three named contingency classes each rounding independently against its own resolved base, and professional/statutory fee lines carrying a fixed or percentage basis. **No existing computed value changed** — migration copies `contingency_pct` into the `general` class on the `all_packages` basis and the eight legacy fee fields into `fixed` fee lines, and both engines route every document, pre- and post-migration, through the same `cost_plan` engine, so "all twelve golden fixtures identical to the penny" is an assertion that could fail rather than one that is structurally blind (§16, following R9's precedent). §3.4's contingency term is replaced with the three-class formula; §3.5/§3.6 are replaced with the fee-line formulation and its two base definitions; §1.6 records inputs v7. §13.2 gains a stated limitation: a stored appraisal not yet re-saved across this boundary prints an `inputs_version` beside an `audit_hash` computed under the prior version, so the hash cannot be recomputed from the printed fields for that row.
 - **2.8.0** — the area bridge (§15, R9), with inputs v6 carrying an entered `areas` block and per-unit `ancillary`. The scheme now has one area statement that ties, and the construction-cost area is **derived** from it rather than asserted independently: §15.3's basis switch chooses between the derived developed GIA and the pre-R9 manual field, and §15.4 makes reading that field outside one accessor a build failure. Ancillary parking, balconies and terraces are valued as a separate GDV component (§3.1, §15.5) that sells with its unit and moves with a §12.1 GDV stress. **No existing computed value changed** — migration writes the manual basis with a zeroed bridge and zeroed ancillary, which is a tested claim, not an assertion (see `migration-notes.md`). §3.1's formula and Included lines are corrected to state GDV as internal plus ancillary value, and the unpaid R3 pointer that excluded parking "until valued separately" is removed rather than repointed; §3.2's `global_per_sqft` lender basis is bound explicitly to internal net internal area; §2 gains four derived-area definitions. §15.6's rules replace the ±25% unit-NIA-vs-construction-area warning, which is deleted rather than retuned. R9 also clears an R8 carry-forward: acquisition-date validation is now a real calendar check in both engines, so `2026-02-31` no longer validates (§14).
 - **2.7.0** — jurisdiction-aware acquisition tax: SDLT (England/NI), LBTT (Scotland) and LTT (Wales) computed from a dated, sourced and versioned band table (§14, R8), with inputs v5 carrying the jurisdiction, its evidence status, the acquisition date and a reasoned override. **No existing computed value changed** — §1.6 explains why. §3.3's formula term is renamed from `SDLT` to `acquisition_tax` and its false "other jurisdictions are out of scope" sentence is deleted; §3.18 records that the RLV is invariant to it; §13.1 gains the table version and applied jurisdiction; §13.3 gains a fourth draft condition. What does change in practice is that every pre-R8 document is marked DRAFT until **both** its jurisdiction is confirmed **and** an acquisition date is recorded — migration leaves the date null, so confirming the jurisdiction alone is not enough (§14.6).
@@ -13,7 +14,7 @@
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9, R10) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9, R10, R11) carry no such restriction.
 
 ---
 
@@ -104,10 +105,10 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 ### 3.3 Acquisition cost [R1]
 
 - **Formula:** `purchase_price + acquisition_tax + legal_fees + survey_cost + round(purchase_price × broker_fee_pct/100) + other_acquisition_costs`.
-- **Acquisition tax:** SDLT in England and Northern Ireland, LBTT in Scotland, LTT in Wales, on the non-residential band set in force at the acquisition date. **See §14** for the band tables, the selection rule, the override and the stated limitations. [R8 — calc 2.7.0. Before it, this line read "SDLT … England/NI slice bands" and stated that other jurisdictions were out of scope and were to be flagged as an assumption in reports. That is no longer true and the sentence has been removed rather than softened: the engine now computes the correct regime, and a report that still flagged Scotland or Wales as unmodelled would be making a false statement about the figures beside it.]
+- **Acquisition tax:** SDLT in England and Northern Ireland, LBTT in Scotland, LTT in Wales, on the non-residential band set in force at the acquisition date, charged on `chargeable_consideration_pence` (§17.7) rather than on `purchase_price` directly wherever the two diverge. **See §14** for the band tables, the selection rule, the override and the stated limitations. [R8 — calc 2.7.0. Before it, this line read "SDLT … England/NI slice bands" and stated that other jurisdictions were out of scope and were to be flagged as an assumption in reports. That is no longer true and the sentence has been removed rather than softened: the engine now computes the correct regime, and a report that still flagged Scotland or Wales as unmodelled would be making a false statement about the figures beside it.] [R11 — calc 2.10.0. `chargeable_consideration_pence` equals `purchase_price` unless the vendor has opted to tax and TOGC does not apply, in which case it is the VAT-inclusive figure — see §17.7 for the accessor, its six call sites and the single-accessor guard.]
 - **One figure, two call sites.** The acquisition tax that enters this formula and the `metrics.acquisition_tax_pence` a report prints are the same computation on the same inputs. They are separately implemented (the cost stack and the metrics derivation) and are held together by an explicit cross-site agreement test in both engines; a run in which they differ is an engine defect.
 - **Timing:** month 0 in full.
-- **Gross/net:** VAT on purchase is not modelled in R1; reports must carry the assumption "purchase price treated as VAT-exempt/TOGC — unconfirmed".
+- **Gross/net:** VAT on the purchase price is disclosed by `chargeable_consideration_pence` and the acquisition tax itself where chargeable (§17.7); it is otherwise nil. [R11 — calc 2.10.0. Before it this line read "VAT on purchase is not modelled in R1; reports must carry the assumption 'purchase price treated as VAT-exempt/TOGC — unconfirmed'" — true of every release from R1 through R10. §17 models both facts (chargeability and recovery, kept as separate questions) and the migrated default (`vendor_opted_to_tax: false`) keeps every existing document's consideration identical to its price, so no fixture moves.]
 - **Rounding:** broker fee rounded half-up; other terms integer inputs.
 - **Edge cases:** negative components are hard validation errors.
 
@@ -116,7 +117,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 - **Formula:** `base_build = Σ packages[].amount_pence` in `detailed` mode, or `round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)` in `headline` mode; `contingency_total = Σ` over the three named classes of `round_half_up(class_base × class.pct/100)` — each class rounds independently, so three classes at 5% on the same base is not one class at 15% (§16.3); `compliance = fire_safety + sound_insulation + part_l` in headline mode, or `0` in detailed mode (§16.2 — priced inside a package instead); `total = base_build + contingency_total + compliance`. [R10 — calc 2.9.0. Before it this line read `base = round_half_up(construction_cost_per_sqm_pence × developed_area_sqm)`; `contingency = round(base × contingency_pct/100)`; `compliance = fire_safety + sound_insulation + part_l`; `total = base + contingency + compliance` — a single blended contingency percentage on an implicit base, which could not separate general design development from existing-building risk from abnormal risk, the three things a conversion lender most wants apart (§16). Headline mode's arithmetic is unchanged to the penny: migration copies `contingency_pct` into the `general` class on the `all_packages` basis and leaves the other two at 0 (§16.7), so `base_build`/`contingency_total`/`compliance` reproduce the pre-R10 `base`/`contingency`/`compliance` exactly.] [R9 — calc 2.8.0. Before it this line read `construction_cost_per_sqm_pence × total_construction_sqm`. The **area** is now resolved through the single accessor `developed_area_sqm(inputs)` (§15.3/§15.4), which returns the derived developed GIA on the `bridge_derived` basis and `total_construction_sqm` verbatim on the `manual` basis — so a migrated document's figure is unchanged to the penny. Reading `total_construction_sqm` anywhere else is a build failure.]
 - **Contingency base:** each of the three classes carries its **own** named, resolved base — `all_packages` (the whole base build) or `selected_packages` (a named subset) — and that base is displayed beside the class, not asserted in prose (§16.3). [R10 — calc 2.9.0. Before it this line read "the headline base build only — explicitly excludes compliance allowances, professional fees and acquisition. This base is displayed wherever contingency appears", true of the single blended percentage that no longer exists. Every class's base still excludes compliance, fees and acquisition — only the base build itself can be named, on either basis.]
 - **Timing:** spread per the spend profile (§6). R1 default: straight-line over the construction window, disclosed as an assumption.
-- **Gross/net:** entered figures are treated as net of recoverable VAT; VAT modelling is R11 and the report carries "construction VAT treatment unconfirmed — no reduced-rate saving is assumed in the appraisal". [R10 — calc 2.9.0. Before it this line named R3 as the release that would model VAT. R3 shipped without it (calc 2.2.0/2.3.0's changelog entries cover only the dated programme and phased-sales/refinance work), and the pointer went unpaid through R4–R9; it is corrected to R11 — this release's own §16.9 stated limitation — rather than left pointing at a release that has already shipped without it, the same "unpaid pointer" fault R9 fixed for the parking/balcony GDV exclusion (§3.1).]
+- **Gross/net:** entered figures are treated as net of recoverable VAT; recovery is now modelled (§17), so **irrecoverable** VAT on construction is not folded into this line — it is its own line, `irrecoverable_vat_pence` (§3.8, §17.5), added to cost-before-finance rather than to construction cost, because the engine runs strictly downstream of the cost plan and no cost line may read a VAT figure without creating a cycle. [R10 — calc 2.9.0. Before it this line named R3 as the release that would model VAT. R3 shipped without it (calc 2.2.0/2.3.0's changelog entries cover only the dated programme and phased-sales/refinance work), and the pointer went unpaid through R4–R9; it was corrected to point at R11 rather than left pointing at a release that had already shipped without it, the same "unpaid pointer" fault R9 fixed for the parking/balcony GDV exclusion (§3.1).] [R11 — calc 2.10.0. R11 has now shipped and the forward pointer is discharged: this line no longer names a future release, and construction's own VAT treatment is entered per-category in `vat.treatments` (§17.1), not disclosed as an unconfirmed assumption.]
 - **Edge cases:** negative rate/area/package amount/contingency `pct` are hard errors; a `detailed`-mode document carrying any non-zero flat compliance field is also a hard error, §16.2. [R9 — calc 2.8.0. This line also said “`total_construction_sqm` differing from Σ unit areas by >25% raises a warning (unreconciled areas)”. **That warning is deleted, not retuned.** It compared two quantities that *should* differ — by exactly the circulation, plant, storage and amenity the model had nowhere to record — so it fired on correct schemes and stayed silent on wrong ones; the tolerance was a proxy for a reconciliation that did not exist. §15.6's rules replace it, including a narrower manual-basis warning that compares the manual area against the **derived** developed area rather than against unit NIA.]
 
 ### 3.5 Professional fees [R1]
@@ -142,8 +143,8 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 
 ### 3.8 Cost before finance [R1]
 
-- **Formula:** acquisition cost + construction cost + professional fees + statutory costs + selling and exit costs.
-- Selling costs are included here (they are a cost of the scheme, not of the debt). A sub-total excluding selling costs ("development cost before disposal and finance") is also reported for LTC-net purposes (§5.3).
+- **Formula:** acquisition cost + construction cost + professional fees + statutory costs + selling and exit costs + `irrecoverable_vat_pence`. [R11 — calc 2.10.0. `irrecoverable_vat_pence` (§17.5, §17.12) is added as its own component rather than folded into any of the other five: the engine computes VAT strictly downstream of the cost plan (§17.5), so no cost line may read it, and its own line is the only place it can enter TDC without creating a cycle. It is `0` on every document with `vat.registered: false` — the migrated and new-document default — so no existing figure moves.]
+- Selling costs are included here (they are a cost of the scheme, not of the debt). A sub-total excluding selling costs ("development cost before disposal and finance") is also reported for LTC-net purposes (§5.3). `irrecoverable_vat_pence` is **not** part of that LTC-net sub-total: VAT is not eligible for the development-cost advance (§17.6), so Net LTC's denominator excludes it while Gross LTC's TDC includes it (§17.13).
 - **Rounding:** exact sum.
 
 ### 3.9 Finance costs [R1]
@@ -521,6 +522,7 @@ weight rules above. `sales_phasing` and `refinance` are implemented from calc
 - **Sources:** equity contributions, senior principal draws, capitalised fees & rolled-up interest (self-funding within the gross facility), receipts applied directly to same-month uses (selling costs and exit fee netted from proceeds), and other committed funding.
 - **Invariant (tested to the penny, monthly and cumulative):** Σ sources = Σ uses. Finance costs are explicitly funded (rolled-up: by the gross facility; serviced: by equity). An unfundable residual appears as `funding_gap` — visible, never plugged.
 - **Refinance-shortfall equity excluded [R3b — calc 2.3.0]:** additional equity injected by the §4.5 refinance event's shortfall or negative-net-proceeds branches funds a facility redemption, not a project cost, so it is excluded from both sides of this identity — like sale-proceeds repayments, which are similarly omitted rather than appearing as a matched source/use pair.
+- **The VAT reclaim excluded [R11 — calc 2.10.0]:** `reconcile()` needs no structural change for VAT. The outflow enters `uses_total_pence` and is funded through the existing per-month loop by draws, equity or a visible gap, exactly like any other cost. The reclaim (`vat_reclaim_pence`, §17.6) **repays** — 100% to senior debt where a facility exists, otherwise to distribution — and is the **third** flow, alongside sale-proceeds repayments and refinance-shortfall equity above, that appears on **neither** side of the identity. Over the term, sources therefore fund the **gross** VAT outflow even though most of it returns, which is correct and is the same treatment sale proceeds already receive.
 
 ## 8. Worked reconciliation example (normative golden case)
 
@@ -1033,8 +1035,12 @@ Recorded so they are not read as oversights. None of the following is modelled;
 - **Leasehold premium and the NPV-of-rent charge** — freehold consideration only.
 - **The "6 or more dwellings" rule** — noted in §14.4 as the reason the basis is
   non-residential, not implemented as a branch.
-- **VAT and TOGC** (R11) and **disposal taxes** (out of scope for this plan) remain
-  unmodelled and are disclosed separately.
+- **Disposal taxes** (out of scope for this plan) remain unmodelled and are
+  disclosed separately. [R11 — calc 2.10.0. Before it this bullet also listed
+  "VAT and TOGC (R11)" as unmodelled. R11 has shipped: purchase VAT and TOGC
+  are modelled at §17.7, including their effect on this section's own
+  chargeable consideration (§3.3). The surviving VAT-specific limitations are
+  §17.13's own list, not this one.]
 
 A report states that it is not a tax opinion (§13.4).
 
@@ -1198,16 +1204,23 @@ CostPackage: id, code, label, amount_pence, contingency_class, lender_eligible, 
 
 **Compliance responds differently to a cost stress in the two modes, and must — this is a stated limitation (§16.9), not an inconsistency to engineer away.** In headline mode `compliance_pence` is a fixed allowance the cost lever (§12.1's `construction_cost_adjustment_pct`) does not scale — pre-R10 behaviour, unchanged. In detailed mode the same money sits inside a package, and packages *are* scaled with every other package amount. The two modes agree on the construction total at rest and diverge under stress once compliance is non-zero. Scaling headline compliance too would move every existing document's scenario figures, which this release forbids; exempting a compliance package from the stress would make it the one package the cost lever cannot reach, recreating §1's pre-R10 defect in miniature.
 
-### 16.3 Contingency — one engine, three classes, a named base
+### 16.3 Contingency — one engine, three classes, a base scoped by the package tag
 
 ```
 ContingencyClassName = 'general' | 'existing_building' | 'abnormal'
-ContingencyClass: name, pct, basis ('all_packages' | 'selected_packages'), package_ids
+ContingencyClass: name, pct
 ```
 
-Each class rounds **half-up independently** (§1.1); the contingency total is the sum of the three rounded figures, **not a rounding of the sum**. Three classes at 5% each on the same base is deliberately not identical to one class at 15% — they are three separate allowances, each computed and each reportable, and collapsing them for rounding would obscure which one moved. `all_packages` is the whole base build, and the only meaningful basis in headline mode, where there are no packages to name. `selected_packages` names a subset by package `id` — the audit's "allow eligibility bases per package and show the base": existing-building contingency belongs on enabling/strip-out/structure, not on externals, and the base it lands on has to be visible to be arguable.
+Each class rounds **half-up independently** (§1.1); the contingency total is the sum of the three rounded figures, **not a rounding of the sum**. Three classes at 5% each on the same base is deliberately not identical to one class at 15% — they are three separate allowances, each computed and each reportable, and collapsing them for rounding would obscure which one moved.
 
-**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: retained so pre-R10 readers keep working, removed in R16, and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail.
+**The base is resolved mode-dependently from the package `contingency_class` tag, not from an input-side `basis`/`package_ids` pair. [R11 — calc 2.10.0.]** Before this release `ContingencyClass` also carried `basis` (`'all_packages'` | `'selected_packages'`) and `package_ids`, read by the engine but written by nothing in the product — R10 shipped `CostPackage.contingency_class` recorded but not live, and assigned this release the decision (§16.9, pre-R11). R10's `basis`/`package_ids` are deleted from the *input* and the resolution rule below is the sole mechanism, in both modes:
+
+- **Headline mode:** every class's base is the whole base build. There are no packages, so scoping by tag is not expressible — you cannot scope what you have not scheduled. This reproduces headline behaviour exactly: `ConversionCostsPage.tsx` renders all three percentages as editable in both modes, and a rule of "tagged packages only, in all modes" would silently zero a live, shipped headline-mode input.
+- **Detailed mode:** `general` takes the whole base build; `existing_building` and `abnormal` each take the sum of packages whose own `contingency_class` tag matches that class name, as an **additional** allowance on top of general. A package tagged `existing_building` therefore carries both general and existing-building contingency — the second is an addition for elevated risk, not a substitution.
+
+**The result shape is unchanged.** `ContingencyLine.basis` survives on the *result* as `'all_packages' | 'selected_packages'`, now **derived** from mode and class rather than read from an input field of the same name — so a report reading `cost_plan.contingency[].basis` needs no change (§16.8). Only the input fields `basis` and `package_ids` are gone.
+
+**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: retained so pre-R10 readers keep working, removed in R16, and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail. [R11 — calc 2.10.0. The v7 → v8 boundary re-tests the same claim one version on: the pre-existing fixture whose `contingency_class` tags and (pre-migration) `package_ids` agreed exactly — the two mechanisms could not be told apart by a re-pin alone — is joined by a **planted-divergence** document whose tags and id-list disagree, asserting the resolved base follows the tag. Without it, deleting `basis`/`package_ids` would be indistinguishable from a no-op (§17 "Guards this release must watch fail").]
 
 ### 16.4 Fee bases, and why double counting is impossible by construction
 
@@ -1249,8 +1262,7 @@ Neither base can name a fee, so no fee can feed its own base or another fee's, a
 - `mode: 'headline'` with a non-empty `packages`, or `mode: 'detailed'` with an empty `packages`, or with `packages` summing to zero (§16.1).
 - Any negative `amount_pence` or `pct` on a package, contingency class or fee line.
 - A duplicate package `id`, or a duplicate fee-line `id`.
-- A `selected_packages` contingency class naming a `package_id` no package carries, or naming none while carrying a non-zero `pct`.
-- Not exactly three contingency classes, or a repeated class `name` — the three classes are schema, not a user-managed list.
+- Not exactly three contingency classes, or a repeated class `name` — the three classes are schema, not a user-managed list. [R11 — calc 2.10.0. Before it this line was preceded by a rule validating a `selected_packages` class's `package_id` list — `ContingencyClass.basis`/`package_ids` no longer exist as input fields (§16.3), so there is nothing left for that rule to validate; a package's `contingency_class` tag is already constrained to the three class names by its own enum type, which needs no separate validation rule.]
 - `mode: 'detailed'` with any non-zero `fire_safety_pence`, `sound_insulation_pence` or `part_l_compliance_pence` (§16.2).
 - A fee line with `basis: 'fixed'` and non-zero `pct`, or a `pct_*` basis with non-zero `amount_pence`, or `per_dwelling: true` on a `pct_*` basis.
 - A fee line whose `code` is one of the eight migrated codes but whose `category` contradicts §16.4's mapping.
@@ -1295,9 +1307,242 @@ Every contingency and fee line reports **its base as well as its amount** — th
 
 Recorded so they are not read as oversights.
 
-- **No VAT.** Neither mode models VAT as a cash flow — deferred to R11, alongside VAT on the rest of the appraisal (§3.4, §14.8).
 - **No per-package programme.** Every package spreads with the construction curve (§6); there is no per-package start offset, duration or curve. Deferred to R12, the same release that generalises fee timing (§16.4).
 - **`lender_eligible` is recorded but not wired to the draw cap.** §16.2 states this at the point of definition; R14 is where `lender_eligible_base_pence` starts constraining `development_cost_advance_pct`. Until then it is disclosure, not a live figure.
 - **No QS provenance.** A package or a percentage fee carries no source, date or status — no "priced by [firm], RIBA Stage 4, dated [x]" distinction in the record, unlike the acquisition jurisdiction's evidence status (§14.6). Deferred to R15, alongside fixed-price coverage, provisional sums and inflation (§7.5 of the second audit).
 - **Compliance's stress behaviour is mode-dependent, by necessity rather than oversight (§16.2).** A fixed unscaled allowance in headline mode; inside a scaled package in detailed mode. The two modes agree at rest and diverge under a cost stress once compliance is non-zero.
-- **`CostPackage.contingency_class` is recorded but not live in R10.** Both engines resolve each contingency class's base from that class's own `basis` / `package_ids` alone (§16.3) — a package's `contingency_class` is never read when computing which packages fall inside a class's base. Tagging a package into a class does not narrow that class's base to it; every class still applies to whatever `basis`/`package_ids` says, which in the product today is `all_packages` for all three classes, because nothing in R10 writes `selected_packages`. This is the same rule §16.2 states for `lender_eligible` — a recorded-but-inert control that looks live is worse than none, so it is stated at the point of definition rather than left to be discovered. Wiring `contingency_class` into base resolution, or removing the field, is a later release's decision.
+
+Two limitations recorded in earlier printings of this section are resolved and have been removed rather than left standing, per this project's own rule that a disclosure outliving its feature is a defect (shipped and caught in R8, R9 and R10 alike):
+
+- **"No VAT"** — resolved by R11. §17 models VAT as a cash flow; the surviving VAT-specific limitations are §17.13's own list, not this one.
+- **`CostPackage.contingency_class` recorded but not live** — resolved by R11. §16.3 now resolves each detailed-mode class's base from that tag; a package's `contingency_class` is read when computing which packages fall inside `existing_building`'s or `abnormal`'s base, and the planted-divergence fixture in §17 "Guards this release must watch fail" proves the tag decides rather than the deleted `package_ids`.
+
+---
+
+## 17. VAT and TOGC [R11 — calc 2.10.0]
+
+Before this release VAT was a disclosed assumption, not a figure: §3.3 told a reader "purchase price treated as VAT-exempt/TOGC — unconfirmed" and §3.4 told them "construction VAT treatment unconfirmed — no reduced-rate saving is assumed", and neither sentence was backed by anything computed. On a conversion scheme that is frequently wrong in both directions — a scheme that recovers most of its input VAT looks needlessly expensive on paper, and a scheme that recovers none of it (an unregistered buyer, a partial-exemption position) looks cheaper than it is, at the exact point (the funding peak) a lender sizes a facility against. §17 gives the appraisal a `vat` block (inputs v8) that computes the cash cycle, the irrecoverable cost, and the effect on the acquisition tax base, in both engines.
+
+### 17.1 The schema
+
+```
+VatChargeCategory =
+  'acquisition' | 'construction' | 'professional' | 'statutory'
+  | 'selling' | 'lender_ancillary'
+
+RecoveryBasis = 'zero_rated_sale' | 'partial_exemption' | 'blocked' | 'unconfirmed'
+
+TogcTreatment = 'applies' | 'does_not_apply' | 'unconfirmed'
+
+VatTreatment {
+  category: VatChargeCategory
+  rate_pct: number             // 0 | 5 | 20 in practice; validated 0..100
+  recoverable_pct: number      // 0..100
+  recovery_basis: RecoveryBasis
+  evidence_status: EvidenceStatus   // reuses the existing vocabulary (§14.6)
+  notes: string
+}
+
+PurchaseVatInputs {
+  vendor_opted_to_tax: boolean
+  togc_treatment: TogcTreatment
+  evidence_status: EvidenceStatus
+  notes: string
+}
+
+VatInputs {
+  registered: boolean
+  return_frequency: 'monthly' | 'quarterly'
+  first_period_end_month: number
+  repayment_lag_months: number
+  treatments: VatTreatment[]   // exactly six, one per category, in a fixed order
+  purchase: PurchaseVatInputs
+}
+```
+
+`treatments` is **schema, not a user-managed list**, the same rule `cost_plan.contingency` follows (§16.3): exactly one row per category, in the declared order, enforced by hard validation (§17.9). A user edits rows; a user never adds or removes one.
+
+`registered: false` makes the entire engine inert: every VAT figure is zero and no reclaim is scheduled, whatever the treatment rows say. This is the migrated default and the new-document default (§17.11).
+
+Detailed-mode lines gain an optional override: `VatOverride { rate_pct, recoverable_pct, recovery_basis }` on `CostPackage.vat_override` and `FeeLine.vat_override`, both `null` unless the user sets one, both hard-rejected in headline mode (§17.9) — the same mode exclusivity §16.1 states for the cost plan itself.
+
+### 17.2 One resolver, and why that is not optional
+
+The R10 post-mortem records a schema that carried two mechanisms for one fact, where the engines read one and the product wrote the other (§16.9, the resolved `contingency_class` entry). The category-plus-override shape here is structurally capable of repeating that defect, so three rules are load-bearing:
+
+1. **One read site.** `resolveVatTreatment` is the only function that may read `vat.treatments` or any `vat_override`. It returns the resolved `{ rate_pct, recoverable_pct, recovery_basis, evidence_status }` for one charge. Precedence: line override if present, else the category row.
+2. **The single-accessor eslint/AST guard covers it**, alongside `developedAreaSqm` (§15.4) and `total_construction_sqm` (§16.3). The guard test runs ESLint's Node API and asserts `severity === 2` — a rule downgradeable to `'warn'` with every other test still green is not a guard (R9's finding) — and the test asserts the allowlist's own contents, because R10 shipped a guard test that *pinned* the hole a widening had opened rather than catching it.
+3. **The override is written by the product, not only carried by the schema.** The cost-plan detailed-mode editor writes `vat_override` per line; an override field the schema declares but nothing writes is R10's `contingency_class` again.
+
+### 17.3 What is a fixed rule, not an input
+
+Two facts are properties of the tax, not choices, and are encoded as constants in the mould of `FEE_CODE_CATEGORY` (§16.4):
+
+- **Interest and the arrangement, exit, non-utilisation and extension fees are exempt financial services and never bear VAT.** Only `lender_ancillary` charges — broker, lender legal, valuation, monitoring surveyor — are standard-rated, and that treatment row applies to the ancillary fee block and to nothing else in the finance stack. Misclassifying a `lender_ancillary` VAT figure into the professional-fee total would move money between two separately-reported, separately-spread lines while every grand total stayed correct — invisible to any totals-based assertion, the same trap `FEE_CODE_CATEGORY`'s `building_control` comment records.
+- **Where TOGC applies, purchase VAT is nil regardless of the option to tax.** That is the whole effect of a TOGC, and it is a hard validation error (§17.9) to enter it any other way — unrepresentable, not merely discouraged.
+
+### 17.4 The return cycle
+
+The first return period covers months `0 .. first_period_end_month` inclusive. Subsequent periods are one month (`monthly`) or three months (`quarterly`). Input VAT incurred anywhere in a period is reclaimed in a single amount at `period_end + repayment_lag_months`. This produces the saw-tooth a flat per-month lag cannot: with quarterly returns, VAT on spend landing at the start of a period carries for the rest of the period plus the lag — the peak a lender sizes a VAT facility against.
+
+**Reclaims falling after the final month are not received.** They are reported as `vat.receivable_at_maturity_pence` and are **not** credited to the ledger — clamping one into the final month would manufacture a receipt the borrower has not had, the standing principle that a funding gap is visible, never plugged.
+
+**Worked cycle, illustrative only (R41) — isolates the construction cycle so the mechanism is legible; nothing pins it.** Quarterly returns, `first_period_end_month = 2`, `repayment_lag_months = 1`. Construction £1,000,000 at 20% recoverable in full, spread £250,000 in each of months 1–4, so £50,000 of VAT is incurred in each of months 1–4:
+
+| Period | Months | VAT incurred | Reclaimed in month |
+|---|---|--:|--:|
+| 1 | 0–2 | £100,000 | 3 |
+| 2 | 3–5 | £100,000 | 6 |
+
+| m | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| carry (£000) | 0 | 50 | 100 | 50 | 100 | 100 | 0 |
+
+Peak carry £100,000. Profit falls by the interest on that carry and by nothing else (§17.5, §17.12).
+
+**The pinned fixture (`r-vat-quarterly.json`) is the normative figure, and it differs from the table above** — it additionally carries chargeable purchase VAT, landing in month 0 inside period 1's window alongside construction's first two months, so its carry is the table's vector plus a constant £100,000 across months 0–2:
+
+| m | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| incurred (£000) | 100 | 50 | 50 | 50 | 50 | 0 | 0 |
+| reclaimed (£000) | 0 | 0 | 0 | 200 | 0 | 0 | 100 |
+| carry (£000) | 100 | 150 | 200 | 50 | 100 | 100 | 0 |
+
+**Peak carry £200,000, at month 2** — months 3–6 are identical to the isolated table; only P0 differs, and it differs by exactly the purchase VAT. The two tables were briefly in conflict in an earlier draft, which called the isolated table normative while also requiring the fixture to carry purchase VAT — jointly unsatisfiable, since a fixture that carries purchase VAT cannot reproduce a table that excludes it. The isolated table is kept for legibility; only the composite vector is a claim this specification makes.
+
+### 17.5 The engine runs in one direction only
+
+`computeVat(inputs, costPlan, schedule)` reads the cost plan and the schedule. **No part of the cost plan reads VAT** — no fee basis, no contingency base and no construction total includes VAT, the same construction R10 used to make fee double counting impossible by construction rather than detected (§16.4). Because VAT is computed strictly downstream of the cost plan, a VAT figure can never feed a base that feeds VAT — no ordering, no iteration, no cycle detection. The direct consequence: irrecoverable VAT cannot be folded back into `construction_cost_pence`. It is its own line, `irrecoverable_vat_pence`, added to cost-before-finance (§3.8) and so to TDC and to profit.
+
+**The invariant worth pinning above all others.** Take any fixture, set `registered: true` with every category at 20% and 100% recoverable, and compare against the same document with `registered: false`:
+
+- `construction_cost_pence`, `professional_fees_pence`, `statutory_costs_pence`, `selling_costs_pence` and `cost_plan` are **byte-identical**;
+- `irrecoverable_vat_pence` is exactly `0`;
+- `profit_pence` differs **only** by the increase in `finance_costs_pence`.
+
+That assertion fails if VAT leaks into any cost base, if irrecoverable VAT is computed off a rounding error, or if a reclaim goes missing. It is the release's primary guard and it is falsifiable in all three directions (§16 "Guards this release must watch fail" — the table below).
+
+### 17.6 The ledger
+
+`MonthUses` gains `vat_pence`, joining the month's `cashUses` alongside acquisition, construction, professional and statutory.
+
+**VAT is not eligible for the development-cost advance.** The cap's eligible base stays `construction + professional + statutory`. Lenders do not advance against reclaimable VAT on the same terms as build cost, so VAT falls to equity or to gross headroom, and a new `vat_funding_gap` flag (`FlagCode`) fires where neither can meet it.
+
+Reclaims are a new inflow, `vat_reclaim_pence`, on `MonthReceipts` and on `LedgerMonth`. It is deliberately **not** a sale receipt:
+
+- **100% swept to senior debt**, ignoring `sales_sweep_pct` — it returns a specific advance rather than realising an asset.
+- **Applied first in the month**, before the sales sweep and before the §4.5 refinance event, because it reduces the balance those two then have to clear.
+- **Is not part of `gross_receipts_pence`**, so no GDV-, LTGDV- or break-even-denominated metric moves.
+- Where there is no facility, it flows to distribution and into `equity_cashflows_pence`, exactly as sale receipts already do for a cash deal.
+
+**A reclaim that fully clears the balance redeems the facility on exactly the same terms as any other full redemption** — the exit fee is charged once and the redemption state is set. This is not the intuitive answer, and the reasoning matters: a reclaim is not a realisation, so "a reclaim never redeems" reads correctly, but the ledger charges the exit fee inside `if (balance > 0 && !isCash)` at the sales sweep. If a reclaim zeroes the balance while leaving the redemption state unset, the later sale finds `balance === 0`, takes neither branch, and the exit fee is never charged and never carried — silently lost, with every total still reconciling. The fee is contractually due on redemption whoever funds it, so the reclaim must redeem properly or not at all. A later draw that re-opens a balance the reclaim had cleared raises `facility_redrawn_after_redemption` — the facility genuinely was redeemed, so the flag is honest rather than spurious.
+
+A **partial** reclaim charges no fee and sets no redemption state, exactly like a partial sales sweep.
+
+**The sources-and-uses identity (§7) needs no structural change.** The VAT outflow enters `uses_total_pence` and is funded through the existing per-month loop; the reclaim repays and appears on neither side, like sale-proceeds repayments and refinance-shortfall equity before it (§7).
+
+### 17.7 Purchase VAT, TOGC, and the chargeable consideration
+
+Purchase VAT is chargeable **iff `vendor_opted_to_tax` is true and `togc_treatment` is not `'applies'`.** Stated that way rather than as a three-branch rule, it covers `'unconfirmed'` without a separate clause: an unconfirmed TOGC is charged (the prudent case) and the document is gated as unconfirmed (§17.10). Where the vendor has not opted to tax there is no VAT to charge, whatever the TOGC position. Where chargeable, the VAT is an outflow in month 0 and reclaims on the cycle like any other input VAT, subject to the `acquisition` category's `recoverable_pct`.
+
+**Chargeability is a fact about the vendor. Recovery is a fact about the buyer (R27).** A vendor who has opted to tax charges VAT on the price whatever the buyer's VAT status; whether the buyer gets it back is separate. `vat.registered: false` makes the whole engine inert (§17.1) — the migrated and new-document default — and it is **not** a statement that the buyer is unregistered.
+
+Those two facts collide in one state: `vendor_opted_to_tax: true`, `togc_treatment: 'does_not_apply'`, `registered: false`. Chargeability says VAT is due; the inert engine resolves the acquisition rate to 0; the chargeable consideration collapses back to the exclusive price — the model would charge tax on a base that excludes VAT while holding that VAT is due, the exact under-report this section exists to remove, in the case (an unregistered buyer, recovering none of it) where it costs most.
+
+**That state is therefore a hard validation error (§17.9), not a case the model may silently approximate.** The real position is already expressible, and exactly: `registered: true`, the `acquisition` row at the applicable rate, `recoverable_pct: 0`, `recovery_basis: 'blocked'`. VAT is charged, none of it comes back, the consideration is VAT-inclusive, the acquisition tax is charged on that inclusive base, and the whole amount lands in `irrecoverable_vat_pence`. The rejected alternative — sourcing `rate_pct` independently of `registered`, so an inert document could still charge purchase VAT — is identity-safe (every migrated rate is 0) but makes `registered` mean two different things in two places, which this release exists partly to stop.
+
+**The acquisition tax base moves.** SDLT, LBTT and LTT are charged on the VAT-inclusive consideration. `chargeableConsiderationPence(inputs)` / `chargeable_consideration_pence(inputs)` replaces six former call sites that passed `acquisition.purchase_price_pence` straight in as `consideration_pence` (§3.3, §14.4), added to the single-accessor guard alongside `developedAreaSqm`; a seventh site fails the lint, not review. This is a **permanent** cost, not a timing one — the migration default (`vendor_opted_to_tax: false`) keeps every existing document's consideration identical to its price, so no fixture moves.
+
+**Out of scope:** a TOGC conditions checklist — buyer VAT-registered, own option to tax, notification before completion, property let as a business. Those are legal due diligence with their own evidence trail; the treatment here is recorded and evidenced, not tested (§17.13, R15).
+
+### 17.8 Contingency: one mechanism (R10 carry-over)
+
+R11 discharges the decision R10 assigned it (§16.9, pre-R11): `CostPackage.contingency_class` is now live, and `ContingencyClass.basis`/`package_ids` are deleted. §16.3 carries the resolved mechanism (mode-dependent: the whole base build for every class in headline mode; `general` on the whole base build and `existing_building`/`abnormal` scoped by tag in detailed mode) and is not repeated here.
+
+**Why the change is not a convenience, and why it is not free to verify.** `ConversionCostsPage.tsx` renders all three contingency percentages as editable in **both** modes, so a rule of "tagged packages only, in all modes" would silently zero a live, shipped headline-mode input — the mode-dependent rule reproduces headline behaviour exactly rather than narrowing it. And the pre-existing fixture (`q-detailed-cost-plan.json`) has its `contingency_class` tags agreeing exactly with the (pre-migration) `package_ids` it is replacing, so a re-pin of that fixture proves nothing — this is precisely R10's stated failure mode, "every test used documents where both code paths agreed, so reverting the refactor kept the suite green." The guard this release adds is a **planted-divergence** document, whose tags and id-list disagree, asserting the resolved base follows the tag (§16 "Guards this release must watch fail").
+
+### 17.9 Validation
+
+**Hard errors** (input errors, not flags):
+
+- a `vat_override` set on any package or fee line while `cost_plan.mode` is `'headline'` — mode exclusivity, mirroring §16.5;
+- `rate_pct` or `recoverable_pct` outside `0..100`, on a treatment row or an override;
+- `treatments` that is not exactly the six `VatChargeCategory` values, each once, in the declared order;
+- `first_period_end_month` negative or ≥ `term_months`, **and** `repayment_lag_months` negative or greater than 6 — **both gated on `registered: true` (R38).** A field that parameterises a dormant engine is not validated: migration gives every document a `vat` block carrying `first_period_end_month: 2`, and validating the return-cycle bounds unconditionally made a stored appraisal with `term_months <= 2` acquire a hard error the instant it was migrated, from a block the engine ignores because `registered` is false. Measured directly: `term=1` yielded `errors=[]` at v7 and `errors=["vat.first_period_end_month"]` at v8 — an inert migration would have silently downgraded every short-term appraisal in the database to DRAFT. The bounds that stay unconditional are the ones that are nonsense in any state (a negative rate, a negative recoverable proportion, a treatments array that is not the six categories); migration writes zeroes and exactly six rows, so none of those can fire on a migrated document.
+- `togc_treatment: 'applies'` together with a non-zero `acquisition` rate — the §17.3 fixed rule must be unrepresentable, not merely unlikely;
+- **`vat.registered: false` while purchase VAT is chargeable** (the vendor has opted to tax and TOGC does not apply) — §17.7's collision. The error message names the correct modelling: `registered: true` with `recoverable_pct: 0` and `recovery_basis: 'blocked'`.
+
+**Warnings** (each carries real domain content):
+
+- `recovery_basis: 'zero_rated_sale'` while `exit_strategy` retains any unit — the zero-rated first grant is what makes input VAT recoverable; retained residential letting is exempt, so full recovery is unsafe. The single most likely real-world data-entry error the model can catch.
+- `togc_treatment: 'applies'` with `vendor_opted_to_tax: false` — possible, but then the TOGC changes nothing and the finding is probably mis-entered.
+- `registered: false` with a non-zero construction cost — the engine is inert and the funding need is reported as zero.
+- `vat.receivable_at_maturity_pence > 0` — a reclaim falls outside the modelled term and is not in the cash flow.
+
+**The regression gate for the general case (R38, R39) is not a same-set assertion.** Both engines migrate every fixture plus synthetic `term_months: 1` **and** `term_months: 2` documents and compare `validateInputs` before and after: the error set with **no exemption whatsoever**, **nothing** removed at either severity, and the **only** permitted addition a warning on `vat.registered` cross-checked per fixture against its own firing condition, with a non-vacuity assertion so the exemption cannot quietly swallow a second finding. A literal same-set test is unsatisfiable by design — §17.9's own `registered: false` warning above can only appear *after* migration, since a pre-v8 document has no `vat` block at all — and the numeric identity gate could not have caught the original defect, because the figures genuinely did not move (confirmed empirically: with the rule un-gated, the numeric gate stayed green throughout).
+
+### 17.10 Evidence, the draft gate and reporting
+
+`DraftReason` gains `'vat_basis_unconfirmed'`, ordered immediately after `'tax_basis_unconfirmed'` in `draftReason()` — an unconfirmed VAT basis does not make the arithmetic wrong, so it must not displace a reason saying the figures themselves may be, but a reader must know the basis is unverified before reading an approval.
+
+**Material means the category actually bears VAT** — a treatment row whose `evidence_status` is `'unconfirmed'` while its resolved charge is non-zero, or `purchase.evidence_status` unconfirmed while purchase VAT is chargeable. No threshold constant is invented; an unconfirmed row charging nothing gates nothing, and `registered: false` can never gate. `DRAFT_REASON_SENTENCE` and `WATERMARK_TEXT` are both `Record<DraftReason, string>`, so adding the union member makes `tsc` require both — a compile-time guard, not a test that could be forgotten (§14.6's precedent, R9's finding that a length-assertion array does not pin exhaustiveness).
+
+**The memo** carries a VAT section: treatment by category with rate, recoverable proportion, basis and evidence status; the return cycle; the month-by-month carry with its peak; the carry interest; irrecoverable VAT; and any `vat.receivable_at_maturity_pence`. Three pre-existing memo sites were rewritten, not appended to: the construction VAT row, the purchase VAT/TOGC row, and the limitation *"VAT is not modelled as a cash flow"* — false the moment this release lands, and this limitations list has itself carried a disclosure outliving its feature in R8, R9 and R10 (§14.8, §16.9), which is why reviewing the whole list, not only the one stale sentence, is a required step here too.
+
+**The spider's counterfactual counts only evidenced rates (R43).** The tax-advantage axis measures VAT saved against a standard-rated counterfactual, and a saving is only real if the actual rate is a determined fact. Every category ships at `rate_pct: 0, evidence_status: 'unconfirmed'` (the migrated and new-document default), and nothing requires a user to configure all six before setting `registered: true` — "registered, with one category ever touched" is a valid, unvalidated, and probably common state, and a naive counterfactual would score every untouched category as a full 20% saving, because a 0% rate nobody filled in is arithmetically indistinguishable from a 0% rate someone determined. **The counterfactual therefore includes only charge lines whose `evidence_status` is `'confirmed'`** — an unevidenced rate contributes nothing to a claimed saving.
+
+**The axis's caveat is not `vatBasisGate`.** They answer different questions: the draft gate asks whether the document has *material* unconfirmed VAT (gating nothing when a row charges nothing); the axis caveat asks whether *any* rate in this saving is unevidenced, and fires whether or not that row currently charges — reusing the gate here would import a materiality threshold tuned for the other question and silence the caveat in precisely the case that needs it. The axis's tests are direction-only (to avoid self-referential recomputation, R9), so an absolute assertion is also required: a document with only `construction` configured must produce exactly the construction-derived figure, with no contribution from the five untouched categories — a direction test alone cannot see a constant added to both sides of a comparison. The `deal-spider.ts` hard-coded `construction_cost_pence × 0.15` and its `illustrative: true`/UNCONFIRMED-caveat help text are replaced by the modelled figure (VAT actually saved relative to a standard-rated counterfactual, less irrecoverable VAT and carry interest) so the report never carries two VAT numbers that disagree.
+
+### 17.11 Migration and the persistence boundary
+
+`migrateV7toV8` / `migrate_v7_to_v8` writes `vat.registered: false`; the six treatment rows at `rate_pct: 0`, `recoverable_pct: 0`, `recovery_basis: 'unconfirmed'`, `evidence_status: 'unconfirmed'`; `purchase`: `vendor_opted_to_tax: false`, `togc_treatment: 'unconfirmed'`, `evidence_status: 'unconfirmed'`; `vat_override: null` on every package and fee line; and the §16.3 rework (`basis`/`package_ids` dropped, tags retained). `DEFAULT_VAT` matches the migration exactly, so the feature ships opt-in as detailed cost-plan mode did (§16.7), and the two engines' v-defaults re-converge.
+
+`RECOGNISED_INPUTS_VERSIONS_V8` is `[1..8]`, written as membership of the declared tuple and tested with a document tagged `9` — R10 found a version predicate loosened from `=== 6` to `!== 5`, the literal negation of the set's own definition, which could never fail. The server-side `cost_plan` deep-merge R10 found nobody had deleted to check gains a `vat` sibling on the same merge, with the same "delete it and watch a test fail" check.
+
+**Both engines carry the numeric-identity gate**, corpus-wide, and it is meaningful only because the VAT engine is live and reads `registered` — R9 recorded that such a gate can be provably blind when the migration synthesises a block no engine yet consumes. The gate therefore also asserts the migration's **structural** output (`registered: false`, six rows, every override `null`) and not only that the figures did not move. Container-level typing still matters: `revalidate_instances='never'` lets a `CalculatorInputsV7` hold a v8 sub-block, so the gate is on the container, never on the block. §17.9's regression gate (R38, R39) is the validation half of this same boundary; both halves and the full boundary crossing (server + calculator + export, mirroring the half-migrated break R10 shipped) are recorded in `migration-notes.md` §11.
+
+### 17.12 Outputs
+
+`AppraisalResultV2` gains:
+
+- `vat: VatResult` — per-category resolved treatment, per-month VAT out, per-month reclaim, the carry vector, peak carry and its month, total input VAT, total reclaimed, total irrecoverable, and `receivable_at_maturity_pence`;
+- `irrecoverable_vat_pence` — included in `cost_before_finance_pence` (§3.8);
+- `vat_carry_interest_pence` — the **interest** attributable to carrying VAT. It is a **disclosure of a slice of `finance_costs_pence`, not an addition to it**: the interest is already there, charged by the ledger on a balance the VAT outflow raised. Its value is an explicit counterfactual — total interest with the document as given, less total interest from the same document with `vat.registered` forced false;
+- `chargeable_consideration_pence` — the base the acquisition tax was charged on, so the VAT-on-price uplift is visible rather than buried in a tax figure.
+
+`FlagCode` gains `'vat_funding_gap'` (§17.6).
+
+**The counterfactual must hold the acquisition tax fixed (R33).** VAT imposes two costs, and only one is carry: a timing cost (money out, money back later, interest on the gap) and a permanent cost (acquisition tax on the VAT-inclusive consideration, §17.7, which never comes back). Simply forcing `registered: false` removes both — it drives `resolveVatTreatment` to inert, the acquisition rate to 0, and the consideration back to the exclusive price, so the counterfactual run carries a smaller month-0 outflow, draws less and pays less interest for a reason that is not the VAT cash cycle. That would overstate `vat_carry_interest_pence` by the interest on the SDLT-on-VAT uplift, and would break §17.5's `Δprofit === Δfinance_costs` identity, because the counterfactual's `cost_before_finance_pence` would also fall by the tax delta. **The counterfactual therefore forces `registered: false` *and* pins the counterfactual document's acquisition tax to the tax the real document was charged**, using the existing `acquisition_tax_override_pence` mechanism with a reason naming the counterfactual. Acquisition cost is then identical on both sides and the difference is exactly the VAT cash cycle — including the carry on purchase VAT itself, which is a timing cost and does belong in the figure. The permanent cost is not hidden by this: it is disclosed by `chargeable_consideration_pence` and by the acquisition tax itself.
+
+**Carry interest and profit impact are two quantities, not one (R31).** `vat_carry_interest_pence` measures interest; §17.5's primary invariant measures profit, which moves by the change in `finance_costs_pence`. On most documents these coincide, which is why the counterfactual definition was chosen over an apportionment — but they diverge whenever a fee base is itself VAT-dependent: with `exit_fee_basis: 'peak_debt'`, carrying VAT raises peak debt, which raises the exit fee, so finance costs rise by more than interest alone and profit falls by more than `vat_carry_interest_pence` reports. Both figures are correct and answer different questions, and **both are pinned**: on a document whose fee bases are VAT-independent, `Δprofit === Δfinance_costs === vat_carry_interest_pence`; on a document with `exit_fee_basis: 'peak_debt'`, `Δprofit === Δfinance_costs` **and** `Δfinance_costs > vat_carry_interest_pence` — the second test is what stops the divergence being latent.
+
+**The carry can be negative, and must not be clamped (R32).** Where equity funds the VAT outflow but the reclaim sweeps 100% to senior debt (§17.6), the reclaim repays borrowing that funded *other* costs, the facility ends up smaller than it would have been without VAT, and `vat_carry_interest_pence` is **negative** — carrying VAT saved interest. That is faithful to the ledger and is reported with its sign, never clamped to zero; the report reads it as a saving rather than a cost when negative, the same standing principle that keeps a funding gap visible rather than adjusted to look sensible. The alternative — repaying whichever source actually funded each month's VAT — was considered and rejected for R11: it requires tracking VAT funding provenance month by month, and the money is not lost either way, since a smaller facility reaches the developer as a smaller redemption at exit.
+
+**VAT under sensitivity.** `computeVat` reads the cost plan, so a sensitivity cell that moves construction cost moves its VAT with it automatically, with no special-casing. VAT is not a sensitivity lever of its own in R11, and it is not invariant across cells the way the facility is (§12.2); no cell-validity rule changes.
+
+### 17.13 Stated limitations
+
+Recorded so they are not read as oversights.
+
+- **No output VAT engine.** Recovery is an input proportion with a declared basis, not a computed partial-exemption calculation. A scheme with a genuine partial-exemption position needs adviser input to set `recoverable_pct`.
+- **No separate VAT facility.** VAT draws on the main facility and is ineligible for the development-cost advance; a dedicated VAT bridge with its own limit, rate and fee is R14.
+- **No capital goods scheme, no option-to-tax revocation, no self-supply charge.**
+- **No TOGC conditions assessment** — the treatment is recorded and evidenced, not tested (R15).
+- Reclaims falling after the modelled term are reported as receivable and are **not** in the cash flow.
+- **`net_ltc_pct` and `gross_ltc_pct` treat VAT differently, deliberately (R34).** Gross LTC measures against total development cost, so it moves with irrecoverable VAT (§3.8). Net LTC measures against the cost the lender advances against, and VAT is not advance-eligible (§17.6), so it does not. The two are internally coherent but read as a bug printed side by side unexplained, so both the memo and the appraisal summary page state which denominator each uses whenever there is irrecoverable VAT for it to explain (§17.10, ruling R45).
+
+### Guards this release must watch fail
+
+Per the standing rule that every guard be planted against and watched failing before it is trusted:
+
+| Guard | Watched by |
+|---|---|
+| VAT ineligible for the advance cap | Add `vat_pence` to the eligible base at the monthly engine's cap; the assertion must break |
+| Recoverable VAT is profit-neutral | Leak VAT into any cost base; §17.5's invariant must break |
+| Contingency follows the tag | The planted-divergence document of §17.8 |
+| The single-accessor eslint rule | Downgrade to `'warn'`; the guard test must still fail, and the allowlist contents are asserted |
+| The v8 version predicate | A document tagged `9` |
+| Migration identity | Corpus-wide, plus the structural assertion, in both engines |
+| A full reclaim redeems properly | A reclaim that clears the balance before any sale must still charge the exit fee exactly once, equal to the same document's fee when the sale redeems instead |
+| A partial reclaim does not redeem | A reclaim smaller than the balance charges no exit fee and sets no redemption state |
+| The server-side `vat` deep-merge | Delete it; a stored-row test must fail |

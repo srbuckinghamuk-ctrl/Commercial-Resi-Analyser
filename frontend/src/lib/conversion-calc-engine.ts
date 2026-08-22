@@ -4,8 +4,19 @@ import type {
   ProposedUnit,
   ProposedUnitV6,
 } from './conversion-types';
-import type { AcquisitionInputsV5 } from './model/finance-types';
+import type { AcquisitionInputsV5, AnyCalculatorInputs } from './model/finance-types';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from './tax/acquisition-tax';
+import { chargeableConsiderationPence } from './model/vat';
+import type { NoVatBlock } from './model/vat';
+
+/** R11 spec §17.7. What an acquisition figure needs: a real document, or one
+ *  explicitly declared to carry no VAT block — the same two arms
+ *  `ConsiderationInputs` has, reusing its `NoVatBlock` marker (ruling R28) so
+ *  the two cannot drift, but with the acquisition block in FULL because this
+ *  function reads legal fees, survey, broker pct and the tax overrides too. */
+export type AcquisitionCostInputs =
+  | AnyCalculatorInputs
+  | (NoVatBlock & { acquisition: AcquisitionInputs | AcquisitionInputsV5 });
 
 /** R9 spec §15.5 — a unit's ancillary value. A pre-v6 unit carries no
  *  `ancillary` block at all, read structurally (the codebase's version-dispatch
@@ -57,10 +68,16 @@ export function calculateBrokerFee(pricePence: number, pct: number): number {
  * carry none of the new keys, so the same `in` guards `deriveMetrics` uses resolve
  * them to `england_ni` with a null date and no override — byte-for-byte what
  * `calculateCommercialSdlt` returned before R8 deleted it.
+ *
+ * R11 (spec §17.7): it takes the DOCUMENT, not the acquisition block alone,
+ * because the tax base is the VAT-inclusive consideration and that is a fact
+ * about the document's VAT block. Passing the block alone would leave this site
+ * unable to obtain a `ChargeableConsideration` at all — which is the point: the
+ * brand makes the missing dependency a compile error rather than a silent
+ * under-report.
  */
-export function calculateTotalAcquisitionCost(
-  acq: AcquisitionInputs | AcquisitionInputsV5,
-): number {
+export function calculateTotalAcquisitionCost(inputs: AcquisitionCostInputs): number {
+  const acq = inputs.acquisition;
   // Fix round 2: `in` guard *and* `??`. A stored document can carry an explicit
   // `"jurisdiction": null` — migrateInputsToV5's already-v5 branch spreads
   // `saved.acquisition` over the defaults, so the null survives — and a bare `in`
@@ -75,7 +92,7 @@ export function calculateTotalAcquisitionCost(
   // doc comment. validateInputs re-derives this as a hard error independently.
   const date = resolveAcquisitionDate(jurisdiction, 'non_residential', rawDate);
   const sdlt = calculateAcquisitionTax({
-    consideration_pence: acq.purchase_price_pence,
+    consideration_pence: chargeableConsiderationPence(inputs),
     jurisdiction,
     basis: 'non_residential',
     date,

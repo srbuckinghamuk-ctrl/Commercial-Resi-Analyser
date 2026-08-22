@@ -4,13 +4,18 @@ import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, AreaBridgeInputs,
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV8,
+  AreaBridgeInputs,
 } from './model';
-import { runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE } from './model';
+import {
+  runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
+  migrateV6toV7, migrateV7toV8, DEFAULT_VAT, defaultVatTreatments,
+} from './model';
+import { buildProvenance } from './report-provenance';
 import type { UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { inspectPdf } from './report-qa/pdf-inspect';
-import { documentText } from './report-qa/report-checks';
+import { documentText, documentProse, watermarkTexts } from './report-qa/report-checks';
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity';
 import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
@@ -1372,5 +1377,234 @@ describe('R9 — the memo reports the area bridge', () => {
       const text = await memoTextFor(inputs);
       expect(text).toContain('Proposed Unit Mix');
     });
+  });
+});
+
+// R11 (Task 12, spec §17.10, §17.12, §17.13). VAT gains a draft gate and a
+// memo section; three memo sites that used to say "unconfirmed"/"not
+// modelled" permanently now read the engine's own computed VatResult
+// (run.metrics.vat) and recompute nothing here (file header's
+// no-recalculation rule).
+describe('R11 — VAT draft gate and memo section', () => {
+  /** `baseInputs()` (v2) promoted to v8 with a confirmed, dated England/NI
+   *  jurisdiction (so no tax-basis text interferes) and a registered VAT
+   *  block rating ONLY the construction category — base build is non-zero
+   *  (100,000/m² x 400 m² = 40,000,000p), so its charge line is genuinely
+   *  material. Equity and the facility are both widened generously: VAT is
+   *  deliberately NOT advance-eligible (spec §17.6), so a tight facility would
+   *  open an unrelated funding gap and these tests are about the report, not
+   *  about facility sizing (see monthly-engine.ts:159). */
+  function vatMemoInputs(opts: {
+    evidence_status?: 'confirmed' | 'unconfirmed';
+    recoverable_pct?: number;
+    vendorOptedToTax?: boolean;
+    togcTreatment?: 'applies' | 'does_not_apply' | 'unconfirmed';
+    /** Only 'construction' is rated by default (see class doc). Set true to
+     *  also rate 'acquisition' at 20%, needed for a genuine chargeable-
+     *  consideration uplift when purchase VAT is chargeable. */
+    rateAcquisition?: boolean;
+    /** Forces every VAT return period's reclaim to land inside the term, so
+     *  there is nothing left `receivable_at_maturity_pence` (spec §17.4). */
+    noReceivableAtMaturity?: boolean;
+  } = {}): CalculatorInputsV8 {
+    const v2 = baseInputs();
+    const v6: CalculatorInputsV6 = {
+      ...v2,
+      inputs_version: 6,
+      acquisition: {
+        ...v2.acquisition,
+        jurisdiction: 'england_ni',
+        jurisdiction_source: 'user',
+        jurisdiction_evidence_status: 'confirmed',
+        acquisition_date: '2026-01-15',
+        acquisition_tax_override_pence: null,
+        acquisition_tax_override_reason: '',
+      },
+      unit_mix: {
+        units: v2.unit_mix.units.map((u) => ({ ...u, ancillary: { ...DEFAULT_UNIT_ANCILLARY } })),
+      },
+      lender_valuation: null,
+      programme: null,
+      sales_phasing: null,
+      refinance: null,
+      areas: { ...DEFAULT_AREA_BRIDGE },
+    };
+    const v8 = migrateV7toV8(migrateV6toV7(v6));
+    return {
+      ...v8,
+      equity_sources: [{ ...v8.equity_sources[0], amount_pence: 900_000_000 }],
+      finance: {
+        ...v8.finance,
+        committed_net_facility_pence: 500_000_000,
+        committed_gross_facility_pence: 600_000_000,
+      },
+      vat: {
+        ...DEFAULT_VAT,
+        registered: true,
+        ...(opts.noReceivableAtMaturity
+          ? { return_frequency: 'monthly' as const, first_period_end_month: 0, repayment_lag_months: 0 }
+          : {}),
+        treatments: defaultVatTreatments().map((t) => {
+          if (t.category === 'construction') {
+            return {
+              ...t,
+              rate_pct: 20,
+              recoverable_pct: opts.recoverable_pct ?? 100,
+              recovery_basis: 'zero_rated_sale' as const,
+              evidence_status: opts.evidence_status ?? 'confirmed',
+            };
+          }
+          if (t.category === 'acquisition' && opts.rateAcquisition === true) {
+            return {
+              ...t, rate_pct: 20, recoverable_pct: 0,
+              recovery_basis: 'blocked' as const, evidence_status: 'confirmed' as const,
+            };
+          }
+          return t;
+        }),
+        purchase: {
+          ...DEFAULT_VAT.purchase,
+          vendor_opted_to_tax: opts.vendorOptedToTax ?? false,
+          togc_treatment: opts.togcTreatment ?? 'unconfirmed',
+        },
+      },
+    };
+  }
+
+  /** The engine's own `fmt` (memo-private), reproduced so a currency-format
+   *  change fails here loudly rather than silently loosening a literal. */
+  function gbp(pence: number): string {
+    return (pence / 100).toLocaleString('en-GB', {
+      style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+    });
+  }
+
+  async function memoTextForVat(inputs: CalculatorInputsV8): Promise<string> {
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    // documentProse, not documentText: several of the assertions below span a
+    // table-cell wrap point (e.g. "Purchase VAT / TOGC"), and a raw line-join
+    // would make the assertion really be about where the line happened to
+    // break (report-checks.ts's own documentProse doc comment).
+    return documentProse(await inspectPdf(blob));
+  }
+
+  it('rewrites the construction VAT and purchase VAT/TOGC assumption rows', async () => {
+    const text = await memoTextForVat(vatMemoInputs());
+    expect(text).toContain('Construction VAT');
+    expect(text).toContain('20.0%, 100.0% recoverable');
+    expect(text).toContain('Zero-rated sale, evidence confirmed');
+    expect(text).toContain('Purchase VAT / TOGC');
+    expect(text).toContain('Vendor has not opted to tax — no purchase VAT');
+    expect(text).not.toContain('Treatment unconfirmed');
+    expect(text).not.toContain('Purchase price treated as VAT-exempt/TOGC');
+  });
+
+  it('discloses the chargeable-consideration VAT uplift where purchase VAT is charged', async () => {
+    const text = await memoTextForVat(vatMemoInputs({
+      vendorOptedToTax: true, togcTreatment: 'does_not_apply', rateAcquisition: true,
+    }));
+    expect(text).toContain('VAT uplift on the');
+    expect(text).toMatch(/Chargeable consideration/);
+  });
+
+  it('prints the VAT section: category treatment, return cycle, peak carry and irrecoverable VAT', async () => {
+    const inputs = vatMemoInputs({ recoverable_pct: 60 });
+    const run = runAppraisal(inputs);
+    expect(run.metrics.vat.total_irrecoverable_pence).toBeGreaterThan(0);
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = documentProse(await inspectPdf(blob));
+    expect(text).toContain('Category');
+    expect(text).toContain('Recovery basis');
+    expect(text).toContain('Return cycle');
+    expect(text).toContain('Peak VAT carry');
+    expect(text).toContain('Total irrecoverable VAT (in cost-before-finance)');
+    // Read off the SAME run the memo was built from, not hand-computed — the
+    // point of this assertion is that the printed figure IS the engine's
+    // total_irrecoverable_pence, not a plausible-looking guess at it.
+    expect(text).toContain(gbp(run.metrics.vat.total_irrecoverable_pence));
+  });
+
+  it('prints a VAT receivable line only when something is outstanding at maturity', async () => {
+    // The default fixture's quarterly cycle genuinely leaves a balance
+    // outstanding at the 12-month term end (spec §17.4) — asserted here so
+    // the "absent" half below is a deliberately DIFFERENT input, not a
+    // fixture that happens to hide the same figure.
+    const withReceivable = runAppraisal(vatMemoInputs());
+    expect(withReceivable.metrics.vat.receivable_at_maturity_pence).toBeGreaterThan(0);
+    const withText = documentProse(await inspectPdf(
+      generateInvestmentMemo(mockProject, withReceivable, mockEligibility),
+    ));
+    expect(withText).toContain('VAT receivable after the modelled term');
+
+    const withoutReceivable = runAppraisal(vatMemoInputs({ noReceivableAtMaturity: true }));
+    expect(withoutReceivable.metrics.vat.receivable_at_maturity_pence).toBe(0);
+    const withoutText = documentProse(await inspectPdf(
+      generateInvestmentMemo(mockProject, withoutReceivable, mockEligibility),
+    ));
+    expect(withoutText).not.toContain('VAT receivable after the modelled term');
+  });
+
+  it('reports the VAT engine as inactive rather than printing a stale treatment table', async () => {
+    const off = vatMemoInputs();
+    const inputs: CalculatorInputsV8 = { ...off, vat: { ...off.vat, registered: false } };
+    const text = await memoTextForVat(inputs);
+    expect(text).toContain('VAT is not registered on this appraisal');
+    expect(text).not.toContain('Recovery basis');
+    expect(text).not.toContain('Peak VAT carry');
+    // The rewritten assumption rows say so too, not just the VAT section.
+    expect(text).toContain('VAT not registered');
+  });
+
+  it('never labels a negative VAT carry interest as a cost, and never clamps it (R32)', async () => {
+    // Isolates the memo's PRESENTATION rule from the engine's own R32 proof
+    // (metrics.test.ts's "reports a NEGATIVE carry unclamped" pins the engine
+    // figure itself) — the same isolation technique this file already uses
+    // elsewhere (moving only run.metrics.area_bridge.unit_nia_sqm) to check
+    // the memo reads the field rather than recomputing or reshaping it.
+    const run = runAppraisal(vatMemoInputs());
+    run.metrics.vat_carry_interest_pence = -1_234_500;
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const text = documentText(await inspectPdf(blob));
+    expect(text).toContain('£12,345 saving');
+    expect(text).not.toContain('-£12,345');
+  });
+
+  it('states which LTC denominator excludes VAT once irrecoverable VAT is material', async () => {
+    const withVat = await memoTextForVat(vatMemoInputs({ recoverable_pct: 60 }));
+    expect(withVat).toContain("Net LTC's denominator excludes");
+    const fullyRecoverable = await memoTextForVat(vatMemoInputs({ recoverable_pct: 100 }));
+    expect(fullyRecoverable).not.toContain("Net LTC's denominator excludes");
+  });
+
+  it('replaces the retired "not modelled as a cash flow" limitation with §17.13\'s residual scope', async () => {
+    const text = await memoTextForVat(vatMemoInputs());
+    expect(text).not.toContain('VAT is not modelled as a cash flow');
+    expect(text).toContain('not a computed partial-exemption');
+    expect(text).toContain('no separate VAT facility');
+  });
+
+  it('gates the document to DRAFT while a materially-charged VAT row is unconfirmed', async () => {
+    const run = runAppraisal(vatMemoInputs({ evidence_status: 'unconfirmed' }));
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBe('vat_basis_unconfirmed');
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility, prov);
+    const info = await inspectPdf(blob);
+    // The watermark is drawn rotated, outside the flowing body text —
+    // `watermarkTexts` (report-checks.ts) is the established way to read it,
+    // the same one memo-release-gate.test.ts uses for the other DraftReasons.
+    expect(info.pages.flatMap(watermarkTexts))
+      .toContain('DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE');
+    expect(documentProse(info)).toContain('a VAT treatment that actually bears VAT is not yet evidence-confirmed');
+  });
+
+  it('reaches FINAL once the materially-charged VAT row is confirmed', async () => {
+    const run = runAppraisal(vatMemoInputs({ evidence_status: 'confirmed' }));
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBeNull();
+    expect(prov.documentStatus).toBe('FINAL');
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility, prov);
+    const info = await inspectPdf(blob);
+    expect(info.pages.flatMap(watermarkTexts)).toEqual([]);
   });
 });

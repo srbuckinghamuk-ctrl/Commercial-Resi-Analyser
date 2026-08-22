@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { buildSchedule, spreadStraightLine } from './schedule';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV7 } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV6, CalculatorInputsV7 } from './finance-types';
+import type { CalculatorInputsV2, CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8 } from './finance-types';
 import { migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4 } from './migrate';
 import type { ProposedUnitV6 } from '../conversion-types';
-import { costPlanFromLegacyCosts } from './cost-plan';
+import { costPlanFromLegacyCosts, defaultContingencyClasses } from './cost-plan';
+import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -332,20 +333,20 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
         mode: 'detailed',
         packages: [{
           id: 'p1', code: 'structure', label: 'Structure', amount_pence: 10_000_000,
-          contingency_class: 'general', lender_eligible: true, notes: '',
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
         }],
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'fixed', amount_pence: 2_000_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 2_000_000, pct: 0, per_dwelling: false, vat_override: null },
           { id: 'f2', code: 'prior_approval', category: 'statutory', label: 'Prior approval',
-            basis: 'fixed', amount_pence: 5_000, pct: 0, per_dwelling: true },
+            basis: 'fixed', amount_pence: 5_000, pct: 0, per_dwelling: true, vat_override: null },
           { id: 'f3', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-            basis: 'fixed', amount_pence: 300_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 300_000, pct: 0, per_dwelling: false, vat_override: null },
         ],
       },
     };
@@ -358,5 +359,112 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
     expect(s.totals.professional_pence).toBe(2_000_000);
     // Cost plan: prior approval 5,000 x 4 units (20,000) + CIL/S106 (300,000).
     expect(s.totals.statutory_pence).toBe(320_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R11 Task 5 (spec §17.6, schedule half) — VAT out on uses, VAT back on
+// receipts. Reuses vat.test.ts's buildWorkedVatCase approach (§17.4's worked
+// cycle): construction is the only category bearing VAT by default, spread
+// months 1-4 by an EXPLICIT programme (the auto window spreads over
+// months 1..term-2 — five months for a term of seven — not the four the
+// worked cycle specifies), and quarterly returns with first_period_end_month:
+// 2 and repayment_lag_months: 1 (DEFAULT_VAT) give two reclaim periods over a
+// 7-month term: months 0-2 (reclaim m3) and months 3-5 (reclaim m6).
+// ---------------------------------------------------------------------------
+
+function workedVatDocument(opts: { registered?: boolean } = {}): CalculatorInputsV8 {
+  const registered = opts.registered ?? true;
+  const v7 = defaultCalculatorInputsV7();
+  return {
+    ...v7,
+    inputs_version: 8,
+    conversion_costs: {
+      ...v7.conversion_costs,
+      construction_cost_per_sqm_pence: 100_000,
+      total_construction_sqm: 1_000,
+      contingency_pct: 0,
+      fire_safety_pence: 0,
+      sound_insulation_pence: 0,
+      part_l_compliance_pence: 0,
+    },
+    cost_plan: {
+      mode: 'headline',
+      packages: [],
+      contingency: defaultContingencyClasses(0),
+      fee_lines: [],
+    },
+    finance: {
+      ...v7.finance,
+      committed_net_facility_pence: 500_000_000,
+      broker_fee_pence: 250_000,
+      lender_legal_fee_pence: 150_000,
+      valuation_fee_pence: 100_000,
+      monitoring_surveyor_fee_pence: 50_000,
+      term_months: 7,
+    },
+    programme: {
+      anchor_month: null,
+      packages: {
+        construction: { start_offset: 1, duration_months: 4, curve: { kind: 'straight_line' } },
+        professional: { start_offset: 1, duration_months: 1, curve: { kind: 'straight_line' } },
+        statutory: { start_offset: 1, duration_months: 1, curve: { kind: 'straight_line' } },
+      },
+    },
+    vat: {
+      ...DEFAULT_VAT,
+      registered,
+      treatments: defaultVatTreatments().map((t) =>
+        t.category === 'construction'
+          ? { ...t, rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' as const }
+          : t),
+    },
+  };
+}
+
+function preV8Document(): CalculatorInputsV7 {
+  return defaultCalculatorInputsV7();
+}
+
+describe('buildSchedule VAT (spec §17.6)', () => {
+  it('places VAT out on the spend months and VAT back on the reclaim months', () => {
+    const schedule = buildSchedule(workedVatDocument());
+    expect(schedule.uses.map((u) => u.vat_pence))
+      .toEqual([0, 5_000_000, 5_000_000, 5_000_000, 5_000_000, 0, 0]);
+    expect(schedule.receipts.map((r) => r.vat_reclaim_pence))
+      .toEqual([0, 0, 0, 10_000_000, 0, 0, 10_000_000]);
+    expect(schedule.totals.vat_pence).toBe(20_000_000);
+    expect(schedule.totals.vat_reclaim_pence).toBe(20_000_000);
+  });
+
+  it('leaves every non-VAT figure identical to the same document with VAT off', () => {
+    // §17.5's one-direction rule, at the schedule boundary. Compared
+    // EXHAUSTIVELY BY EXCLUSION (ruling R21) rather than an enumerated field
+    // list: strip the VAT fields off both sides and deep-equal the remainder,
+    // so a field added to MonthUses/MonthReceipts/Schedule.totals in future is
+    // covered automatically, and a newly-leaking field fails this test without
+    // anyone remembering to update an allowlist here.
+    const on = buildSchedule(workedVatDocument());
+    const off = buildSchedule(workedVatDocument({ registered: false }));
+
+    const usesWithoutVat = (uses: typeof on.uses) => uses.map(({ vat_pence, ...rest }) => rest);
+    expect(usesWithoutVat(on.uses)).toEqual(usesWithoutVat(off.uses));
+
+    const receiptsWithoutVat = (receipts: typeof on.receipts) =>
+      receipts.map(({ vat_reclaim_pence, ...rest }) => rest);
+    expect(receiptsWithoutVat(on.receipts)).toEqual(receiptsWithoutVat(off.receipts));
+
+    const totalsWithoutVat = (totals: typeof on.totals) => {
+      const { vat_pence, vat_reclaim_pence, irrecoverable_vat_pence, ...rest } = totals;
+      return rest;
+    };
+    expect(totalsWithoutVat(on.totals)).toEqual(totalsWithoutVat(off.totals));
+  });
+
+  it('writes zeroed VAT lines for a document with no vat block at all', () => {
+    const schedule = buildSchedule(preV8Document());
+    expect(schedule.uses.every((u) => u.vat_pence === 0)).toBe(true);
+    expect(schedule.receipts.every((r) => r.vat_reclaim_pence === 0)).toBe(true);
+    expect(schedule.totals.vat_pence).toBe(0);
   });
 });

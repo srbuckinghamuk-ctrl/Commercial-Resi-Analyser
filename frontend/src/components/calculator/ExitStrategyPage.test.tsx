@@ -2,17 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ExitStrategyPage from './ExitStrategyPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV7, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
-import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV8, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
+import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import { penceToPounds } from '../../lib/format';
 
-function buildInputs(overrides: Partial<CalculatorInputsV7> = {}): CalculatorInputsV7 {
-  const base = defaultCalculatorInputsV7();
+function buildInputs(overrides: Partial<CalculatorInputsV8> = {}): CalculatorInputsV8 {
+  const base = defaultCalculatorInputsV8();
   return { ...base, ...overrides };
 }
 
-function setup(inputs: CalculatorInputsV7, onChange = vi.fn()) {
+function setup(inputs: CalculatorInputsV8, onChange = vi.fn()) {
   const run = runAppraisal(inputs);
   render(<ExitStrategyPage inputs={inputs} onChange={onChange} run={run} />);
   return { onChange, run };
@@ -38,21 +38,21 @@ const UNIT_A = {
 
 describe('ExitStrategyPage — section visibility by route', () => {
   it('sell_all: shows the sales phasing toggle, hides the refinance section', () => {
-    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' } });
+    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' } });
     setup(inputs);
     expect(screen.getByRole('button', { name: /phase the sales/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add refinance/i })).not.toBeInTheDocument();
   });
 
   it('retain_all: hides the sales phasing toggle, shows the refinance toggle', () => {
-    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'retain_all' } });
+    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'retain_all' } });
     setup(inputs);
     expect(screen.queryByRole('button', { name: /phase the sales/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add refinance/i })).toBeInTheDocument();
   });
 
   it('blended: shows both the sales phasing and refinance toggles', () => {
-    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'blended' } });
+    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'blended' } });
     setup(inputs);
     expect(screen.getByRole('button', { name: /phase the sales/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add refinance/i })).toBeInTheDocument();
@@ -67,7 +67,7 @@ describe('ExitStrategyPage — route switch clears now-invalid blocks (IMPORTANT
   // moves money on screen.
   it('switching to retain_all clears sales_phasing but leaves refinance untouched', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'blended' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'blended' },
       sales_phasing: SEEDED_PHASING,
       refinance: SEEDED_REFINANCE,
     });
@@ -81,7 +81,7 @@ describe('ExitStrategyPage — route switch clears now-invalid blocks (IMPORTANT
 
   it('switching to sell_all clears refinance but leaves sales_phasing untouched', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'blended' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'blended' },
       sales_phasing: SEEDED_PHASING,
       refinance: SEEDED_REFINANCE,
     });
@@ -95,7 +95,7 @@ describe('ExitStrategyPage — route switch clears now-invalid blocks (IMPORTANT
 
   it('switching to blended clears neither block (both remain valid)', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: SEEDED_PHASING,
       refinance: null,
     });
@@ -110,7 +110,7 @@ describe('ExitStrategyPage — route switch clears now-invalid blocks (IMPORTANT
 describe('ExitStrategyPage — sales phasing toggle', () => {
   it('toggling phasing on seeds a single final-month tranche at 100%', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: null,
     });
     const { onChange } = setup(inputs);
@@ -122,7 +122,7 @@ describe('ExitStrategyPage — sales phasing toggle', () => {
 
   it('toggling phasing off clears the block', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: SEEDED_PHASING,
     });
     const { onChange } = setup(inputs);
@@ -134,7 +134,7 @@ describe('ExitStrategyPage — sales phasing toggle', () => {
 describe('ExitStrategyPage — sales phasing tranche editing', () => {
   it('"Add tranche" appends a zero-pct row at the final month', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: SEEDED_PHASING,
     });
     const { onChange } = setup(inputs);
@@ -157,7 +157,7 @@ describe('ExitStrategyPage — sales phasing tranche editing', () => {
       ],
     };
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: twoTranche,
     });
     const { onChange } = setup(inputs);
@@ -180,7 +180,7 @@ describe('ExitStrategyPage — sales phasing tranche editing', () => {
       ],
     };
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: twoTranche,
     });
     const { onChange } = setup(inputs);
@@ -198,7 +198,7 @@ describe('ExitStrategyPage — sales phasing tranche editing', () => {
       ],
     };
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: badSum,
     });
     setup(inputs);
@@ -208,7 +208,7 @@ describe('ExitStrategyPage — sales phasing tranche editing', () => {
 
   it('does not show a red sum badge when tranche percentages sum to 100', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'sell_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'sell_all' },
       sales_phasing: SEEDED_PHASING,
     });
     setup(inputs);
@@ -221,7 +221,7 @@ describe('ExitStrategyPage — refinance toggle', () => {
   it('enabling refinance seeds defaults using the component\'s retainedCapitalValue', () => {
     const inputs = buildInputs({
       exit_strategy: {
-        ...defaultCalculatorInputsV7().exit_strategy,
+        ...defaultCalculatorInputsV8().exit_strategy,
         route: 'retain_all',
         retained_units: [{ unit_id: 'u1', monthly_rent_pence: 100_000 }],
       },
@@ -262,7 +262,7 @@ describe('ExitStrategyPage — refinance toggle', () => {
     // same units and must agree to the penny.
     const inputs = buildInputs({
       exit_strategy: {
-        ...defaultCalculatorInputsV7().exit_strategy,
+        ...defaultCalculatorInputsV8().exit_strategy,
         route: 'blended',
         retained_units: [{ unit_id: 'u2', monthly_rent_pence: 100_000 }],
       },
@@ -292,7 +292,7 @@ describe('ExitStrategyPage — refinance toggle', () => {
   it('bases the gross yield on the engine\'s retained value, ancillary included', () => {
     const inputs = buildInputs({
       exit_strategy: {
-        ...defaultCalculatorInputsV7().exit_strategy,
+        ...defaultCalculatorInputsV8().exit_strategy,
         route: 'blended',
         retained_units: [{ unit_id: 'u2', monthly_rent_pence: 100_000 }],
       },
@@ -309,7 +309,7 @@ describe('ExitStrategyPage — refinance toggle', () => {
 
   it('disabling refinance clears the block', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'retain_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'retain_all' },
       refinance: SEEDED_REFINANCE,
     });
     const { onChange } = setup(inputs);
@@ -321,7 +321,7 @@ describe('ExitStrategyPage — refinance toggle', () => {
 describe('ExitStrategyPage — refinance field editing and preview', () => {
   it('editing the LTV % calls onChange with the updated refinance block', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'retain_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'retain_all' },
       refinance: SEEDED_REFINANCE,
     });
     const { onChange } = setup(inputs);
@@ -333,7 +333,7 @@ describe('ExitStrategyPage — refinance field editing and preview', () => {
 
   it('editing the investment value (£) converts pounds to pence', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'retain_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'retain_all' },
       refinance: SEEDED_REFINANCE,
     });
     const { onChange } = setup(inputs);
@@ -345,7 +345,7 @@ describe('ExitStrategyPage — refinance field editing and preview', () => {
 
   it('shows the net-proceeds preview line computed from the current refinance inputs', () => {
     const inputs = buildInputs({
-      exit_strategy: { ...defaultCalculatorInputsV7().exit_strategy, route: 'retain_all' },
+      exit_strategy: { ...defaultCalculatorInputsV8().exit_strategy, route: 'retain_all' },
       refinance: SEEDED_REFINANCE,
     });
     setup(inputs);

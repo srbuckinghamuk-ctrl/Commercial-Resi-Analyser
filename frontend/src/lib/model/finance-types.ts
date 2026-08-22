@@ -7,6 +7,7 @@ import type { SpendCurve } from './curves';
 import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
+import type { VatInputs, VatResult } from './vat';
 
 export type { SpendCurve };
 
@@ -220,9 +221,17 @@ export interface CalculatorInputsV7 extends Omit<CalculatorInputsV6, 'inputs_ver
   cost_plan: CostPlanInputs;
 }
 
+/** R11 (spec 17). Adds the VAT block. Purely additive: migration (Task 10)
+ *  writes `registered: false`, so the engine is inert and no existing
+ *  appraisal's computed values move. */
+export interface CalculatorInputsV8 extends Omit<CalculatorInputsV7, 'inputs_version'> {
+  inputs_version: 8;
+  vat: VatInputs;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
-  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7;
+  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -230,7 +239,11 @@ export type FlagCode =
   | 'negative_profit' | 'requires_confirmation' | 'irr_unavailable'
   | 'unrealised_profit_basis' | 'exit_fee_not_charged'
   | 'senior_breakeven_unsolvable' | 'developer_breakeven_unsolvable'
-  | 'breakeven_cap_exhausted' | 'facility_redrawn_after_redemption';
+  | 'breakeven_cap_exhausted' | 'facility_redrawn_after_redemption'
+  /** R11 spec §17.6: VAT is not eligible for the development-cost advance, so a
+   *  month's VAT can fall through to a funding gap even where the build itself
+   *  is fully advanced. Narrows the generic `funding_gap` — both fire. */
+  | 'vat_funding_gap';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -246,12 +259,20 @@ export interface MonthUses {
   professional_pence: number;
   statutory_pence: number;
   lender_ancillary_fees_pence: number;
+  /** R11 spec §17.6. Written back from `computeVat`'s `months[].incurred_pence`
+   *  after the uses/receipts arrays are fully built — never a source figure
+   *  itself (§17.5's one-direction rule). */
+  vat_pence: number;
 }
 
 export interface MonthReceipts {
   gross_sale_pence: number;
   agent_fee_pence: number;
   selling_legal_pence: number;
+  /** R11 spec §17.6. Written back from `computeVat`'s `months[].reclaimed_pence`.
+   *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt, so
+   *  no GDV-, LTGDV- or break-even-denominated metric may read it. */
+  vat_reclaim_pence: number;
 }
 
 export interface Schedule {
@@ -267,7 +288,19 @@ export interface Schedule {
     selling_costs_pence: number; gross_sales_pence: number;
     gdv_pence: number; retained_value_pence: number;
     cost_before_finance_ex_selling_pence: number;
+    /** R11 spec §17.6/§17.5. `vat_pence`/`vat_reclaim_pence` disclose the gross
+     *  VAT cycle; `irrecoverable_vat_pence` is the cost-plan-adjacent figure
+     *  Task 8 adds to cost-before-finance on its own line. None of these three
+     *  feed `cost_before_finance_ex_selling_pence` above — that would double
+     *  count the very figure Task 8 adds downstream. */
+    vat_pence: number;
+    vat_reclaim_pence: number;
+    irrecoverable_vat_pence: number;
   };
+  /** R11 spec §17.5/§17.6. The full VAT result, computed strictly downstream of
+   *  the finished uses/receipts arrays and written back into them — never the
+   *  other way round. */
+  vat: VatResult;
 }
 
 export interface LedgerMonth {
@@ -290,6 +323,14 @@ export interface LedgerMonth {
   funding_gap_pence: number;
   gross_receipts_pence: number;
   net_receipts_pence: number;
+  /** R11 spec §17.6. The VAT reclaimed this month, applied to senior debt in
+   *  full (ignoring `sales_sweep_pct`) and before the sales sweep and the §4.5
+   *  refinance event. Deliberately absent from `gross_receipts_pence` and
+   *  `net_receipts_pence`: it returns a specific advance rather than realising
+   *  an asset, so no GDV-, LTGDV- or break-even-denominated metric may read it.
+   *  Where it exceeds the balance plus the exit fee, or where there is no
+   *  facility, the excess falls into `distribution_pence`. */
+  vat_reclaim_pence: number;
   /** Spec §4.5 — 0 when no refinance event occurs this month. */
   refinance_proceeds_pence: number;
   distribution_pence: number;
@@ -317,6 +358,13 @@ export interface MonthlyModel {
     funding_gap_pence: number;
     distributions_pence: number;
     repayments_pence: number;
+    /** R11 spec §17.6. The gross VAT cycle as the LEDGER saw it: `vat_pence` is
+     *  the VAT funded through the per-month loop (part of `uses_total_pence`),
+     *  `vat_reclaim_pence` the VAT swept back out. Disclosure only — neither is
+     *  a finance cost, and `vat_reclaim_pence` appears on neither side of §7's
+     *  sources-and-uses identity. */
+    vat_pence: number;
+    vat_reclaim_pence: number;
   };
   peak_debt_pence: number;
   peak_debt_month: number | null;
@@ -357,6 +405,12 @@ export interface AppraisalResultV2 {
   /** Spec §14 (R8) — the full derivation: regime, band breakdown, surcharge,
    *  band-set effective date, table version, source and override provenance. */
   acquisition_tax: AcquisitionTaxResult;
+  /** R11 spec §17.7 — the figure the acquisition tax was actually charged on:
+   *  the price PLUS any chargeable purchase VAT. Equal to
+   *  `acquisition.purchase_price_pence` unless the vendor has opted to tax and
+   *  TOGC does not apply. Disclosed rather than left implicit, so the tax base
+   *  is visible in the result instead of buried inside a tax figure. */
+  chargeable_consideration_pence: number;
   /**
    * @deprecated R8 — a jurisdiction-neutral figure under an England/NI-only
    * name. Carries the identical value to `acquisition_tax_pence`; retained only
@@ -374,6 +428,13 @@ export interface AppraisalResultV2 {
    *  class with its base, every fee line with its base. The UI and the report
    *  read cost from here and never recompute one. */
   cost_plan: CostPlanResult;
+  /** R11 spec §17.12 — the full VAT derivation: per-category resolved treatment,
+   *  per-month VAT out, per-month reclaim, the carry vector, peak carry and its
+   *  month, total input VAT, total reclaimed, total irrecoverable, and
+   *  `receivable_at_maturity_pence`. This is the SCHEDULE's `vat`, republished
+   *  here rather than recomputed: §17.5 runs the engine once, in one direction.
+   *  The UI and the report read VAT from here and never call `computeVat`. */
+  vat: VatResult;
   /** R9 spec §3.1 — GDV excluding ancillary. This is the pre-R9 figure, kept so
    *  a variance against it stays expressible. */
   gdv_internal_pence: number;
@@ -384,8 +445,27 @@ export interface AppraisalResultV2 {
   professional_fees_pence: number;
   statutory_costs_pence: number;
   selling_costs_pence: number;
+  /** R11 spec §17.5 — VAT the scheme cannot recover, on its OWN line and added
+   *  to `cost_before_finance_pence` (and so to TDC and to profit). Deliberately
+   *  NOT folded back into `construction_cost_pence`, however natural that
+   *  reads: `computeVat` reads the cost plan, so a VAT figure entering a cost
+   *  base is the one thing that could make the engine cyclic. Equal to
+   *  `vat.total_irrecoverable_pence`. */
+  irrecoverable_vat_pence: number;
   cost_before_finance_pence: number;
   finance_costs_pence: number;
+  /** R11 spec §17.12 — the finance cost attributable to carrying recoverable
+   *  VAT. A **disclosure of a slice of `finance_costs_pence`, not an addition
+   *  to it**: the interest is already there, charged by the ledger on a balance
+   *  the VAT outflow raised, and adding it again would double count.
+   *
+   *  Defined by an explicit counterfactual, never by apportioning interest
+   *  across balances: total interest with the document as given, less total
+   *  interest from the same document with `vat.registered` forced false. That
+   *  is the same quantity §17.5's primary invariant measures wherever the
+   *  facility's fee bases are VAT-independent, so the two pin each other. 0 for
+   *  a document with no VAT block, or one that is not registered. */
+  vat_carry_interest_pence: number;
   total_development_cost_pence: number;
   profit_pence: number;
   profit_is_unrealised: boolean;
@@ -432,4 +512,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.9.0';
+export const CALC_VERSION = '2.10.0';

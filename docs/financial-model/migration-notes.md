@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v7)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v8)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -532,12 +532,15 @@ No `expected_metrics` value in any golden fixture moved. **This boundary move
 is also where spec §13.2's audit-hash disclosure applies for the first time in
 practice**: a row saved before this release and not yet re-saved has a stored
 `audit_hash` computed under whatever `inputs_version` it was last saved at
-(6 or earlier), but the report's provenance panel prints the *client's*
-current schema — `inputs_version: 7` — because the printed run is the freshly
-migrated-and-recalculated document, not the stale stored snapshot. A reader
-must not assume the printed `inputs_version` on a freshly-generated report is
-the one the stored `audit_hash` was computed over unless the row has actually
-been re-saved since.
+(7 or earlier), but the report's provenance panel prints the *client's*
+current schema — `inputs_version: 8`, as of this release — because the
+printed run is the freshly migrated-and-recalculated document, not the stale
+stored snapshot. A reader must not assume the printed `inputs_version` on a
+freshly-generated report is the one the stored `audit_hash` was computed over
+unless the row has actually been re-saved since. (This is a description of
+the boundary's shape, not a figure pinned to one release: the "current
+schema" is whichever `inputs_version` the client is on when this line is
+read, and moves again at the next additive step.)
 
 ### 10.2 The York appraisal after R10
 
@@ -557,3 +560,143 @@ The saved Stonegate record is a migrated v1 snapshot, headline mode throughout
 
 The audit's independently reconciled figures for this case therefore remain
 reproducible line for line, as they did through R7, R8 and R9.
+
+## 11. v7 → v8 (Release 11, calc `2.10.0`)
+
+**What's added.** `CalculatorInputsV8` is `CalculatorInputsV7` plus exactly one
+thing: a `vat` block (spec §17.1) — `registered`, `return_frequency`,
+`first_period_end_month`, `repayment_lag_months`, exactly six `treatments`
+rows (one per `VatChargeCategory`, in the declared order) and a `purchase`
+block (`vendor_opted_to_tax`, `togc_treatment`, evidence). Plus an optional
+`vat_override` on every `CostPackage` and `FeeLine`, and the version stamp
+itself. No existing field changes shape, name or semantics.
+`CalculatorInputsV8` subclasses `CalculatorInputsV7`, for the same reason R8,
+R9 and R10 extended rather than replaced: the engine dispatches on those
+types, and a flat re-declaration would make every `isinstance` check silently
+false for a v8 document.
+
+**Defaults, and the one thing the migration deliberately will not do.** A v7
+document migrated to v8 gets:
+
+- `vat.registered: false`, so `resolveVatTreatment` drives every charge to
+  `INERT` and `chargeableConsiderationPence` collapses back to the exclusive
+  price — no existing appraisal's computed values move (§17.11), with the
+  one named exception §11.1 qualifies (ruling R46);
+- the six treatment rows at `rate_pct: 0`, `recoverable_pct: 0`,
+  `recovery_basis: 'unconfirmed'`, `evidence_status: 'unconfirmed'`;
+- `purchase`: `vendor_opted_to_tax: false`, `togc_treatment: 'unconfirmed'`,
+  `evidence_status: 'unconfirmed'`;
+- `vat_override: null` on every package and every fee line;
+- the spec §16.3 contingency rework this release also carries: each
+  contingency row is rebuilt from `name`/`pct` alone, so the deleted `basis`
+  and `package_ids` fields are dropped off a stored R10 row rather than
+  spread through untouched — the `contingency_class` tag on each package is
+  the surviving mechanism (§17.8) and is retained.
+
+This is the same block `DEFAULT_VAT` gives a brand-new document
+(`conversion-defaults.ts:365`), so the two engines' v-defaults re-converge one
+version on, exactly as the v6 → v7 boundary did for `cost_plan`.
+
+**No configuration is inferred.** The migration could not have guessed
+`vendor_opted_to_tax` or any treatment's rate from anything already stored —
+that would be inventing evidence the record never contained, the same
+reasoning R8 applied to `acquisition_date`, R9 to the area bridge and R10 to
+the package schedule. A migrated document stays VAT-inert until a user
+configures it.
+
+**Implementation** (`migrateV7toV8` / `migrate_v7_to_v8`,
+`migrateInputsToV8` / `migrate_inputs_to_v8`). The entry point mirrors
+`migrateInputsToV7`'s shape exactly, including its two refusals — an
+unrecognised `inputs_version` throws, and a document declaring version 8 that
+fails the v8 structural check throws rather than falling through to the
+permissive v1 path. `migrateInputsToV7` correspondingly **refuses a v8
+document** ("use migrateInputsToV8"). The already-v8 merge branch carries
+`vat` through untouched — a merge that silently reset it to the inert default
+would move a registered document's whole VAT position and every figure
+downstream of it.
+
+### 11.1 The numerical-identity claim, and where it is tested
+
+**Claim: the v7 → v8 migration is purely additive. Every existing appraisal
+produces byte-identical output either side of it — not "close", identical —
+with exactly one named, reachable exception (ruling R46).** §17.8 makes a
+detailed-mode package's `contingency_class` tag live: a document carrying a
+non-zero percentage on `existing_building` or `abnormal` while no package
+carries that tag now resolves that class's contingency base to zero, where
+before every class resolved against the whole base build regardless of tag.
+This is not caused by the migration step itself — the migration touches
+nothing on `cost_plan.packages` or their tags — but by the engine's new
+resolution rule (§17.8), which applies the first time such a document is run
+under calc `2.10.0`, migrated or not. It is the one figure this release does
+move, and it is disclosed rather than left silent: `validate_inputs` (§17.9)
+adds a **warning** naming the class and stating its resolved base is zero.
+The rule is deliberately a warning, not an error — the same reasoning R38
+established: a stored document already in that shape must not acquire a hard
+validation error on migration, which would make `report_safe` false and
+silently downgrade the report to DRAFT. The rule reads `cost_plan`, which is
+identical before and after the v7 → v8 boundary, so it fires identically
+either side of it and does not add to the R38/R39 regression gate below (that
+gate permits exactly one addition, the `vat.registered` warning, and the
+corpus's one detailed-mode fixture already has every non-general class
+correctly tagged, so the gate observes no R46 warning on any fixture either).
+
+This is a *tested* claim, mirroring §10.1's pattern one version on:
+
+| What | TypeScript | Python |
+|---|---|---|
+| Whole-corpus numeric identity, plus the structural write | `golden-fixtures.test.ts`, `migrating %s to v8 moves no computed figure, and writes the specified block` | `tests/test_migrate_v8.py::test_v8_migration_moves_no_existing_figure` |
+| Pins reproduce after migration | `golden-fixtures.test.ts`, `reproduces its metrics after migration to v8 (merge branch)` | `tests/test_financial_model_fixtures.py::test_fixture_r_reproduces_its_metrics_after_migration_to_v8` |
+| Validation regression gate (R38/R39, below) | `golden-fixtures.test.ts`, `migrating %s to v8 adds and removes no validation issue` | `tests/test_migrate_v8.py::test_v8_migration_adds_and_removes_no_validation_issue`, `test_v8_migration_adds_no_validation_issue_to_a_short_term_document` |
+| The v8 version predicate is membership, not a negation | — | `tests/test_migrate_v8.py::test_document_tagged_v8_that_fails_the_structural_check_is_refused`, and a document tagged `9` |
+
+**This gate is numeric *and* structural, for the same reason §9.1's and
+§10.1's gates had to be.** A migration that wrote a non-inert default, or
+that spread the deleted contingency fields back onto a stored row instead of
+rebuilding it, could move no figure at all for a document whose extra fields
+happen to be zero or absent — the structural assertion (`registered: false`,
+six rows, every override `null`, the two contingency fields gone) is what a
+purely numeric gate cannot see. R9 recorded that a numeric-only gate can be
+**provably blind** when the migration synthesises a block no engine yet
+consumes; here it is meaningful only because the VAT engine is live and reads
+`registered`.
+
+**The validation regression gate is not a same-set assertion (R39).** §17.9
+specifies a warning for `registered: false` with a non-zero construction cost,
+and a pre-v8 document has no `vat` block at all — so that warning can only
+ever appear *after* migration. A literal "same issues before and after"
+comparison is unsatisfiable by design. The gate is instead the narrowest form
+that still bites: the error set is compared with no exemption whatsoever,
+nothing may be removed at either severity, and the only permitted addition is
+that one warning, cross-checked per fixture against its own firing condition
+with a non-vacuity assertion. Both a `term_months: 1` and a `term_months: 2`
+synthetic document are required — the return-cycle bounds this gate exists to
+catch (`first_period_end_month`, `repayment_lag_months`) are gated on
+`registered: true` (§17.9, R38) precisely because migration gives every
+document a `vat` block carrying `first_period_end_month: 2`, and an earlier
+draft of this release validated that bound unconditionally: a stored
+appraisal with `term_months <= 2` acquired a hard validation error the moment
+it was migrated, from a block the engine ignores. Measured directly:
+`term=1` yielded `errors=[]` at v7 and `errors=["vat.first_period_end_month"]`
+at v8, which would have silently downgraded every short-term appraisal in the
+database to DRAFT.
+
+**Hash consequence.** As with every previous additive step, `input_hash` is
+computed over the full validated document, so it changes for every row the
+next time it is saved — every migrated document now carries a `vat` block it
+did not before. This is the ordinary re-hash-on-any-change behaviour and is
+benign; `status` is preserved by the existing rule and is not reset by the
+version bump itself. **`audit_hash` also changes for every migrated
+document, and for a different reason** (`app/api/app.py`'s upsert path):
+its move is deliberate provenance, tracking that the document was
+recalculated under a new `calc_version`/`inputs_version` pair, not a
+side-effect of the `vat` block's presence. Neither hash is compared against
+its pre-migration value anywhere in the codebase, so nothing flips `status`
+on account of either change — but `hashing.py` documents `input_hash` as the
+mechanism for detecting a stale client-submitted figure, so a release in
+which every stored row's hash changes silently is worth recording rather than
+discovering later. No `expected_metrics` value in any golden fixture moved.
+
+No fixture-level York-appraisal case study is added for this boundary: the
+Stonegate record (§10.2) carries no VAT configuration and none is inferred,
+so its post-R11 behaviour is exactly the R10 row above with one more
+inert block attached.

@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import ConversionCostsPage from './ConversionCostsPage';
 import { runAppraisal } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV7, CostPackage, FeeLine } from '../../lib/model';
-import { defaultCalculatorInputsV7 } from '../../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV8, CostPackage, FeeLine } from '../../lib/model';
+import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 
@@ -15,8 +15,8 @@ import type { ProposedUnitV6 } from '../../lib/conversion-types';
  * 40, retained 100 -> developed 520) so the bridge-derived figure asserted
  * here (520) is the same one that suite already pins.
  */
-function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV7 {
-  const inputs = defaultCalculatorInputsV7();
+function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV8 {
+  const inputs = defaultCalculatorInputsV8();
   return {
     ...inputs,
     areas: {
@@ -83,7 +83,7 @@ describe('ConversionCostsPage — construction area basis selector', () => {
 // so a component that recomputed the contingency amount itself, instead of
 // reading the run, would render something else (or throw).
 function runWithContingencyAmount(amountPence: number): AppraisalRun {
-  const inputs = defaultCalculatorInputsV7();
+  const inputs = defaultCalculatorInputsV8();
   const run = runAppraisal(inputs);
   return {
     ...run,
@@ -112,8 +112,8 @@ function runWithContingencyAmount(amountPence: number): AppraisalRun {
 // value, so a label that happened to equal the code's human name would make
 // this test ambiguous for a reason that has nothing to do with what it is
 // checking.
-function detailedInputs(): CalculatorInputsV7 {
-  const base = defaultCalculatorInputsV7();
+function detailedInputs(): CalculatorInputsV8 {
+  const base = defaultCalculatorInputsV8();
   return {
     ...base,
     finance: { ...base.finance, funding_source: 'cash', term_months: 12 },
@@ -126,20 +126,20 @@ function detailedInputs(): CalculatorInputsV7 {
       packages: [
         { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
           amount_pence: 1_000_000, contingency_class: 'existing_building',
-          lender_eligible: true, notes: '' },
+          lender_eligible: true, notes: '', vat_override: null },
         { id: 'p2', code: 'structure', label: 'Structural frame', amount_pence: 3_000_000,
-          contingency_class: 'general', lender_eligible: true, notes: '' },
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null },
       ],
       contingency: [
-        { name: 'general', pct: 5, basis: 'all_packages', package_ids: [] },
-        { name: 'existing_building', pct: 15, basis: 'selected_packages', package_ids: ['p1'] },
-        { name: 'abnormal', pct: 2.5, basis: 'all_packages', package_ids: [] },
+        { name: 'general', pct: 5 },
+        { name: 'existing_building', pct: 15 },
+        { name: 'abnormal', pct: 2.5 },
       ],
       fee_lines: [
         { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-          basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false },
+          basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
         { id: 'f2', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-          basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false },
+          basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null },
       ],
     },
   };
@@ -147,7 +147,7 @@ function detailedInputs(): CalculatorInputsV7 {
 
 describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan, never recomputes them', () => {
   it('renders the contingency amount from the run, not from its own arithmetic', () => {
-    const inputs = defaultCalculatorInputsV7();
+    const inputs = defaultCalculatorInputsV8();
     const run = runWithContingencyAmount(12_345_678);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
     expect(screen.getByText(/123,456\.78/)).toBeInTheDocument();
@@ -170,12 +170,37 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
     expect(screen.getByDisplayValue('Structure')).toBeInTheDocument();
     // And the negative half — without it, a grid rendered unconditionally passes.
     cleanup();
-    const headline: CalculatorInputsV7 = {
+    const headline: CalculatorInputsV8 = {
       ...inputs,
       cost_plan: { ...inputs.cost_plan, mode: 'headline' as const, packages: [] },
     };
     render(<ConversionCostsPage inputs={headline} run={runAppraisal(headline)} onChange={vi.fn()} />);
     expect(screen.queryByDisplayValue('Structure')).not.toBeInTheDocument();
+  });
+
+  // R11 spec §17.8. The contingency-class select on each package row went live
+  // this release (previously "recorded only" -- see the R10 comment this task
+  // rewrote). Assert it writes ONLY the row it belongs to: a change handler
+  // that updated every package (e.g. a stale closure over the wrong id) would
+  // still pass a test that only checked the changed row.
+  it("changing a package's contingency class select updates that package, and no other", () => {
+    const inputs = detailedInputs(); // p1 tagged existing_building, p2 tagged general
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} run={runAppraisal(inputs)} onChange={onChange} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package contingency class' });
+    expect(selects).toHaveLength(2);
+    fireEvent.change(selects[0], { target: { value: 'abnormal' } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: {
+        ...inputs.cost_plan,
+        packages: [
+          { ...inputs.cost_plan.packages[0], contingency_class: 'abnormal' },
+          inputs.cost_plan.packages[1],
+        ],
+      },
+    });
   });
 
   // §3.2.1 / §6. Switching to detailed mode on a document carrying compliance
@@ -186,8 +211,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   // duplicated -- and that it happens through the SAME onChange every other
   // edit on this page uses, not a second code path.
   it('offers to convert compliance allowances into a package when switching to detailed mode', () => {
-    const base = defaultCalculatorInputsV7();
-    const inputs: CalculatorInputsV7 = {
+    const base = defaultCalculatorInputsV8();
+    const inputs: CalculatorInputsV8 = {
       ...base,
       conversion_costs: {
         ...base.conversion_costs,
@@ -219,7 +244,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('switches mode without prompting when there is no compliance to convert', () => {
-    const inputs = defaultCalculatorInputsV7(); // compliance fields are 0 by default
+    const inputs = defaultCalculatorInputsV8(); // compliance fields are 0 by default
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     const confirmSpy = vi.spyOn(window, 'confirm');
@@ -233,8 +258,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('leaves the compliance fields untouched when the user declines the conversion', () => {
-    const base = defaultCalculatorInputsV7();
-    const inputs: CalculatorInputsV7 = {
+    const base = defaultCalculatorInputsV8();
+    const inputs: CalculatorInputsV8 = {
       ...base,
       conversion_costs: { ...base.conversion_costs, fire_safety_pence: 200_000 },
     };
@@ -282,7 +307,7 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 
   it('allows switching back to headline once every package is zeroed', () => {
     const inputs = detailedInputs();
-    const zeroed: CalculatorInputsV7 = {
+    const zeroed: CalculatorInputsV8 = {
       ...inputs,
       cost_plan: {
         ...inputs.cost_plan,
@@ -307,8 +332,8 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 // construction_total 4,400,000 (no compliance, no other fee lines) are
 // pinned literals so the resolved-base assertions below are falsifiable,
 // not just "some text appeared".
-function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV7 {
-  const base = defaultCalculatorInputsV7();
+function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV8 {
+  const base = defaultCalculatorInputsV8();
   return {
     ...base,
     areas: { ...base.areas, basis: 'manual' },
@@ -333,7 +358,7 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('renders a fixed-basis fee as an amount input, with no resolved-base note', () => {
     const inputs = feeTestInputs([
       { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false },
+        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null },
     ]);
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
@@ -344,7 +369,7 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('renders a pct_of_base_build fee with the resolved base and amount read from the run', () => {
     const inputs = feeTestInputs([
       { id: 'f2', code: 'other_professional', category: 'professional', label: 'QS fee',
-        basis: 'pct_of_base_build', amount_pence: 0, pct: 5, per_dwelling: false },
+        basis: 'pct_of_base_build', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null },
     ]);
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
@@ -357,7 +382,7 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('renders a pct_of_construction_total fee against a base that includes contingency, unlike pct_of_base_build', () => {
     const inputs = feeTestInputs([
       { id: 'f3', code: 'other_professional', category: 'professional', label: 'QS fee',
-        basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false },
+        basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null },
     ]);
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
@@ -370,7 +395,7 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('switching a fee basis selector calls onChange with the new basis', () => {
     const inputs = feeTestInputs([
       { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false },
+        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null },
     ]);
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
@@ -396,7 +421,7 @@ describe('ConversionCostsPage — a fee basis switch zeroes the field the new ba
   it('zeroes amount_pence when switching FROM fixed TO a percentage basis', () => {
     const inputs = feeTestInputs([
       { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false },
+        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null },
     ]);
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
@@ -418,7 +443,7 @@ describe('ConversionCostsPage — a fee basis switch zeroes the field the new ba
   it('zeroes pct when switching FROM a percentage basis TO fixed', () => {
     const inputs = feeTestInputs([
       { id: 'f2', code: 'other_professional', category: 'professional', label: 'QS fee',
-        basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false },
+        basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
     ]);
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
@@ -454,15 +479,15 @@ function unit(id: string): ProposedUnitV6 {
 
 describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (multiplied) amount (I3, fix round 1)', () => {
   it('shows the resolved amount, not the per-dwelling figure typed in', () => {
-    const base = defaultCalculatorInputsV7();
-    const inputs: CalculatorInputsV7 = {
+    const base = defaultCalculatorInputsV8();
+    const inputs: CalculatorInputsV8 = {
       ...base,
       unit_mix: { units: ['u1', 'u2', 'u3'].map(unit) },
       cost_plan: {
         ...base.cost_plan,
         fee_lines: [
           { id: 'pa', code: 'prior_approval', category: 'statutory', label: 'Prior approval fee',
-            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true },
+            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true, vat_override: null },
         ],
       },
     };
@@ -474,5 +499,90 @@ describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (m
     // render this string at all.
     expect(screen.getByDisplayValue('96')).toBeInTheDocument();
     expect(screen.getByText(/x 3 units = £288\.00/)).toBeInTheDocument();
+  });
+});
+
+// R11 Task 14 (spec §17.2 rule 3). If no UI writes `vat_override`, the schema
+// carries a mechanism nothing writes -- the exact defect R10 shipped
+// (`contingency_class`). Detailed-mode package and fee rows get an override
+// control that writes `vat_override` on that ONE row and clears it to `null`,
+// never a zeroed object.
+describe('ConversionCostsPage — per-line VAT override control (spec §17.2 rule 3)', () => {
+  it('setting an override on one package writes vat_override on that package and leaves every other package null', () => {
+    const inputs = detailedInputs();
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /add vat override — strip out/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    expect(updated.find((p) => p.id === 'p1')!.vat_override).not.toBeNull();
+    expect(updated.find((p) => p.id === 'p2')!.vat_override).toBeNull();
+  });
+
+  it('clearing a package override writes null, not a zeroed object', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.packages[0].vat_override = { rate_pct: 5, recoverable_pct: 50, recovery_basis: 'partial_exemption' };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /clear vat override — strip out/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    const p1 = updated.find((p) => p.id === 'p1')!;
+    expect(p1.vat_override).toBeNull();
+    // Not a zeroed object -- an object with all-zero fields would also pass a
+    // naive `!p1.vat_override.rate_pct` check but is NOT what the spec asks for.
+    expect(p1.vat_override).not.toEqual({ rate_pct: 0, recoverable_pct: 0, recovery_basis: 'unconfirmed' });
+  });
+
+  it('editing an active package override writes the changed field only, on that package', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.packages[0].vat_override = { rate_pct: 5, recoverable_pct: 50, recovery_basis: 'partial_exemption' };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: /strip out vat override rate %/i }), { target: { value: '12' } });
+
+    const updated = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    const p1 = updated.find((p) => p.id === 'p1')!;
+    expect(p1.vat_override).toEqual({ rate_pct: 12, recoverable_pct: 50, recovery_basis: 'partial_exemption' });
+    expect(updated.find((p) => p.id === 'p2')!.vat_override).toBeNull();
+  });
+
+  it('setting an override on one fee line writes vat_override on that fee and leaves the other fee null', () => {
+    const inputs = detailedInputs();
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /add vat override — architect/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.fee_lines as FeeLine[];
+    expect(updated.find((f) => f.id === 'f1')!.vat_override).not.toBeNull();
+    expect(updated.find((f) => f.id === 'f2')!.vat_override).toBeNull();
+  });
+
+  it('clearing a fee line override writes null', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.fee_lines[0].vat_override = { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /clear vat override — architect/i }));
+
+    const updated = onChange.mock.calls[0][0].cost_plan.fee_lines as FeeLine[];
+    expect(updated.find((f) => f.id === 'f1')!.vat_override).toBeNull();
+  });
+
+  it('does not render the override control in headline mode', () => {
+    const inputs = defaultCalculatorInputsV8();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.queryByText(/vat override/i)).not.toBeInTheDocument();
   });
 });

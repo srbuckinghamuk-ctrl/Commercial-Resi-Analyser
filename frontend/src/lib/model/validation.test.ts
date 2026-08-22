@@ -11,9 +11,12 @@ import { DEFAULT_AREA_BRIDGE } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV7, ProgrammePackage, RefinanceInputs,
+  CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8,
+  ProgrammePackage, RefinanceInputs,
 } from './finance-types';
 import type { CostPackage, FeeLine } from './cost-plan';
+import { DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments } from './vat';
+import type { VatChargeCategory, VatOverride, VatTreatment } from './vat';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -64,6 +67,48 @@ function makeV7Inputs(overrides: {
     conversion_costs: { ...v7.conversion_costs, ...(overrides.conversion_costs ?? {}) },
     cost_plan: { ...v7.cost_plan, ...(overrides.cost_plan ?? {}) },
   };
+}
+
+/** R11 (Task 9, spec §17.9). A v8 document built on makeV7Inputs — there is no
+ *  migrateV7toV8 yet (Task 10 lands it), so the `vat` block is added directly
+ *  from DEFAULT_VAT here, exactly as buildWorkedVatCase does in vat.test.ts.
+ *  `purchase` is merged one level deeper than the rest so a partial override
+ *  (e.g. `{ togc_treatment: 'applies' }`) does not blank out `vendor_opted_to_tax`. */
+function makeV8Inputs(overrides: {
+  cost_plan?: Partial<CalculatorInputsV7['cost_plan']>;
+  conversion_costs?: Partial<CalculatorInputsV6['conversion_costs']>;
+  finance?: Partial<CalculatorInputsV7['finance']>;
+  exit_strategy?: Partial<CalculatorInputsV7['exit_strategy']>;
+  vat?: Partial<Omit<CalculatorInputsV8['vat'], 'purchase'>> & {
+    purchase?: Partial<CalculatorInputsV8['vat']['purchase']>;
+  };
+} = {}): CalculatorInputsV8 {
+  const v7 = makeV7Inputs({ cost_plan: overrides.cost_plan, conversion_costs: overrides.conversion_costs });
+  const vatOverrides = overrides.vat ?? {};
+  return {
+    ...v7,
+    inputs_version: 8,
+    finance: { ...v7.finance, ...(overrides.finance ?? {}) },
+    exit_strategy: { ...v7.exit_strategy, ...(overrides.exit_strategy ?? {}) },
+    vat: {
+      ...DEFAULT_VAT,
+      ...vatOverrides,
+      purchase: { ...DEFAULT_VAT.purchase, ...(vatOverrides.purchase ?? {}) },
+    },
+  };
+}
+
+/** Builds the six-row `treatments` array from the production default, applying
+ *  a partial patch to the named category's row only — every other row (and the
+ *  order) stays exactly as `defaultVatTreatments()` produces it. */
+function vatTreatments(
+  overrides: Partial<Record<VatChargeCategory, Partial<VatTreatment>>> = {},
+): VatTreatment[] {
+  return defaultVatTreatments().map((t) => ({ ...t, ...(overrides[t.category] ?? {}) }));
+}
+
+function vatOverride(overrides: Partial<VatOverride> = {}): VatOverride {
+  return { rate_pct: 0, recoverable_pct: 0, recovery_basis: 'unconfirmed', ...overrides };
 }
 
 function errorsFor(mutate: (i: ReturnType<typeof defaultCalculatorInputsV2>) => void) {
@@ -879,14 +924,16 @@ describe('R10 — cost plan validation', () => {
   function pkg(overrides: Partial<CostPackage> = {}): CostPackage {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
-      contingency_class: 'general', lender_eligible: true, notes: '', ...overrides,
+      contingency_class: 'general', lender_eligible: true, notes: '',
+      vat_override: null, ...overrides,
     };
   }
 
   function feeLine(overrides: Partial<FeeLine> = {}): FeeLine {
     return {
       id: 'fee-x', code: 'other', category: 'professional', label: 'X',
-      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false, ...overrides,
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
+      vat_override: null, ...overrides,
     };
   }
 
@@ -942,9 +989,9 @@ describe('R10 — cost plan validation', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: -5, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: -5 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -953,9 +1000,9 @@ describe('R10 — cost plan validation', () => {
     const valid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 5 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -1018,64 +1065,12 @@ describe('R10 — cost plan validation', () => {
     expect(valid.some((i) => i.field === 'cost_plan.fee_lines' && i.message.includes('unique'))).toBe(false);
   });
 
-  it('hard-errors when a selected-packages contingency names an unknown package id', () => {
-    const invalid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        mode: 'detailed',
-        packages: [pkg({ id: 'pkg-1' })],
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: ['no-such-id'] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].package_ids')).toBe(true);
-
-    const valid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        mode: 'detailed',
-        packages: [pkg({ id: 'pkg-1' })],
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: ['pkg-1'] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].package_ids')).toBe(false);
-  });
-
-  it('hard-errors when a selected-packages contingency names no packages but carries a percentage', () => {
-    const invalid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 5, basis: 'selected_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[1].package_ids')).toBe(true);
-
-    const valid = validateInputs(makeV7Inputs({
-      cost_plan: {
-        contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'selected_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
-        ],
-      },
-    }));
-    expect(valid.some((i) => i.field === 'cost_plan.contingency[1].package_ids')).toBe(false);
-  });
-
   it('hard-errors when there are not exactly three contingency classes', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
         ],
       },
     }));
@@ -1089,9 +1084,9 @@ describe('R10 — cost plan validation', () => {
     const invalid = validateInputs(makeV7Inputs({
       cost_plan: {
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'general', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'general', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -1201,9 +1196,9 @@ describe('R10 — cost plan validation', () => {
       cost_plan: {
         mode: 'headline',
         contingency: [
-          { name: 'general', pct: 60, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 60 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
@@ -1214,13 +1209,62 @@ describe('R10 — cost plan validation', () => {
       cost_plan: {
         mode: 'headline',
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 0, basis: 'all_packages', package_ids: [] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 0 },
         ],
       },
     }));
     expect(valid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.contingency')).toBe(false);
+  });
+
+  it('warns (not errors) when a detailed-mode non-general contingency class has a '
+    + 'non-zero percentage but no package carries its tag (R46)', () => {
+    const invalid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ contingency_class: 'general' })],
+        contingency: [
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 8 },
+        ],
+      },
+    }));
+    expect(invalid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.contingency[2].pct')).toBe(true);
+    // R46 is a deliberate warning, not a hard error -- see the ruling: an error
+    // would repeat R38's defect by turning a migrated document's state into a
+    // hard error that silently downgrades a report to DRAFT.
+    expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.contingency[2].pct')).toBe(false);
+
+    const valid = validateInputs(makeV7Inputs({
+      cost_plan: {
+        mode: 'detailed',
+        packages: [pkg({ contingency_class: 'abnormal' })],
+        contingency: [
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 8 },
+        ],
+      },
+    }));
+    expect(valid.some((i) => i.field === 'cost_plan.contingency[2].pct')).toBe(false);
+  });
+
+  it('does not warn on the R46 rule in headline mode, where all classes resolve against '
+    + 'the whole base build', () => {
+    const issues = validateInputs(makeV7Inputs({
+      conversion_costs: { total_construction_sqm: 100 },
+      cost_plan: {
+        mode: 'headline',
+        contingency: [
+          { name: 'general', pct: 5 },
+          { name: 'existing_building', pct: 0 },
+          { name: 'abnormal', pct: 8 },
+        ],
+      },
+    }));
+    expect(issues.some((i) => i.field.startsWith('cost_plan.contingency[2]'))).toBe(false);
   });
 
   it('warns when a percentage-basis fee line resolves against a zero base', () => {
@@ -1235,5 +1279,492 @@ describe('R10 — cost plan validation', () => {
       cost_plan: { fee_lines: [feeLine({ basis: 'pct_of_base_build', amount_pence: 0, pct: 5 })] },
     }));
     expect(valid.some((i) => i.severity === 'warning' && i.field === 'cost_plan.fee_lines[0].basis')).toBe(false);
+  });
+});
+
+describe('R11 — VAT validation (spec §17.9)', () => {
+  function pkgWithOverride(override: VatOverride | null): CostPackage {
+    return {
+      id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
+      contingency_class: 'general', lender_eligible: true, notes: '',
+      vat_override: override,
+    };
+  }
+
+  function feeLineWithOverride(override: VatOverride | null): FeeLine {
+    return {
+      id: 'fee-1', code: 'other', category: 'professional', label: 'X',
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
+      vat_override: override,
+    };
+  }
+
+  it('does not gain a VAT issue on a pre-v8 document (no vat block)', () => {
+    const issues = validateInputs(makeV7Inputs({}));
+    expect(issues.filter((i) => i.field.startsWith('vat.') || i.field.includes('vat_override'))).toEqual([]);
+  });
+
+  it('produces no VAT issue on the all-defaults v8 document', () => {
+    const issues = validateInputs(makeV8Inputs());
+    expect(issues.filter((i) => i.field.startsWith('vat.') || i.field.includes('vat_override'))).toEqual([]);
+  });
+
+  describe('override in headline mode', () => {
+    it('hard-errors on a package vat_override', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'headline', packages: [pkgWithOverride(vatOverride())] },
+      }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].vat_override')).toBe(true);
+
+      // Fix round 1 (minor 3): the near-miss of the actual precondition is
+      // the SAME override present in DETAILED mode, not the override removed
+      // entirely — that changes only the one field the rule actually gates on.
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride())] },
+      }));
+      expect(valid.some((i) => i.field === 'cost_plan.packages[0].vat_override')).toBe(false);
+    });
+
+    it('hard-errors on a fee-line vat_override', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'headline', fee_lines: [feeLineWithOverride(vatOverride())] },
+      }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'cost_plan.fee_lines[0].vat_override')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', fee_lines: [feeLineWithOverride(vatOverride())] },
+      }));
+      expect(valid.some((i) => i.field === 'cost_plan.fee_lines[0].vat_override')).toBe(false);
+    });
+  });
+
+  describe('rate_pct out of 0..100', () => {
+    const idx = VAT_CHARGE_CATEGORIES.indexOf('construction');
+
+    it('hard-errors when a treatment row rate_pct is negative', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { rate_pct: -1 } }) },
+      }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === `vat.treatments[${idx}].rate_pct`)).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { rate_pct: 20 } }) },
+      }));
+      expect(valid.some((i) => i.field === `vat.treatments[${idx}].rate_pct`)).toBe(false);
+    });
+
+    it('hard-errors when a treatment row rate_pct exceeds 100', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { rate_pct: 101 } }) },
+      }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === `vat.treatments[${idx}].rate_pct`)).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { rate_pct: 100 } }) },
+      }));
+      expect(valid.some((i) => i.field === `vat.treatments[${idx}].rate_pct`)).toBe(false);
+    });
+
+    it('hard-errors when a package vat_override rate_pct is negative', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ rate_pct: -1 }))] },
+      }));
+      expect(invalid.some(
+        (i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].vat_override.rate_pct',
+      )).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ rate_pct: 20 }))] },
+      }));
+      expect(valid.some((i) => i.field === 'cost_plan.packages[0].vat_override.rate_pct')).toBe(false);
+    });
+
+    it('hard-errors when a package vat_override rate_pct exceeds 100', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ rate_pct: 101 }))] },
+      }));
+      expect(invalid.some(
+        (i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].vat_override.rate_pct',
+      )).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ rate_pct: 100 }))] },
+      }));
+      expect(valid.some((i) => i.field === 'cost_plan.packages[0].vat_override.rate_pct')).toBe(false);
+    });
+  });
+
+  describe('recoverable_pct out of 0..100', () => {
+    const idx = VAT_CHARGE_CATEGORIES.indexOf('construction');
+
+    it('hard-errors when a treatment row recoverable_pct is negative', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { recoverable_pct: -1 } }) },
+      }));
+      expect(invalid.some(
+        (i) => i.severity === 'error' && i.field === `vat.treatments[${idx}].recoverable_pct`,
+      )).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { recoverable_pct: 50 } }) },
+      }));
+      expect(valid.some((i) => i.field === `vat.treatments[${idx}].recoverable_pct`)).toBe(false);
+    });
+
+    it('hard-errors when a treatment row recoverable_pct exceeds 100', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { recoverable_pct: 101 } }) },
+      }));
+      expect(invalid.some(
+        (i) => i.severity === 'error' && i.field === `vat.treatments[${idx}].recoverable_pct`,
+      )).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        vat: { treatments: vatTreatments({ construction: { recoverable_pct: 100 } }) },
+      }));
+      expect(valid.some((i) => i.field === `vat.treatments[${idx}].recoverable_pct`)).toBe(false);
+    });
+
+    it('hard-errors when a package vat_override recoverable_pct is negative', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ recoverable_pct: -1 }))] },
+      }));
+      expect(invalid.some(
+        (i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].vat_override.recoverable_pct',
+      )).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ recoverable_pct: 50 }))] },
+      }));
+      expect(valid.some((i) => i.field === 'cost_plan.packages[0].vat_override.recoverable_pct')).toBe(false);
+    });
+
+    it('hard-errors when a package vat_override recoverable_pct exceeds 100', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ recoverable_pct: 101 }))] },
+      }));
+      expect(invalid.some(
+        (i) => i.severity === 'error' && i.field === 'cost_plan.packages[0].vat_override.recoverable_pct',
+      )).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        cost_plan: { mode: 'detailed', packages: [pkgWithOverride(vatOverride({ recoverable_pct: 100 }))] },
+      }));
+      expect(valid.some((i) => i.field === 'cost_plan.packages[0].vat_override.recoverable_pct')).toBe(false);
+    });
+  });
+
+  describe('treatments array shape', () => {
+    it('hard-errors when a category is missing', () => {
+      const missing = defaultVatTreatments().filter((t) => t.category !== 'lender_ancillary');
+      const invalid = validateInputs(makeV8Inputs({ vat: { treatments: missing } }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.treatments')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs());
+      expect(valid.some((i) => i.field === 'vat.treatments')).toBe(false);
+    });
+
+    it('hard-errors when a category is duplicated (and another therefore missing)', () => {
+      const duplicated = defaultVatTreatments().map(
+        (t, i) => (i === 5 ? { ...t, category: 'acquisition' as const } : t),
+      );
+      const invalid = validateInputs(makeV8Inputs({ vat: { treatments: duplicated } }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.treatments')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs());
+      expect(valid.some((i) => i.field === 'vat.treatments')).toBe(false);
+    });
+
+    it('hard-errors when the six categories are present but out of the declared order', () => {
+      const wrongOrder = [...defaultVatTreatments()].reverse();
+      const invalid = validateInputs(makeV8Inputs({ vat: { treatments: wrongOrder } }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.treatments')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs());
+      expect(valid.some((i) => i.field === 'vat.treatments')).toBe(false);
+    });
+  });
+
+  // --- The two RETURN-CYCLE bounds (ruling R38, spec §17.11).
+  //
+  // These cases were originally written on `makeV8Inputs()` unmodified, i.e. on
+  // `registered: false` documents. That was asserting the wrong thing: a rule
+  // about a LIVE return cycle has to be tested on a document whose cycle is
+  // live. Written that way they also pinned the defect R38 exists to fix — the
+  // migration writes `first_period_end_month: 2` onto EVERY document, so an
+  // ungated rule made every stored appraisal with `term_months <= 2` a hard
+  // error, and a hard error marks the report DRAFT.
+  describe('first_period_end_month out of range', () => {
+    it('hard-errors when negative', () => {
+      const invalid = validateInputs(makeV8Inputs({ vat: { registered: true, first_period_end_month: -1 } }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.first_period_end_month')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({ vat: { registered: true, first_period_end_month: 0 } }));
+      expect(valid.some((i) => i.field === 'vat.first_period_end_month')).toBe(false);
+    });
+
+    it('hard-errors when >= term_months', () => {
+      const invalid = validateInputs(makeV8Inputs({
+        finance: { term_months: 3 }, vat: { registered: true, first_period_end_month: 3 },
+      }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.first_period_end_month')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({
+        finance: { term_months: 3 }, vat: { registered: true, first_period_end_month: 2 },
+      }));
+      expect(valid.some((i) => i.field === 'vat.first_period_end_month')).toBe(false);
+    });
+
+    // R38. The migration's own write — `first_period_end_month: 2` on a 1-month
+    // term — must produce NO issue while `registered` is false. Ungated this was
+    // a hard error, which makes `report_safe` false and marks the report DRAFT:
+    // an "inert" migration would have silently downgraded every short-term
+    // appraisal in the database.
+    it('is not validated at all while the engine is dormant, and is the moment it registers', () => {
+      const dormant = makeV8Inputs({ finance: { term_months: 1 } });
+      expect(dormant.vat.registered).toBe(false);
+      expect(dormant.vat.first_period_end_month).toBe(2);
+      expect(validateInputs(dormant).some((i) => i.field === 'vat.first_period_end_month')).toBe(false);
+
+      // The gate DEFERS the rule, it does not delete it.
+      const live = makeV8Inputs({ finance: { term_months: 1 }, vat: { registered: true } });
+      expect(validateInputs(live).some(
+        (i) => i.severity === 'error' && i.field === 'vat.first_period_end_month',
+      )).toBe(true);
+    });
+  });
+
+  describe('repayment_lag_months out of range', () => {
+    it('hard-errors when negative', () => {
+      const invalid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: -1 } }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.repayment_lag_months')).toBe(true);
+
+      const valid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: 0 } }));
+      expect(valid.some((i) => i.field === 'vat.repayment_lag_months')).toBe(false);
+    });
+
+    // R38's second gated field. Tested with a value that is nonsense in any
+    // state (7 > the 6-month cap) so this cannot pass merely because the
+    // default happens to be in range.
+    it('is not validated at all while the engine is dormant, and is the moment it registers', () => {
+      const dormant = makeV8Inputs({ vat: { repayment_lag_months: 7 } });
+      expect(dormant.vat.registered).toBe(false);
+      expect(validateInputs(dormant).some((i) => i.field === 'vat.repayment_lag_months')).toBe(false);
+
+      const live = makeV8Inputs({ vat: { registered: true, repayment_lag_months: 7 } });
+      expect(validateInputs(live).some(
+        (i) => i.severity === 'error' && i.field === 'vat.repayment_lag_months',
+      )).toBe(true);
+    });
+
+    it('hard-errors when greater than 6', () => {
+      const invalid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: 7 } }));
+      expect(invalid.some((i) => i.severity === 'error' && i.field === 'vat.repayment_lag_months')).toBe(true);
+
+      // `registered: true` on the valid half too — under the R38 gate an
+      // unregistered document passes this rule VACUOUSLY, which would make the
+      // in-range assertion prove nothing about the bound.
+      const valid = validateInputs(makeV8Inputs({ vat: { registered: true, repayment_lag_months: 6 } }));
+      expect(valid.some((i) => i.field === 'vat.repayment_lag_months')).toBe(false);
+    });
+  });
+
+  it("hard-errors when togc_treatment is 'applies' with a non-zero acquisition rate", () => {
+    const acqIdx = VAT_CHARGE_CATEGORIES.indexOf('acquisition');
+    const invalid = validateInputs(makeV8Inputs({
+      vat: {
+        treatments: vatTreatments({ acquisition: { rate_pct: 20 } }),
+        purchase: { togc_treatment: 'applies', vendor_opted_to_tax: true },
+      },
+    }));
+    expect(invalid.some(
+      (i) => i.severity === 'error' && i.field === `vat.treatments[${acqIdx}].rate_pct`,
+    )).toBe(true);
+
+    const valid = validateInputs(makeV8Inputs({
+      vat: {
+        treatments: vatTreatments({ acquisition: { rate_pct: 0 } }),
+        purchase: { togc_treatment: 'applies', vendor_opted_to_tax: true },
+      },
+    }));
+    expect(valid.some((i) => i.field === `vat.treatments[${acqIdx}].rate_pct`)).toBe(false);
+  });
+});
+
+describe('R11 — VAT warnings (spec §17.9)', () => {
+  /** Every case here must appear on `validateInputs`/`run.validation` and NOT
+   *  on `reconcile().issues`, which carries only errors bar one `'model'`
+   *  warning (see the module comment at the top of validation.ts). */
+  function assertWarningChannel(inputs: CalculatorInputsV8, field: string) {
+    const issues = validateInputs(inputs);
+    expect(issues.some((i) => i.severity === 'warning' && i.field === field)).toBe(true);
+
+    const schedule = buildSchedule(inputs);
+    const model = runLedger(schedule, inputs.finance, inputs.equity_sources);
+    const recIssues = reconcile(inputs, schedule, model).issues;
+    expect(recIssues.some((i) => i.field === field)).toBe(false);
+  }
+
+  // Local, minimal duplicates of the hard-error describe's helpers above —
+  // that describe scopes them to its own callback, and this is a separate
+  // top-level describe (same convention the R10 cost-plan block already uses
+  // for its own `pkg()`/`feeLine()`).
+  function pkgWithOverride(override: VatOverride | null): CostPackage {
+    return {
+      id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
+      contingency_class: 'general', lender_eligible: true, notes: '',
+      vat_override: override,
+    };
+  }
+
+  function feeLineWithOverride(override: VatOverride | null): FeeLine {
+    return {
+      id: 'fee-1', code: 'other', category: 'professional', label: 'X',
+      basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
+      vat_override: override,
+    };
+  }
+
+  describe("recovery_basis 'zero_rated_sale' while exit_strategy retains a unit", () => {
+    const idx = VAT_CHARGE_CATEGORIES.indexOf('selling');
+
+    it('warns on a retain_all exit', () => {
+      const inputs = makeV8Inputs({
+        vat: {
+          registered: true,
+          treatments: vatTreatments({
+            selling: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+          }),
+        },
+        exit_strategy: { route: 'retain_all' },
+      });
+      assertWarningChannel(inputs, `vat.treatments[${idx}].recovery_basis`);
+    });
+
+    it('warns on a blended exit with one retained unit', () => {
+      const inputs = makeV8Inputs({
+        vat: {
+          registered: true,
+          treatments: vatTreatments({
+            selling: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+          }),
+        },
+        exit_strategy: { route: 'blended', retained_units: [{ unit_id: 'u1', monthly_rent_pence: 1000 }] },
+      });
+      assertWarningChannel(inputs, `vat.treatments[${idx}].recovery_basis`);
+    });
+
+    it('does not warn on a sell_all exit — no unit is retained', () => {
+      const inputs = makeV8Inputs({
+        vat: {
+          registered: true,
+          treatments: vatTreatments({
+            selling: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+          }),
+        },
+        exit_strategy: { route: 'sell_all' },
+      });
+      expect(validateInputs(inputs).some(
+        (i) => i.field === `vat.treatments[${idx}].recovery_basis`,
+      )).toBe(false);
+    });
+
+    // Fix round 1 (Ruling R35). A VatOverride carries its OWN recovery_basis —
+    // exactly the same unsafe assumption is expressible on a package or fee
+    // line, and a scan of vat.treatments alone never sees it. Two more cases,
+    // making this rule's total four, not two.
+    it('warns on a package override recovered as zero_rated_sale', () => {
+      const inputs = makeV8Inputs({
+        vat: { registered: true },
+        cost_plan: {
+          mode: 'detailed',
+          packages: [pkgWithOverride(vatOverride({
+            rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale',
+          }))],
+        },
+        exit_strategy: { route: 'retain_all' },
+      });
+      assertWarningChannel(inputs, 'cost_plan.packages[0].vat_override.recovery_basis');
+    });
+
+    it('warns on a fee-line override recovered as zero_rated_sale', () => {
+      const inputs = makeV8Inputs({
+        vat: { registered: true },
+        cost_plan: {
+          mode: 'detailed',
+          fee_lines: [feeLineWithOverride(vatOverride({
+            rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale',
+          }))],
+        },
+        exit_strategy: { route: 'retain_all' },
+      });
+      assertWarningChannel(inputs, 'cost_plan.fee_lines[0].vat_override.recovery_basis');
+    });
+
+    it('does not warn on a package override recovered as zero_rated_sale when no unit is retained', () => {
+      const inputs = makeV8Inputs({
+        vat: { registered: true },
+        cost_plan: {
+          mode: 'detailed',
+          packages: [pkgWithOverride(vatOverride({
+            rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale',
+          }))],
+        },
+        exit_strategy: { route: 'sell_all' },
+      });
+      expect(validateInputs(inputs).some(
+        (i) => i.field === 'cost_plan.packages[0].vat_override.recovery_basis',
+      )).toBe(false);
+    });
+  });
+
+  it("warns when togc_treatment is 'applies' but the vendor has not opted to tax", () => {
+    const inputs = makeV8Inputs({
+      vat: { purchase: { togc_treatment: 'applies', vendor_opted_to_tax: false } },
+    });
+    assertWarningChannel(inputs, 'vat.purchase.togc_treatment');
+
+    const valid = makeV8Inputs({
+      vat: { purchase: { togc_treatment: 'does_not_apply', vendor_opted_to_tax: false } },
+    });
+    expect(validateInputs(valid).some(
+      (i) => i.field === 'vat.purchase.togc_treatment' && i.severity === 'warning',
+    )).toBe(false);
+  });
+
+  it('warns when registered is false but construction cost is non-zero', () => {
+    const inputs = makeV8Inputs({
+      conversion_costs: { construction_cost_per_sqm_pence: 100_000, total_construction_sqm: 100 },
+    });
+    assertWarningChannel(inputs, 'vat.registered');
+
+    const valid = makeV8Inputs();
+    expect(validateInputs(valid).some(
+      (i) => i.field === 'vat.registered' && i.severity === 'warning',
+    )).toBe(false);
+  });
+
+  it('warns when the final VAT return period reclaim falls outside the modelled term', () => {
+    // Ruling R4: derived from vatReturnPeriods(vat, term_months), gated on a
+    // non-zero resolved rate — never from the result field
+    // vat.receivable_at_maturity_pence, which validateInputs cannot see.
+    const inputs = makeV8Inputs({
+      finance: { term_months: 3 },
+      vat: { registered: true, treatments: vatTreatments({ construction: { rate_pct: 20 } }) },
+    });
+    assertWarningChannel(inputs, 'vat.repayment_lag_months');
+  });
+
+  it('does not warn where the resolved rate is zero, even though the final period is structurally out of term', () => {
+    // Same term/lag/frequency as the case above -- the final period's reclaim
+    // is still null -- but every treatment rate is 0 (the default), so there is
+    // nothing to reclaim and the gate must hold.
+    const inputs = makeV8Inputs({
+      finance: { term_months: 3 },
+      vat: { registered: true },
+    });
+    expect(validateInputs(inputs).some(
+      (i) => i.field === 'vat.repayment_lag_months' && i.severity === 'warning',
+    )).toBe(false);
   });
 });

@@ -15,15 +15,58 @@ function doc(over: Partial<CalculatorInputsV7['cost_plan']>, costs: Partial<Calc
 }
 
 const CLASSES = (general: number, existing: number, abnormal: number) => [
-  { name: 'general' as const, pct: general, basis: 'all_packages' as const, package_ids: [] },
-  { name: 'existing_building' as const, pct: existing, basis: 'all_packages' as const, package_ids: [] },
-  { name: 'abnormal' as const, pct: abnormal, basis: 'all_packages' as const, package_ids: [] },
+  { name: 'general' as const, pct: general },
+  { name: 'existing_building' as const, pct: existing },
+  { name: 'abnormal' as const, pct: abnormal },
 ];
 
 const pkg = (id: string, amount: number, over = {}) => ({
   id, code: 'structure' as const, label: id, amount_pence: amount,
-  contingency_class: 'general' as const, lender_eligible: true, notes: '', ...over,
+  contingency_class: 'general' as const, lender_eligible: true, notes: '',
+  vat_override: null, ...over,
 });
+
+/** R11 spec §17.8. Two small builders used by the planted-divergence test and
+ *  its neighbours below, matching `doc()`'s wholesale-replace semantics for
+ *  `packages` / `contingency` but with sensible per-field defaults so a test
+ *  can write a bare `{ id, code, amount_pence, contingency_class }` package or
+ *  a bare `{ name, pct }` contingency class.
+ *
+ *  `package_ids: []` is stamped onto every contingency class regardless: a
+ *  bare `{ name, pct }` is the correct final input shape (the field is gone
+ *  from ContingencyClass), but stamping it keeps this helper safe to run
+ *  against the PRE-refactor engine too, which still reads `c.package_ids` --
+ *  without it, an absent field is `undefined`, and `undefined.reduce(...)`
+ *  throws before the assertion ever runs, which is a type error, not the
+ *  wrong `base_pence` the RED run is supposed to show. */
+function detailedCostPlanDocument(over: {
+  packages?: Array<Partial<CalculatorInputsV7['cost_plan']['packages'][number]>
+    & Pick<CalculatorInputsV7['cost_plan']['packages'][number], 'id' | 'code' | 'amount_pence' | 'contingency_class'>>;
+  contingency?: CalculatorInputsV7['cost_plan']['contingency'];
+} = {}): CalculatorInputsV7 {
+  const packages = over.packages?.map((p) => (
+    { label: p.id, lender_eligible: true, notes: '', vat_override: null, ...p }
+  ));
+  const contingency = over.contingency?.map((c) => ({ package_ids: [] as string[], ...c }));
+  return doc({
+    mode: 'detailed',
+    ...(packages ? { packages } : {}),
+    ...(contingency ? { contingency } : {}),
+  });
+}
+
+function headlineCostPlanDocument(over: {
+  constructionPerSqm?: number;
+  areaSqm?: number;
+  contingency?: CalculatorInputsV7['cost_plan']['contingency'];
+} = {}): CalculatorInputsV7 {
+  const contingency = over.contingency?.map((c) => ({ package_ids: [] as string[], ...c }));
+  return doc(
+    { mode: 'headline', ...(contingency ? { contingency } : {}) },
+    over.constructionPerSqm !== undefined
+      ? { construction_cost_per_sqm_pence: over.constructionPerSqm } : {},
+  );
+}
 
 describe('computeCostPlan — headline mode', () => {
   it('reproduces the pre-R10 base = rate x area', () => {
@@ -59,25 +102,33 @@ describe('computeCostPlan — three contingency classes round independently', ()
     // 50,000.5 -> 50,001 half-up. Three classes: 150,003.
     // One class at 15% would be 150,001.5 -> 150,002. The two differ by 1p, so
     // this test fails if the classes are ever collapsed for rounding.
+    //
+    // Headline mode: R11 spec §17.8 makes existing_building/abnormal scope by
+    // package tag in DETAILED mode, so a single untagged package could no
+    // longer give all three classes the same base. Headline mode still gives
+    // every class the whole base build, which is what this test needs to
+    // isolate rounding independence from scoping.
     const r = computeCostPlan(
-      doc({ mode: 'detailed', packages: [pkg('p1', 1_000_010)], contingency: CLASSES(5, 5, 5) }),
-      0, 1,
+      headlineCostPlanDocument({ constructionPerSqm: 1_000_010, areaSqm: 1, contingency: CLASSES(5, 5, 5) }),
+      1, 1,
     );
     expect(r.contingency.map((c) => c.amount_pence)).toEqual([50_001, 50_001, 50_001]);
     expect(r.contingency_total_pence).toBe(150_003);
   });
 
-  it('resolves a selected_packages class against only the named packages', () => {
-    // existing_building at 20% of p2 alone (2,000,000) = 400,000.
+  it('resolves existing_building against only its tagged packages, as an addition to general', () => {
+    // existing_building at 20% of p2 alone (2,000,000, tagged existing_building) = 400,000.
     // general at 10% of the whole base build (3,000,000) = 300,000.
     const r = computeCostPlan(
-      doc({
-        mode: 'detailed',
-        packages: [pkg('p1', 1_000_000), pkg('p2', 2_000_000)],
+      detailedCostPlanDocument({
+        packages: [
+          { id: 'p1', code: 'structure', amount_pence: 1_000_000, contingency_class: 'general' },
+          { id: 'p2', code: 'structure', amount_pence: 2_000_000, contingency_class: 'existing_building' },
+        ],
         contingency: [
-          { name: 'general', pct: 10, basis: 'all_packages', package_ids: [] },
-          { name: 'existing_building', pct: 20, basis: 'selected_packages', package_ids: ['p2'] },
-          { name: 'abnormal', pct: 0, basis: 'all_packages', package_ids: [] },
+          { name: 'general', pct: 10 },
+          { name: 'existing_building', pct: 20 },
+          { name: 'abnormal', pct: 0 },
         ],
       }),
       0, 1,
@@ -88,6 +139,66 @@ describe('computeCostPlan — three contingency classes round independently', ()
     expect(r.contingency[1].base_pence).toBe(2_000_000);
     expect(r.contingency[1].amount_pence).toBe(400_000);
     expect(r.contingency_total_pence).toBe(700_000);
+  });
+});
+
+describe('computeCostPlan — contingency scoped by package tag, mode-dependent (R11 spec §17.8)', () => {
+  it('resolves a contingency base from the package TAG, not from a stale id list', () => {
+    // The two mechanisms are made to DISAGREE deliberately. Before this task,
+    // package_ids decided the base -- and this document's helper stamps
+    // package_ids: [] on every class, since nothing here sets it, so the old
+    // mechanism would report 0, not a plausible-looking figure from either
+    // package. After it, the tag decides and the base is the OTHER package
+    // (7,000,000, abnormal's own package, not general's 1,000,000).
+    const inputs = detailedCostPlanDocument({
+      packages: [
+        { id: 'p1', code: 'structure', amount_pence: 1_000_000, contingency_class: 'general' },
+        { id: 'p2', code: 'externals', amount_pence: 7_000_000, contingency_class: 'abnormal' },
+      ],
+      contingency: [
+        { name: 'general', pct: 0 },
+        { name: 'existing_building', pct: 0 },
+        { name: 'abnormal', pct: 10 },
+      ],
+    });
+    const result = computeCostPlan(inputs, 100, 1);
+    const abnormal = result.contingency.find((c) => c.name === 'abnormal');
+    expect(abnormal?.base_pence).toBe(7_000_000);
+    expect(abnormal?.amount_pence).toBe(700_000);
+    expect(abnormal?.basis).toBe('selected_packages');
+  });
+
+  it('gives every contingency class the whole base build in headline mode', () => {
+    // ConversionCostsPage renders all three percentages in BOTH modes, and a
+    // headline document has no packages to tag. Scoping by tag here would
+    // silently zero a live, shipped input path (spec §17.8).
+    const inputs = headlineCostPlanDocument({
+      constructionPerSqm: 100_000, areaSqm: 100,   // base build 10,000,000p
+      contingency: [
+        { name: 'general', pct: 5 },
+        { name: 'existing_building', pct: 15 },
+        { name: 'abnormal', pct: 0 },
+      ],
+    });
+    const result = computeCostPlan(inputs, 100, 1);
+    const existing = result.contingency.find((c) => c.name === 'existing_building');
+    expect(existing?.base_pence).toBe(10_000_000);
+    expect(existing?.amount_pence).toBe(1_500_000);
+    expect(existing?.basis).toBe('all_packages');
+  });
+
+  it('gives general the whole base build in detailed mode, tagged or not', () => {
+    const inputs = detailedCostPlanDocument({
+      packages: [
+        { id: 'p1', code: 'structure', amount_pence: 1_000_000, contingency_class: 'existing_building' },
+        { id: 'p2', code: 'externals', amount_pence: 7_000_000, contingency_class: 'abnormal' },
+      ],
+      contingency: [{ name: 'general', pct: 5 }, { name: 'existing_building', pct: 0 }, { name: 'abnormal', pct: 0 }],
+    });
+    const result = computeCostPlan(inputs, 100, 1);
+    const general = result.contingency.find((c) => c.name === 'general');
+    expect(general?.base_pence).toBe(8_000_000);
+    expect(general?.basis).toBe('all_packages');
   });
 });
 
@@ -105,9 +216,9 @@ describe('computeCostPlan — fee bases never include fees', () => {
         contingency: CLASSES(10, 0, 0),
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false },
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
           { id: 'f2', code: 'other_professional', category: 'professional', label: 'PM',
-            basis: 'fixed', amount_pence: 9_000_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 9_000_000, pct: 0, per_dwelling: false, vat_override: null },
         ],
       }),
       0, 1,
@@ -128,7 +239,7 @@ describe('computeCostPlan — fee bases never include fees', () => {
         contingency: CLASSES(10, 0, 0),
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false },
+            basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
         ],
       }),
       0, 1,
@@ -146,9 +257,9 @@ describe('computeCostPlan — fee bases never include fees', () => {
         contingency: CLASSES(0, 0, 0),
         fee_lines: [
           { id: 'f1', code: 'prior_approval', category: 'statutory', label: 'Prior approval',
-            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true },
+            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true, vat_override: null },
           { id: 'f2', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'fixed', amount_pence: 1_500_000, pct: 0, per_dwelling: false },
+            basis: 'fixed', amount_pence: 1_500_000, pct: 0, per_dwelling: false, vat_override: null },
         ],
       }),
       0, 4,
