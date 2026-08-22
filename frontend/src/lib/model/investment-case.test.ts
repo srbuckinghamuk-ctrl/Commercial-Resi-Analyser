@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  occupancyPctAt, operatingCostAt,
+  occupancyPctAt, grossPotentialMonthlyPence, operatingCostAt,
   noiSeries, stabilisedAnnualNoiPence, OPEX_CODES,
 } from './investment-case';
 import type { OperatingLine } from './investment-case';
@@ -26,6 +26,19 @@ describe('occupancyPctAt (§19.2)', () => {
   it('with ramp_months = 0 is stabilised from the stabilisation month itself', () => {
     expect(occupancyPctAt(3, 3, 0, 96)).toBeCloseTo(96, 9);
     expect(occupancyPctAt(2, 3, 0, 96)).toBe(0);
+  });
+});
+
+describe('grossPotentialMonthlyPence (§19.2)', () => {
+  it('sums the retained rent roll', () => {
+    expect(grossPotentialMonthlyPence([
+      { monthly_rent_pence: 140_000 },
+      { monthly_rent_pence: 155_000 },
+    ])).toBe(295_000);
+  });
+
+  it('is zero for an empty rent roll', () => {
+    expect(grossPotentialMonthlyPence([])).toBe(0);
   });
 });
 
