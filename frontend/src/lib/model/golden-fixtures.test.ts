@@ -88,6 +88,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'p-scotland-levered',
   'q-detailed-cost-plan',
   'r-vat-quarterly',
+  's-dated-programme',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -166,6 +167,26 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   vat_months_incurred_pence: (r) => r.metrics.vat.months.map((m) => m.incurred_pence),
   vat_months_reclaimed_pence: (r) => r.metrics.vat.months.map((m) => m.reclaimed_pence),
   vat_months_carry_pence: (r) => r.metrics.vat.months.map((m) => m.carry_pence),
+  // R12 spec §18.10, fixture S: the derived ProgrammeResult. It hangs off the
+  // SCHEDULE (`schedule.programme`), not off `metrics`, so a dotted
+  // expected_metrics path cannot reach it at all — the same reasoning as
+  // `funding_gap_pence` and the redemption arrays above. The per-phase figures
+  // are pinned as four parallel flat arrays in `programme.phases[]` order
+  // (which is the INPUT `phases[]` order) rather than as an array of objects,
+  // keeping the fixture JSON language-neutral: the Python mirror holds a list
+  // of `DerivedPhase` dataclasses here, and comparing a dataclass against a
+  // dict would never pass.
+  //
+  // `programme_phase_ids` is not decoration. Without it the other three arrays
+  // are positional against a shape nothing pins, so a reordering of `phases[]`
+  // would silently re-key every start, finish and float.
+  programme_finish_month: (r) => r.schedule.programme?.finish_month ?? null,
+  programme_critical_path: (r) => r.schedule.programme?.critical_path ?? null,
+  programme_phase_ids: (r) => r.schedule.programme?.phases.map((p) => p.id) ?? null,
+  programme_phase_start_months: (r) => r.schedule.programme?.phases.map((p) => p.start_month) ?? null,
+  programme_phase_finish_months: (r) => r.schedule.programme?.phases.map((p) => p.finish_month) ?? null,
+  programme_phase_total_float_months:
+    (r) => r.schedule.programme?.phases.map((p) => p.total_float_months) ?? null,
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -241,10 +262,17 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // stops at 7 -- so a v8 fixture asserts its own v8-specific properties instead of
   // the v7 one, in the it.each tables further below.
   const v8Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 8);
+  // R12: fixture S is BORN at v9 -- it has no v8 antecedent, so every
+  // migrate-to-vN loop below excludes it by the same design that excluded
+  // fixture R from the v7 loops (migrateInputsToV8 refuses a v9 document:
+  // RECOGNISED_INPUTS_VERSIONS_V8 stops at 8). Its own properties are asserted
+  // by its pinned expected_metrics and by the v9-specific tests further down.
+  const v9Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 9);
 
-  it('every fixture is v5, v6, v7 or v8, and each group is non-empty', () => {
+  it('every fixture is v5, v6, v7, v8 or v9, and each group is non-empty', () => {
     expect(
-      v5Fixtures.length + v6Fixtures.length + v7Fixtures.length + v8Fixtures.length,
+      v5Fixtures.length + v6Fixtures.length + v7Fixtures.length
+      + v8Fixtures.length + v9Fixtures.length,
     ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
@@ -258,6 +286,56 @@ describe('golden fixtures (shared with the Python engine)', () => {
     expect(v8Fixtures.map((f) => f.name)).toEqual([
       'R — VAT quarterly return cycle, purchase VAT chargeable, levered facility',
     ]);
+    expect(v9Fixtures.map((f) => f.name)).toEqual([
+      'S — fourteen-phase dated programme, slack phases, anchored two-tranche sale, tagged package',
+    ]);
+  });
+
+  // R12 spec §13 guard 1's FIXTURE REQUIREMENT, asserted rather than assumed.
+  // A network in which every phase is critical makes the float column
+  // untestable and the slip-asymmetry guard vacuous: "slipping a float-bearing
+  // phase leaves the finish unchanged" has no witness to run on. The pinned
+  // `programme_phase_total_float_months` array states the floats, but a pin can
+  // be edited to match a regression; this derives the claim from the run.
+  //
+  // Both arms matter. Without the second, a network with NO critical phase at
+  // all — an impossibility that would nonetheless mean the backward pass had
+  // stopped working — would satisfy the first.
+  it('the v9 corpus contains a phase with float >= 1 AND a critical phase (guard 1)', () => {
+    expect(v9Fixtures.length).toBeGreaterThan(0);
+    for (const fx of v9Fixtures) {
+      const programme = runAppraisal(fx.inputs).schedule.programme;
+      expect(programme, `${fx.name} must produce a derived programme block`).not.toBeNull();
+      const floats = programme!.phases.map((p) => p.total_float_months);
+      expect(Math.max(...floats), `${fx.name}: no phase carries float`).toBeGreaterThanOrEqual(1);
+      expect(programme!.critical_path.length, `${fx.name}: no phase is critical`)
+        .toBeGreaterThan(0);
+      // And the critical path is exactly the zero-float set, in phases[] order —
+      // the two are separately derived in programme.ts (a filter over the
+      // topological order versus a per-phase subtraction) and must agree.
+      expect(programme!.critical_path).toEqual(
+        programme!.phases.filter((p) => p.total_float_months === 0).map((p) => p.id),
+      );
+    }
+  });
+
+  // R12 spec §18.6. Fixture S's two tranches carry a `month_offset` that
+  // deliberately DISAGREES with their anchors (20/21 stored, 16/19 resolved),
+  // so a dead anchor cannot hide behind an agreeing fallback. This states that
+  // asymmetry as a property of the document rather than leaving it to the note.
+  it('fixture S\'s sale tranches are anchored, and their stored month_offsets are NOT the resolved months', () => {
+    const fx = v9Fixtures.find((f) => f.name.startsWith('S — '))!;
+    const inputs = fx.inputs as unknown as {
+      sales_phasing: { tranches: Array<{ month_offset: number; anchor: { phase_id: string; offset_months: number } | null }> };
+    };
+    const programme = runAppraisal(fx.inputs).schedule.programme!;
+    const byId = new Map(programme.phases.map((p) => [p.id, p]));
+    expect(inputs.sales_phasing.tranches).toHaveLength(2);
+    for (const tr of inputs.sales_phasing.tranches) {
+      expect(tr.anchor, 'every tranche must be anchored').not.toBeNull();
+      const resolved = byId.get(tr.anchor!.phase_id)!.start_month + tr.anchor!.offset_months;
+      expect(resolved).not.toBe(tr.month_offset);
+    }
   });
 
   for (const fx of v5Fixtures) {
@@ -280,7 +358,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // corpus-wide statement is now the v7 loop immediately below. R11 widens the
   // exclusion to v7 or v8 -- migrateInputsToV6 refuses v8 by the same design
   // (RECOGNISED_INPUTS_VERSIONS_V6 stops at 6).
-  for (const fx of appraisalFixtures.filter((f) => ![7, 8].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -297,7 +375,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R11: restricted to the pre-v8 fixtures -- migrateInputsToV7 refuses a v8
   // document by design (RECOGNISED_INPUTS_VERSIONS_V7 stops at 7). Fixture R (v8)
   // asserts its own identity guarantee in the v8 it.each table further below instead.
-  for (const fx of appraisalFixtures.filter((f) => versionOf(f) !== 8)) {
+  for (const fx of appraisalFixtures.filter((f) => ![8, 9].includes(versionOf(f)))) {
     // R10: the same identity guarantee one version further on, and the one that now
     // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
@@ -355,7 +433,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -367,6 +445,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'P — Scottish acquisition, LBTT non-residential, development finance',
       'Q — detailed cost plan, three contingency classes, levered facility',
       'R — VAT quarterly return cycle, purchase VAT chargeable, levered facility',
+      'S — fourteen-phase dated programme, slack phases, anchored two-tranche sale, tagged package',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
     // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
@@ -375,17 +454,22 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // up would leave the R9 areas/ancillary, the R10 cost_plan AND the R11 vat blocks
     // at their zeroed/legacy-derived/inert defaults, a different document.
     //
+    // R12 widens it once more to include 9: fixture S is BORN at v9 and has no
+    // pre-R8 form at all — it did not exist before R8, and stamping it v3/v4 would
+    // additionally strip the R12 programme network the fixture is entirely about.
+    //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
     // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
-    // so it is vacuously true for every member and can never fail. Enumerating 6/7/8
+    // so it is vacuously true for every member and can never fail. Enumerating 6/7/8/9
     // keeps the check able to fail: it catches a fixture excluded for a FOURTH,
-    // unstated reason (e.g. a future non-v5/v6/v7/v8 fixture, or a change to
+    // unstated reason (e.g. a future non-v5..v9 fixture, or a change to
     // preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
         jurisdictionOf(fx) !== 'england_ni'
-          || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8,
+          || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8
+          || versionOf(fx) === 9,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -603,6 +687,40 @@ describe('golden fixtures (shared with the Python engine)', () => {
         vat_months_carry_pence: [10000000, 15000000, 19999999, 5000000, 10000000, 10000000, 0],
       },
     },
+    // R12 (the same convention this block states): fixture S adds six new FLAT_KEYS
+    // mappers for the derived ProgrammeResult. Each wrong value is a plausible REAL
+    // regression rather than an arbitrary wrong number:
+    //   - finish_month 21 is what §18.2's maximum gives if the MILESTONE arm is
+    //     dropped, i.e. `max(finish)` over duration>=1 phases alone — the programme
+    //     would then be reported as finishing before its own maturity_tail;
+    //   - the critical path with `construction` removed is what the successor-only
+    //     late-finish rule produces (§18.4's correction): its SS successor
+    //     `marketing` would lend it a float of 2 it does not have;
+    //   - the float array with marketing at 0 is a wholly-critical network, the
+    //     state guard 1 exists to reject;
+    //   - the start array with marketing at 8 is an SS lag read as 0 rather than 3;
+    //   - the finish array with practical_completion at 17 is a milestone given a
+    //     one-month duration;
+    //   - the id array with `design` and `procurement` transposed is the reordering
+    //     that would silently re-key the three positional arrays above.
+    {
+      namePrefix: 'S — fourteen-phase dated programme',
+      wrongValues: {
+        programme_finish_month: 21,
+        programme_critical_path: [
+          'acquisition', 'planning', 'conditions', 'strip_out', 'testing',
+          'building_control', 'practical_completion', 'unit_completions', 'sales', 'maturity_tail',
+        ],
+        programme_phase_ids: [
+          'acquisition', 'planning', 'conditions', 'procurement', 'design', 'strip_out',
+          'construction', 'testing', 'building_control', 'practical_completion',
+          'marketing', 'unit_completions', 'sales', 'maturity_tail',
+        ],
+        programme_phase_start_months: [0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 8, 16, 18, 21],
+        programme_phase_finish_months: [1, 4, 6, 5, 7, 8, 14, 15, 16, 17, 15, 18, 21, 21],
+        programme_phase_total_float_months: [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -637,7 +755,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // by design (RECOGNISED_INPUTS_VERSIONS_V6 stops at 6), mirroring the v5Fixtures/
   // v6Fixtures restriction above. The stronger, corpus-wide gate is the v7 table below.
   // R11 widens the exclusion to v7 or v8 -- migrateInputsToV6 refuses v8 the same way.
-  it.each(appraisalFixtures.filter((f) => ![7, 8].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![7, 8, 9].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -700,7 +818,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // documents alike (RECOGNISED_INPUTS_VERSIONS_V7 = 1–7), and refuses v8 by the
   // same design (R11) -- fixture R (v8) is excluded here and gets its own gate in
   // the v8 table below.
-  it.each(appraisalFixtures.filter((f) => versionOf(f) !== 8).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![8, 9].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -752,7 +870,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // rate 0) would fail for it not because the migration is wrong but because they
   // are asserting the wrong claim about an already-registered document. Fixture
   // R's own identity-through-merge property is asserted separately, below.
-  const preV8Fixtures = appraisalFixtures.filter((f) => versionOf(f) !== 8);
+  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9].includes(versionOf(f)));
 
   it.each(preV8Fixtures.map((f) => f.name))(
     'migrating %s to v8 moves no computed figure, and writes the specified block',

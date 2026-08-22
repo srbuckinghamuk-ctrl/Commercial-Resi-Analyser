@@ -406,6 +406,12 @@ def _pipeline_fixtures():
             continue  # names a base_fixture instead of carrying inputs
         if doc["inputs"].get("inputs_version") == 8:
             continue  # fixture R -- already v8, merge branch, not the inert write
+        if (doc["inputs"].get("inputs_version") or 0) > 8:
+            # R12: fixture S is BORN at v9 -- migrate_inputs_to_v8 refuses it
+            # (_RECOGNISED_VERSIONS_V8 stops at 8), so it has no v8 antecedent for
+            # this gate to compare. Its identity is covered by the golden-corpus
+            # expected figures instead (spec Sec 18.7 Rule 1).
+            continue
         yield path.name, doc
 
 

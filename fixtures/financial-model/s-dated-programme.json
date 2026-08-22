@@ -1,0 +1,223 @@
+{
+  "name": "S — fourteen-phase dated programme, slack phases, anchored two-tranche sale, tagged package",
+  "kind": "programme",
+  "note": "R12 spec §18. The release's flagship fixture, and the first document in the corpus BORN at inputs_version 9 — it has no v8 antecedent, so the two v8→v9 migration identity gates (spec §18.7) correctly skip it (they iterate only fixtures whose STORED inputs_version is 8 or below). That is by design, not a gap: there is nothing to compare a v9-born document against, and it is exercised by the hand-derived expected figures below instead.\n\nWHAT IT CARRIES, ALL AT ONCE:\n(a) a FOURTEEN-PHASE precedence network spanning the audit's own phase catalogue, acquisition → maturity_tail, one phase per PhaseCode except `other`;\n(b) `practical_completion` and `maturity_tail` as DURATION-0 MILESTONES (§18.3) — `maturity_tail` is the phase that DEFINES the programme finish (22 = start 21 + 1), which is exactly the case §18.2's milestone arm and §18.4's `own_bound = programme_finish − 1` were corrected for;\n(c) THREE phases with non-zero total float — `marketing` (7), `design` (1) and `procurement` (1) — so the float column and the critical path are both non-vacuous. Guard 1 of §13 requires a fixture whose network is not wholly critical; `programme_phase_total_float_months` is pinned here and a separate corpus test asserts `max(total_float) >= 1` rather than trusting the pin;\n(d) an SS edge with a lag — `marketing` starts SS+3 on `construction` — which is the shape §18.4's correction is about: the successor-only late-finish rule would give `construction` a float of 2 (`late_start(marketing) + 6 − 3 = 21`) when its true float is 0, because an SS edge constrains marketing's START and says nothing about construction's FINISH. `own_bound` (22) is what makes construction critical here;\n(e) an ANCHORED TWO-TRANCHE SALE (§18.6): `unit_completions + 0` → month 16 and `unit_completions + 3` → month 19. Both tranches carry a `month_offset` (20 and 21) that DELIBERATELY DISAGREES with the resolved months — a legal, in-range unanchored fallback that is not the value in use. If the anchors ever went dead, both tranches would land at months 20/21, the first tranche would no longer part-redeem at 16, and peak debt, total interest and profit would all move; the fixture fails loudly rather than passing on a no-op. (Guard 4's anchored/absolute twin test is the separate, dedicated statement; this is the corpus's standing check that the anchor is live at all.);\n(f) `cost_plan.mode: 'detailed'` with a PER-LINE `phase_id` OVERRIDE on the enabling package — `pkg-enabling` (`enabling_strip_out_asbestos`, 6,000,000p) is tagged to `strip_out`, so it spends in months 6–7 rather than with the rest of the build in months 8–13. That is the audit complaint §18 exists to answer: before R12, `enabling_strip_out_asbestos` was a cost code with no timing of its own. A SECOND override sits on the statutory side: `fee-prior-approval` is tagged to `planning`, so it spreads over months 1–3 instead of taking §18.5's month-0 pin — the tagged half of the prior-approval carve-out;\n(g) a LEVERED facility with ROLLED-UP interest (12.0% p.a., committed net 100,000,000p / gross 110,000,000p, 2% arrangement on net, 1% exit on gross), so a slip reaches interest and peak debt rather than stopping at the spend profile.\n\nHAND-DERIVED, INDEPENDENTLY OF BOTH ENGINES, BEFORE EITHER RAN. Every figure below was worked through on paper from the spec's own arithmetic (§18.2 forward pass, §18.4 backward pass, §18.5 bucketing, §18.6 anchor resolution, §16 cost plan, §3.3/§14 acquisition tax, §4.2 waterfall, §4.4/§4.4.1 sweep, §5 finance costs, §7 identity) and then re-checked against a worksheet that imports NOTHING from either engine — see task-15-report.md for the month-by-month ledger. The engines were run only afterwards. No expected figure in this file was produced by running the engine and pasting its output.\n\nPROGRAMME (§18.2/§18.4). Derived starts, in `phases[]` order: 0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 11, 16, 18, 21. Finishes: 1, 4, 6, 5, 7, 8, 14, 15, 16, 16, 15, 18, 21, 21. Total float: 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 7, 0, 0, 0. `finish_month` 22 = `maturity_tail`'s start (21) + 1, the milestone arm of §18.2's maximum; every duration-bearing phase finishes by 21. `critical_path` is the eleven zero-float ids in topological order — acquisition, planning, conditions, strip_out, construction, testing, building_control, practical_completion, unit_completions, sales, maturity_tail. `term_months` is 24, so the overrun rule (finish 22 ≤ 24, milestone start 21 ≤ 23) and the sale-tail rule over the PRE_COMPLETION codes (building_control's finish 16 ≤ 23; practical_completion's start 16 ≤ 22) both pass with headroom — the two months of slack keep the `timeline` sensitivity lever's −2 endpoint measurable rather than turning it into an invalid cell.\n\nCOST STACK (§16). base_build 66,000,000 (6,000,000 enabling + 24,000,000 structure + 18,000,000 envelope + 12,000,000 M&E + 6,000,000 externals); general contingency 5% of the whole base build = 3,300,000, the other two classes at 0%; compliance 0 (detailed mode prices it inside the packages); construction_total 69,300,000. professional_total 8,000,000 (4,000,000 + 1,600,000 + 800,000 + 1,600,000, all fixed). statutory_total 3,400,000 (prior approval 150,000 × 4 dwellings = 600,000, CIL/S106 2,400,000, building control 400,000). conversion_total 80,700,000. lender_eligible_base 60,000,000 (externals is the sole `lender_eligible: false` line). implied_rate 110,000 p/sqm (66,000,000 / 600). EVERY product in this fixture lands on an exact whole-pence figure and NO ROUNDING BOUNDARY is exercised in the cost stack — deliberately, exactly as fixture Q states of itself; the rounding discriminators live in cost-plan.test.ts and curves.test.ts, not here.\n\nBUCKETING (§18.5, as corrected). Amounts bucket by (resolved phase, category) and each bucket's TOTAL spreads once, with that phase's curve. Construction resolves to two buckets: `strip_out` takes 6,000,000 (the tagged enabling package) over its 2-month window, and `construction` takes 63,300,000 — the four untagged packages (60,000,000) PLUS the contingency remainder (3,300,000), which is not a line and always resolves through the category default — over its 6-month window. Professional is one bucket on `design` (8,000,000 over months 1–4). Statutory is two: `planning` takes the tagged prior-approval 600,000 (months 1–3) and `conditions` takes 2,800,000 (months 4–5). Every bucket divides exactly into its window, so `uses_construction_pence` is [0,0,0,0,0,0,3000000,3000000,10550000,10550000,10550000,10550000,10550000,10550000,0×10], professional is 2,000,000 in each of months 1–4, and statutory is 200,000 in each of months 1–3 then 1,400,000 in each of months 4–5. Month 0 carries acquisition and NOTHING else — the untagged-prior-approval month-0 pin is deliberately not exercised here, because tagging it is the half this fixture is for.\n\nACQUISITION (§3.3/§14). Price 100,000,000; SDLT non-residential on 100,000,000 = 0% × 15,000,000 + 2% × 10,000,000 + 5% × 75,000,000 = 3,950,000; legal 500,000; survey 300,000; broker 1% × 100,000,000 = 1,000,000. acquisition_cost 105,750,000. The VAT engine is OFF (`registered: false`), so chargeable consideration is the bare price and irrecoverable VAT is 0.\n\nTHE LEDGER (§4.2/§4.4.1/§5), hand-replayed month by month. Committed cash equity is 105,750,000 — EXACTLY month 0's cash use — so equity buys the land and the facility funds the build, and from month 1 every month draws. `day_one_advance_pence` is 0, so month 0's only facility movement is the capitalised 2,000,000 arrangement fee. Monthly rate is exactly 0.01 (12.0/100/12) and no month's interest lands on a half-penny, so the two engines' rounding conventions cannot diverge here. Balances roll: 2,020,000 (m0) → 4,262,200 → 6,526,822 → 8,814,090 → 12,336,231 → 13,873,593 → 17,042,329 → 20,242,752 → 31,100,680 → 42,067,187 → 53,143,359 → 64,330,293 → 75,629,096 → 87,040,887 (m13) → 87,911,296 → 88,790,409 → 89,678,313 (m16, pre-receipt). PEAK DEBT is that m16 figure, 89,678,313, measured after interest capitalisation and before the sweep, comfortably inside the 110,000,000 gross facility. Tranche 1's net receipts of 73,725,000 are LESS than balance + exit fee (90,778,313), so §4.4's clamp applies: it repays 73,725,000 and the facility does NOT redeem, leaving 15,953,313 to accrue through months 17–19 (→ 16,436,714). Tranche 2's 172,025,000 clears principal plus the 1,100,000 exit fee, redeeming at month 19 and distributing 154,488,286. TOTAL INTEREST 7,461,714; finance costs 10,561,714 (interest + 2,000,000 arrangement + 1,100,000 exit, no ancillary fees). Funding gap 0 in every month, and cost-to-complete never shows a shortfall — undrawn facility less remaining spend is a constant 17,300,000, against a maximum remaining interest of 7,441,714.\n\nPROFIT (§7). cost_before_finance 190,700,000 = 105,750,000 + 69,300,000 + 8,000,000 + 3,400,000 + 4,250,000 selling (1.5% agent on 250,000,000 = 3,750,000, plus 500,000 legal). TDC 201,261,714. GDV 250,000,000 (2 × 55,000,000 + 2 × 70,000,000, no ancillary), sold whole under `sell_all`, so gross receipts equal GDV and nothing is unrealised. profit 48,738,286; profit_on_cost 24.22%; profit_on_gdv 19.50%. gross_ltc 44.56% (peak debt / TDC), net_ltc 44.36% (net advances 82,700,000 = 80,700,000 draws + 2,000,000 capitalised fees, over cost-before-finance-ex-selling 186,450,000), ltgdv_developer 35.87%.\n\nWHAT THIS FIXTURE DOES NOT COVER, so a later author does not assume it does: no `s_curve`, `back_loaded` or `user_defined` phase curve (every phase is straight-line and every bucket divides exactly, so this fixture cannot distinguish a curve regression — curves.test.ts and its Python twin own that); no non-zero `slip_months` and no `phase_slip` scenario override (the base document is unslipped, and the asymmetry guard's slipped twin is a separate test — a fixture that shipped a slip in its own base case could not serve as the zero-slip control); no refinance; no VAT; no retained units; no `other`-coded phase.",
+  "inputs": {
+    "inputs_version": 9,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 100000000,
+      "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000,
+      "broker_fee_pct": 1.0,
+      "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-08-01",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": {
+      "units": [
+        { "id": "u1", "type": "2bed", "floor_area_sqm": 70, "estimated_value_pence": 55000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u2", "type": "2bed", "floor_area_sqm": 70, "estimated_value_pence": 55000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u3", "type": "3bed", "floor_area_sqm": 90, "estimated_value_pence": 70000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u4", "type": "3bed", "floor_area_sqm": 90, "estimated_value_pence": 70000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } }
+      ]
+    },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 0, "cil_s106_pence": 0,
+      "architect_pence": 0, "structural_engineer_pence": 0, "mande_pence": 0,
+      "planning_consultant_pence": 0, "building_control_pence": 0,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 0,
+      "total_construction_sqm": 600, "contingency_pct": 0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "cost_plan": {
+      "mode": "detailed",
+      "packages": [
+        { "id": "pkg-enabling", "code": "enabling_strip_out_asbestos", "label": "Enabling works, strip-out & asbestos removal", "amount_pence": 6000000, "contingency_class": "existing_building", "lender_eligible": true, "notes": "Tagged to the strip_out phase (spec §18.5) — the whole point of the per-line override.", "vat_override": null, "phase_id": "strip_out" },
+        { "id": "pkg-structure", "code": "structure", "label": "Structural repairs and new floors", "amount_pence": 24000000, "contingency_class": "existing_building", "lender_eligible": true, "notes": "", "vat_override": null, "phase_id": null },
+        { "id": "pkg-envelope", "code": "envelope", "label": "Envelope — windows, cladding, roof", "amount_pence": 18000000, "contingency_class": "general", "lender_eligible": true, "notes": "", "vat_override": null, "phase_id": null },
+        { "id": "pkg-mande", "code": "mech_elec_public_health", "label": "M&E and public health installations", "amount_pence": 12000000, "contingency_class": "general", "lender_eligible": true, "notes": "", "vat_override": null, "phase_id": null },
+        { "id": "pkg-externals", "code": "externals", "label": "Externals and landscaping", "amount_pence": 6000000, "contingency_class": "abnormal", "lender_eligible": false, "notes": "", "vat_override": null, "phase_id": null }
+      ],
+      "contingency": [
+        { "name": "general", "pct": 5 },
+        { "name": "existing_building", "pct": 0 },
+        { "name": "abnormal", "pct": 0 }
+      ],
+      "fee_lines": [
+        { "id": "fee-architect", "code": "architect", "category": "professional", "label": "Architect", "basis": "fixed", "amount_pence": 4000000, "pct": 0, "per_dwelling": false, "vat_override": null, "phase_id": null },
+        { "id": "fee-structural", "code": "structural_engineer", "category": "professional", "label": "Structural engineer", "basis": "fixed", "amount_pence": 1600000, "pct": 0, "per_dwelling": false, "vat_override": null, "phase_id": null },
+        { "id": "fee-mande", "code": "mande", "category": "professional", "label": "M&E consultant", "basis": "fixed", "amount_pence": 800000, "pct": 0, "per_dwelling": false, "vat_override": null, "phase_id": null },
+        { "id": "fee-other-prof", "code": "other_professional", "category": "professional", "label": "Other professional fees", "basis": "fixed", "amount_pence": 1600000, "pct": 0, "per_dwelling": false, "vat_override": null, "phase_id": null },
+        { "id": "fee-prior-approval", "code": "prior_approval", "category": "statutory", "label": "Prior approval fee", "basis": "fixed", "amount_pence": 150000, "pct": 0, "per_dwelling": true, "vat_override": null, "phase_id": "planning" },
+        { "id": "fee-cil", "code": "cil_s106", "category": "statutory", "label": "CIL / S106", "basis": "fixed", "amount_pence": 2400000, "pct": 0, "per_dwelling": false, "vat_override": null, "phase_id": null },
+        { "id": "fee-building-control", "code": "building_control", "category": "statutory", "label": "Building control", "basis": "fixed", "amount_pence": 400000, "pct": 0, "per_dwelling": false, "vat_override": null, "phase_id": null }
+      ]
+    },
+    "programme": {
+      "anchor_month": "2026-08",
+      "phases": [
+        { "id": "acquisition", "code": "acquisition", "label": "Acquisition", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [] },
+        { "id": "planning", "code": "planning", "label": "Prior approval / planning", "duration_months": 3, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "acquisition", "type": "FS", "lag_months": 0 }] },
+        { "id": "conditions", "code": "conditions", "label": "Discharge of conditions", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "planning", "type": "FS", "lag_months": 0 }] },
+        { "id": "design", "code": "design", "label": "Technical design", "duration_months": 4, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "planning", "type": "SS", "lag_months": 0 }] },
+        { "id": "procurement", "code": "procurement", "label": "Procurement and main contract", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "design", "type": "FS", "lag_months": 0 }] },
+        { "id": "strip_out", "code": "strip_out", "label": "Enabling works and strip-out", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "conditions", "type": "FS", "lag_months": 0 }] },
+        { "id": "construction", "code": "construction", "label": "Main construction", "duration_months": 6, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "procurement", "type": "FS", "lag_months": 0 }, { "phase_id": "strip_out", "type": "FS", "lag_months": 0 }] },
+        { "id": "testing", "code": "testing", "label": "Testing and commissioning", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "construction", "type": "FS", "lag_months": 0 }] },
+        { "id": "building_control", "code": "building_control", "label": "Building control and warranty sign-off", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "testing", "type": "FS", "lag_months": 0 }] },
+        { "id": "practical_completion", "code": "practical_completion", "label": "Practical completion", "duration_months": 0, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "building_control", "type": "FS", "lag_months": 0 }] },
+        { "id": "marketing", "code": "marketing", "label": "Marketing and reservations", "duration_months": 4, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "construction", "type": "SS", "lag_months": 3 }] },
+        { "id": "unit_completions", "code": "unit_completions", "label": "Unit completions", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "practical_completion", "type": "FS", "lag_months": 0 }] },
+        { "id": "sales", "code": "sales", "label": "Sales run-off", "duration_months": 3, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "unit_completions", "type": "FS", "lag_months": 0 }] },
+        { "id": "maturity_tail", "code": "maturity_tail", "label": "Maturity", "duration_months": 0, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "sales", "type": "FS", "lag_months": 0 }] }
+      ],
+      "category_phase_ids": {
+        "construction": "construction",
+        "professional": "design",
+        "statutory": "conditions"
+      }
+    },
+    "vat": {
+      "registered": false,
+      "return_frequency": "quarterly",
+      "first_period_end_month": 2,
+      "repayment_lag_months": 1,
+      "treatments": [
+        { "category": "acquisition", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "construction", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "professional", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "statutory", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "selling", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "lender_ancillary", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" }
+      ],
+      "purchase": {
+        "vendor_opted_to_tax": false,
+        "togc_treatment": "unconfirmed",
+        "evidence_status": "unconfirmed",
+        "notes": ""
+      }
+    },
+    "finance": {
+      "funding_source": "development_finance", "day_one_advance_pence": 0,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 100000000,
+      "committed_gross_facility_pence": 110000000, "annual_interest_rate_pct": 12.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 24, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 105750000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "sell_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 500000, "retained_units": []
+    },
+    "sales_phasing": {
+      "tranches": [
+        { "month_offset": 20, "pct_of_gross_receipts": 30, "anchor": { "phase_id": "unit_completions", "offset_months": 0 } },
+        { "month_offset": 21, "pct_of_gross_receipts": 70, "anchor": { "phase_id": "unit_completions", "offset_months": 3 } }
+      ]
+    },
+    "refinance": null,
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2, "phase_slip_phase_id": null, "phase_slip_months": 0 }
+    },
+    "deal_spider": {
+      "storeys": 4, "building_height_m": 13, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 6, "exit_sell": true, "exit_refinance": false, "exit_hold": false,
+      "exit_part_sale": false, "prior_approval_window_months": 3, "programme_contingency_months": 2,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 250000000,
+    "gdv_internal_pence": 250000000,
+    "gdv_ancillary_pence": 0,
+    "gross_sales_pence": 250000000,
+    "acquisition_tax_pence": 3950000,
+    "chargeable_consideration_pence": 100000000,
+    "sdlt_pence": 3950000,
+    "acquisition_cost_pence": 105750000,
+    "construction_cost_pence": 69300000,
+    "professional_fees_pence": 8000000,
+    "statutory_costs_pence": 3400000,
+    "selling_costs_pence": 4250000,
+    "irrecoverable_vat_pence": 0,
+    "cost_before_finance_pence": 190700000,
+    "finance_costs_pence": 10561714,
+    "total_development_cost_pence": 201261714,
+    "profit_pence": 48738286,
+    "profit_is_unrealised": false,
+    "profit_on_cost_pct": 24.22,
+    "profit_on_gdv_pct": 19.5,
+    "peak_debt_pence": 89678313,
+    "peak_debt_month": 16,
+    "day_one_advance_pence": 0,
+    "gross_ltc_pct": 44.56,
+    "net_ltc_pct": 44.36,
+    "ltgdv_developer_pct": 35.87,
+    "equity_contributed_pence": 105750000,
+    "funding_gap_pence": 0,
+    "cost_to_complete_first_shortfall_month": null,
+    "cost_to_complete_max_shortfall_pence": 0,
+    "redemption_balance_at_disposal_pence": 16436714,
+    "redemption_schedule_months": [16, 19],
+    "redemption_schedule_balances_pence": [89678313, 16436714],
+    "developed_area_sqm": 600,
+    "area_bridge.developed_area_sqm": 600,
+    "area_bridge.manual_area_sqm": 600,
+    "area_bridge.unit_nia_sqm": 320,
+    "area_bridge.developed_gia_sqm": 0,
+    "area_bridge.nia_to_gia_pct": null,
+    "cost_plan.mode": "detailed",
+    "cost_plan.base_build_pence": 66000000,
+    "cost_plan.contingency_total_pence": 3300000,
+    "cost_plan.compliance_pence": 0,
+    "cost_plan.construction_total_pence": 69300000,
+    "cost_plan.professional_total_pence": 8000000,
+    "cost_plan.statutory_total_pence": 3400000,
+    "cost_plan.conversion_total_pence": 80700000,
+    "cost_plan.lender_eligible_base_pence": 60000000,
+    "cost_plan.implied_rate_pence_per_sqm": 110000,
+    "uses_construction_pence": [0, 0, 0, 0, 0, 0, 3000000, 3000000, 10550000, 10550000, 10550000, 10550000, 10550000, 10550000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "programme_finish_month": 22,
+    "programme_critical_path": ["acquisition", "planning", "conditions", "strip_out", "construction", "testing", "building_control", "practical_completion", "unit_completions", "sales", "maturity_tail"],
+    "programme_phase_ids": ["acquisition", "planning", "conditions", "design", "procurement", "strip_out", "construction", "testing", "building_control", "practical_completion", "marketing", "unit_completions", "sales", "maturity_tail"],
+    "programme_phase_start_months": [0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 11, 16, 18, 21],
+    "programme_phase_finish_months": [1, 4, 6, 5, 7, 8, 14, 15, 16, 16, 15, 18, 21, 21],
+    "programme_phase_total_float_months": [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 7, 0, 0, 0]
+  }
+}

@@ -263,6 +263,11 @@ def _pipeline_fixtures():
         doc = json.loads(path.read_text())
         if doc.get("kind") == "sensitivity":
             continue  # names a base_fixture instead of carrying inputs
+        if (doc["inputs"].get("inputs_version") or 0) > 6:
+            # R12: fixture S is BORN at v9 -- migrate_inputs_to_v6 refuses it by
+            # the same design that makes it refuse any version above its own
+            # roster, so it has no antecedent for this gate to compare.
+            continue
         yield path.name, doc
 
 

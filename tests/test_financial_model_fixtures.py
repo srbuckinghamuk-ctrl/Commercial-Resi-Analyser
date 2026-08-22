@@ -34,8 +34,12 @@ from app.financial_model.types import (
     AnyCalculatorInputs,
     CalculatorInputsV5,
     CalculatorInputsV7,
+    CalculatorInputsV9,
+    CategoryPhaseIds,
     cost_plan_from_legacy_costs,
+    Phase,
     ProgrammeInputs,
+    ProgrammeNetwork,
     ProgrammePackage,
     ProgrammePackages,
     SalesPhasingInputs,
@@ -67,6 +71,7 @@ EXPECTED_FIXTURE_STEMS = [
     "p-scotland-levered",
     "q-detailed-cost-plan",
     "r-vat-quarterly",
+    "s-dated-programme",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -178,6 +183,38 @@ _FLAT_KEYS = {
     "vat_months_incurred_pence": lambda r: [m.incurred_pence for m in r.metrics.vat.months],
     "vat_months_reclaimed_pence": lambda r: [m.reclaimed_pence for m in r.metrics.vat.months],
     "vat_months_carry_pence": lambda r: [m.carry_pence for m in r.metrics.vat.months],
+    # R12 spec Sec 18.10, fixture S: the derived ProgrammeResult. It hangs off the
+    # SCHEDULE (schedule.programme), not off metrics, so a dotted expected_metrics
+    # path cannot reach it at all -- the same reasoning as funding_gap_pence and the
+    # redemption arrays above. The per-phase figures are pinned as four parallel flat
+    # arrays in programme.phases[] order (which is the INPUT phases[] order) rather
+    # than as a list of objects, keeping the fixture JSON language-neutral: this
+    # engine holds DerivedPhase dataclasses here and the TS engine holds objects.
+    #
+    # programme_phase_ids is not decoration. Without it the other three arrays are
+    # positional against a shape nothing pins, so a reordering of phases[] would
+    # silently re-key every start, finish and float.
+    "programme_finish_month": (
+        lambda r: r.schedule.programme.finish_month if r.schedule.programme else None
+    ),
+    "programme_critical_path": (
+        lambda r: list(r.schedule.programme.critical_path) if r.schedule.programme else None
+    ),
+    "programme_phase_ids": (
+        lambda r: [p.id for p in r.schedule.programme.phases] if r.schedule.programme else None
+    ),
+    "programme_phase_start_months": (
+        lambda r: [p.start_month for p in r.schedule.programme.phases]
+        if r.schedule.programme else None
+    ),
+    "programme_phase_finish_months": (
+        lambda r: [p.finish_month for p in r.schedule.programme.phases]
+        if r.schedule.programme else None
+    ),
+    "programme_phase_total_float_months": (
+        lambda r: [p.total_float_months for p in r.schedule.programme.phases]
+        if r.schedule.programme else None
+    ),
 }
 
 
@@ -237,13 +274,20 @@ _V7_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) =
 # would have to drop `vat` to produce one) -- see _RECOGNISED_VERSIONS_V7, which stops
 # at 7 -- so a v8 fixture asserts its own v8-specific properties instead of the v7 one.
 _V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 8]
+# R12: fixture S is BORN at v9 -- it has no v8 antecedent, so every migrate-to-vN
+# parametrisation below excludes it by the same design that excluded fixture R from
+# the v7 ones (migrate_inputs_to_v8 refuses a v9 document: _RECOGNISED_VERSIONS_V8
+# stops at 8). Its own properties are asserted by its pinned expected_metrics and by
+# the v9-specific tests further down.
+_V9_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 9]
 
 
-def test_every_fixture_is_v5_v6_v7_or_v8_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_v6_v7_v8_or_v9_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
+        + len(_V9_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -252,6 +296,54 @@ def test_every_fixture_is_v5_v6_v7_or_v8_and_each_group_is_non_empty() -> None:
     ]
     assert [p.stem for p in _V7_FIXTURES] == ["q-detailed-cost-plan"]
     assert [p.stem for p in _V8_FIXTURES] == ["r-vat-quarterly"]
+    assert [p.stem for p in _V9_FIXTURES] == ["s-dated-programme"]
+
+
+def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
+    """R12 spec Sec 13 guard 1's FIXTURE REQUIREMENT, asserted rather than assumed.
+
+    A network in which every phase is critical makes the float column untestable and
+    the slip-asymmetry guard vacuous: "slipping a float-bearing phase leaves the
+    finish unchanged" has no witness to run on. The pinned
+    programme_phase_total_float_months array states the floats, but a pin can be
+    edited to match a regression; this derives the claim from the run.
+
+    Both arms matter. Without the second, a network with NO critical phase at all --
+    an impossibility that would nonetheless mean the backward pass had stopped
+    working -- would satisfy the first. Mirrors golden-fixtures.test.ts."""
+    assert len(_V9_FIXTURES) > 0
+    for path in _V9_FIXTURES:
+        doc = _load_fixture(path)
+        programme = run_appraisal(parse_calculator_inputs(doc["inputs"])).schedule.programme
+        assert programme is not None, f"{path.stem} must produce a derived programme block"
+        floats = [p.total_float_months for p in programme.phases]
+        assert max(floats) >= 1, f"{path.stem}: no phase carries float"
+        assert len(programme.critical_path) > 0, f"{path.stem}: no phase is critical"
+        # And the critical path is exactly the zero-float set, in phases[] order --
+        # the two are separately derived in programme.py (a filter over the
+        # topological order versus a per-phase subtraction) and must agree.
+        assert programme.critical_path == [
+            p.id for p in programme.phases if p.total_float_months == 0
+        ]
+
+
+def test_fixture_s_tranches_are_anchored_and_their_month_offsets_are_not_the_resolved_months() -> None:
+    """R12 spec Sec 18.6. Fixture S's two tranches carry a ``month_offset`` that
+    deliberately DISAGREES with their anchors (20/21 stored, 16/19 resolved), so a
+    dead anchor cannot hide behind an agreeing fallback. This states that asymmetry
+    as a property of the document rather than leaving it to the fixture note.
+    Mirrors golden-fixtures.test.ts."""
+    doc = _load_fixture(FIXTURE_DIR / "s-dated-programme.json")
+    inputs = parse_calculator_inputs(doc["inputs"])
+    programme = run_appraisal(inputs).schedule.programme
+    assert programme is not None
+    by_id = {p.id: p for p in programme.phases}
+    tranches = inputs.sales_phasing.tranches
+    assert len(tranches) == 2
+    for tr in tranches:
+        assert tr.anchor is not None, "every tranche must be anchored"
+        resolved = by_id[tr.anchor.phase_id].start_month + tr.anchor.offset_months
+        assert resolved != tr.month_offset
 
 
 @pytest.mark.parametrize("path", _V5_FIXTURES, ids=lambda p: p.stem)
@@ -277,7 +369,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # below. R11 widens the exclusion to v7 or v8 -- migrate_inputs_to_v6 refuses v8 the
 # same way (_RECOGNISED_VERSIONS_V6 stops at 6).
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9)
 ]
 
 
@@ -299,7 +391,9 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # document by design (_RECOGNISED_VERSIONS_V7 stops at 7). Fixture R (v8) asserts
 # its own identity guarantee in test_fixture_r_reproduces_its_metrics_after_
 # migration_to_v8 below instead.
-_PRE_V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) != 8]
+_PRE_V8_FIXTURES = [
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9)
+]
 
 
 @pytest.mark.parametrize("path", _PRE_V8_FIXTURES, ids=lambda p: p.stem)
@@ -897,7 +991,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     excluded = [p for p in APPRAISAL_FIXTURES if p not in _PRE_R8_FIXTURES]
     assert [p.stem for p in excluded] == [
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
-        "q-detailed-cost-plan", "r-vat-quarterly",
+        "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -906,12 +1000,16 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # the R10 cost_plan AND the R11 vat blocks at their zeroed/legacy-derived/inert
     # defaults, a different document.
     #
+    # R12 widens it once more to include 9: fixture S is BORN at v9 and has no
+    # pre-R8 form at all -- it did not exist before R8, and stamping it v3/v4 would
+    # additionally strip the R12 programme network the fixture is entirely about.
+    #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
-    # so it is vacuously true for every member and can never fail. Enumerating 6/7/8
+    # so it is vacuously true for every member and can never fail. Enumerating 6/7/8/9
     # keeps the check able to fail: it catches a fixture excluded for a FOURTH,
-    # unstated reason (e.g. a future non-v5/v6/v7/v8 fixture, or a change to
+    # unstated reason (e.g. a future non-v5..v9 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -920,6 +1018,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 6
             or version == 7
             or version == 8
+            or version == 9
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -1104,6 +1203,39 @@ _NEGATIVE_CONTROLS = [
         # peak off by one penny.
         "vat_months_carry_pence": [10000000, 15000000, 19999999, 5000000, 10000000, 10000000, 0],
     }),
+    # R12 (the same convention stated above): fixture S adds six new _FLAT_KEYS
+    # mappers for the derived ProgrammeResult. Each wrong value is a plausible REAL
+    # regression rather than an arbitrary wrong number:
+    #   - finish_month 21 is what Sec 18.2's maximum gives if the MILESTONE arm is
+    #     dropped, i.e. max(finish) over duration>=1 phases alone -- the programme
+    #     would then be reported as finishing before its own maturity_tail;
+    #   - the critical path with `construction` removed is what the successor-only
+    #     late-finish rule produces (Sec 18.4's correction): its SS successor
+    #     `marketing` would lend it a float of 2 it does not have;
+    #   - the float array with marketing at 0 is a wholly-critical network, the state
+    #     guard 1 exists to reject;
+    #   - the start array with marketing at 8 is an SS lag read as 0 rather than 3;
+    #   - the finish array with practical_completion at 17 is a milestone given a
+    #     one-month duration;
+    #   - the id array with `design` and `procurement` transposed is the reordering
+    #     that would silently re-key the three positional arrays above.
+    # Mirrors golden-fixtures.test.ts's negativeControls entry for fixture S.
+    ("s-dated-programme", {
+        "programme_finish_month": 21,
+        "programme_critical_path": [
+            "acquisition", "planning", "conditions", "strip_out", "testing",
+            "building_control", "practical_completion", "unit_completions", "sales",
+            "maturity_tail",
+        ],
+        "programme_phase_ids": [
+            "acquisition", "planning", "conditions", "procurement", "design", "strip_out",
+            "construction", "testing", "building_control", "practical_completion",
+            "marketing", "unit_completions", "sales", "maturity_tail",
+        ],
+        "programme_phase_start_months": [0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 8, 16, 18, 21],
+        "programme_phase_finish_months": [1, 4, 6, 5, 7, 8, 14, 15, 16, 17, 15, 18, 21, 21],
+        "programme_phase_total_float_months": [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    }),
 ]
 
 
@@ -1166,6 +1298,43 @@ def _programme_for_term(term_months: int) -> ProgrammeInputs:
     )
 
 
+def _network_for_term(term_months: int) -> ProgrammeNetwork:
+    """R12: the v9 sibling of _programme_for_term, for a fixture BORN at v9.
+    migrate_inputs_to_v8 refuses such a document (_RECOGNISED_VERSIONS_V8 stops at
+    8), so the "programme" variant below cannot route it through the legacy shape.
+
+    Deliberately the same THREE predecessor-free phases the v8 -> v9 migration
+    itself produces (spec Sec 18.7), with the same windows _programme_for_term
+    uses, so the variant asserts the same claim on both arms: the ledger
+    invariants hold for a document whose spend is driven by a programme fitted to
+    its own term, whatever shape that programme is stored in."""
+    term = max(1, int(term_months))
+    cap = max(1, term - 2)
+    return ProgrammeNetwork(
+        anchor_month=None,
+        phases=[
+            Phase(
+                id="construction", code="construction", label="Construction",
+                duration_months=min(6, cap), slip_months=0, start_offset=0,
+                curve=SimpleSpendCurve(kind="s_curve"), predecessors=[],
+            ),
+            Phase(
+                id="professional", code="design", label="Professional",
+                duration_months=min(3, cap), slip_months=0, start_offset=0,
+                curve=SimpleSpendCurve(kind="straight_line"), predecessors=[],
+            ),
+            Phase(
+                id="statutory", code="planning", label="Statutory",
+                duration_months=min(2, cap), slip_months=0, start_offset=0,
+                curve=SimpleSpendCurve(kind="back_loaded"), predecessors=[],
+            ),
+        ],
+        category_phase_ids=CategoryPhaseIds(
+            construction="construction", professional="professional", statutory="statutory",
+        ),
+    )
+
+
 def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalculatorInputs]]:
     """Mirrors invariants.test.ts's `variants()`: derived transformations of each
     fixture, widening coverage without new hand calcs. Each variant is deep-copied off
@@ -1192,9 +1361,28 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # migrate_inputs_to_v8 accepts all four versions (upgrade, upgrade, upgrade, merge),
     # and the isinstance check below still holds unchanged: CalculatorInputsV8
     # subclasses CalculatorInputsV7.
-    programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
-    assert isinstance(programmed, CalculatorInputsV7)
-    programmed.programme = _programme_for_term(programmed.finance.term_months)
+    # R12: a v9-born fixture (fixture S) cannot go through migrate_inputs_to_v8 at
+    # all -- it refuses a v9 document by the same design that made it refuse nothing
+    # below 9. It takes the v9 arm instead, and gets a v9 NETWORK fitted to its term
+    # rather than the legacy three-package block.
+    if inputs.inputs_version >= 9:
+        programmed = migrate_inputs_to_v9(inputs.model_dump(mode="json"))
+        assert isinstance(programmed, CalculatorInputsV9)
+        programmed.programme = _network_for_term(programmed.finance.term_months)
+        # Replacing the network orphans any Sec 18.6 anchor that named one of the
+        # phases just discarded. ``anchor: None`` is that field's own documented
+        # meaning -- "use month_offset" -- so clearing it keeps the variant a
+        # document the validator would accept, rather than one that only survives
+        # because build_schedule's defensive degrade catches an absent phase_id.
+        if programmed.sales_phasing is not None:
+            for tranche in programmed.sales_phasing.tranches:
+                tranche.anchor = None
+        if programmed.refinance is not None:
+            programmed.refinance.anchor = None
+    else:
+        programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
+        assert isinstance(programmed, CalculatorInputsV7)
+        programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
         ("retain_all", retained),
