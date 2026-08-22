@@ -291,6 +291,67 @@ class ProgrammePackages(Model):
     statutory: ProgrammePackage
 
 
+# --- Release 12 (calc 2.11.0): the dated, dependent programme (spec Sec 18) ---
+
+PhaseCode = Literal[
+    "acquisition", "planning", "conditions", "design", "procurement",
+    "strip_out", "construction", "testing", "building_control",
+    "practical_completion", "marketing", "unit_completions",
+    "sales", "maturity_tail", "other",
+]
+
+#: Spec Sec 18.8. The sale-tail rule binds by CODE-SET MEMBERSHIP.
+#: ``practical_completion`` is IN the set (PC is the boundary and must fall
+#: inside the tail); ``other`` is NOT (an unclassified phase gets the weaker
+#: overrun rule rather than a hard error nobody can act on).
+PRE_COMPLETION_CODES: tuple[str, ...] = (
+    "acquisition", "planning", "conditions", "design", "procurement",
+    "strip_out", "construction", "testing", "building_control",
+    "practical_completion",
+)
+
+DependencyType = Literal["FS", "SS"]
+
+
+class Dependency(Model):
+    """Port rule #7 exception, mirroring ProgrammePackage: ``lag_months`` carries
+    no *lower* Pydantic bound. Spec Sec 18.8's rules are hard *validation*
+    errors owned by validation.py, so that a negative lag surfaces as the
+    spec-worded ValidationIssue rather than a 422 Pydantic parse failure -- and
+    so the negative cases stay constructible in the validation tests."""
+
+    phase_id: str
+    type: DependencyType
+    lag_months: int = Field(le=1200)
+
+
+class Phase(Model):
+    """``slip_months`` is SIGNED (spec Sec 18.2) -- negative is acceleration --
+    and carries the same resource-exhaustion ceilings, not spec rules, as
+    ProgrammePackage's."""
+
+    id: str
+    code: PhaseCode
+    label: str
+    duration_months: int = Field(le=1200)
+    slip_months: int = Field(ge=-1200, le=1200)
+    start_offset: int = Field(le=1200)
+    curve: SpendCurve
+    predecessors: list[Dependency] = Field(default_factory=list, max_length=1200)
+
+
+class CategoryPhaseIds(Model):
+    construction: str
+    professional: str
+    statutory: str
+
+
+class ProgrammeNetwork(Model):
+    anchor_month: str | None = None
+    phases: list[Phase] = Field(default_factory=list, max_length=1200)
+    category_phase_ids: CategoryPhaseIds
+
+
 class ProgrammeInputs(Model):
     # Display-only calendar anchor, "YYYY-MM". None = month indices only.
     anchor_month: str | None = None
