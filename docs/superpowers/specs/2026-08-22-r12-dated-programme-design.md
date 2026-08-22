@@ -366,6 +366,14 @@ statutory:
 No `CostPackage` or `FeeLine` gains a `phase_id`. `sales_phasing` tranches and
 `refinance` gain `anchor: null`.
 
+**All four scenarios** gain `phase_slip_phase_id: null` and
+`phase_slip_months: 0` (§18.9). Both are no-ops by construction: `applyScenario`
+matches the id against each phase, and `null` matches none.
+
+Every one of these five additions is a written `null` or `0` — the migration
+adds no value that any engine reads as live. That is the property the identity
+gates below actually test.
+
 Because a predecessor-free phase's start *is* its floor (§18.1), every derived
 window equals the old window identically, for every curve and every term.
 
@@ -422,6 +430,8 @@ network:
 | pre-PC phase breaches the sale tail | §6.1's message, unchanged |
 | resolved tranche months not strictly increasing | names the tranche |
 | an `anchor` referencing an absent phase | names the tranche or `refinance` |
+| a scenario's `phase_slip_phase_id` naming an absent phase, or set while `programme` is `null` | names the scenario |
+| a `phase_slip` axis or tornado range with `phase_id` null, or a non-`phase_slip` one with `phase_id` set (§12.6) | names the axis or range |
 
 ### The two window rules, stated exactly
 
@@ -482,6 +492,59 @@ validation**. The derivation must never be the thing that decides a phase fits.
 | Lever | Unit | Effect on the inputs document |
 |---|---|---|
 | `phase_slip` | months | adds to `programme.phases[<id>].slip_months` for a named phase |
+
+### The lever needs a target, and that reaches two shapes it must not bypass
+
+The existing four levers are scalars: `SensitivityLever` is a bare string union
+and `overridesFor()` maps each to one field of `ScenarioOverrides`. `phase_slip`
+is the first lever that needs a **target** as well as a magnitude, and following
+that through the existing code changes two shapes. Both changes are required;
+neither is optional, and the alternative in each case is worse.
+
+**1. `SensitivityAxis` and `TornadoRange` gain `phase_id: string | null`.**
+Required when `lever === 'phase_slip'`, and required to be `null` otherwise —
+both hard validation errors under §12.6. Two consequences for existing rules:
+
+- the "rows and cols must differ" check (`sensitivity.ts:168`) compares the pair
+  `(lever, phase_id)`, not `lever` alone — two `phase_slip` axes targeting
+  different phases are a legitimate matrix and must not be rejected as duplicate;
+- the tornado's duplicate-lever check (`sensitivity.ts:184`) keys the same pair,
+  so a tornado may carry one bar per slipped phase.
+
+Encoding the target in the lever string instead (`'phase_slip:planning'`) was
+rejected: `LEVER_ORDER` is a closed set and the §12.6 membership check is what
+stops a misspelled lever reaching the engine. A lever whose name is
+user-composed cannot be a member of a closed set, so that check would have to be
+loosened into a prefix match — the exact shape R10 caught when a `=== 6`
+predicate had been loosened to `!== 5`.
+
+**2. `ScenarioOverrides` gains `phase_slip_phase_id: string | null` and
+`phase_slip_months: number`.** Every lever reaches the document through
+`applyScenario()`, which takes a `ScenarioOverrides` and is the single point at
+which an inputs document is adjusted for *both* the four named scenarios and
+every sensitivity cell. A lever that bypassed it would be the only one that did,
+and the two adjustment paths would diverge silently.
+
+`ScenarioOverrides` is a **stored** block (`scenarios.{base,upside,downside,
+severe}`), so this is a v9 schema addition and part of the migration (§18.7),
+not a runtime-only type. That is a gain, not a cost: the four named scenarios can
+then express slippage directly — a downside case whose planning slips three
+months is the single most common thing a credit paper models, and today it is
+inexpressible.
+
+`applyScenario` writes the slip additively onto the named phase and leaves every
+other phase untouched:
+
+```
+phase.slip_months += (overrides.phase_slip_phase_id === phase.id)
+                     ? overrides.phase_slip_months : 0
+```
+
+Additive, not assignment, so a base-case slip already recorded on the document is
+stressed **from** its recorded position rather than overwritten by it. An
+override naming a `phase_id` no phase carries, or naming one while `programme` is
+`null`, is a hard validation error (§18.8) — not a silent no-op, which is what
+would make the lever look live while doing nothing.
 
 §12.1 requires that any lever added in a later release define its composition
 order **at the time it is added**. `phase_slip` writes a field no other lever
