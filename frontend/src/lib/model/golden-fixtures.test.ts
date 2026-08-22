@@ -1007,6 +1007,8 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         label: '', gdv_adjustment_pct: Number(step),
         construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       });
       expect(levered.unit_mix.units.every((u) => u.estimated_value_pence === expected)).toBe(true);
     }
@@ -1015,6 +1017,8 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         label: '', gdv_adjustment_pct: 0,
         construction_cost_adjustment_pct: Number(step), timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       });
       expect(levered.conversion_costs.construction_cost_per_sqm_pence).toBe(expected);
     }
@@ -1023,6 +1027,8 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         label: '', gdv_adjustment_pct: 0,
         construction_cost_adjustment_pct: 0, timeline_adjustment_months: Number(step),
         interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       });
       expect(levered.finance.term_months).toBe(expected);
     }
@@ -1031,6 +1037,8 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         label: '', gdv_adjustment_pct: 0,
         construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: Number(step),
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       });
       expect(levered.finance.annual_interest_rate_pct).toBe(expected);
     }
@@ -1085,6 +1093,8 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
           construction_cost_adjustment_pct: rowStep,
           timeline_adjustment_months: 0,
           interest_rate_adjustment_pct: 0,
+          phase_slip_phase_id: null,
+          phase_slip_months: 0,
         })).metrics;
         const cell = result.matrix[ri][ci];
         expect(cell.profit_pence).toBe(expected.profit_pence);

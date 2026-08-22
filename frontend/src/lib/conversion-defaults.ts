@@ -115,6 +115,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: 0,
     timeline_adjustment_months: 0,
     interest_rate_adjustment_pct: 0,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
   upside: {
     label: 'Upside',
@@ -122,6 +124,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: -5,
     timeline_adjustment_months: -2,
     interest_rate_adjustment_pct: 0,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
   downside: {
     label: 'Downside',
@@ -129,6 +133,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: 15,
     timeline_adjustment_months: 3,
     interest_rate_adjustment_pct: 1,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
   severe: {
     label: 'Severe',
@@ -136,6 +142,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: 20,
     timeline_adjustment_months: 6,
     interest_rate_adjustment_pct: 2,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
 };
 

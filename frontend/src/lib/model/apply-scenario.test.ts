@@ -17,6 +17,8 @@ const BASE_OVERRIDES: ScenarioOverrides = {
   construction_cost_adjustment_pct: 0,
   timeline_adjustment_months: 0,
   interest_rate_adjustment_pct: 0,
+  phase_slip_phase_id: null,
+  phase_slip_months: 0,
 };
 
 function fixtureInputs(): CalculatorInputsV2 {
@@ -36,6 +38,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 0,
       timeline_adjustment_months: 0,
       interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(adjusted.unit_mix.units[0].estimated_value_pence).toBe(33_000_000);
     expect(adjusted.unit_mix.units[1].estimated_value_pence).toBe(22_000_000);
@@ -49,6 +53,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: 3,
       interest_rate_adjustment_pct: 1,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(adjusted.conversion_costs.construction_cost_per_sqm_pence).toBe(
       Math.round(base.conversion_costs.construction_cost_per_sqm_pence * 1.15),
@@ -85,6 +91,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: -3,
       interest_rate_adjustment_pct: 1.0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
 
     const staged = applyScenario(
@@ -94,6 +102,8 @@ describe('applyScenario', () => {
         construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       }),
       {
         label: 'Test',
@@ -101,6 +111,8 @@ describe('applyScenario', () => {
         construction_cost_adjustment_pct: 15,
         timeline_adjustment_months: -3,
         interest_rate_adjustment_pct: 1.0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       },
     );
 
@@ -123,6 +135,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: 3,
       interest_rate_adjustment_pct: 1,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(out.finance.committed_net_facility_pence).toBe(v2Inputs.finance.committed_net_facility_pence);
     expect(out.finance.committed_gross_facility_pence).toBe(v2Inputs.finance.committed_gross_facility_pence);
@@ -157,6 +171,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: 3,
       interest_rate_adjustment_pct: 1,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
 
     // v3-only fields pass through identically — the generic's whole point:
@@ -204,6 +220,7 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
       {
         label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null, phase_slip_months: 0,
       },
     );
 
@@ -222,6 +239,7 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
       {
         label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null, phase_slip_months: 0,
       },
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
@@ -271,10 +289,10 @@ describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
         packages: [
           { id: 'p1', code: 'structure', label: 'Structure',
             amount_pence: 3_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
           { id: 'p2', code: 'envelope', label: 'Envelope',
             amount_pence: 1_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
         ],
         contingency,
         fee_lines: [],
@@ -338,10 +356,12 @@ describe('the cost lever does not double-apply to compliance or fees (headline m
           {
             id: 'fee-fixed', code: 'architect', category: 'professional', label: 'Architect',
             basis: 'fixed', amount_pence: 200_000, pct: 0, per_dwelling: false, vat_override: null,
+            phase_id: null,
           },
           {
             id: 'fee-pct', code: 'other_professional', category: 'professional', label: 'Other professional fees',
             basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null,
+            phase_id: null,
           },
         ],
       },

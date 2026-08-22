@@ -59,6 +59,7 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       irrecoverable_vat_pence: 0,
     },
     vat: emptyVat(u.length),
+    programme: null,
   };
 }
 
@@ -763,9 +764,9 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         packages: [
           { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
             amount_pence: 1_000_000, contingency_class: 'existing_building',
-            lender_eligible: true, notes: '', vat_override: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
           { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
-            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null },
+            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
         ],
         contingency: [
           { name: 'general', pct: 5 },
@@ -774,9 +775,11 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         ],
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null,
+            phase_id: null },
           { id: 'f2', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null },
+            basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null,
+            phase_id: null },
         ],
       },
     });

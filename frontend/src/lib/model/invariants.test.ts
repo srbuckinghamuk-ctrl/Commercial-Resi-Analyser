@@ -464,6 +464,8 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
             construction_cost_adjustment_pct: rowStep,
             timeline_adjustment_months: 0,
             interest_rate_adjustment_pct: 0,
+            phase_slip_phase_id: null,
+            phase_slip_months: 0,
           });
           expect(levered.finance.committed_net_facility_pence)
             .toBe(inputs.finance.committed_net_facility_pence);
@@ -525,6 +527,8 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
       construction_cost_adjustment_pct: 0,
       timeline_adjustment_months: -3,
       interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(levered.finance.term_months).toBe(9);
 

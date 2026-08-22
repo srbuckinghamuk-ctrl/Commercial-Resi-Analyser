@@ -54,7 +54,15 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   uses[0].acquisition_pence = acquisitionTotal;
   uses[0].statutory_pence += priorApproval;
 
-  const programme = 'programme' in inputs ? inputs.programme : null;
+  // R12 (spec §18.1): `programme` is a two-state INPUT field across the version
+  // union — the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence
+  // network (`{ phases: [...] }`, no `packages`). No v9 document reaches this
+  // build path yet (Task 11 wires the network arm); `'packages' in` narrows the
+  // union to the legacy shape this function still knows how to place, without
+  // touching the v4-v8 auto/explicit behaviour below.
+  const programme = 'programme' in inputs && inputs.programme != null && 'packages' in inputs.programme
+    ? inputs.programme
+    : null;
 
   if (programme == null) {
     // auto windows — calc 2.1.0 behaviour, byte-identical (spec §6)
@@ -185,5 +193,9 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       irrecoverable_vat_pence: vat.total_irrecoverable_pence,
     },
     vat,
+    // R12 spec §18.10. Task 11 replaces this with the real derivation on the
+    // network path; every document built here today is on the auto-window or
+    // legacy-explicit-programme path, so this is null, exactly as the input is.
+    programme: null,
   };
 }

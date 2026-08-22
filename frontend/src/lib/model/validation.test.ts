@@ -925,7 +925,7 @@ describe('R10 — cost plan validation', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: null, ...overrides,
+      vat_override: null, ...overrides, phase_id: overrides.phase_id ?? null,
     };
   }
 
@@ -933,7 +933,7 @@ describe('R10 — cost plan validation', () => {
     return {
       id: 'fee-x', code: 'other', category: 'professional', label: 'X',
       basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
-      vat_override: null, ...overrides,
+      vat_override: null, ...overrides, phase_id: overrides.phase_id ?? null,
     };
   }
 
@@ -1287,7 +1287,7 @@ describe('R11 — VAT validation (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override,
+      vat_override: override, phase_id: null,
     };
   }
 
@@ -1295,7 +1295,7 @@ describe('R11 — VAT validation (spec §17.9)', () => {
     return {
       id: 'fee-1', code: 'other', category: 'professional', label: 'X',
       basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
-      vat_override: override,
+      vat_override: override, phase_id: null,
     };
   }
 
@@ -1613,7 +1613,7 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override,
+      vat_override: override, phase_id: null,
     };
   }
 
@@ -1621,7 +1621,7 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     return {
       id: 'fee-1', code: 'other', category: 'professional', label: 'X',
       basis: 'fixed', amount_pence: 1000, pct: 0, per_dwelling: false,
-      vat_override: override,
+      vat_override: override, phase_id: null,
     };
   }
 

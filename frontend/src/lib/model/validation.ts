@@ -659,7 +659,11 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   // Spec §6 (Release 3a): explicit programme windows must sit inside [0, term-2] —
   // the schedule's programme arm only clamps the upper bound, so a negative
   // start_offset or an oversized window must be caught here as a hard error.
-  if ('programme' in inputs && inputs.programme != null) {
+  // R12 (spec §18.1): `programme` is a two-state field across the version union —
+  // the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence network
+  // (`{ phases: [...] }`, no `packages`). `'packages' in` narrows to the legacy
+  // shape this block validates; the v9 network's own validation is Task 6's.
+  if ('programme' in inputs && inputs.programme != null && 'packages' in inputs.programme) {
     const term = Math.max(1, Math.floor(inputs.finance.term_months));
     for (const [name, pkg] of Object.entries(inputs.programme.packages)) {
       const field = `programme.packages.${name}`;

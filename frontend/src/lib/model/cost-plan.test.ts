@@ -23,7 +23,7 @@ const CLASSES = (general: number, existing: number, abnormal: number) => [
 const pkg = (id: string, amount: number, over = {}) => ({
   id, code: 'structure' as const, label: id, amount_pence: amount,
   contingency_class: 'general' as const, lender_eligible: true, notes: '',
-  vat_override: null, ...over,
+  vat_override: null, phase_id: null, ...over,
 });
 
 /** R11 spec §17.8. Two small builders used by the planted-divergence test and
@@ -45,7 +45,7 @@ function detailedCostPlanDocument(over: {
   contingency?: CalculatorInputsV7['cost_plan']['contingency'];
 } = {}): CalculatorInputsV7 {
   const packages = over.packages?.map((p) => (
-    { label: p.id, lender_eligible: true, notes: '', vat_override: null, ...p }
+    { label: p.id, lender_eligible: true, notes: '', vat_override: null, ...p, phase_id: p.phase_id ?? null }
   ));
   const contingency = over.contingency?.map((c) => ({ package_ids: [] as string[], ...c }));
   return doc({
@@ -216,9 +216,11 @@ describe('computeCostPlan — fee bases never include fees', () => {
         contingency: CLASSES(10, 0, 0),
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
+            basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null,
+            phase_id: null },
           { id: 'f2', code: 'other_professional', category: 'professional', label: 'PM',
-            basis: 'fixed', amount_pence: 9_000_000, pct: 0, per_dwelling: false, vat_override: null },
+            basis: 'fixed', amount_pence: 9_000_000, pct: 0, per_dwelling: false, vat_override: null,
+            phase_id: null },
         ],
       }),
       0, 1,
@@ -239,7 +241,8 @@ describe('computeCostPlan — fee bases never include fees', () => {
         contingency: CLASSES(10, 0, 0),
         fee_lines: [
           { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
+            basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null,
+            phase_id: null },
         ],
       }),
       0, 1,
@@ -257,9 +260,11 @@ describe('computeCostPlan — fee bases never include fees', () => {
         contingency: CLASSES(0, 0, 0),
         fee_lines: [
           { id: 'f1', code: 'prior_approval', category: 'statutory', label: 'Prior approval',
-            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true, vat_override: null },
+            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true, vat_override: null,
+            phase_id: null },
           { id: 'f2', code: 'architect', category: 'professional', label: 'Architect',
-            basis: 'fixed', amount_pence: 1_500_000, pct: 0, per_dwelling: false, vat_override: null },
+            basis: 'fixed', amount_pence: 1_500_000, pct: 0, per_dwelling: false, vat_override: null,
+            phase_id: null },
         ],
       }),
       0, 4,

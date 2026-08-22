@@ -126,9 +126,9 @@ function detailedInputs(): CalculatorInputsV8 {
       packages: [
         { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
           amount_pence: 1_000_000, contingency_class: 'existing_building',
-          lender_eligible: true, notes: '', vat_override: null },
+          lender_eligible: true, notes: '', vat_override: null, phase_id: null },
         { id: 'p2', code: 'structure', label: 'Structural frame', amount_pence: 3_000_000,
-          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null },
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
       ],
       contingency: [
         { name: 'general', pct: 5 },
@@ -137,9 +137,11 @@ function detailedInputs(): CalculatorInputsV8 {
       ],
       fee_lines: [
         { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-          basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
+          basis: 'pct_of_construction_total', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null,
+          phase_id: null },
         { id: 'f2', code: 'cil_s106', category: 'statutory', label: 'CIL / S106',
-          basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null },
+          basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null,
+          phase_id: null },
       ],
     },
   };
@@ -358,7 +360,8 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('renders a fixed-basis fee as an amount input, with no resolved-base note', () => {
     const inputs = feeTestInputs([
       { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null },
+        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null,
+        phase_id: null },
     ]);
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
@@ -369,7 +372,8 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('renders a pct_of_base_build fee with the resolved base and amount read from the run', () => {
     const inputs = feeTestInputs([
       { id: 'f2', code: 'other_professional', category: 'professional', label: 'QS fee',
-        basis: 'pct_of_base_build', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null },
+        basis: 'pct_of_base_build', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null,
+        phase_id: null },
     ]);
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
@@ -382,7 +386,8 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('renders a pct_of_construction_total fee against a base that includes contingency, unlike pct_of_base_build', () => {
     const inputs = feeTestInputs([
       { id: 'f3', code: 'other_professional', category: 'professional', label: 'QS fee',
-        basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null },
+        basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null,
+        phase_id: null },
     ]);
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
@@ -395,7 +400,8 @@ describe('ConversionCostsPage — fee rows render every basis from the run (I2, 
   it('switching a fee basis selector calls onChange with the new basis', () => {
     const inputs = feeTestInputs([
       { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null },
+        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null,
+        phase_id: null },
     ]);
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
@@ -421,7 +427,8 @@ describe('ConversionCostsPage — a fee basis switch zeroes the field the new ba
   it('zeroes amount_pence when switching FROM fixed TO a percentage basis', () => {
     const inputs = feeTestInputs([
       { id: 'f1', code: 'architect', category: 'professional', label: 'Architect',
-        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null },
+        basis: 'fixed', amount_pence: 500_000, pct: 0, per_dwelling: false, vat_override: null,
+        phase_id: null },
     ]);
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
@@ -443,7 +450,8 @@ describe('ConversionCostsPage — a fee basis switch zeroes the field the new ba
   it('zeroes pct when switching FROM a percentage basis TO fixed', () => {
     const inputs = feeTestInputs([
       { id: 'f2', code: 'other_professional', category: 'professional', label: 'QS fee',
-        basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null },
+        basis: 'pct_of_base_build', amount_pence: 0, pct: 6, per_dwelling: false, vat_override: null,
+        phase_id: null },
     ]);
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
@@ -487,7 +495,8 @@ describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (m
         ...base.cost_plan,
         fee_lines: [
           { id: 'pa', code: 'prior_approval', category: 'statutory', label: 'Prior approval fee',
-            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true, vat_override: null },
+            basis: 'fixed', amount_pence: 9_600, pct: 0, per_dwelling: true, vat_override: null,
+            phase_id: null },
         ],
       },
     };

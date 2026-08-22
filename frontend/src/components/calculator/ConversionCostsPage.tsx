@@ -156,6 +156,7 @@ function newPackage(): CostPackage {
     lender_eligible: false,
     notes: '',
     vat_override: null,
+    phase_id: null,
   };
 }
 

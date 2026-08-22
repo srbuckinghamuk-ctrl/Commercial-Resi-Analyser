@@ -536,11 +536,12 @@ function detailedV7Document(): CalculatorInputsV7 {
           // nulls every override" vacuously true — the exact shape of blindness
           // R9 recorded against a gate that could not fail.
           vat_override: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+          phase_id: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope',
           amount_pence: 10_000_000, contingency_class: 'existing_building',
-          lender_eligible: true, notes: '', vat_override: null,
+          lender_eligible: true, notes: '', vat_override: null, phase_id: null,
         },
       ],
       contingency: v7.cost_plan.contingency.map((c) => ({

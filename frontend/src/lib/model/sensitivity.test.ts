@@ -354,6 +354,8 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
       construction_cost_adjustment_pct: worst.row_step,
       timeline_adjustment_months: 0,
       interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(levered.finance.committed_net_facility_pence).toBe(inputs.finance.committed_net_facility_pence);
     expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);

@@ -8,6 +8,7 @@ import type { AreaBridgeInputs, AreaBridgeResult } from './areas';
 import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax';
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 import type { VatInputs, VatResult } from './vat';
+import type { ProgrammeNetwork, DerivedPhase } from './programme';
 
 export type { SpendCurve };
 
@@ -148,6 +149,33 @@ export interface RefinanceInputs {
   legal_costs_pence: number;
 }
 
+export type {
+  PhaseCode, DependencyType, Dependency, Phase, ProgrammeNetwork,
+  DerivedPhase, ProgrammeDerivation,
+} from './programme';
+export { PHASE_CODES, PRE_COMPLETION_CODES } from './programme';
+
+/** R12 spec §18.6. A month expressed relative to a phase's derived start. */
+export interface PhaseAnchor {
+  phase_id: string;
+  offset_months: number;
+}
+
+export interface SalesPhasingTrancheV9 {
+  month_offset: number;
+  pct_of_gross_receipts: number;
+  /** null = use `month_offset` (the migration default, §18.7). */
+  anchor: PhaseAnchor | null;
+}
+
+export interface SalesPhasingInputsV9 {
+  tranches: SalesPhasingTrancheV9[];
+}
+
+export interface RefinanceInputsV9 extends RefinanceInputs {
+  anchor: PhaseAnchor | null;
+}
+
 export interface CalculatorInputsV4 {
   inputs_version: 4;
   project_id: string | null;
@@ -229,9 +257,24 @@ export interface CalculatorInputsV8 extends Omit<CalculatorInputsV7, 'inputs_ver
   vat: VatInputs;
 }
 
+/**
+ * R12 spec §18.1. `programme` is a two-state field: `null` = §6 auto windows
+ * (bit-identical to calc 2.10.0), or a precedence network. The v8
+ * `{ packages: {...} }` shape does NOT survive migration — there are two live
+ * spend paths, not three.
+ */
+export interface CalculatorInputsV9 extends Omit<CalculatorInputsV8,
+  'inputs_version' | 'programme' | 'sales_phasing' | 'refinance'> {
+  inputs_version: 9;
+  programme: ProgrammeNetwork | null;
+  sales_phasing: SalesPhasingInputsV9 | null;
+  refinance: RefinanceInputsV9 | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
-  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8;
+  | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
+  | CalculatorInputsV9;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -301,6 +344,14 @@ export interface Schedule {
    *  the finished uses/receipts arrays and written back into them — never the
    *  other way round. */
   vat: VatResult;
+  /** R12 spec §18.10. null on the auto-window path, exactly as the INPUT is —
+   *  a derived block is never synthesised for a document that never asked for
+   *  one, and the auto path has no dependency structure to report. */
+  programme: {
+    finish_month: number;
+    critical_path: string[];
+    phases: DerivedPhase[];
+  } | null;
 }
 
 export interface LedgerMonth {
@@ -512,4 +563,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.10.0';
+export const CALC_VERSION = '2.11.0';

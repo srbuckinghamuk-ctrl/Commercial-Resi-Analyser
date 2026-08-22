@@ -375,7 +375,15 @@ export function generateInvestmentMemo(
   // documents carry none of these blocks at all, so every read is `in`-guarded
   // exactly like lenderValuation above. anchor_month is display-only (spec §2.1)
   // and never enters calculation; monthLabel is the memo's single conversion point.
-  const programme = 'programme' in inputs ? inputs.programme : null;
+  // R12 (spec §18.1): `programme` is a two-state INPUT field across the version
+  // union — the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence
+  // network (`{ phases: [...] }`, no `packages`). No v9 document reaches this
+  // memo path yet, but the type must narrow correctly for the union either way;
+  // `'packages' in` distinguishes the two shapes without touching the v4-v8
+  // rendering below.
+  const programme = 'programme' in inputs && inputs.programme != null && 'packages' in inputs.programme
+    ? inputs.programme
+    : null;
   const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
   const refinance = 'refinance' in inputs ? inputs.refinance : null;
   const anchor = programme?.anchor_month ?? null;

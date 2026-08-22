@@ -215,6 +215,8 @@ function overridesFor(levers: Partial<Record<SensitivityLever, number>>): Scenar
     construction_cost_adjustment_pct: levers.construction_cost ?? 0,
     timeline_adjustment_months: levers.timeline ?? 0,
     interest_rate_adjustment_pct: levers.interest_rate ?? 0,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   };
 }
 

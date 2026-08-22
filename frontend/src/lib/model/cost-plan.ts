@@ -48,6 +48,10 @@ export interface CostPackage {
    *  (validation, Task 9). null on every migrated line and on every line the
    *  user has not overridden. Read ONLY through resolveVatTreatment(). */
   vat_override: VatOverride | null;
+  /** R12 spec §18.5. Overrides the category default for this line's spend
+   *  window. null on every migrated row and on every line the user has not
+   *  re-tagged; resolved ONLY through `resolvedPhaseId()` (Task 11). */
+  phase_id: string | null;
 }
 
 /** R11 spec §17.8. One mechanism: the package's own `contingency_class` tag.
@@ -103,6 +107,10 @@ export interface FeeLine {
    *  (validation, Task 9). null on every migrated line and on every line the
    *  user has not overridden. Read ONLY through resolveVatTreatment(). */
   vat_override: VatOverride | null;
+  /** R12 spec §18.5. Overrides the category default for this line's spend
+   *  window. null on every migrated row and on every line the user has not
+   *  re-tagged; resolved ONLY through `resolvedPhaseId()` (Task 11). */
+  phase_id: string | null;
 }
 
 export interface CostPlanInputs {
@@ -157,6 +165,7 @@ export function costPlanFromLegacyCosts(cc: ConversionCostInputs): CostPlanInput
     pct: 0,
     per_dwelling: perDwelling,
     vat_override: null,
+    phase_id: null,
   });
   return {
     mode: 'headline',
