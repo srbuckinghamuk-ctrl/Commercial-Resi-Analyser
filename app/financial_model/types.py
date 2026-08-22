@@ -332,14 +332,19 @@ class Dependency(Model):
 
 class Phase(Model):
     """``slip_months`` is SIGNED (spec Sec 18.2) -- negative is acceleration --
-    and carries the same resource-exhaustion ceilings, not spec rules, as
-    ProgrammePackage's."""
+    and carries no lower bound, for the same reason PhaseAnchor.offset_months
+    does not: sign and range are a spec rule owned by validation.py (Task 10),
+    not a Pydantic 422. Its ``le=1200`` ceiling is the same resource-exhaustion
+    backstop as ``duration_months``/``start_offset`` below, not a spec rule --
+    and matches programme.ts's ``Phase.slip_months``, a plain ``number`` with
+    no bound at all. ``duration_months`` and ``start_offset`` are unsigned in
+    the spec, so they carry no lower bound either, only the same ceiling."""
 
     id: str
     code: PhaseCode
     label: str
     duration_months: int = Field(le=1200)
-    slip_months: int = Field(ge=-1200, le=1200)
+    slip_months: int = Field(le=1200)
     start_offset: int = Field(le=1200)
     curve: SpendCurve
     predecessors: list[Dependency] = Field(default_factory=list, max_length=1200)
@@ -394,12 +399,18 @@ class RefinanceInputs(Model):
 
 
 class PhaseAnchor(Model):
-    """Spec Sec 18.6. ``offset_months`` carries no lower bound for the same
-    reason SalesPhasingTranche.month_offset does not: validation.py owns the
-    window rule and the spec-worded message."""
+    """Spec Sec 18.6. ``offset_months`` is SIGNED and carries no lower bound,
+    for the same reason SalesPhasingTranche.month_offset does not: sign and
+    range are a spec rule owned by validation.py (Task 10), which reports a
+    spec-worded ``ValidationIssue`` rather than a generic Pydantic 422. The
+    ``le=1200`` ceiling is not a spec rule -- it is a resource-exhaustion
+    backstop, guarding against a huge positive month count driving per-month
+    array allocation before any rule can reject it. A hugely negative value
+    allocates nothing and is simply rejected by validation, so it earns no
+    ceiling of its own."""
 
     phase_id: str
-    offset_months: int = Field(ge=-1200, le=1200)
+    offset_months: int = Field(le=1200)
 
 
 class SalesPhasingTrancheV9(SalesPhasingTranche):
