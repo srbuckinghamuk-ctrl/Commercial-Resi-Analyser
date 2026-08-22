@@ -211,7 +211,10 @@ export function validateSensitivityConfig(
       (axis.lever === 'timeline' || axis.lever === 'phase_slip')
       && axis.steps.some((s) => !Number.isInteger(s))
     ) {
-      issues.push({ severity: 'error', field, message: 'Timeline steps must be whole months.' });
+      // Fix round 1, Finding 5: worded per the actual offending lever, not a fixed
+      // "Timeline" — this surfaces verbatim in the calculator's issues panel.
+      const label = axis.lever === 'timeline' ? 'Timeline steps' : 'phase_slip steps';
+      issues.push({ severity: 'error', field, message: `${label} must be whole months.` });
     }
   }
 
@@ -247,10 +250,16 @@ export function validateSensitivityConfig(
   // not the lever alone — two `phase_slip` axes targeting different phases are a
   // legitimate matrix, not a duplicate.
   if (leverKey(config.rows) === leverKey(config.cols)) {
-    issues.push({
-      severity: 'error', field: 'sensitivity.cols.lever',
-      message: 'The row and column axes must use different levers.',
-    });
+    // Fix round 1, Finding 5: two identical-lever axes and two same-phase
+    // `phase_slip` axes are different mistakes, and the message now says so — a
+    // reader seeing "must use different levers" against two `phase_slip` axes
+    // naming the SAME phase would otherwise wonder why `phase_slip`/`phase_slip`
+    // on different phases is allowed a few lines above.
+    const message = config.rows.lever === 'phase_slip' && config.cols.lever === 'phase_slip'
+      ? 'Two phase_slip axes must target different phases (the row and column axes '
+        + 'must use different levers, or different phase_slip targets).'
+      : 'The row and column axes must use different levers.';
+    issues.push({ severity: 'error', field: 'sensitivity.cols.lever', message });
   }
 
   const seen = new Set<string>();
@@ -283,9 +292,11 @@ export function validateSensitivityConfig(
       (range.lever === 'timeline' || range.lever === 'phase_slip')
       && (!Number.isInteger(range.low) || !Number.isInteger(range.high))
     ) {
+      // Fix round 1, Finding 5: same rewording as the axis rule above.
+      const label = range.lever === 'timeline' ? 'Timeline bounds' : 'phase_slip bounds';
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
-        message: 'Timeline bounds must be whole months.',
+        message: `${label} must be whole months.`,
       });
     }
     // §18.8/§18.9, same pairing rule as the axes above.
@@ -329,6 +340,26 @@ interface LeverSetting {
   value: number;
 }
 
+/**
+ * A true no-op scenario: every lever at its identity value. Applied once at the
+ * START of every measurement — including the base case, whose `settings` is
+ * `[]` — so `measure()` always routes through `applyScenario` at least once (fix
+ * round 1, Finding 6). Without this, the base case bypassed `applyScenario`
+ * entirely and the §12.5 "base case is the unadjusted appraisal" test stopped
+ * exercising `applyScenario`'s own zero-value arithmetic — a defect there (e.g.
+ * a multiplier that isn't truly 1 at zero adjustment) would have gone
+ * undetected by that test.
+ */
+const ZERO_SCENARIO: ScenarioOverrides = {
+  label: '',
+  gdv_adjustment_pct: 0,
+  construction_cost_adjustment_pct: 0,
+  timeline_adjustment_months: 0,
+  interest_rate_adjustment_pct: 0,
+  phase_slip_phase_id: null,
+  phase_slip_months: 0,
+};
+
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
  *  setting's own lever does not own is left at its no-op value (§12.1: the five
  *  levers write to disjoint fields), so applying several settings in sequence via
@@ -364,15 +395,21 @@ function unmeasured(errors: ValidationIssue[]): SensitivityMetrics {
  * passes is appraised. An unmeasured position never reaches the ledger, so the suite does
  * not depend on `buildSchedule`'s defensive term clamp holding.
  *
- * `settings` is applied via `applyScenario` once per setting, in order — never combined
- * into one `ScenarioOverrides` — precisely because two settings can both be `phase_slip`
- * (§18.9) and a single overrides object cannot carry two simultaneous targets. Every
- * setting's own lever is disjoint from every other's field (§12.1), so the sequential
- * application composes exactly as one combined call would for the four scalar levers,
- * and correctly for two different phase_slip targets besides.
+ * `settings` is applied via `applyScenario` once per setting, in order, ON TOP OF a
+ * leading `ZERO_SCENARIO` pass — never combined into one `ScenarioOverrides` — precisely
+ * because two settings can both be `phase_slip` (§18.9) and a single overrides object
+ * cannot carry two simultaneous targets. Every setting's own lever is disjoint from
+ * every other's field (§12.1), so the sequential application composes exactly as one
+ * combined call would for the four scalar levers, and correctly for two different
+ * phase_slip targets besides. The leading zero pass means the base case (`settings ===
+ * []`) still goes through `applyScenario` exactly once, the same as every levered
+ * position — see `ZERO_SCENARIO`'s own comment.
  */
 function measure(inputs: AnyCalculatorInputs, settings: LeverSetting[]): SensitivityMetrics {
-  const levered = settings.reduce((doc, s) => applyScenario(doc, overridesFor(s)), inputs);
+  const levered = settings.reduce(
+    (doc, s) => applyScenario(doc, overridesFor(s)),
+    applyScenario(inputs, ZERO_SCENARIO),
+  );
   const errors = validateInputs(levered).filter((i) => i.severity === 'error');
   if (errors.length > 0) return unmeasured(errors);
 

@@ -383,8 +383,12 @@ def test_phase_slip_adds_additively_to_the_named_phase_only():
 
 
 def test_null_phase_slip_phase_id_matches_no_phase_the_migration_no_op():
+    """Fix round 1, Finding 2: months=0 cannot fail for any predicate that
+    matches the wrong phase -- a broken match still adds zero. A nonzero
+    magnitude makes this non-vacuous: a mutated predicate that makes a null
+    target match EVERY phase would increment every phase's slip_months by 99."""
     doc = _network_doc()
-    out = apply_scenario(doc, _overrides())
+    out = apply_scenario(doc, _overrides(phase_slip_phase_id=None, phase_slip_months=99))
     assert out.programme == doc.programme
 
 

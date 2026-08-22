@@ -9,6 +9,7 @@ import { runAppraisal } from './index';
 import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
 import { migrateInputsToV9 } from './migrate';
+import { derivePhases } from './programme';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
 import type { AnyCalculatorInputs, SalesPhasingInputs, CalculatorInputsV9 } from './finance-types';
 import type { Phase } from './programme';
@@ -727,9 +728,58 @@ describe('phase_slip lever — §18.9', () => {
   });
 
   it('a null phase_slip_phase_id matches no phase — the migration no-op', () => {
+    // Fix round 1, Finding 2: a `phase_slip_months: 0` override cannot fail for any
+    // predicate that matches the wrong phase — a broken match still adds zero to
+    // whichever phase it (wrongly) picks. A nonzero magnitude is what makes this
+    // test non-vacuous: a mutated predicate like `(overrides.phase_slip_phase_id ??
+    // p.id) === p.id` (which makes a null target match EVERY phase) increments
+    // every phase's slip_months by 99, and this assertion catches it.
     const doc = networkDoc();
-    const out = applyScenario(doc, ZERO_OVERRIDES);
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: null, phase_slip_months: 99,
+    });
     expect(out.programme).toEqual(doc.programme);
+  });
+
+  // Fix round 1, Finding 3: absolute derived months, hand-derived from §18.2's
+  // formula rather than a computed reference or an inequality. Hand-derivation:
+  // planning is predecessor-free at start_offset 0; a +5 slip resolves its start
+  // to 5, finish to 5 + 2 = 7. construction's floor is
+  // max(start_offset 0, finish(planning) + lag 0) = 7, unslipped, so its start is
+  // 7 and its finish is 7 + 8 = 15 — the slip on planning propagates through the
+  // FS dependency to move construction by the same 5 months, without construction
+  // itself carrying any slip.
+  it('a phase_slip moves the derived start/finish by exactly the slip amount (§18.2)', () => {
+    const doc = networkDoc(20);
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 5,
+    });
+    const derivation = derivePhases(out.programme!);
+    if ('cycle' in derivation) throw new Error('unexpected cycle');
+    expect(derivation.byId.planning.start_month).toBe(5);
+    expect(derivation.byId.planning.finish_month).toBe(7);
+    expect(derivation.byId.construction.start_month).toBe(7);
+    expect(derivation.byId.construction.finish_month).toBe(15);
+  });
+
+  // Fix round 1, Finding 3: an absolute profit_pence, pinned identically in both
+  // engines (see the sibling assertion in test_financial_model_sensitivity.py).
+  // Hand-deriving a full appraisal waterfall (SDLT, cost-plan buckets, monthly
+  // interest compounding, IRR) by hand is not practicable — this is the same
+  // "pin a full appraisal's ground truth" pattern the fixture corpus itself uses
+  // (see e.g. h-programme-scurve.json's `expected_metrics` block), captured here
+  // by running the TS engine once and cross-checked against an independently run
+  // Python engine producing the SAME value. A divergence between the two pinned
+  // literals would mean the engines disagree, which is exactly what this pin
+  // exists to catch — the two literals are not allowed to be edited
+  // independently of each other.
+  it('an absolute profit_pence under a single phase_slip setting, pinned cross-engine', () => {
+    const doc = networkDoc(20);
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 2,
+    });
+    const metrics = runAppraisal(out).metrics;
+    expect(metrics.profit_pence).toBe(20_633_313);
   });
 
   it('GUARD 7: all FIVE levers compose order-independently (spec §13 guard 7)', () => {
@@ -748,10 +798,13 @@ describe('phase_slip lever — §18.9', () => {
       applyInOrder(doc, order, levers, { phase_slip: 'planning' }),
     ).metrics);
 
+    // Fix round 1, Finding 4: the spec and brief both say "identical results", not
+    // "identical on the three metrics this test happened to pick". `toEqual` on the
+    // full metrics object is what actually proves that — three named fields could
+    // agree by construction (they're the ones downstream of the phase_slip-affected
+    // schedule) while something else the guard never looked at silently diverged.
     for (const r of results.slice(1)) {
-      expect(r.profit_pence).toBe(results[0].profit_pence);
-      expect(r.peak_debt_pence).toBe(results[0].peak_debt_pence);
-      expect(r.finance_costs_pence).toBe(results[0].finance_costs_pence);
+      expect(r).toEqual(results[0]);
     }
 
     // Negative control (per R11's ordering-guard lesson, §13): a fixture the levers

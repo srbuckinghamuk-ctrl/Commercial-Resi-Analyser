@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react';
 import type { AnyCalculatorInputs } from '../../lib/model';
 import {
-  defaultSensitivityConfig, validateSensitivityConfig, LEVER_ORDER, MAX_AXIS_STEPS,
+  defaultSensitivityConfig, validateSensitivityConfig, MAX_AXIS_STEPS,
 } from '../../lib/model/sensitivity';
 import type {
   SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics,
 } from '../../lib/model/sensitivity';
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
-  LEVER_LABEL, LEVER_SHORT, SENSITIVITY_METRICS,
+  LEVER_LABEL, LEVER_SHORT, SELECTABLE_LEVERS, SENSITIVITY_METRICS,
   formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
   unmeasuredCellNotes, unmeasuredCellNote,
 } from '../../lib/sensitivity-format';
@@ -123,7 +123,7 @@ export default function SensitivityPage({ inputs }: Props) {
           onChange={(e) => setRowLever(e.target.value as SensitivityLever)}
           style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
         >
-          {LEVER_ORDER.map((lever) => (
+          {SELECTABLE_LEVERS.map((lever) => (
             <option key={lever} value={lever}>{LEVER_LABEL[lever]}</option>
           ))}
         </select>
@@ -144,7 +144,7 @@ export default function SensitivityPage({ inputs }: Props) {
           onChange={(e) => setColLever(e.target.value as SensitivityLever)}
           style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
         >
-          {LEVER_ORDER.map((lever) => (
+          {SELECTABLE_LEVERS.map((lever) => (
             <option key={lever} value={lever}>{LEVER_LABEL[lever]}</option>
           ))}
         </select>

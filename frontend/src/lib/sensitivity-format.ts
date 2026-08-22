@@ -1,5 +1,6 @@
 import type { FlagCode } from './model';
 import type { MeasuredMetrics, SensitivityCell, SensitivityLever, TornadoBar } from './model/sensitivity';
+import { LEVER_ORDER } from './model/sensitivity';
 
 /**
  * Presentation for the spec §12 sensitivity suite, shared by the investment
@@ -36,6 +37,13 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   interest_rate: 'Rate',
   phase_slip: 'Slip',
 };
+
+/** R12: `phase_slip` needs a phase-target picker, which lands with the phase
+ *  editor (Task 17). Until then it is engine- and API-selectable but not
+ *  offered in the UI — a dropdown entry whose validation error the user
+ *  cannot satisfy blanks the whole matrix. */
+export const SELECTABLE_LEVERS: readonly SensitivityLever[] =
+  LEVER_ORDER.filter((l) => l !== 'phase_slip');
 
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
 function decimalsFor(lever: SensitivityLever): number {

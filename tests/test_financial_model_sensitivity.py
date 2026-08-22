@@ -10,6 +10,7 @@ import pytest
 
 from app.financial_model import run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
+from app.financial_model.programme import derive_phases
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     LEVER_ORDER,
@@ -679,9 +680,55 @@ def test_apply_scenario_adds_the_slip_additively_to_the_named_phase_only():
 
 
 def test_null_phase_slip_phase_id_matches_no_phase_the_migration_no_op():
+    """Fix round 1, Finding 2: months=0 cannot fail for any predicate that
+    matches the wrong phase -- a broken match still adds zero. A nonzero
+    magnitude makes this non-vacuous: a mutated predicate that makes a null
+    target match EVERY phase would increment every phase's slip_months by 99."""
     doc = _network_doc()
-    out = apply_scenario(doc, ScenarioOverrides(**_ZERO_OVERRIDES))
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["phase_slip_phase_id"] = None
+    overrides["phase_slip_months"] = 99
+    out = apply_scenario(doc, ScenarioOverrides(**overrides))
     assert out.programme == doc.programme
+
+
+def test_phase_slip_moves_the_derived_start_finish_by_exactly_the_slip_amount():
+    """Fix round 1, Finding 3. Hand-derivation (identical to the TS mirror):
+    planning is predecessor-free at start_offset 0; a +5 slip resolves its
+    start to 5, finish to 5 + 2 = 7. construction's floor is
+    max(start_offset 0, finish(planning) + lag 0) = 7, unslipped, so its start
+    is 7 and its finish is 7 + 8 = 15 -- the slip on planning propagates
+    through the FS dependency to move construction by the same 5 months."""
+    doc = _network_doc(20)
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["phase_slip_phase_id"] = "planning"
+    overrides["phase_slip_months"] = 5
+    out = apply_scenario(doc, ScenarioOverrides(**overrides))
+    derivation = derive_phases(out.programme)
+    assert derivation.cycle is None
+    assert derivation.by_id["planning"].start_month == 5
+    assert derivation.by_id["planning"].finish_month == 7
+    assert derivation.by_id["construction"].start_month == 7
+    assert derivation.by_id["construction"].finish_month == 15
+
+
+def test_absolute_profit_pence_under_a_single_phase_slip_setting_pinned_cross_engine():
+    """Fix round 1, Finding 3: an absolute profit_pence, pinned identically in
+    both engines (see the sibling assertion in sensitivity.test.ts). Hand-
+    deriving a full appraisal waterfall by hand is not practicable -- this is
+    the same "pin a full appraisal's ground truth" pattern the fixture corpus
+    itself uses. Captured by running the TS engine once and cross-checked here
+    against an INDEPENDENTLY run Python engine. A divergence between the two
+    pinned literals would mean the engines disagree, which is exactly what
+    this pin exists to catch -- the two literals are not allowed to be edited
+    independently of each other."""
+    doc = _network_doc(20)
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["phase_slip_phase_id"] = "planning"
+    overrides["phase_slip_months"] = 2
+    out = apply_scenario(doc, ScenarioOverrides(**overrides))
+    metrics = run_appraisal(out).metrics
+    assert metrics.profit_pence == 20_633_313
 
 
 def test_guard_7_all_five_levers_compose_order_independently():
@@ -699,10 +746,11 @@ def test_guard_7_all_five_levers_compose_order_independently():
         run_appraisal(_apply_in_order(doc, order, levers, {"phase_slip": "planning"})).metrics
         for order in orders
     ]
+    # Fix round 1, Finding 4: the spec and brief both say "identical results", not
+    # "identical on the three fields this test happened to pick". Full dataclass
+    # equality is what actually proves that.
     for r in results[1:]:
-        assert r.profit_pence == results[0].profit_pence
-        assert r.peak_debt_pence == results[0].peak_debt_pence
-        assert r.finance_costs_pence == results[0].finance_costs_pence
+        assert r == results[0]
 
     # Negative control (per R11's ordering-guard lesson, Sec 13): a fixture the
     # levers don't actually move would prove order-independence vacuously.

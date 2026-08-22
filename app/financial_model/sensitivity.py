@@ -190,8 +190,11 @@ def validate_sensitivity_config(
         if axis.lever in ("timeline", "phase_slip") and any(
             not isfinite(s) or not float(s).is_integer() for s in axis.steps
         ):
+            # Fix round 1, Finding 5: worded per the actual offending lever, not a
+            # fixed "Timeline" -- this surfaces verbatim in a lender-facing UI.
+            label = "Timeline steps" if axis.lever == "timeline" else "phase_slip steps"
             issues.append(ValidationIssue(severity="error", field=field_name,
-                                          message="Timeline steps must be whole months."))
+                                          message=f"{label} must be whole months."))
 
     # Sec 18.8/18.9: phase_id is required exactly when the axis is phase_slip, and
     # forbidden otherwise.
@@ -216,8 +219,18 @@ def validate_sensitivity_config(
     # phase_id), not the lever alone -- two phase_slip axes targeting different
     # phases are a legitimate matrix, not a duplicate.
     if _lever_key(config.rows) == _lever_key(config.cols):
+        # Fix round 1, Finding 5: two identical-lever axes and two same-phase
+        # phase_slip axes are different mistakes, and the message now says so.
+        if config.rows.lever == "phase_slip" and config.cols.lever == "phase_slip":
+            message = (
+                "Two phase_slip axes must target different phases (the row and "
+                "column axes must use different levers, or different phase_slip "
+                "targets)."
+            )
+        else:
+            message = "The row and column axes must use different levers."
         issues.append(ValidationIssue(severity="error", field="sensitivity.cols.lever",
-                                      message="The row and column axes must use different levers."))
+                                      message=message))
 
     seen: set[str] = set()
     for rng in config.tornado:
@@ -242,9 +255,11 @@ def validate_sensitivity_config(
         if rng.lever in ("timeline", "phase_slip") and not (
             float(rng.low).is_integer() and float(rng.high).is_integer()
         ):
+            # Fix round 1, Finding 5: same rewording as the axis rule above.
+            label = "Timeline bounds" if rng.lever == "timeline" else "phase_slip bounds"
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",
-                message="Timeline bounds must be whole months."))
+                message=f"{label} must be whole months."))
         # Sec 18.8/18.9, same pairing rule as the axes above.
         if rng.lever == "phase_slip":
             if rng.phase_id is None:
@@ -276,6 +291,26 @@ class _LeverSetting:
     lever: SensitivityLever
     phase_id: str | None
     value: float
+
+
+def _zero_scenario() -> ScenarioOverrides:
+    """A true no-op scenario: every lever at its identity value. Applied once at
+    the START of every measurement -- including the base case, whose `settings`
+    is [] -- so _measure always routes through apply_scenario at least once (fix
+    round 1, Finding 6). Without this, the base case bypassed apply_scenario
+    entirely and the Sec 12.5 "base case is the unadjusted appraisal" test
+    stopped exercising apply_scenario's own zero-value arithmetic. A factory,
+    not a module-level constant, so a caller mutating the returned dataclass
+    cannot poison later calls -- mirrors _default_config()'s own reasoning."""
+    return ScenarioOverrides(
+        label="",
+        gdv_adjustment_pct=0,
+        construction_cost_adjustment_pct=0,
+        timeline_adjustment_months=0,
+        interest_rate_adjustment_pct=0,
+        phase_slip_phase_id=None,
+        phase_slip_months=0,
+    )
 
 
 def _overrides_for(setting: _LeverSetting) -> ScenarioOverrides:
@@ -312,17 +347,19 @@ def _measure(inputs: AnyCalculatorInputs, settings: list[_LeverSetting]) -> Sens
     """One position: the levered document is validated first (Sec 12.7), and only a
     document that passes is appraised. An unmeasured position never reaches the ledger.
 
-    `settings` is applied via apply_scenario once per setting, in order -- never
-    combined into one ScenarioOverrides -- precisely because two settings can both be
-    phase_slip (Sec 18.9) and a single overrides object cannot carry two simultaneous
-    targets. Every setting's own lever is disjoint from every other's field (Sec
-    12.1), so the sequential application composes exactly as one combined call would
-    for the four scalar levers, and correctly for two different phase_slip targets
-    besides.
+    `settings` is applied via apply_scenario once per setting, in order, ON TOP OF a
+    leading _zero_scenario() pass -- never combined into one ScenarioOverrides --
+    precisely because two settings can both be phase_slip (Sec 18.9) and a single
+    overrides object cannot carry two simultaneous targets. Every setting's own lever
+    is disjoint from every other's field (Sec 12.1), so the sequential application
+    composes exactly as one combined call would for the four scalar levers, and
+    correctly for two different phase_slip targets besides. The leading zero pass
+    means the base case (settings == []) still goes through apply_scenario exactly
+    once, the same as every levered position.
     """
     from app.financial_model import run_appraisal  # local import: see module docstring
 
-    levered = inputs
+    levered = apply_scenario(inputs, _zero_scenario())
     for setting in settings:
         levered = apply_scenario(levered, _overrides_for(setting))
     errors = [i for i in validate_inputs(levered) if i.severity == "error"]
