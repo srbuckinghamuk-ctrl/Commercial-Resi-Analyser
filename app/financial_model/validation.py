@@ -997,8 +997,8 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             if pkg.start_offset + pkg.duration_months - 1 > term - 2:
                 err(
                     field_,
-                    f"Package must finish by month {term - 2} - the final two months are the "
-                    "sale tail (spec Sec 6).",
+                    f"Package must finish by month {term - 2} — the final two months are the "
+                    "sale tail (spec §6).",
                 )
             if pkg.curve.kind == "user_defined":
                 w = pkg.curve.weights
