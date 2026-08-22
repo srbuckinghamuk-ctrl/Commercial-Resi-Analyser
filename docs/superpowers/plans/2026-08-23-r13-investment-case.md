@@ -48,7 +48,7 @@
 
 | File | Change |
 |---|---|
-| `frontend/src/lib/model/finance-types.ts` | `CalculatorInputsV10`, `RefinanceInputsV10`, `Schedule.investment_case`, `Schedule.resolved_exit_months`, `MonthReceipts.net_operating_income_pence`, `LedgerMonth.net_operating_income_pence`, `MonthlyModel.totals.operating_shortfall_equity_pence`, three `FlagCode`s, `AppraisalResultV2.investment_case`, `CALC_VERSION`. |
+| `frontend/src/lib/model/finance-types.ts` | **Task 4:** `CalculatorInputsV10`, `RefinanceInputsV10`, `ArrangementFeeBasis`, `CALC_VERSION`. **Task 8:** `Schedule.investment_case`, `Schedule.resolved_exit_months`, `Schedule.totals.net_operating_income_pence`, `MonthReceipts.net_operating_income_pence`, and the `InvestmentCaseResult` import (the type is born in Task 8, so Task 4 cannot reference it). **Task 9:** `LedgerMonth.net_operating_income_pence`, `MonthlyModel.totals.operating_shortfall_equity_pence`. **Task 11:** three `FlagCode`s, `AppraisalResultV2.investment_case`. |
 | `frontend/src/lib/model/schedule.ts:219-320` | Investment case computed; NOI written onto receipts; `resolved_exit_months` published; refinance proceeds taken from the sized quantum when `investment_case` is non-null. |
 | `frontend/src/lib/model/monthly-engine.ts:224-250` | The NOI block, between the VAT reclaim block and the sale-receipt block. |
 | `frontend/src/lib/model/metrics.ts:380-400` | `investment_case` republished; §7 exclusions; the three new flags. |
@@ -1174,11 +1174,13 @@ Add to the imports at the top of the file:
 ```ts
 // Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
 // rejects an unused type import, and the re-exports below do not count as uses.
-import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
+// `InvestmentCaseResult` is deliberately ABSENT: it does not exist until Task 8
+// writes `computeInvestmentCase`, and importing it here would not compile.
+// Task 8 adds both the import and the `Schedule.investment_case` field.
+import type { InvestmentCaseInputs } from './investment-case';
 export type {
   OpexCode, OperatingLineBasis, OperatingLine, StabilisationInputs, TakeoutInputs,
-  InvestmentCaseInputs, InvestmentCaseMonth, InvestmentCaseResult, TakeoutSizing,
-  BindingConstraint,
+  InvestmentCaseInputs, InvestmentCaseMonth, TakeoutSizing, BindingConstraint,
 } from './investment-case';
 export { OPEX_CODES } from './investment-case';
 ```
@@ -1343,12 +1345,12 @@ FIXTURES = [p for p in ALL_FIXTURES if _stored_version(p) <= 9]
 
 def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     """Guards the filter above. If every fixture became v10-native this file
-    would pass with zero parametrised cases and prove nothing."""
+    would pass with zero parametrised cases and prove nothing.
+
+    The EXCLUSION BOUND (how many fixtures sit outside the gate) is added by
+    Task 5b, not here: Task 5b authors the two v10-native fixtures, so at this
+    point the exclusion count is legitimately zero and asserting 2 would fail."""
     assert len(FIXTURES) >= 15
-    assert len(ALL_FIXTURES) - len(FIXTURES) == 2, (
-        "the v10-native fixture count changed -- confirm the new fixture is meant "
-        "to be outside the migration gate, then update this bound deliberately"
-    )
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
@@ -1646,8 +1648,18 @@ Expected: PASS.
 
 Adding two fixtures changes the corpus every gate iterates.
 
+First, tighten Task 5's corpus guard now that the exclusion is real — append to
+`test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink`:
+
+```python
+    assert len(ALL_FIXTURES) - len(FIXTURES) == 2, (
+        "the v10-native fixture count changed -- confirm the new fixture is meant "
+        "to be outside the migration gate, then update this bound deliberately"
+    )
+```
+
 Run: `pytest tests/test_migrate_v10.py tests/test_golden_fixtures.py -q && cd frontend && npx vitest run src/lib/model/golden-fixtures.test.ts`
-Expected: PASS, and `test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink` confirms exactly two fixtures now sit outside the migration gate.
+Expected: PASS, with the bound above confirming exactly two fixtures sit outside the migration gate.
 
 - [ ] **Step 7: Commit**
 
@@ -2663,12 +2675,21 @@ describe('§18.10 limitation 9 — the resolved exit month (R12 carry)', () => {
 });
 ```
 
-Run: `cd frontend && git stash && npx vitest run src/lib/export-investment-memo.test.ts -t "limitation 9"; git stash pop`
+Run: `cd frontend && npx vitest run src/lib/export-investment-memo.test.ts -t "limitation 9"`
 
-Expected: **FAIL on `main`** — the memo prints `Month 12`. Record the failure
-output in the commit message. If it PASSES on `main`, stop: either the fixture
-is not actually anchored, or the defect is not what §18.10 described, and the
-plan needs correcting before any code changes.
+Expected: **FAIL, at the branch head, before you touch either printer** — the
+memo prints `Month 12`. Record the failure output in the commit message.
+
+**Do not try to run this against `main`.** By this point the branch carries
+eleven committed tasks and `git stash` reverts working-tree changes, not commits,
+so stashing would prove nothing. The branch-head failure is exactly as strong a
+proof: Task 8 published `resolved_exit_months` but changed no printer, so the
+memo and `CashflowPage` still print the raw `month_offset` here — the failure you
+are watching IS the R12 carried defect, in the last run before it is fixed.
+
+If it PASSES, stop: either `anchoredSlippedDoc()` is not actually anchored (Task
+5b asserts it is — check that test first), or the defect is not what §18.10
+described, and the plan needs correcting before any code changes.
 
 - [ ] **Step 2: Fix both surfaces**
 
