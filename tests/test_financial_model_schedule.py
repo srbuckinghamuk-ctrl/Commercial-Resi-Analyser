@@ -45,18 +45,23 @@ from app.financial_model.types import (
     ExitStrategyInputs,
     FeeLine,
     Phase,
+    PhaseAnchor,
     ProgrammeNetwork,
     ProposedUnit,
     ProposedUnitV6,
+    RefinanceInputsV9,
     RetainedUnit,
     SalesPhasingInputs,
+    SalesPhasingInputsV9,
     SalesPhasingTranche,
+    SalesPhasingTrancheV9,
     SimpleSpendCurve,
     UnitAncillary,
     UnitMixInputsV6,
     cost_plan_from_legacy_costs,
     default_contingency_classes,
 )
+from app.financial_model.programme import ProgrammeDerivation, derive_phases
 from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
 
@@ -919,3 +924,130 @@ class TestGuard2Propagation:
         # that was blind to a constant added to both sides.
         assert slipped.metrics.peak_debt_pence != base.metrics.peak_debt_pence
         assert slipped.model.totals.interest_pence != base.model.totals.interest_pence
+
+
+# ---------------------------------------------------------------------------
+# R12 spec Sec 18.6 / guard 4 -- exit timing anchors. Python twin of
+# schedule.test.ts's `exit anchors -- Sec 18.6, guard 4` describe block. Same
+# hand-derived absolute months as the TS side; see that file's comments for
+# the full forward-pass derivation these pin.
+# ---------------------------------------------------------------------------
+
+def _exit_anchor_network_doc(term: int = 24) -> CalculatorInputsV9:
+    """`planning` [0,3) is predecessor-free; `unit_completions` is a milestone
+    chained off it (FS, lag 11) so slipping `planning` cascades onto
+    `unit_completions`'s start -- 3 + 11 = 14 at baseline, matching the TS
+    side's worked example verbatim. `practical_completion` (milestone, start
+    10) and `sales` [16,21) are independent, so they do NOT move when
+    `planning` slips."""
+    v9 = _migrate_to_v9(_base_inputs_v2())
+    v9.finance = v9.finance.model_copy(update={"term_months": term})
+    v9.programme = ProgrammeNetwork(
+        anchor_month=None,
+        phases=[
+            Phase(id="planning", code="planning", label="Planning", duration_months=3,
+                  slip_months=0, start_offset=0, curve=SL_CURVE, predecessors=[]),
+            Phase(id="unit_completions", code="unit_completions", label="Unit completions",
+                  duration_months=0, slip_months=0, start_offset=0, curve=SL_CURVE,
+                  predecessors=[Dependency(phase_id="planning", type="FS", lag_months=11)]),
+            Phase(id="practical_completion", code="practical_completion", label="Practical completion",
+                  duration_months=0, slip_months=0, start_offset=10, curve=SL_CURVE, predecessors=[]),
+            Phase(id="sales", code="sales", label="Sales", duration_months=5,
+                  slip_months=0, start_offset=16, curve=SL_CURVE, predecessors=[]),
+        ],
+        category_phase_ids=CategoryPhaseIds(
+            construction="planning", professional="planning", statutory="planning",
+        ),
+    )
+    return v9
+
+
+def _doc_with_tranche(anchor: PhaseAnchor | None, month_offset: int) -> CalculatorInputsV9:
+    d = _exit_anchor_network_doc()
+    d.sales_phasing = SalesPhasingInputsV9(tranches=[
+        SalesPhasingTrancheV9(month_offset=month_offset, pct_of_gross_receipts=100, anchor=anchor),
+    ])
+    return d
+
+
+def _doc_with_two_anchored_tranches() -> CalculatorInputsV9:
+    d = _exit_anchor_network_doc()
+    d.sales_phasing = SalesPhasingInputsV9(tranches=[
+        SalesPhasingTrancheV9(
+            month_offset=0, pct_of_gross_receipts=40,
+            anchor=PhaseAnchor(phase_id="unit_completions", offset_months=0),
+        ),
+        SalesPhasingTrancheV9(
+            month_offset=0, pct_of_gross_receipts=60,
+            anchor=PhaseAnchor(phase_id="sales", offset_months=0),
+        ),
+    ])
+    return d
+
+
+def _doc_with_refinance(anchor: PhaseAnchor | None, month_offset: int) -> CalculatorInputsV9:
+    d = _exit_anchor_network_doc()
+    d.refinance = RefinanceInputsV9(
+        month_offset=month_offset, anchor=anchor,
+        investment_value_pence=10_000_000, ltv_pct=60,
+        arrangement_fee_pence=100_000, legal_costs_pence=50_000,
+    )
+    return d
+
+
+def _with_slip(doc: CalculatorInputsV9, phase_id: str, months: int) -> CalculatorInputsV9:
+    c = doc.model_copy(deep=True)
+    for p in c.programme.phases:
+        if p.id == phase_id:
+            p.slip_months += months
+    return c
+
+
+class TestExitAnchors:
+    """Spec Sec 18.6, guard 4."""
+
+    def test_an_anchored_tranche_and_its_absolute_twin_are_identical_at_zero_slip(self):
+        anchored = _doc_with_tranche(PhaseAnchor(phase_id="unit_completions", offset_months=0), 0)
+        absolute = _doc_with_tranche(None, 14)  # = unit_completions start
+        assert build_schedule(anchored).receipts == build_schedule(absolute).receipts
+
+    def test_and_diverge_at_non_zero_slip(self):
+        # Without this, anchor is a no-op.
+        anchored = _with_slip(
+            _doc_with_tranche(PhaseAnchor(phase_id="unit_completions", offset_months=0), 0),
+            "planning", 3,
+        )
+        absolute = _with_slip(_doc_with_tranche(None, 14), "planning", 3)
+        assert build_schedule(anchored).receipts != build_schedule(absolute).receipts
+        # Absolute, not directional: planning [0,3) -> slip 3 -> [3,6);
+        # unit_completions floor = finish(planning) + 11 = 6 + 11 = 17.
+        assert build_schedule(anchored).receipts[17].gross_sale_pence > 0
+        # Unanchored: month_offset is untouched by any phase's slip.
+        assert build_schedule(absolute).receipts[14].gross_sale_pence > 0
+
+    def test_a_tranche_may_anchor_to_a_milestone(self):
+        # practical_completion + 2 -- the canonical case, and exactly why
+        # milestones carry a start even though they occupy no month.
+        doc = _doc_with_tranche(PhaseAnchor(phase_id="practical_completion", offset_months=2), 0)
+        pc: ProgrammeDerivation = derive_phases(doc.programme)
+        s = build_schedule(doc)
+        assert s.receipts[pc.by_id["practical_completion"].start_month + 2].gross_sale_pence > 0
+        assert [i for i in validate_inputs(doc) if i.severity == "error"] == []
+
+    def test_refinance_anchors_the_same_way(self):
+        anchored = _doc_with_refinance(PhaseAnchor(phase_id="unit_completions", offset_months=1), 0)
+        uc = derive_phases(anchored.programme).by_id["unit_completions"]
+        assert build_schedule(anchored).refinance.month == uc.start_month + 1
+
+    def test_two_anchored_tranches_that_cross_when_one_slips_are_a_hard_error(self):
+        # Sec 18.8's resolved-order rule. A slip that reorders tranches is a
+        # finding, not something to sort silently -- the receipts would
+        # otherwise reorder without anyone being told.
+        d = _doc_with_two_anchored_tranches()
+        # Negative control: unslipped, the same document is clean.
+        assert [i for i in validate_inputs(d) if i.severity == "error"] == []
+        crossed = _with_slip(d, "unit_completions", 9)
+        assert any(
+            i.severity == "error" and "strictly increasing" in i.message
+            for i in validate_inputs(crossed)
+        )

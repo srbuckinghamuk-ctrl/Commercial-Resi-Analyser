@@ -3,6 +3,7 @@ import { buildSchedule, spreadStraightLine } from './schedule';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV7 } from '../conversion-defaults';
 import type {
   CalculatorInputsV2, CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
+  ProgrammeDerivation,
 } from './finance-types';
 import {
   migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4,
@@ -13,6 +14,7 @@ import { costPlanFromLegacyCosts, defaultContingencyClasses } from './cost-plan'
 import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 import { runAppraisal } from './index';
 import { validateInputs } from './validation';
+import { derivePhases } from './programme';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -814,5 +816,133 @@ describe('phase-driven spend — §18.5', () => {
     const s2 = buildSchedule(isolated);
     expect(s2.uses[0].professional_pence + s2.uses[1].professional_pence).toBe(architectAmount);
     expect(s2.totals.professional_pence).toBe(architectAmount);
+  });
+});
+
+// --- R12 §18.6/guard 4 — exit timing anchors --------------------------------
+
+/**
+ * `planning` [0,3) is predecessor-free; `unit_completions` is a milestone
+ * chained off it (FS, lag 11) so slipping `planning` cascades onto
+ * `unit_completions`'s start — 3 + 11 = 14 at baseline, matching the brief's
+ * worked example verbatim. `practical_completion` (milestone, start 10) and
+ * `sales` [16,21) are independent, so they do NOT move when `planning` slips
+ * — the shape guard 4's divergence test needs.
+ */
+function exitAnchorNetworkDoc(term = 24): CalculatorInputsV9 {
+  const v9 = migrateToV9(baseInputs());
+  v9.finance = { ...v9.finance, term_months: term };
+  v9.programme = {
+    anchor_month: null,
+    phases: [
+      { id: 'planning', code: 'planning', label: 'Planning', duration_months: 3,
+        slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [] },
+      { id: 'unit_completions', code: 'unit_completions', label: 'Unit completions', duration_months: 0,
+        slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' },
+        predecessors: [{ phase_id: 'planning', type: 'FS', lag_months: 11 }] },
+      { id: 'practical_completion', code: 'practical_completion', label: 'Practical completion',
+        duration_months: 0, slip_months: 0, start_offset: 10, curve: { kind: 'straight_line' },
+        predecessors: [] },
+      { id: 'sales', code: 'sales', label: 'Sales', duration_months: 5,
+        slip_months: 0, start_offset: 16, curve: { kind: 'straight_line' }, predecessors: [] },
+    ],
+    category_phase_ids: { construction: 'planning', professional: 'planning', statutory: 'planning' },
+  };
+  return v9;
+}
+
+function docWithTranche(
+  tr: { anchor: { phase_id: string; offset_months: number } | null; month_offset: number },
+): CalculatorInputsV9 {
+  const d = exitAnchorNetworkDoc();
+  return { ...d, sales_phasing: { tranches: [{ pct_of_gross_receipts: 100, ...tr }] } };
+}
+
+function docWithTwoAnchoredTranches(): CalculatorInputsV9 {
+  const d = exitAnchorNetworkDoc();
+  return {
+    ...d,
+    sales_phasing: {
+      tranches: [
+        { anchor: { phase_id: 'unit_completions', offset_months: 0 }, month_offset: 0, pct_of_gross_receipts: 40 },
+        { anchor: { phase_id: 'sales', offset_months: 0 }, month_offset: 0, pct_of_gross_receipts: 60 },
+      ],
+    },
+  };
+}
+
+function docWithRefinance(
+  rf: { anchor: { phase_id: string; offset_months: number } | null; month_offset: number },
+): CalculatorInputsV9 {
+  const d = exitAnchorNetworkDoc();
+  return {
+    ...d,
+    refinance: {
+      month_offset: rf.month_offset, anchor: rf.anchor,
+      investment_value_pence: 10_000_000, ltv_pct: 60,
+      arrangement_fee_pence: 100_000, legal_costs_pence: 50_000,
+    },
+  };
+}
+
+function withSlip(d: CalculatorInputsV9, phaseId: string, months: number): CalculatorInputsV9 {
+  return {
+    ...d,
+    programme: {
+      ...d.programme!,
+      phases: d.programme!.phases.map((p) => (
+        p.id === phaseId ? { ...p, slip_months: p.slip_months + months } : p
+      )),
+    },
+  };
+}
+
+describe('exit anchors — §18.6, guard 4', () => {
+  it('an anchored tranche and its absolute twin are IDENTICAL at zero slip', () => {
+    const anchored = docWithTranche({ anchor: { phase_id: 'unit_completions', offset_months: 0 }, month_offset: 0 });
+    const absolute = docWithTranche({ anchor: null, month_offset: 14 }); // = unit_completions start
+    expect(buildSchedule(anchored).receipts).toEqual(buildSchedule(absolute).receipts);
+  });
+
+  it('and DIVERGE at non-zero slip — without this, anchor is a no-op', () => {
+    const anchored = withSlip(
+      docWithTranche({ anchor: { phase_id: 'unit_completions', offset_months: 0 }, month_offset: 0 }),
+      'planning', 3,
+    );
+    const absolute = withSlip(docWithTranche({ anchor: null, month_offset: 14 }), 'planning', 3);
+    expect(buildSchedule(anchored).receipts).not.toEqual(buildSchedule(absolute).receipts);
+    // absolute, not directional: planning [0,3)->slip 3->[3,6); unit_completions
+    // floor = finish(planning) + 11 = 6 + 11 = 17.
+    expect(buildSchedule(anchored).receipts[17].gross_sale_pence).toBeGreaterThan(0);
+    // unanchored: month_offset is untouched by any phase's slip.
+    expect(buildSchedule(absolute).receipts[14].gross_sale_pence).toBeGreaterThan(0);
+  });
+
+  it('a tranche may anchor to a MILESTONE', () => {
+    // practical_completion + 2 — the canonical case, and exactly why milestones
+    // carry a start even though they occupy no month.
+    const doc = docWithTranche({ anchor: { phase_id: 'practical_completion', offset_months: 2 }, month_offset: 0 });
+    const pc = derivePhases(doc.programme!) as ProgrammeDerivation;
+    const s = buildSchedule(doc);
+    expect(s.receipts[pc.byId.practical_completion.start_month + 2].gross_sale_pence).toBeGreaterThan(0);
+    expect(validateInputs(doc).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('refinance anchors the same way', () => {
+    const anchored = docWithRefinance({ anchor: { phase_id: 'unit_completions', offset_months: 1 }, month_offset: 0 });
+    const uc = (derivePhases(anchored.programme!) as ProgrammeDerivation).byId.unit_completions;
+    expect(buildSchedule(anchored).refinance!.month).toBe(uc.start_month + 1);
+  });
+
+  it('two anchored tranches that CROSS when one slips are a hard error', () => {
+    // §18.8's resolved-order rule. A slip that reorders tranches is a
+    // finding, not something to sort silently — the receipts would
+    // otherwise reorder without anyone being told.
+    const d = docWithTwoAnchoredTranches();
+    // Negative control: unslipped, the same document is clean.
+    expect(validateInputs(d).filter((i) => i.severity === 'error')).toEqual([]);
+    const crossed = withSlip(d, 'unit_completions', 9);
+    expect(validateInputs(crossed).some((i) => i.severity === 'error' && /strictly increasing/.test(i.message)))
+      .toBe(true);
   });
 });

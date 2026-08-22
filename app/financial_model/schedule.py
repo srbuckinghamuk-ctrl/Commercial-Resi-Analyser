@@ -31,6 +31,7 @@ from .types import (
     AcquisitionInputsV5,
     AnyCalculatorInputs,
     FeeCategory,
+    PhaseAnchor,
     ProgrammeNetwork,
     ProgrammePackage,
     ProposedUnit,
@@ -446,6 +447,28 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             place(legacy_programme.packages.professional, professional_total, "professional_pence")
             place(legacy_programme.packages.statutory, statutory_spread_total, "statutory_pence")
 
+    # R12 spec Sec 18.6. `resolve_anchor_month` is the single resolution rule
+    # for sales_phasing tranches and refinance: an anchor resolves against the
+    # phase's derived start; `anchor=None` (the migration default) keeps
+    # `month_offset` exactly as before, so every stored document's receipts
+    # land where they land today. Recomputed here -- rather than threaded out
+    # of the network branch above -- because derive_phases is pure and cheap
+    # over a handful of phases, and this keeps that branch untouched.
+    exit_timing_derivation = derive_phases(network) if network is not None else None
+
+    def resolve_anchor_month(anchor: PhaseAnchor | None, month_offset: int) -> int:
+        if anchor is None:
+            return month_offset
+        # Defensive, mirroring the placement clamps above: unreachable for any
+        # document that passes validation -- an anchor naming an absent
+        # phase, or a cyclic network, are hard validation errors owned by
+        # validation.py. Degrades to the entered `month_offset` rather than
+        # crashing an unvalidated caller.
+        if exit_timing_derivation is None or exit_timing_derivation.cycle is not None:
+            return month_offset
+        dp = exit_timing_derivation.by_id.get(anchor.phase_id)
+        return dp.start_month + anchor.offset_months if dp is not None else month_offset
+
     # Exit: which units sell?
     route = inputs.exit_strategy.route
     retained_ids = {r.unit_id for r in inputs.exit_strategy.retained_units}
@@ -499,7 +522,8 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
                 gross_allocated += gross
                 agent_allocated += agent
                 legal_allocated += legal
-                m = min(max(0, math.floor(tr.month_offset)), term - 1)
+                anchor = getattr(tr, "anchor", None)
+                m = min(max(0, math.floor(resolve_anchor_month(anchor, tr.month_offset))), term - 1)
                 receipts[m].gross_sale_pence += gross
                 receipts[m].agent_fee_pence += agent
                 receipts[m].selling_legal_pence += legal
@@ -509,7 +533,9 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     refinance = None
     if refinance_input is not None:
         refinance = ScheduleRefinance(
-            month=min(max(0, math.floor(refinance_input.month_offset)), term - 1),
+            month=min(max(0, math.floor(resolve_anchor_month(
+                getattr(refinance_input, "anchor", None), refinance_input.month_offset,
+            ))), term - 1),
             net_proceeds_pence=(
                 money_round((refinance_input.investment_value_pence * refinance_input.ltv_pct) / 100)
                 - refinance_input.arrangement_fee_pence - refinance_input.legal_costs_pence

@@ -1,5 +1,6 @@
 import type {
-  AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, ProgrammeNetwork, Schedule,
+  AnyCalculatorInputs, MonthReceipts, MonthUses, PhaseAnchor, ProgrammePackage, ProgrammeNetwork,
+  RefinanceInputsV9, SalesPhasingTrancheV9, Schedule,
 } from './finance-types';
 import {
   calculateGdv, calculateTotalAcquisitionCost, unitAncillaryValuePence,
@@ -214,6 +215,26 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     }
   }
 
+  // R12 spec §18.6. `resolveAnchorMonth` is the single resolution rule for
+  // sales_phasing tranches and refinance: an anchor resolves against the
+  // phase's derived start; `anchor: null` (the migration default) keeps
+  // `month_offset` exactly as before, so every stored document's receipts
+  // land where they land today. Recomputed here — rather than threaded out
+  // of the network branch above — because `derivePhases` is pure and cheap
+  // over a handful of phases, and this keeps that branch untouched.
+  const exitTimingDerivation = network != null ? derivePhases(network) : null;
+  const resolveAnchorMonth = (anchor: PhaseAnchor | null, monthOffset: number): number => {
+    if (anchor == null) return monthOffset;
+    // Defensive, mirroring the placement clamps above: unreachable for any
+    // document that passes validation — an anchor naming an absent phase, or
+    // a cyclic network, are hard validation errors owned by validation.ts.
+    // Degrades to the entered `month_offset` rather than crashing an
+    // unvalidated caller.
+    if (exitTimingDerivation == null || 'cycle' in exitTimingDerivation) return monthOffset;
+    const dp = exitTimingDerivation.byId[anchor.phase_id];
+    return dp ? dp.start_month + anchor.offset_months : monthOffset;
+  };
+
   // Exit: which units sell?
   const route = inputs.exit_strategy.route;
   const retainedIds = new Set(inputs.exit_strategy.retained_units.map((r) => r.unit_id));
@@ -256,7 +277,8 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
         const legal = last ? sellingLegal - legalAllocated
           : Math.round((sellingLegal * gross) / grossSales);
         grossAllocated += gross; agentAllocated += agent; legalAllocated += legal;
-        const m = Math.min(Math.max(0, Math.floor(tr.month_offset)), term - 1);
+        const anchor = 'anchor' in tr ? (tr as SalesPhasingTrancheV9).anchor : null;
+        const m = Math.min(Math.max(0, Math.floor(resolveAnchorMonth(anchor, tr.month_offset))), term - 1);
         receipts[m].gross_sale_pence += gross;
         receipts[m].agent_fee_pence += agent;
         receipts[m].selling_legal_pence += legal;
@@ -267,7 +289,10 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   // spec §4.5 net refinance proceeds — wired into the ledger by the refinance task.
   const refinanceInput = 'refinance' in inputs ? inputs.refinance : null;
   const refinance = refinanceInput == null ? null : {
-    month: Math.min(Math.max(0, Math.floor(refinanceInput.month_offset)), term - 1),
+    month: Math.min(Math.max(0, Math.floor(resolveAnchorMonth(
+      'anchor' in refinanceInput ? (refinanceInput as RefinanceInputsV9).anchor : null,
+      refinanceInput.month_offset,
+    ))), term - 1),
     net_proceeds_pence:
       Math.round((refinanceInput.investment_value_pence * refinanceInput.ltv_pct) / 100)
       - refinanceInput.arrangement_fee_pence - refinanceInput.legal_costs_pence,
