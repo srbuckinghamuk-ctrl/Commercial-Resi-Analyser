@@ -6,6 +6,7 @@ TS side.
 """
 from dataclasses import asdict
 
+from app.financial_model import run_appraisal
 from app.financial_model.areas import developed_area_sqm
 from app.financial_model.engine import money_round
 from app.financial_model.migrate import (
@@ -15,11 +16,17 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v7,
     migrate_v2_to_v3,
     migrate_v3_to_v4,
+    migrate_v4_to_v5,
+    migrate_v5_to_v6,
+    migrate_v6_to_v7,
+    migrate_v7_to_v8,
+    migrate_v8_to_v9,
 )
 from app.financial_model.schedule import (
     calculate_gdv,
     calculate_gdv_breakdown,
     build_schedule,
+    resolved_phase_id,
     unit_ancillary_value_pence,
 )
 from app.financial_model.types import (
@@ -28,20 +35,29 @@ from app.financial_model.types import (
     CalculatorInputsV4,
     CalculatorInputsV7,
     CalculatorInputsV8,
+    CalculatorInputsV9,
+    CategoryPhaseIds,
     ContingencyClass,
     CostPackage,
     CostPlanInputs,
+    Dependency,
+    EquitySource,
+    ExitStrategyInputs,
     FeeLine,
+    Phase,
+    ProgrammeNetwork,
     ProposedUnit,
     ProposedUnitV6,
     RetainedUnit,
     SalesPhasingInputs,
     SalesPhasingTranche,
+    SimpleSpendCurve,
     UnitAncillary,
     UnitMixInputsV6,
     cost_plan_from_legacy_costs,
     default_contingency_classes,
 )
+from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
 
 PROGRAMME = {
@@ -555,3 +571,351 @@ class TestBuildScheduleVat:
         assert all(u.vat_pence == 0 for u in schedule.uses)
         assert all(r.vat_reclaim_pence == 0 for r in schedule.receipts)
         assert schedule.totals.vat_pence == 0
+
+
+# ---------------------------------------------------------------------------
+# R12 Task 12a (spec Sec 18.5) -- phase-driven spend, Python mirror. Port of
+# schedule.test.ts's 'phase-driven spend -- Sec18.5' describe block (HEAD,
+# post fix-round-1 -- spreading is per (phase, category) BUCKET, not per
+# line; see the module-level Sec 18.5 amendment in the spec). Same absolute
+# figures as the TS side throughout.
+# ---------------------------------------------------------------------------
+
+SL_CURVE = SimpleSpendCurve(kind="straight_line")
+
+
+def _base_inputs_v2() -> dict:
+    """Python twin of schedule.test.ts's `baseInputs()`. Professional total
+    2,800,000p (architect 1,500,000 + structural_engineer 500,000 + mande
+    500,000 + planning_consultant 300,000); statutory total 238,400p (prior
+    approval 4 x 9,600 = 38,400 + building_control 200,000, cil_s106 0);
+    construction total 44,000,000p (400 sqm x 100,000p/sqm base build,
+    + 10% contingency)."""
+    doc = default_calculator_inputs_v2()
+    doc["acquisition"] = {
+        "purchase_price_pence": 40_000_000, "legal_fees_pence": 500_000, "survey_cost_pence": 300_000,
+        "broker_fee_pct": 1.0, "other_acquisition_costs_pence": 0,
+    }
+    doc["unit_mix"] = {"units": [
+        {"id": f"u{n}", "type": "1bed", "floor_area_sqm": 50,
+         "estimated_value_pence": 30_000_000, "comparable_notes": ""}
+        for n in (1, 2, 3, 4)
+    ]}
+    doc["conversion_costs"] = {
+        **doc["conversion_costs"],
+        "construction_cost_per_sqm_pence": 100_000, "total_construction_sqm": 400, "contingency_pct": 10,
+        "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0,
+        "prior_approval_fee_per_dwelling_pence": 9_600, "cil_s106_pence": 0,
+        "architect_pence": 1_500_000, "structural_engineer_pence": 500_000, "mande_pence": 500_000,
+        "planning_consultant_pence": 300_000, "building_control_pence": 200_000,
+        "other_professional_fees_pence": 0,
+    }
+    doc["finance"] = {**doc["finance"], "term_months": 12}
+    doc["exit_strategy"] = {
+        "route": "sell_all", "selling_agent_fee_pct": 1.5, "selling_legal_fee_pence": 400_000,
+        "retained_units": [],
+    }
+    return doc
+
+
+def _migrate_to_v9(v2_doc: dict) -> CalculatorInputsV9:
+    v3 = migrate_v2_to_v3(v2_doc)
+    v4 = migrate_v3_to_v4(v3)
+    v5 = migrate_v4_to_v5(v4)
+    v6 = migrate_v5_to_v6(v5)
+    v7 = migrate_v6_to_v7(v6)
+    v8 = migrate_v7_to_v8(v7)
+    return migrate_v8_to_v9(v8)
+
+
+def _base_network_doc() -> CalculatorInputsV9:
+    """Python twin of schedule.test.ts's `baseNetworkDoc()`. Three
+    predecessor-free phases: `design` [0,2), `strip_out` [0,2), `construction`
+    [4,8). Categories default construction -> construction, professional and
+    statutory -> design."""
+    v9 = _migrate_to_v9(_base_inputs_v2())
+    v9.programme = ProgrammeNetwork(
+        anchor_month=None,
+        phases=[
+            Phase(id="design", code="design", label="Design", duration_months=2,
+                  slip_months=0, start_offset=0, curve=SL_CURVE, predecessors=[]),
+            Phase(id="strip_out", code="strip_out", label="Strip out", duration_months=2,
+                  slip_months=0, start_offset=0, curve=SL_CURVE, predecessors=[]),
+            Phase(id="construction", code="construction", label="Construction", duration_months=4,
+                  slip_months=0, start_offset=4, curve=SL_CURVE, predecessors=[]),
+        ],
+        category_phase_ids=CategoryPhaseIds(
+            construction="construction", professional="design", statutory="design",
+        ),
+    )
+    return v9
+
+
+class TestResolvedPhaseId:
+    """resolved_phase_id -- the ONE resolution rule (spec Sec 18.5). A line's
+    override and the category default can never both apply."""
+
+    def test_a_line_level_override_wins_over_the_category_default(self):
+        network = _base_network_doc().programme
+        assert resolved_phase_id("strip_out", "construction", network) == "strip_out"
+
+    def test_none_falls_through_to_the_category_default(self):
+        network = _base_network_doc().programme
+        assert resolved_phase_id(None, "construction", network) == "construction"
+        assert resolved_phase_id(None, "professional", network) == "design"
+        assert resolved_phase_id(None, "statutory", network) == "design"
+
+
+class TestPhaseDrivenSpend:
+    def test_headline_totals_spread_over_the_phase_named_by_category_phase_ids_construction(self):
+        # construction phase occupies [4,8) -- ABSOLUTE months 4,5,6,7. Total
+        # is 44,000,000p, which divides the 4-month straight-line window
+        # evenly: 11,000,000p/month, no residue.
+        s = build_schedule(_base_network_doc())
+        c = [u.construction_pence for u in s.uses]
+        assert c[0:4] == [0, 0, 0, 0]
+        assert c[4:8] == [11_000_000, 11_000_000, 11_000_000, 11_000_000]
+        assert c[8] == 0
+        assert s.totals.construction_pence == 44_000_000
+
+    def test_guard_5_repointing_category_phase_ids_professional_changes_the_spend_profile(self):
+        # Two documents identical but for the map. Without this, the map
+        # could be read by nothing and every other test would still pass.
+        a = _base_network_doc()  # professional -> design [0,2)
+        b = _base_network_doc()
+        b.programme.category_phase_ids.professional = "construction"  # [4,8)
+        pa = [u.professional_pence for u in build_schedule(a).uses]
+        pb = [u.professional_pence for u in build_schedule(b).uses]
+        assert pa != pb
+
+    def test_a_per_line_phase_id_override_lands_in_its_own_window_not_the_category_default(self):
+        doc = _base_network_doc()
+        doc.cost_plan = CostPlanInputs(
+            mode="detailed",
+            packages=[CostPackage(
+                id="p1", code="structure", label="Structure", amount_pence=6_000_000,
+                contingency_class="general", lender_eligible=True, notes="",
+                phase_id="strip_out",
+            )],
+            contingency=default_contingency_classes(0),
+            fee_lines=[],
+        )
+        s = build_schedule(doc)
+        # strip_out window is months 0-1; the package's whole amount must
+        # land there.
+        assert s.uses[0].construction_pence + s.uses[1].construction_pence == 6_000_000
+        # construction window (category default, months 4-7) gets none of it
+        # -- the remainder (base build minus the one tagged package) is zero
+        # here.
+        assert all(u.construction_pence == 0 for u in s.uses[4:8])
+        assert s.totals.construction_pence == 6_000_000
+
+    def test_acquisition_stays_at_month_0_regardless_of_the_acquisition_phase_window(self):
+        doc = _base_network_doc()
+        doc.programme.phases.append(Phase(
+            id="acquisition", code="acquisition", label="Acquisition", duration_months=1,
+            slip_months=0, start_offset=6, curve=SL_CURVE, predecessors=[],
+        ))
+        s = build_schedule(doc)
+        assert s.totals.acquisition_pence > 0
+        assert s.uses[0].acquisition_pence == s.totals.acquisition_pence
+
+    def test_prior_approval_stays_at_month_0_by_default_and_moves_only_when_tagged(self):
+        # Isolate: zero the other statutory fee (building_control; cil_s106
+        # is already 0 in _base_inputs_v2()) and move the statutory category
+        # default itself off month 0, so any month-0 statutory spend can only
+        # be the prior_approval pin.
+        untagged = _base_network_doc()
+        untagged.cost_plan.fee_lines = [
+            f.model_copy(update={"amount_pence": 0}) if f.code == "building_control" else f
+            for f in untagged.cost_plan.fee_lines
+        ]
+        untagged.programme.category_phase_ids.statutory = "construction"  # [4,8), nowhere near month 0
+        tagged = untagged.model_copy(deep=True)
+        tagged.cost_plan.fee_lines = [
+            f.model_copy(update={"phase_id": "construction"}) if f.code == "prior_approval" else f
+            for f in tagged.cost_plan.fee_lines
+        ]
+
+        assert build_schedule(untagged).uses[0].statutory_pence > 0
+        assert build_schedule(tagged).uses[0].statutory_pence == 0
+
+    def test_every_window_still_sums_to_its_total_exactly(self):
+        doc = _base_network_doc()
+        doc.programme.category_phase_ids.professional = "construction"  # exercises a >1-month curve too
+        s = build_schedule(doc)
+        assert sum(u.construction_pence for u in s.uses) == s.totals.construction_pence
+        assert sum(u.professional_pence for u in s.uses) == s.totals.professional_pence
+        assert sum(u.statutory_pence for u in s.uses) == s.totals.statutory_pence
+
+    def test_the_auto_path_is_untouched_when_programme_is_null(self):
+        v2 = _base_inputs_v2()
+        v8 = migrate_v7_to_v8(
+            migrate_v6_to_v7(migrate_v5_to_v6(migrate_v4_to_v5(migrate_v3_to_v4(migrate_v2_to_v3(v2))))),
+        )
+        v9 = migrate_v8_to_v9(v8)
+        assert v9.programme is None
+        assert build_schedule(v9) == build_schedule(v8)
+        assert build_schedule(v9).programme is None
+
+    def test_guard_finding_1_two_lines_in_one_category_resolving_to_the_same_phase_are_one_spread(self):
+        # 1,000,000p + 1,000,000p = 2,000,000p over 3 months, straight-line.
+        # Per-line spreading would give [333,333,333,333,334] summed to
+        # [666,666, 666,666, 666,668]. Bucketing the combined 2,000,000p
+        # gives a SINGLE spread: round(2,000,000/3)=666,667 for the first two
+        # months, the third absorbs the residue: 2,000,000-2*666,667=666,666.
+        doc = _base_network_doc()
+        doc.programme.phases[2].duration_months = 3  # construction [4,7)
+        doc.cost_plan = CostPlanInputs(
+            mode="detailed",
+            packages=[
+                CostPackage(id="p1", code="structure", label="Structure A", amount_pence=1_000_000,
+                            contingency_class="general", lender_eligible=True, notes=""),
+                CostPackage(id="p2", code="envelope", label="Structure B", amount_pence=1_000_000,
+                            contingency_class="general", lender_eligible=True, notes=""),
+            ],
+            contingency=default_contingency_classes(0),
+            fee_lines=[],
+        )
+        s = build_schedule(doc)
+        assert s.uses[4].construction_pence == 666_667
+        assert s.uses[5].construction_pence == 666_667
+        assert s.uses[6].construction_pence == 666_666
+        assert s.totals.construction_pence == 2_000_000
+
+    def test_guard_finding_3_the_phases_own_curve_is_actually_used_not_a_hardcoded_straight_line(self):
+        # s_curve raised-cosine weights for a 3-month window: cum(k) =
+        # (1-cos(pi*k/3))/2 -> cum(1)=0.25, cum(2)=0.75, cum(3)=1, so
+        # w=[0.25, 0.5, 0.25]. Against the 2,800,000p professional total:
+        # 700,000 / 1,400,000 / 700,000 exactly -- a straight-line spread
+        # over 3 months would instead give three equal shares (~933,333
+        # each), so this distinguishes the two unambiguously.
+        doc = _base_network_doc()
+        design = next(p for p in doc.programme.phases if p.id == "design")
+        design.duration_months = 3
+        design.curve = SimpleSpendCurve(kind="s_curve")
+        # professional -> design already the default in _base_network_doc().
+        s = build_schedule(doc)
+        assert s.uses[0].professional_pence == 700_000
+        assert s.uses[1].professional_pence == 1_400_000
+        assert s.uses[2].professional_pence == 700_000
+        assert s.totals.professional_pence == 2_800_000
+
+    def test_a_detailed_mode_fee_line_phase_id_override_lands_in_its_own_window(self):
+        # Finding 5: only a package override was covered; fee lines take the
+        # same resolved_phase_id path and need their own guard.
+        doc = _base_network_doc()
+        doc.cost_plan.mode = "detailed"
+        doc.cost_plan.fee_lines = [
+            f.model_copy(update={"phase_id": "strip_out"}) if f.code == "architect" else f
+            for f in doc.cost_plan.fee_lines
+        ]
+        architect_amount = next(
+            f.amount_pence for f in doc.cost_plan.fee_lines if f.code == "architect"
+        )
+        s = build_schedule(doc)
+        # strip_out window is months 0-1; the tagged fee's whole amount lands
+        # there, and none of it lands in the category default (design, [0,2)
+        # too, but asserted via the totals split instead since the windows
+        # coincide here).
+        assert s.uses[0].professional_pence + s.uses[1].professional_pence >= architect_amount
+
+        # Isolate precisely: re-run with every OTHER professional fee zeroed
+        # so strip_out's professional total is exactly the tagged architect
+        # fee.
+        isolated = _base_network_doc()
+        isolated.cost_plan.mode = "detailed"
+        isolated.cost_plan.fee_lines = [
+            f.model_copy(update={"phase_id": "strip_out"}) if f.code == "architect"
+            else (f.model_copy(update={"amount_pence": 0, "pct": 0}) if f.category == "professional" else f)
+            for f in isolated.cost_plan.fee_lines
+        ]
+        s2 = build_schedule(isolated)
+        assert s2.uses[0].professional_pence + s2.uses[1].professional_pence == architect_amount
+        assert s2.totals.professional_pence == architect_amount
+
+
+# ---------------------------------------------------------------------------
+# GUARD 2 (propagation): a slipped critical phase must move the successor's
+# start AND peak debt/interest, absolutely -- not merely "some number
+# changed". Port of schedule.test.ts's GUARD 2 test (HEAD, fix round 1
+# Finding 2: term_months is 9, not 8, so the slipped document's finish month
+# does not trip validation's sale-tail rule). Same hand-derived absolute
+# figures as the TS side; see schedule.test.ts's block comment for the full
+# month-by-month derivation this pins.
+# ---------------------------------------------------------------------------
+
+def _guard2_doc() -> CalculatorInputsV9:
+    v9 = _migrate_to_v9(_base_inputs_v2())
+    v9.finance = v9.finance.model_copy(update={
+        "term_months": 9, "annual_interest_rate_pct": 12, "arrangement_fee_pct": 0,
+        "exit_fee_pct": 0, "committed_net_facility_pence": 5_000_000_000, "day_one_advance_pence": None,
+    })
+    v9.equity_sources = [EquitySource(
+        id="eq1", classification="cash", amount_pence=42_150_000,
+        timing_month=0, repayment_priority=1, evidence_status="confirmed", notes="",
+    )]
+    v9.exit_strategy = ExitStrategyInputs(
+        route="retain_all", selling_agent_fee_pct=0, selling_legal_fee_pence=0, retained_units=[],
+    )
+    v9.conversion_costs = v9.conversion_costs.model_copy(update={
+        "construction_cost_per_sqm_pence": 750_000, "total_construction_sqm": 400,
+    })
+    v9.cost_plan = CostPlanInputs(
+        mode="headline", packages=[], contingency=default_contingency_classes(0), fee_lines=[],
+    )
+    v9.programme = ProgrammeNetwork(
+        anchor_month=None,
+        phases=[
+            Phase(id="planning", code="planning", label="Planning", duration_months=2,
+                  slip_months=0, start_offset=0, curve=SL_CURVE, predecessors=[]),
+            Phase(id="construction", code="construction", label="Construction", duration_months=3,
+                  slip_months=0, start_offset=0, curve=SL_CURVE,
+                  predecessors=[Dependency(phase_id="planning", type="FS", lag_months=0)]),
+        ],
+        category_phase_ids=CategoryPhaseIds(
+            construction="construction", professional="planning", statutory="planning",
+        ),
+    )
+    return v9
+
+
+def _with_planning_slip(doc: CalculatorInputsV9, months: int) -> CalculatorInputsV9:
+    c = doc.model_copy(deep=True)
+    for p in c.programme.phases:
+        if p.id == "planning":
+            p.slip_months = months
+    return c
+
+
+class TestGuard2Propagation:
+    def test_slipping_a_critical_phase_moves_the_successor_start_and_peak_debt_interest_absolutely(self):
+        base_doc = _guard2_doc()
+        slipped_doc = _with_planning_slip(_guard2_doc(), 3)
+
+        # Fix round 1, Finding 2: the pinned figures below describe a
+        # document the product actually accepts -- not a state validation
+        # rejects.
+        assert [i for i in validate_inputs(base_doc) if i.severity == "error"] == []
+        assert [i for i in validate_inputs(slipped_doc) if i.severity == "error"] == []
+
+        base = run_appraisal(base_doc)
+        slipped = run_appraisal(slipped_doc)
+
+        def start_of(r, phase_id: str) -> int:
+            return next(p.start_month for p in r.schedule.programme.phases if p.id == phase_id)
+
+        assert start_of(base, "construction") == 2
+        assert start_of(slipped, "construction") == 5
+
+        # Hand-derived in schedule.test.ts's block comment -- not read off a
+        # prior run of this code.
+        assert base.metrics.peak_debt_pence == 318_466_555
+        assert base.model.totals.interest_pence == 18_466_555
+        assert slipped.metrics.peak_debt_pence == 309_100_501
+        assert slipped.model.totals.interest_pence == 9_100_501
+
+        # Absolute, not directional -- R11 shipped a direction-only guard
+        # that was blind to a constant added to both sides.
+        assert slipped.metrics.peak_debt_pence != base.metrics.peak_debt_pence
+        assert slipped.model.totals.interest_pence != base.model.totals.interest_pence

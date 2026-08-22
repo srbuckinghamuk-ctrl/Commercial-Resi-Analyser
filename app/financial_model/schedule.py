@@ -25,13 +25,16 @@ from .cost_plan import compute_cost_plan
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
-from .programme import is_legacy_programme, is_programme_network
+from .programme import DerivedPhase, derive_phases, is_legacy_programme, is_programme_network
 from .types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
     AnyCalculatorInputs,
+    FeeCategory,
+    ProgrammeNetwork,
     ProgrammePackage,
     ProposedUnit,
+    SimpleSpendCurve,
 )
 from .vat import (
     ConsiderationInputs,
@@ -177,6 +180,19 @@ class ScheduleRefinance:
 
 
 @dataclass
+class ScheduleProgramme:
+    """R12 spec Sec 18.10/Sec 18.5. Mirrors Schedule['programme'] in
+    finance-types.ts. Populated only for a v9 precedence network with no
+    cycle; None on the auto-window path and the legacy explicit-programme
+    path, exactly as their input is -- a derived block is never synthesised
+    for a document that never asked for one."""
+
+    finish_month: int
+    critical_path: list[str]
+    phases: list[DerivedPhase]
+
+
+@dataclass
 class Schedule:
     term_months: int
     uses: list[MonthUses]
@@ -191,6 +207,12 @@ class Schedule:
     # to calc 2.2.0). Defaulted so pre-existing direct-construction call sites
     # (tests) do not need to change.
     refinance: ScheduleRefinance | None = None
+    # R12 spec Sec 18.10/Sec 18.5. None on the auto-window and legacy-explicit-
+    # programme paths, exactly as their input is; the derived
+    # {finish_month, critical_path, phases} block for a v9 network, computed
+    # in build_schedule, and None-only if that network contains a cycle
+    # (unreachable post-validation).
+    programme: ScheduleProgramme | None = None
 
 
 @dataclass
@@ -214,6 +236,17 @@ def spread_straight_line(total: int, months: int) -> list[int]:
     out = [per] * months
     out[months - 1] = total - per * (months - 1)
     return out
+
+
+def resolved_phase_id(
+    phase_id: str | None, category: FeeCategory | str, network: ProgrammeNetwork,
+) -> str:
+    """Spec Sec 18.5. The ONE resolution rule, both cost modes. A line's
+    override and the category default can never both apply. Mirrors
+    resolvedPhaseId in schedule.ts."""
+    if phase_id is not None:
+        return phase_id
+    return getattr(network.category_phase_ids, category)
 
 
 def _empty_uses() -> MonthUses:
@@ -252,59 +285,166 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     receipts = [_empty_receipts() for _ in range(term)]
 
     uses[0].acquisition_pence = acquisition_total
-    uses[0].statutory_pence += prior_approval
-
-    programme = getattr(inputs, "programme", None)
 
     # R12 (spec Sec 18.1): `programme` is a two-state field across the version
     # union -- the legacy `{ packages: {...} }` shape (v4-v8) or a v9
-    # precedence network (`{ phases: [...] }`). Nothing constructs a v9
-    # document yet (Task 7 wires the migration), so this raise is unreachable
-    # today; it becomes a loud failure the moment one exists, rather than the
-    # silent misread the legacy `programme.packages` read below would give it.
-    # Mirrors schedule.ts's isProgrammeNetwork guard.
-    if programme is not None and is_programme_network(programme):
-        raise ValueError("v9 programme network not yet supported (Task 12 wires the network arm)")
+    # precedence network (`{ phases: [...] }`). Mirrors schedule.ts's
+    # isProgrammeNetwork/isLegacyProgramme discriminators.
+    raw_programme = getattr(inputs, "programme", None)
+    network: ProgrammeNetwork | None = (
+        raw_programme if raw_programme is not None and is_programme_network(raw_programme) else None
+    )
+    legacy_programme = (
+        raw_programme if raw_programme is not None and is_legacy_programme(raw_programme) else None
+    )
 
-    if programme is None or not is_legacy_programme(programme):
-        # auto windows -- calc 2.1.0 behaviour, byte-identical (spec Sec 6)
-        if term == 1:
-            uses[0].construction_pence = construction_total
-            uses[0].professional_pence = professional_total
-            uses[0].statutory_pence += statutory_spread_total
-        else:
-            construction_window = max(1, term - 2)  # months 1..construction_window
-            professional_window = max(1, math.ceil(construction_window / 2))
-            construction_spread = spread_straight_line(construction_total, construction_window)
-            professional_spread = spread_straight_line(professional_total, professional_window)
-            statutory_spread = spread_straight_line(statutory_spread_total, professional_window)
-            for i, v in enumerate(construction_spread):
-                uses[min(i + 1, term - 1)].construction_pence += v
-            for i, v in enumerate(professional_spread):
-                uses[min(i + 1, term - 1)].professional_pence += v
-            for i, v in enumerate(statutory_spread):
-                uses[min(i + 1, term - 1)].statutory_pence += v
-    else:
-        # explicit programme (spec Sec 6.1); windows validated in validation.py --
-        # the upper clamp is belt-and-braces, mirroring the auto path.
+    programme_result: ScheduleProgramme | None = None
+
+    if network is not None:
+        # Spec Sec 18.5 (amended, fix round 1 Finding 1). The ONE resolution
+        # rule places every resolved amount into a BUCKET keyed by (resolved
+        # phase, category); each bucket's TOTAL spreads once over that
+        # phase's window with that phase's curve. Two lines resolving to the
+        # same phase in the same category are one spread of their combined
+        # total, not two spreads summed -- summed spreads round independently
+        # and can disagree with a single spread of the sum by a few pence,
+        # which breaks the v8->v9 migration identity gate on any document
+        # whose amounts don't happen to divide evenly. When every line
+        # resolves to its category default -- exactly what migration
+        # produces, since it writes no per-line phase_id -- the bucket total
+        # IS the category total and this is bit-identical to the legacy arm's
+        # single spread_by_curve(category_total, ...) call.
         #
-        # The lower `max(..., 0)` has no counterpart in schedule.ts, and is a
-        # deliberate language difference rather than a rule difference: JS
-        # `uses[-1]` is `undefined` and throws loudly on the very next property
-        # access, whereas Python's negative indexing would silently wrap to the
-        # END of the list and book the spend in the wrong month. validation.py
-        # hard-rejects `start_offset < 0`, so this is unreachable for any
-        # document that passes validation; it exists so the unvalidated path
-        # degrades to a defined, in-range placement (totals still reconcile)
-        # instead of a silently wrong one.
-        def place(pkg: ProgrammePackage, total: int, field_name: str) -> None:
-            for i, v in enumerate(spread_by_curve(total, pkg.duration_months, pkg.curve)):
-                target = uses[min(max(pkg.start_offset + i, 0), term - 1)]
-                setattr(target, field_name, getattr(target, field_name) + v)
+        # The auto/legacy arms' month-0 lump (`uses[0].statutory_pence +=
+        # prior_approval`, in the else branch below) is deliberately NOT
+        # applied here -- Sec 18.5's second surviving anchor is a placement
+        # decision, not a rounding one, and stays keyed per LINE: an untagged
+        # prior_approval fee is pinned to month 0 and never enters a bucket;
+        # a tagged one joins its phase's bucket like any other line. A
+        # category-level lump can't tell those two cases apart.
+        derivation = derive_phases(network)
+        phase_by_id = {p.id: p for p in network.phases}
 
-        place(programme.packages.construction, construction_total, "construction_pence")
-        place(programme.packages.professional, professional_total, "professional_pence")
-        place(programme.packages.statutory, statutory_spread_total, "statutory_pence")
+        # Defensive, mirroring the legacy arm's belt-and-braces clamp below:
+        # unreachable for any document that passes validation -- a cycle, or
+        # a phase_id / category_phase_ids entry naming an absent phase, are
+        # hard validation errors owned by validation.py, not this module.
+        # Degrades to a defined month-0, ONE-month placement instead of
+        # crashing an unvalidated caller -- `max(1, ...)`, not a bare
+        # fallback of 1, because a resolvable milestone (duration_months ==
+        # 0, itself only reachable pre-validation) is not None and would
+        # otherwise pass 0 through, and spread_by_curve returns [] for a
+        # non-positive duration, silently dropping the money instead of
+        # degrading to a defined placement.
+        def place_in_phase(total: int, phase_id: str, add) -> None:
+            phase = phase_by_id.get(phase_id)
+            derived = derivation.by_id.get(phase_id) if derivation.cycle is None else None
+            start = derived.start_month if derived is not None else 0
+            duration = max(1, derived.duration_months if derived is not None else 1)
+            curve = phase.curve if phase is not None else SimpleSpendCurve(kind="straight_line")
+            for i, v in enumerate(spread_by_curve(total, duration, curve)):
+                add(min(max(math.floor(start + i), 0), term - 1), v)
+
+        def add_to_bucket(bucket: dict[str, int], phase_id: str, amount: int) -> None:
+            bucket[phase_id] = bucket.get(phase_id, 0) + amount
+
+        # Construction: each package's own amount joins its resolved phase's
+        # bucket. The remainder -- contingency and compliance, or a headline
+        # document's WHOLE total, since headline mode carries no package
+        # rows at all -- is not itself a "line" and always resolves through
+        # the category default, joining whichever bucket that is.
+        construction_buckets: dict[str, int] = {}
+        construction_remainder = construction_total
+        for pkg in cost_plan.packages:
+            pid = resolved_phase_id(pkg.phase_id, "construction", network)
+            add_to_bucket(construction_buckets, pid, pkg.amount_pence)
+            construction_remainder -= pkg.amount_pence
+        add_to_bucket(
+            construction_buckets, resolved_phase_id(None, "construction", network), construction_remainder,
+        )
+
+        # Professional and statutory: every fee line (other than an untagged
+        # prior_approval, carved out per line above) joins its resolved
+        # phase's bucket in its own category. The buckets across both
+        # categories sum to compute_cost_plan's own professional/statutory
+        # totals exactly, since every fee line is accounted for exactly once
+        # -- either the month-0 carve-out or a bucket.
+        professional_buckets: dict[str, int] = {}
+        statutory_buckets: dict[str, int] = {}
+        for fee in cost_plan.fees:
+            if fee.code == "prior_approval" and fee.phase_id is None:
+                uses[0].statutory_pence += fee.amount_pence
+                continue
+            bucket = professional_buckets if fee.category == "professional" else statutory_buckets
+            add_to_bucket(bucket, resolved_phase_id(fee.phase_id, fee.category, network), fee.amount_pence)
+
+        for pid, total in construction_buckets.items():
+            place_in_phase(total, pid, lambda m, v: setattr(
+                uses[m], "construction_pence", uses[m].construction_pence + v,
+            ))
+        for pid, total in professional_buckets.items():
+            place_in_phase(total, pid, lambda m, v: setattr(
+                uses[m], "professional_pence", uses[m].professional_pence + v,
+            ))
+        for pid, total in statutory_buckets.items():
+            place_in_phase(total, pid, lambda m, v: setattr(
+                uses[m], "statutory_pence", uses[m].statutory_pence + v,
+            ))
+
+        # Sec 18.10: a derived block is only ever produced for a document
+        # that asked for one. A cycle has no dates to report -- validation.py
+        # hard-errors it, so `programme` stays None rather than publishing a
+        # half-formed derivation to an unvalidated caller.
+        if derivation.cycle is None:
+            programme_result = ScheduleProgramme(
+                finish_month=derivation.finish_month,
+                critical_path=derivation.critical_path,
+                phases=derivation.phases,
+            )
+    else:
+        uses[0].statutory_pence += prior_approval
+
+        if legacy_programme is None:
+            # auto windows -- calc 2.1.0 behaviour, byte-identical (spec Sec 6)
+            if term == 1:
+                uses[0].construction_pence = construction_total
+                uses[0].professional_pence = professional_total
+                uses[0].statutory_pence += statutory_spread_total
+            else:
+                construction_window = max(1, term - 2)  # months 1..construction_window
+                professional_window = max(1, math.ceil(construction_window / 2))
+                construction_spread = spread_straight_line(construction_total, construction_window)
+                professional_spread = spread_straight_line(professional_total, professional_window)
+                statutory_spread = spread_straight_line(statutory_spread_total, professional_window)
+                for i, v in enumerate(construction_spread):
+                    uses[min(i + 1, term - 1)].construction_pence += v
+                for i, v in enumerate(professional_spread):
+                    uses[min(i + 1, term - 1)].professional_pence += v
+                for i, v in enumerate(statutory_spread):
+                    uses[min(i + 1, term - 1)].statutory_pence += v
+        else:
+            # explicit programme (spec Sec 6.1); windows validated in
+            # validation.py -- the upper clamp is belt-and-braces, mirroring
+            # the auto path.
+            #
+            # The lower `max(..., 0)` has no counterpart in schedule.ts, and
+            # is a deliberate language difference rather than a rule
+            # difference: JS `uses[-1]` is `undefined` and throws loudly on
+            # the very next property access, whereas Python's negative
+            # indexing would silently wrap to the END of the list and book
+            # the spend in the wrong month. validation.py hard-rejects
+            # `start_offset < 0`, so this is unreachable for any document
+            # that passes validation; it exists so the unvalidated path
+            # degrades to a defined, in-range placement (totals still
+            # reconcile) instead of a silently wrong one.
+            def place(pkg: ProgrammePackage, total: int, field_name: str) -> None:
+                for i, v in enumerate(spread_by_curve(total, pkg.duration_months, pkg.curve)):
+                    target = uses[min(max(pkg.start_offset + i, 0), term - 1)]
+                    setattr(target, field_name, getattr(target, field_name) + v)
+
+            place(legacy_programme.packages.construction, construction_total, "construction_pence")
+            place(legacy_programme.packages.professional, professional_total, "professional_pence")
+            place(legacy_programme.packages.statutory, statutory_spread_total, "statutory_pence")
 
     # Exit: which units sell?
     route = inputs.exit_strategy.route
@@ -395,6 +535,7 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         receipts=receipts,
         vat=vat,
         refinance=refinance,
+        programme=programme_result,
         totals=ScheduleTotals(
             acquisition_pence=acquisition_total,
             construction_pence=construction_total,

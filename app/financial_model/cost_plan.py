@@ -20,6 +20,12 @@ class CostPackageLine:
     amount_pence: int
     contingency_class: str
     lender_eligible: bool
+    # R12 spec Sec 18.5. Carried straight through from the input line so
+    # schedule.py's resolved_phase_id() (Task 12) can read it without
+    # re-deriving the cost plan a second time. None on every migrated row and
+    # on every line the user has not re-tagged. Mirrors CostPackageLine in
+    # cost-plan.ts.
+    phase_id: str | None = None
 
 
 @dataclass
@@ -40,6 +46,8 @@ class FeeLineResult:
     basis: str
     base_pence: int
     amount_pence: int
+    # See the matching comment on CostPackageLine.phase_id above.
+    phase_id: str | None = None
 
 
 @dataclass
@@ -91,6 +99,11 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
         CostPackageLine(
             id=p.id, code=p.code, label=p.label, amount_pence=p.amount_pence,
             contingency_class=p.contingency_class, lender_eligible=p.lender_eligible,
+            # `p.phase_id` is already None on every migrated/untagged row --
+            # CostPackage declares the field with that default -- so this is a
+            # plain passthrough, not the TS side's `?? null` guard against an
+            # absent key on an unvalidated object literal.
+            phase_id=p.phase_id,
         )
         for p in plan.packages
     ]
@@ -155,6 +168,8 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
             FeeLineResult(
                 id=f.id, code=f.code, category=f.category, label=f.label,
                 basis=f.basis, base_pence=base, amount_pence=amount,
+                # See the matching comment on the package mapping above.
+                phase_id=f.phase_id,
             )
         )
 

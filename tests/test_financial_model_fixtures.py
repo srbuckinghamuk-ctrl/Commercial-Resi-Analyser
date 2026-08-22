@@ -431,10 +431,13 @@ def _strip_version_fields(run: AppraisalRun) -> dict:
     alias could in principle appear inside it too.
 
     `calc_version` (2.10.0 vs 2.11.0) legitimately differs and is the only
-    field stripped out of the four compared members: unlike
-    finance-types.ts's Schedule, the Python Schedule dataclass carries no
-    `programme` field yet (a later task wires the network arm in), so there
-    is nothing else to strip on this side of the port."""
+    field stripped out of the four compared members. Task 12a gave the Python
+    Schedule dataclass its own `programme` field, matching finance-types.ts's
+    Schedule -- but every fixture in THIS gate's scope has `programme: None`
+    on both sides (Rule 2 excludes the only two that don't), so the field
+    compares None == None here and needs no stripping of its own. Task 12b,
+    which deletes Rule 2's exclusion, is what actually exercises it inside
+    this gate."""
     metrics = asdict(run.metrics)
     del metrics["calc_version"]
     reconciliation = asdict(run.reconciliation)
