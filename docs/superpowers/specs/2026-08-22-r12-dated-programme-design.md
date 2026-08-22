@@ -325,10 +325,45 @@ phase's** curve, through the existing `spreadByCurve`. The invariant is
 unchanged: each month rounds half-up, the final month of the window absorbs the
 cumulative residue, Σ = total.
 
-Where several cost lines resolve to the same phase, each spreads independently
-and the phase's monthly figures are their sum. Rounding residue is absorbed
-per line, not per phase — this is the existing behaviour of detailed mode under
-a single window and it is not changed here.
+### Spreading is per (phase, category) BUCKET, not per line [corrected during R12 implementation]
+
+Amounts are **bucketed** by their resolved phase and their category, and each
+bucket's **total** is spread once over that phase's window with that phase's
+curve. Two lines resolving to the same phase in the same category are one spread
+of their combined total, not two spreads summed.
+
+This spec previously said the opposite — that each line spreads independently
+and residue is absorbed per line, "unchanged from detailed mode's existing
+behaviour". **That claim was factually wrong**, and Task 11 implemented it before
+the error was found.
+
+The auto-window arm (§6) and the legacy three-package arm (§6.1) both spread the
+**category total** exactly once: `spreadByCurve(professionalTotal, …)`, never a
+per-line loop. Per-line spreading is therefore not the existing behaviour; it is
+a new behaviour, and it differs from the old one by rounding. Each line absorbs
+its own residue, so `Σᵢ round(tᵢ · w) ≠ round((Σᵢ tᵢ) · w)` in general — the
+category total is preserved, but its **monthly distribution** shifts by pennies.
+
+That is not cosmetic. §18.7's migration identity gate asserts every computed
+figure is penny-identical across the v8→v9 boundary, and a v8 document's
+professional spend is a single spread of the total while its migrated v9 twin's
+would be eight separate spreads of eight synthesised fee lines. The gate would
+fail on documents where the amounts do not divide evenly — and pass on those
+where they happen to, which is worse, because the defect would then depend on
+the fixture rather than on the rule.
+
+Bucketing restores identity **by construction** rather than by arithmetic luck:
+when every line in a category resolves to the category default — which is exactly
+what migration produces, since it writes no per-line `phase_id` — the bucket
+total *is* the category total and the spread is bit-identical to the legacy arm's.
+Per-line overrides still work: a line tagged to a different phase simply joins a
+different bucket.
+
+**The prior-approval carve-out stays per line**, because it is a placement
+decision rather than a rounding one: an untagged `prior_approval` fee is pinned
+to month 0 and never enters a bucket, while a tagged one joins its phase's bucket
+like any other line. A single category-level lump could not tell those two cases
+apart.
 
 ### The two month-0 anchors that survive
 
@@ -664,9 +699,11 @@ dependency structure to report.
    write this same field.
 5. **No resource levelling, no calendars, no non-working periods.**
 6. **`FF` and `SF` dependency types are not supported** (decision 8).
-7. **Rounding residue is absorbed per cost line, not per phase.** Two lines
-   resolving to one phase each absorb their own residue; the phase's monthly
-   total is their sum. Unchanged from detailed mode's existing behaviour.
+7. **Rounding residue is absorbed per (phase, category) bucket.** Two lines
+   resolving to the same phase in the same category are spread once, as their
+   combined total. This matches the auto and legacy arms, which spread the
+   category total exactly once, and it is what keeps §18.7's penny-identity gate
+   true by construction rather than by arithmetic coincidence (§18.5).
 8. **Total float only.** `total_float_months` is float against the programme
    finish. Free float — the delay a phase can absorb without moving its immediate
    successors — is not derived. Total float is what answers the lender's
