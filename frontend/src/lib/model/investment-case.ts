@@ -150,3 +150,95 @@ export function stabilisedAnnualNoiPence(args: NoiSeriesArgs): number {
   );
   return 12 * (egr - operatingCostAt(args.lines, egr));
 }
+
+/**
+ * §19.4. Annual debt service per £1 of debt — the constant that makes the DSCR
+ * cap solve in closed form and lets this whole module stay one-directional.
+ *
+ * Interest-only: the bare rate. Amortising: twelve times the standard monthly
+ * annuity constant, with a zero-rate arm because the annuity formula divides by
+ * zero there (a 0% loan simply repays 1/N of principal a month).
+ */
+export function annualDebtServiceFactor(takeout: TakeoutInputs): number {
+  const r = takeout.annual_rate_pct / 100;
+  if (takeout.amortisation_years == null) return r;
+  const i = r / 12;
+  const n = takeout.amortisation_years * 12;
+  if (n <= 0) return r;
+  return 12 * (i === 0 ? 1 / n : i / (1 - (1 + i) ** -n));
+}
+
+/**
+ * §19.3. The net-initial-yield convention: capitalise at the yield, then deduct
+ * purchaser's costs. ONE expression and ONE rounding — a two-step derivation
+ * would let a report's own arithmetic drift a penny from the published figure.
+ */
+export function investmentValuePence(
+  annualNoiPence: number, capYieldPct: number, purchasersCostsPct: number,
+): number {
+  if (annualNoiPence <= 0 || capYieldPct <= 0) return 0;
+  return Math.round(
+    (annualNoiPence * 100) / capYieldPct / (1 + purchasersCostsPct / 100),
+  );
+}
+
+export type BindingConstraint = 'ltv' | 'dscr' | 'icr' | null;
+
+export interface TakeoutSizing {
+  ltv_cap_pence: number;
+  /** null when the cap cannot bind: `a === 0` for DSCR, `r === 0` for ICR. */
+  dscr_cap_pence: number | null;
+  icr_cap_pence: number | null;
+  quantum_pence: number;
+  binding_constraint: BindingConstraint;
+  annual_debt_service_factor: number;
+  achieved_ltv_pct: number | null;
+  achieved_dscr: number | null;
+  achieved_icr: number | null;
+}
+
+/**
+ * §19.4. `quantum = min(applicable caps)`; the binding constraint is the argmin
+ * with a stated precedence — LTV, then DSCR, then ICR — so an exact tie
+ * resolves the same way every run (§1.4 determinism).
+ *
+ * ALL THREE caps are published, not only the binding one. A reader who sees
+ * "LTV 4,200,000 / DSCR 3,610,000 / ICR 4,050,000 — DSCR binds" learns the shape
+ * of the constraint; a reader given only 3,610,000 learns a number.
+ *
+ * Every cap FLOORS (§19.4), a deliberate departure from §1.1's half-up default.
+ */
+export function sizeTakeout(
+  annualNoiPence: number, valuePence: number, takeout: TakeoutInputs,
+): TakeoutSizing {
+  const r = takeout.annual_rate_pct / 100;
+  const a = annualDebtServiceFactor(takeout);
+  const noi = Math.max(0, annualNoiPence);
+
+  const ltvCap = Math.floor((valuePence * takeout.ltv_cap_pct) / 100);
+  const dscrCap = a > 0 ? Math.floor(noi / (takeout.dscr_floor * a)) : null;
+  const icrCap = r > 0 ? Math.floor(noi / (takeout.icr_floor * r)) : null;
+
+  // Precedence order IS the tie-break: `<` (not `<=`) keeps the earlier entry.
+  const candidates: { key: Exclude<BindingConstraint, null>; cap: number }[] = [
+    { key: 'ltv', cap: ltvCap },
+    ...(dscrCap == null ? [] : [{ key: 'dscr' as const, cap: dscrCap }]),
+    ...(icrCap == null ? [] : [{ key: 'icr' as const, cap: icrCap }]),
+  ];
+  let binding = candidates[0];
+  for (const c of candidates) if (c.cap < binding.cap) binding = c;
+
+  const quantum = Math.max(0, binding.cap);
+  const sized = quantum > 0;
+  return {
+    ltv_cap_pence: ltvCap,
+    dscr_cap_pence: dscrCap,
+    icr_cap_pence: icrCap,
+    quantum_pence: quantum,
+    binding_constraint: sized ? binding.key : null,
+    annual_debt_service_factor: a,
+    achieved_ltv_pct: sized && valuePence > 0 ? (quantum / valuePence) * 100 : null,
+    achieved_dscr: sized && a > 0 ? noi / (quantum * a) : null,
+    achieved_icr: sized && r > 0 ? noi / (quantum * r) : null,
+  };
+}

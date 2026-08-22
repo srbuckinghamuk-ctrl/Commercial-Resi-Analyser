@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   occupancyPctAt, grossPotentialMonthlyPence, operatingCostAt,
   noiSeries, stabilisedAnnualNoiPence, OPEX_CODES,
+  annualDebtServiceFactor, investmentValuePence, sizeTakeout,
 } from './investment-case';
-import type { OperatingLine } from './investment-case';
+import type { OperatingLine, TakeoutInputs } from './investment-case';
 
 const LINES: OperatingLine[] = [
   { id: 'l1', code: 'management', label: 'Management', basis: 'pct_of_gross_rent', value: 10 },
@@ -115,5 +116,106 @@ describe('OPEX_CODES', () => {
       'repairs_and_maintenance', 'service_charge_shortfall', 'ground_rent',
       'utilities_on_voids', 'compliance_and_safety', 'bad_debt', 'other',
     ]);
+  });
+});
+
+const IO: TakeoutInputs = {
+  ltv_cap_pct: 65, dscr_floor: 1.3, icr_floor: 1.3,
+  annual_rate_pct: 6, amortisation_years: null, term_years: 5,
+};
+
+describe('annualDebtServiceFactor (§19.4)', () => {
+  it('is the bare rate on an interest-only take-out', () => {
+    expect(annualDebtServiceFactor(IO)).toBeCloseTo(0.06, 12);
+  });
+
+  it('exceeds the rate once there is amortisation', () => {
+    const a = annualDebtServiceFactor({ ...IO, amortisation_years: 25 });
+    expect(a).toBeGreaterThan(0.06);
+    // 6% over 25 years: monthly i = 0.005, N = 300 -> annual constant ~0.077322
+    expect(a).toBeCloseTo(0.0773, 4);
+  });
+
+  it('handles a zero rate with amortisation as straight-line repayment', () => {
+    // No interest: the whole principal amortises over N months, so the annual
+    // constant is 12/N. Without this arm the annuity formula divides by zero.
+    expect(annualDebtServiceFactor({ ...IO, annual_rate_pct: 0, amortisation_years: 10 }))
+      .toBeCloseTo(12 / 120, 12);
+  });
+});
+
+describe('investmentValuePence (§19.3)', () => {
+  it('capitalises at the yield and deducts purchaser\'s costs in ONE rounding', () => {
+    // 4_020_000 * 100 / 5.5 = 73_090_909.09; / 1.0675 = 68_469_235.68
+    expect(investmentValuePence(4_020_000, 5.5, 6.75)).toBe(68_469_236);
+  });
+
+  it('is zero for a non-positive NOI', () => {
+    expect(investmentValuePence(0, 5.5, 6.75)).toBe(0);
+    expect(investmentValuePence(-1_000, 5.5, 6.75)).toBe(0);
+  });
+});
+
+describe('sizeTakeout (§19.4)', () => {
+  it('names LTV when the value cap is the tightest, and publishes all three', () => {
+    // NOI 500_000/yr, value 20_000_000. LTV 65% -> 13_000_000.
+    // DSCR: 500_000 / (1.3 × 0.06) = 6_410_256 -> DSCR binds, so raise NOI
+    // instead: NOI 2_000_000 -> DSCR cap 25_641_025, ICR the same (interest-only).
+    const s = sizeTakeout(2_000_000, 20_000_000, IO);
+    expect(s.ltv_cap_pence).toBe(13_000_000);
+    expect(s.dscr_cap_pence).toBe(25_641_025);
+    expect(s.icr_cap_pence).toBe(25_641_025);
+    expect(s.quantum_pence).toBe(13_000_000);
+    expect(s.binding_constraint).toBe('ltv');
+  });
+
+  it('names DSCR when coverage is the tightest', () => {
+    const s = sizeTakeout(500_000, 20_000_000, IO);
+    expect(s.quantum_pence).toBe(6_410_256);
+    expect(s.binding_constraint).toBe('dscr');
+    expect(s.quantum_pence).toBeLessThan(s.ltv_cap_pence);
+  });
+
+  it('separates DSCR from ICR exactly when there is amortisation', () => {
+    const amortising = { ...IO, amortisation_years: 25 };
+    const io = sizeTakeout(500_000, 20_000_000, IO);
+    expect(io.dscr_cap_pence).toBe(io.icr_cap_pence);
+
+    const am = sizeTakeout(500_000, 20_000_000, amortising);
+    expect(am.dscr_cap_pence).toBeLessThan(am.icr_cap_pence!);
+    expect(am.binding_constraint).toBe('dscr');
+  });
+
+  it('floors every cap — a cap rounded up is a cap breached', () => {
+    // 1_000_001 / (1 × 0.06) = 16_666_683.33 -> floors to ...83, never ...84
+    const s = sizeTakeout(1_000_001, 999_999_999_999, {
+      ...IO, dscr_floor: 1, icr_floor: 1, ltv_cap_pct: 100,
+    });
+    expect(s.dscr_cap_pence).toBe(16_666_683);
+  });
+
+  it('drops the coverage caps out of the minimum at a zero rate', () => {
+    const s = sizeTakeout(500_000, 20_000_000, { ...IO, annual_rate_pct: 0 });
+    expect(s.dscr_cap_pence).toBeNull();
+    expect(s.icr_cap_pence).toBeNull();
+    expect(s.binding_constraint).toBe('ltv');
+    expect(s.quantum_pence).toBe(13_000_000);
+  });
+
+  it('reports the binding ratio as AT LEAST its floor, never below it', () => {
+    const s = sizeTakeout(500_000, 20_000_000, IO);
+    expect(s.achieved_dscr).toBeGreaterThanOrEqual(IO.dscr_floor);
+    // Better than the floor by less than one pence of debt — the floor rounding
+    // is the only reason it is not exact.
+    expect(s.achieved_dscr!).toBeLessThan(
+      500_000 / ((s.quantum_pence) * 0.06) + 1e-6,
+    );
+  });
+
+  it('sizes to nothing on a non-positive NOI and names no constraint', () => {
+    const s = sizeTakeout(0, 0, IO);
+    expect(s.quantum_pence).toBe(0);
+    expect(s.binding_constraint).toBeNull();
+    expect(s.achieved_ltv_pct).toBeNull();
   });
 });
