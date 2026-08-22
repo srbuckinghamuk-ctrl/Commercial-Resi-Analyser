@@ -2,7 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, EligibilityAssessment } from '../types';
 import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
-import { runAppraisal } from './model';
+import { runAppraisal, isProgrammeNetwork, isLegacyProgramme } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
 import type { SensitivityCell, SensitivityConfig, SensitivityLever } from './model/sensitivity';
@@ -10,7 +10,7 @@ import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
-import { formatProgrammeMonth } from './programme-months';
+import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 import { repairGluedDescription, humanise } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
@@ -377,16 +377,27 @@ export function generateInvestmentMemo(
   // and never enters calculation; monthLabel is the memo's single conversion point.
   // R12 (spec §18.1): `programme` is a two-state INPUT field across the version
   // union — the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence
-  // network (`{ phases: [...] }`, no `packages`). No v9 document reaches this
-  // memo path yet, but the type must narrow correctly for the union either way;
-  // `'packages' in` distinguishes the two shapes without touching the v4-v8
-  // rendering below.
-  const programme = 'programme' in inputs && inputs.programme != null && 'packages' in inputs.programme
-    ? inputs.programme
-    : null;
+  // network (`{ phases: [...] }`). This memo does not yet know how to render a
+  // v9 network (Task 18 wires that): rather than silently fall through to the
+  // v4-v8 rendering below and print the OPPOSITE of what the document actually
+  // has (Task 4 fix round 1, Finding 1 — "auto-derived" text and Section 6 gap
+  // markers on a document that supplies exactly those things), it fails loudly
+  // here. Unreachable today (no v9 document exists yet); becomes a loud failure
+  // at this exact wiring site the moment Task 6's migration produces the first
+  // one.
+  const rawProgramme = 'programme' in inputs ? inputs.programme : null;
+  if (rawProgramme != null && isProgrammeNetwork(rawProgramme)) {
+    throw new Error('v9 programme network not yet supported in the memo (Task 18)');
+  }
+  const programme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
   const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
   const refinance = 'refinance' in inputs ? inputs.refinance : null;
-  const anchor = programme?.anchor_month ?? null;
+  // Finding 2 (Task 4 fix round 1): `anchor_month` exists on BOTH the legacy and
+  // v9 shapes and was never shape-dependent — read it from the un-narrowed
+  // value via the same centralised helper CashflowPage.tsx uses, not from
+  // `programme` above (which is null for anything the `isLegacyProgramme` arm
+  // doesn't recognise, and would silently disagree with every other surface).
+  const anchor = programmeAnchor(inputs);
   const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
 
   // R9 (spec §15). The one place the memo reads areas from — never

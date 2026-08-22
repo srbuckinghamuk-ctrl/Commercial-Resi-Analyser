@@ -13,6 +13,7 @@ import { areaBridge } from './areas';
 import { computeCostPlan, FEE_CODE_CATEGORY } from './cost-plan';
 import { VAT_CHARGE_CATEGORIES, isPurchaseVatChargeable, vatReturnPeriods } from './vat';
 import { pct } from './pct';
+import { isProgrammeNetwork, isLegacyProgramme } from './programme';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -661,35 +662,43 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   // start_offset or an oversized window must be caught here as a hard error.
   // R12 (spec §18.1): `programme` is a two-state field across the version union —
   // the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence network
-  // (`{ phases: [...] }`, no `packages`). `'packages' in` narrows to the legacy
-  // shape this block validates; the v9 network's own validation is Task 6's.
-  if ('programme' in inputs && inputs.programme != null && 'packages' in inputs.programme) {
-    const term = Math.max(1, Math.floor(inputs.finance.term_months));
-    for (const [name, pkg] of Object.entries(inputs.programme.packages)) {
-      const field = `programme.packages.${name}`;
-      if (pkg.duration_months < 1) err(field, 'Package duration must be at least 1 month.');
-      if (pkg.start_offset < 0) err(field, 'Package start month cannot be negative.');
-      // CRITICAL 1b: the schedule's programme arm floors both fields (spec §6.1
-      // window rules assume whole months) but never rejects a fractional value
-      // itself — a typed "2.5" duration reaches buildSchedule un-floored and can
-      // throw. Caught here as its own rule, alongside (not replacing) the
-      // range checks above.
-      if (!Number.isInteger(pkg.duration_months)) err(field, 'Package duration must be a whole number of months.');
-      if (!Number.isInteger(pkg.start_offset)) err(field, 'Package start month must be a whole month.');
-      if (pkg.start_offset + pkg.duration_months - 1 > term - 2) {
-        err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
-      }
-      if (pkg.curve.kind === 'user_defined') {
-        const w = pkg.curve.weights;
-        if (w.length !== pkg.duration_months) err(field, 'user_defined weights must have one entry per window month.');
-        // Finiteness must be checked explicitly: NaN passes every other rule here
-        // (NaN < 0 is false, and a sum containing NaN is never <= 0) and then
-        // poisons the spread. Python's json.loads accepts literal NaN/Infinity, so
-        // the mirrored rule in validation.py is what keeps a hostile payload from
-        // reaching build_schedule and 500-ing there.
-        if (w.some((x) => !Number.isFinite(x))) err(field, 'user_defined weights must be finite numbers.');
-        if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
-        if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
+  // (`{ phases: [...] }`). `isLegacyProgramme` narrows to the legacy shape this
+  // block validates. A v9 network cannot silently skip validation (Task 4 fix
+  // round 1, Finding 4): this function returns issues rather than throwing, so
+  // it reports a hard error instead — Task 9 replaces this arm with the
+  // network's own rules.
+  if ('programme' in inputs && inputs.programme != null) {
+    if (isProgrammeNetwork(inputs.programme)) {
+      err('programme', 'This document carries a v9 programme network, which validation does not yet implement (Task 9).');
+    } else if (isLegacyProgramme(inputs.programme)) {
+      const programme = inputs.programme;
+      const term = Math.max(1, Math.floor(inputs.finance.term_months));
+      for (const [name, pkg] of Object.entries(programme.packages)) {
+        const field = `programme.packages.${name}`;
+        if (pkg.duration_months < 1) err(field, 'Package duration must be at least 1 month.');
+        if (pkg.start_offset < 0) err(field, 'Package start month cannot be negative.');
+        // CRITICAL 1b: the schedule's programme arm floors both fields (spec §6.1
+        // window rules assume whole months) but never rejects a fractional value
+        // itself — a typed "2.5" duration reaches buildSchedule un-floored and can
+        // throw. Caught here as its own rule, alongside (not replacing) the
+        // range checks above.
+        if (!Number.isInteger(pkg.duration_months)) err(field, 'Package duration must be a whole number of months.');
+        if (!Number.isInteger(pkg.start_offset)) err(field, 'Package start month must be a whole month.');
+        if (pkg.start_offset + pkg.duration_months - 1 > term - 2) {
+          err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
+        }
+        if (pkg.curve.kind === 'user_defined') {
+          const w = pkg.curve.weights;
+          if (w.length !== pkg.duration_months) err(field, 'user_defined weights must have one entry per window month.');
+          // Finiteness must be checked explicitly: NaN passes every other rule here
+          // (NaN < 0 is false, and a sum containing NaN is never <= 0) and then
+          // poisons the spread. Python's json.loads accepts literal NaN/Infinity, so
+          // the mirrored rule in validation.py is what keeps a hostile payload from
+          // reaching build_schedule and 500-ing there.
+          if (w.some((x) => !Number.isFinite(x))) err(field, 'user_defined weights must be finite numbers.');
+          if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
+          if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
+        }
       }
     }
   }

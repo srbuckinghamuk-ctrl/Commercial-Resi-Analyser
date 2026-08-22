@@ -153,7 +153,7 @@ export type {
   PhaseCode, DependencyType, Dependency, Phase, ProgrammeNetwork,
   DerivedPhase, ProgrammeDerivation,
 } from './programme';
-export { PHASE_CODES, PRE_COMPLETION_CODES } from './programme';
+export { PHASE_CODES, PRE_COMPLETION_CODES, isProgrammeNetwork, isLegacyProgramme } from './programme';
 
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {

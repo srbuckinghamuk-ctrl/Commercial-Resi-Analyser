@@ -60,6 +60,37 @@ export interface ProgrammeNetwork {
   };
 }
 
+/** Structural mirror of finance-types.ts's legacy `ProgrammeInputs` /
+ *  `ProgrammePackage` shapes. finance-types.ts imports from this module, so
+ *  importing those types back here would cycle -- a real `ProgrammeInputs`
+ *  value satisfies this structurally, which is all `isLegacyProgramme` needs. */
+interface LegacyProgrammePackage {
+  start_offset: number;
+  duration_months: number;
+  curve: SpendCurve;
+}
+
+interface LegacyProgrammeInputs {
+  anchor_month: string | null;
+  packages: {
+    construction: LegacyProgrammePackage;
+    professional: LegacyProgrammePackage;
+    statutory: LegacyProgrammePackage;
+  };
+}
+
+/** R12. `programme` is a two-state field (spec §18.1). These are the ONLY
+ *  sanctioned discriminators — four sites open-coded `'packages' in` during
+ *  Task 4 and that tests the shape being RETIRED, which ages badly. Tasks 9,
+ *  11 and 18 replace the scaffolding arms; they change these, not four call
+ *  sites. */
+export function isProgrammeNetwork(p: LegacyProgrammeInputs | ProgrammeNetwork): p is ProgrammeNetwork {
+  return 'phases' in p;
+}
+export function isLegacyProgramme(p: LegacyProgrammeInputs | ProgrammeNetwork): p is LegacyProgrammeInputs {
+  return 'packages' in p;
+}
+
 export interface DerivedPhase {
   id: string;
   code: PhaseCode;
