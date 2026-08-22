@@ -693,19 +693,117 @@ async def test_stored_explicit_programme_becomes_a_network_without_moving_a_figu
         "professional": "professional",
         "statutory": "statutory",
     }
+    # Fix round 1, Finding 1. The window ITSELF, phase by phase, against what
+    # was posted. Without these three fields a migration that zeroed every
+    # start_offset -- or flattened every curve to straight_line -- would pass
+    # every assertion above unchanged, because ids, empty predecessor lists
+    # and the category map would all still be right. The stored network is the
+    # only record of the user's programme once the v8 shape is gone, so this
+    # is what makes "becomes a network" mean "becomes THIS network".
+    posted = _programme(
+        {"start_offset": 1, "duration_months": 8, "curve": {"kind": "s_curve"}},
+    )["packages"]
+    for phase in programme["phases"]:
+        source = posted[phase["id"]]
+        assert phase["start_offset"] == source["start_offset"], phase
+        assert phase["duration_months"] == source["duration_months"], phase
+        assert phase["curve"]["kind"] == source["curve"]["kind"], phase
+        # Additive, and inert: nothing has slipped this phase (spec Sec 18.9).
+        assert phase["slip_months"] == 0, phase
 
     # Not a figure moved.
     assert body["gdv_pence"] == before.metrics.gdv_pence
     assert body["total_cost_pence"] == before.metrics.total_development_cost_pence
     assert body["rlv_pence"] == before.metrics.rlv_pence
-    # Non-vacuity: the explicit programme is doing something. Fixture A is
-    # all-cash, so its headline cost is insensitive to WHEN money is spent --
-    # the equalities above would hold for any programme, including none. The
-    # monthly construction profile is what the programme actually moves, and
-    # it differs from the Sec 6 auto windows, so the network arm really is
-    # reproducing this document's own windows rather than the default ones.
+    # What this next pair does and does NOT establish, stated exactly, because
+    # the first version of it overclaimed. BOTH runs below are the v8
+    # in-process arm, so this compares an explicit v8 programme against the
+    # Sec 6 auto windows: it establishes that the document under test is
+    # genuinely programme-BEARING -- that the equalities above are not three
+    # runs of the default schedule agreeing with each other -- and nothing
+    # more. Fixture A is all-cash, so its headline figures are insensitive to
+    # WHEN money is spent and those equalities would hold for any programme.
+    # The cross-boundary parity proof on a timing-SENSITIVE figure is the
+    # debt-funded test below; this test's own teeth are the structural
+    # assertions above.
     auto = run_appraisal(migrate_inputs_to_v8(fixture_a_inputs()))
     explicit_spend = [u.construction_pence for u in before.schedule.uses]
     auto_spend = [u.construction_pence for u in auto.schedule.uses]
     assert explicit_spend != auto_spend
     assert sum(explicit_spend) == sum(auto_spend)
+
+
+FIXTURE_F_PATH = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
+)
+FIXTURE_F_INPUTS = json.loads(FIXTURE_F_PATH.read_text())["inputs"]
+
+
+def fixture_f_inputs() -> dict:
+    """A fresh deep copy of fixture F -- the development-finance deal.
+
+    Fixture A is all-cash, so no figure it produces depends on WHEN money is
+    spent. Fixture F is levered, so rolled-up interest makes peak debt and
+    total development cost both functions of the spend profile, which is what
+    a programme moves."""
+    return copy.deepcopy(FIXTURE_F_INPUTS)
+
+
+async def test_stored_explicit_programme_keeps_a_timing_sensitive_figure_across_the_boundary(
+    client, project,
+):
+    """Fix round 1, Finding 1. The cutover's boundary-parity proof, on a figure
+    that can actually detect a changed window.
+
+    The all-cash test above pins GDV, total cost and RLV, none of which move
+    when spend moves; its own teeth are structural. This one posts a levered
+    document with an explicit programme, so the SERVER computes rolled-up
+    interest off the v9 network it derived, and pins the resulting
+    `peak_debt_pence` and `total_cost_pence` -- both off the real HTTP response
+    -- against the same document run through the v8 entry point in process.
+
+    Nothing here is hand-derived: a hand-written expected figure would be a
+    second implementation of the engine, and the question is parity between two
+    arms of the same one, not arithmetic. If the v9 network arm derived any
+    window differently from the v8 packages arm -- one month later, a flatter
+    curve, a zeroed start_offset -- interest would differ and these equalities
+    would fail.
+    """
+    from app.financial_model import migrate_inputs_to_v8, run_appraisal
+
+    inputs = fixture_f_inputs()
+    inputs["programme"] = _programme(
+        {"start_offset": 1, "duration_months": 8, "curve": {"kind": "s_curve"}},
+    )
+
+    before = run_appraisal(migrate_inputs_to_v8(copy.deepcopy(inputs)))
+
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Levered explicit programme",
+        "inputs_snapshot": inputs,
+    })
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["inputs_snapshot"]["inputs_version"] == 9
+    assert "packages" not in body["inputs_snapshot"]["programme"]
+
+    metrics = body["outputs"]["metrics"]
+    assert metrics["peak_debt_pence"] == before.metrics.peak_debt_pence
+    assert metrics["peak_debt_month"] == before.metrics.peak_debt_month
+    assert body["total_cost_pence"] == before.metrics.total_development_cost_pence
+
+    # Non-vacuity, and this time it bites: the SAME fixture on the Sec 6 auto
+    # windows produces a DIFFERENT peak debt and a different total cost, so
+    # the equalities above are pinning this document's own programme rather
+    # than a figure every programme would produce. (Measured, not assumed --
+    # the assertion is that they differ, not what they are.)
+    auto = run_appraisal(migrate_inputs_to_v8(fixture_f_inputs()))
+    assert before.metrics.peak_debt_pence != auto.metrics.peak_debt_pence
+    assert (
+        before.metrics.total_development_cost_pence
+        != auto.metrics.total_development_cost_pence
+    )
+    # And the fixture is genuinely levered, so "peak debt" is a real quantity
+    # rather than a zero that two runs trivially agree on.
+    assert before.metrics.peak_debt_pence > 0
