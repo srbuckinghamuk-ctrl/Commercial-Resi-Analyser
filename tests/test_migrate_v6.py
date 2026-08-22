@@ -264,9 +264,20 @@ def _pipeline_fixtures():
         if doc.get("kind") == "sensitivity":
             continue  # names a base_fixture instead of carrying inputs
         if (doc["inputs"].get("inputs_version") or 0) > 6:
-            # R12: fixture S is BORN at v9 -- migrate_inputs_to_v6 refuses it by
-            # the same design that makes it refuse any version above its own
-            # roster, so it has no antecedent for this gate to compare.
+            # migrate_inputs_to_v6 refuses any document above its own roster by
+            # design -- _RECOGNISED_VERSIONS_V6 stops at 6 -- because producing a
+            # v6 document from a later one would mean DROPPING the block that
+            # version added. R10: fixture Q (v7) would lose `cost_plan`. R11:
+            # fixture R (v8) would lose `vat`. R12: fixture S is BORN at v9 and
+            # has no v6 antecedent at all. Each is covered instead by the
+            # corpus-wide mirror of this property one or more versions further
+            # on -- test_fixtures_reproduce_their_metrics_after_migration_to_v7
+            # in test_financial_model_fixtures.py, and, for fixture S, that
+            # file's golden-corpus expected figures.
+            #
+            # This is the ONLY place the exclusion is decided. R12 fix round 1:
+            # test_v6_migration_moves_no_existing_figure previously repeated it
+            # as an inner `in (7, 8)` check, which this filter made unreachable.
             continue
         yield path.name, doc
 
@@ -321,16 +332,8 @@ def test_v6_migration_moves_no_existing_figure():
     fixture."""
     names = []
     for name, doc in _pipeline_fixtures():
-        # R10: migrate_inputs_to_v6 refuses a v7 document by design (it would have to
-        # drop `cost_plan` to produce a v6 one) -- see _RECOGNISED_VERSIONS_V6, which
-        # stops at 6. Fixture Q (q-detailed-cost-plan.json) is v7, so it is excluded
-        # from this v6-specific gate; test_fixtures_reproduce_their_metrics_after_
-        # migration_to_v7 in test_financial_model_fixtures.py is the corpus-wide
-        # (v5+v6+v7) mirror of this same property one version further on. R11 widens
-        # the exclusion to v7 or v8 -- fixture R (r-vat-quarterly.json) is v8, and
-        # migrate_inputs_to_v6 refuses it for the identical reason.
-        if doc["inputs"].get("inputs_version") in (7, 8):
-            continue
+        # The above-roster exclusion lives in _pipeline_fixtures(), not here --
+        # see its comment for which fixtures it drops and why.
         names.append(name)
         migrated = migrate_inputs_to_v6(doc["inputs"])
         # R9 Task 12: the zeroed-blocks half applies to a document that is being
