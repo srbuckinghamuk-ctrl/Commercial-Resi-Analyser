@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV8,
-  CalculatorInputsV9, AreaBridgeInputs,
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
+  CalculatorInputsV8, CalculatorInputsV9, AreaBridgeInputs,
 } from './model';
 import {
   runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
@@ -1647,16 +1647,35 @@ describe('R12 memo programme section (spec §18.10, Task 18)', () => {
     const anchor = programmeAnchor(inputs);
     const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
 
-    // The phase table: every phase's own label and derived start/finish
-    // (read off schedule.programme, never recomputed here) appear, and the
-    // two duration-0 phases (practical_completion, maturity_tail) are marked
-    // "Milestone" rather than "0 mo".
+    // The phase table: every phase's own label, start, and LAST OCCUPIED month
+    // (read off schedule.programme, never recomputed here) appear adjacently in
+    // that order, and the two duration-0 phases (practical_completion,
+    // maturity_tail) are marked "Milestone" rather than "0 mo".
+    //
+    // R12 final review wave (Finding 2). `finish_month` is EXCLUSIVE (the
+    // spec's half-open windows: a phase occupies `start_month … finish_month -
+    // 1`) — printing it verbatim as "Finish" reads a month later than the
+    // phase actually runs. The row must read the last OCCUPIED month instead:
+    // `finish_month - 1` for a real duration, or `start_month` itself for a
+    // milestone (duration_months === 0), where `finish_month === start_month`
+    // already and subtracting 1 would read backwards.
     for (const dp of p.phases) {
-      expect(text).toContain(dp.label);
-      expect(text).toContain(monthLabel(dp.start_month));
-      expect(text).toContain(monthLabel(dp.finish_month));
+      const lastOccupied = dp.duration_months <= 0 ? dp.start_month : dp.finish_month - 1;
+      const durationLabel = dp.duration_months === 0 ? 'Milestone' : `${dp.duration_months} mo`;
+      expect(text).toContain(
+        `${dp.label} ${monthLabel(dp.start_month)} ${monthLabel(lastOccupied)} ${durationLabel}`,
+      );
     }
     expect(text).toContain('Milestone');
+
+    // The concrete case: Acquisition is a single ONE-month phase (start_month
+    // 0, finish_month 1 exclusive). Its printed Finish must read the SAME
+    // month as its Start, not the month after.
+    const acquisition = p.phases.find((ph) => ph.id === 'acquisition')!;
+    expect(acquisition.start_month).toBe(0);
+    expect(acquisition.finish_month).toBe(1);
+    expect(text).toContain(`Acquisition ${monthLabel(0)} ${monthLabel(0)} 1 mo`);
+    expect(text).not.toContain(`Acquisition ${monthLabel(0)} ${monthLabel(1)}`);
     // marketing's total float is 7 (fixture note (c)) — no phase's duration or
     // slip is 7, so this figure can only have come from the float column.
     expect(text).toContain('7 mo');
@@ -1805,5 +1824,60 @@ describe('R12 memo programme section (spec §18.10, Task 18)', () => {
     expect(text).toContain(
       `Derived finish: ${formatProgrammeMonth(programmeAnchor(inputs), 25)} — 1 month(s) after the facility term of 24 months.`,
     );
+  });
+});
+
+// R12 final review wave (Finding 2). The legacy `programme.packages` branch
+// (v4-v8 documents) has its own, independent "Finish" column -- fixture H
+// (`h-programme-scurve.json`, v5 on disk) is the only fixture this file loads
+// that carries the legacy shape, and until this test nothing exercised its
+// programme table at all.
+describe('R12 final review wave: legacy programme package table "Finish" column (Finding 2)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+  // v5 on disk, carrying the legacy `{ packages: {...} }` shape -- CalculatorInputsV9's
+  // `programme` field is narrowed to `ProgrammeNetwork | null`, so this fixture is typed
+  // to the version it actually is, not cast to the version this file mostly deals in.
+  const fixtureH = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 'h-programme-scurve.json'), 'utf-8'),
+  ) as { inputs: CalculatorInputsV5 };
+
+  it('prints the LAST OCCUPIED month per package, not the exclusive boundary', async () => {
+    const inputs = fixtureH.inputs;
+    const pkgs = inputs.programme!.packages;
+    expect(pkgs.construction).toEqual(expect.objectContaining({ start_offset: 1, duration_months: 6 }));
+    expect(pkgs.professional).toEqual(expect.objectContaining({ start_offset: 2, duration_months: 3 }));
+    expect(pkgs.statutory).toEqual(expect.objectContaining({ start_offset: 4, duration_months: 2 }));
+
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+    const monthLabel = (m: number) => formatProgrammeMonth(programmeAnchor(inputs), m);
+
+    // Construction: start 1, duration 6 -> last occupied month 6 (exclusive
+    // boundary would read month 7, one month past the phase's own end).
+    expect(text).toContain(`Construction ${monthLabel(1)} ${monthLabel(6)} s_curve`);
+    expect(text).not.toContain(`Construction ${monthLabel(1)} ${monthLabel(7)}`);
+    // Professional: start 2, duration 3 -> last occupied month 4.
+    expect(text).toContain(`Professional ${monthLabel(2)} ${monthLabel(4)} straight_line`);
+    // Statutory: start 4, duration 2 -> last occupied month 5.
+    expect(text).toContain(`Statutory ${monthLabel(4)} ${monthLabel(5)} back_loaded`);
+  });
+
+  it('reads a zero-duration package as Start == Finish, not backwards', async () => {
+    // A pure display-formatting case: rig a run already past validation (which
+    // requires a package duration of at least 1 month) with a zero-duration
+    // package, exactly as the whole-branch review's Finding 2 describes the
+    // code-level defect -- `start_offset + duration_months - 1` reads
+    // `start_offset - 1`, one month BEFORE the package's own start, when
+    // duration_months is 0.
+    const inputs: CalculatorInputsV5 = JSON.parse(JSON.stringify(fixtureH.inputs));
+    inputs.programme!.packages.statutory = { start_offset: 4, duration_months: 0, curve: { kind: 'straight_line' } };
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+    const monthLabel = (m: number) => formatProgrammeMonth(programmeAnchor(inputs), m);
+
+    expect(text).toContain(`Statutory ${monthLabel(4)} ${monthLabel(4)} straight_line`);
+    expect(text).not.toContain(`Statutory ${monthLabel(4)} ${monthLabel(3)}`);
   });
 });

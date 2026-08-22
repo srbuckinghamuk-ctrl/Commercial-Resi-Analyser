@@ -417,6 +417,36 @@ describe('SensitivityPage — the phase_slip lever and its phase-target picker',
     expect(screen.queryByText(/does not describe a valid grid/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/could not be calculated/i)).not.toBeInTheDocument();
     const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
-    expect(within(matrix).getAllByRole('rowheader')[0]).toHaveTextContent('Slip -5 months');
+    // R12 final review wave (Finding 3): the row header now names the phase
+    // too, not just the bare lever short-name.
+    expect(within(matrix).getAllByRole('rowheader')[0]).toHaveTextContent('Slip: Construction -5 months');
+  });
+
+  // R12 final review wave (Finding 3). The engine permits rows and cols to
+  // both be phase_slip, targeting DIFFERENT phases (spec §18.9) -- before
+  // this fix both axes rendered as the bare "Slip", the corner read
+  // "Slip \ Slip", and neither header named which phase moved.
+  it('two phase_slip axes targeting different phases render distinguishable labels', () => {
+    render(<SensitivityPage inputs={buildNetworkInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'phase_slip' } });
+    fireEvent.change(screen.getByLabelText(/row phase/i), { target: { value: 'design' } });
+    fireEvent.change(screen.getByLabelText(/column lever/i), { target: { value: 'phase_slip' } });
+    fireEvent.change(screen.getByLabelText(/column phase/i), { target: { value: 'construction' } });
+
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    const headerCells = within(matrix).getAllByRole('columnheader');
+    const corner = headerCells[0];
+    expect(corner).toHaveTextContent('Slip: Design');
+    expect(corner).toHaveTextContent('Slip: Construction');
+    // The old, indistinguishable text must be gone, not merely superseded.
+    expect(corner.textContent).not.toBe('Slip \\ Slip');
+
+    const colHeaderTexts = headerCells.slice(1).map((h) => h.textContent ?? '');
+    expect(colHeaderTexts.some((t) => t.includes('Slip: Construction'))).toBe(true);
+    expect(colHeaderTexts.some((t) => t.includes('Slip: Design'))).toBe(false);
+
+    const rowHeaderTexts = within(matrix).getAllByRole('rowheader').map((h) => h.textContent ?? '');
+    expect(rowHeaderTexts.some((t) => t.includes('Slip: Design'))).toBe(true);
+    expect(rowHeaderTexts.some((t) => t.includes('Slip: Construction'))).toBe(false);
   });
 });

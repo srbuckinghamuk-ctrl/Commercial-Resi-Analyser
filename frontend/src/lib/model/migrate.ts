@@ -985,9 +985,18 @@ export function migrateInputsToV9(
       equity_sources: saved.equity_sources ?? defaults.equity_sources,
       exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
       risks: saved.risks ?? defaults.risks,
-      // Mirrors the `cost_plan`/`vat` merges above and carries the same risk:
-      // without this line a saved network would come back as the default
-      // document's `null` and every phase would be lost.
+      // R12 final review wave (Finding 4). This is NOT a merge like the
+      // `cost_plan`/`vat` lines above -- `programme` is replaced wholesale,
+      // never deep-merged -- and `...saved` at the top of this object
+      // already carries whatever `programme` the saved document has,
+      // network or legacy. Deleting this line would NOT revert a saved
+      // network to the default's `null`: `...saved` has already set it.
+      // What this line actually does is normalise an explicitly-`undefined`
+      // `saved.programme` (a key present with no value, distinct from the
+      // key being absent) to `null`, and read the same way as the
+      // `sales_phasing`/`refinance` lines immediately below it -- a
+      // defensive, self-documenting mirror of its siblings, not a rescue of
+      // data the spread above would otherwise have dropped.
       programme: saved.programme ?? null,
       sales_phasing: saved.sales_phasing ?? null,
       refinance: saved.refinance ?? null,

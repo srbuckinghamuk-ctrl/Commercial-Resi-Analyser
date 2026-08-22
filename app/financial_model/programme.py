@@ -86,35 +86,68 @@ def topological_order(phases: list[Phase]) -> tuple[list[str], list[str] | None]
 
 
 def _find_cycle(phases: list[Phase], ids: set[str]) -> list[str]:
+    """Depth-first walk over the phases Kahn could not place, returning the
+    first closed loop found with its opening id repeated at the end.
+
+    R12 final review wave (Finding 5). This was recursive (one Python stack
+    frame per predecessor edge walked) while ``types.py`` legally permits up
+    to 1200 phases (``max_length=1200``) -- a long chain ending in a cycle
+    could exceed Python's recursion limit and raise an uncaught
+    ``RecursionError`` (a 500), where the mirrored TypeScript
+    (``programme.ts``'s ``findCycle``) simply returns the cycle and lets
+    validation.py's caller emit the spec-worded error. Rewritten iterative
+    with an explicit call stack -- ``call_stack`` holds ``(id, next
+    predecessor index)`` frames, replacing the recursion's implicit frames,
+    so this scales to the full 1200-phase input with no risk of overflow.
+
+    Behaviour-preserving: same traversal order (phases in list order at the
+    top level, each phase's own ``predecessors`` in list order underneath),
+    same ``state``/``stack`` bookkeeping and cycle-closing rule, same
+    reversed-to-forward-order return -- byte-identical output to the old
+    recursive version, and to programme.ts's ``findCycle``, for every input
+    that already worked.
+    """
     by_id = {p.id: p for p in phases}
     state: dict[str, int] = {}  # 0 unseen, 1 on stack, 2 done
-    stack: list[str] = []
+    stack: list[str] = []  # the current DFS path, exactly as the old recursion's `stack`
     found: list[str] | None = None
 
-    def visit(pid: str) -> None:
-        nonlocal found
-        if found is not None:
-            return
-        if state.get(pid) == 1:
-            found = [*stack[stack.index(pid):], pid]
-            return
-        if state.get(pid) == 2:
-            return
-        state[pid] = 1
-        stack.append(pid)
-        for d in by_id[pid].predecessors if pid in by_id else []:
+    for start in phases:
+        if state.get(start.id) == 2:
+            continue
+        # `start.id` can never be 1 here: state 1 only exists while a DFS
+        # below is actively in progress, and every DFS below either finishes
+        # (unwinding every frame back to state 2) or sets `found`, which
+        # exits this whole function before the next top-level phase is tried.
+        state[start.id] = 1
+        stack.append(start.id)
+        call_stack: list[tuple[str, int]] = [(start.id, 0)]
+
+        while call_stack:
+            pid, next_idx = call_stack[-1]
+            preds = by_id[pid].predecessors if pid in by_id else []
+            if next_idx >= len(preds):
+                call_stack.pop()
+                stack.pop()
+                state[pid] = 2
+                continue
+            call_stack[-1] = (pid, next_idx + 1)
+            d = preds[next_idx]
             if d.phase_id not in ids:
                 continue
-            visit(d.phase_id)
-            if found is not None:
-                return
-        stack.pop()
-        state[pid] = 2
+            child_state = state.get(d.phase_id, 0)
+            if child_state == 1:
+                found = [*stack[stack.index(d.phase_id):], d.phase_id]
+                break
+            if child_state == 2:
+                continue
+            state[d.phase_id] = 1
+            stack.append(d.phase_id)
+            call_stack.append((d.phase_id, 0))
 
-    for p in phases:
-        visit(p.id)
         if found is not None:
             break
+
     return list(reversed(found)) if found else []
 
 

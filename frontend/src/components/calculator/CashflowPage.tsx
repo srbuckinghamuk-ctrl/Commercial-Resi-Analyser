@@ -1,5 +1,5 @@
 import type { AppraisalRun, CalculatorInputsV9 } from '../../lib/model';
-import { isLegacyProgramme } from '../../lib/model';
+import { isLegacyProgramme, isProgrammeNetwork } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
@@ -25,17 +25,15 @@ export default function CashflowPage({ run }: Props) {
   // v4-aware, polymorphic over run.inputs (v2/v3 documents carry none of these
   // blocks at all) — see programme-months.ts and calculation spec §2.1: the
   // anchor month is display-only and never enters calculation.
-  // R12 (spec §18.1, Task 4 fix round 1, Finding 3): `programme` is a two-state
-  // field across the version union — the legacy `{ packages: {...} }` shape or
-  // a v9 precedence network. `buildSchedule` (schedule.ts) throws before a v9
-  // network ever reaches a rendered `run`, so this page cannot see one today —
-  // but the narrowing is routed through the same named discriminator the other
-  // three sites use rather than an open-coded `'packages' in`, so a future
-  // relaxation of that throw does not silently mislabel this page's own
-  // "Explicit dated programme" text.
-  const programme = 'programme' in run.inputs && run.inputs.programme != null && isLegacyProgramme(run.inputs.programme)
-    ? run.inputs.programme
-    : null;
+  // R12 (spec §18.1): `programme` is a two-state field across the version
+  // union — the legacy `{ packages: {...} }` shape or a v9 precedence network.
+  // A v9 network document DOES reach a rendered `run` (the `buildSchedule`
+  // throw this comment used to describe was removed mid-release), so both
+  // arms are narrowed here through the same named discriminators the other
+  // sites use, rather than an open-coded `'packages' in`.
+  const rawProgramme = 'programme' in run.inputs && run.inputs.programme != null ? run.inputs.programme : null;
+  const network = rawProgramme != null && isProgrammeNetwork(rawProgramme) ? rawProgramme : null;
+  const programme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
   const salesPhasing = 'sales_phasing' in run.inputs ? run.inputs.sales_phasing : null;
   const refinance = 'refinance' in run.inputs ? run.inputs.refinance : null;
   // `anchor_month` exists on both shapes and was never shape-dependent (Finding
@@ -44,7 +42,7 @@ export default function CashflowPage({ run }: Props) {
   const anchor = programmeAnchor(run.inputs);
 
   const assumptionsNote = (() => {
-    if (programme == null && salesPhasing == null) {
+    if (programme == null && network == null && salesPhasing == null) {
       // Verbatim wording from before Release 3b — unchanged for every deal
       // that uses neither an explicit programme nor phased sales.
       return term > 1
@@ -53,7 +51,12 @@ export default function CashflowPage({ run }: Props) {
     }
     const spendClause = programme != null
       ? 'Explicit dated programme (spec §6.1)'
-      : `Straight-line spend over months 1–${spendWindow}`;
+      // §18.5: each resolved (phase, category) total is placed once over that
+      // phase's own derived window with that phase's own curve -- not a
+      // straight line across the whole term.
+      : network != null
+        ? 'Dated phase network: spend placed per phase, by derived window and curve (spec §18.5)'
+        : `Straight-line spend over months 1–${spendWindow}`;
     // With a calendar anchor these read as dates, matching the table below;
     // without one formatProgrammeMonth returns the same "Month N" wording as before.
     const label = (m: number) => (anchor != null ? formatProgrammeMonth(anchor, m) : `month ${m}`);

@@ -144,6 +144,33 @@ def test_absent_predecessor_is_ignored_by_the_engine():
     assert d.by_id["a"].start_month == 0
 
 
+# R12 final review wave (Finding 5). `_find_cycle` was recursive -- one Python
+# stack frame per predecessor edge walked -- while types.py legally permits up
+# to 1200 phases (max_length=1200). A long dependency chain that closes into a
+# cycle drives the walk to a depth of N, which used to raise an uncaught
+# RecursionError (a 500) well before N=1200, where the mirrored TypeScript
+# (programme.ts's findCycle, plain recursion over the JS stack) simply returns
+# the cycle. Rewritten iterative with an explicit stack; this is the
+# regression test -- it would have raised RecursionError under the old
+# implementation (Python's default limit is 1000) and must now both complete
+# and return the exact same cycle, in the exact same forward dependency order,
+# that the small-N tests above already establish the algorithm produces.
+def test_long_chain_cycle_does_not_overflow_the_stack():
+    n = 1200
+    phases = [
+        phase(f"p{i}", "planning", 1, [dep(f"p{(i - 1) % n}")])
+        for i in range(n)
+    ]
+    d = derive_phases(net(phases))
+    assert d.cycle is not None
+    assert d.cycle[0] == d.cycle[-1]
+    assert len(d.cycle) == n + 1
+    # Forward dependency order: p0 -> p1 -> ... -> p{n-1} -> p0 (mirrors
+    # test_three_node_cycle_is_reported_in_forward_dependency_order above,
+    # generalised to n nodes instead of 3).
+    assert d.cycle == [f"p{i}" for i in range(n)] + ["p0"]
+
+
 def test_pre_completion_codes_membership():
     assert "practical_completion" in PRE_COMPLETION_CODES
     assert "marketing" not in PRE_COMPLETION_CODES

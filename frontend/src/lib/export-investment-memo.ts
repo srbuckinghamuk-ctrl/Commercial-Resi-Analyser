@@ -146,6 +146,20 @@ function lastAutoTableFinalY(doc: jsPDF): number {
   return (doc as JsPdfWithAutoTable).lastAutoTable.finalY;
 }
 
+/** R12 final review wave (Finding 2). Windows are half-open — a phase occupies
+ *  `start … exclusiveFinish - 1` — so a memo "Finish" column must print the
+ *  LAST OCCUPIED month, not the exclusive boundary itself: printing the
+ *  boundary reads a month later than the phase actually runs, and disagrees
+ *  with the v9/legacy twin across the migration boundary for the identical
+ *  phase. A milestone (`duration_months === 0`) occupies no month at all, so
+ *  `exclusiveFinish - 1` would read one month BEFORE its own start; that case
+ *  reads as the start itself instead. Shared by both the v9 network branch
+ *  (`exclusiveFinish` = `finish_month`) and the legacy package branch
+ *  (`exclusiveFinish` = `start_offset + duration_months`) below. */
+function lastOccupiedMonth(start: number, durationMonths: number): number {
+  return durationMonths <= 0 ? start : start + durationMonths - 1;
+}
+
 function fmt(pence: number): string {
   return (pence / 100).toLocaleString('en-GB', {
     style: 'currency',
@@ -1615,7 +1629,7 @@ export function generateInvestmentMemo(
       body: prog.phases.map((p) => [
         p.label,
         monthLabel(p.start_month),
-        monthLabel(p.finish_month),
+        monthLabel(lastOccupiedMonth(p.start_month, p.duration_months)),
         p.duration_months === 0 ? 'Milestone' : `${p.duration_months} mo`,
         p.slip_months === 0 ? '—' : `${p.slip_months > 0 ? '+' : ''}${p.slip_months} mo`,
         `${p.total_float_months} mo`,
@@ -1682,7 +1696,7 @@ export function generateInvestmentMemo(
     const pkgRows: string[][] = (['construction', 'professional', 'statutory'] as const).map((key) => {
       const p = programme.packages[key];
       const label = key.charAt(0).toUpperCase() + key.slice(1);
-      return [label, monthLabel(p.start_offset), monthLabel(p.start_offset + p.duration_months - 1), p.curve.kind];
+      return [label, monthLabel(p.start_offset), monthLabel(lastOccupiedMonth(p.start_offset, p.duration_months)), p.curve.kind];
     });
     table({
       startY: y,

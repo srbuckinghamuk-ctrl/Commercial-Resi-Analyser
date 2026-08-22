@@ -100,6 +100,30 @@ export default function SensitivityPage({ inputs }: Props) {
   const phases = useMemo(() => network?.phases ?? [], [network]);
   const levers = selectableLevers(network != null);
 
+  // R12 final review wave (Finding 3). The engine deliberately allows rows
+  // and cols to both be `phase_slip`, targeting different phases (spec
+  // §18.9) — `LEVER_LABEL`/`LEVER_SHORT` alone render both axes as the same
+  // bare "Slip", with nothing naming which phase. `TornadoBar.phase_id` and
+  // `SensitivityAxis.phase_id` are the engine's own echo of the phase a
+  // `phase_slip` axis targets (sensitivity.ts); look it up against this
+  // page's own `phases` list rather than trusting the id to already read
+  // sensibly, and fall back to the raw id if a phase was ever removed after
+  // the axis was configured.
+  const phaseLabel = (phaseId: string | null | undefined): string => {
+    if (phaseId == null) return '';
+    return phases.find((p) => p.id === phaseId)?.label ?? phaseId;
+  };
+  const leverLabel = (lever: SensitivityLever, phaseId: string | null | undefined): string => (
+    lever === 'phase_slip' && phaseId != null
+      ? `${LEVER_LABEL[lever]}: ${phaseLabel(phaseId)}`
+      : LEVER_LABEL[lever]
+  );
+  const leverShort = (lever: SensitivityLever, phaseId: string | null | undefined): string => (
+    lever === 'phase_slip' && phaseId != null
+      ? `${LEVER_SHORT[lever]}: ${phaseLabel(phaseId)}`
+      : LEVER_SHORT[lever]
+  );
+
   const resetToDefaults = () => {
     setRowLever(DEFAULTS.rows.lever);
     setColLever(DEFAULTS.cols.lever);
@@ -337,7 +361,7 @@ export default function SensitivityPage({ inputs }: Props) {
               const highPos = pos(Math.max(lowProfit, highProfit));
               return (
                 <tr key={bar.lever} style={{ borderBottom: `1px solid ${PANEL}` }}>
-                  <td style={{ padding: '8px 12px', color: TEXT }}>{LEVER_LABEL[bar.lever]}</td>
+                  <td style={{ padding: '8px 12px', color: TEXT }}>{leverLabel(bar.lever, bar.phase_id)}</td>
                   <td style={{ padding: '8px 12px', color: MUTED }}>
                     {formatRangeLabel(bar.lever, bar.low_step, bar.high_step)}
                   </td>
@@ -421,11 +445,11 @@ export default function SensitivityPage({ inputs }: Props) {
           <thead>
             <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
               <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>
-                {LEVER_SHORT[resolved.rows.lever]} \ {LEVER_SHORT[resolved.cols.lever]}
+                {leverShort(resolved.rows.lever, resolved.rows.phase_id)} \ {leverShort(resolved.cols.lever, resolved.cols.phase_id)}
               </th>
               {resolved.cols.steps.map((step) => (
                 <th key={step} style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>
-                  {`${LEVER_SHORT[resolved.cols.lever]} ${formatStepLabel(resolved.cols.lever, step)}`}
+                  {`${leverShort(resolved.cols.lever, resolved.cols.phase_id)} ${formatStepLabel(resolved.cols.lever, step)}`}
                 </th>
               ))}
             </tr>
@@ -434,7 +458,7 @@ export default function SensitivityPage({ inputs }: Props) {
             {matrix.map((row) => (
               <tr key={row[0].row_step} style={{ borderBottom: `1px solid ${PANEL}` }}>
                 <th scope="row" style={{ padding: '8px 12px', color: TEXT, textAlign: 'left', fontWeight: 600 }}>
-                  {`${LEVER_SHORT[resolved.rows.lever]} ${formatStepLabel(resolved.rows.lever, row[0].row_step)}`}
+                  {`${leverShort(resolved.rows.lever, resolved.rows.phase_id)} ${formatStepLabel(resolved.rows.lever, row[0].row_step)}`}
                 </th>
                 {row.map((cell: SensitivityCell) => {
                   const codes = flagShortCodes(cell.flags);

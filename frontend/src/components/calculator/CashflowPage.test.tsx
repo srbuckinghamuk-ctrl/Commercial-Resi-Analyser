@@ -21,6 +21,10 @@ const fixtureJ = JSON.parse(
 const fixtureVat = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
 ) as { inputs: CalculatorInputsV9 };
+// v9 on disk -- a dated phase NETWORK, not the legacy three-package shape.
+const fixtureNetwork = JSON.parse(
+  readFileSync(join(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8'),
+) as { inputs: CalculatorInputsV9 };
 
 describe('CashflowPage — no programme, no sales phasing (default v4)', () => {
   const inputs = defaultCalculatorInputsV9();
@@ -68,6 +72,23 @@ describe('CashflowPage — explicit dated programme (fixture H)', () => {
     const peakDebtTile = screen.getByText('Peak Debt').parentElement as HTMLElement;
     expect(peakDebtTile.textContent).toMatch(/\(\w{3} \d{4}\)/);
     expect(peakDebtTile.textContent).not.toMatch(/\(Month \d+\)/);
+  });
+});
+
+// R12 final review wave (Finding 1). A v9 phase-network document DOES reach a
+// rendered run -- the `buildSchedule` throw the old comment described was
+// removed mid-release -- so the note must say what schedule.ts actually does
+// (bucket-per-phase placement), not the straight-line wording, and must not
+// fall through the "no explicit programme" early-return either.
+describe('CashflowPage — dated phase network (fixture S, v9)', () => {
+  const run = runAppraisal(fixtureNetwork.inputs);
+
+  it('describes per-phase placement, not a straight line', () => {
+    render(<CashflowPage inputs={fixtureNetwork.inputs} onChange={vi.fn()} run={run} />);
+    expect(
+      screen.getByText(/Dated phase network: spend placed per phase, by derived window and curve \(spec §18\.5\)/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Straight-line spend/)).not.toBeInTheDocument();
   });
 });
 
