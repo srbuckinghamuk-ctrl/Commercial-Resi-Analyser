@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.10.0`.
-**Date:** 21 August 2026
+**Status:** Authoritative. Calculation version `2.11.0`.
+**Date:** 22 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.11.0** — the dated, dependent programme (§18, R12), with inputs v9 carrying `programme` as a **precedence network**: phases with an `id`, a fourteen-value `code` enum plus `other`, a signed `slip_months`, an earliest-start floor `start_offset` and `FS`/`SS` predecessors with lags; a derivation that computes every start, a backward pass that reports total float and the critical path; cost lines that resolve to a phase (`line.phase_id ?? category_phase_ids[line.category]`, §18.5) and spend over that phase's derived window; sale tranches and `refinance` that may **anchor** to a phase; a fifth sensitivity lever, `phase_slip` (§12.1, §18.9); and a hard `programme.overrun` error where the derived finish passes maturity — never a clamp (§18.8). **No existing computed value changed** — `programme = null` remains the auto-window path of §6, bit-identical to calc 2.10.0, and the v8 three-package shape migrates to three predecessor-free phases whose derived windows *are* the old windows by construction rather than by arithmetic coincidence (§18.7). §6.1 is **superseded for the explicit-programme case** and §6's auto-window text is unchanged and remains live. The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties rather than one set equality (§18.7), because §18.8's overrun rule has no v8 counterpart at all. §12.1's lever table goes from four levers to five, still writing to disjoint fields and still order-independent; §12.6 gains the `phase_id` target rules; §16 gains the phase-resolution note for packages and fee lines. Spreading is per **(phase, category) bucket**, not per line — the auto and legacy arms spread a category total exactly once, and bucketing is what keeps penny-identity true by construction (§18.5, §18.10 limitation 7).
 - **2.10.0** — VAT and TOGC (§17, R11), with inputs v8 carrying a `vat` block: registration, a return cycle (monthly or quarterly, with a repayment lag), six fixed per-category treatment rows (rate, recoverable proportion, recovery basis, evidence status) resolved through one accessor, and a purchase/TOGC block that decides whether acquisition VAT is chargeable and whether the acquisition tax base is VAT-inclusive. **No existing computed value changed, with one named exception (ruling R46)** — migration writes `registered: false`, six zeroed treatment rows and an inert purchase block, which drives every resolved rate to zero and the chargeable consideration back to the exclusive price, so all twelve-plus golden fixtures (now thirteen, with the VAT worked cycle pinned as fixture R) reproduce every reported metric to the penny, and the gate is numeric **and** structural for the same reason §16.3's was (§17.11). §3.8 gains `irrecoverable_vat_pence` as a cost-before-finance component; §7 gains the VAT reclaim as a third flow excluded from both sides of the sources-and-uses identity, alongside sale-proceeds repayments and refinance-shortfall equity; §16.3's contingency base is now the package tag, mode-dependently, with the input fields `basis`/`package_ids` deleted (the *result* shape is unchanged). **The one figure this release does move**: §17.8 makes the package's `contingency_class` tag live, so a detailed-mode document carrying a non-zero percentage on `existing_building` or `abnormal` while no package carries that tag now resolves that class's base to zero, where before every class resolved against the whole base build regardless of tag — the same reachable shape §17.8's planted-divergence guard exists to catch, here on the validation side rather than the numeric one. §17.9 adds a **warning** naming it (not an error — see ruling R46, and the R38/R39 regression gate this does not touch, since it reads `cost_plan` which is unchanged either side of the v7→v8 boundary), and no fixture in the corpus is in that shape. §16.9 loses the `contingency_class`-not-live limitation (now resolved) and the "No VAT" limitation (now superseded by §17.13's own list, which is where a VAT limitation belongs from this release on).
 - **2.9.0** — cost plan modes (§16, R10), with inputs v7 carrying a `cost_plan` block: a `headline` mode (rate × area, unchanged) and a mutually exclusive `detailed` mode (a priced package schedule), three named contingency classes each rounding independently against its own resolved base, and professional/statutory fee lines carrying a fixed or percentage basis. **No existing computed value changed** — migration copies `contingency_pct` into the `general` class on the `all_packages` basis and the eight legacy fee fields into `fixed` fee lines, and both engines route every document, pre- and post-migration, through the same `cost_plan` engine, so "all twelve golden fixtures identical to the penny" is an assertion that could fail rather than one that is structurally blind (§16, following R9's precedent). §3.4's contingency term is replaced with the three-class formula; §3.5/§3.6 are replaced with the fee-line formulation and its two base definitions; §1.6 records inputs v7. §13.2 gains a stated limitation: a stored appraisal not yet re-saved across this boundary prints an `inputs_version` beside an `audit_hash` computed under the prior version, so the hash cannot be recomputed from the printed fields for that row.
 - **2.8.0** — the area bridge (§15, R9), with inputs v6 carrying an entered `areas` block and per-unit `ancillary`. The scheme now has one area statement that ties, and the construction-cost area is **derived** from it rather than asserted independently: §15.3's basis switch chooses between the derived developed GIA and the pre-R9 manual field, and §15.4 makes reading that field outside one accessor a build failure. Ancillary parking, balconies and terraces are valued as a separate GDV component (§3.1, §15.5) that sells with its unit and moves with a §12.1 GDV stress. **No existing computed value changed** — migration writes the manual basis with a zeroed bridge and zeroed ancillary, which is a tested claim, not an assertion (see `migration-notes.md`). §3.1's formula and Included lines are corrected to state GDV as internal plus ancillary value, and the unpaid R3 pointer that excluded parking "until valued separately" is removed rather than repointed; §3.2's `global_per_sqft` lender basis is bound explicitly to internal net internal area; §2 gains four derived-area definitions. §15.6's rules replace the ±25% unit-NIA-vs-construction-area warning, which is deleted rather than retuned. R9 also clears an R8 carry-forward: acquisition-date validation is now a real calendar check in both engines, so `2026-02-31` no longer validates (§14).
@@ -14,7 +15,7 @@
 - **2.2.0** — dated programme + spend curves (R3a); flags moved onto the result object; no numeric change for migrated v3 inputs.
 - **2.1.0** — new optional `lender_valuation` input block and `finance.enforcement_cost_assumption_pence` field (§2); no existing formula's computed value changed.
 
-Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9, R10, R11) carry no such restriction.
+Implementation release markers: **[R1]** implemented in Release 1 (P0 financial correction); **[R2]** defined now, implemented later; **[R3a]** Release 3 programme engine (calc 2.2.0, implemented); **[R3b]** Release 3 phased exits (calc 2.3.0, implemented); **[R4]** Release 4a sensitivity engine (calc 2.4.0, implemented in both engines); Release 4b added the Sensitivity page that consumes it, so §12 now has a user-visible surface. A metric whose marker means "defined now, implemented later" — R2, or a bare R3 — must be displayed as "not available" (never a substitute formula) until implemented; markers recording work already shipped (R1, R3a, R3b, R4, R5, R6, R7, R8, R9, R10, R11, R12) carry no such restriction.
 
 ---
 
@@ -53,7 +54,7 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
 
 Calc 2.7.0 (R8) adds §14's jurisdiction-aware acquisition tax. **It changes no existing computed value.** Every document that existed before it was implicitly an England/NI one, the migration to inputs v5 stamps exactly that, and the England/NI non-residential bands have not moved since 17 March 2016 — so every stored appraisal reproduces its figures to the penny. What 2.7.0 changes is what a *non*-English appraisal computes (previously wrong) and what every report *says* about its own tax basis (§14.6).
 
@@ -487,6 +488,16 @@ R1 supports `straight_line` over a window (construction: months 1..N−2 of the 
 
 ### 6.1 Dated programme [R3a — calc 2.2.0]
 
+> **Superseded for the explicit-programme case by §18 (calc 2.11.0). The
+> `programme = null` auto-window rules in §6 above are unchanged and remain
+> live.** From inputs v9 an explicit `programme` is a precedence network of
+> phases, not three independent packages; the three-package shape below does
+> not survive migration (§18.7). What is retained verbatim from this section
+> and re-used by §18 is the **curve catalogue** and its residue-absorption
+> invariant, and the **sale-tail rule**, now scoped to the pre-completion
+> codes (§18.8). Read the rest of this section as the historical statement of
+> the v4–v8 shape.
+
 Inputs v4 adds a nullable `programme` block. `programme = null` (the migration
 default) = auto windows: construction straight-line over months 1..N−2,
 professional and statutory over the first half of that window (§6 above),
@@ -585,7 +596,7 @@ the three named scenarios (`base`, `upside`, `downside`), which share its lever 
 
 ### 12.1 Levers
 
-A **lever** is one named adjustment applied to an inputs document. There are four:
+A **lever** is one named adjustment applied to an inputs document. There are five:
 
 | Lever | Unit | Effect on the inputs document |
 |---|---|---|
@@ -593,13 +604,25 @@ A **lever** is one named adjustment applied to an inputs document. There are fou
 | `construction_cost` | percent | scales `conversion_costs.construction_cost_per_sqm_pence` |
 | `timeline` | months | adds to `finance.term_months` |
 | `interest_rate` | percentage points | adds to `finance.annual_interest_rate_pct` |
+| `phase_slip` [R12 — calc 2.11.0] | months | adds to `programme.phases[<id>].slip_months` for a **named** phase (§18.9) |
 
 A percent lever of `p` multiplies its target by `(1 + p/100)` and rounds half-up to
 integer pence (§1.1). A months or percentage-point lever adds its value directly.
 
-The four levers write to **disjoint input fields**, so applying several to one document
+The five levers write to **disjoint input fields**, so applying several to one document
 is order-independent. Any lever added in a later release that shares a field with an
 existing lever must define its composition order in this section at the same time.
+
+**`phase_slip`'s composition order, stated at the time it is added, as this section
+requires.** `phase_slip` writes `programme.phases[<id>].slip_months` and nothing else.
+No other lever touches that field — `gdv` writes unit values, `construction_cost` the
+construction rate, `timeline` `finance.term_months`, `interest_rate` the interest rate
+— so the five levers remain disjoint and their application remains
+**order-independent**. That is asserted rather than merely stated: a test applies all
+five levers to one document in several orders and requires identical results (§18.9).
+`phase_slip` is the first lever that carries a **target** as well as a magnitude, so
+`SensitivityAxis` and `TornadoRange` carry `phase_id` alongside `lever` (§12.6), and
+the duplicate checks key the pair `(lever, phase_id)` rather than `lever` alone.
 
 ### 12.2 The facility is invariant
 
@@ -650,15 +673,19 @@ this is the `(construction_cost = 0, gdv = 0)` cell.
 
 The following are input errors, not flags:
 
-- an axis or a tornado bar naming a lever that is not one of the four §12.1 levers;
+- an axis or a tornado bar naming a lever that is not one of the five §12.1 levers;
 - an axis with an empty step list, or any non-finite step;
 - an axis with more than nine steps (the suite is bounded at 81 cells);
-- a row axis and a column axis naming the same lever;
-- a lever appearing more than once among the tornado bars;
+- a row axis and a column axis naming the same **`(lever, phase_id)` pair**;
+- a `(lever, phase_id)` pair appearing more than once among the tornado bars;
 - a tornado bar whose low is not strictly less than its high, or either non-finite;
-- a step, or a tornado bound, for the `timeline` lever that is not a whole number of months.
+- a step, or a tornado bound, for the `timeline` lever that is not a whole number of months;
+- **[R12 — calc 2.11.0]** an axis or tornado range with `lever === 'phase_slip'` and `phase_id` null, or with any other lever and `phase_id` set;
+- **[R12 — calc 2.11.0]** a step, or a tornado bound, for the `phase_slip` lever that is not a whole number of months.
 
-The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline` lever is therefore constrained to whole months at the point of input rather than rounded later.
+The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline` and `phase_slip` levers are therefore constrained to whole months at the point of input rather than rounded later.
+
+The duplicate checks key the **pair** rather than the lever alone because two `phase_slip` axes targeting different phases are a legitimate matrix, and a tornado may carry one bar per slipped phase. The lever name itself stays a closed set: encoding the target into the lever string (`'phase_slip:planning'`) would have forced the membership check that stops a misspelled lever reaching the engine to be loosened into a prefix match.
 
 ### 12.7 Cell validity [R5 — calc 2.5.0]
 
@@ -1187,6 +1214,14 @@ CostPlanMode = 'headline' | 'detailed'
 
 **Headline stays rate × area; detailed is priced lump sums.** The two modes are mutually exclusive, and it is enforced rather than assumed: `headline` mode carrying a non-empty package schedule is a hard validation error, and so is `detailed` mode carrying none (§16.5). Packages deliberately do not each carry their own rate and area — a QS prices a package; the rate is the QS's working, not the appraisal's input. Reintroducing per-package rate × area would recreate the two-numbers-one-fact condition the §15 area bridge exists to remove.
 
+**Note — how a cost line reaches the programme [R12 — calc 2.11.0].** From inputs v9 every `CostPackage` and every `FeeLine` carries an optional `phase_id`, and both modes resolve a line to a phase through the one rule
+
+```
+resolved_phase(line) = line.phase_id  ??  programme.category_phase_ids[line.category]
+```
+
+where a package's category is `construction` and a fee line's is its existing `FeeCategory` (`professional` | `statutory`). Headline mode has no line rows, so its three totals resolve straight through `category_phase_ids`. There is **one** accessor, and a line's own override and the category default can never both apply. `category_phase_ids` is required whenever `programme` is a network; `phase_id` is `null` on every migrated line. The spreading rule, the milestone prohibition and the `prior_approval` month-0 carve-out are §18.5's.
+
 ### 16.2 Packages, and the compliance double-count they would otherwise cause
 
 ```
@@ -1546,3 +1581,354 @@ Per the standing rule that every guard be planted against and watched failing be
 | A full reclaim redeems properly | A reclaim that clears the balance before any sale must still charge the exit fee exactly once, equal to the same document's fee when the sale redeems instead |
 | A partial reclaim does not redeem | A reclaim smaller than the balance charges no exit fee and sets no redemption state |
 | The server-side `vat` deep-merge | Delete it; a stored-row test must fail |
+
+---
+
+## 18. The dated, dependent programme [R12 — calc 2.11.0]
+
+Before this release an explicit programme was three mutually independent windows — construction, professional, statutory — each with an unconstrained `start_offset` (§6.1). Nothing in the model said construction followed procurement, or that discharging conditions preceded a start on site, so moving one window moved one window and a lender's first programme question (*"what happens to my exposure if planning takes three months longer?"*) had no representable answer. Eight of the fourteen phases a conversion scheme actually runs — conditions, procurement, strip-out, testing, building control/warranty, practical completion, marketing, unit completions — had nowhere to live at all. §18 replaces the three windows with a **precedence network**, binds the cost lines to it, and makes a single slip propagate.
+
+**§6.1 is superseded for the explicit-programme case. §6's `programme = null` auto-window rules are unchanged and remain live.** There are **two** live spend paths from inputs v9, not three: the auto path and the network. The v8 three-package shape does not survive migration (§18.7).
+
+### 18.1 The schema
+
+`inputs_version: 9`. `programme` is a two-state field:
+
+| State | Meaning | Spend profile |
+|---|---|---|
+| `null` | auto windows | §6, **bit-identical to calc 2.10.0** |
+| `{ anchor_month, phases[], category_phase_ids }` | precedence network | §18.2–§18.5 |
+
+```
+PhaseCode =
+  | 'acquisition' | 'planning' | 'conditions' | 'design' | 'procurement'
+  | 'strip_out' | 'construction' | 'testing' | 'building_control'
+  | 'practical_completion' | 'marketing' | 'unit_completions'
+  | 'sales' | 'maturity_tail' | 'other'
+
+DependencyType = 'FS' | 'SS'
+
+Dependency:
+  phase_id:   string
+  type:       DependencyType
+  lag_months: integer >= 0
+
+Phase:
+  id:              string          -- identity; unique
+  code:            PhaseCode
+  label:           string          -- free text
+  duration_months: integer >= 0    -- 0 = milestone (§18.3)
+  slip_months:     integer         -- SIGNED; default 0; negative = acceleration
+  start_offset:    integer >= 0    -- earliest-start floor, default 0
+  curve:           SpendCurve
+  predecessors:    Dependency[]
+
+ProgrammeNetwork:
+  anchor_month:        string | null   -- unchanged from v4; a display label
+  phases:              Phase[]
+  category_phase_ids:  { construction: string, professional: string, statutory: string }
+```
+
+`code` is a fixed enum plus a free `label`, mirroring §16.2's `CostPackage.code` treatment: it makes programmes comparable across appraisals while still admitting the phase a particular scheme has that the enum does not. **Duplicate `code`s are allowed** (two `other` phases; three `construction` phases for a phased block release); **duplicate `id`s are not** — `id` is the identity that dependencies, `category_phase_ids`, cost lines and sale anchors all reference.
+
+`curve` is the existing `SpendCurve` (`straight_line` | `s_curve` | `back_loaded` | `user_defined`) of §6.1, unchanged, including the residue-absorption invariant.
+
+**`start_offset` is an earliest-start floor, not an override.** This is the rule that keeps the schema from carrying two sources of truth for one date:
+
+- a phase with no predecessors starts at `start_offset` (default 0);
+- a phase with predecessors starts at the **later** of its floor and its constraints;
+- there is no state in which a phase has both a "derived" and an "actual" start that can disagree.
+
+It also does the migration's work by construction (§18.7): a v8 package becomes a predecessor-free phase whose floor *is* its old `start_offset`, so the derived window equals the old window identically rather than by arithmetic coincidence.
+
+### 18.2 The derivation
+
+One rule, applied over a topological order of `phases`:
+
+```
+ref(d)   = finish(d.phase_id)   if d.type = 'FS'
+         = start(d.phase_id)    if d.type = 'SS'
+
+start(p) = slip_months(p)
+         + max( start_offset(p),
+                max over d in predecessors(p) of ( ref(d) + lag_months(d) ) )
+
+finish(p) = start(p) + duration_months(p)
+```
+
+The window is **half-open**: `[start, finish)`, occupying months `start … finish − 1`. This is §6.1's existing convention, where a package with `start_offset = 1, duration_months = 4` occupies months 1–4. `max` over an empty predecessor list is `−infinity`, so a predecessor-free phase starts at `slip_months + start_offset`.
+
+**Programme finish.**
+
+```
+programme_finish = max over all p of ( finish(p)      if duration_months(p) >= 1
+                                       start(p) + 1   if duration_months(p) = 0 )
+```
+
+It is the first month index no phase occupies. **The milestone arm sits inside the same maximum; it is not a fallback for the case where only milestones remain.** A trailing `maturity_tail` milestone sitting three months after the last spend-bearing phase finishes *is* the programme's end, and a formula that took the maximum over `duration >= 1` phases alone would report the programme finishing before its own final milestone.
+
+**Slip is applied to the phase and inherited by its successors.** `slip_months(p)` is added to `p`'s own start *after* its constraints resolve, so it delays `p` and, through `ref(d)`, everything that depends on `p`. A slip on a phase is **not** a slip on the programme: whether `programme_finish` moves is decided by `p`'s float (§18.4), and that asymmetry is this release's primary falsifiable guard.
+
+**Slip is signed.** A negative `slip_months` is acceleration — *"planning comes through two months early"* is as legitimate a lender question as the delay, and an unsigned field would make §12.4's tornado one-sided, its low endpoint an invalid cell on every programme document. Signing it costs exactly one rule: because `slip_months` is applied outside the `max`, it can drive a start below zero, and **a resolved `start(p) < 0` is a hard error naming the phase and the resolved start (§18.8), never a clamp to month 0.** Clamping would silently convert an over-acceleration into a different, valid-looking programme.
+
+**Cycles.** Evaluation is a topological pass. A cycle has no topological order and there is no defensible default start for a phase inside one, so a cycle is a **hard validation error naming the cycle in order** — `planning → conditions → planning` — not a generic "invalid programme" and not a silently broken edge. Self-references and dependencies naming an absent `phase_id` are the degenerate cases and error the same way.
+
+### 18.3 Milestones
+
+`duration_months = 0` is a milestone: practical completion, a funder's first-draw date, a warranty sign-off.
+
+- `finish = start`, so an `FS` successor with `lag_months = 0` starts in the same month the milestone falls.
+- A milestone **occupies no month** and **may carry no spend**. A cost line resolving to a milestone is a **hard error**, not a silent zero — dropping money the user entered without saying so is the worse failure (the rule §16.2 settled for detailed-mode compliance figures).
+- `curve` on a milestone is ignored. It is not removed from the record, because a milestone that later gains a duration should not need its curve re-entered.
+
+### 18.4 Float and the critical path
+
+A backward pass over the reverse topological order:
+
+```
+own_bound(p)   = programme_finish       if duration_months(p) >= 1
+               = programme_finish − 1   if duration_months(p) = 0   (milestone)
+
+late_finish(p) = min( own_bound(p),
+                      min over successors s of late_ref(p, s) )
+
+late_ref(p, s) = late_start(s) − lag_months(d)                        if d.type = 'FS'
+               = late_start(s) + duration_months(p) − lag_months(d)   if d.type = 'SS'
+
+late_start(p)  = late_finish(p) − duration_months(p)
+
+total_float(p) = late_start(p) − start(p)
+is_critical(p) = total_float(p) == 0
+```
+
+`d` is the dependency on `s` that names `p`. The inner `min` over an empty successor list is `+infinity`, so a phase with no successors takes its `own_bound`.
+
+**`own_bound` applies to EVERY phase, not only the successorless ones.** The textbook formulation bounds late finish by the project end *only* for activities with no successors and takes the successor minimum otherwise. That formulation is wrong here, and stating the correct rule is the whole point of writing this subsection normatively.
+
+**An `SS` edge constrains the successor's *start*. It says nothing about the predecessor's *finish*.** So a phase can have successors and still be the phase whose own finish defines the end of the programme:
+
+> `construction` runs 10 months from month 0. `marketing` starts `SS + 6` and runs 2 months, finishing at month 8. The programme finishes at month 10 — set by construction. The successor-only rule gives `late_finish(construction) = late_start(marketing) + 10 − 6 = 12`, hence a total float of **2**. Delay construction by one month and the programme finishes at 11: its true float is **0**.
+
+A lender reading that report would see two months of free buffer on the one activity that has none. Taking the minimum against `own_bound` for every phase is what standard CPM achieves with an implicit project-end node that every activity ultimately feeds; stating it as a bound rather than as a node is the same rule without the phantom vertex.
+
+The milestone arm of `own_bound` mirrors §18.2's programme-finish formula: a zero-duration phase contributes `start + 1` to the finish, so its own bound is `programme_finish − 1`. Without it a trailing `maturity_tail` milestone — the phase that *defines* the finish — reports a float of 1.
+
+**Neither arm can produce negative float.** For `duration >= 1`, `programme_finish >= finish(p)` by construction of §18.2's maximum, so `own_bound(p) − duration(p) >= start(p)`; for a milestone, `programme_finish >= start(p) + 1`, so `own_bound(p) >= start(p)`. Adding a term to a `min` only lowers `late_finish`, so it cannot mask a negative float arising elsewhere either. Negative float **is** still reachable through a negative `slip_months` on a successor — §18.2 permits acceleration — and that is a validation matter (§18.8), not a derivation one.
+
+`critical_path` is reported as the list of phase ids with zero float, **in topological order**.
+
+This is not ornament. It is what makes the slippage analysis answer the lender's actual question — *does this delay cost me anything?* — and it supplies the release's non-commutative guard: slipping a phase with float ≥ 1 must leave `programme_finish` **unchanged**, while slipping a critical phase by *n* must move it by **exactly** *n*.
+
+### 18.5 How phases bind to money
+
+**One resolution rule, both cost modes.**
+
+```
+resolved_phase(line) = line.phase_id  ??  programme.category_phase_ids[line.category]
+```
+
+- **Headline mode** has no line rows. Its three totals — construction, professional, statutory — resolve straight through `category_phase_ids`.
+- **Detailed mode** (§16) gives every `CostPackage` and `FeeLine` an optional `phase_id` that overrides the category default. A package's category is `construction`; a fee line's is its existing `FeeCategory` (`professional` | `statutory`).
+
+`category_phase_ids` is **required** whenever `programme` is a network, in both modes. This is mode-dependent resolution of a *single* rule — the shape §16.3's contingency base settled on. There is one accessor, and a line's override and the category default can never both apply.
+
+**Spreading is per (phase, category) BUCKET, not per line.** Amounts are bucketed by their resolved phase and their category, and each bucket's **total** is spread once over that phase's derived window, with that phase's curve, through the existing `spreadByCurve` of §6.1. Two lines resolving to the same phase in the same category are **one** spread of their combined total, not two spreads summed. The invariant is unchanged: each month rounds half-up, the final month of the window absorbs the cumulative residue, Σ = total.
+
+Bucketing is normative and load-bearing, not an implementation detail. Per-line spreading is **not** the pre-existing behaviour: the auto-window arm (§6) and the legacy three-package arm (§6.1) both spread the **category total** exactly once — `spreadByCurve(professionalTotal, …)`, never a per-line loop. Per-line spreading differs from that by rounding, because each line would absorb its own residue and `Σᵢ round(tᵢ · w) ≠ round((Σᵢ tᵢ) · w)` in general. The category total would be preserved; its **monthly distribution** would shift by pennies. §18.7's migration identity gate asserts every computed figure is penny-identical across the v8 → v9 boundary, and a v8 document's professional spend is one spread of the total while its migrated v9 twin's would be eight separate spreads of eight synthesised fee lines. The gate would fail on documents whose amounts do not divide evenly — and pass on those where they happen to, which is worse, because the defect would then depend on the fixture rather than on the rule. Bucketing restores identity **by construction**: when every line in a category resolves to the category default — exactly what migration produces, since it writes no per-line `phase_id` — the bucket total *is* the category total and the spread is bit-identical to the legacy arm's. Per-line overrides still work; a line tagged to a different phase simply joins a different bucket.
+
+**The prior-approval carve-out stays per line**, because it is a placement decision rather than a rounding one: an untagged `prior_approval` fee is pinned to month 0 and never enters a bucket, while a tagged one joins its phase's bucket like any other line. A single category-level lump could not tell those two cases apart.
+
+**The two month-0 anchors that survive.**
+
+- **Acquisition stays at month 0, unconditionally.** It is the completion date and the origin of the term. The `acquisition` phase in the catalogue is therefore a *displayed, zero-spend* phase representing the purchase process; re-timing the consideration is deferred consideration and overage, and is out of scope (§18.10, limitation 2).
+- **The `prior_approval` fee keeps its month-0 pin by default** (§3.4, §6.1) and moves only if it carries an explicit `phase_id` — in practice, `planning`. Defaulting it to `category_phase_ids.statutory` instead would move it on every migrated document, because a migrated statutory phase's window is the old statutory window, which is not month 0. The default exists to hold migration identity (§18.7), and that is the reason it exists.
+
+### 18.6 Exit timing
+
+`sales_phasing.tranches[]` and `refinance` each gain:
+
+```
+anchor: { phase_id: string, offset_months: integer } | null
+```
+
+```
+resolved_month = anchor ? start(anchor.phase_id) + anchor.offset_months
+                        : month_offset
+```
+
+**`anchor: null` means "use `month_offset`"**, and it is the migration default, so every stored document's receipts land exactly where they land today. `month_offset` is retained and is not deprecated: an unanchored disposal date is a legitimate thing to model.
+
+Where an anchor is set, a construction slip moves the receipts — and therefore peak debt, interest, IRR, the sources-and-uses profile and cost-to-complete. That propagation is the audit's "exit slippage", and it is why stopping the release at practical completion was rejected: a programme that slips PC while the sale date stays pinned models a delay with no consequence.
+
+An anchor may only reference a phase that exists. It **may** reference a milestone — a tranche anchored to `practical_completion + 2` is the canonical case, and is exactly why milestones carry a start even though they occupy no month.
+
+This is the R12/R13 seam: **R12 ships *when*; R13 ships *how much*.**
+
+### 18.7 Migration and the persistence boundary
+
+```
+v8 programme: null           →  v9 null                       (untouched)
+v8 programme: { packages }   →  v9 { anchor_month, phases[3], category_phase_ids }
+```
+
+For each of the three packages, in the fixed order construction, professional, statutory:
+
+| v9 field | Value |
+|---|---|
+| `id` | **the package name** — `'construction'`, `'professional'`, `'statutory'` |
+| `code` | `construction`, `design`, `planning` respectively |
+| `label` | `'Construction'`, `'Professional'`, `'Statutory'` |
+| `duration_months` | the package's `duration_months` |
+| `start_offset` | the package's `start_offset` |
+| `slip_months` | `0` |
+| `curve` | the package's `curve`, unchanged |
+| `predecessors` | `[]` |
+
+`anchor_month` carries across unchanged. `category_phase_ids` becomes `{ construction: 'construction', professional: 'professional', statutory: 'statutory' }`. Because a predecessor-free phase's start *is* its floor (§18.1), every derived window equals the old window identically, for every curve and every term.
+
+**The five additive no-ops.** No `CostPackage` or `FeeLine` gains a live `phase_id` — every one is written `null`. `sales_phasing` tranches and `refinance` gain `anchor: null`. **All four scenarios** gain `phase_slip_phase_id: null` and `phase_slip_months: 0` (§18.9); both are no-ops by construction, because `applyScenario` matches the id against each phase and `null` matches none. Every one of these five additions is a written `null` or `0`: the migration adds no value any engine reads as live.
+
+**The persistence boundary.** The v9 additions must round-trip through the Python model, whose config is `extra='ignore'` — a field the Pydantic model does not declare is dropped silently on the way in, so a structural assertion of the form `"phase_id" not in row` can hold even with the migration helper bypassed entirely. The boundary tests therefore assert the **presence and value** of every new field after a full save/load round trip, not its absence before one.
+
+**The gate is a pair.**
+
+1. **Numeric identity** — every gated fixture, every computed figure, penny-identical across migration, in both engines.
+2. **Validation identity** — over every gated fixture plus synthetic **term-1**, **term-2** and **term-3** documents.
+
+**Validation identity is THREE properties, not one equality.** An earlier draft of this release required `validateInputs` to return the same issue set before and after migration. That is the wrong assertion once v9 carries rules v8 never had. **§18.8's overrun rule has no v8 counterpart at all** — the legacy arm validates window bounds but has no concept of a programme finishing after maturity — and both programme-bearing fixtures breach the sale-tail rule at all three synthetic terms, so exact equality would fail on behaviour that is new *and correct*. Relaxing the comparison generally would have weakened the gate everywhere to accommodate one rule.
+
+1. **No valid document becomes invalid.** If the pre-migration document has no hard (`severity: 'error'`) issue, the post-migration document has none either. **Unconditional — no filter, no exemption.** This is the only property that describes a silent DRAFT downgrade.
+2. **No invalid document becomes valid.** The converse, **also unconditional**. This is not symmetry for its own sake: v9 treats a zero-duration phase as a legal milestone where the legacy arm rejected `duration_months < 1`, so a migration could silently *upgrade* a broken document to report-safe.
+3. **Issue sets equal, except issues from a named list of v9-only rules.** The list holds exactly **one** entry — the overrun rule — asserted as such, with a separate control proving the overrun rule still fires. Excluding a rule from the comparison must never be able to hide a rule that has stopped working.
+
+**The two exemptions are of DIFFERENT SHAPES and must not be conflated.**
+
+| Exemption | Shape | Size, asserted |
+|---|---|---|
+| `PROGRAMME_FIELD_ALIASES` | a **field rename across the boundary** — the v8 sale-tail rule reports `programme.packages.<name>` where v9 reports `programme.phases.<id>`, and migration assigns `id = <name>` precisely so the two correspond one-to-one | exactly **three** entries |
+| the v9-only-rule list | a **rule with no v8 counterpart** — the overrun rule, which the legacy arm cannot express at all | exactly **one** entry |
+
+Both are asserted to their exact sizes, so neither can be widened without a test failing: narrow by construction, not narrow by intention. The alias map is additionally **derived** from the same package→phase table the migration itself uses, so the two cannot drift apart.
+
+**Property 3's exemption is applied to the post-migration side ONLY, and that one-sidedness is load-bearing.** Applying it symmetrically would let a v9-only-rule issue on the *pre-migration* side be silently dropped too, which is a hole rather than an exemption. Because the pre-migration side never carries such an issue today, a symmetric refactor would be a silent no-op — so the one-sidedness is pinned by its own test rather than by a comment.
+
+### 18.8 Validation
+
+New hard errors (input errors, not flags), applying only when `programme` is a network:
+
+| Rule | Message shape |
+|---|---|
+| duplicate `id` | names the repeated id |
+| dependency names an absent `phase_id` | names the phase and the missing id |
+| self-reference | names the phase |
+| cycle | names the cycle in order — `planning → conditions → planning` |
+| `duration_months` / `lag_months` / `start_offset` negative | names the field |
+| `duration_months` / `slip_months` / `lag_months` / `start_offset` fractional or non-finite | names the field (`slip_months` may be negative but must be a whole number) |
+| resolved `start(p) < 0` — over-acceleration | names the phase and the resolved start |
+| `user_defined` weights: length ≠ `duration_months`, non-finite, negative, or summing to ≤ 0 | §6.1's four rules, unchanged, **per phase** |
+| `category_phase_ids` references an absent id, or a **milestone** | names the category |
+| a cost line's `phase_id` references an absent phase, or a **milestone** | names the line |
+| `phases` is empty | a network with no phases is not a network |
+| **`programme.overrun`** | names the offending phase and the overrun in months |
+| a pre-completion phase breaches the sale tail | §6.1's message, unchanged |
+| resolved tranche months not strictly increasing | names the tranche |
+| an `anchor` referencing an absent phase | names the tranche or `refinance` |
+| a scenario's `phase_slip_phase_id` naming an absent phase, or set while `programme` is `null` | names the scenario |
+| a `phase_slip` axis or tornado range with `phase_id` null, or a non-`phase_slip` one with `phase_id` set | names the axis or range (§12.6) |
+
+**The two window rules, stated exactly.** Let `term = max(1, floor(finance.term_months))`. The last valid month index is `term − 1`.
+
+- **Overrun (all phases).** For `duration_months >= 1`: `finish(p) <= term`. For a milestone: `start(p) <= term − 1`. A breach raises `programme.overrun` against the phase, quoting the derived finish, the term and the difference — *"Programme finishes month 21; facility term is 18. Phase 'marketing' ends 3 months after maturity."* The term is authoritative; an overrun is a **hard error**, never a clamp into the final month.
+- **Sale tail (the pre-completion codes only).** `finish(p) <= term − 1` for `duration_months >= 1`, i.e. the last occupied month index is `term − 2`; for a milestone, `start(p) <= term − 2`. §6.1's existing rule, with its existing message.
+
+  The rule binds by **code-set membership**, not by position in the network:
+
+  ```
+  PRE_COMPLETION_CODES = acquisition, planning, conditions, design, procurement,
+                         strip_out, construction, testing, building_control,
+                         practical_completion
+  ```
+
+  `practical_completion` is itself in the set — PC is the boundary and must fall inside the tail, not on it. Everything from `marketing` onward is outside it. `other` is **not** in the set: an unclassified phase gets the weaker rule, because the alternative is a hard error nobody can act on.
+
+**Why the tail rule was scoped rather than dropped or widened.** The two-month tail exists because §4.4 places a disposal the model did not otherwise represent in the final month. Once marketing, unit completions and sales are explicit phases, the reservation *is* those phases, and applying a tail reservation to them would reserve the tail against itself. Scoping it to the pre-completion codes keeps it binding on exactly the phases it has always bound — which is why a migrated three-phase network, whose codes are `construction`, `design` and `planning`, all in the set, produces an identical issue set (§18.7). Relaxing the rule to `term` for everything would have killed the guard by widening it.
+
+**Validation is not the schedule's clamp.** `schedule.ts` and `schedule.py` both clamp month indices into range as belt-and-braces (the documented defence: an unvalidated negative index is `undefined` in JS and wraps to the end of the list in Python). Those clamps stay, and they stay **unreachable for any document that passes validation**. The derivation must never be the thing that decides whether a phase fits.
+
+### 18.9 Sensitivity — the `phase_slip` lever
+
+§12.1's fifth lever:
+
+| Lever | Unit | Effect on the inputs document |
+|---|---|---|
+| `phase_slip` | months | adds to `programme.phases[<id>].slip_months` for a named phase |
+
+**The lever carries a target as well as a magnitude**, which reaches two shapes it must not bypass.
+
+1. **`SensitivityAxis` and `TornadoRange` carry `phase_id: string | null`** — required when `lever === 'phase_slip'`, required to be `null` otherwise, both hard errors under §12.6. The "rows and cols must differ" check and the tornado's duplicate check both key the pair `(lever, phase_id)`, not `lever` alone, so two `phase_slip` axes targeting different phases are a legitimate matrix and a tornado may carry one bar per slipped phase. Encoding the target into the lever string (`'phase_slip:planning'`) was rejected: `LEVER_ORDER` is a closed set and §12.6's membership check is what stops a misspelled lever reaching the engine, and a user-composed lever name cannot be a member of a closed set.
+2. **`ScenarioOverrides` carries `phase_slip_phase_id: string | null` and `phase_slip_months: number`.** Every lever reaches the document through `applyScenario()`, the single point at which an inputs document is adjusted for *both* the four named scenarios and every sensitivity cell. A lever that bypassed it would be the only one that did, and the two adjustment paths would diverge silently. `ScenarioOverrides` is a **stored** block (`scenarios.{base,upside,downside,severe}`), so this is a v9 schema addition and part of the migration (§18.7), not a runtime-only type — which is a gain: a downside case whose planning slips three months is the most common thing a credit paper models, and before this release it was inexpressible.
+
+```
+phase.slip_months += (overrides.phase_slip_phase_id === phase.id)
+                     ? overrides.phase_slip_months : 0
+```
+
+**Additive, not assignment**, so a base-case slip already recorded on the document is stressed **from** its recorded position rather than overwritten by it. An override naming a `phase_id` no phase carries, or naming one while `programme` is `null`, is a hard validation error (§18.8) — not a silent no-op, which is what would make the lever look live while doing nothing. `phase_slip` on a `programme = null` document has no field to write and is rejected as a lever misconfiguration.
+
+**Composition order** is stated in §12.1 as that section requires: `phase_slip` writes a field no other lever touches, so the five levers remain disjoint and application remains order-independent — asserted by applying all five in several orders to one document and requiring identical results, not merely stated.
+
+§12.2's facility invariance is untouched; `phase_slip` writes nothing under `finance` or `equity_sources`.
+
+**The lever is signed**, matching `slip_months` (§18.2), so a tornado endpoint pair of −2 / +2 months is expressible and symmetric. A cell whose slip pushes the derived finish past maturity raises `programme.overrun`; a cell whose acceleration drives a start below month 0 raises the over-acceleration error. §12.7's cell-validity machinery already turns a hard input error into an **invalid cell** rather than a plausible wrong number, so no new mechanism is needed.
+
+### 18.10 Outputs, reporting and stated limitations
+
+**The result block.** `Schedule` gains `programme`:
+
+```
+ProgrammeResult:
+  finish_month:   integer
+  critical_path:  string[]            -- phase ids, topological order
+  phases: Array<{
+    id, code, label,
+    start_month, finish_month,
+    duration_months, slip_months,
+    total_float_months, is_critical
+  }>
+```
+
+`programme` is `null` on the auto path, exactly as the input is. It is **not** synthesised for auto-window documents: a derived block on a document that never asked for one is the silent-downgrade shape this release exists to avoid, and the auto path genuinely has no dependency structure to report.
+
+**Reporting.**
+
+- `ProgrammePage` carries the phase editor and a Gantt with the critical path marked and float shown; the three-package editor is replaced.
+- The investment memo carries a programme section: the phase table, the critical path, the derived finish against the facility term, and any slip recorded on the base case. Where the derivation fails on a dependency cycle, the memo **states the failure**; it does not silently omit the section.
+- `programme.overrun` is a hard error, so it makes `report_safe` false and marks the report **DRAFT** through the existing §13.3 mechanism. No new `DraftReason` is invented for it — it is an input error like any other.
+
+**Stated limitations.** Recorded so they are not read as oversights.
+
+1. **The `programme = null` path can never show slippage.** Auto-window documents have no phases, no float and no critical path. This is the deliberate price of leaving §6 live: the alternative moved a derived block onto every stored document.
+2. **Acquisition is fixed at month 0** (§18.5). Deferred consideration and overage are a later release.
+3. **No calendar dates.** `anchor_month` remains a display label; the model is month-offset throughout and phases inherit that.
+4. **No planned-versus-actual.** `slip_months` records a delay or an acceleration as a single signed number; it does not record a reporting date, a certified position or a QS forecast. That is the monitoring case (R14), which will write this same field.
+5. **No resource levelling, no calendars, no non-working periods.**
+6. **`FF` and `SF` dependency types are not supported.** No realistic construction link in this model needs them, and each would be another arm of the derivation to test.
+7. **Rounding residue is absorbed per (phase, category) bucket.** Two lines resolving to the same phase in the same category are spread once, as their combined total. This matches the auto and legacy arms, which spread the category total exactly once, and it is what keeps §18.7's penny-identity gate true by construction rather than by arithmetic coincidence (§18.5).
+8. **Total float only.** `total_float_months` is float against the programme finish. Free float — the delay a phase can absorb without moving its immediate successors — is not derived. Total float is what answers the lender's question; free float would be a second number readers would have to be taught to tell apart from the first.
+9. **Exit anchors are engine-complete but have no UI control.** §18.6's `anchor` is fully implemented, validated and tested in both engines, and an anchored tranche's receipts move with a programme slip — but **no screen writes a non-null `anchor`**, so the feature is reachable only through the API and through stored documents authored elsewhere. Nothing regressed: `anchor: null` is the correct default and §18.6 defines null as "use `month_offset`", which makes a UI-born tranche behaviourally identical to a migrated one and to every pre-R12 tranche. **This is recorded as a deferral, not a defect** — the control belongs with the exit work of R13, which owns exit economics, and shipping a control here would have put the timing switch on one screen and the economics it changes on another.
+
+### Guards this release must watch fail
+
+Per the standing rule that every guard be planted against and watched failing before it is trusted:
+
+| Guard | Watched by |
+|---|---|
+| Float asymmetry (§18.4) | Slipping a phase with `total_float >= 1` leaves the finish unchanged; slipping a critical phase by *n* moves it by exactly *n* — both arms on **absolute** month numbers, plus a test asserting the fixture really contains a non-zero-float phase |
+| Propagation, absolutely (§18.2) | The successor's **absolute** start month and the resulting **absolute** peak debt and total interest — not that they moved, and not their direction |
+| Cycle detection (§18.2) | A cyclic document errors naming the cycle; its acyclic twin, differing by **one** dependency, does not |
+| Anchor liveness (§18.6) | An anchored tranche and its absolute-month twin give **identical** receipts at zero slip and **divergent** receipts at non-zero slip |
+| Category-map liveness (§18.5) | Two documents identical but for `category_phase_ids.professional` produce different professional spend profiles |
+| Migration identity, both axes (§18.7) | The numeric gate corpus-wide in both engines, plus the three validation properties, the three-entry alias assertion and the one-entry v9-only-rule assertion, plus a control proving the overrun rule still fires |
+| Lever order-independence (§18.9) | All five levers applied in several orders to one document give identical results |
+
+**Guards deliberately not written**, because they would be vacuous by construction: any assertion that every phase's `code` is in `PhaseCode` (the type guarantees it); any assertion that `finish = start + duration` (true by construction of the implementation's own addition).

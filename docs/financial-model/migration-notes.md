@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v8)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v9)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -700,3 +700,192 @@ No fixture-level York-appraisal case study is added for this boundary: the
 Stonegate record (§10.2) carries no VAT configuration and none is inferred,
 so its post-R11 behaviour is exactly the R10 row above with one more
 inert block attached.
+
+---
+
+## 12. v8 → v9 (Release 12, calc `2.11.0`)
+
+**What's added.** `CalculatorInputsV9` is `CalculatorInputsV8` plus a **changed
+`programme` block** and five additive fields. `programme` was three mutually
+independent packages (`construction`, `professional`, `statutory`, each with a
+`start_offset`, a `duration_months` and a `curve`); from v9 an explicit
+`programme` is a **precedence network** — `{ anchor_month, phases[],
+category_phase_ids }` — whose phases carry an `id`, a `code`, a `label`, a
+`duration_months` (0 = milestone), a **signed** `slip_months`, an
+earliest-start floor `start_offset`, a `curve` and `FS`/`SS` `predecessors`
+with lags (spec §18.1). `CalculatorInputsV9` subclasses `CalculatorInputsV8`,
+for the same reason R8, R9, R10 and R11 extended rather than replaced: the
+engine dispatches on those types, and a flat re-declaration would make every
+`isinstance` check silently false for a v9 document.
+
+**`programme = null` is untouched.** It stays `null` across the boundary and
+keeps the §6 auto-window spend profile, bit-identical to calc `2.10.0`. Twelve
+fixtures depend on that, and it is the single decision that keeps this release
+from putting a derived block on documents that never asked for one.
+
+### The five additive no-ops
+
+Every one of these is a written `null` or `0`. The migration adds no value that
+any engine reads as live — which is the property the identity gates below
+actually test.
+
+| Field | Where | Written |
+|---|---|---|
+| `phase_id` | every `CostPackage` (§16.2) | `null` |
+| `phase_id` | every `FeeLine` (§16.4) | `null` |
+| `anchor` | every `sales_phasing.tranches[]` entry (§18.6) | `null` |
+| `anchor` | `refinance` (§18.6) | `null` |
+| `phase_slip_phase_id` / `phase_slip_months` | **all four** scenarios — `base`, `upside`, `downside`, `severe` (§18.9) | `null` / `0` |
+
+`phase_id: null` means "resolve through `category_phase_ids[line.category]`"
+(§18.5), and on a migrated document the category default *is* the phase that
+carries the old package's window — so nothing moves. `anchor: null` means "use
+`month_offset`" (§18.6), so every stored document's receipts land exactly where
+they landed before. The two scenario fields are no-ops by construction:
+`applyScenario` matches `phase_slip_phase_id` against each phase's `id`, and
+`null` matches none.
+
+### The three-package → network conversion
+
+For each of the three packages, in the fixed order construction, professional,
+statutory (`PACKAGE_TO_PHASE` in both engines):
+
+| v9 field | Value |
+|---|---|
+| `id` | **the package name** — `'construction'`, `'professional'`, `'statutory'` |
+| `code` | `construction`, `design`, `planning` respectively |
+| `label` | `'Construction'`, `'Professional'`, `'Statutory'` |
+| `duration_months` | the package's `duration_months`, unchanged |
+| `start_offset` | the package's `start_offset`, unchanged |
+| `slip_months` | `0` |
+| `curve` | the package's `curve`, unchanged |
+| `predecessors` | `[]` |
+
+`anchor_month` carries across unchanged. `category_phase_ids` becomes
+`{ construction: 'construction', professional: 'professional', statutory: 'statutory' }`.
+
+**`id = <package name>` is load-bearing, not cosmetic.** A predecessor-free
+phase's start *is* its floor (spec §18.1), so each derived window equals the old
+window **by construction** rather than by arithmetic coincidence — and the
+package name as id is what makes the one field-name alias below a one-to-one
+correspondence rather than a guess.
+
+### The one field-name alias
+
+`PROGRAMME_FIELD_ALIASES` — exactly **three** entries, one per package:
+
+```
+programme.packages.construction  →  programme.phases.construction
+programme.packages.professional  →  programme.phases.professional
+programme.packages.statutory     →  programme.phases.statutory
+```
+
+The v8 sale-tail validation rule reports its issue against
+`programme.packages.<name>`; the v9 rule reports the same issue against
+`programme.phases.<id>`. Because migration assigns `id = <name>`, the two
+correspond exactly, and the alias map is **derived from `PACKAGE_TO_PHASE`**
+rather than written out independently, so the two cannot drift apart. It is
+asserted to be exactly three entries.
+
+**Implementation** (`migrateV8toV9` / `migrate_v8_to_v9`, `migrateInputsToV9` /
+`migrate_inputs_to_v9`). The entry point mirrors `migrateInputsToV8`'s shape,
+including its two refusals — an unrecognised `inputs_version` throws, and a
+document declaring version 9 that fails the v9 structural check throws rather
+than falling through to the permissive v1 path. `RECOGNISED_INPUTS_VERSIONS_V9`
+is `[1..9]`, written as membership of the declared tuple. The already-v9 merge
+branch carries a **populated network** through untouched — a merge that reset
+it to the default `null` would silently downgrade a fully scheduled programme
+to auto windows and move every figure downstream of it. `is_v9` gates on the
+**container**, never on the `programme` block: `revalidate_instances='never'`
+lets a `CalculatorInputsV8` hold a v9 sub-block.
+
+### 12.1 The identity claim, and where it is tested
+
+**Claim: the v8 → v9 migration moves no computed figure and adds no validation
+issue that is not a genuinely new rule. Every existing appraisal produces
+byte-identical output either side of it — not "close", identical.**
+
+The gate is a pair, and the validation half is **three separately-falsifiable
+properties, not one set equality** (spec §18.7). An earlier draft of this
+release required the same issue set before and after migration; that is the
+wrong assertion once v9 carries a rule v8 never had. §18.8's **overrun** rule
+has no v8 counterpart at all — the legacy arm validates window bounds but has
+no concept of a programme finishing after maturity — and both programme-bearing
+fixtures breach the sale-tail rule at all three synthetic terms, so exact
+equality would fail on behaviour that is new *and correct*.
+
+1. **No valid document becomes invalid.** Unconditional — no filter, no
+   exemption. This is the silent-DRAFT-downgrade property, and it is the one
+   R11 was defined by.
+2. **No invalid document becomes valid.** Also unconditional. Not symmetry for
+   its own sake: v9 treats a zero-duration phase as a legal milestone where the
+   legacy arm rejected `duration_months < 1`, so a migration could silently
+   *upgrade* a broken document to report-safe.
+3. **Issue sets equal, except issues from a named list of v9-only rules** —
+   exactly **one** entry, the overrun rule, asserted as such, with a separate
+   control proving the overrun rule still fires. Excluding a rule from the
+   comparison must never be able to hide a rule that has stopped working.
+
+**The two exemptions are of different shapes and must not be conflated.** The
+three-entry `PROGRAMME_FIELD_ALIASES` map is a **field rename across the
+boundary**; the one-entry v9-only-rule list is a **rule with no v8
+counterpart**. Both are asserted to their exact sizes, so neither can be
+widened without a test failing. **Property 3's exemption is applied to the
+post-migration side only**, and that one-sidedness is load-bearing: applying it
+symmetrically would let a v9-only-rule issue on the *pre-migration* side be
+silently dropped too, which is a hole rather than an exemption. Because the
+pre-migration side never carries such an issue today, a symmetric refactor
+would be a silent no-op — so the one-sidedness is pinned by its own test.
+
+| What | TypeScript | Python |
+|---|---|---|
+| Gate scope is non-empty and excludes only v9-born fixtures | `golden-fixtures.test.ts`, `the gate fixture set is non-empty and excludes ONLY v9-born fixtures` | `tests/test_financial_model_fixtures.py::test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_v9_born_fixtures` |
+| Gate 1 — whole-corpus numeric identity | `golden-fixtures.test.ts`, `%s: every computed figure is penny-identical` | `tests/test_financial_model_fixtures.py::test_v9_migration_gate_1_every_computed_figure_is_penny_identical` |
+| Gate 2, property 1 | `%s: property 1 — a valid document never becomes INVALID` | `test_v9_migration_gate_2_property_1_a_valid_document_never_becomes_invalid` |
+| Gate 2, property 2 | `%s: property 2 — an invalid document never becomes VALID` | `test_v9_migration_gate_2_property_2_an_invalid_document_never_becomes_valid` |
+| Gate 2, property 3 | `%s: property 3 — issue sets equal, except v9-only rules` | `test_v9_migration_gate_2_property_3_issue_sets_equal_except_v9_only_rules` |
+| Property 3 is one-sided | `property 3's comparison is ONE-SIDED — a v9-only issue on the BEFORE side fails it` | `test_v9_migration_gate_2_property_3_comparison_is_one_sided` |
+| The alias map: exactly three, derived | `the alias map has EXACTLY three entries, and each maps name → same name` | `tests/test_migrate_v9.py::test_programme_field_aliases_is_derived_and_has_exactly_three_entries` |
+| The v9-only rule list: exactly one, named | `the v9-only rule list has EXACTLY one entry, named` | `test_v9_only_validation_rule_list_has_exactly_one_entry_named` |
+| The exemption cannot hide a dead rule | `the overrun rule really fires — excluding it from gate 2 cannot hide a dead rule` | `test_v9_migration_gate_2_the_overrun_rule_really_fires` |
+| The three properties are not vacuous over the corpus | `the three properties are not vacuous over the corpus` | `test_v9_migration_gate_2_the_three_properties_are_not_vacuous_over_the_corpus` |
+| Synthetic short-term documents really bite | `a term-2 document from a GATED fixture really does produce a genuine short-term issue` | `test_v9_migration_gate_2_a_term_2_document_from_a_gated_fixture_really_does_produce_a_genuine_short_term_issue` |
+| Persistence boundary — every new field survives a round trip | `migrate.test.ts` | `tests/test_migrate_v9.py::test_every_new_field_survives_a_full_round_trip`, `test_a_populated_network_survives_the_round_trip_with_its_dependencies` |
+| The merge branch does not reset a saved network | — | `test_merge_branch_carries_a_saved_populated_network_not_the_default_null` |
+
+**The persistence boundary is asserted by presence, never by absence.** The
+Python model's config is `extra='ignore'`, so a field the Pydantic model does
+not declare is dropped silently on the way in — meaning a structural assertion
+of the form `"phase_id" not in row` can hold even with the migration helper
+bypassed entirely. Every boundary test therefore asserts the **presence and
+value** of each new field after a full save/load round trip.
+
+**Why the numeric gate is not blind here.** R9 recorded that a numeric-identity
+gate can be *provably* blind when a migration synthesises a block no engine yet
+consumes. That is not the case at this boundary: the programme network is the
+live spend path for every migrated programme-bearing document, so the
+three-package → network conversion is exercised by the very figures the gate
+compares. The identity holds because a predecessor-free phase's start is its
+floor and because spreading is per **(phase, category) bucket** rather than per
+line (spec §18.5) — per-line spreading would have moved the monthly
+distribution by pennies on any document whose amounts do not divide evenly, and
+would have *passed* on documents where they happen to, which is worse.
+
+**Hash consequence.** As with every previous step, `input_hash` is computed over
+the full validated document, so it changes for every row the next time it is
+saved — every migrated document now carries a reshaped `programme` (or the same
+`null`) plus five new fields. `audit_hash` also changes for every migrated
+document, tracking recalculation under a new `calc_version`/`inputs_version`
+pair. Neither hash is compared against its pre-migration value anywhere in the
+codebase, so nothing flips `status` on account of either. No `expected_metrics`
+value in any golden fixture moved.
+
+### 12.2 The York appraisal after R12
+
+The Stonegate record (§10.2) carries `programme: null` and no `sales_phasing`
+or `refinance`, so it takes the untouched arm: its programme stays `null`, its
+spend profile stays on §6's auto windows, and it gains only the five additive
+no-ops — `phase_id: null` on its fee lines, and the two `phase_slip` fields at
+`null`/`0` on all four scenarios. Its post-R12 behaviour is exactly the R11 row
+with those written defaults attached. It shows no float and no critical path,
+which is limitation 1 of spec §18.10, stated rather than discovered.
