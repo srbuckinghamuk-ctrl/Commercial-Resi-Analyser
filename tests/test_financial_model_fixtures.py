@@ -1,5 +1,6 @@
 import copy
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -9,13 +10,17 @@ from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.migrate import (
+    PACKAGE_TO_PHASE,
+    PROGRAMME_FIELD_ALIASES,
     migrate_inputs,
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
     migrate_inputs_to_v7,
     migrate_inputs_to_v8,
+    migrate_inputs_to_v9,
 )
 from app.financial_model.schedule import build_schedule
+from app.financial_model.validation import validate_inputs
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     SensitivityAxis,
@@ -332,6 +337,142 @@ def test_fixture_r_reproduces_its_metrics_after_migration_to_v8(path: Path) -> N
     assert migrated.inputs_version == 8
     assert migrated.vat == parse_calculator_inputs(doc["inputs"]).vat
     _assert_expected_metrics(run_appraisal(migrated), doc, f"{path.stem}[migrated-to-v8]")
+
+
+# ---------------------------------------------------------------------------
+# R12 Task 8 (spec Sec 18.7, guard 6 of Sec 13) -- the v8 -> v9 migration
+# identity gates. Mirrors golden-fixtures.test.ts's identically-named describe
+# blocks. This is the release's main protection for real stored appraisal
+# data: gate 1 proves no computed figure moves, gate 2 proves validate_inputs
+# returns the SAME issue set either side of migration. Gate 2 exists because
+# of a real defect (R11): a migration that moved no number gave every
+# short-term document a hard validation error from a block the engine
+# otherwise ignored, silently downgrading its report to DRAFT while gate 1
+# stayed green throughout. Gate 1 cannot see that axis; gate 2 is written for
+# exactly it.
+# ---------------------------------------------------------------------------
+
+# Rule 2 (TEMPORARY): both engines fail loudly on a populated v9 programme
+# network today -- schedule.py raises, validation.py hard-errors -- because
+# the network arms are not wired until later tasks. Migrating either of these
+# two fixtures (both carry a non-null v8 `programme` block) produces exactly
+# that shape, so they are excluded here until a later task deletes this
+# filter.
+#
+# Rule 3: the exclusion is self-policing -- a named constant, asserted below
+# to have EXACTLY two entries, both named. An exclusion list that can grow in
+# silence is how a gate quietly stops gating.
+_MIGRATION_V9_GATE_EXCLUDED_STEMS = ("h-programme-scurve", "r-vat-quarterly")
+
+# Rule 1: only fixtures whose STORED inputs_version is 8 or below have a v8
+# antecedent to migrate from -- migrate_inputs_to_v8 called on an already-v9
+# document would raise, and there would be nothing to compare. No v9-tagged
+# fixture exists yet; a later task adds one, so the filter is written now
+# rather than left to break then.
+_MIGRATION_V9_GATE_FIXTURES = [
+    p for p in APPRAISAL_FIXTURES
+    if _version_of(_load_fixture(p)) <= 8 and p.stem not in _MIGRATION_V9_GATE_EXCLUDED_STEMS
+]
+
+
+def test_migration_v9_gate_exclusion_names_exactly_the_two_programme_bearing_fixtures() -> None:
+    assert len(_MIGRATION_V9_GATE_EXCLUDED_STEMS) == 2
+    assert sorted(_MIGRATION_V9_GATE_EXCLUDED_STEMS) == ["h-programme-scurve", "r-vat-quarterly"]
+
+
+def test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_the_named_fixtures() -> None:
+    """Non-vacuity, and: without this, a fixture dropped from the gate for a
+    FOURTH, unstated reason would pass silently rather than fail here."""
+    assert len(_MIGRATION_V9_GATE_FIXTURES) > 0
+    excluded = [p.stem for p in APPRAISAL_FIXTURES if p not in _MIGRATION_V9_GATE_FIXTURES]
+    assert sorted(excluded) == sorted(_MIGRATION_V9_GATE_EXCLUDED_STEMS)
+
+
+def _strip_version_fields(run: AppraisalRun) -> dict:
+    """Gate 1 compares the WHOLE computed result, not a hand-picked list of
+    metrics -- a chosen list is a guard that only watches what its author
+    remembered. `calc_version` (2.10.0 vs 2.11.0) legitimately differs and is
+    the only field stripped before comparison: unlike finance-types.ts's
+    Schedule, the Python Schedule dataclass carries no `programme` field yet
+    (a later task wires the network arm in), so there is nothing else to
+    strip on this side of the port."""
+    metrics = asdict(run.metrics)
+    del metrics["calc_version"]
+    return {"metrics": metrics, "model": asdict(run.model), "schedule": asdict(run.schedule)}
+
+
+def _with_term_months(inputs: dict, term_months: int) -> dict:
+    doc = copy.deepcopy(inputs)
+    doc["finance"] = {**doc["finance"], "term_months": term_months}
+    return doc
+
+
+@pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
+def test_v9_migration_gate_1_every_computed_figure_is_penny_identical(path: Path) -> None:
+    doc = _load_fixture(path)
+    before = run_appraisal(migrate_inputs_to_v8(doc["inputs"]))
+    after = run_appraisal(migrate_inputs_to_v9(doc["inputs"]))
+    assert _strip_version_fields(after) == _strip_version_fields(before)
+
+
+def test_programme_field_aliases_has_exactly_three_entries_and_each_maps_name_to_same_name() -> None:
+    """The bound. R11's lesson was that an exemption must be narrow BY
+    CONSTRUCTION, not by intention -- this test is the construction, and
+    because the map is derived from PACKAGE_TO_PHASE it constrains the
+    migration's phase ids at the same time. Mirrors
+    tests/test_migrate_v9.py::test_programme_field_aliases_is_derived_and_has_exactly_three_entries
+    (Task 6/7) and golden-fixtures.test.ts's identically-named test."""
+    assert len(PROGRAMME_FIELD_ALIASES) == 3
+    assert sorted(PROGRAMME_FIELD_ALIASES) == sorted(f"programme.packages.{n}" for n in PACKAGE_TO_PHASE)
+    for from_, to in PROGRAMME_FIELD_ALIASES.items():
+        # The alias is legitimate ONLY because migration writes id = package name.
+        assert to == from_.replace(".packages.", ".phases.")
+
+
+def _issue_triples(issues) -> list[tuple[str, str, str]]:
+    """Canonicalises under PROGRAMME_FIELD_ALIASES and nothing else -- every
+    other issue matches on field AND message with no aliasing at all."""
+    return sorted(
+        (i.severity, PROGRAMME_FIELD_ALIASES.get(i.field, i.field), i.message)
+        for i in issues
+    )
+
+
+@pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
+def test_v9_migration_gate_2_the_same_issue_set_before_and_after(path: Path) -> None:
+    doc = _load_fixture(path)
+    before = _issue_triples(validate_inputs(migrate_inputs_to_v8(doc["inputs"])))
+    after = _issue_triples(validate_inputs(migrate_inputs_to_v9(doc["inputs"])))
+    assert after == before
+
+
+# R11's actual failure: the v8 migration gave every document a block whose
+# default made every term<=2 appraisal a hard error, so the migration
+# silently downgraded them to DRAFT while the numeric gate stayed green. Term
+# 3 goes one step further than R11's own boundary, so a rule re-narrowed to a
+# fixed "<= 2" cutoff -- rather than derived from the migrated
+# `first_period_end_month` -- would still be caught.
+@pytest.mark.parametrize("term", [1, 2, 3])
+def test_v9_migration_gate_2_term_synthetic_documents_keep_their_issue_set(term: int) -> None:
+    for path in _MIGRATION_V9_GATE_FIXTURES:
+        doc = _load_fixture(path)
+        shortened = _with_term_months(doc["inputs"], term)
+        before = _issue_triples(validate_inputs(migrate_inputs_to_v8(shortened)))
+        after = _issue_triples(validate_inputs(migrate_inputs_to_v9(shortened)))
+        assert after == before, path.stem
+
+
+def test_v9_migration_gate_2_a_term_2_document_with_a_programme_really_does_produce_issues() -> None:
+    """Negative control: if the synthetic documents happened to be valid, the
+    test above would pass while asserting nothing. This proves the term-2
+    case is the hard case -- exactly where R11's defect lived. Deliberately
+    reaches past the gate's own excluded set (Rule 2) to fixture H, which
+    still carries a v8 `programme` block, precisely so migrating it to v9
+    yields a populated network and something for validate_inputs to reject."""
+    doc = _load_fixture(FIXTURE_DIR / "h-programme-scurve.json")
+    shortened = _with_term_months(doc["inputs"], 2)
+    issues = validate_inputs(migrate_inputs_to_v9(shortened))
+    assert any(i.severity == "error" for i in issues)
 
 
 # R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named scenarios

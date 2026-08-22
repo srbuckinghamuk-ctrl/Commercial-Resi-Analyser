@@ -6,6 +6,7 @@ import { validateInputs } from './validation';
 import type { ValidationIssue } from './validation';
 import {
   migrateInputsToV5, migrateInputsToV6, migrateInputsToV7, migrateInputsToV8,
+  migrateInputsToV9, PROGRAMME_FIELD_ALIASES,
 } from './migrate';
 import { costPlanFromLegacyCosts, computeCostPlan } from './cost-plan';
 import { areaBridge } from './areas';
@@ -966,6 +967,159 @@ describe('golden fixtures (shared with the Python engine)', () => {
 
     assertIssueSetsAgree(before, after, `synthetic ${termMonths}-month document`);
     expect(after.some((i) => i.includes('vat.first_period_end_month'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R12 Task 8 (spec §18.7, guard 6 of §13) — the v8 → v9 migration identity
+// gates. This is the release's main protection for real stored appraisal
+// data: gate 1 proves no computed figure moves, gate 2 proves validateInputs
+// returns the SAME issue set either side of migration. Gate 2 exists because
+// of a real defect (R11): a migration that moved no number gave every
+// short-term document a hard validation error from a block the engine
+// otherwise ignored, silently downgrading its report to DRAFT while gate 1
+// stayed green throughout. Gate 1 cannot see that axis; gate 2 is written
+// for exactly it.
+//
+// Fixture stems, correlated by index with `fixtures` (both built off the
+// same `fixtureFiles` scan above) rather than parsed from the human-readable
+// `name` field, which carries no stem at all.
+const fixtureStemsByFixture = new Map(fixtures.map((fx, i) => [fx, fixtureFiles[i].replace(/\.json$/, '')]));
+
+// Rule 2 (TEMPORARY): both engines fail loudly on a populated v9 programme
+// network today — schedule.ts and export-investment-memo.ts throw,
+// validation.ts hard-errors — because the network arms are not wired until
+// later tasks (Task 9, Task 11). Migrating either of these two fixtures
+// (both carry a non-null v8 `programme` block) produces exactly that shape,
+// so they are excluded here until a later task deletes this filter.
+//
+// Rule 3: the exclusion is self-policing — a named constant, asserted below
+// to have EXACTLY two entries, both named. An exclusion list that can grow
+// in silence is how a gate quietly stops gating.
+const MIGRATION_V9_GATE_EXCLUDED_STEMS = ['h-programme-scurve', 'r-vat-quarterly'] as const;
+
+// Rule 1: only fixtures whose STORED inputs_version is 8 or below have a v8
+// antecedent to migrate from — migrateInputsToV8 called on an already-v9
+// document would throw, and there would be nothing to compare. No v9-tagged
+// fixture exists yet; a later task adds one, so the filter is written now
+// rather than left to break then.
+const migrationV9GateFixtures = appraisalFixtures.filter((fx) => {
+  const stem = fixtureStemsByFixture.get(fx)!;
+  return versionOf(fx) <= 8 && !(MIGRATION_V9_GATE_EXCLUDED_STEMS as readonly string[]).includes(stem);
+});
+
+const FIXTURE_NAMES = migrationV9GateFixtures.map((fx) => fx.name);
+
+function loadFixture(name: string): Fixture {
+  const fx = migrationV9GateFixtures.find((f) => f.name === name);
+  if (!fx) throw new Error(`loadFixture: "${name}" is not in the v9 migration gate's fixture set`);
+  return fx;
+}
+
+/** Gate 1 compares the WHOLE computed result, not a hand-picked list of
+ *  metrics — a chosen list is a guard that only watches what its author
+ *  remembered. `calc_version` (2.10.0 vs 2.11.0) and the new
+ *  `schedule.programme` block (null vs the migrated network's derivation,
+ *  once Task 11 wires the network arm) legitimately differ and are the only
+ *  two fields stripped before comparison. */
+function stripVersionFields(run: AppraisalRun): unknown {
+  const { calc_version: _calc_version, ...metrics } = run.metrics;
+  const { programme: _programme, ...schedule } = run.schedule;
+  return { metrics, model: run.model, schedule };
+}
+
+function withTermMonths(inputs: AnyCalculatorInputs, termMonths: number): Record<string, unknown> {
+  const doc = JSON.parse(JSON.stringify(inputs)) as Record<string, unknown>;
+  (doc.finance as Record<string, unknown>).term_months = termMonths;
+  return doc;
+}
+
+describe('v8 → v9 migration gate scope — spec §18.7 Rules 1–3', () => {
+  it('the exclusion names exactly the two programme-bearing fixtures', () => {
+    expect(MIGRATION_V9_GATE_EXCLUDED_STEMS).toHaveLength(2);
+    expect([...MIGRATION_V9_GATE_EXCLUDED_STEMS].sort())
+      .toEqual(['h-programme-scurve', 'r-vat-quarterly']);
+  });
+
+  it('the gate fixture set is non-empty and excludes only the named fixtures', () => {
+    // Non-vacuity, and: without this, a fixture dropped from the gate for a
+    // FOURTH, unstated reason would pass silently rather than fail here.
+    expect(FIXTURE_NAMES.length).toBeGreaterThan(0);
+    const excludedStems = appraisalFixtures
+      .filter((fx) => !migrationV9GateFixtures.includes(fx))
+      .map((fx) => fixtureStemsByFixture.get(fx));
+    expect(excludedStems.sort()).toEqual([...MIGRATION_V9_GATE_EXCLUDED_STEMS].sort());
+  });
+});
+
+describe('v8 → v9 migration identity — spec §18.7 gate 1 (numeric)', () => {
+  it.each(FIXTURE_NAMES)('%s: every computed figure is penny-identical', (name) => {
+    const raw = loadFixture(name);
+    const before = runAppraisal(migrateInputsToV8(raw.inputs as unknown as Record<string, unknown>));
+    const after = runAppraisal(migrateInputsToV9(raw.inputs as unknown as Record<string, unknown>));
+    expect(stripVersionFields(after)).toEqual(stripVersionFields(before));
+  });
+});
+
+// PROGRAMME_FIELD_ALIASES is imported from migrate.ts (Task 6/7), where it is
+// DERIVED from PACKAGE_TO_PHASE, not redefined here: a second, hand-written
+// copy could gain a fourth entry without anything failing, which is exactly
+// the property the exemption must not have.
+const canonicalIssue = (i: ValidationIssue) => ({
+  severity: i.severity,
+  field: PROGRAMME_FIELD_ALIASES[i.field] ?? i.field,
+  message: i.message,
+});
+const sortIssuesForV9Gate = (xs: ValidationIssue[]) =>
+  xs.map(canonicalIssue).sort((a, b) => (a.field + a.message).localeCompare(b.field + b.message));
+
+describe('v8 → v9 migration identity — spec §18.7 gate 2 (validation)', () => {
+  it('the alias map has EXACTLY three entries, and each maps name → same name', () => {
+    // The bound. R11's lesson was that an exemption must be narrow BY
+    // CONSTRUCTION, not by intention — this test is the construction, and
+    // because the map is derived from PACKAGE_TO_PHASE it constrains the
+    // migration's phase ids at the same time.
+    expect(Object.keys(PROGRAMME_FIELD_ALIASES)).toHaveLength(3);
+    expect(Object.keys(PROGRAMME_FIELD_ALIASES).sort())
+      .toEqual(['programme.packages.construction', 'programme.packages.professional',
+                'programme.packages.statutory']);
+    for (const [from, to] of Object.entries(PROGRAMME_FIELD_ALIASES)) {
+      // The alias is legitimate ONLY because migration writes id = package name.
+      expect(to).toBe(from.replace('.packages.', '.phases.'));
+    }
+  });
+
+  it.each(FIXTURE_NAMES)('%s: the same issue set before and after', (name) => {
+    const raw = loadFixture(name);
+    expect(sortIssuesForV9Gate(validateInputs(migrateInputsToV9(raw.inputs as unknown as Record<string, unknown>))))
+      .toEqual(sortIssuesForV9Gate(validateInputs(migrateInputsToV8(raw.inputs as unknown as Record<string, unknown>))));
+  });
+
+  // R11's actual failure: the v8 migration gave every document a block whose
+  // default made every term<=2 appraisal a hard error, so the migration
+  // silently downgraded them to DRAFT while the numeric gate stayed green.
+  // Term 3 goes one step further than R11's own boundary, so a rule
+  // re-narrowed to a fixed "<= 2" cutoff — rather than derived from the
+  // migrated `first_period_end_month` — would still be caught.
+  it.each([1, 2, 3])('term-%i synthetic documents keep their issue set', (term) => {
+    for (const name of FIXTURE_NAMES) {
+      const raw = loadFixture(name);
+      const shortened = withTermMonths(raw.inputs, term);
+      expect(sortIssuesForV9Gate(validateInputs(migrateInputsToV9(shortened))))
+        .toEqual(sortIssuesForV9Gate(validateInputs(migrateInputsToV8(shortened))));
+    }
+  });
+
+  it('a term-2 document WITH a programme really does produce issues', () => {
+    // Negative control: if the synthetic documents happened to be valid, the
+    // test above would pass while asserting nothing. This proves the term-2
+    // case is the hard case — exactly where R11's defect lived. Deliberately
+    // reaches past the gate's own excluded set (Rule 2) to fixture H, which
+    // still carries a v8 `programme` block, precisely so migrating it to v9
+    // yields a populated network and something for validateInputs to reject.
+    const hFixture = fixtures.find((f) => fixtureStemsByFixture.get(f) === 'h-programme-scurve')!;
+    const shortened = withTermMonths(hFixture.inputs, 2);
+    expect(validateInputs(migrateInputsToV9(shortened)).some((i) => i.severity === 'error')).toBe(true);
   });
 });
 
