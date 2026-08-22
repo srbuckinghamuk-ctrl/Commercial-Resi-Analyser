@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from './export-investment-memo';
 import type { Project, EligibilityAssessment } from '../types';
 import type {
-  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV8,
-  AreaBridgeInputs,
+  CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
+  CalculatorInputsV8, CalculatorInputsV9, AreaBridgeInputs,
 } from './model';
 import {
   runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
@@ -20,6 +20,7 @@ import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity'
 import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
 import { LEVER_LABEL } from './sensitivity-format';
+import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -101,10 +102,10 @@ function baseInputs(): CalculatorInputsV2 {
       { id: 'r2', description: 'Sales rate slower than expected', likelihood: 'medium', impact: 'medium', mitigation: 'Competitive pricing strategy, flexible exit' },
     ],
     scenarios: {
-      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0 },
-      upside: { label: 'Upside', gdv_adjustment_pct: 10, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0 },
-      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 15, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1 },
-      severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2 },
+      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0 },
+      upside: { label: 'Upside', gdv_adjustment_pct: 10, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0 },
+      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 15, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0 },
+      severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0 },
     },
     deal_spider: {
       storeys: 2,
@@ -1606,5 +1607,277 @@ describe('R11 — VAT draft gate and memo section', () => {
     const blob = generateInvestmentMemo(mockProject, run, mockEligibility, prov);
     const info = await inspectPdf(blob);
     expect(info.pages.flatMap(watermarkTexts)).toEqual([]);
+  });
+});
+
+// R12 (Task 18, spec §18.10). Fixture S (`s-dated-programme.json`) is the
+// ONLY v9 document in the corpus carrying a POPULATED phase network — it is
+// the sole fixture able to exercise the memo's programme section at all,
+// which is exactly why the earlier throw on a v9 network (removed by this
+// task) never fired across Tasks 1-17. Loaded by explicit filename, matching
+// every other fixture this file reads (never a directory scan).
+describe('R12 memo programme section (spec §18.10, Task 18)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+  const fixtureS = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8'),
+  ) as { inputs: CalculatorInputsV9 };
+
+  function cloneS(): CalculatorInputsV9 {
+    return JSON.parse(JSON.stringify(fixtureS.inputs)) as CalculatorInputsV9;
+  }
+
+  it('renders the phase table, the critical path and the derived finish against the facility term (fixture S)', async () => {
+    const inputs = cloneS();
+    const run = runAppraisal(inputs);
+    const prog = run.schedule.programme;
+    expect(prog).not.toBeNull();
+    const p = prog!;
+    // Fixture S's own hand-derived, pre-registered figures (fixture note + expected_metrics).
+    expect(p.finish_month).toBe(22);
+    expect(inputs.finance.term_months).toBe(24);
+    expect(p.critical_path).toEqual([
+      'acquisition', 'planning', 'conditions', 'strip_out', 'construction',
+      'testing', 'building_control', 'practical_completion', 'unit_completions',
+      'sales', 'maturity_tail',
+    ]);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    const anchor = programmeAnchor(inputs);
+    const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
+
+    // The phase table: every phase's own label, start, and LAST OCCUPIED month
+    // (read off schedule.programme, never recomputed here) appear adjacently in
+    // that order, and the two duration-0 phases (practical_completion,
+    // maturity_tail) are marked "Milestone" rather than "0 mo".
+    //
+    // R12 final review wave (Finding 2). `finish_month` is EXCLUSIVE (the
+    // spec's half-open windows: a phase occupies `start_month … finish_month -
+    // 1`) — printing it verbatim as "Finish" reads a month later than the
+    // phase actually runs. The row must read the last OCCUPIED month instead:
+    // `finish_month - 1` for a real duration, or `start_month` itself for a
+    // milestone (duration_months === 0), where `finish_month === start_month`
+    // already and subtracting 1 would read backwards.
+    for (const dp of p.phases) {
+      const lastOccupied = dp.duration_months <= 0 ? dp.start_month : dp.finish_month - 1;
+      const durationLabel = dp.duration_months === 0 ? 'Milestone' : `${dp.duration_months} mo`;
+      expect(text).toContain(
+        `${dp.label} ${monthLabel(dp.start_month)} ${monthLabel(lastOccupied)} ${durationLabel}`,
+      );
+    }
+    expect(text).toContain('Milestone');
+
+    // The concrete case: Acquisition is a single ONE-month phase (start_month
+    // 0, finish_month 1 exclusive). Its printed Finish must read the SAME
+    // month as its Start, not the month after.
+    const acquisition = p.phases.find((ph) => ph.id === 'acquisition')!;
+    expect(acquisition.start_month).toBe(0);
+    expect(acquisition.finish_month).toBe(1);
+    expect(text).toContain(`Acquisition ${monthLabel(0)} ${monthLabel(0)} 1 mo`);
+    expect(text).not.toContain(`Acquisition ${monthLabel(0)} ${monthLabel(1)}`);
+    // marketing's total float is 7 (fixture note (c)) — no phase's duration or
+    // slip is 7, so this figure can only have come from the float column.
+    expect(text).toContain('7 mo');
+
+    // Critical path — the engine's own order (schedule.programme.critical_path),
+    // transcribed as labels, not re-derived. ' -> ', not '→': jsPDF's standard
+    // helvetica font has no WinAnsi glyph for the arrow (see the generator's
+    // own comment at this line).
+    const expectedPath = p.critical_path
+      .map((id) => p.phases.find((ph) => ph.id === id)!.label)
+      .join(' -> ');
+    expect(text).toContain(`Critical path: ${expectedPath}.`);
+
+    // Derived finish against the facility term: 22 vs 24 is 2 months of headroom.
+    expect(text).toContain(
+      `Derived finish: ${monthLabel(22)}, within the facility term of 24 months (2 month(s) of headroom).`,
+    );
+
+    // The unmodified base case carries no slip (fixture S states this of itself).
+    expect(text).toContain('No slip recorded on the base case.');
+
+    // Ruling A's memo arm: a v9 network document must NOT be silently
+    // rendered as auto-windows — the exact defect the throw existed to
+    // prevent (Task 4 fix round 1, Finding 1; progress.md's "Ruling A").
+    expect(text).toContain('Programme: dated phase network, 14 phases');
+    expect(text).not.toContain('Programme: auto-derived from term');
+    expect(text).not.toContain('Key dates — start on site, practical completion, sales/letting period');
+    expect(text).not.toContain('Critical path, long-lead items');
+  });
+
+  it('a programme == null document renders the §6 auto-window disclosure and no phase table', async () => {
+    const inputs = cloneS();
+    inputs.programme = null;
+    const run = runAppraisal(inputs);
+    expect(run.schedule.programme).toBeNull();
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    // The negative control for the assertions above: the SAME document minus
+    // the network takes the auto path and says so.
+    expect(text).toContain('Programme: auto-derived from term (spec §6).');
+    expect(text).toContain('Key dates — start on site, practical completion, sales/letting period');
+    expect(text).toContain('Critical path, long-lead items');
+
+    // No phase table and no derived-programme prose: the auto path has no
+    // dependency structure to report (spec §18.10's first stated limitation).
+    expect(text).not.toContain('Critical path:');
+    expect(text).not.toContain('Derived finish:');
+    expect(text).not.toContain('Slip recorded on the base case');
+    expect(text).not.toContain('Technical design'); // a phase label unique to the network
+  });
+
+  // Fix round 1, Finding 1. Before this fix, `network != null` but
+  // `schedule.programme == null` (a dependency cycle) fell through every
+  // branch in Section 6 and rendered nothing -- silently, on a document
+  // whose Section 3 line still asserted a working network. This is the
+  // third, distinct state a v9 document can be in: neither the resolved
+  // fixture-S state above nor the `programme == null` auto-window state.
+  it('a v9 network with a dependency cycle states the failure instead of silently omitting the section', async () => {
+    const inputs = cloneS();
+    // The cheapest cycle: acquisition already has no predecessors, and
+    // planning's sole predecessor is acquisition (FS) -- adding the reverse
+    // edge closes a 2-node cycle (acquisition -> planning -> acquisition).
+    const acquisition = inputs.programme!.phases.find((ph) => ph.id === 'acquisition')!;
+    acquisition.predecessors = [{ phase_id: 'planning', type: 'FS', lag_months: 0 }];
+    const run = runAppraisal(inputs);
+    expect(run.schedule.programme).toBeNull();
+    expect(run.reconciliation.report_safe).toBe(false);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    // The stated failure note (Section 6) -- not a blank section.
+    expect(text).toContain('Programme could not be derived: the phase network contains a dependency cycle.');
+    // Section 3's provenance line is qualified, not left claiming an
+    // unqualified working network.
+    expect(text).toContain(
+      'Programme: dated phase network, 14 phases — could not be derived (dependency cycle; see Section 6).',
+    );
+
+    // Distinguishes this state from the RESOLVED-network state (fixture S
+    // unmodified, above): no phase table, no critical path, no finish/slip
+    // sentences.
+    expect(text).not.toContain('Critical path:');
+    expect(text).not.toContain('Derived finish:');
+    expect(text).not.toContain('Slip recorded on the base case');
+    expect(text).not.toContain('No slip recorded on the base case.');
+
+    // Distinguishes this state from the `programme == null` AUTO-WINDOW
+    // state (immediately above): no auto-derived text, no auto-path gap
+    // markers -- this document does have a programme block, it just could
+    // not be resolved.
+    expect(text).not.toContain('Programme: auto-derived from term');
+    expect(text).not.toContain('Key dates — start on site, practical completion, sales/letting period');
+    expect(text).not.toContain('Critical path, long-lead items');
+  });
+
+  it("a slip within a phase's own float leaves the finish unchanged and is reported as a base-case slip", async () => {
+    const inputs = cloneS();
+    // Fixture note (c): design carries exactly 1 month of float.
+    const design = inputs.programme!.phases.find((ph) => ph.id === 'design')!;
+    design.slip_months = 1;
+    const run = runAppraisal(inputs);
+    const prog = run.schedule.programme!;
+    const dp = prog.phases.find((ph) => ph.id === 'design')!;
+    expect(dp.slip_months).toBe(1);
+    // Guard 1 (spec §13): slipping a phase with float >= 1 leaves the
+    // programme finish unchanged.
+    expect(prog.finish_month).toBe(22);
+    expect(run.reconciliation.report_safe).toBe(true);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+    expect(text).toContain('Slip recorded on the base case: Technical design +1 month(s).');
+    expect(text).not.toContain('No slip recorded on the base case.');
+    expect(text).toContain(
+      `Derived finish: ${formatProgrammeMonth(programmeAnchor(inputs), 22)}, within the facility term of 24 months (2 month(s) of headroom).`,
+    );
+  });
+
+  it('an overrunning document is DRAFT via the existing report_safe / §13.3 mechanism, with no new DraftReason', async () => {
+    const inputs = cloneS();
+    // construction is on the critical path with zero float — slipping it
+    // moves the programme finish by exactly the same amount (Guard 1).
+    const construction = inputs.programme!.phases.find((ph) => ph.id === 'construction')!;
+    construction.slip_months = 3;
+    const run = runAppraisal(inputs);
+    const prog = run.schedule.programme!;
+    expect(prog.finish_month).toBe(25);
+    expect(prog.finish_month).toBeGreaterThan(inputs.finance.term_months);
+    // programme.overrun is a hard validation error (validation.ts), so
+    // report_safe is false — no new DraftReason, the existing §13.3 gate.
+    expect(run.reconciliation.report_safe).toBe(false);
+
+    const prov = buildProvenance(run, null);
+    expect(prov.draftReason).toBe('unreconciled');
+    expect(prov.documentStatus).toBe('DRAFT');
+
+    const blob = generateInvestmentMemo(mockProject, run, null, prov);
+    const info = await inspectPdf(blob);
+    expect(info.pages.flatMap(watermarkTexts))
+      .toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+
+    const text = documentProse(info);
+    expect(text).toContain(
+      `Derived finish: ${formatProgrammeMonth(programmeAnchor(inputs), 25)} — 1 month(s) after the facility term of 24 months.`,
+    );
+  });
+});
+
+// R12 final review wave (Finding 2). The legacy `programme.packages` branch
+// (v4-v8 documents) has its own, independent "Finish" column -- fixture H
+// (`h-programme-scurve.json`, v5 on disk) is the only fixture this file loads
+// that carries the legacy shape, and until this test nothing exercised its
+// programme table at all.
+describe('R12 final review wave: legacy programme package table "Finish" column (Finding 2)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+  // v5 on disk, carrying the legacy `{ packages: {...} }` shape -- CalculatorInputsV9's
+  // `programme` field is narrowed to `ProgrammeNetwork | null`, so this fixture is typed
+  // to the version it actually is, not cast to the version this file mostly deals in.
+  const fixtureH = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 'h-programme-scurve.json'), 'utf-8'),
+  ) as { inputs: CalculatorInputsV5 };
+
+  it('prints the LAST OCCUPIED month per package, not the exclusive boundary', async () => {
+    const inputs = fixtureH.inputs;
+    const pkgs = inputs.programme!.packages;
+    expect(pkgs.construction).toEqual(expect.objectContaining({ start_offset: 1, duration_months: 6 }));
+    expect(pkgs.professional).toEqual(expect.objectContaining({ start_offset: 2, duration_months: 3 }));
+    expect(pkgs.statutory).toEqual(expect.objectContaining({ start_offset: 4, duration_months: 2 }));
+
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+    const monthLabel = (m: number) => formatProgrammeMonth(programmeAnchor(inputs), m);
+
+    // Construction: start 1, duration 6 -> last occupied month 6 (exclusive
+    // boundary would read month 7, one month past the phase's own end).
+    expect(text).toContain(`Construction ${monthLabel(1)} ${monthLabel(6)} s_curve`);
+    expect(text).not.toContain(`Construction ${monthLabel(1)} ${monthLabel(7)}`);
+    // Professional: start 2, duration 3 -> last occupied month 4.
+    expect(text).toContain(`Professional ${monthLabel(2)} ${monthLabel(4)} straight_line`);
+    // Statutory: start 4, duration 2 -> last occupied month 5.
+    expect(text).toContain(`Statutory ${monthLabel(4)} ${monthLabel(5)} back_loaded`);
+  });
+
+  it('reads a zero-duration package as Start == Finish, not backwards', async () => {
+    // A pure display-formatting case: rig a run already past validation (which
+    // requires a package duration of at least 1 month) with a zero-duration
+    // package, exactly as the whole-branch review's Finding 2 describes the
+    // code-level defect -- `start_offset + duration_months - 1` reads
+    // `start_offset - 1`, one month BEFORE the package's own start, when
+    // duration_months is 0.
+    const inputs: CalculatorInputsV5 = JSON.parse(JSON.stringify(fixtureH.inputs));
+    inputs.programme!.packages.statutory = { start_offset: 4, duration_months: 0, curve: { kind: 'straight_line' } };
+    const run = runAppraisal(inputs);
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+    const monthLabel = (m: number) => formatProgrammeMonth(programmeAnchor(inputs), m);
+
+    expect(text).toContain(`Statutory ${monthLabel(4)} ${monthLabel(4)} straight_line`);
+    expect(text).not.toContain(`Statutory ${monthLabel(4)} ${monthLabel(3)}`);
   });
 });

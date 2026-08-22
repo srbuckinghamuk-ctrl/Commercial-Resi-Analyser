@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   LEVER_LABEL, LEVER_SHORT, formatStepLabel, formatRangeLabel, flagShortCodes, unmeasuredCellNotes,
-  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNote,
+  isMeasuredBar, omittedTornadoNotes, unmeasuredCellNote, selectableLevers,
 } from './sensitivity-format';
+import { LEVER_ORDER } from './model/sensitivity';
 import type { SensitivityCell, TornadoBar } from './model/sensitivity';
 
 describe('sensitivity-format', () => {
@@ -250,5 +251,21 @@ describe('omittedTornadoNotes', () => {
     expect(notes).toHaveLength(1);
     const occurrences = notes[0].split(TERM).length - 1;
     expect(occurrences).toBe(1);
+  });
+});
+
+// R12 Task 17 (spec §18.9). `phase_slip` needs a phase-target picker to be
+// usable, and that picker can only be populated from a document that carries
+// a phase network -- so the lever itself is withheld from a document that
+// does not, rather than offered next to a picker with nothing to show.
+describe('selectableLevers', () => {
+  it('offers all five levers, including phase_slip, when the document carries a phase network', () => {
+    expect(selectableLevers(true)).toEqual(LEVER_ORDER);
+  });
+
+  it('withholds phase_slip when the document has no phase network, leaving the other four', () => {
+    const levers = selectableLevers(false);
+    expect(levers).not.toContain('phase_slip');
+    expect(levers).toEqual(LEVER_ORDER.filter((l) => l !== 'phase_slip'));
   });
 });

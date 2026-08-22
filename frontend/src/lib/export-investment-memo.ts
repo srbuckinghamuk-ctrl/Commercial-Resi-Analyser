@@ -2,7 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, EligibilityAssessment } from '../types';
 import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
-import { runAppraisal } from './model';
+import { runAppraisal, isProgrammeNetwork, isLegacyProgramme } from './model';
 import { applyScenario } from './model/apply-scenario';
 import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
 import type { SensitivityCell, SensitivityConfig, SensitivityLever } from './model/sensitivity';
@@ -10,7 +10,7 @@ import {
   LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
-import { formatProgrammeMonth } from './programme-months';
+import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 import { repairGluedDescription, humanise } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
@@ -144,6 +144,20 @@ interface JsPdfWithAutoTable extends jsPDF {
 /** Y-coordinate immediately below the most recently drawn table. */
 function lastAutoTableFinalY(doc: jsPDF): number {
   return (doc as JsPdfWithAutoTable).lastAutoTable.finalY;
+}
+
+/** R12 final review wave (Finding 2). Windows are half-open — a phase occupies
+ *  `start … exclusiveFinish - 1` — so a memo "Finish" column must print the
+ *  LAST OCCUPIED month, not the exclusive boundary itself: printing the
+ *  boundary reads a month later than the phase actually runs, and disagrees
+ *  with the v9/legacy twin across the migration boundary for the identical
+ *  phase. A milestone (`duration_months === 0`) occupies no month at all, so
+ *  `exclusiveFinish - 1` would read one month BEFORE its own start; that case
+ *  reads as the start itself instead. Shared by both the v9 network branch
+ *  (`exclusiveFinish` = `finish_month`) and the legacy package branch
+ *  (`exclusiveFinish` = `start_offset + duration_months`) below. */
+function lastOccupiedMonth(start: number, durationMonths: number): number {
+  return durationMonths <= 0 ? start : start + durationMonths - 1;
 }
 
 function fmt(pence: number): string {
@@ -375,10 +389,27 @@ export function generateInvestmentMemo(
   // documents carry none of these blocks at all, so every read is `in`-guarded
   // exactly like lenderValuation above. anchor_month is display-only (spec §2.1)
   // and never enters calculation; monthLabel is the memo's single conversion point.
-  const programme = 'programme' in inputs ? inputs.programme : null;
+  // R12 (spec §18.1): `programme` is a two-state INPUT field across the version
+  // union — the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence
+  // network (`{ phases: [...] }`). Section 6 below renders the network arm from
+  // `schedule.programme` (the engine's own ProgrammeResult — spec §18.10) rather
+  // than from `network` itself: the memo reads the result block, it does not
+  // call `derivePhases` or compute a date, a float or a critical path (Task 4
+  // fix round 1, Finding 1 was exactly this defect in reverse — printing
+  // "auto-derived" text and the §6 gap markers on a document that supplies
+  // dates; a second engine recomputing them here would be the same defect
+  // moved one line down).
+  const rawProgramme = 'programme' in inputs ? inputs.programme : null;
+  const network = rawProgramme != null && isProgrammeNetwork(rawProgramme) ? rawProgramme : null;
+  const programme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
   const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
   const refinance = 'refinance' in inputs ? inputs.refinance : null;
-  const anchor = programme?.anchor_month ?? null;
+  // Finding 2 (Task 4 fix round 1): `anchor_month` exists on BOTH the legacy and
+  // v9 shapes and was never shape-dependent — read it from the un-narrowed
+  // value via the same centralised helper CashflowPage.tsx uses, not from
+  // `programme` above (which is null for anything the `isLegacyProgramme` arm
+  // doesn't recognise, and would silently disagree with every other surface).
+  const anchor = programmeAnchor(inputs);
   const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
 
   // R9 (spec §15). The one place the memo reads areas from — never
@@ -432,6 +463,30 @@ export function generateInvestmentMemo(
     doc.setFontSize(style.size);
     doc.setFont('helvetica', style.weight);
     doc.setTextColor(...style.color);
+  }
+
+  /**
+   * Apply `style`, run `draw`, then restore whatever font/size/colour was
+   * active before the call. `bodyText`/`subHeading`/`writeLines`/`table`
+   * already honour the "reapply immediately before every draw" rule above by
+   * construction; this is for the rarer direct `doc.text()` call that sits
+   * outside that family (spec §18.10's programme section, Task 18) — it gets
+   * the same restore-what-you-found guarantee `drawWatermark` (report-layout.ts)
+   * and `preservingMeasurement` already give their own callers, so a bespoke
+   * style change here can never leak into whatever draws next.
+   */
+  function withTextStyle<T>(style: Style, draw: () => T): T {
+    const size = doc.getFontSize();
+    const { fontName, fontStyle } = doc.getFont();
+    const color = doc.getTextColor();
+    applyStyle(style);
+    try {
+      return draw();
+    } finally {
+      doc.setFontSize(size);
+      doc.setFont(fontName, fontStyle);
+      doc.setTextColor(color);
+    }
   }
 
   // ── Draft watermark (spec: unreconciled appraisals never look lender-ready) ──
@@ -1234,9 +1289,18 @@ export function generateInvestmentMemo(
   // which only appears when a lender valuation actually produced a GDV).
   y = bodyText(
     y,
-    programme != null
-      ? `Programme: explicit${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
-      : 'Programme: auto-derived from term (spec §6).',
+    network != null
+      ? schedule.programme != null
+        ? `Programme: dated phase network, ${network.phases.length} phases${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
+        // Fix round 1, Finding 1: a working network is asserted here and
+        // nowhere else in the document, so this line must say so itself
+        // rather than stay silent while Section 6 reports the failure —
+        // qualified, not suppressed, because dropping the line entirely
+        // would read as "no network was ever supplied", which is false.
+        : `Programme: dated phase network, ${network.phases.length} phases — could not be derived (dependency cycle; see Section 6).`
+      : programme != null
+        ? `Programme: explicit${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
+        : 'Programme: auto-derived from term (spec §6).',
   );
   y = bodyText(
     y,
@@ -1549,13 +1613,90 @@ export function generateInvestmentMemo(
   y = sectionTitle(y, 6, 'Programme');
 
   y = subHeading(y, 'Timeline');
-  if (programme != null) {
+  if (network != null && schedule.programme != null) {
+    // v9 dated phase network (spec §18.10). Every figure below is read off
+    // `schedule.programme` — the engine's own ProgrammeResult — never off
+    // `network` (the raw input) and never recomputed: `finish_month`,
+    // `critical_path` and each phase's `start_month`/`finish_month`/
+    // `total_float_months`/`is_critical` are the engine's derivation, not
+    // this file's.
+    const prog = schedule.programme;
+    const criticalSet = new Set(prog.critical_path);
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Phase', 'Start', 'Finish', 'Duration', 'Slip', 'Float', 'Critical']],
+      body: prog.phases.map((p) => [
+        p.label,
+        monthLabel(p.start_month),
+        monthLabel(lastOccupiedMonth(p.start_month, p.duration_months)),
+        p.duration_months === 0 ? 'Milestone' : `${p.duration_months} mo`,
+        p.slip_months === 0 ? '—' : `${p.slip_months > 0 ? '+' : ''}${p.slip_months} mo`,
+        `${p.total_float_months} mo`,
+        p.is_critical ? 'Yes' : '',
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      didParseCell(data) {
+        if (data.section === 'body' && criticalSet.has(prog.phases[data.row.index]?.id)) {
+          data.cell.styles.fontStyle = 'bold';
+        }
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 4;
+
+    const criticalLabels = prog.critical_path.map(
+      (id) => prog.phases.find((p) => p.id === id)?.label ?? id,
+    );
+    // ' -> ' rather than '→': jsPDF's standard helvetica font is WinAnsi-only
+    // and has no glyph for U+2192 — a text run containing one is re-encoded
+    // whole as UTF-16 and comes back as interleaved NUL bytes through any
+    // byte-stream reader (raw pdfText and every PDF text extractor alike),
+    // corrupting not just the arrow but the entire line it sits in.
+    y = bodyText(y, `Critical path: ${criticalLabels.join(' -> ')}.`);
+
+    // The derived finish against the facility term (spec §18.10, bullet 2).
+    // `programme.overrun` is a hard validation error (validation.ts) that
+    // makes `report_safe` false and marks the report DRAFT through the
+    // existing §13.3 mechanism below — no new DraftReason for it, and this
+    // sentence itself is never the thing that decides DRAFT vs FINAL.
+    const termOverrun = prog.finish_month - inputs.finance.term_months;
+    const finishText = termOverrun > 0
+      ? `Derived finish: ${monthLabel(prog.finish_month)} — ${termOverrun} month(s) after the facility term of ${inputs.finance.term_months} months.`
+      : `Derived finish: ${monthLabel(prog.finish_month)}, within the facility term of ${inputs.finance.term_months} months (${Math.abs(termOverrun)} month(s) of headroom).`;
+    const finishStyle = termOverrun > 0 ? INFO : BODY;
+    y = withTextStyle(finishStyle, () => writeLines(y, wrap(finishText, finishStyle), finishStyle, 5)) + 2;
+
+    // Any slip recorded on the base case (spec §18.10, bullet 2) — read off
+    // each phase's own `slip_months`, never re-derived.
+    const slipped = prog.phases.filter((p) => p.slip_months !== 0);
+    y = bodyText(
+      y,
+      slipped.length > 0
+        ? `Slip recorded on the base case: ${slipped.map((p) => `${p.label} ${p.slip_months > 0 ? '+' : ''}${p.slip_months} month(s)`).join('; ')}.`
+        : 'No slip recorded on the base case.',
+    );
+  } else if (network != null) {
+    // Fix round 1, Finding 1: `network != null` but `schedule.programme` is
+    // null — the phase network contains a dependency cycle. validation.ts
+    // hard-errors this (which is what makes report_safe false and the report
+    // DRAFT, below); schedule.ts deliberately withholds a derived block
+    // rather than publish a half-formed one off an unresolved cycle (spec
+    // §18.10). Neither the resolved-network branch above nor the legacy
+    // branch below applies, so without this branch the section would render
+    // nothing at all — silently, on a document whose Section 3 line (above)
+    // already asserts a network exists. A PDF must never silently omit a
+    // section it was asked to produce; state the failure instead.
+    const cycleNote = 'Programme could not be derived: the phase network contains a dependency cycle.';
+    y = withTextStyle(INFO, () => writeLines(y, wrap(cycleNote, INFO), INFO, 5)) + 2;
+  } else if (programme != null) {
     // Explicit dated programme (spec §6.1) — one row per package, straight from
     // the recorded input windows; Start/Finish are display-only calendar labels.
     const pkgRows: string[][] = (['construction', 'professional', 'statutory'] as const).map((key) => {
       const p = programme.packages[key];
       const label = key.charAt(0).toUpperCase() + key.slice(1);
-      return [label, monthLabel(p.start_offset), monthLabel(p.start_offset + p.duration_months - 1), p.curve.kind];
+      return [label, monthLabel(p.start_offset), monthLabel(lastOccupiedMonth(p.start_offset, p.duration_months)), p.curve.kind];
     });
     table({
       startY: y,
@@ -1582,12 +1723,16 @@ export function generateInvestmentMemo(
           : `month ${metrics.peak_debt_month + 1}`
     } of the programme. Total interest cost: ${fmt(model.totals.interest_pence)}.`,
   );
-  if (programme == null) {
+  if (network == null && programme == null) {
+    // §6 auto-window disclosure — a `programme == null` document has no
+    // dependency structure to report (spec §18.10), so no phase table above
+    // and these two gap markers stand as before.
     y = infoRequired(y, 'Key dates — start on site, practical completion, sales/letting period');
     y = infoRequired(y, 'Critical path, long-lead items');
   } else if (anchor == null) {
-    // An explicit programme IS the dated programme (the package table above
-    // replaces the two gap markers) — only the calendar anchor is still missing.
+    // An explicit programme (legacy or v9 network) IS the dated programme
+    // (the table above replaces the two gap markers) — only the calendar
+    // anchor is still missing.
     y = infoRequired(y, 'Programme anchor month (calendar dates)');
   }
 

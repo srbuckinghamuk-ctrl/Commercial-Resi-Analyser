@@ -4,6 +4,7 @@ import type { ValidationIssue } from './validation';
 import { validateInputs } from './validation';
 import { applyScenario } from './apply-scenario';
 import { runAppraisal } from './index';
+import { isProgrammeNetwork } from './programme';
 
 /**
  * The fixed-facility sensitivity suite of spec §12. Every cell and every tornado
@@ -16,11 +17,14 @@ import { runAppraisal } from './index';
  * import or re-export this module — consumers import `./model/sensitivity` directly.
  */
 
-export type SensitivityLever = 'gdv' | 'construction_cost' | 'timeline' | 'interest_rate';
+export type SensitivityLever =
+  'gdv' | 'construction_cost' | 'timeline' | 'interest_rate' | 'phase_slip';
 
-/** Spec §12.4 tie-break order, making the tornado sort total and so deterministic (§1.4). */
+/** Spec §12.4 tie-break order, making the tornado sort total and so deterministic (§1.4).
+ *  R12 spec §18.9 appends the fifth lever, `phase_slip`, at the end — it is the newest
+ *  and lowest-priority tie-break, not a reordering of the four §12.1 levers. */
 export const LEVER_ORDER: readonly SensitivityLever[] = [
-  'gdv', 'construction_cost', 'timeline', 'interest_rate',
+  'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
 ];
 
 /** Spec §12.6: an axis is capped at nine steps, bounding the suite at 81 cells. */
@@ -28,15 +32,31 @@ export const MAX_AXIS_STEPS = 9;
 
 export interface SensitivityAxis {
   lever: SensitivityLever;
-  /** In the lever's own unit: percent for gdv/construction_cost, months for timeline,
-   *  percentage points for interest_rate. */
+  /** R12 spec §18.9. Required (non-null) exactly when `lever === 'phase_slip'`, and
+   *  required to be `null`/absent otherwise — both hard validation errors under §12.6
+   *  (`validateSensitivityConfig`). Optional rather than mandatory in the TYPE so that
+   *  every pre-R12 construction site (the four scalar levers never had a target) keeps
+   *  compiling unmodified; an absent field is treated identically to an explicit `null`
+   *  everywhere this module reads it. */
+  phase_id?: string | null;
+  /** In the lever's own unit: percent for gdv/construction_cost, months for
+   *  timeline/phase_slip, percentage points for interest_rate. */
   steps: number[];
 }
 
 export interface TornadoRange {
   lever: SensitivityLever;
+  /** Same rule as `SensitivityAxis.phase_id` above. */
+  phase_id?: string | null;
   low: number;
   high: number;
+}
+
+/** Pair-keys a lever with its target so two `phase_slip` positions aiming at different
+ *  phases compare as distinct (§18.9) while every other lever — whose `phase_id` is
+ *  always absent/null — still compares on the lever name alone. */
+function leverKey(a: { lever: SensitivityLever; phase_id?: string | null }): string {
+  return `${a.lever}:${a.phase_id ?? ''}`;
 }
 
 export interface SensitivityConfig {
@@ -111,6 +131,9 @@ export interface SensitivityCell extends SensitivityMetrics {
 
 export interface TornadoBar {
   lever: SensitivityLever;
+  /** Echoes the configured range's target (§18.9); `null`/absent for every non-
+   *  `phase_slip` lever. */
+  phase_id?: string | null;
   low_step: number;
   high_step: number;
   low: SensitivityMetrics;
@@ -129,17 +152,40 @@ export interface SensitivityResult {
   config: SensitivityConfig;
 }
 
-/** Spec §12.6. Returns error-severity issues; an empty array means the config is usable. */
-export function validateSensitivityConfig(config: SensitivityConfig): ValidationIssue[] {
+/** The set of phase ids the document's programme network carries, or empty when
+ *  `programme` is `null` or the legacy `{ packages }` shape — both cases where a
+ *  `phase_slip` axis has no field it could possibly write to (§18.9). */
+function networkPhaseIds(inputs: AnyCalculatorInputs | undefined): Set<string> {
+  const programme = inputs != null && 'programme' in inputs ? inputs.programme : null;
+  return new Set(
+    programme != null && isProgrammeNetwork(programme) ? programme.phases.map((p) => p.id) : [],
+  );
+}
+
+/**
+ * Spec §12.6, extended by §18.9/§18.8 for the `phase_slip` lever's target. Returns
+ * error-severity issues; an empty array means the config is usable.
+ *
+ * `inputs` is optional so every pre-R12 caller keeps compiling and behaving exactly as
+ * before (`phase_slip` cannot appear in a config nobody has taught to build); passing it
+ * additionally checks a `phase_slip` axis or tornado range names a phase the document
+ * actually carries. `runSensitivity` always passes it.
+ */
+export function validateSensitivityConfig(
+  config: SensitivityConfig,
+  inputs?: AnyCalculatorInputs,
+): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const axes: Array<['rows' | 'cols', SensitivityAxis]> = [['rows', config.rows], ['cols', config.cols]];
+  const phaseIds = networkPhaseIds(inputs);
 
   for (const [name, axis] of axes) {
     const field = `sensitivity.${name}.lever`;
-    // Spec §12.6: an axis lever must be one of the four §12.1 levers. `LEVER_ORDER`
-    // is the closed set — this is what stops a bad-cased or misspelled lever from
-    // silently producing a matrix in which that axis does nothing, or (in the Python
-    // mirror) crashing inside LEVER_ORDER.index() further down the pipeline.
+    // Spec §12.6: an axis lever must be one of the five §12.1/§18.9 levers.
+    // `LEVER_ORDER` is the closed set — this is what stops a bad-cased or
+    // misspelled lever from silently producing a matrix in which that axis does
+    // nothing, or (in the Python mirror) crashing inside LEVER_ORDER.index()
+    // further down the pipeline.
     if (!LEVER_ORDER.includes(axis.lever)) {
       issues.push({ severity: 'error', field, message: `Unknown lever "${axis.lever}".` });
     }
@@ -159,20 +205,64 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
     // Spec §12.6: the engine is month-indexed (§1.3), so a fractional term has no
     // meaning in the ledger. Constraining the timeline lever here is also what makes
     // the Python mirror's int() narrowing of `timeline_adjustment_months` safe — see
-    // app/financial_model/apply_scenario.py.
-    if (axis.lever === 'timeline' && axis.steps.some((s) => !Number.isInteger(s))) {
-      issues.push({ severity: 'error', field, message: 'Timeline steps must be whole months.' });
+    // app/financial_model/apply_scenario.py. §18.9 extends the same rule to
+    // `phase_slip`: `slip_months` is a whole month count too.
+    if (
+      (axis.lever === 'timeline' || axis.lever === 'phase_slip')
+      && axis.steps.some((s) => !Number.isInteger(s))
+    ) {
+      // Fix round 1, Finding 5: worded per the actual offending lever, not a fixed
+      // "Timeline" — this surfaces verbatim in the calculator's issues panel.
+      const label = axis.lever === 'timeline' ? 'Timeline steps' : 'phase_slip steps';
+      issues.push({ severity: 'error', field, message: `${label} must be whole months.` });
     }
   }
 
-  if (config.rows.lever === config.cols.lever) {
-    issues.push({
-      severity: 'error', field: 'sensitivity.cols.lever',
-      message: 'The row and column axes must use different levers.',
-    });
+  // §18.8/§18.9: `phase_id` is required exactly when the axis is `phase_slip`, and
+  // forbidden otherwise. Encoding the target in the lever name itself
+  // (`'phase_slip:planning'`) was rejected — see spec §18.9 — because `LEVER_ORDER`
+  // is the closed set the checks above depend on, and a lever whose name is
+  // user-composed cannot be a member of a closed set.
+  for (const [name, axis] of axes) {
+    const field = `sensitivity.${name}.phase_id`;
+    if (axis.lever === 'phase_slip') {
+      if (axis.phase_id == null) {
+        issues.push({
+          severity: 'error', field,
+          message: 'A phase_slip axis needs a phase_id naming the phase it slips.',
+        });
+      } else if (inputs != null && !phaseIds.has(axis.phase_id)) {
+        issues.push({
+          severity: 'error', field,
+          message: `A phase_slip axis references phase "${axis.phase_id}", but there is `
+            + `no phase with id "${axis.phase_id}".`,
+        });
+      }
+    } else if (axis.phase_id != null) {
+      issues.push({
+        severity: 'error', field,
+        message: `phase_id is only meaningful for the phase_slip lever, not "${axis.lever}".`,
+      });
+    }
   }
 
-  const seen = new Set<SensitivityLever>();
+  // §18.9: the "rows and cols must differ" rule compares the PAIR (lever, phase_id),
+  // not the lever alone — two `phase_slip` axes targeting different phases are a
+  // legitimate matrix, not a duplicate.
+  if (leverKey(config.rows) === leverKey(config.cols)) {
+    // Fix round 1, Finding 5: two identical-lever axes and two same-phase
+    // `phase_slip` axes are different mistakes, and the message now says so — a
+    // reader seeing "must use different levers" against two `phase_slip` axes
+    // naming the SAME phase would otherwise wonder why `phase_slip`/`phase_slip`
+    // on different phases is allowed a few lines above.
+    const message = config.rows.lever === 'phase_slip' && config.cols.lever === 'phase_slip'
+      ? 'Two phase_slip axes must target different phases (the row and column axes '
+        + 'must use different levers, or different phase_slip targets).'
+      : 'The row and column axes must use different levers.';
+    issues.push({ severity: 'error', field: 'sensitivity.cols.lever', message });
+  }
+
+  const seen = new Set<string>();
   for (const range of config.tornado) {
     // Spec §12.6, same closed-set rule as the axes above.
     if (!LEVER_ORDER.includes(range.lever)) {
@@ -181,24 +271,52 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
         message: `Unknown lever "${range.lever}".`,
       });
     }
-    if (seen.has(range.lever)) {
+    // §18.9: the tornado's duplicate-lever check keys the same pair as the axis
+    // check above, so a tornado may carry one bar per slipped phase.
+    if (seen.has(leverKey(range))) {
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
         message: `Lever ${range.lever} appears more than once in the tornado.`,
       });
     }
-    seen.add(range.lever);
+    seen.add(leverKey(range));
     if (!Number.isFinite(range.low) || !Number.isFinite(range.high) || range.low >= range.high) {
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
         message: `Tornado range for ${range.lever} needs finite low < high.`,
       });
     }
-    // Spec §12.6, same whole-month rule as the axes above.
-    if (range.lever === 'timeline' && (!Number.isInteger(range.low) || !Number.isInteger(range.high))) {
+    // Spec §12.6, same whole-month rule as the axes above; §18.9 extends it to
+    // phase_slip.
+    if (
+      (range.lever === 'timeline' || range.lever === 'phase_slip')
+      && (!Number.isInteger(range.low) || !Number.isInteger(range.high))
+    ) {
+      // Fix round 1, Finding 5: same rewording as the axis rule above.
+      const label = range.lever === 'timeline' ? 'Timeline bounds' : 'phase_slip bounds';
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
-        message: 'Timeline bounds must be whole months.',
+        message: `${label} must be whole months.`,
+      });
+    }
+    // §18.8/§18.9, same pairing rule as the axes above.
+    if (range.lever === 'phase_slip') {
+      if (range.phase_id == null) {
+        issues.push({
+          severity: 'error', field: 'sensitivity.tornado',
+          message: 'A phase_slip tornado range needs a phase_id naming the phase it slips.',
+        });
+      } else if (inputs != null && !phaseIds.has(range.phase_id)) {
+        issues.push({
+          severity: 'error', field: 'sensitivity.tornado',
+          message: `A phase_slip tornado range references phase "${range.phase_id}", but `
+            + `there is no phase with id "${range.phase_id}".`,
+        });
+      }
+    } else if (range.phase_id != null) {
+      issues.push({
+        severity: 'error', field: 'sensitivity.tornado',
+        message: `phase_id is only meaningful for the phase_slip lever, not "${range.lever}".`,
       });
     }
   }
@@ -206,15 +324,55 @@ export function validateSensitivityConfig(config: SensitivityConfig): Validation
   return issues;
 }
 
-/** Builds the `ScenarioOverrides` for a set of lever positions. Levers not named sit at
- *  zero, which §12.1 guarantees is a no-op because the four levers are disjoint. */
-function overridesFor(levers: Partial<Record<SensitivityLever, number>>): ScenarioOverrides {
+/**
+ * One lever's setting for a single measurement: the lever, its magnitude in the
+ * lever's own unit, and — for `phase_slip` only — the phase it targets. A grid cell
+ * or tornado endpoint is one or more of these.
+ *
+ * §18.9 is why this is a list rather than the pre-R12 `Partial<Record<SensitivityLever,
+ * number>>`: a matrix whose rows AND cols are both `phase_slip` (targeting different
+ * phases, per §12.6's pair-keyed duplicate check above) needs to carry TWO simultaneous
+ * `phase_slip` settings, and a single `phase_slip` key in a record can hold only one.
+ */
+interface LeverSetting {
+  lever: SensitivityLever;
+  phaseId: string | null;
+  value: number;
+}
+
+/**
+ * A true no-op scenario: every lever at its identity value. Applied once at the
+ * START of every measurement — including the base case, whose `settings` is
+ * `[]` — so `measure()` always routes through `applyScenario` at least once (fix
+ * round 1, Finding 6). Without this, the base case bypassed `applyScenario`
+ * entirely and the §12.5 "base case is the unadjusted appraisal" test stopped
+ * exercising `applyScenario`'s own zero-value arithmetic — a defect there (e.g.
+ * a multiplier that isn't truly 1 at zero adjustment) would have gone
+ * undetected by that test.
+ */
+const ZERO_SCENARIO: ScenarioOverrides = {
+  label: '',
+  gdv_adjustment_pct: 0,
+  construction_cost_adjustment_pct: 0,
+  timeline_adjustment_months: 0,
+  interest_rate_adjustment_pct: 0,
+  phase_slip_phase_id: null,
+  phase_slip_months: 0,
+};
+
+/** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
+ *  setting's own lever does not own is left at its no-op value (§12.1: the five
+ *  levers write to disjoint fields), so applying several settings in sequence via
+ *  `applyScenario` composes correctly regardless of order (§18.9 guard 7). */
+function overridesFor(setting: LeverSetting): ScenarioOverrides {
   return {
     label: '',
-    gdv_adjustment_pct: levers.gdv ?? 0,
-    construction_cost_adjustment_pct: levers.construction_cost ?? 0,
-    timeline_adjustment_months: levers.timeline ?? 0,
-    interest_rate_adjustment_pct: levers.interest_rate ?? 0,
+    gdv_adjustment_pct: setting.lever === 'gdv' ? setting.value : 0,
+    construction_cost_adjustment_pct: setting.lever === 'construction_cost' ? setting.value : 0,
+    timeline_adjustment_months: setting.lever === 'timeline' ? setting.value : 0,
+    interest_rate_adjustment_pct: setting.lever === 'interest_rate' ? setting.value : 0,
+    phase_slip_phase_id: setting.lever === 'phase_slip' ? setting.phaseId : null,
+    phase_slip_months: setting.lever === 'phase_slip' ? setting.value : 0,
   };
 }
 
@@ -236,9 +394,22 @@ function unmeasured(errors: ValidationIssue[]): SensitivityMetrics {
  * One position: the levered document is validated first (§12.7), and only a document that
  * passes is appraised. An unmeasured position never reaches the ledger, so the suite does
  * not depend on `buildSchedule`'s defensive term clamp holding.
+ *
+ * `settings` is applied via `applyScenario` once per setting, in order, ON TOP OF a
+ * leading `ZERO_SCENARIO` pass — never combined into one `ScenarioOverrides` — precisely
+ * because two settings can both be `phase_slip` (§18.9) and a single overrides object
+ * cannot carry two simultaneous targets. Every setting's own lever is disjoint from
+ * every other's field (§12.1), so the sequential application composes exactly as one
+ * combined call would for the four scalar levers, and correctly for two different
+ * phase_slip targets besides. The leading zero pass means the base case (`settings ===
+ * []`) still goes through `applyScenario` exactly once, the same as every levered
+ * position — see `ZERO_SCENARIO`'s own comment.
  */
-function measure(inputs: AnyCalculatorInputs, levers: Partial<Record<SensitivityLever, number>>): SensitivityMetrics {
-  const levered = applyScenario(inputs, overridesFor(levers));
+function measure(inputs: AnyCalculatorInputs, settings: LeverSetting[]): SensitivityMetrics {
+  const levered = settings.reduce(
+    (doc, s) => applyScenario(doc, overridesFor(s)),
+    applyScenario(inputs, ZERO_SCENARIO),
+  );
   const errors = validateInputs(levered).filter((i) => i.severity === 'error');
   if (errors.length > 0) return unmeasured(errors);
 
@@ -287,7 +458,10 @@ export function runSensitivity(
   // resolved value rather than the `DEFAULT_SENSITIVITY_CONFIG` singleton.
   config: SensitivityConfig = defaultSensitivityConfig(),
 ): SensitivityResult {
-  const issues = validateSensitivityConfig(config);
+  // §18.9: passing `inputs` activates the phase-existence check, so a `phase_slip`
+  // axis naming a phase this document does not carry is rejected here rather than
+  // reaching `measure` and failing every cell identically.
+  const issues = validateSensitivityConfig(config, inputs);
   if (issues.length > 0) {
     // Deduplicated: e.g. both axes missing a step raises the identical "An axis needs
     // at least one step." issue twice, and repeating it says nothing extra.
@@ -295,7 +469,7 @@ export function runSensitivity(
     throw new InvalidSensitivityConfigError(`Invalid sensitivity config: ${messages.join(' ')}`);
   }
 
-  const base = measure(inputs, {});
+  const base = measure(inputs, []);
   // §12.5 makes the base case an identity with the unadjusted appraisal, so a suite over
   // an invalid base is meaningless in every position at once — this is an input error
   // (§12.6/§12.7), not twenty-five unmeasured cells.
@@ -311,16 +485,21 @@ export function runSensitivity(
     config.cols.steps.map((colStep) => ({
       row_step: rowStep,
       col_step: colStep,
-      ...measure(inputs, { [config.rows.lever]: rowStep, [config.cols.lever]: colStep }),
+      ...measure(inputs, [
+        { lever: config.rows.lever, phaseId: config.rows.phase_id ?? null, value: rowStep },
+        { lever: config.cols.lever, phaseId: config.cols.phase_id ?? null, value: colStep },
+      ]),
     })),
   );
 
   const tornado: TornadoBar[] = config.tornado
     .map((range) => {
-      const low = measure(inputs, { [range.lever]: range.low });
-      const high = measure(inputs, { [range.lever]: range.high });
+      const phaseId = range.phase_id ?? null;
+      const low = measure(inputs, [{ lever: range.lever, phaseId, value: range.low }]);
+      const high = measure(inputs, [{ lever: range.lever, phaseId, value: range.high }]);
       return {
         lever: range.lever,
+        phase_id: phaseId,
         low_step: range.low,
         high_step: range.high,
         low,
@@ -335,14 +514,18 @@ export function runSensitivity(
     .sort((a, b) => {
       // §12.4, extended by §12.7: spanless bars sort after every bar with a span; within
       // each group the fixed lever order keeps the sort total and so deterministic (§1.4).
+      // §18.9 extends the tie-break with the phase target, so two phase_slip bars (same
+      // lever, different phase) still sort into a total, caller-order-independent order.
       if (a.span_pence === null || b.span_pence === null) {
         if (a.span_pence !== null) return -1;
         if (b.span_pence !== null) return 1;
-        return LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever);
+        return LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever)
+          || (a.phase_id ?? '').localeCompare(b.phase_id ?? '');
       }
       return (
         b.span_pence - a.span_pence
         || LEVER_ORDER.indexOf(a.lever) - LEVER_ORDER.indexOf(b.lever)
+        || (a.phase_id ?? '').localeCompare(b.phase_id ?? '')
       );
     });
 

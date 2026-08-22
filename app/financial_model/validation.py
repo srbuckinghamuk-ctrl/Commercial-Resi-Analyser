@@ -12,8 +12,9 @@ from .areas import area_bridge
 from .cost_plan import compute_cost_plan
 from .engine import MonthlyModel, pct
 from .lender_valuation import compute_lender_gdv
+from .programme import ProgrammeDerivation, derive_phases, is_legacy_programme, is_programme_network
 from .schedule import Schedule
-from .types import FEE_CODE_CATEGORY, AnyCalculatorInputs
+from .types import FEE_CODE_CATEGORY, PRE_COMPLETION_CODES, AnyCalculatorInputs
 from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -270,6 +271,18 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     # warning further down ("registered: false with non-zero construction
     # cost") can read the resolved construction total without recomputing it.
     resolved_cost_plan = None
+    # R12 Sec 18.6/18.8: hoisted so the sales_phasing/refinance anchor rules
+    # below (which run after the programme block) can resolve start(phase_id)
+    # and check anchor existence without re-deriving the network a second
+    # time. `network_phase_ids` is populated whenever `programme` is a v9
+    # network, regardless of whether it also has structural errors (an anchor
+    # can still be checked for existence against the raw id set even when,
+    # say, a different phase has a duplicate id). `programme_derivation` is
+    # populated ONLY when the network has no structural errors and no cycle --
+    # the same gate the window rules use, because a tranche cannot resolve a
+    # month from dates that do not exist.
+    network_phase_ids: set[str] = set()
+    programme_derivation: ProgrammeDerivation | None = None
     if cp is not None:
         if cp.mode == "detailed":
             if len(cp.packages) == 0:
@@ -737,8 +750,226 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     # [0, term-2] -- the schedule's programme arm only clamps the upper bound,
     # so a negative start_offset or an oversized window must be caught here as
     # a hard error.
+    # R12 (spec Sec 18.1): `programme` is a two-state field across the version
+    # union -- the legacy `{ packages: {...} }` shape (v4-v8) or a v9
+    # precedence network (`{ phases: [...] }`). `is_legacy_programme` narrows
+    # to the legacy shape the elif block below validates -- unchanged since
+    # R3a; documents at versions 4-8 still use it, and the migration identity
+    # gate validates pre-migration v8 documents through it. Mirrors
+    # validation.ts's isProgrammeNetwork/isLegacyProgramme dispatch.
     programme = getattr(inputs, "programme", None)
-    if programme is not None:
+    if programme is not None and is_programme_network(programme):
+        # R12 (spec Sec 18.8). Real rules for the v9 precedence network,
+        # replacing the Task 4 scaffolding placeholder. Order matters: the
+        # id/dependency/scalar rules run FIRST and gate derive_phases -- a
+        # network with a dangling reference or a fractional field has already
+        # produced its error, and deriving it anyway would report a second,
+        # confusing one. A cycle (found only once the gate above is clear)
+        # reports ONLY the cycle error and skips every window rule: dates do
+        # not exist for a phase inside a cycle.
+        net = programme
+        term = max(1, math.floor(inputs.finance.term_months))
+
+        def phase_field(id_: str) -> str:
+            return f"programme.phases.{id_}"
+
+        if len(net.phases) == 0:
+            err("programme.phases", "A programme network must have at least one phase.")
+
+        all_ids = {p.id for p in net.phases}
+        network_phase_ids = all_ids
+        seen_ids: set[str] = set()
+        structural_ok = True
+
+        for p in net.phases:
+            field_ = phase_field(p.id)
+
+            if p.id in seen_ids:
+                err(field_, f'Duplicate phase id "{p.id}".')
+                structural_ok = False
+            seen_ids.add(p.id)
+
+            # CRITICAL 1b (textual parity with validation.ts): Phase.duration_months/
+            # start_offset/slip_months and Dependency.lag_months are typed `int`
+            # in Pydantic, which already rejects a fractional value at parse (a
+            # 422, before validate_inputs ever runs) -- these whole-number checks
+            # are unreachable in practice but kept so the two engines carry the
+            # same rule set and messages, mirroring the legacy arm above.
+            if not isinstance(p.duration_months, int):
+                err(field_, f"Phase '{p.id}' duration_months must be a whole number of months.")
+                structural_ok = False
+            elif p.duration_months < 0:
+                err(field_, f"Phase '{p.id}' duration_months cannot be negative.")
+                structural_ok = False
+
+            if not isinstance(p.start_offset, int):
+                err(field_, f"Phase '{p.id}' start_offset must be a whole number of months.")
+                structural_ok = False
+            elif p.start_offset < 0:
+                err(field_, f"Phase '{p.id}' start_offset cannot be negative.")
+                structural_ok = False
+
+            # Sec 18.2: slip_months is SIGNED (a negative slip is legal
+            # acceleration) but must still be a whole number.
+            if not isinstance(p.slip_months, int):
+                err(field_, f"Phase '{p.id}' slip_months must be a whole number of months.")
+                structural_ok = False
+
+            for d in p.predecessors:
+                if d.phase_id == p.id:
+                    err(field_, f"Phase '{p.id}' cannot depend on itself.")
+                    structural_ok = False
+                elif d.phase_id not in all_ids:
+                    err(
+                        field_,
+                        f"Phase '{p.id}' has a dependency on \"{d.phase_id}\", but there is no "
+                        f"phase with id \"{d.phase_id}\".",
+                    )
+                    structural_ok = False
+                if not isinstance(d.lag_months, int):
+                    err(
+                        field_,
+                        f"Phase '{p.id}' has a dependency on \"{d.phase_id}\" whose lag_months "
+                        "must be a whole number of months.",
+                    )
+                    structural_ok = False
+                elif d.lag_months < 0:
+                    err(
+                        field_,
+                        f"Phase '{p.id}' has a dependency on \"{d.phase_id}\" whose lag_months "
+                        "cannot be negative.",
+                    )
+                    structural_ok = False
+
+            # Sec 6.1's four user_defined rules, unchanged, now evaluated per phase.
+            if p.curve.kind == "user_defined":
+                w = p.curve.weights
+                if len(w) != p.duration_months:
+                    err(field_, "user_defined weights must have one entry per window month.")
+                if any(not math.isfinite(x) for x in w):
+                    err(field_, "user_defined weights must be finite numbers.")
+                if any(x < 0 for x in w):
+                    err(field_, "user_defined weights cannot be negative.")
+                if sum(w) <= 0:
+                    err(field_, "user_defined weights must sum to more than zero.")
+
+        # Sec 18.5: category_phase_ids is required whenever `programme` is a
+        # network, and must name a real, non-milestone phase -- a milestone
+        # occupies no month and cannot carry spend.
+        milestone_ids = {p.id for p in net.phases if p.duration_months == 0}
+        for cat in ("construction", "professional", "statutory"):
+            id_ = getattr(net.category_phase_ids, cat)
+            field_ = f"programme.category_phase_ids.{cat}"
+            if id_ not in all_ids:
+                err(
+                    field_,
+                    f"category_phase_ids.{cat} references phase \"{id_}\", but there is no "
+                    f"phase with id \"{id_}\".",
+                )
+            elif id_ in milestone_ids:
+                err(
+                    field_,
+                    f"category_phase_ids.{cat} references phase \"{id_}\", which is a milestone "
+                    "and cannot carry spend.",
+                )
+
+        # Sec 18.5: a detailed-mode line's `phase_id` override is the same
+        # rule -- absent phase or milestone -- applied to the cost side of the
+        # resolution. Read through `cp`, computed above; this does not need
+        # derive_phases either, only the phase catalogue.
+        if cp is not None:
+            for idx, p in enumerate(cp.packages):
+                if p.phase_id is None:
+                    continue
+                field_ = f"cost_plan.packages[{idx}].phase_id"
+                if p.phase_id not in all_ids:
+                    err(
+                        field_,
+                        f"Cost package '{p.id}' is tagged to phase \"{p.phase_id}\", but there "
+                        f"is no phase with id \"{p.phase_id}\".",
+                    )
+                elif p.phase_id in milestone_ids:
+                    err(
+                        field_,
+                        f"Cost package '{p.id}' is tagged to phase \"{p.phase_id}\", which is a "
+                        "milestone and cannot carry spend.",
+                    )
+            for idx, fl in enumerate(cp.fee_lines):
+                if fl.phase_id is None:
+                    continue
+                field_ = f"cost_plan.fee_lines[{idx}].phase_id"
+                if fl.phase_id not in all_ids:
+                    err(
+                        field_,
+                        f"Fee line '{fl.id}' is tagged to phase \"{fl.phase_id}\", but there is "
+                        f"no phase with id \"{fl.phase_id}\".",
+                    )
+                elif fl.phase_id in milestone_ids:
+                    err(
+                        field_,
+                        f"Fee line '{fl.id}' is tagged to phase \"{fl.phase_id}\", which is a "
+                        "milestone and cannot carry spend.",
+                    )
+
+        if structural_ok:
+            derivation = derive_phases(net)
+            if derivation.cycle is not None:
+                # Sec 18.1: a cycle has no topological order and no defensible
+                # default start for a phase inside it -- a hard error naming
+                # the cycle in order, not a generic "invalid programme".
+                err("programme.phases", f"Phase dependency cycle: {' → '.join(derivation.cycle)}.")
+            else:
+                programme_derivation = derivation
+                global_finish = derivation.finish_month
+
+                for dp in derivation.phases:
+                    field_ = phase_field(dp.id)
+                    is_milestone = dp.duration_months == 0
+
+                    # Sec 18.1/18.8: over-acceleration below month 0 is a hard
+                    # error naming the phase -- never silently clamped (the R5
+                    # defect).
+                    if dp.start_month < 0:
+                        err(
+                            field_,
+                            f"Phase '{dp.id}' resolves to start month {dp.start_month}, before "
+                            "month 0 (over-acceleration).",
+                        )
+
+                    # Overrun -- ALL phases. The first clause ("Programme
+                    # finishes month N") is a fact about the whole programme,
+                    # so it always quotes the GLOBAL finish; the second clause
+                    # names THIS phase, so its overrun quantity must be THIS
+                    # phase's own -- fix round 1, Finding 1: a non-terminal
+                    # breaching phase (finish(p) > term but finish(p) <
+                    # global_finish) previously had the global overrun
+                    # (belonging to whichever phase sets global_finish)
+                    # spliced into its own sentence, which understates or
+                    # overstates its true lateness whenever it is not the
+                    # phase defining the programme's end.
+                    overrun_breach = dp.start_month > term - 1 if is_milestone else dp.finish_month > term
+                    if overrun_breach:
+                        own_overrun = (dp.start_month - (term - 1)) if is_milestone else (dp.finish_month - term)
+                        err(
+                            field_,
+                            f"Programme finishes month {global_finish}; facility term is {term}. "
+                            f"Phase '{dp.label}' ends {own_overrun} months after maturity.",
+                        )
+
+                    # Sale tail -- the PRE-COMPLETION codes only (spec Sec
+                    # 6.1's existing rule and message, unchanged, so the
+                    # v8->v9 migration-identity alias holds on message as well
+                    # as field). `other` gets only the weaker overrun rule
+                    # above.
+                    if dp.code in PRE_COMPLETION_CODES:
+                        tail_breach = dp.start_month > term - 2 if is_milestone else dp.finish_month > term - 1
+                        if tail_breach:
+                            err(
+                                field_,
+                                f"Package must finish by month {term - 2} — the final two months "
+                                "are the sale tail (spec §6).",
+                            )
+    elif programme is not None and is_legacy_programme(programme):
         term = max(1, math.floor(inputs.finance.term_months))
         # validation.ts walks `Object.entries(inputs.programme.packages)`;
         # ProgrammePackages is a Pydantic model rather than a plain map, so the
@@ -766,8 +997,8 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             if pkg.start_offset + pkg.duration_months - 1 > term - 2:
                 err(
                     field_,
-                    f"Package must finish by month {term - 2} - the final two months are the "
-                    "sale tail (spec Sec 6).",
+                    f"Package must finish by month {term - 2} — the final two months are the "
+                    "sale tail (spec §6).",
                 )
             if pkg.curve.kind == "user_defined":
                 w = pkg.curve.weights
@@ -800,14 +1031,46 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             )
         if len(trs) == 0:
             err("sales_phasing", "Phased sales need at least one tranche.")
+
+        # R12 spec Sec 18.6: `anchor` only exists on a v9 tranche;
+        # getattr(tr, "anchor", None) reads it structurally, mirroring this
+        # module's other version-dispatch checks (see the `getattr(inputs,
+        # "vat", None)` guard above). Returns None when the month cannot be
+        # resolved -- an anchor naming an absent phase (own error, reported
+        # separately below) or a network that failed to derive (structural
+        # error or cycle, own error, reported above) -- so the ordering check
+        # does not manufacture a second, confusing error on top of the first.
+        def resolved_tranche_month(tr: object) -> int | None:
+            anchor = getattr(tr, "anchor", None)
+            if anchor is None:
+                return tr.month_offset  # type: ignore[attr-defined]
+            if programme_derivation is None:
+                return None
+            dp = programme_derivation.by_id.get(anchor.phase_id)
+            return dp.start_month + anchor.offset_months if dp is not None else None
+
         for i, tr in enumerate(trs):
             field_ = f"sales_phasing.tranches[{i}]"
             if not isinstance(tr.month_offset, int) or tr.month_offset < 0 or tr.month_offset > term - 1:
                 err(field_, f"Tranche month must be a whole month between 0 and {term - 1}.")
             if not math.isfinite(tr.pct_of_gross_receipts) or tr.pct_of_gross_receipts <= 0:
                 err(field_, "Tranche percentage must be a finite number greater than zero.")
-            if i > 0 and not (tr.month_offset > trs[i - 1].month_offset):
-                err(field_, "Tranche months must be strictly increasing.")
+            anchor = getattr(tr, "anchor", None)
+            if anchor is not None and anchor.phase_id not in network_phase_ids:
+                err(
+                    f"{field_}.anchor",
+                    f"Tranche anchor references phase \"{anchor.phase_id}\", but there is no "
+                    f"phase with id \"{anchor.phase_id}\".",
+                )
+            # Sec 18.6/18.8: the resolved months, not the entered ones -- an
+            # anchor on a phase that later slips can cross a neighbouring
+            # tranche even though the two month_offsets (or anchors) were
+            # entered in order.
+            if i > 0:
+                prev_month = resolved_tranche_month(trs[i - 1])
+                cur_month = resolved_tranche_month(tr)
+                if prev_month is not None and cur_month is not None and not (cur_month > prev_month):
+                    err(field_, "Tranche months must be strictly increasing.")
         pct_sum = sum(tr.pct_of_gross_receipts for tr in trs)
         if len(trs) > 0 and not (abs(pct_sum - 100) <= 1e-9):
             err("sales_phasing", f"Tranche percentages must sum to 100 (currently {pct_sum}).")
@@ -833,6 +1096,14 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             err("refinance", "Refinance arrangement fee must be zero or more.")
         if not math.isfinite(rf.legal_costs_pence) or rf.legal_costs_pence < 0:
             err("refinance", "Refinance legal costs must be zero or more.")
+        # R12 spec Sec 18.6: `anchor` only exists on a v9 refinance block.
+        rf_anchor = getattr(rf, "anchor", None)
+        if rf_anchor is not None and rf_anchor.phase_id not in network_phase_ids:
+            err(
+                "refinance.anchor",
+                f"Refinance anchor references phase \"{rf_anchor.phase_id}\", but there is no "
+                f"phase with id \"{rf_anchor.phase_id}\".",
+            )
 
     # R8 (spec Sec 14). Mirrors validation.ts's `'jurisdiction' in inputs.acquisition`
     # guard: v2-v4 documents carry none of these fields via getattr(..., None) and
@@ -871,6 +1142,34 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 "The tax jurisdiction has not been confirmed. Acquisition tax is computed "
                 f"on {regime_for(acq.jurisdiction)} and the report will remain a draft until "
                 "it is confirmed.",
+            )
+
+    # R12 spec Sec 18.8/18.9: a scenario's phase_slip_phase_id needs a real
+    # target. Scenarios carries the field on every document version (v2-v9),
+    # so a document with no v9 network at all can still have it set -- that
+    # must not be a silent no-op (the lever would look live while doing
+    # nothing), so it is a hard error naming the scenario rather than a rule
+    # scoped only to v9 documents. `has_network` is true only for a v9
+    # document whose `programme` is an actual precedence network -- a legacy
+    # `{ packages }` programme has no phase to slip either.
+    has_network = programme is not None and is_programme_network(programme)
+    for name in ("base", "upside", "downside", "severe"):
+        scenario = getattr(inputs.scenarios, name)
+        if scenario.phase_slip_phase_id is None:
+            continue
+        field_ = f"scenarios.{name}.phase_slip_phase_id"
+        if not has_network:
+            err(
+                field_,
+                f"Scenario '{name}' sets phase_slip_phase_id, but this document has no "
+                "programme network to slip a phase within.",
+            )
+        elif scenario.phase_slip_phase_id not in network_phase_ids:
+            err(
+                field_,
+                f"Scenario '{name}' phase_slip_phase_id references phase "
+                f"\"{scenario.phase_slip_phase_id}\", but there is no phase with id "
+                f"\"{scenario.phase_slip_phase_id}\".",
             )
 
     return issues

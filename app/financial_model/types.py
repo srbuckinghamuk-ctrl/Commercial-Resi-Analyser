@@ -148,6 +148,11 @@ class ScenarioOverrides(Model):
     construction_cost_adjustment_pct: float
     timeline_adjustment_months: float
     interest_rate_adjustment_pct: float
+    # R12 spec Sec 18.9. Defaulted so every existing construction site and
+    # fixture keeps parsing; the v9 MIGRATION writes them explicitly anyway
+    # (Sec 18.7), which is what the identity gate actually asserts.
+    phase_slip_phase_id: str | None = None
+    phase_slip_months: int = 0
 
 
 class Scenarios(Model):
@@ -291,6 +296,72 @@ class ProgrammePackages(Model):
     statutory: ProgrammePackage
 
 
+# --- Release 12 (calc 2.11.0): the dated, dependent programme (spec Sec 18) ---
+
+PhaseCode = Literal[
+    "acquisition", "planning", "conditions", "design", "procurement",
+    "strip_out", "construction", "testing", "building_control",
+    "practical_completion", "marketing", "unit_completions",
+    "sales", "maturity_tail", "other",
+]
+
+#: Spec Sec 18.8. The sale-tail rule binds by CODE-SET MEMBERSHIP.
+#: ``practical_completion`` is IN the set (PC is the boundary and must fall
+#: inside the tail); ``other`` is NOT (an unclassified phase gets the weaker
+#: overrun rule rather than a hard error nobody can act on).
+PRE_COMPLETION_CODES: tuple[str, ...] = (
+    "acquisition", "planning", "conditions", "design", "procurement",
+    "strip_out", "construction", "testing", "building_control",
+    "practical_completion",
+)
+
+DependencyType = Literal["FS", "SS"]
+
+
+class Dependency(Model):
+    """Port rule #7 exception, mirroring ProgrammePackage: ``lag_months`` carries
+    no *lower* Pydantic bound. Spec Sec 18.8's rules are hard *validation*
+    errors owned by validation.py, so that a negative lag surfaces as the
+    spec-worded ValidationIssue rather than a 422 Pydantic parse failure -- and
+    so the negative cases stay constructible in the validation tests."""
+
+    phase_id: str
+    type: DependencyType
+    lag_months: int = Field(le=1200)
+
+
+class Phase(Model):
+    """``slip_months`` is SIGNED (spec Sec 18.2) -- negative is acceleration --
+    and carries no lower bound, for the same reason PhaseAnchor.offset_months
+    does not: sign and range are a spec rule owned by validation.py (Task 10),
+    not a Pydantic 422. Its ``le=1200`` ceiling is the same resource-exhaustion
+    backstop as ``duration_months``/``start_offset`` below, not a spec rule --
+    and matches programme.ts's ``Phase.slip_months``, a plain ``number`` with
+    no bound at all. ``duration_months`` and ``start_offset`` are unsigned in
+    the spec, so they carry no lower bound either, only the same ceiling."""
+
+    id: str
+    code: PhaseCode
+    label: str
+    duration_months: int = Field(le=1200)
+    slip_months: int = Field(le=1200)
+    start_offset: int = Field(le=1200)
+    curve: SpendCurve
+    predecessors: list[Dependency] = Field(default_factory=list, max_length=1200)
+
+
+class CategoryPhaseIds(Model):
+    construction: str
+    professional: str
+    statutory: str
+
+
+class ProgrammeNetwork(Model):
+    anchor_month: str | None = None
+    phases: list[Phase] = Field(default_factory=list, max_length=1200)
+    category_phase_ids: CategoryPhaseIds
+
+
 class ProgrammeInputs(Model):
     # Display-only calendar anchor, "YYYY-MM". None = month indices only.
     anchor_month: str | None = None
@@ -325,6 +396,33 @@ class RefinanceInputs(Model):
     ltv_pct: float
     arrangement_fee_pence: int
     legal_costs_pence: int
+
+
+class PhaseAnchor(Model):
+    """Spec Sec 18.6. ``offset_months`` is SIGNED and carries no lower bound,
+    for the same reason SalesPhasingTranche.month_offset does not: sign and
+    range are a spec rule owned by validation.py (Task 10), which reports a
+    spec-worded ``ValidationIssue`` rather than a generic Pydantic 422. The
+    ``le=1200`` ceiling is not a spec rule -- it is a resource-exhaustion
+    backstop, guarding against a huge positive month count driving per-month
+    array allocation before any rule can reject it. A hugely negative value
+    allocates nothing and is simply rejected by validation, so it earns no
+    ceiling of its own."""
+
+    phase_id: str
+    offset_months: int = Field(le=1200)
+
+
+class SalesPhasingTrancheV9(SalesPhasingTranche):
+    anchor: PhaseAnchor | None = None
+
+
+class SalesPhasingInputsV9(Model):
+    tranches: list[SalesPhasingTrancheV9] = Field(default_factory=list, max_length=1200)
+
+
+class RefinanceInputsV9(RefinanceInputs):
+    anchor: PhaseAnchor | None = None
 
 
 class CalculatorInputsV4(CalculatorInputsV3):
@@ -539,6 +637,9 @@ class CostPackage(Model):
     # (validation, Task 9). None on every migrated line and on every line the
     # user has not overridden. Read ONLY through resolve_vat_treatment().
     vat_override: VatOverride | None = None
+    # R12 spec Sec 18.5. Overrides the category default; None on every migrated
+    # row. Read ONLY through resolved_phase_id() (Task 12).
+    phase_id: str | None = None
 
 
 class ContingencyClass(Model):
@@ -565,6 +666,9 @@ class FeeLine(Model):
     # (validation, Task 9). None on every migrated line and on every line the
     # user has not overridden. Read ONLY through resolve_vat_treatment().
     vat_override: VatOverride | None = None
+    # R12 spec Sec 18.5. Overrides the category default; None on every migrated
+    # row. Read ONLY through resolved_phase_id() (Task 12).
+    phase_id: str | None = None
 
 
 class CostPlanInputs(Model):
@@ -710,9 +814,28 @@ class CalculatorInputsV8(CalculatorInputsV7):
     vat: VatInputs = Field(default_factory=lambda: DEFAULT_VAT.model_copy(deep=True))
 
 
+class CalculatorInputsV9(CalculatorInputsV8):
+    """Mirrors CalculatorInputsV8 with the Sec 18 programme network. Subclasses
+    V8 for the same reason V8 subclasses V7: the engine dispatches on it, and a
+    flat re-declaration would make those isinstance checks silently False for
+    v9 documents.
+
+    ``programme`` NARROWS from ``ProgrammeInputs | None`` to
+    ``ProgrammeNetwork | None`` -- the v8 three-package shape does not survive
+    migration (Sec 18.7). A v8 document therefore fails
+    ``CalculatorInputsV9.model_validate`` on its programme block, which is the
+    intended mutual exclusion, not an accident."""
+
+    inputs_version: Literal[9] = 9  # type: ignore[assignment]
+    programme: ProgrammeNetwork | None = None  # type: ignore[assignment]
+    sales_phasing: SalesPhasingInputsV9 | None = None  # type: ignore[assignment]
+    refinance: RefinanceInputsV9 | None = None  # type: ignore[assignment]
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
+    | CalculatorInputsV9
 )
 
 
@@ -724,6 +847,12 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v9 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # programme network and every other post-v2 field -- R8's silent-corruption
+    # defect, which returned 201 while dropping a confirmed equity source.
+    if version == 9:
+        return CalculatorInputsV9.model_validate(doc)
     # R11 ruling R10: without this branch a v8 document falls through every
     # check below to the CalculatorInputsV2 default, silently dropping the VAT
     # block and every other post-v2 field -- R8's silent-corruption class of
@@ -756,4 +885,4 @@ FlagCode = Literal[
     "vat_funding_gap",
 ]
 
-CALC_VERSION = "2.10.0"
+CALC_VERSION = "2.11.0"

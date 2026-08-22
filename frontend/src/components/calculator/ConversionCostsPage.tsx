@@ -1,5 +1,5 @@
 import type {
-  CalculatorInputsV8, AppraisalRun, AreaBasis,
+  CalculatorInputsV9, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
   VatOverride, RecoveryBasis,
 } from '../../lib/model';
@@ -7,8 +7,8 @@ import { COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES } from '../../lib/model';
 import { penceToPounds, penceToPoundsExact, humanise } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV8;
-  onChange: (partial: Partial<CalculatorInputsV8>) => void;
+  inputs: CalculatorInputsV9;
+  onChange: (partial: Partial<CalculatorInputsV9>) => void;
   run: AppraisalRun;
 }
 
@@ -156,6 +156,7 @@ function newPackage(): CostPackage {
     lender_eligible: false,
     notes: '',
     vat_override: null,
+    phase_id: null,
   };
 }
 

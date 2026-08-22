@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
-  defaultCalculatorInputsV8,
+  defaultCalculatorInputsV8, defaultCalculatorInputsV9,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
-  migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8,
+  migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -257,5 +257,61 @@ describe('defaultCalculatorInputsV8 (R11 Task 10, spec §17.11)', () => {
     a.vat.purchase.notes = 'edited';
     expect(b.vat.treatments[0].rate_pct).toBe(0);
     expect(b.vat.purchase.notes).toBe('');
+  });
+});
+
+describe('defaultCalculatorInputsV9 (R12 Task 18b, spec §18.7)', () => {
+  // Same guard as the V5/V6/V7/V8 blocks above, and it is the one that
+  // matters most here: this is the document EVERY freshly opened calculator
+  // now starts on, and the one every stored appraisal is compared against
+  // after `migrateInputsToV9` merges onto it. If the two drifted, a new
+  // appraisal and a migrated one would be different documents while both
+  // claiming to be v9.
+  it('is exactly what migrateV8toV9 makes of the v8 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV9>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV9()))
+      .toEqual(stripIds(migrateV8toV9(defaultCalculatorInputsV8())));
+  });
+
+  // Non-vacuity for the equality above: the three fields v9 re-types are
+  // asserted by name and value, so the comparison cannot be passing merely
+  // because both sides are the v8 document with a bumped version number.
+  it('starts on the §6 auto windows, with no exit block anchored', () => {
+    const v9 = defaultCalculatorInputsV9();
+    expect(v9.inputs_version).toBe(9);
+    // null programme = the auto windows, bit-identical to calc 2.10.0 --
+    // a brand-new appraisal behaves exactly as it did before R12 until the
+    // user builds a network on the Programme page.
+    expect(v9.programme).toBeNull();
+    expect(v9.sales_phasing).toBeNull();
+    expect(v9.refinance).toBeNull();
+  });
+
+  // The v9-only fields v9 inherits from v8 UNCHANGED, so the type system
+  // cannot tell you whether they are actually present. They are what the
+  // phase_slip lever (§18.9) and the per-line phase tags (§18.7) read.
+  it('carries the phase tags and the phase_slip lever fields inert', () => {
+    const v9 = defaultCalculatorInputsV9();
+    for (const scenario of [v9.scenarios.base, v9.scenarios.upside,
+      v9.scenarios.downside, v9.scenarios.severe]) {
+      expect(scenario.phase_slip_phase_id).toBeNull();
+      expect(scenario.phase_slip_months).toBe(0);
+    }
+    for (const line of [...v9.cost_plan.packages, ...v9.cost_plan.fee_lines]) {
+      expect(line.phase_id).toBeNull();
+    }
+  });
+
+  it('hands every caller its own document, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV9();
+    const b = defaultCalculatorInputsV9();
+    a.vat.treatments[0].rate_pct = 20;
+    a.scenarios.base.phase_slip_months = 3;
+    expect(b.vat.treatments[0].rate_pct).toBe(0);
+    expect(b.scenarios.base.phase_slip_months).toBe(0);
   });
 });

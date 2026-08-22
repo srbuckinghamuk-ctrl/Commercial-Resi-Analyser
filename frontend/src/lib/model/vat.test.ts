@@ -338,11 +338,13 @@ function buildDetailedVatCase(opts: { mode?: 'detailed' | 'headline' } = {}) {
         {
           id: 'p1', code: 'structure', label: 'Structure', amount_pence: 60_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
+          phase_id: null,
         },
         {
           id: 'p2', code: 'envelope', label: 'Envelope', amount_pence: 40_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '',
           vat_override: { rate_pct: 5, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+          phase_id: null,
         },
       ],
       contingency: defaultContingencyClasses(10),

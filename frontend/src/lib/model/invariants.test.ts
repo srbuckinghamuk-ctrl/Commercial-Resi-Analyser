@@ -4,14 +4,14 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import { migrateInputsToV8 } from './migrate';
+import { migrateInputsToV8, migrateInputsToV9 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './sensitivity';
 import type {
   AnyCalculatorInputs, CalculatorInputsV5,
-  ProgrammeInputs, SpendCurve,
+  ProgrammeInputs, ProgrammeNetwork, SpendCurve,
 } from './finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
@@ -41,6 +41,38 @@ function programmeForTerm(termMonths: number): ProgrammeInputs {
   };
 }
 
+// R12: the v9 sibling of programmeForTerm, for a fixture BORN at v9.
+// migrateInputsToV8 refuses such a document (RECOGNISED_INPUTS_VERSIONS_V8 stops
+// at 8), so the 'programme' variant below cannot route it through the legacy shape.
+//
+// Deliberately the same THREE predecessor-free phases the v8 → v9 migration itself
+// produces (spec §18.7), with the same windows programmeForTerm uses, so the variant
+// asserts the same claim on both arms: the ledger invariants hold for a document
+// whose spend is driven by a programme fitted to its own term, whatever shape that
+// programme is stored in.
+function networkForTerm(termMonths: number): ProgrammeNetwork {
+  const term = Math.max(1, Math.floor(termMonths));
+  const cap = Math.max(1, term - 2);
+  const phase = (
+    id: string, code: ProgrammeNetwork['phases'][number]['code'],
+    label: string, duration: number, curve: SpendCurve,
+  ): ProgrammeNetwork['phases'][number] => ({
+    id, code, label, duration_months: duration, slip_months: 0, start_offset: 0,
+    curve, predecessors: [],
+  });
+  return {
+    anchor_month: null,
+    phases: [
+      phase('construction', 'construction', 'Construction', Math.min(6, cap), { kind: 's_curve' }),
+      phase('professional', 'design', 'Professional', Math.min(3, cap), { kind: 'straight_line' }),
+      phase('statutory', 'planning', 'Statutory', Math.min(2, cap), { kind: 'back_loaded' }),
+    ],
+    category_phase_ids: {
+      construction: 'construction', professional: 'professional', statutory: 'statutory',
+    },
+  };
+}
+
 // Variants derived from each fixture to widen coverage without new hand calcs.
 function variants(
   inputs: CalculatorInputsV5,
@@ -65,8 +97,30 @@ function variants(
   // R11: widened once more, to v8 — migrateInputsToV7 refuses a v8 document (fixture
   // R) by the same design, since producing one would mean dropping `vat`.
   // migrateInputsToV8 accepts all four versions (upgrade, upgrade, upgrade, merge).
-  const programmed = migrateInputsToV8(clone() as unknown as Record<string, unknown>);
-  programmed.programme = programmeForTerm(programmed.finance.term_months);
+  // R12: a v9-born fixture (fixture S) cannot go through migrateInputsToV8 at all —
+  // it refuses a v9 document by the same design that made it refuse nothing below 9.
+  // It takes the v9 arm instead, and gets a v9 NETWORK fitted to its term rather
+  // than the legacy three-package block.
+  const storedVersion = (inputs as unknown as { inputs_version?: number }).inputs_version ?? 2;
+  let programmed: AnyCalculatorInputs;
+  if (storedVersion >= 9) {
+    const v9 = migrateInputsToV9(clone() as unknown as Record<string, unknown>);
+    v9.programme = networkForTerm(v9.finance.term_months);
+    // Replacing the network orphans any §18.6 anchor that named one of the
+    // phases just discarded. `anchor: null` is that field's own documented
+    // meaning — "use month_offset" — so clearing it keeps the variant a document
+    // the validator would accept, rather than one that only survives because
+    // buildSchedule's defensive degrade catches an absent phase_id.
+    if (v9.sales_phasing != null) {
+      v9.sales_phasing.tranches = v9.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v9.refinance != null) v9.refinance = { ...v9.refinance, anchor: null };
+    programmed = v9;
+  } else {
+    const v8 = migrateInputsToV8(clone() as unknown as Record<string, unknown>);
+    v8.programme = programmeForTerm(v8.finance.term_months);
+    programmed = v8;
+  }
   return [
     { label: 'base', inputs },
     { label: 'retain_all', inputs: retained },
@@ -464,6 +518,8 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
             construction_cost_adjustment_pct: rowStep,
             timeline_adjustment_months: 0,
             interest_rate_adjustment_pct: 0,
+            phase_slip_phase_id: null,
+            phase_slip_months: 0,
           });
           expect(levered.finance.committed_net_facility_pence)
             .toBe(inputs.finance.committed_net_facility_pence);
@@ -525,6 +581,8 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
       construction_cost_adjustment_pct: 0,
       timeline_adjustment_months: -3,
       interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(levered.finance.term_months).toBe(9);
 

@@ -1,11 +1,12 @@
 import type {
   CalculatorInputs, FinanceInputs, ProposedUnit, ProposedUnitV6, UnitMixInputsV6,
+  ScenarioOverrides,
 } from '../conversion-types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8,
+  CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
-  ProgrammeInputs, SalesPhasingInputs, RefinanceInputs,
+  ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
 import {
   calculateTotalAcquisitionCost, calculateTotalConstructionCost, calculateTotalProfessionalFees,
@@ -824,4 +825,194 @@ export function migrateInputsToV8(
     };
   }
   return migrateV7toV8(migrateInputsToV7(snapshot, project));
+}
+
+/** §18.7. The three v8 packages, in fixed order, and the phase code each becomes.
+ *  The KEY is also the phase `id` the migration writes — Task 8's validation-identity
+ *  alias map is bounded by that equality, and asserts this object has exactly three
+ *  entries. Do not add a fourth. */
+export const PACKAGE_TO_PHASE: Readonly<Record<'construction' | 'professional' | 'statutory',
+  { code: PhaseCode; label: string }>> = {
+  construction: { code: 'construction', label: 'Construction' },
+  professional: { code: 'design', label: 'Professional' },
+  statutory: { code: 'planning', label: 'Statutory' },
+};
+
+/**
+ * §18.7's ONE exemption to the validation-identity gate, DERIVED from the map
+ * above rather than written out beside it. The v8 sale-tail rule reports its
+ * field as `programme.packages.<name>`; the v9 rule reports
+ * `programme.phases.<id>`; migration assigns `id = <name>`, which is the only
+ * reason they correspond.
+ *
+ * Deriving it is the bound. A hand-written second list could gain a fourth
+ * entry without anything failing; this one cannot have an entry that
+ * `PACKAGE_TO_PHASE` does not license, and Task 8's three-entry assertion
+ * therefore constrains both objects at once.
+ */
+export const PROGRAMME_FIELD_ALIASES: Readonly<Record<string, string>> =
+  Object.fromEntries(Object.keys(PACKAGE_TO_PHASE).map(
+    (name) => [`programme.packages.${name}`, `programme.phases.${name}`],
+  ));
+
+/** A v9 document has the same finance shape as v2–v8, discriminated by
+ *  inputs_version === 9. */
+function isV9(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV9 {
+  return snapshot.inputs_version === 9 && typeof snapshot.finance === 'object'
+    && snapshot.finance !== null
+    && 'committed_net_facility_pence' in (snapshot.finance as object);
+}
+
+/**
+ * R12 (spec §18.7). Converts the v8 three-package programme to a precedence
+ * network, and writes five additive no-ops. Purely additive by construction:
+ * every new value is a written `null` or `0`, and each migrated phase is
+ * PREDECESSOR-FREE, so its derived start IS its `start_offset` floor (§18.1)
+ * and every window is identical to the v8 window for every curve and every term.
+ *
+ * Precondition: `v8` must not already be a v9 document (idempotence guard,
+ * same as migrateV7toV8).
+ */
+export function migrateV8toV9(v8: CalculatorInputsV8): CalculatorInputsV9 {
+  if (isV9(v8 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV8toV9: input is already a v9 document');
+  }
+  const { inputs_version: _v8Version, cost_plan, programme, sales_phasing, refinance, scenarios, ...rest } = v8;
+
+  const network: ProgrammeNetwork | null = programme == null ? null : (() => {
+    const phases = (Object.keys(PACKAGE_TO_PHASE) as Array<keyof typeof PACKAGE_TO_PHASE>).map((name) => {
+      const pkg = programme.packages[name];
+      // Loud and NAMED: a stored `programme` missing one of its three packages
+      // is malformed data, not a type this function's signature can rule out
+      // (a hand-edited or hand-crafted stored row is not bound by the compiler).
+      // An anonymous TypeError reading `.duration_months` off `undefined` here
+      // would send whoever hits this hunting through a stack trace instead of
+      // straight to the missing key.
+      if (pkg == null) {
+        throw new Error(`migrateV8toV9: stored programme is missing its "${name}" package`);
+      }
+      return {
+        id: name,
+        code: PACKAGE_TO_PHASE[name].code,
+        label: PACKAGE_TO_PHASE[name].label,
+        duration_months: pkg.duration_months,
+        slip_months: 0,
+        start_offset: pkg.start_offset,
+        curve: pkg.curve,
+        predecessors: [],
+      };
+    });
+    // DERIVED from the phases just built, not restated -- id === package name
+    // (asserted in migrate.test.ts) is what makes this correct, the same
+    // discipline PROGRAMME_FIELD_ALIASES applies to its own map.
+    const categoryPhaseIds = Object.fromEntries(
+      phases.map((p) => [p.id, p.id]),
+    ) as ProgrammeNetwork['category_phase_ids'];
+    return { anchor_month: programme.anchor_month, phases, category_phase_ids: categoryPhaseIds };
+  })();
+
+  const withSlip = (s: ScenarioOverrides): ScenarioOverrides => ({
+    ...s, phase_slip_phase_id: null, phase_slip_months: 0,
+  });
+
+  return {
+    ...rest,
+    inputs_version: 9,
+    cost_plan: {
+      ...cost_plan,
+      packages: cost_plan.packages.map((p) => ({ ...p, phase_id: null })),
+      fee_lines: cost_plan.fee_lines.map((f) => ({ ...f, phase_id: null })),
+    },
+    programme: network,
+    sales_phasing: sales_phasing == null ? null : {
+      tranches: sales_phasing.tranches.map((t) => ({ ...t, anchor: null })),
+    },
+    refinance: refinance == null ? null : { ...refinance, anchor: null },
+    scenarios: {
+      base: withSlip(scenarios.base), upside: withSlip(scenarios.upside),
+      downside: withSlip(scenarios.downside), severe: withSlip(scenarios.severe),
+    },
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V9: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/**
+ * Normalises any stored snapshot (v1–v9) to v9. Mirrors migrateInputsToV8's
+ * shape exactly, including its two hardest-won refusals (see that function's
+ * comment for the R8 incident that motivated them) and the version predicate
+ * as MEMBERSHIP OF THE DECLARED TUPLE, never a negation. `migrate.test.ts`
+ * tests this one with a document tagged 10, the neighbour that catches a
+ * predicate loosened the way R10 found `=== 6` loosened to `!== 5`.
+ */
+export function migrateInputsToV9(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV9 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V9.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV9: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V9.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 9 && !isV9(snapshot)) {
+    throw new Error(
+      'migrateInputsToV9: inputs_version is 9 but the document fails the v9 structural check '
+      + '(finance is not an object, or is missing committed_net_facility_pence) -- refusing to '
+      + 'silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV9(snapshot)) {
+    const defaults = migrateV8toV9(migrateV7toV8(migrateV6toV7(migrateV5toV6(
+      migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)))),
+    ))));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV9>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 9,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      // R12 final review wave (Finding 4). This is NOT a merge like the
+      // `cost_plan`/`vat` lines above -- `programme` is replaced wholesale,
+      // never deep-merged -- and `...saved` at the top of this object
+      // already carries whatever `programme` the saved document has,
+      // network or legacy. Deleting this line would NOT revert a saved
+      // network to the default's `null`: `...saved` has already set it.
+      // What this line actually does is normalise an explicitly-`undefined`
+      // `saved.programme` (a key present with no value, distinct from the
+      // key being absent) to `null`, and read the same way as the
+      // `sales_phasing`/`refinance` lines immediately below it -- a
+      // defensive, self-documenting mirror of its siblings, not a rescue of
+      // data the spread above would otherwise have dropped.
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV8toV9(migrateInputsToV8(snapshot, project));
 }

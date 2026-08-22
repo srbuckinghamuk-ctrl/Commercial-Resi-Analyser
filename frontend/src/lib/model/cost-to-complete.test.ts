@@ -57,6 +57,7 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       irrecoverable_vat_pence: 0,
     },
     vat: emptyVat(u.length),
+    programme: null,
   };
 }
 

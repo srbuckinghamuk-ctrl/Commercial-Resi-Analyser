@@ -1,5 +1,6 @@
 import type { FlagCode } from './model';
 import type { MeasuredMetrics, SensitivityCell, SensitivityLever, TornadoBar } from './model/sensitivity';
+import { LEVER_ORDER } from './model/sensitivity';
 
 /**
  * Presentation for the spec §12 sensitivity suite, shared by the investment
@@ -16,6 +17,11 @@ export const LEVER_LABEL: Record<SensitivityLever, string> = {
   construction_cost: 'Construction cost',
   timeline: 'Timeline',
   interest_rate: 'Interest rate',
+  // R12 spec §18.9. The fifth lever; the page does not yet offer a phase picker
+  // for it (that is later UI work), but every exhaustive lookup keyed on
+  // SensitivityLever must still resolve a label for a bar the engine can now
+  // return.
+  phase_slip: 'Phase slip',
 };
 
 /**
@@ -29,7 +35,27 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   construction_cost: 'Cost',
   timeline: 'Timeline',
   interest_rate: 'Rate',
+  phase_slip: 'Slip',
 };
+
+/**
+ * R12 Task 17: the lever dropdown's own offer list. `phase_slip` needs a
+ * phase target (the picker SensitivityPage.tsx shows next to the lever
+ * select), and that target can only be populated from a document that
+ * actually carries a phase network — a `programme = null` document has no
+ * phase to slip. Offering the lever there would reproduce exactly the defect
+ * this replaces: a dropdown entry whose validation error the user has no
+ * control to satisfy, which used to blank the whole matrix and tornado
+ * (`outcome = issues.length > 0 ? null : run(...)`).
+ *
+ * `hasPhaseNetwork` is the caller's own `isProgrammeNetwork` check (the sole
+ * sanctioned discriminator, programme.ts) — this module stays outside
+ * `lib/model/` and takes the already-resolved boolean rather than the
+ * document itself.
+ */
+export function selectableLevers(hasPhaseNetwork: boolean): readonly SensitivityLever[] {
+  return hasPhaseNetwork ? LEVER_ORDER : LEVER_ORDER.filter((l) => l !== 'phase_slip');
+}
 
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
 function decimalsFor(lever: SensitivityLever): number {
@@ -44,7 +70,8 @@ function signed(value: number, decimals: number): string {
 export function formatStepLabel(lever: SensitivityLever, step: number): string {
   const text = signed(step, decimalsFor(lever));
   if (lever === 'gdv' || lever === 'construction_cost') return `${text}%`;
-  if (lever === 'timeline') return `${text} months`;
+  // R12 spec §18.9: phase_slip is months, same unit as timeline.
+  if (lever === 'timeline' || lever === 'phase_slip') return `${text} months`;
   return `${text} pp`;
 }
 
@@ -54,7 +81,7 @@ export function formatRangeLabel(lever: SensitivityLever, low: number, high: num
   if (lever === 'gdv' || lever === 'construction_cost') {
     return `${signed(low, d)}% to ${signed(high, d)}%`;
   }
-  const unit = lever === 'timeline' ? 'months' : 'pp';
+  const unit = lever === 'timeline' || lever === 'phase_slip' ? 'months' : 'pp';
   return `${signed(low, d)} to ${signed(high, d)} ${unit}`;
 }
 

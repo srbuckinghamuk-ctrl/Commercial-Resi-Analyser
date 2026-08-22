@@ -1,11 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { applyScenario } from './apply-scenario';
-import { migrateInputsToV6 } from './migrate';
+import { migrateInputsToV6, migrateInputsToV9 } from './migrate';
 import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
 import {
   defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
 } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6, CalculatorInputsV7, LenderValuation } from './';
+import type {
+  AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6,
+  CalculatorInputsV7, CalculatorInputsV9, LenderValuation,
+} from './';
+import type { Phase } from './programme';
 import type { ScenarioOverrides } from '../conversion-types';
 
 // Neutral overrides — every lever at 0. Not defined elsewhere in this file, so
@@ -17,6 +23,8 @@ const BASE_OVERRIDES: ScenarioOverrides = {
   construction_cost_adjustment_pct: 0,
   timeline_adjustment_months: 0,
   interest_rate_adjustment_pct: 0,
+  phase_slip_phase_id: null,
+  phase_slip_months: 0,
 };
 
 function fixtureInputs(): CalculatorInputsV2 {
@@ -36,6 +44,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 0,
       timeline_adjustment_months: 0,
       interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(adjusted.unit_mix.units[0].estimated_value_pence).toBe(33_000_000);
     expect(adjusted.unit_mix.units[1].estimated_value_pence).toBe(22_000_000);
@@ -49,6 +59,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: 3,
       interest_rate_adjustment_pct: 1,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(adjusted.conversion_costs.construction_cost_per_sqm_pence).toBe(
       Math.round(base.conversion_costs.construction_cost_per_sqm_pence * 1.15),
@@ -85,6 +97,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: -3,
       interest_rate_adjustment_pct: 1.0,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
 
     const staged = applyScenario(
@@ -94,6 +108,8 @@ describe('applyScenario', () => {
         construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0,
         interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       }),
       {
         label: 'Test',
@@ -101,6 +117,8 @@ describe('applyScenario', () => {
         construction_cost_adjustment_pct: 15,
         timeline_adjustment_months: -3,
         interest_rate_adjustment_pct: 1.0,
+        phase_slip_phase_id: null,
+        phase_slip_months: 0,
       },
     );
 
@@ -123,6 +141,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: 3,
       interest_rate_adjustment_pct: 1,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
     expect(out.finance.committed_net_facility_pence).toBe(v2Inputs.finance.committed_net_facility_pence);
     expect(out.finance.committed_gross_facility_pence).toBe(v2Inputs.finance.committed_gross_facility_pence);
@@ -157,6 +177,8 @@ describe('applyScenario', () => {
       construction_cost_adjustment_pct: 15,
       timeline_adjustment_months: 3,
       interest_rate_adjustment_pct: 1,
+      phase_slip_phase_id: null,
+      phase_slip_months: 0,
     });
 
     // v3-only fields pass through identically — the generic's whole point:
@@ -204,6 +226,7 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
       {
         label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null, phase_slip_months: 0,
       },
     );
 
@@ -222,6 +245,7 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
       {
         label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+        phase_slip_phase_id: null, phase_slip_months: 0,
       },
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
@@ -271,10 +295,10 @@ describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
         packages: [
           { id: 'p1', code: 'structure', label: 'Structure',
             amount_pence: 3_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
           { id: 'p2', code: 'envelope', label: 'Envelope',
             amount_pence: 1_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
         ],
         contingency,
         fee_lines: [],
@@ -338,10 +362,12 @@ describe('the cost lever does not double-apply to compliance or fees (headline m
           {
             id: 'fee-fixed', code: 'architect', category: 'professional', label: 'Architect',
             basis: 'fixed', amount_pence: 200_000, pct: 0, per_dwelling: false, vat_override: null,
+            phase_id: null,
           },
           {
             id: 'fee-pct', code: 'other_professional', category: 'professional', label: 'Other professional fees',
             basis: 'pct_of_construction_total', amount_pence: 0, pct: 5, per_dwelling: false, vat_override: null,
+            phase_id: null,
           },
         ],
       },
@@ -382,5 +408,163 @@ describe('the cost lever does not double-apply to compliance or fees (headline m
     // values differ, so this assertion is the discriminating check.
     expect(pctFee.amount_pence).toBe(223_000);
     expect(pctFee.amount_pence).not.toBe(220_500);
+  });
+});
+
+// R12 Task 14, fix round 1 (Finding 4): the phase_slip lever at the applyScenario
+// level, including the full-document order-independence check the Python mirror
+// (test_financial_model_apply_scenario.py) already had and this file didn't.
+
+const FIXTURE_F_PATH = resolve(__dirname, '../../../../fixtures/financial-model/f-dev-finance-12mo.json');
+
+function fixtureFInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_F_PATH, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
+function phase(
+  id: string, code: Phase['code'], duration: number,
+  preds: Phase['predecessors'] = [], extra: Partial<Phase> = {},
+): Phase {
+  return {
+    id, code, label: id,
+    duration_months: duration, slip_months: 0, start_offset: 0,
+    curve: { kind: 'straight_line' }, predecessors: preds, ...extra,
+  };
+}
+
+/** Fixture F migrated to v9 and given a small two-phase network: `planning` (2
+ *  months) then `construction` (8 months, FS off `planning`). Mirrors the
+ *  identically named helper in sensitivity.test.ts. */
+function networkDoc(term = 20): CalculatorInputsV9 {
+  const base = migrateInputsToV9(fixtureFInputs() as unknown as Record<string, unknown>);
+  const phases: Phase[] = [
+    phase('planning', 'planning', 2),
+    phase('construction', 'construction', 8, [{ phase_id: 'planning', type: 'FS', lag_months: 0 }]),
+  ];
+  return {
+    ...base,
+    finance: { ...base.finance, term_months: term },
+    programme: {
+      anchor_month: null,
+      phases,
+      category_phase_ids: {
+        construction: 'construction', professional: 'planning', statutory: 'planning',
+      },
+    },
+  };
+}
+
+const ZERO_OVERRIDES: ScenarioOverrides = {
+  label: '',
+  gdv_adjustment_pct: 0,
+  construction_cost_adjustment_pct: 0,
+  timeline_adjustment_months: 0,
+  interest_rate_adjustment_pct: 0,
+  phase_slip_phase_id: null,
+  phase_slip_months: 0,
+};
+
+/** Sets a phase's `slip_months` directly (not via `applyScenario`), so a test can
+ *  record a BASE-CASE slip before a lever stresses it — the only way to
+ *  distinguish additive from assignment. */
+function withSlip(doc: CalculatorInputsV9, phaseId: string, months: number): CalculatorInputsV9 {
+  return {
+    ...doc,
+    programme: {
+      ...doc.programme!,
+      phases: doc.programme!.phases.map((p) => (
+        p.id === phaseId ? { ...p, slip_months: p.slip_months + months } : p
+      )),
+    },
+  };
+}
+
+describe('phase_slip lever — spec §18.9, at the applyScenario level', () => {
+  it('adds additively (not assignment) to the named phase only', () => {
+    // Hand-derived: planning already carries a base-case slip of 1 month; the
+    // override adds 3 more. 1 + 3 = 4, not 3 — distinguishing additive from
+    // assignment is the whole point of this test.
+    const doc = withSlip(networkDoc(), 'planning', 1);
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 3,
+    });
+    expect(out.programme!.phases.find((p) => p.id === 'planning')!.slip_months).toBe(4);
+    expect(out.programme!.phases.find((p) => p.id === 'construction')!.slip_months).toBe(0);
+  });
+
+  it('a null target with NONZERO months leaves every phase untouched', () => {
+    // Fix round 1, Finding 2 applied here too: months=0 cannot fail for any
+    // predicate that matches the wrong phase.
+    const doc = networkDoc();
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: null, phase_slip_months: 99,
+    });
+    expect(out.programme).toEqual(doc.programme);
+  });
+
+  it('is a no-op on a legacy (v4-v8) three-package programme', () => {
+    // The write is gated on the v9 network SHAPE ('phases' in programme), not on
+    // inputs_version >= 9: a legacy ProgrammeInputs (`{ packages }`) has no
+    // `phases` field, so the lever writes nothing rather than crashing or
+    // misinterpreting a package as a phase.
+    const legacy = migrateInputsToV6({}, { id: 'p', price_pence: 0, floor_area_sqm: 0 });
+    const doc = {
+      ...legacy,
+      programme: {
+        anchor_month: null,
+        packages: {
+          construction: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' as const } },
+          professional: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' as const } },
+          statutory: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' as const } },
+        },
+      },
+    };
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'construction', phase_slip_months: 5,
+    });
+    expect(out.programme).toEqual(doc.programme);
+  });
+
+  it('is a no-op on a programme = null document', () => {
+    const doc = migrateInputsToV9({});
+    expect(doc.programme).toBeNull();
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 5,
+    });
+    expect(out.programme).toBeNull();
+  });
+
+  it('leaves finance and equity_sources untouched — §12.2 facility invariance', () => {
+    const doc = networkDoc();
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 6,
+    });
+    expect(out.finance).toEqual(doc.finance);
+    expect(out.equity_sources).toEqual(doc.equity_sources);
+  });
+
+  // Fix round 1, Finding 4: the Python mirror already asserted FULL-document
+  // equality for this property; this file previously had no equivalent. A
+  // partial-field check (only `unit_mix`/`conversion_costs`/`finance`) can pass
+  // while something the check didn't look at silently diverges.
+  it('composes order-independently with the other four levers — full document equality', () => {
+    const doc = networkDoc();
+    const scalars: ScenarioOverrides = {
+      ...ZERO_OVERRIDES,
+      gdv_adjustment_pct: 5, construction_cost_adjustment_pct: -3,
+      timeline_adjustment_months: 2, interest_rate_adjustment_pct: 1,
+    };
+    const slip: ScenarioOverrides = {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'planning', phase_slip_months: 2,
+    };
+
+    const forward = applyScenario(applyScenario(doc, scalars), slip);
+    const backward = applyScenario(applyScenario(doc, slip), scalars);
+    expect(forward).toEqual(backward);
+
+    // Negative control: the combination must actually differ from applying only
+    // the scalars — proof phase_slip is live, not silently absorbed.
+    const onlyScalars = applyScenario(doc, scalars);
+    expect(forward.programme).not.toEqual(onlyScalars.programme);
   });
 });

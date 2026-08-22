@@ -1,6 +1,6 @@
 import type {
   CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV7, CalculatorInputsV8,
+  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
 } from './finance-types';
 
 /** Sq ft per sq m (spec §3.2 `global_per_sqft` basis). No shared constant existed
@@ -43,9 +43,14 @@ export interface LenderGdvResult {
 // V6 -> V5 -> V4 -> V3, so it already accepts a v7 document silently; without
 // this widening the two engines would disagree about which documents have
 // lender metrics at all.
+// R12: `CalculatorInputsV9` added for the same reason. Python's twin gates on
+// `isinstance(inputs, CalculatorInputsV3)`, and V9 subclasses V8 -> V7 -> V6 ->
+// V5 -> V4 -> V3, so it already accepts a v9 document silently; without this
+// widening the two engines would disagree about which documents have lender
+// metrics at all.
 export function computeLenderGdv(
   inputs: CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5
-    | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8,
+    | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8 | CalculatorInputsV9,
 ): LenderGdvResult | null {
   const lv = inputs.lender_valuation;
   if (lv == null) return null;

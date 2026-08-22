@@ -1,237 +1,241 @@
-import { useCallback } from 'react';
-import type { CalculatorInputsV8, AppraisalRun, ProgrammePackage, SpendCurve } from '../../lib/model';
+import { useCallback, useMemo } from 'react';
+import type {
+  AppraisalRun, CalculatorInputsV8, CalculatorInputsV9, ProgrammeInputs, ProgrammeNetwork, Phase,
+} from '../../lib/model';
+import { isProgrammeNetwork, isLegacyProgramme, PACKAGE_TO_PHASE } from '../../lib/model';
+import { derivePhases } from '../../lib/model/programme';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth } from '../../lib/programme-months';
+import CalculatorFailurePanel from '../CalculatorFailurePanel';
+import PhaseEditor from './PhaseEditor';
+import ProgrammeGantt from './ProgrammeGantt';
 
-interface Props {
-  inputs: CalculatorInputsV8;
-  onChange: (partial: Partial<CalculatorInputsV8>) => void;
+/**
+ * R12 spec §18.1/§18.10. `programme` is a two-state field across the version
+ * union (`null` = auto windows, or a shape) but THREE states reach this page:
+ * `null`, the legacy `{ packages: {...} }` shape a v4-v8 document still
+ * carries, and a v9 `{ phases: [...] }` network. `isProgrammeNetwork` /
+ * `isLegacyProgramme` (programme.ts) are the sole sanctioned discriminators.
+ *
+ * R12 Task 18b (spec §18.7) wired the app end-to-end to v9, so T resolves to
+ * CalculatorInputsV9 at the real call site (ConversionCalculator.tsx) and the
+ * legacy `{ packages: {...} }` arm below is now reachable only from a caller
+ * still holding a v8 document -- the tests, and any future one. Props stays
+ * generic over both shapes `programme` can legally live on, and `onChange`
+ * stays typed to whichever one the caller has, so both compile against the
+ * SAME component. Keeping the v8 arm is deliberate: it is what proves the
+ * legacy discriminator still works, and it costs nothing at the v9 call site.
+ */
+type ProgrammeCarrier = CalculatorInputsV8 | CalculatorInputsV9;
+
+interface Props<T extends ProgrammeCarrier> {
+  inputs: T;
+  onChange: (partial: Partial<T>) => void;
   run: AppraisalRun;
 }
 
-const PACKAGES = ['construction', 'professional', 'statutory'] as const;
-type PackageName = (typeof PACKAGES)[number];
-
-const PACKAGE_LABELS: Record<PackageName, string> = {
-  construction: 'Construction',
-  professional: 'Professional',
-  statutory: 'Statutory',
-};
-
-const CURVE_KINDS = ['straight_line', 's_curve', 'back_loaded', 'user_defined'] as const;
-const CURVE_LABELS: Record<(typeof CURVE_KINDS)[number], string> = {
-  straight_line: 'Straight line',
-  s_curve: 'S-curve',
-  back_loaded: 'Back-loaded',
-  user_defined: 'User-defined',
-};
+const TEXT = '#e2e8f0';
+const MUTED = '#94a3b8';
+const BORDER = '#1e3a5f';
+const PANEL = '#0f172a';
+const ACCENT = '#2563eb';
+const DISABLED_BG = '#1e293b';
+const DISABLED_TEXT = '#475569';
 
 const numberInputStyle: React.CSSProperties = {
-  width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f',
-  borderRadius: 4, color: '#e2e8f0', fontSize: 14,
+  width: 90, padding: '6px 10px', background: PANEL, border: `1px solid ${BORDER}`,
+  borderRadius: 4, color: TEXT, fontSize: 14,
 };
 
-const selectStyle: React.CSSProperties = {
-  padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f',
-  borderRadius: 4, color: '#e2e8f0', fontSize: 14,
-};
+const cellStyle: React.CSSProperties = { padding: '4px 10px', fontSize: 13, textAlign: 'right', color: TEXT };
 
-const cellStyle: React.CSSProperties = { padding: '4px 10px', fontSize: 13, textAlign: 'right', color: '#e2e8f0' };
-
-// CRITICAL 1: a typed negative or fractional value reaches buildSchedule's
-// programme arm untouched — `uses[-1]`/`uses[2.5]` throws (TypeError) or
-// `new Array(2.5)` throws (RangeError) inside a render-time useMemo, which
-// unmounts the whole calculator. Clamp on write so the input can never carry
-// an invalid value into state. Number.isFinite guards NaN (an emptied field)
-// before Math.floor, since Math.floor(NaN) is NaN, not 0/1.
-function clampStartOffset(raw: string): number {
-  const n = Number(raw);
-  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
-}
-function clampDurationMonths(raw: string): number {
-  const n = Number(raw);
-  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+/** The auto-window arithmetic (spec §6, unchanged by R12): construction spans
+ *  months 1..term-2, professional/statutory span the first half of that. Used
+ *  ONLY to seed the starting values of a template network the user then edits
+ *  -- this is input scaffolding, not the schedule's own calculation, which
+ *  lives in schedule.ts's auto arm untouched by this file. */
+function templateWindows(term: number): { construction: number; professional: number; statutory: number } {
+  const cw = Math.max(1, term - 2);
+  const pw = Math.max(1, Math.ceil(cw / 2));
+  return { construction: cw, professional: pw, statutory: pw };
 }
 
-export default function ProgrammePage({ inputs, onChange, run }: Props) {
+/** Predecessor-free phases named/coded exactly as migrateV8toV9 would produce
+ *  (PACKAGE_TO_PHASE, migrate.ts) -- so a template built here and a v8
+ *  document actually migrated land on the same phase ids and codes. */
+function phasesFromWindows(
+  windows: Record<'construction' | 'professional' | 'statutory', number>,
+  startOffset: (name: 'construction' | 'professional' | 'statutory') => number,
+  curveOf: (name: 'construction' | 'professional' | 'statutory') => Phase['curve'],
+): Phase[] {
+  return (Object.keys(PACKAGE_TO_PHASE) as Array<keyof typeof PACKAGE_TO_PHASE>).map((name) => ({
+    id: name,
+    code: PACKAGE_TO_PHASE[name].code,
+    label: PACKAGE_TO_PHASE[name].label,
+    duration_months: windows[name],
+    slip_months: 0,
+    start_offset: startOffset(name),
+    curve: curveOf(name),
+    predecessors: [],
+  }));
+}
+
+function categoryPhaseIdsFrom(phases: Phase[]): ProgrammeNetwork['category_phase_ids'] {
+  return Object.fromEntries(phases.map((p) => [p.id, p.id])) as ProgrammeNetwork['category_phase_ids'];
+}
+
+function defaultTemplateNetwork(term: number): ProgrammeNetwork {
+  const windows = templateWindows(term);
+  const phases = phasesFromWindows(windows, () => 1, () => ({ kind: 'straight_line' }));
+  return { anchor_month: null, phases, category_phase_ids: categoryPhaseIdsFrom(phases) };
+}
+
+/** Mirrors migrateV8toV9's own phase-building transform (migrate.ts) exactly
+ *  -- same ids, same codes, same values carried across -- so converting here
+ *  produces the identical network the real migration would have written. */
+function networkFromLegacy(programme: ProgrammeInputs): ProgrammeNetwork {
+  const windows = {
+    construction: programme.packages.construction.duration_months,
+    professional: programme.packages.professional.duration_months,
+    statutory: programme.packages.statutory.duration_months,
+  };
+  const phases = phasesFromWindows(
+    windows,
+    (name) => programme.packages[name].start_offset,
+    (name) => programme.packages[name].curve,
+  );
+  return { anchor_month: programme.anchor_month, phases, category_phase_ids: categoryPhaseIdsFrom(phases) };
+}
+
+export default function ProgrammePage<T extends ProgrammeCarrier>({ inputs, onChange, run }: Props<T>) {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
-  const programme = inputs.programme;
-  const anchor = programme?.anchor_month ?? null;
-  const canSetExplicit = term >= 3;
+  const canBuildTemplate = term >= 3;
+  const rawProgramme = inputs.programme;
 
-  const seedFromAuto = useCallback(() => {
-    const cw = Math.max(1, term - 2);
-    const pw = Math.max(1, Math.ceil(cw / 2));
-    const straight = { kind: 'straight_line' as const };
-    onChange({
-      programme: {
-        anchor_month: null,
-        packages: {
-          construction: { start_offset: 1, duration_months: cw, curve: straight },
-          professional: { start_offset: 1, duration_months: pw, curve: straight },
-          statutory: { start_offset: 1, duration_months: pw, curve: straight },
-        },
-      },
-    });
+  const network = rawProgramme != null && isProgrammeNetwork(rawProgramme) ? rawProgramme : null;
+  const legacyProgramme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
+  const anchor = rawProgramme?.anchor_month ?? null;
+
+  // §18.2/§18.4: the ONE call to derivePhases on this page. PhaseEditor and
+  // ProgrammeGantt below receive only its result -- neither derives anything.
+  const derivation = useMemo(() => (network != null ? derivePhases(network) : null), [network]);
+  const isCycle = derivation !== null && 'cycle' in derivation;
+  const derivedById = derivation !== null && !('cycle' in derivation) ? derivation.byId : null;
+
+  const buildTemplate = useCallback(() => {
+    if (!window.confirm(
+      'Building a phase network replaces the auto windows with an editable dependency network you can '
+      + 'add phases, dependencies and slip to. This cannot be undone automatically. Continue?',
+    )) return;
+    onChange({ programme: defaultTemplateNetwork(term) } as Partial<T>);
   }, [term, onChange]);
 
-  const updatePackage = useCallback(
-    (name: PackageName, partial: Partial<ProgrammePackage>) => {
-      if (!programme) return;
-      onChange({
-        programme: {
-          ...programme,
-          packages: { ...programme.packages, [name]: { ...programme.packages[name], ...partial } },
-        },
-      });
+  const convertLegacy = useCallback(() => {
+    if (!legacyProgramme) return;
+    if (!window.confirm(
+      'Converting migrates the three legacy packages (construction, professional, statutory) into phases '
+      + 'you can edit here, add dependencies to and reorder. Continue?',
+    )) return;
+    onChange({ programme: networkFromLegacy(legacyProgramme) } as Partial<T>);
+  }, [legacyProgramme, onChange]);
+
+  const updateAnchor = useCallback(
+    (value: string) => {
+      if (!network) return;
+      onChange({ programme: { ...network, anchor_month: value || null } } as Partial<T>);
     },
-    [programme, onChange],
+    [network, onChange],
   );
 
-  const updateCurveKind = useCallback(
-    (name: PackageName, kind: SpendCurve['kind']) => {
-      if (!programme) return;
-      const pkg = programme.packages[name];
-      const curve: SpendCurve =
-        kind === 'user_defined' ? { kind: 'user_defined', weights: Array(pkg.duration_months).fill(1) } : { kind };
-      updatePackage(name, { curve });
+  const updatePhases = useCallback(
+    (phases: Phase[]) => {
+      if (!network) return;
+      onChange({ programme: { ...network, phases } } as Partial<T>);
     },
-    [programme, updatePackage],
-  );
-
-  // Only writes finite parses -- an in-progress edit like "1, 2," or "1, abc"
-  // never overwrites the last valid weights (spec §6.1: NaN/Infinity would
-  // poison the curve spread downstream).
-  const updateWeights = useCallback(
-    (name: PackageName, raw: string) => {
-      const parsed = raw.split(',').map((s) => Number(s.trim()));
-      if (parsed.length > 0 && parsed.every((n) => Number.isFinite(n))) {
-        updatePackage(name, { curve: { kind: 'user_defined', weights: parsed } });
-      }
-    },
-    [updatePackage],
+    [network, onChange],
   );
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>7. Programme</h3>
+      <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 20 }}>7. Programme</h3>
 
-      {programme == null ? (
-        <div style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', marginBottom: 24 }}>
-          <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12 }}>
+      {rawProgramme == null && (
+        <div style={{ padding: 16, background: PANEL, borderRadius: 8, border: `1px solid ${BORDER}`, marginBottom: 24 }}>
+          <p style={{ color: MUTED, fontSize: 14, marginBottom: 12 }}>
             Auto windows: straight-line construction over months 1–{Math.max(1, term - 2)}, professional/statutory
             over the first half — spec §6.
           </p>
           <button
-            onClick={seedFromAuto}
-            disabled={!canSetExplicit}
+            onClick={buildTemplate}
+            disabled={!canBuildTemplate}
             style={{
               padding: '8px 20px',
-              background: canSetExplicit ? '#2563eb' : '#1e293b',
-              color: canSetExplicit ? '#fff' : '#475569',
+              background: canBuildTemplate ? ACCENT : DISABLED_BG,
+              color: canBuildTemplate ? '#fff' : DISABLED_TEXT,
               border: 'none',
               borderRadius: 6,
-              cursor: canSetExplicit ? 'pointer' : 'default',
+              cursor: canBuildTemplate ? 'pointer' : 'default',
               fontSize: 14,
               fontWeight: 600,
             }}
           >
-            Set explicit programme
+            Build phase network
           </button>
-          {!canSetExplicit && (
+          {!canBuildTemplate && (
             <p style={{ color: '#f59e0b', fontSize: 13, marginTop: 8 }}>
-              Explicit programme editing requires a term of at least 3 months — the final two months are the
+              A phase network requires a term of at least 3 months — the final two months are the
               sale-tail (spec §6).
             </p>
           )}
         </div>
-      ) : (
+      )}
+
+      {legacyProgramme && (
+        <div style={{ padding: 16, background: PANEL, borderRadius: 8, border: `1px solid ${BORDER}`, marginBottom: 24 }}>
+          <p style={{ color: MUTED, fontSize: 14, marginBottom: 12 }}>
+            This appraisal still carries a legacy three-package programme. Convert it to a phase network to
+            edit dependencies, slip and the critical path here.
+          </p>
+          <button
+            onClick={convertLegacy}
+            style={{ padding: '8px 20px', background: ACCENT, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}
+          >
+            Convert to phase network
+          </button>
+        </div>
+      )}
+
+      {network && (
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-            <label style={{ color: '#94a3b8', fontSize: 14 }}>Anchor month</label>
+            <label htmlFor="programme-anchor-month" style={{ color: MUTED, fontSize: 14 }}>Anchor month</label>
             <input
+              id="programme-anchor-month"
               type="month"
               value={anchor ?? ''}
-              onChange={(e) => onChange({ programme: { ...programme, anchor_month: e.target.value || null } })}
+              onChange={(e) => updateAnchor(e.target.value)}
               style={numberInputStyle}
             />
-            <button
-              onClick={() => onChange({ programme: null })}
-              style={{
-                padding: '8px 20px', background: '#1e3a5f', color: '#e2e8f0', border: 'none',
-                borderRadius: 6, cursor: 'pointer', fontSize: 14,
-              }}
-            >
-              Revert to auto windows
-            </button>
           </div>
 
-          {PACKAGES.map((name) => {
-            const pkg = programme.packages[name];
-            return (
-              <div
-                key={name}
-                style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', marginBottom: 12 }}
-              >
-                <h4 style={{ color: '#e2e8f0', fontSize: 14, marginBottom: 12 }}>{PACKAGE_LABELS[name]}</h4>
-                <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <label style={{ color: '#94a3b8', fontSize: 13 }}>Start offset</label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={pkg.start_offset}
-                      onChange={(e) => updatePackage(name, { start_offset: clampStartOffset(e.target.value) })}
-                      style={numberInputStyle}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <label style={{ color: '#94a3b8', fontSize: 13 }}>Duration (months)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={pkg.duration_months}
-                      onChange={(e) => updatePackage(name, { duration_months: clampDurationMonths(e.target.value) })}
-                      style={numberInputStyle}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <label style={{ color: '#94a3b8', fontSize: 13 }}>Curve</label>
-                    <select
-                      value={pkg.curve.kind}
-                      onChange={(e) => updateCurveKind(name, e.target.value as SpendCurve['kind'])}
-                      style={selectStyle}
-                    >
-                      {CURVE_KINDS.map((k) => (
-                        <option key={k} value={k}>{CURVE_LABELS[k]}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                {pkg.curve.kind === 'user_defined' && (
-                  <div style={{ marginTop: 12 }}>
-                    <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>
-                      Weights (comma-separated, one per window month)
-                    </label>
-                    <input
-                      type="text"
-                      value={pkg.curve.weights.join(', ')}
-                      onChange={(e) => updateWeights(name, e.target.value)}
-                      style={{
-                        width: '100%', padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f',
-                        borderRadius: 4, color: '#e2e8f0', fontSize: 14,
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          <PhaseEditor phases={network.phases} derivedById={derivedById} onChange={updatePhases} />
+
+          {/* §18.2's "Cycles" note: a cycle has no topological order and no
+              defensible default start for a phase inside it -- no dates exist,
+              so no bars are drawn. Not a half-drawn chart, not zeroes. */}
+          {isCycle && derivation && 'cycle' in derivation && (
+            <CalculatorFailurePanel title="This programme has a dependency cycle">
+              {`Phase dependency cycle: ${derivation.cycle.join(' → ')}.`}
+            </CalculatorFailurePanel>
+          )}
+          {!isCycle && derivation && !('cycle' in derivation) && (
+            <ProgrammeGantt derivation={derivation} />
+          )}
         </div>
       )}
 
       <div>
-        <h4 style={{ color: '#94a3b8', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+        <h4 style={{ color: MUTED, fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
           Spend Preview
         </h4>
         {/* Engine output only (run.schedule.uses) -- component-local spend arithmetic
@@ -244,8 +248,8 @@ export default function ProgrammePage({ inputs, onChange, run }: Props) {
                   <th
                     key={h}
                     style={{
-                      textAlign: h === 'Month' ? 'left' : 'right', color: '#94a3b8', fontSize: 12,
-                      padding: '6px 10px', borderBottom: '1px solid #1e3a5f',
+                      textAlign: h === 'Month' ? 'left' : 'right', color: MUTED, fontSize: 12,
+                      padding: '6px 10px', borderBottom: `1px solid ${BORDER}`,
                     }}
                   >
                     {h}
@@ -258,7 +262,7 @@ export default function ProgrammePage({ inputs, onChange, run }: Props) {
                 const total = u.construction_pence + u.professional_pence + u.statutory_pence;
                 return (
                   <tr key={m}>
-                    <td style={{ padding: '4px 10px', fontSize: 13, color: '#e2e8f0' }}>
+                    <td style={{ padding: '4px 10px', fontSize: 13, color: TEXT }}>
                       {formatProgrammeMonth(anchor, m)}
                     </td>
                     <td style={cellStyle}>{penceToPounds(u.construction_pence)}</td>

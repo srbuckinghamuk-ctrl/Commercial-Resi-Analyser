@@ -81,6 +81,13 @@ export interface ScenarioOverrides {
   construction_cost_adjustment_pct: number;
   timeline_adjustment_months: number;
   interest_rate_adjustment_pct: number;
+  /** R12 spec §18.9. null = no slip; matches no phase, so it is a no-op by
+   *  construction. This is what makes the v9 migration a written-null. */
+  phase_slip_phase_id: string | null;
+  /** SIGNED months, added to the named phase's `slip_months` ADDITIVELY, so a
+   *  base-case slip already on the document is stressed FROM its recorded
+   *  position rather than overwritten by it. */
+  phase_slip_months: number;
 }
 
 export interface DealSpiderInputs {

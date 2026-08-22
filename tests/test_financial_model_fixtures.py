@@ -1,6 +1,9 @@
 import copy
 import json
+import re
+from dataclasses import asdict, replace
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -9,13 +12,17 @@ from app.financial_model.engine import exit_fee_amount, money_round
 from app.financial_model.metrics import pct
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.migrate import (
+    PACKAGE_TO_PHASE,
+    PROGRAMME_FIELD_ALIASES,
     migrate_inputs,
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
     migrate_inputs_to_v7,
     migrate_inputs_to_v8,
+    migrate_inputs_to_v9,
 )
 from app.financial_model.schedule import build_schedule
+from app.financial_model.validation import ValidationIssue, validate_inputs
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     SensitivityAxis,
@@ -27,8 +34,12 @@ from app.financial_model.types import (
     AnyCalculatorInputs,
     CalculatorInputsV5,
     CalculatorInputsV7,
+    CalculatorInputsV9,
+    CategoryPhaseIds,
     cost_plan_from_legacy_costs,
+    Phase,
     ProgrammeInputs,
+    ProgrammeNetwork,
     ProgrammePackage,
     ProgrammePackages,
     SalesPhasingInputs,
@@ -60,6 +71,7 @@ EXPECTED_FIXTURE_STEMS = [
     "p-scotland-levered",
     "q-detailed-cost-plan",
     "r-vat-quarterly",
+    "s-dated-programme",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -171,6 +183,38 @@ _FLAT_KEYS = {
     "vat_months_incurred_pence": lambda r: [m.incurred_pence for m in r.metrics.vat.months],
     "vat_months_reclaimed_pence": lambda r: [m.reclaimed_pence for m in r.metrics.vat.months],
     "vat_months_carry_pence": lambda r: [m.carry_pence for m in r.metrics.vat.months],
+    # R12 spec Sec 18.10, fixture S: the derived ProgrammeResult. It hangs off the
+    # SCHEDULE (schedule.programme), not off metrics, so a dotted expected_metrics
+    # path cannot reach it at all -- the same reasoning as funding_gap_pence and the
+    # redemption arrays above. The per-phase figures are pinned as four parallel flat
+    # arrays in programme.phases[] order (which is the INPUT phases[] order) rather
+    # than as a list of objects, keeping the fixture JSON language-neutral: this
+    # engine holds DerivedPhase dataclasses here and the TS engine holds objects.
+    #
+    # programme_phase_ids is not decoration. Without it the other three arrays are
+    # positional against a shape nothing pins, so a reordering of phases[] would
+    # silently re-key every start, finish and float.
+    "programme_finish_month": (
+        lambda r: r.schedule.programme.finish_month if r.schedule.programme else None
+    ),
+    "programme_critical_path": (
+        lambda r: list(r.schedule.programme.critical_path) if r.schedule.programme else None
+    ),
+    "programme_phase_ids": (
+        lambda r: [p.id for p in r.schedule.programme.phases] if r.schedule.programme else None
+    ),
+    "programme_phase_start_months": (
+        lambda r: [p.start_month for p in r.schedule.programme.phases]
+        if r.schedule.programme else None
+    ),
+    "programme_phase_finish_months": (
+        lambda r: [p.finish_month for p in r.schedule.programme.phases]
+        if r.schedule.programme else None
+    ),
+    "programme_phase_total_float_months": (
+        lambda r: [p.total_float_months for p in r.schedule.programme.phases]
+        if r.schedule.programme else None
+    ),
 }
 
 
@@ -230,13 +274,20 @@ _V7_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) =
 # would have to drop `vat` to produce one) -- see _RECOGNISED_VERSIONS_V7, which stops
 # at 7 -- so a v8 fixture asserts its own v8-specific properties instead of the v7 one.
 _V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 8]
+# R12: fixture S is BORN at v9 -- it has no v8 antecedent, so every migrate-to-vN
+# parametrisation below excludes it by the same design that excluded fixture R from
+# the v7 ones (migrate_inputs_to_v8 refuses a v9 document: _RECOGNISED_VERSIONS_V8
+# stops at 8). Its own properties are asserted by its pinned expected_metrics and by
+# the v9-specific tests further down.
+_V9_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 9]
 
 
-def test_every_fixture_is_v5_v6_v7_or_v8_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_v6_v7_v8_or_v9_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
+        + len(_V9_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -245,6 +296,54 @@ def test_every_fixture_is_v5_v6_v7_or_v8_and_each_group_is_non_empty() -> None:
     ]
     assert [p.stem for p in _V7_FIXTURES] == ["q-detailed-cost-plan"]
     assert [p.stem for p in _V8_FIXTURES] == ["r-vat-quarterly"]
+    assert [p.stem for p in _V9_FIXTURES] == ["s-dated-programme"]
+
+
+def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
+    """R12 spec Sec 13 guard 1's FIXTURE REQUIREMENT, asserted rather than assumed.
+
+    A network in which every phase is critical makes the float column untestable and
+    the slip-asymmetry guard vacuous: "slipping a float-bearing phase leaves the
+    finish unchanged" has no witness to run on. The pinned
+    programme_phase_total_float_months array states the floats, but a pin can be
+    edited to match a regression; this derives the claim from the run.
+
+    Both arms matter. Without the second, a network with NO critical phase at all --
+    an impossibility that would nonetheless mean the backward pass had stopped
+    working -- would satisfy the first. Mirrors golden-fixtures.test.ts."""
+    assert len(_V9_FIXTURES) > 0
+    for path in _V9_FIXTURES:
+        doc = _load_fixture(path)
+        programme = run_appraisal(parse_calculator_inputs(doc["inputs"])).schedule.programme
+        assert programme is not None, f"{path.stem} must produce a derived programme block"
+        floats = [p.total_float_months for p in programme.phases]
+        assert max(floats) >= 1, f"{path.stem}: no phase carries float"
+        assert len(programme.critical_path) > 0, f"{path.stem}: no phase is critical"
+        # And the critical path is exactly the zero-float set, in phases[] order --
+        # the two are separately derived in programme.py (a filter over the
+        # topological order versus a per-phase subtraction) and must agree.
+        assert programme.critical_path == [
+            p.id for p in programme.phases if p.total_float_months == 0
+        ]
+
+
+def test_fixture_s_tranches_are_anchored_and_their_month_offsets_are_not_the_resolved_months() -> None:
+    """R12 spec Sec 18.6. Fixture S's two tranches carry a ``month_offset`` that
+    deliberately DISAGREES with their anchors (20/21 stored, 16/19 resolved), so a
+    dead anchor cannot hide behind an agreeing fallback. This states that asymmetry
+    as a property of the document rather than leaving it to the fixture note.
+    Mirrors golden-fixtures.test.ts."""
+    doc = _load_fixture(FIXTURE_DIR / "s-dated-programme.json")
+    inputs = parse_calculator_inputs(doc["inputs"])
+    programme = run_appraisal(inputs).schedule.programme
+    assert programme is not None
+    by_id = {p.id: p for p in programme.phases}
+    tranches = inputs.sales_phasing.tranches
+    assert len(tranches) == 2
+    for tr in tranches:
+        assert tr.anchor is not None, "every tranche must be anchored"
+        resolved = by_id[tr.anchor.phase_id].start_month + tr.anchor.offset_months
+        assert resolved != tr.month_offset
 
 
 @pytest.mark.parametrize("path", _V5_FIXTURES, ids=lambda p: p.stem)
@@ -270,7 +369,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # below. R11 widens the exclusion to v7 or v8 -- migrate_inputs_to_v6 refuses v8 the
 # same way (_RECOGNISED_VERSIONS_V6 stops at 6).
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9)
 ]
 
 
@@ -292,7 +391,9 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # document by design (_RECOGNISED_VERSIONS_V7 stops at 7). Fixture R (v8) asserts
 # its own identity guarantee in test_fixture_r_reproduces_its_metrics_after_
 # migration_to_v8 below instead.
-_PRE_V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) != 8]
+_PRE_V8_FIXTURES = [
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9)
+]
 
 
 @pytest.mark.parametrize("path", _PRE_V8_FIXTURES, ids=lambda p: p.stem)
@@ -332,6 +433,531 @@ def test_fixture_r_reproduces_its_metrics_after_migration_to_v8(path: Path) -> N
     assert migrated.inputs_version == 8
     assert migrated.vat == parse_calculator_inputs(doc["inputs"]).vat
     _assert_expected_metrics(run_appraisal(migrated), doc, f"{path.stem}[migrated-to-v8]")
+
+
+# ---------------------------------------------------------------------------
+# R12 Task 8 (spec Sec 18.7, guard 6 of Sec 13) -- the v8 -> v9 migration
+# identity gates. Mirrors golden-fixtures.test.ts's identically-named describe
+# blocks. This is the release's main protection for real stored appraisal
+# data: gate 1 proves no computed figure moves, gate 2 proves validate_inputs
+# returns the SAME issue set either side of migration. Gate 2 exists because
+# of a real defect (R11): a migration that moved no number gave every
+# short-term document a hard validation error from a block the engine
+# otherwise ignored, silently downgrading its report to DRAFT while gate 1
+# stayed green throughout. Gate 1 cannot see that axis; gate 2 is written for
+# exactly it.
+#
+# R12 Task 12b -- what gate 1 proves NOW. Task 8's exclusion of the two
+# programme-bearing fixtures is gone (the network arms it existed for are
+# wired: Tasks 9-12a), so the gate runs over every fixture with a v8
+# antecedent and covers BOTH of the migration's arms:
+#
+#   (a) the five additive no-ops -- `phase_id: None` on every cost package
+#       and fee line, `anchor: None` on every sales-phasing tranche and on
+#       refinance, `phase_slip_phase_id: None` / `phase_slip_months: 0` on
+#       all four scenarios -- move no computed figure. Every fixture in
+#       scope exercises this arm.
+#
+#   (b) the three-package -> precedence-network conversion moves no computed
+#       figure either. Exercised by `h-programme-scurve` and
+#       `r-vat-quarterly`, the only two in-scope fixtures whose stored
+#       `programme` is non-null (asserted below, so this claim cannot go
+#       vacuous if a fixture is edited). This holds because migration writes
+#       no per-line `phase_id`: every cost line resolves to its category
+#       default, the (phase, category) bucket total IS the category total,
+#       and the derived-window spread is bit-identical to the legacy arm's
+#       single spread.
+#
+# What gate 1 still does NOT compare is `schedule.programme` itself -- None
+# on the v8 side, the derived network on the v9 side. That block is a v9
+# addition with no v8 counterpart, so there is nothing to be identical to;
+# it is pinned by the programme fixtures' own expectations and by Task
+# 9-12a's derivation tests, not here.
+# ---------------------------------------------------------------------------
+
+# Rule 2 (Task 8's TEMPORARY exclusion of `h-programme-scurve` and
+# `r-vat-quarterly`) is DELETED here, Task 12b. It existed because both
+# engines were deliberately made to fail loudly on a populated v9 programme
+# network before the network arms were wired; Tasks 9-12a wired them, so the
+# exclusion has served its purpose and the two programme-bearing fixtures are
+# now the most valuable documents in this gate's scope -- they are the only
+# ones that make the migration's network conversion execute. Rule 3 (the
+# exclusion is self-policing) goes with it; an empty exclusion needs no
+# policing, and the test below now polices the opposite property.
+
+# Rule 1 (RETAINED): only fixtures whose STORED inputs_version is 8 or below
+# have a v8 antecedent to migrate from -- migrate_inputs_to_v8 called on an
+# already-v9 document would raise, and there would be nothing to compare. No
+# v9-tagged fixture exists yet; a later release adds one, so the filter stays.
+_MIGRATION_V9_GATE_FIXTURES = [
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) <= 8
+]
+
+# The two fixtures whose stored `programme` is non-null, and therefore the
+# only ones for which migration builds a precedence network at all. Named here
+# so the gate can assert they are IN scope rather than merely hoping.
+_PROGRAMME_BEARING_STEMS = ("h-programme-scurve", "r-vat-quarterly")
+
+
+def test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_v9_born_fixtures() -> None:
+    """The only legitimate reason to be out of scope is having no v8
+    antecedent; today that set is empty, and when a v9-born fixture is added
+    this still passes while any OTHER exclusion fails.
+
+    Fix round 1, Finding 3: a PINNED FLOOR, not `> 0`. The equality below
+    compares `not (version <= 8)` against `version > 8` -- both derived from
+    the same expression -- so it catches an ADDED second filter clause (its
+    purpose) but not a NARROWED one (`<= 7`), which moves both sides together.
+    The floor is what catches a silently shrinking corpus: 13 is today's count
+    and the corpus only ever grows."""
+    assert len(_MIGRATION_V9_GATE_FIXTURES) >= 13
+    excluded = [p.stem for p in APPRAISAL_FIXTURES if p not in _MIGRATION_V9_GATE_FIXTURES]
+    assert excluded == [p.stem for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) > 8]
+
+
+def test_both_programme_bearing_fixtures_are_in_gate_scope_and_really_carry_a_legacy_programme() -> None:
+    """The point of Task 12b. If either of these ever drops out of scope -- by
+    exclusion, by being re-stamped v9, or by losing its `programme` block --
+    the migration's network conversion silently stops being covered by gate 1,
+    which is the state Task 8 shipped and this task exists to end. Mirrors
+    golden-fixtures.test.ts's identically-named test."""
+    stems = [p.stem for p in _MIGRATION_V9_GATE_FIXTURES]
+    for stem in _PROGRAMME_BEARING_STEMS:
+        assert stem in stems
+        inputs = _load_fixture(FIXTURE_DIR / f"{stem}.json")["inputs"]
+        assert inputs.get("programme") is not None
+        # And migration really does build a network from it.
+        migrated = migrate_inputs_to_v9(inputs)
+        assert migrated.programme is not None
+        assert len(migrated.programme.phases) == 3
+    # And no OTHER in-scope fixture carries one -- so the two named above are
+    # exhaustive, not merely examples.
+    bearing = [
+        p.stem for p in _MIGRATION_V9_GATE_FIXTURES
+        if _load_fixture(p)["inputs"].get("programme") is not None
+    ]
+    assert sorted(bearing) == sorted(_PROGRAMME_BEARING_STEMS)
+
+
+class _CanonicalIssue(NamedTuple):
+    """An issue with its field canonicalised under PROGRAMME_FIELD_ALIASES.
+    A NamedTuple so it compares and sorts exactly as the plain triple it
+    replaces, while still answering ``.severity`` / ``.field`` / ``.message``
+    -- which lets the v9-only-rule predicate run on the CANONICAL form, the
+    same form the comparison itself sees. Mirrors golden-fixtures.test.ts's
+    ``canonicalIssue``."""
+
+    severity: str
+    field: str
+    message: str
+
+
+def _canonical_issue(i) -> _CanonicalIssue:
+    return _CanonicalIssue(i.severity, PROGRAMME_FIELD_ALIASES.get(i.field, i.field), i.message)
+
+
+def _issue_triples(issues) -> list[tuple[str, str, str]]:
+    """Canonicalises under PROGRAMME_FIELD_ALIASES and nothing else -- every
+    other issue matches on field AND message with no aliasing at all.
+    Fix round 1, Finding 4 (already correct on this side of the port, kept
+    as-is): sorts the FULL (severity, field, message) triple, not field+message
+    alone -- two issues sharing a field and message but differing in severity
+    must not be treated as interchangeable."""
+    return sorted(tuple(_canonical_issue(i)) for i in issues)
+
+
+def _strip_version_fields(run: AppraisalRun) -> dict:
+    """Gate 1 compares the WHOLE computed result, not a hand-picked list of
+    metrics -- a chosen list is a guard that only watches what its author
+    remembered.
+
+    Fix round 1, Finding 2: `AppraisalRun` has six fields. Four are compared
+    here -- `metrics`, `model`, `schedule`, `reconciliation` -- and two are
+    deliberately left out, named rather than silently dropped: `inputs`
+    differs by construction (it IS the migrated document, v8 shape vs v9
+    shape), and `validation` is covered by gate 2 below, which already
+    asserts on it directly with the alias canonicalisation this comparison
+    would otherwise have to duplicate. `reconciliation.issues` gets that same
+    canonicalisation here, because `reconciliation` carries `report_safe` --
+    the DRAFT flag this whole task exists to protect -- and a programme-field
+    alias could in principle appear inside it too.
+
+    `calc_version` (2.10.0 vs 2.11.0) and the new `schedule.programme` block
+    legitimately differ and are the only two fields stripped out of the four
+    compared members. Since Task 12b removed the exclusion,
+    `schedule.programme` really does differ for the two programme-bearing
+    fixtures -- None on the v8 side, the derived network on the v9 side --
+    because it is a v9 addition with no v8 counterpart. Everything the network
+    FEEDS (the monthly spend, the facility, every metric) is inside the
+    comparison and must be identical."""
+    metrics = asdict(run.metrics)
+    del metrics["calc_version"]
+    schedule = asdict(run.schedule)
+    del schedule["programme"]
+    reconciliation = asdict(run.reconciliation)
+    reconciliation["issues"] = _issue_triples(run.reconciliation.issues)
+    return {
+        "metrics": metrics, "model": asdict(run.model), "schedule": schedule,
+        "reconciliation": reconciliation,
+    }
+
+
+def _with_term_months(inputs: dict, term_months: int) -> dict:
+    doc = copy.deepcopy(inputs)
+    doc["finance"] = {**doc["finance"], "term_months": term_months}
+    return doc
+
+
+# Task 12b. Gate 2 used to assert exact issue-set equality. With the two
+# programme-bearing fixtures in scope that assertion is WRONG, not merely
+# strict: the legacy three-package validation arm has NO OVERRUN RULE AT ALL,
+# so a migrated document legitimately reports errors its v8 antecedent could
+# never have produced. (Both fixtures breach the sale-tail rule at all three
+# synthetic terms on BOTH sides -- that part still matches exactly; it is only
+# the overrun errors that are new.)
+#
+# The exemption is a NAMED LIST of v9-only RULES, asserted below to hold
+# exactly one entry -- the same self-policing discipline
+# PROGRAMME_FIELD_ALIASES already carries. It is deliberately NOT the same
+# kind of thing as that alias map: an alias is a field RENAME across the
+# boundary, where the rule fires identically on both sides; this list is for
+# rules that exist on one side only. Mirrors golden-fixtures.test.ts's
+# V9_ONLY_VALIDATION_RULES.
+#
+# The overrun rule's MESSAGE shape is kept separate from the predicate: the
+# "overrun really fires" control keys on this alone and then asserts severity
+# and field independently. A control that reused the whole predicate could not
+# tell a rule that stopped firing from a predicate narrowed past it.
+_OVERRUN_MESSAGE_RE = re.compile(
+    r"^Programme finishes month -?\d+; facility term is -?\d+\. "
+    r"Phase '.+' ends -?\d+ months after maturity\.$"
+)
+
+_V9_ONLY_VALIDATION_RULES = {
+    # spec Sec 18.8. A phase whose derived finish runs past facility maturity.
+    # It is a property of the DERIVED network, and the legacy arm derives
+    # nothing, so there is no v8 counterpart to compare against.
+    #
+    # Fix round 1, Finding 2: keyed on ALL THREE of the keys a ValidationIssue
+    # actually has, not on the message alone. There is no stable rule id in
+    # either engine, so message text is unavoidable -- but an unrelated field
+    # emitting this shape, or this rule downgraded to a warning, must NOT be
+    # exempted. Both would be a real change across the migration boundary and
+    # gate 2 exists to see them.
+    "overrun": lambda i: (
+        i.severity == "error"
+        and i.field.startswith("programme.phases.")
+        and bool(_OVERRUN_MESSAGE_RE.match(i.message))
+    ),
+}
+
+
+def _is_v9_only_rule_issue(issue) -> bool:
+    return any(matches(issue) for matches in _V9_ONLY_VALIDATION_RULES.values())
+
+
+def _compare_ex_v9_only(before_issues, after_issues) -> tuple[list, list]:
+    """Property 3's comparison, extracted (fix round 1, Finding 1) so that its
+    ONE-SIDEDNESS can be tested directly rather than asserted in prose.
+
+    The v9-only exemption is applied to the ``after`` side ONLY. A v9-only-rule
+    issue appearing on the ``before`` side would mean a LEGACY rule had started
+    emitting a shape it has no business emitting -- that must fail the
+    comparison, not be quietly dropped alongside its v9 twin.
+
+    This matters more than it reads: the pre-migration side carries no such
+    issue on any case today, so a "tidy-up" to a symmetric filter would be a
+    SILENT no-op. R11 was defined by a guard that died from being widened, so
+    the one-sidedness is pinned by its own synthetic test below.
+
+    Returns the ``(before, after)`` pair rather than a bool so a gate failure
+    still prints a readable diff. Mirrors golden-fixtures.test.ts's
+    ``compareExV9Only``."""
+    before = _issue_triples(before_issues)
+    after = sorted(
+        tuple(c) for c in map(_canonical_issue, after_issues) if not _is_v9_only_rule_issue(c)
+    )
+    return before, after
+
+
+def _hard_issues(issues) -> list:
+    return [i for i in issues if i.severity == "error"]
+
+
+# Every gate-2 case: each in-scope fixture at its STORED term, plus the same
+# fixture at synthetic terms 1, 2 and 3. The three properties below each run
+# over the whole list, so a defect that only shows at a short term is caught
+# by the same assertion as one that shows at the stored term.
+_V9_GATE_CASES = [
+    (f"{p.stem} @ {label}", doc)
+    for p in _MIGRATION_V9_GATE_FIXTURES
+    for label, doc in (
+        [("stored term", copy.deepcopy(_load_fixture(p)["inputs"]))]
+        + [(f"term {t}", _with_term_months(_load_fixture(p)["inputs"], t)) for t in (1, 2, 3)]
+    )
+]
+
+
+_V9_GATE_CASE_IDS = [label for label, _doc in _V9_GATE_CASES]
+
+
+@pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
+def test_v9_migration_gate_1_every_computed_figure_is_penny_identical(path: Path) -> None:
+    """Task 12b: this gate now proves BOTH arms of the migration move no
+    computed figure -- the five additive no-ops on every fixture, and the
+    three-package -> precedence-network conversion on the two
+    programme-bearing ones. See the module-level comment above for the full
+    statement.
+
+    Task 16 falsifiability audit. Single-line change that kills this guard:
+    schedule.py's `resolved_phase_id`, `return getattr(network
+    .category_phase_ids, category)` -> `return network.category_phase_ids
+    .construction`. Verified: 2 of the 13 cases fail -- the two
+    programme-bearing fixtures (h-programme-scurve, r-vat-quarterly), whose
+    migrated networks resolve professional/statutory to their own category
+    default and so shift window when that default is silently overridden --
+    the other 11 (no `programme` block) are correctly unaffected. Reverted
+    after confirming the guard, and the rest of this file, pass again clean.
+    (Task 12b's own review additionally perturbed
+    `construction.duration_months + 1` post-migration and found it moves
+    profit on both programme-bearing fixtures -- a second, independent
+    confirmation this gate is live, not vacuous.)"""
+    doc = _load_fixture(path)
+    before = run_appraisal(migrate_inputs_to_v8(doc["inputs"]))
+    after = run_appraisal(migrate_inputs_to_v9(doc["inputs"]))
+    assert _strip_version_fields(after) == _strip_version_fields(before)
+
+
+# Task 16 falsifiability audit (gate 2). Single-line change that kills
+# property 3 below: `_compare_ex_v9_only`'s `after = sorted(tuple(c) for c in
+# map(_canonical_issue, after_issues) if not _is_v9_only_rule_issue(c))` ->
+# dropping the `if not _is_v9_only_rule_issue(c)` filter entirely (no
+# exemption applied at all). Task 12b's fix round 1 (Finding 1) made and ran
+# exactly this class of mutation -- widening the filter to strip the v9-only
+# issue from BOTH sides instead of just `after` -- and it failed exactly one
+# test, `test_v9_migration_gate_2_property_3_comparison_is_one_sided`, and
+# nothing else; dropping the filter outright is a strict superset of that
+# same widening and fails property 3 itself on every case where the overrun
+# rule fires (both programme-bearing fixtures at their short synthetic
+# terms). This task's own mutation of the `overrun` predicate (see
+# `test_v9_migration_gate_2_the_overrun_rule_really_fires`, below) is the
+# same falsifiability discipline applied to the OTHER moving part of this
+# gate -- the rule-membership predicate rather than the one-sidedness of its
+# application.
+def test_programme_field_aliases_has_exactly_three_entries_and_each_maps_name_to_same_name() -> None:
+    """The bound. R11's lesson was that an exemption must be narrow BY
+    CONSTRUCTION, not by intention -- this test is the construction, and
+    because the map is derived from PACKAGE_TO_PHASE it constrains the
+    migration's phase ids at the same time. Mirrors
+    tests/test_migrate_v9.py::test_programme_field_aliases_is_derived_and_has_exactly_three_entries
+    (Task 6/7) and golden-fixtures.test.ts's identically-named test.
+
+    Fix round 1, Finding 5: the three names are pinned as LITERALS, not
+    re-derived from PACKAGE_TO_PHASE and compared to themselves -- that
+    would be tautological (a renamed package would pass this test while
+    failing golden-fixtures.test.ts's literal-pinned twin, a mirror weaker
+    than the original it mirrors)."""
+    assert len(PROGRAMME_FIELD_ALIASES) == 3
+    assert sorted(PROGRAMME_FIELD_ALIASES) == [
+        "programme.packages.construction", "programme.packages.professional", "programme.packages.statutory",
+    ]
+    # PACKAGE_TO_PHASE is still exercised here, but as the SOURCE of a second,
+    # independent check (its keys must be exactly these three names too), not
+    # as the thing the alias map's own keys are compared against.
+    assert sorted(PACKAGE_TO_PHASE) == [
+        "construction", "professional", "statutory",
+    ]
+    for from_, to in PROGRAMME_FIELD_ALIASES.items():
+        # The alias is legitimate ONLY because migration writes id = package name.
+        assert to == from_.replace(".packages.", ".phases.")
+
+
+def test_v9_only_validation_rule_list_has_exactly_one_entry_named() -> None:
+    """Same discipline as the alias map above, for a different kind of
+    exemption. An unpoliced list of "rules we do not compare" is a gate that
+    stops gating one rule at a time. Mirrors golden-fixtures.test.ts."""
+    assert list(_V9_ONLY_VALIDATION_RULES) == ["overrun"]
+
+
+# The three properties. R11's actual failure: the v8 migration gave every
+# document a block whose default made every term<=2 appraisal a hard error, so
+# the migration silently downgraded them to DRAFT while the numeric gate
+# stayed green. Terms 1-3 are run alongside each fixture's stored term because
+# that is where the interesting behaviour lives; term 3 goes one step further
+# than R11's own boundary, so a rule re-narrowed to a fixed "<= 2" cutoff
+# would still be caught.
+@pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
+def test_v9_migration_gate_2_property_1_a_valid_document_never_becomes_invalid(label: str, doc: dict) -> None:
+    before = _hard_issues(validate_inputs(migrate_inputs_to_v8(doc)))
+    if before:
+        return  # premise false; property 2 covers this case
+    # UNCONDITIONAL -- no v9-only-rule exemption applies here. This is the
+    # historical defect: a document that validated clean before migration and
+    # reports DRAFT after it.
+    assert _hard_issues(validate_inputs(migrate_inputs_to_v9(doc))) == [], label
+
+
+@pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
+def test_v9_migration_gate_2_property_2_an_invalid_document_never_becomes_valid(label: str, doc: dict) -> None:
+    before = _hard_issues(validate_inputs(migrate_inputs_to_v8(doc)))
+    if not before:
+        return  # premise false; property 1 covers this case
+    # Also UNCONDITIONAL, and it catches a real sibling of the R11 defect: v9
+    # treats a zero-duration phase as a legal milestone where the legacy arm
+    # rejected `duration < 1`, so a migration could silently UPGRADE a broken
+    # document to report-safe.
+    assert len(_hard_issues(validate_inputs(migrate_inputs_to_v9(doc)))) > 0, label
+
+
+@pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
+def test_v9_migration_gate_2_property_3_issue_sets_equal_except_v9_only_rules(label: str, doc: dict) -> None:
+    before, after = _compare_ex_v9_only(
+        validate_inputs(migrate_inputs_to_v8(doc)), validate_inputs(migrate_inputs_to_v9(doc)),
+    )
+    assert after == before, label
+
+
+def test_v9_migration_gate_2_property_3_comparison_is_one_sided() -> None:
+    """Fix round 1, Finding 1a. Synthetic, because no real case can produce
+    this shape on the before side -- which is precisely why a symmetric filter
+    would be a silent no-op over the corpus and needs a test that dies on the
+    refactor rather than a comment asking nobody to do it. Mirrors
+    golden-fixtures.test.ts's identically-named test."""
+    overrun_shaped = ValidationIssue(
+        severity="error",
+        field="programme.phases.construction",
+        message=(
+            "Programme finishes month 7; facility term is 3. "
+            "Phase 'Construction' ends 4 months after maturity."
+        ),
+    )
+    shared = ValidationIssue(severity="warning", field="vat.registered", message="shared")
+    assert _is_v9_only_rule_issue(overrun_shaped)  # the predicate really recognises it
+
+    # AFTER side carries it -> exempted, comparison AGREES. The exemption doing
+    # its job; without this half, deleting the filter outright would still pass
+    # the half below.
+    before, after = _compare_ex_v9_only([shared], [shared, overrun_shaped])
+    assert after == before
+
+    # BEFORE side carries it -> NOT exempted, comparison DISAGREES. A symmetric
+    # filter strips it here too and makes these equal, so this assertion fails
+    # on exactly the refactor that would weaken the gate.
+    before, after = _compare_ex_v9_only([shared, overrun_shaped], [shared])
+    assert after != before
+
+
+def test_v9_migration_gate_2_no_pre_migration_document_carries_a_v9_only_rule_issue() -> None:
+    """Fix round 1, Finding 1b: the invariant that makes the one-sidedness
+    above safe today, asserted directly instead of assumed. The day a legacy
+    rule starts emitting the overrun shape, this fails loudly. Checked on the
+    CANONICALISED before side, because that is what the comparison actually
+    sees (a legacy `programme.packages.*` field is aliased to
+    `programme.phases.*` before any predicate runs)."""
+    offenders = [
+        label for label, doc in _V9_GATE_CASES
+        if any(
+            _is_v9_only_rule_issue(c)
+            for c in map(_canonical_issue, validate_inputs(migrate_inputs_to_v8(doc)))
+        )
+    ]
+    assert offenders == []
+
+
+def test_v9_migration_gate_2_the_three_properties_are_not_vacuous_over_the_corpus() -> None:
+    """Property 1's premise, property 2's premise, and property 3's exemption
+    must each be satisfied by at least one case -- otherwise a property can
+    pass by never applying to anything."""
+    clean_before = dirty_before = exempted = 0
+    for _label, doc in _V9_GATE_CASES:
+        if _hard_issues(validate_inputs(migrate_inputs_to_v8(doc))):
+            dirty_before += 1
+        else:
+            clean_before += 1
+        exempted += sum(1 for i in validate_inputs(migrate_inputs_to_v9(doc)) if _is_v9_only_rule_issue(i))
+    assert clean_before > 0
+    assert dirty_before > 0
+    assert exempted > 0
+
+
+def test_v9_migration_gate_2_the_overrun_rule_really_fires() -> None:
+    """Excluding a rule from gate 2 cannot be allowed to hide a dead rule.
+    Without this, property 3's exemption would keep passing if the overrun
+    rule were deleted, broken, or reworded out of its own predicate. Fixture
+    H's migrated network finishes month 7; at a 3-month term all three phases
+    run past maturity. Mirrors golden-fixtures.test.ts."""
+    inputs = _load_fixture(FIXTURE_DIR / "h-programme-scurve.json")["inputs"]
+    issues = validate_inputs(migrate_inputs_to_v9(_with_term_months(inputs, 3)))
+    # Fix round 1, Finding 2: selected by MESSAGE SHAPE alone, then severity
+    # and field asserted independently. Selecting with the full predicate would
+    # make those two assertions tautological, and a predicate narrowed past the
+    # real rule would then look like a rule that still fires.
+    overruns = [i for i in issues if _OVERRUN_MESSAGE_RE.match(i.message)]
+    assert len(overruns) == 3
+    assert all(i.severity == "error" for i in overruns)
+    assert sorted(i.field for i in overruns) == [
+        "programme.phases.construction", "programme.phases.professional",
+        "programme.phases.statutory",
+    ]
+    # ... and the predicate really does cover every one of them, so property
+    # 3's exemption and the rule that fires are the same set, not two sets that
+    # merely overlap.
+    assert all(_is_v9_only_rule_issue(i) for i in overruns)
+    # Task 12b's deferred gap (Task 16): the assertion above only proves the
+    # predicate is a SUPERSET of the message-shaped set over THESE three
+    # fields -- it would not notice a `field.startswith("programme.phases.")`
+    # check replaced by an enumeration of exactly these three ids, which would
+    # pass every assertion above by coincidence (this fixture's phases happen
+    # to BE that trio). Two synthetic checks close that: the predicate must
+    # accept a phase id this fixture does not have (proving it matches by
+    # PREFIX, not by enumerating known ids)...
+    arbitrary_phase_overrun = ValidationIssue(
+        severity="error",
+        field="programme.phases.some-other-phase-id-not-in-this-fixture",
+        message=(
+            "Programme finishes month 7; facility term is 3. "
+            "Phase 'Other' ends 4 months after maturity."
+        ),
+    )
+    assert _is_v9_only_rule_issue(arbitrary_phase_overrun)
+    # ...and must reject the identical severity+message on a field OUTSIDE
+    # `programme.phases.` -- otherwise the field check could be replaced with
+    # `True` and nothing above would notice.
+    assert not _is_v9_only_rule_issue(
+        replace(arbitrary_phase_overrun, field="sales_phasing.tranches.0")
+    )
+    # Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
+    # round 1, Finding 1) -- so the exemption is not swallowing a rule that has
+    # silently degenerated to one message repeated three times.
+    assert len({i.message for i in overruns}) == 3
+    # And it does NOT fire at the stored term: a predicate that matched
+    # everything would satisfy the assertions above just as well.
+    assert [i for i in validate_inputs(migrate_inputs_to_v9(inputs)) if _is_v9_only_rule_issue(i)] == []
+
+
+def test_v9_migration_gate_2_a_term_2_document_from_a_gated_fixture_really_does_produce_a_genuine_short_term_issue() -> None:
+    """Fix round 1, Finding 3 (Task 8): the original version of this control
+    asserted on fixture H, and the error satisfying it was the temporary "v9
+    programme network... not yet implemented" placeholder that Task 10
+    deletes, at which point the control would have silently stopped testing
+    anything. It proved neither that a GATED document produces issues, nor
+    that a short-term RULE is what fires.
+
+    This version uses fixture I, which carries a `sales_phasing` block whose
+    three tranches sit at months 9/10/11 of a 12-month term. Shortened to a
+    2-month term, `term - 1 == 1`, so every tranche breaches sales_phasing's
+    own permanent term bound -- a rule with nothing to do with programme
+    scaffolding, and one that is NOT on the v9-only list, so property 3
+    compares it on both sides."""
+    doc = _load_fixture(FIXTURE_DIR / "i-phased-sales.json")
+    shortened = _with_term_months(doc["inputs"], 2)
+    issues = validate_inputs(migrate_inputs_to_v9(shortened))
+    tail_issues = [i for i in issues if i.severity == "error" and i.field.startswith("sales_phasing.tranches")]
+    assert len(tail_issues) > 0
+    assert all(i.message == "Tranche month must be a whole month between 0 and 1." for i in tail_issues)
+    # Sanity: this must not be satisfied by the scaffolding placeholder the
+    # original control (mistakenly) relied on.
+    assert not any("not yet implement" in i.message for i in issues)
 
 
 # R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named scenarios
@@ -418,7 +1044,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     excluded = [p for p in APPRAISAL_FIXTURES if p not in _PRE_R8_FIXTURES]
     assert [p.stem for p in excluded] == [
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
-        "q-detailed-cost-plan", "r-vat-quarterly",
+        "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -427,12 +1053,16 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # the R10 cost_plan AND the R11 vat blocks at their zeroed/legacy-derived/inert
     # defaults, a different document.
     #
+    # R12 widens it once more to include 9: fixture S is BORN at v9 and has no
+    # pre-R8 form at all -- it did not exist before R8, and stamping it v3/v4 would
+    # additionally strip the R12 programme network the fixture is entirely about.
+    #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
-    # so it is vacuously true for every member and can never fail. Enumerating 6/7/8
+    # so it is vacuously true for every member and can never fail. Enumerating 6/7/8/9
     # keeps the check able to fail: it catches a fixture excluded for a FOURTH,
-    # unstated reason (e.g. a future non-v5/v6/v7/v8 fixture, or a change to
+    # unstated reason (e.g. a future non-v5..v9 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -441,6 +1071,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 6
             or version == 7
             or version == 8
+            or version == 9
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -625,6 +1256,39 @@ _NEGATIVE_CONTROLS = [
         # peak off by one penny.
         "vat_months_carry_pence": [10000000, 15000000, 19999999, 5000000, 10000000, 10000000, 0],
     }),
+    # R12 (the same convention stated above): fixture S adds six new _FLAT_KEYS
+    # mappers for the derived ProgrammeResult. Each wrong value is a plausible REAL
+    # regression rather than an arbitrary wrong number:
+    #   - finish_month 21 is what Sec 18.2's maximum gives if the MILESTONE arm is
+    #     dropped, i.e. max(finish) over duration>=1 phases alone -- the programme
+    #     would then be reported as finishing before its own maturity_tail;
+    #   - the critical path with `construction` removed is what the successor-only
+    #     late-finish rule produces (Sec 18.4's correction): its SS successor
+    #     `marketing` would lend it a float of 2 it does not have;
+    #   - the float array with marketing at 0 is a wholly-critical network, the state
+    #     guard 1 exists to reject;
+    #   - the start array with marketing at 8 is an SS lag read as 0 rather than 3;
+    #   - the finish array with practical_completion at 17 is a milestone given a
+    #     one-month duration;
+    #   - the id array with `design` and `procurement` transposed is the reordering
+    #     that would silently re-key the three positional arrays above.
+    # Mirrors golden-fixtures.test.ts's negativeControls entry for fixture S.
+    ("s-dated-programme", {
+        "programme_finish_month": 21,
+        "programme_critical_path": [
+            "acquisition", "planning", "conditions", "strip_out", "testing",
+            "building_control", "practical_completion", "unit_completions", "sales",
+            "maturity_tail",
+        ],
+        "programme_phase_ids": [
+            "acquisition", "planning", "conditions", "procurement", "design", "strip_out",
+            "construction", "testing", "building_control", "practical_completion",
+            "marketing", "unit_completions", "sales", "maturity_tail",
+        ],
+        "programme_phase_start_months": [0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 8, 16, 18, 21],
+        "programme_phase_finish_months": [1, 4, 6, 5, 7, 8, 14, 15, 16, 17, 15, 18, 21, 21],
+        "programme_phase_total_float_months": [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    }),
 ]
 
 
@@ -687,6 +1351,43 @@ def _programme_for_term(term_months: int) -> ProgrammeInputs:
     )
 
 
+def _network_for_term(term_months: int) -> ProgrammeNetwork:
+    """R12: the v9 sibling of _programme_for_term, for a fixture BORN at v9.
+    migrate_inputs_to_v8 refuses such a document (_RECOGNISED_VERSIONS_V8 stops at
+    8), so the "programme" variant below cannot route it through the legacy shape.
+
+    Deliberately the same THREE predecessor-free phases the v8 -> v9 migration
+    itself produces (spec Sec 18.7), with the same windows _programme_for_term
+    uses, so the variant asserts the same claim on both arms: the ledger
+    invariants hold for a document whose spend is driven by a programme fitted to
+    its own term, whatever shape that programme is stored in."""
+    term = max(1, int(term_months))
+    cap = max(1, term - 2)
+    return ProgrammeNetwork(
+        anchor_month=None,
+        phases=[
+            Phase(
+                id="construction", code="construction", label="Construction",
+                duration_months=min(6, cap), slip_months=0, start_offset=0,
+                curve=SimpleSpendCurve(kind="s_curve"), predecessors=[],
+            ),
+            Phase(
+                id="professional", code="design", label="Professional",
+                duration_months=min(3, cap), slip_months=0, start_offset=0,
+                curve=SimpleSpendCurve(kind="straight_line"), predecessors=[],
+            ),
+            Phase(
+                id="statutory", code="planning", label="Statutory",
+                duration_months=min(2, cap), slip_months=0, start_offset=0,
+                curve=SimpleSpendCurve(kind="back_loaded"), predecessors=[],
+            ),
+        ],
+        category_phase_ids=CategoryPhaseIds(
+            construction="construction", professional="professional", statutory="statutory",
+        ),
+    )
+
+
 def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalculatorInputs]]:
     """Mirrors invariants.test.ts's `variants()`: derived transformations of each
     fixture, widening coverage without new hand calcs. Each variant is deep-copied off
@@ -713,9 +1414,28 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # migrate_inputs_to_v8 accepts all four versions (upgrade, upgrade, upgrade, merge),
     # and the isinstance check below still holds unchanged: CalculatorInputsV8
     # subclasses CalculatorInputsV7.
-    programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
-    assert isinstance(programmed, CalculatorInputsV7)
-    programmed.programme = _programme_for_term(programmed.finance.term_months)
+    # R12: a v9-born fixture (fixture S) cannot go through migrate_inputs_to_v8 at
+    # all -- it refuses a v9 document by the same design that made it refuse nothing
+    # below 9. It takes the v9 arm instead, and gets a v9 NETWORK fitted to its term
+    # rather than the legacy three-package block.
+    if inputs.inputs_version >= 9:
+        programmed = migrate_inputs_to_v9(inputs.model_dump(mode="json"))
+        assert isinstance(programmed, CalculatorInputsV9)
+        programmed.programme = _network_for_term(programmed.finance.term_months)
+        # Replacing the network orphans any Sec 18.6 anchor that named one of the
+        # phases just discarded. ``anchor: None`` is that field's own documented
+        # meaning -- "use month_offset" -- so clearing it keeps the variant a
+        # document the validator would accept, rather than one that only survives
+        # because build_schedule's defensive degrade catches an absent phase_id.
+        if programmed.sales_phasing is not None:
+            for tranche in programmed.sales_phasing.tranches:
+                tranche.anchor = None
+        if programmed.refinance is not None:
+            programmed.refinance.anchor = None
+    else:
+        programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
+        assert isinstance(programmed, CalculatorInputsV7)
+        programmed.programme = _programme_for_term(programmed.finance.term_months)
     return [
         ("base", inputs),
         ("retain_all", retained),

@@ -12,16 +12,24 @@ from pathlib import Path
 
 from app.financial_model import compute_cost_plan, developed_area_sqm, run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7
+from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7, migrate_inputs_to_v9
 from app.financial_model.types import (
     CalculatorInputsV6,
     CalculatorInputsV7,
+    CategoryPhaseIds,
     ContingencyClass,
     CostPackage,
     CostPlanInputs,
+    Dependency,
     FeeLine,
+    Phase,
+    ProgrammeInputs,
+    ProgrammeNetwork,
+    ProgrammePackage,
+    ProgrammePackages,
     ProposedUnitV6,
     ScenarioOverrides,
+    SimpleSpendCurve,
     UnitAncillary,
     UnitMixInputsV6,
     parse_calculator_inputs,
@@ -41,6 +49,8 @@ def _overrides(**kwargs):
         construction_cost_adjustment_pct=kwargs.get("construction_cost_adjustment_pct", 0.0),
         timeline_adjustment_months=kwargs.get("timeline_adjustment_months", 0),
         interest_rate_adjustment_pct=kwargs.get("interest_rate_adjustment_pct", 0.0),
+        phase_slip_phase_id=kwargs.get("phase_slip_phase_id", None),
+        phase_slip_months=kwargs.get("phase_slip_months", 0),
     )
 
 
@@ -319,3 +329,123 @@ class TestTheCostLeverDoesNotDoubleApply:
         # The two values differ, so this assertion is the discriminating check.
         assert pct_fee.amount_pence == 223_000
         assert pct_fee.amount_pence != 220_500
+
+
+# --- R12 Task 14: the phase_slip lever (spec Sec 18.9) ---------------------
+
+SL = SimpleSpendCurve(kind="straight_line")
+
+
+def _v9_phase(pid, code, duration, preds=(), *, start_offset=0, slip=0) -> Phase:
+    return Phase(
+        id=pid, code=code, label=pid, duration_months=duration,
+        slip_months=slip, start_offset=start_offset, curve=SL,
+        predecessors=list(preds),
+    )
+
+
+def _network_doc(term: int = 12):
+    """Fixture F migrated to v9 and given a small two-phase network: planning (2
+    months) then construction (8 months, FS off planning). Mirrors the identically
+    named helper in test_financial_model_sensitivity.py."""
+    base = migrate_inputs_to_v9(json.loads(FIXTURE.read_text(encoding="utf-8"))["inputs"])
+    phases = [
+        _v9_phase("planning", "planning", 2),
+        _v9_phase("construction", "construction", 8, [Dependency(phase_id="planning", type="FS", lag_months=0)]),
+    ]
+    base.finance = base.finance.model_copy(update={"term_months": term})
+    base.programme = ProgrammeNetwork(
+        anchor_month=None,
+        phases=phases,
+        category_phase_ids=CategoryPhaseIds(
+            construction="construction", professional="planning", statutory="planning",
+        ),
+    )
+    return base
+
+
+def _with_slip(doc, phase_id: str, months: int):
+    d = doc.model_copy(deep=True)
+    for p in d.programme.phases:
+        if p.id == phase_id:
+            p.slip_months += months
+    return d
+
+
+def test_phase_slip_adds_additively_to_the_named_phase_only():
+    """Spec Sec 18.9. Hand-derived: planning already carries a base-case slip of
+    1 month; the override adds 3 more. 1 + 3 = 4. construction is not the named
+    phase, so its slip stays at 0."""
+    doc = _with_slip(_network_doc(), "planning", 1)
+    out = apply_scenario(doc, _overrides(phase_slip_phase_id="planning", phase_slip_months=3))
+    assert next(p for p in out.programme.phases if p.id == "planning").slip_months == 4
+    assert next(p for p in out.programme.phases if p.id == "construction").slip_months == 0
+
+
+def test_null_phase_slip_phase_id_matches_no_phase_the_migration_no_op():
+    """Fix round 1, Finding 2: months=0 cannot fail for any predicate that
+    matches the wrong phase -- a broken match still adds zero. A nonzero
+    magnitude makes this non-vacuous: a mutated predicate that makes a null
+    target match EVERY phase would increment every phase's slip_months by 99."""
+    doc = _network_doc()
+    out = apply_scenario(doc, _overrides(phase_slip_phase_id=None, phase_slip_months=99))
+    assert out.programme == doc.programme
+
+
+def test_phase_slip_is_a_no_op_on_a_legacy_v8_programme():
+    """The additive write is gated on the v9 network SHAPE (hasattr(programme,
+    "phases")), not on inputs_version >= 9: a v4-v8 document's legacy
+    ProgrammeInputs (`{ packages }`) has no `phases` attribute, so the lever
+    writes nothing when there is nothing of the right shape to write to --
+    rather than crashing, or silently misinterpreting a package as a phase."""
+    inputs = migrate_inputs_to_v7({}, {"id": "p", "price_pence": 0, "floor_area_sqm": 0})
+    inputs.programme = ProgrammeInputs(
+        anchor_month=None,
+        packages=ProgrammePackages(
+            construction=ProgrammePackage(start_offset=0, duration_months=1, curve=SL),
+            professional=ProgrammePackage(start_offset=0, duration_months=1, curve=SL),
+            statutory=ProgrammePackage(start_offset=0, duration_months=1, curve=SL),
+        ),
+    )
+    out = apply_scenario(inputs, _overrides(phase_slip_phase_id="construction", phase_slip_months=5))
+    assert out.programme == inputs.programme
+
+
+def test_phase_slip_is_a_no_op_on_a_programme_none_document():
+    inputs = migrate_inputs_to_v9({})
+    assert inputs.programme is None
+    out = apply_scenario(inputs, _overrides(phase_slip_phase_id="planning", phase_slip_months=5))
+    assert out.programme is None
+
+
+def test_phase_slip_leaves_finance_and_equity_sources_untouched():
+    """Spec Sec 12.2 facility invariance -- phase_slip writes nothing under
+    finance or equity_sources."""
+    doc = _with_slip(_network_doc(), "planning", 1)
+    out = apply_scenario(doc, _overrides(phase_slip_phase_id="planning", phase_slip_months=6))
+    assert out.finance == doc.finance
+    assert out.equity_sources == doc.equity_sources
+
+
+def test_phase_slip_composes_order_independently_with_the_other_four_levers():
+    """Spec Sec 13 guard 7, at the apply_scenario level: chaining a phase_slip
+    override with the four scalar-lever overrides, in either order, must produce
+    an identical document -- the five levers write to disjoint fields."""
+    doc = _network_doc(20)
+    scalars = _overrides(
+        gdv_adjustment_pct=5.0, construction_cost_adjustment_pct=-3.0,
+        timeline_adjustment_months=2, interest_rate_adjustment_pct=1.0,
+    )
+    slip = _overrides(phase_slip_phase_id="planning", phase_slip_months=2)
+
+    forward = apply_scenario(apply_scenario(doc, scalars), slip)
+    backward = apply_scenario(apply_scenario(doc, slip), scalars)
+
+    assert forward.unit_mix == backward.unit_mix
+    assert forward.conversion_costs == backward.conversion_costs
+    assert forward.finance == backward.finance
+    assert forward.programme == backward.programme
+    # Negative control: the combination must actually differ from either single
+    # application, proving both levers are live rather than one silently no-oping.
+    only_scalars = apply_scenario(doc, scalars)
+    assert forward.programme != only_scalars.programme

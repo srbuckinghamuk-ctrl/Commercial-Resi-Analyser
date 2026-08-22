@@ -6,10 +6,11 @@ import {
   migrateV5toV6, migrateInputsToV6,
   migrateV6toV7, migrateInputsToV7,
   migrateV7toV8, migrateInputsToV8, isV8,
+  migrateV8toV9, migrateInputsToV9, PACKAGE_TO_PHASE,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV7,
+  CalculatorInputsV7, CalculatorInputsV8,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
@@ -536,11 +537,12 @@ function detailedV7Document(): CalculatorInputsV7 {
           // nulls every override" vacuously true — the exact shape of blindness
           // R9 recorded against a gate that could not fail.
           vat_override: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
+          phase_id: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope',
           amount_pence: 10_000_000, contingency_class: 'existing_building',
-          lender_eligible: true, notes: '', vat_override: null,
+          lender_eligible: true, notes: '', vat_override: null, phase_id: null,
         },
       ],
       contingency: v7.cost_plan.contingency.map((c) => ({
@@ -711,5 +713,217 @@ describe('migrateInputsToV8 merge-onto-defaults branch', () => {
     const merged = migrateInputsToV8({ ...snapshot, cost_plan: { mode: 'detailed' } } as never);
     expect(merged.cost_plan.mode).toBe('detailed');
     expect(merged.cost_plan.contingency).toHaveLength(3);
+  });
+});
+
+// --- R12 spec §18.7 — v9, the precedence-network migration ------------------
+
+/** A v8 document with no programme/sales_phasing/refinance blocks -- the
+ *  common case a fresh someV7Document() migrates to. */
+function defaultV8Document(): CalculatorInputsV8 {
+  return migrateV7toV8(someV7Document());
+}
+
+/** A v8 document with a real (detailed) cost plan carrying packages and fee
+ *  lines, so the phase_id no-op has non-empty arrays to write onto. */
+function defaultV8DocumentWithDetailedCostPlan(): CalculatorInputsV8 {
+  return migrateV7toV8(detailedV7Document());
+}
+
+/** A v8 document with a real, explicit three-package programme. The three
+ *  packages carry DISTINCT start_offset/duration_months/curve values on every
+ *  axis so that a migration bug which transposes two packages -- rather than
+ *  merely dropping a field -- changes an assertion somewhere in the suite. */
+function v8DocumentWithProgramme(): CalculatorInputsV8 {
+  return {
+    ...defaultV8Document(),
+    programme: {
+      anchor_month: '2026-03',
+      packages: {
+        construction: { start_offset: 2, duration_months: 9, curve: { kind: 's_curve' as const } },
+        professional: { start_offset: 0, duration_months: 5, curve: { kind: 'straight_line' as const } },
+        statutory: { start_offset: 1, duration_months: 4, curve: { kind: 'back_loaded' as const } },
+      },
+    },
+  };
+}
+
+describe('migrateV8toV9 — spec §18.7', () => {
+  it('leaves a null programme null', () => {
+    const v9 = migrateV8toV9({ ...defaultV8Document(), programme: null } as never);
+    expect(v9.programme).toBeNull();
+    expect(v9.inputs_version).toBe(9);
+  });
+
+  it('converts each of the three packages to a predecessor-free phase with an identical window', () => {
+    // Table-driven over ALL THREE, matched by id rather than array position:
+    // fix round 1, Finding 3. The single-phase (index-0) version of this test
+    // passed even with `professional`/`statutory`'s fields transposed --
+    // window identity is this task's entire safety claim, so every package
+    // needs its own check against ITS OWN source values, not just construction's.
+    const source = v8DocumentWithProgramme().programme!.packages;
+    const v9 = migrateV8toV9(v8DocumentWithProgramme() as never);
+    const net = v9.programme!;
+
+    expect(net.anchor_month).toBe('2026-03');
+    expect(net.phases.map((p) => p.id)).toEqual(['construction', 'professional', 'statutory']);
+    expect(net.phases.map((p) => p.code)).toEqual(['construction', 'design', 'planning']);
+    expect(net.phases.every((p) => p.predecessors.length === 0)).toBe(true);
+    expect(net.phases.every((p) => p.slip_months === 0)).toBe(true);
+
+    for (const name of ['construction', 'professional', 'statutory'] as const) {
+      const phase = net.phases.find((p) => p.id === name)!;
+      const pkg = source[name];
+      expect(phase.start_offset).toBe(pkg.start_offset);
+      expect(phase.duration_months).toBe(pkg.duration_months);
+      expect(phase.curve).toEqual(pkg.curve);
+    }
+  });
+
+  it('points category_phase_ids at the three migrated phases', () => {
+    const v9 = migrateV8toV9(v8DocumentWithProgramme() as never);
+    expect(v9.programme!.category_phase_ids).toEqual({
+      construction: 'construction', professional: 'professional', statutory: 'statutory',
+    });
+  });
+
+  it('writes the id equal to the package name — the alias map depends on it', () => {
+    // §18.7's one exemption to the validation-identity gate is bounded by this
+    // equality. If migration ever renames these ids, Task 8's alias assertion
+    // must fail, so this is asserted at the source too.
+    const v9 = migrateV8toV9(v8DocumentWithProgramme() as never);
+    expect(new Set(v9.programme!.phases.map((p) => p.id)))
+      .toEqual(new Set(Object.keys(PACKAGE_TO_PHASE)));
+  });
+
+  it('names the missing package rather than throwing an anonymous TypeError', () => {
+    // Fix round 1, Finding 5. A hand-edited or malformed stored row is not
+    // bound by CalculatorInputsV8's type -- this is the runtime guard for a
+    // `programme.packages` object missing one of its three keys.
+    const v8 = v8DocumentWithProgramme();
+    const packages = v8.programme!.packages as unknown as Record<string, unknown>;
+    delete packages.statutory;
+    expect(() => migrateV8toV9(v8 as never)).toThrow(/migrateV8toV9.*"statutory"/);
+  });
+
+  it('adds anchor: null to every tranche and to refinance', () => {
+    const v8 = {
+      ...defaultV8Document(),
+      sales_phasing: { tranches: [{ month_offset: 10, pct_of_gross_receipts: 100 }] },
+      refinance: { month_offset: 11, investment_value_pence: 1, ltv_pct: 60, arrangement_fee_pence: 0, legal_costs_pence: 0 },
+    };
+    const v9 = migrateV8toV9(v8 as never);
+    expect(v9.sales_phasing!.tranches[0].anchor).toBeNull();
+    expect(v9.sales_phasing!.tranches[0].month_offset).toBe(10);
+    expect(v9.refinance!.anchor).toBeNull();
+  });
+
+  // Fix round 1, Finding 1 (CRITICAL). `phase_slip_phase_id`/`phase_slip_months`
+  // live on the SHARED, version-agnostic `ScenarioOverrides` type, and Task 4
+  // already made conversion-defaults.ts write both at these exact no-op values
+  // -- so `defaultV8Document()` already carries them, and a test built from it
+  // stays green with `withSlip` deleted from migrateV8toV9 entirely. A stored
+  // v8 row written before R12 has NEITHER key. The fixture here is raw JSON
+  // with both keys stripped, and their absence is asserted first, so the test
+  // can only pass because the migration actually wrote them.
+  it('adds the two slip fields, at no-op values, to all four scenarios -- from a snapshot with neither key', () => {
+    const raw = JSON.parse(JSON.stringify(defaultV8Document())) as Record<string, unknown>;
+    const scenarios = raw.scenarios as Record<string, Record<string, unknown>>;
+    for (const k of ['base', 'upside', 'downside', 'severe']) {
+      delete scenarios[k].phase_slip_phase_id;
+      delete scenarios[k].phase_slip_months;
+    }
+    // Non-vacuity: the input really does lack what the migration must add.
+    for (const k of ['base', 'upside', 'downside', 'severe']) {
+      expect('phase_slip_phase_id' in scenarios[k]).toBe(false);
+      expect('phase_slip_months' in scenarios[k]).toBe(false);
+    }
+
+    const v9 = migrateV8toV9(raw as never);
+    for (const k of ['base', 'upside', 'downside', 'severe'] as const) {
+      expect(v9.scenarios[k].phase_slip_phase_id).toBeNull();
+      expect(v9.scenarios[k].phase_slip_months).toBe(0);
+    }
+  });
+
+  // Fix round 1, Finding 1 (CRITICAL). `phase_id` lives on the SHARED
+  // `CostPackage`/`FeeLine` types, and `costPlanFromLegacyCosts` (cost-plan.ts)
+  // already writes `phase_id: null` on every fee line it builds -- so
+  // `defaultV8DocumentWithDetailedCostPlan()`'s fee lines already carry it, and
+  // a test built from it stays green with both `.map` clauses deleted from
+  // migrateV8toV9. Same fix as above: raw JSON, keys stripped, absence
+  // asserted first.
+  it('writes phase_id: null on every package and fee line -- from a snapshot with neither key', () => {
+    const raw = JSON.parse(JSON.stringify(defaultV8DocumentWithDetailedCostPlan())) as Record<string, unknown>;
+    const costPlan = raw.cost_plan as {
+      packages: Array<Record<string, unknown>>; fee_lines: Array<Record<string, unknown>>;
+    };
+    for (const p of costPlan.packages) delete p.phase_id;
+    for (const f of costPlan.fee_lines) delete f.phase_id;
+    // Non-vacuity: there are real rows here, and none of them carry the key.
+    expect(costPlan.packages.length).toBeGreaterThan(0);
+    expect(costPlan.fee_lines.length).toBeGreaterThan(0);
+    expect(costPlan.packages.every((p) => !('phase_id' in p))).toBe(true);
+    expect(costPlan.fee_lines.every((f) => !('phase_id' in f))).toBe(true);
+
+    const v9 = migrateV8toV9(raw as never);
+    expect(v9.cost_plan.packages.length).toBeGreaterThan(0);
+    expect(v9.cost_plan.fee_lines.length).toBeGreaterThan(0);
+    expect(v9.cost_plan.packages.every((p) => p.phase_id === null)).toBe(true);
+    expect(v9.cost_plan.fee_lines.every((f) => f.phase_id === null)).toBe(true);
+  });
+
+  it('refuses to double-migrate', () => {
+    const v9 = migrateV8toV9(defaultV8Document() as never);
+    expect(() => migrateV8toV9(v9 as never)).toThrow(/already a v9 document/);
+  });
+});
+
+// Fix round 1, Finding 2. Neither describe below existed in the brief; every
+// other version (migrate.test.ts:307, 373, 504, 671 and the
+// migrateInputsToV8 merge-onto-defaults describe) has both a refusal test and
+// a merge-branch test, and copying the brief without noticing the gap was the
+// mistake -- flagged here rather than repeated again.
+describe('migrateInputsToV9 refusals (R8 carry-forward)', () => {
+  it('refuses an unrecognised version — tested with 10, the neighbour', () => {
+    // R10 found a version predicate loosened from `=== 6` to `!== 5`, the literal
+    // negation of the set's own definition, which could never fail. Testing the
+    // NEIGHBOUR is what catches that shape.
+    //
+    // The regex names migrateInputsToV9 DELIBERATELY, mirroring
+    // migrateInputsToV8's refusal test above: a v9 predicate that never fires
+    // falls through to migrateV8toV9(migrateInputsToV8(...)), and
+    // migrateInputsToV8's OWN predicate then refuses 10 with a message a loose
+    // /unrecognised inputs_version/ regex would still match for the wrong reason.
+    expect(() => migrateInputsToV9({ inputs_version: 10 } as never))
+      .toThrow(/migrateInputsToV9: unrecognised inputs_version 10/);
+  });
+
+  it('refuses a document tagged v9 that fails the structural check', () => {
+    expect(() => migrateInputsToV9({ inputs_version: 9, finance: 'nope' } as never))
+      .toThrow(/fails the v9 structural check/);
+  });
+});
+
+describe('migrateInputsToV9 merge-onto-defaults branch', () => {
+  function someV9SnapshotWithProgramme(): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(migrateV8toV9(v8DocumentWithProgramme()))) as Record<string, unknown>;
+  }
+
+  // Fix round 1, Finding 2. Guards migrateInputsToV9's
+  // `programme: saved.programme ?? null` line specifically -- delete it and a
+  // stored network comes back as the default document's null, and every phase
+  // is silently lost. Same shape as R10's cost_plan-merge defect and R11's vat
+  // one; this is the v9 instance of that recurring class.
+  it('carries a saved, populated programme network through the merge branch, not the default null', () => {
+    const snapshot = someV9SnapshotWithProgramme();
+    // Non-vacuity: the stored snapshot really does carry a live network.
+    expect((snapshot.programme as { phases: unknown[] }).phases).toHaveLength(3);
+
+    const merged = migrateInputsToV9(snapshot as never);
+    expect(merged.programme).not.toBeNull();
+    expect(merged.programme!.phases.map((p) => p.id)).toEqual(['construction', 'professional', 'statutory']);
+    expect(merged.programme!.phases.map((p) => p.start_offset)).toEqual([2, 0, 1]);
+    expect(merged.programme!.phases.map((p) => p.duration_months)).toEqual([9, 5, 4]);
   });
 });

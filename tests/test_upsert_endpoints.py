@@ -226,10 +226,14 @@ class TestAppraisalV5Normalisation:
         body = resp.json()
         # The governance column (drives audit_hash), not just the snapshot's
         # own inputs_version. R10 Task 6: the boundary is v7. R11 Task 10: v8.
-        assert body["inputs_version"] == 8
+        # R12 Task 18b (spec Sec 18.7): v9.
+        assert body["inputs_version"] == 9
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 8
+        assert snapshot["inputs_version"] == 9
+        # The v9 step is purely additive on a v4 document with no programme:
+        # a null programme stays null and keeps the Sec 6 auto windows.
+        assert snapshot["programme"] is None
         acq = snapshot["acquisition"]
         assert acq["jurisdiction"] == "england_ni"
         assert acq["jurisdiction_source"] == "migrated_default"
@@ -313,16 +317,16 @@ class TestAppraisalV5Normalisation:
         a 422, not a 201 carrying a silently corrupted snapshot.
 
         R9 Task 3 moved the stand-in from 6 to 7; R10 Task 6 moved it from 7 to
-        8; R11 Task 10 moves it from 8 to 9: 8 is now a version this server
-        implements, so it no longer stands in for one it does not. 9 is also
-        the NEIGHBOUR of the recognised set, which is the only value that
-        catches a predicate loosened to the negation of its own tuple (spec
-        Sec 17.11)."""
+        8; R11 Task 10 moved it from 8 to 9; R12 Task 18b moves it from 9 to 10:
+        9 is now a version this server implements, so it no longer stands in for
+        one it does not. 10 is also the NEIGHBOUR of the recognised set, which
+        is the only value that catches a predicate loosened to the negation of
+        its own tuple (spec Sec 18.7)."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         unknown_version_doc = copy.deepcopy(FIXTURE_A_INPUTS)
-        unknown_version_doc["inputs_version"] = 9
+        unknown_version_doc["inputs_version"] = 10
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
@@ -336,7 +340,7 @@ class TestAppraisalV5Normalisation:
     async def test_unknown_future_inputs_version_is_422_not_silent_corruption(
         self, client, monkeypatch,
     ):
-        """R9 Task 3, extended by R10 Task 6 and R11 Task 10. R8's
+        """R9 Task 3, extended by R10 Task 6, R11 Task 10 and R12 Task 18b. R8's
         silent-corruption bug,
         guarded forward: an inputs_version this server does not implement
         must be refused, never rebuilt from the v1 LTV heuristic and returned
@@ -352,7 +356,7 @@ class TestAppraisalV5Normalisation:
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
             "name": "Future version appraisal",
-            "inputs_snapshot": {"inputs_version": 9},
+            "inputs_snapshot": {"inputs_version": 10},
         })
         assert resp.status_code == 422, resp.text
         assert "unrecognised inputs_version" in resp.text

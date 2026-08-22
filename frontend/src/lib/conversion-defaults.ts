@@ -14,7 +14,8 @@ import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, EquitySource, FacilityTerms,
+  CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
+  EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
@@ -115,6 +116,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: 0,
     timeline_adjustment_months: 0,
     interest_rate_adjustment_pct: 0,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
   upside: {
     label: 'Upside',
@@ -122,6 +125,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: -5,
     timeline_adjustment_months: -2,
     interest_rate_adjustment_pct: 0,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
   downside: {
     label: 'Downside',
@@ -129,6 +134,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: 15,
     timeline_adjustment_months: 3,
     interest_rate_adjustment_pct: 1,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
   severe: {
     label: 'Severe',
@@ -136,6 +143,8 @@ export const DEFAULT_SCENARIOS: {
     construction_cost_adjustment_pct: 20,
     timeline_adjustment_months: 6,
     interest_rate_adjustment_pct: 2,
+    phase_slip_phase_id: null,
+    phase_slip_months: 0,
   },
 };
 
@@ -397,5 +406,36 @@ export function defaultCalculatorInputsV8(project?: {
     ...defaultCalculatorInputsV7(project),
     inputs_version: 8,
     vat: defaultVatInputs(),
+  };
+}
+
+/**
+ * v9 defaults (R12 Task 18b, spec §18.7): the document a freshly opened
+ * calculator starts on, now on the dated programme.
+ *
+ * Every v9-only field is already written by the v8 defaults above --
+ * `cost_plan`'s per-line `phase_id` (via `costPlanFromLegacyCosts`) and each
+ * scenario's `phase_slip_phase_id` / `phase_slip_months` (via
+ * `DEFAULT_SCENARIOS`) -- because v9 shares those two blocks' types with v8
+ * unchanged. What v9 re-types is `programme`, `sales_phasing` and `refinance`,
+ * and all three are `null` on a new document: `null` programme means the §6
+ * auto windows, which is exactly what a brand-new appraisal had before R12.
+ * They are restated here rather than inherited through the spread because
+ * their v8 types are not assignable to their v9 ones.
+ *
+ * Spelled out literally rather than calling `migrateV8toV9` for the same
+ * reason `defaultCalculatorInputsV5` is: `model/migrate.ts` imports this
+ * module, so importing it back would be a cycle. `conversion-defaults.test.ts`
+ * pins the two against each other field for field so they cannot drift.
+ */
+export function defaultCalculatorInputsV9(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV9 {
+  return {
+    ...defaultCalculatorInputsV8(project),
+    inputs_version: 9,
+    programme: null,
+    sales_phasing: null,
+    refinance: null,
   };
 }

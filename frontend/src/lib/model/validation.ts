@@ -1,4 +1,7 @@
-import type { AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule } from './finance-types';
+import type {
+  AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule,
+  RefinanceInputsV9, SalesPhasingTrancheV9,
+} from './finance-types';
 import { computeLenderGdv } from './lender-valuation';
 // R9 fix wave: `selectBandSet` is restricted by the single-accessor guard
 // (eslint.config.js) because it returns the raw band array. Validation's use is
@@ -13,6 +16,10 @@ import { areaBridge } from './areas';
 import { computeCostPlan, FEE_CODE_CATEGORY } from './cost-plan';
 import { VAT_CHARGE_CATEGORIES, isPurchaseVatChargeable, vatReturnPeriods } from './vat';
 import { pct } from './pct';
+import {
+  isProgrammeNetwork, isLegacyProgramme, derivePhases, PRE_COMPLETION_CODES,
+} from './programme';
+import type { ProgrammeDerivation } from './programme';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -238,6 +245,18 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   // warning further down ("registered: false with non-zero construction cost")
   // can read the resolved construction total without recomputing it.
   let resolvedCostPlan: ReturnType<typeof computeCostPlan> | null = null;
+  // R12 §18.6/§18.8: hoisted so the sales_phasing/refinance anchor rules below
+  // (which run after the programme block) can resolve `start(phase_id)` and
+  // check anchor existence without re-deriving the network a second time.
+  // `networkPhaseIds` is populated whenever `programme` is a v9 network,
+  // regardless of whether it also has structural errors (an anchor can still
+  // be checked for existence against the raw id set even when, say, a
+  // different phase has a duplicate id). `programmeDerivation` is populated
+  // ONLY when the network has no structural errors and no cycle — the same
+  // gate the window rules use, because a tranche cannot resolve a month from
+  // dates that do not exist.
+  let networkPhaseIds: Set<string> = new Set();
+  let programmeDerivation: ProgrammeDerivation | null = null;
   if (cp != null) {
     if (cp.mode === 'detailed') {
       if (cp.packages.length === 0) {
@@ -659,33 +678,212 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   // Spec §6 (Release 3a): explicit programme windows must sit inside [0, term-2] —
   // the schedule's programme arm only clamps the upper bound, so a negative
   // start_offset or an oversized window must be caught here as a hard error.
+  // R12 (spec §18.1): `programme` is a two-state field across the version union —
+  // the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence network
+  // (`{ phases: [...] }`). `isLegacyProgramme` narrows to the legacy shape this
+  // block validates.
   if ('programme' in inputs && inputs.programme != null) {
-    const term = Math.max(1, Math.floor(inputs.finance.term_months));
-    for (const [name, pkg] of Object.entries(inputs.programme.packages)) {
-      const field = `programme.packages.${name}`;
-      if (pkg.duration_months < 1) err(field, 'Package duration must be at least 1 month.');
-      if (pkg.start_offset < 0) err(field, 'Package start month cannot be negative.');
-      // CRITICAL 1b: the schedule's programme arm floors both fields (spec §6.1
-      // window rules assume whole months) but never rejects a fractional value
-      // itself — a typed "2.5" duration reaches buildSchedule un-floored and can
-      // throw. Caught here as its own rule, alongside (not replacing) the
-      // range checks above.
-      if (!Number.isInteger(pkg.duration_months)) err(field, 'Package duration must be a whole number of months.');
-      if (!Number.isInteger(pkg.start_offset)) err(field, 'Package start month must be a whole month.');
-      if (pkg.start_offset + pkg.duration_months - 1 > term - 2) {
-        err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
+    if (isProgrammeNetwork(inputs.programme)) {
+      // R12 (spec §18.8). Real rules for the v9 precedence network, replacing
+      // the Task 4 scaffolding placeholder. Order matters: the id/dependency/
+      // scalar rules run FIRST and gate `derivePhases` — a network with a
+      // dangling reference or a fractional field has already produced its
+      // error, and deriving it anyway would report a second, confusing one.
+      // A cycle (found only once the gate above is clear) reports ONLY the
+      // cycle error and skips every window rule: dates do not exist for a
+      // phase inside a cycle.
+      const net = inputs.programme;
+      const term = Math.max(1, Math.floor(inputs.finance.term_months));
+      const phaseField = (id: string) => `programme.phases.${id}`;
+
+      if (net.phases.length === 0) {
+        err('programme.phases', 'A programme network must have at least one phase.');
       }
-      if (pkg.curve.kind === 'user_defined') {
-        const w = pkg.curve.weights;
-        if (w.length !== pkg.duration_months) err(field, 'user_defined weights must have one entry per window month.');
-        // Finiteness must be checked explicitly: NaN passes every other rule here
-        // (NaN < 0 is false, and a sum containing NaN is never <= 0) and then
-        // poisons the spread. Python's json.loads accepts literal NaN/Infinity, so
-        // the mirrored rule in validation.py is what keeps a hostile payload from
-        // reaching build_schedule and 500-ing there.
-        if (w.some((x) => !Number.isFinite(x))) err(field, 'user_defined weights must be finite numbers.');
-        if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
-        if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
+
+      const allIds = new Set(net.phases.map((p) => p.id));
+      networkPhaseIds = allIds;
+      const seenIds = new Set<string>();
+      let structuralOk = true;
+
+      for (const p of net.phases) {
+        const field = phaseField(p.id);
+
+        if (seenIds.has(p.id)) {
+          err(field, `Duplicate phase id "${p.id}".`);
+          structuralOk = false;
+        }
+        seenIds.add(p.id);
+
+        if (!Number.isFinite(p.duration_months) || !Number.isInteger(p.duration_months)) {
+          err(field, `Phase '${p.id}' duration_months must be a whole number of months.`);
+          structuralOk = false;
+        } else if (p.duration_months < 0) {
+          err(field, `Phase '${p.id}' duration_months cannot be negative.`);
+          structuralOk = false;
+        }
+
+        if (!Number.isFinite(p.start_offset) || !Number.isInteger(p.start_offset)) {
+          err(field, `Phase '${p.id}' start_offset must be a whole number of months.`);
+          structuralOk = false;
+        } else if (p.start_offset < 0) {
+          err(field, `Phase '${p.id}' start_offset cannot be negative.`);
+          structuralOk = false;
+        }
+
+        // §18.2: slip_months is SIGNED (a negative slip is legal acceleration)
+        // but must still be a whole number — Python's json.loads would
+        // otherwise accept a fractional or non-finite value straight off the
+        // wire.
+        if (!Number.isFinite(p.slip_months) || !Number.isInteger(p.slip_months)) {
+          err(field, `Phase '${p.id}' slip_months must be a whole number of months.`);
+          structuralOk = false;
+        }
+
+        for (const d of p.predecessors) {
+          if (d.phase_id === p.id) {
+            err(field, `Phase '${p.id}' cannot depend on itself.`);
+            structuralOk = false;
+          } else if (!allIds.has(d.phase_id)) {
+            err(field, `Phase '${p.id}' has a dependency on "${d.phase_id}", but there is no phase with id "${d.phase_id}".`);
+            structuralOk = false;
+          }
+          if (!Number.isFinite(d.lag_months) || !Number.isInteger(d.lag_months)) {
+            err(field, `Phase '${p.id}' has a dependency on "${d.phase_id}" whose lag_months must be a whole number of months.`);
+            structuralOk = false;
+          } else if (d.lag_months < 0) {
+            err(field, `Phase '${p.id}' has a dependency on "${d.phase_id}" whose lag_months cannot be negative.`);
+            structuralOk = false;
+          }
+        }
+
+        // §6.1's four user_defined rules, unchanged, now evaluated per phase.
+        if (p.curve.kind === 'user_defined') {
+          const w = p.curve.weights;
+          if (w.length !== p.duration_months) err(field, 'user_defined weights must have one entry per window month.');
+          if (w.some((x) => !Number.isFinite(x))) err(field, 'user_defined weights must be finite numbers.');
+          if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
+          if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
+        }
+      }
+
+      // §18.5: category_phase_ids is required whenever `programme` is a
+      // network, and must name a real, non-milestone phase — a milestone
+      // occupies no month and cannot carry spend.
+      const milestoneIds = new Set(net.phases.filter((p) => p.duration_months === 0).map((p) => p.id));
+      (['construction', 'professional', 'statutory'] as const).forEach((cat) => {
+        const id = net.category_phase_ids[cat];
+        const field = `programme.category_phase_ids.${cat}`;
+        if (!allIds.has(id)) {
+          err(field, `category_phase_ids.${cat} references phase "${id}", but there is no phase with id "${id}".`);
+        } else if (milestoneIds.has(id)) {
+          err(field, `category_phase_ids.${cat} references phase "${id}", which is a milestone and cannot carry spend.`);
+        }
+      });
+
+      // §18.5: a detailed-mode line's `phase_id` override is the same rule —
+      // absent phase or milestone — applied to the cost side of the
+      // resolution. Read through `cp`, computed above; this does not need
+      // `derivePhases` either, only the phase catalogue.
+      if (cp != null) {
+        cp.packages.forEach((p, idx) => {
+          if (p.phase_id == null) return;
+          const field = `cost_plan.packages[${idx}].phase_id`;
+          if (!allIds.has(p.phase_id)) {
+            err(field, `Cost package '${p.id}' is tagged to phase "${p.phase_id}", but there is no phase with id "${p.phase_id}".`);
+          } else if (milestoneIds.has(p.phase_id)) {
+            err(field, `Cost package '${p.id}' is tagged to phase "${p.phase_id}", which is a milestone and cannot carry spend.`);
+          }
+        });
+        cp.fee_lines.forEach((fl, idx) => {
+          if (fl.phase_id == null) return;
+          const field = `cost_plan.fee_lines[${idx}].phase_id`;
+          if (!allIds.has(fl.phase_id)) {
+            err(field, `Fee line '${fl.id}' is tagged to phase "${fl.phase_id}", but there is no phase with id "${fl.phase_id}".`);
+          } else if (milestoneIds.has(fl.phase_id)) {
+            err(field, `Fee line '${fl.id}' is tagged to phase "${fl.phase_id}", which is a milestone and cannot carry spend.`);
+          }
+        });
+      }
+
+      if (structuralOk) {
+        const derivation = derivePhases(net);
+        if ('cycle' in derivation) {
+          // §18.1: a cycle has no topological order and no defensible default
+          // start for a phase inside it — a hard error naming the cycle in
+          // order, not a generic "invalid programme".
+          err('programme.phases', `Phase dependency cycle: ${derivation.cycle.join(' → ')}.`);
+        } else {
+          programmeDerivation = derivation;
+          const globalFinish = derivation.finish_month;
+
+          for (const dp of derivation.phases) {
+            const field = phaseField(dp.id);
+            const isMilestone = dp.duration_months === 0;
+
+            // §18.1/§18.8: over-acceleration below month 0 is a hard error
+            // naming the phase — never silently clamped (the R5 defect).
+            if (dp.start_month < 0) {
+              err(field, `Phase '${dp.id}' resolves to start month ${dp.start_month}, before month 0 (over-acceleration).`);
+            }
+
+            // Overrun — ALL phases. The first clause ("Programme finishes
+            // month N") is a fact about the whole programme, so it always
+            // quotes the GLOBAL finish; the second clause names THIS phase,
+            // so its overrun quantity must be THIS phase's own — fix round 1,
+            // Finding 1: a non-terminal breaching phase (finish(p) > term but
+            // finish(p) < globalFinish) previously had the global overrun
+            // (belonging to whichever phase sets globalFinish) spliced into
+            // its own sentence, which understates or overstates its true
+            // lateness whenever it is not the phase defining the programme's
+            // end.
+            const overrunBreach = isMilestone ? dp.start_month > term - 1 : dp.finish_month > term;
+            if (overrunBreach) {
+              const ownOverrun = isMilestone ? dp.start_month - (term - 1) : dp.finish_month - term;
+              err(field, `Programme finishes month ${globalFinish}; facility term is ${term}. Phase '${dp.label}' ends ${ownOverrun} months after maturity.`);
+            }
+
+            // Sale tail — the PRE-COMPLETION codes only (spec §6.1's existing
+            // rule and message, unchanged, so the v8->v9 migration-identity
+            // alias holds on message as well as field). `other` gets only the
+            // weaker overrun rule above.
+            if (PRE_COMPLETION_CODES.includes(dp.code)) {
+              const tailBreach = isMilestone ? dp.start_month > term - 2 : dp.finish_month > term - 1;
+              if (tailBreach) {
+                err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
+              }
+            }
+          }
+        }
+      }
+    } else if (isLegacyProgramme(inputs.programme)) {
+      const programme = inputs.programme;
+      const term = Math.max(1, Math.floor(inputs.finance.term_months));
+      for (const [name, pkg] of Object.entries(programme.packages)) {
+        const field = `programme.packages.${name}`;
+        if (pkg.duration_months < 1) err(field, 'Package duration must be at least 1 month.');
+        if (pkg.start_offset < 0) err(field, 'Package start month cannot be negative.');
+        // CRITICAL 1b: the schedule's programme arm floors both fields (spec §6.1
+        // window rules assume whole months) but never rejects a fractional value
+        // itself — a typed "2.5" duration reaches buildSchedule un-floored and can
+        // throw. Caught here as its own rule, alongside (not replacing) the
+        // range checks above.
+        if (!Number.isInteger(pkg.duration_months)) err(field, 'Package duration must be a whole number of months.');
+        if (!Number.isInteger(pkg.start_offset)) err(field, 'Package start month must be a whole month.');
+        if (pkg.start_offset + pkg.duration_months - 1 > term - 2) {
+          err(field, `Package must finish by month ${term - 2} — the final two months are the sale tail (spec §6).`);
+        }
+        if (pkg.curve.kind === 'user_defined') {
+          const w = pkg.curve.weights;
+          if (w.length !== pkg.duration_months) err(field, 'user_defined weights must have one entry per window month.');
+          // Finiteness must be checked explicitly: NaN passes every other rule here
+          // (NaN < 0 is false, and a sum containing NaN is never <= 0) and then
+          // poisons the spread. Python's json.loads accepts literal NaN/Infinity, so
+          // the mirrored rule in validation.py is what keeps a hostile payload from
+          // reaching build_schedule and 500-ing there.
+          if (w.some((x) => !Number.isFinite(x))) err(field, 'user_defined weights must be finite numbers.');
+          if (w.some((x) => x < 0)) err(field, 'user_defined weights cannot be negative.');
+          if (w.reduce((a, b) => a + b, 0) <= 0) err(field, 'user_defined weights must sum to more than zero.');
+        }
       }
     }
   }
@@ -696,6 +894,22 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       err('sales_phasing', 'Phased sales apply to the sold portion — a retain-all exit has none. Remove the block or change the exit route.');
     }
     if (trs.length === 0) err('sales_phasing', 'Phased sales need at least one tranche.');
+    // R12 spec §18.6: `anchor` only exists on a v9 tranche; `'anchor' in tr`
+    // reads it without narrowing the whole union, matching this file's
+    // existing pattern for version-gated fields (e.g. `'jurisdiction' in
+    // inputs.acquisition` below). `resolvedTrancheMonth` returns null when
+    // the month cannot be resolved — an anchor naming an absent phase (own
+    // error, reported separately below) or a network that failed to derive
+    // (structural error or cycle, own error, reported above) — so the
+    // ordering check does not manufacture a second, confusing error on top
+    // of the first.
+    const resolvedTrancheMonth = (tr: (typeof trs)[number]): number | null => {
+      const anchor = 'anchor' in tr ? (tr as SalesPhasingTrancheV9).anchor : null;
+      if (anchor == null) return tr.month_offset;
+      if (programmeDerivation == null) return null;
+      const dp = programmeDerivation.byId[anchor.phase_id];
+      return dp ? dp.start_month + anchor.offset_months : null;
+    };
     trs.forEach((tr, i) => {
       const field = `sales_phasing.tranches[${i}]`;
       if (!Number.isInteger(tr.month_offset) || tr.month_offset < 0 || tr.month_offset > term - 1) {
@@ -704,8 +918,19 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       if (!Number.isFinite(tr.pct_of_gross_receipts) || tr.pct_of_gross_receipts <= 0) {
         err(field, 'Tranche percentage must be a finite number greater than zero.');
       }
-      if (i > 0 && !(tr.month_offset > trs[i - 1].month_offset)) {
-        err(field, 'Tranche months must be strictly increasing.');
+      const anchor = 'anchor' in tr ? (tr as SalesPhasingTrancheV9).anchor : null;
+      if (anchor != null && !networkPhaseIds.has(anchor.phase_id)) {
+        err(`${field}.anchor`, `Tranche anchor references phase "${anchor.phase_id}", but there is no phase with id "${anchor.phase_id}".`);
+      }
+      // §18.6/§18.8: the resolved months, not the entered ones — an anchor
+      // on a phase that later slips can cross a neighbouring tranche even
+      // though the two `month_offset`s (or anchors) were entered in order.
+      if (i > 0) {
+        const prevMonth = resolvedTrancheMonth(trs[i - 1]);
+        const curMonth = resolvedTrancheMonth(tr);
+        if (prevMonth != null && curMonth != null && !(curMonth > prevMonth)) {
+          err(field, 'Tranche months must be strictly increasing.');
+        }
       }
     });
     const pctSum = trs.reduce((a, b) => a + b.pct_of_gross_receipts, 0);
@@ -733,6 +958,11 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
     if (!Number.isFinite(rf.legal_costs_pence) || rf.legal_costs_pence < 0) {
       err('refinance', 'Refinance legal costs must be zero or more.');
+    }
+    // R12 spec §18.6: `anchor` only exists on a v9 refinance block.
+    const rfAnchor = 'anchor' in rf ? (rf as RefinanceInputsV9).anchor : null;
+    if (rfAnchor != null && !networkPhaseIds.has(rfAnchor.phase_id)) {
+      err('refinance.anchor', `Refinance anchor references phase "${rfAnchor.phase_id}", but there is no phase with id "${rfAnchor.phase_id}".`);
     }
   }
 
@@ -776,6 +1006,26 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       );
     }
   }
+
+  // R12 spec §18.8/§18.9: a scenario's `phase_slip_phase_id` needs a real
+  // target. `ScenarioOverrides` carries the field on every document version
+  // (v2-v9), so a document with no v9 network at all can still have it set —
+  // that must not be a silent no-op (the lever would look live while doing
+  // nothing), so it is a hard error naming the scenario rather than a rule
+  // scoped only to v9 documents. `hasNetwork` is true only for a v9 document
+  // whose `programme` is an actual precedence network — a legacy `{ packages
+  // }` programme has no phase to slip either.
+  const hasNetwork = 'programme' in inputs && inputs.programme != null && isProgrammeNetwork(inputs.programme);
+  (['base', 'upside', 'downside', 'severe'] as const).forEach((name) => {
+    const scenario = inputs.scenarios[name];
+    if (scenario.phase_slip_phase_id == null) return;
+    const field = `scenarios.${name}.phase_slip_phase_id`;
+    if (!hasNetwork) {
+      err(field, `Scenario '${name}' sets phase_slip_phase_id, but this document has no programme network to slip a phase within.`);
+    } else if (!networkPhaseIds.has(scenario.phase_slip_phase_id)) {
+      err(field, `Scenario '${name}' phase_slip_phase_id references phase "${scenario.phase_slip_phase_id}", but there is no phase with id "${scenario.phase_slip_phase_id}".`);
+    }
+  });
 
   return issues;
 }

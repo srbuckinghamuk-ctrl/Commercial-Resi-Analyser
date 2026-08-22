@@ -17,13 +17,17 @@ from math import isfinite
 from typing import Literal
 
 from .apply_scenario import apply_scenario
-from .types import AnyCalculatorInputs, ScenarioOverrides
+from .types import AnyCalculatorInputs, ProgrammeNetwork, ScenarioOverrides
 from .validation import ValidationIssue, validate_inputs
 
-SensitivityLever = Literal["gdv", "construction_cost", "timeline", "interest_rate"]
+SensitivityLever = Literal["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip"]
 
-# Spec Sec 12.4 tie-break order, making the tornado sort total and so deterministic (Sec 1.4).
-LEVER_ORDER: tuple[SensitivityLever, ...] = ("gdv", "construction_cost", "timeline", "interest_rate")
+# Spec Sec 12.4 tie-break order, making the tornado sort total and so deterministic
+# (Sec 1.4). R12 spec Sec 18.9 appends the fifth lever, phase_slip, at the end -- it is
+# the newest and lowest-priority tie-break, not a reordering of the four Sec 12.1 levers.
+LEVER_ORDER: tuple[SensitivityLever, ...] = (
+    "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+)
 
 # Spec Sec 12.6: an axis is capped at nine steps, bounding the suite at 81 cells.
 MAX_AXIS_STEPS = 9
@@ -32,9 +36,15 @@ MAX_AXIS_STEPS = 9
 @dataclass
 class SensitivityAxis:
     lever: SensitivityLever
-    # In the lever's own unit: percent for gdv/construction_cost, months for timeline,
-    # percentage points for interest_rate.
+    # In the lever's own unit: percent for gdv/construction_cost, months for
+    # timeline/phase_slip, percentage points for interest_rate.
     steps: list[float]
+    # R12 spec Sec 18.9. Required (non-None) exactly when lever == "phase_slip", and
+    # required to be None otherwise -- both hard validation errors under Sec 12.6
+    # (validate_sensitivity_config). Defaulted to None, mirroring the TS twin's
+    # optional `phase_id?`, so every pre-R12 construction site keeps working
+    # unmodified.
+    phase_id: str | None = None
 
 
 @dataclass
@@ -42,6 +52,15 @@ class TornadoRange:
     lever: SensitivityLever
     low: float
     high: float
+    # Same rule as SensitivityAxis.phase_id above.
+    phase_id: str | None = None
+
+
+def _lever_key(a: SensitivityAxis | TornadoRange) -> str:
+    """Pair-keys a lever with its target so two phase_slip positions aiming at
+    different phases compare as distinct (Sec 18.9) while every other lever --
+    whose phase_id is always None -- still compares on the lever name alone."""
+    return f"{a.lever}:{a.phase_id or ''}"
 
 
 @dataclass
@@ -86,6 +105,8 @@ class TornadoBar:
     low: SensitivityMetrics
     high: SensitivityMetrics
     span_pence: int | None  # |profit(high) - profit(low)|, spec Sec 12.4; null when either endpoint is unmeasured (Sec 12.7)
+    # Echoes the configured range's target (Sec 18.9); None for every non-phase_slip lever.
+    phase_id: str | None = None
 
 
 @dataclass
@@ -114,12 +135,34 @@ def _default_config() -> SensitivityConfig:
 DEFAULT_SENSITIVITY_CONFIG = _default_config()
 
 
-def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIssue]:
-    """Spec Sec 12.6. Returns error-severity issues; an empty list means usable."""
+def _network_phase_ids(inputs: AnyCalculatorInputs | None) -> set[str]:
+    """The set of phase ids the document's programme network carries, or empty when
+    programme is None or the legacy {packages} shape -- both cases where a phase_slip
+    axis has no field it could possibly write to (Sec 18.9)."""
+    if inputs is None:
+        return set()
+    programme = getattr(inputs, "programme", None)
+    if isinstance(programme, ProgrammeNetwork):
+        return {p.id for p in programme.phases}
+    return set()
+
+
+def validate_sensitivity_config(
+    config: SensitivityConfig,
+    inputs: AnyCalculatorInputs | None = None,
+) -> list[ValidationIssue]:
+    """Spec Sec 12.6, extended by Sec 18.9/18.8 for the phase_slip lever's target.
+    Returns error-severity issues; an empty list means usable.
+
+    `inputs` is optional so every pre-R12 caller keeps working exactly as before;
+    passing it additionally checks a phase_slip axis or tornado range names a phase
+    the document actually carries. run_sensitivity always passes it.
+    """
     issues: list[ValidationIssue] = []
+    phase_ids = _network_phase_ids(inputs)
 
     for name, axis in (("rows", config.rows), ("cols", config.cols)):
-        # Spec Sec 12.6: an axis lever must be one of the four Sec 12.1 levers.
+        # Spec Sec 12.6: an axis lever must be one of the five Sec 12.1/18.9 levers.
         # LEVER_ORDER is the closed set -- this is what stops a bad-cased or
         # misspelled lever from crashing later inside LEVER_ORDER.index() in
         # run_sensitivity (the TS mirror instead silently no-ops that axis, so this
@@ -142,16 +185,52 @@ def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIss
                                           message="Every step must be a finite number."))
         # Spec Sec 12.6: the engine is month-indexed (Sec 1.3), so a fractional term has
         # no meaning in the ledger. This rule is also what makes apply_scenario.py's
-        # int() narrowing of timeline_adjustment_months safe.
-        if axis.lever == "timeline" and any(
+        # int() narrowing of timeline_adjustment_months safe. Sec 18.9 extends the same
+        # rule to phase_slip: slip_months is a whole month count too.
+        if axis.lever in ("timeline", "phase_slip") and any(
             not isfinite(s) or not float(s).is_integer() for s in axis.steps
         ):
+            # Fix round 1, Finding 5: worded per the actual offending lever, not a
+            # fixed "Timeline" -- this surfaces verbatim in a lender-facing UI.
+            label = "Timeline steps" if axis.lever == "timeline" else "phase_slip steps"
             issues.append(ValidationIssue(severity="error", field=field_name,
-                                          message="Timeline steps must be whole months."))
+                                          message=f"{label} must be whole months."))
 
-    if config.rows.lever == config.cols.lever:
+    # Sec 18.8/18.9: phase_id is required exactly when the axis is phase_slip, and
+    # forbidden otherwise.
+    for name, axis in (("rows", config.rows), ("cols", config.cols)):
+        field_name = f"sensitivity.{name}.phase_id"
+        if axis.lever == "phase_slip":
+            if axis.phase_id is None:
+                issues.append(ValidationIssue(
+                    severity="error", field=field_name,
+                    message="A phase_slip axis needs a phase_id naming the phase it slips."))
+            elif inputs is not None and axis.phase_id not in phase_ids:
+                issues.append(ValidationIssue(
+                    severity="error", field=field_name,
+                    message=f'A phase_slip axis references phase "{axis.phase_id}", but '
+                            f'there is no phase with id "{axis.phase_id}".'))
+        elif axis.phase_id is not None:
+            issues.append(ValidationIssue(
+                severity="error", field=field_name,
+                message=f'phase_id is only meaningful for the phase_slip lever, not "{axis.lever}".'))
+
+    # Sec 18.9: the "rows and cols must differ" rule compares the PAIR (lever,
+    # phase_id), not the lever alone -- two phase_slip axes targeting different
+    # phases are a legitimate matrix, not a duplicate.
+    if _lever_key(config.rows) == _lever_key(config.cols):
+        # Fix round 1, Finding 5: two identical-lever axes and two same-phase
+        # phase_slip axes are different mistakes, and the message now says so.
+        if config.rows.lever == "phase_slip" and config.cols.lever == "phase_slip":
+            message = (
+                "Two phase_slip axes must target different phases (the row and "
+                "column axes must use different levers, or different phase_slip "
+                "targets)."
+            )
+        else:
+            message = "The row and column axes must use different levers."
         issues.append(ValidationIssue(severity="error", field="sensitivity.cols.lever",
-                                      message="The row and column axes must use different levers."))
+                                      message=message))
 
     seen: set[str] = set()
     for rng in config.tornado:
@@ -160,35 +239,93 @@ def validate_sensitivity_config(config: SensitivityConfig) -> list[ValidationIss
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",
                 message=f'Unknown lever "{rng.lever}".'))
-        if rng.lever in seen:
+        # Sec 18.9: the tornado's duplicate-lever check keys the same pair as the axis
+        # check above, so a tornado may carry one bar per slipped phase.
+        if _lever_key(rng) in seen:
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",
                 message=f"Lever {rng.lever} appears more than once in the tornado."))
-        seen.add(rng.lever)
+        seen.add(_lever_key(rng))
         if not isfinite(rng.low) or not isfinite(rng.high) or rng.low >= rng.high:
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",
                 message=f"Tornado range for {rng.lever} needs finite low < high."))
-        # Spec Sec 12.6, same whole-month rule as the axes above.
-        if rng.lever == "timeline" and not (
+        # Spec Sec 12.6, same whole-month rule as the axes above; Sec 18.9 extends it
+        # to phase_slip.
+        if rng.lever in ("timeline", "phase_slip") and not (
             float(rng.low).is_integer() and float(rng.high).is_integer()
         ):
+            # Fix round 1, Finding 5: same rewording as the axis rule above.
+            label = "Timeline bounds" if rng.lever == "timeline" else "phase_slip bounds"
             issues.append(ValidationIssue(
                 severity="error", field="sensitivity.tornado",
-                message="Timeline bounds must be whole months."))
+                message=f"{label} must be whole months."))
+        # Sec 18.8/18.9, same pairing rule as the axes above.
+        if rng.lever == "phase_slip":
+            if rng.phase_id is None:
+                issues.append(ValidationIssue(
+                    severity="error", field="sensitivity.tornado",
+                    message="A phase_slip tornado range needs a phase_id naming the phase it slips."))
+            elif inputs is not None and rng.phase_id not in phase_ids:
+                issues.append(ValidationIssue(
+                    severity="error", field="sensitivity.tornado",
+                    message=f'A phase_slip tornado range references phase "{rng.phase_id}", '
+                            f'but there is no phase with id "{rng.phase_id}".'))
+        elif rng.phase_id is not None:
+            issues.append(ValidationIssue(
+                severity="error", field="sensitivity.tornado",
+                message=f'phase_id is only meaningful for the phase_slip lever, not "{rng.lever}".'))
 
     return issues
 
 
-def _overrides_for(levers: dict[str, float]) -> ScenarioOverrides:
-    """Levers not named sit at zero, which Sec 12.1 guarantees is a no-op because the
-    four levers write to disjoint fields."""
+@dataclass
+class _LeverSetting:
+    """One lever's setting for a single measurement: the lever, its magnitude in the
+    lever's own unit, and -- for phase_slip only -- the phase it targets. Sec 18.9 is
+    why _measure takes a LIST of these rather than the pre-R12 dict[str, float]: a
+    matrix whose rows AND cols are both phase_slip (targeting different phases, per
+    the pair-keyed duplicate check above) needs to carry TWO simultaneous phase_slip
+    settings, and a single "phase_slip" dict key can hold only one."""
+
+    lever: SensitivityLever
+    phase_id: str | None
+    value: float
+
+
+def _zero_scenario() -> ScenarioOverrides:
+    """A true no-op scenario: every lever at its identity value. Applied once at
+    the START of every measurement -- including the base case, whose `settings`
+    is [] -- so _measure always routes through apply_scenario at least once (fix
+    round 1, Finding 6). Without this, the base case bypassed apply_scenario
+    entirely and the Sec 12.5 "base case is the unadjusted appraisal" test
+    stopped exercising apply_scenario's own zero-value arithmetic. A factory,
+    not a module-level constant, so a caller mutating the returned dataclass
+    cannot poison later calls -- mirrors _default_config()'s own reasoning."""
     return ScenarioOverrides(
         label="",
-        gdv_adjustment_pct=levers.get("gdv", 0),
-        construction_cost_adjustment_pct=levers.get("construction_cost", 0),
-        timeline_adjustment_months=levers.get("timeline", 0),
-        interest_rate_adjustment_pct=levers.get("interest_rate", 0),
+        gdv_adjustment_pct=0,
+        construction_cost_adjustment_pct=0,
+        timeline_adjustment_months=0,
+        interest_rate_adjustment_pct=0,
+        phase_slip_phase_id=None,
+        phase_slip_months=0,
+    )
+
+
+def _overrides_for(setting: _LeverSetting) -> ScenarioOverrides:
+    """Builds the single-lever ScenarioOverrides for one setting. Every field the
+    setting's own lever does not own is left at its no-op value (Sec 12.1: the five
+    levers write to disjoint fields), so applying several settings in sequence via
+    apply_scenario composes correctly regardless of order (Sec 18.9 guard 7)."""
+    return ScenarioOverrides(
+        label="",
+        gdv_adjustment_pct=setting.value if setting.lever == "gdv" else 0,
+        construction_cost_adjustment_pct=setting.value if setting.lever == "construction_cost" else 0,
+        timeline_adjustment_months=setting.value if setting.lever == "timeline" else 0,
+        interest_rate_adjustment_pct=setting.value if setting.lever == "interest_rate" else 0,
+        phase_slip_phase_id=setting.phase_id if setting.lever == "phase_slip" else None,
+        phase_slip_months=int(setting.value) if setting.lever == "phase_slip" else 0,
     )
 
 
@@ -206,12 +343,25 @@ def _unmeasured(errors: list[ValidationIssue]) -> SensitivityMetrics:
     )
 
 
-def _measure(inputs: AnyCalculatorInputs, levers: dict[str, float]) -> SensitivityMetrics:
+def _measure(inputs: AnyCalculatorInputs, settings: list[_LeverSetting]) -> SensitivityMetrics:
     """One position: the levered document is validated first (Sec 12.7), and only a
-    document that passes is appraised. An unmeasured position never reaches the ledger."""
+    document that passes is appraised. An unmeasured position never reaches the ledger.
+
+    `settings` is applied via apply_scenario once per setting, in order, ON TOP OF a
+    leading _zero_scenario() pass -- never combined into one ScenarioOverrides --
+    precisely because two settings can both be phase_slip (Sec 18.9) and a single
+    overrides object cannot carry two simultaneous targets. Every setting's own lever
+    is disjoint from every other's field (Sec 12.1), so the sequential application
+    composes exactly as one combined call would for the four scalar levers, and
+    correctly for two different phase_slip targets besides. The leading zero pass
+    means the base case (settings == []) still goes through apply_scenario exactly
+    once, the same as every levered position.
+    """
     from app.financial_model import run_appraisal  # local import: see module docstring
 
-    levered = apply_scenario(inputs, _overrides_for(levers))
+    levered = apply_scenario(inputs, _zero_scenario())
+    for setting in settings:
+        levered = apply_scenario(levered, _overrides_for(setting))
     errors = [i for i in validate_inputs(levered) if i.severity == "error"]
     if errors:
         return _unmeasured(errors)
@@ -261,7 +411,10 @@ def run_sensitivity(
     if config is None:
         config = _default_config()
 
-    issues = validate_sensitivity_config(config)
+    # Sec 18.9: passing inputs activates the phase-existence check, so a phase_slip
+    # axis naming a phase this document does not carry is rejected here rather than
+    # reaching _measure and failing every cell identically.
+    issues = validate_sensitivity_config(config, inputs)
     if issues:
         # Deduplicated: e.g. both axes missing a step raises the identical "An axis
         # needs at least one step." issue twice, and repeating it says nothing extra.
@@ -270,7 +423,7 @@ def run_sensitivity(
             "Invalid sensitivity config: " + " ".join(messages)
         )
 
-    base = _measure(inputs, {})
+    base = _measure(inputs, [])
     # Sec 12.5 makes the base case an identity with the unadjusted appraisal, so a suite
     # over an invalid base is meaningless in every position at once -- an input error
     # (Sec 12.6/12.7), not twenty-five unmeasured cells.
@@ -287,7 +440,10 @@ def run_sensitivity(
     for row_step in config.rows.steps:
         row: list[SensitivityCell] = []
         for col_step in config.cols.steps:
-            m = _measure(inputs, {config.rows.lever: row_step, config.cols.lever: col_step})
+            m = _measure(inputs, [
+                _LeverSetting(lever=config.rows.lever, phase_id=config.rows.phase_id, value=row_step),
+                _LeverSetting(lever=config.cols.lever, phase_id=config.cols.phase_id, value=col_step),
+            ])
             row.append(SensitivityCell(
                 profit_pence=m.profit_pence,
                 profit_on_cost_pct=m.profit_on_cost_pct,
@@ -304,8 +460,8 @@ def run_sensitivity(
 
     bars = []
     for rng in config.tornado:
-        low = _measure(inputs, {rng.lever: rng.low})
-        high = _measure(inputs, {rng.lever: rng.high})
+        low = _measure(inputs, [_LeverSetting(lever=rng.lever, phase_id=rng.phase_id, value=rng.low)])
+        high = _measure(inputs, [_LeverSetting(lever=rng.lever, phase_id=rng.phase_id, value=rng.high)])
         # Sec 12.7: an unmeasured endpoint leaves the bar with no span at all.
         span = (
             None
@@ -314,6 +470,7 @@ def run_sensitivity(
         )
         bars.append(TornadoBar(
             lever=rng.lever,
+            phase_id=rng.phase_id,
             low_step=rng.low,
             high_step=rng.high,
             low=low,
@@ -321,11 +478,14 @@ def run_sensitivity(
             span_pence=span,
         ))
     # Sec 12.4 extended by Sec 12.7: spanless bars sort after every bar with a span; the
-    # fixed lever order keeps the sort total within each group (Sec 1.4).
+    # fixed lever order keeps the sort total within each group (Sec 1.4). Sec 18.9
+    # extends the tie-break with the phase target, so two phase_slip bars (same lever,
+    # different phase) still sort into a total, caller-order-independent order.
     bars.sort(key=lambda b: (
         b.span_pence is None,
         -b.span_pence if b.span_pence is not None else 0,
         LEVER_ORDER.index(b.lever),
+        b.phase_id or "",
     ))
 
     return SensitivityResult(base=base, matrix=matrix, tornado=bars, config=config)
