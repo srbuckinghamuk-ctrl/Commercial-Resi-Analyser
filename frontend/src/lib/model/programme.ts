@@ -207,16 +207,21 @@ export function derivePhases(network: ProgrammeNetwork): ProgrammeDerivation | C
   for (const id of [...order].reverse()) {
     const p = byId.get(id)!;
     const succs = successors.get(id)!;
-    let lf: number;
-    if (succs.length === 0) {
-      lf = p.duration_months >= 1 ? finishMonth : finishMonth - 1;
-    } else {
-      lf = Math.min(...succs.map(({ id: sid, dep }) => (
-        dep.type === 'FS'
-          ? lateStart.get(sid)! - dep.lag_months
-          : lateStart.get(sid)! + p.duration_months - dep.lag_months
-      )));
-    }
+    // Every phase is itself a candidate in the finishMonth max (§18.2's
+    // comment on the milestone arm applies symmetrically here): an SS-only
+    // successor constrains this phase's START, never its FINISH, so a phase
+    // with such a successor can still be the one whose own finish sets the
+    // programme end. The finishMonth bound must therefore apply to every
+    // phase's late finish, not only to phases with zero successors — else an
+    // SS successor's late-start can push this phase's late finish past the
+    // programme's own finish, manufacturing float that isn't real.
+    const own = p.duration_months >= 1 ? finishMonth : finishMonth - 1;
+    const succBounds = succs.map(({ id: sid, dep }) => (
+      dep.type === 'FS'
+        ? lateStart.get(sid)! - dep.lag_months
+        : lateStart.get(sid)! + p.duration_months - dep.lag_months
+    ));
+    const lf = Math.min(own, ...succBounds);
     lateFinish.set(id, lf);
     lateStart.set(id, lf - p.duration_months);
   }

@@ -125,6 +125,22 @@ describe('derivePhases — §18.2', () => {
     expect(new Set(d.cycle)).toEqual(new Set(['a', 'b']));
   });
 
+  it('reports a three-node cycle in forward dependency order', () => {
+    // a depends on c, c depends on b, b depends on a.
+    // Forward (dependency) order must read a → b → c → a, NOT the reverse.
+    // A 2-node cycle is a palindrome and cannot catch a missing reversal;
+    // this one can. (Task 1 review, minor finding.)
+    const d = derivePhases(net([
+      phase('a', 'planning', 2, [{ phase_id: 'c', type: 'FS', lag_months: 0 }]),
+      phase('b', 'design', 2, [{ phase_id: 'a', type: 'FS', lag_months: 0 }]),
+      phase('c', 'procurement', 2, [{ phase_id: 'b', type: 'FS', lag_months: 0 }]),
+    ]));
+    expect('cycle' in d).toBe(true);
+    if (!('cycle' in d)) return;
+    expect(d.cycle[0]).toBe(d.cycle[d.cycle.length - 1]);
+    expect(d.cycle).toEqual(['a', 'b', 'c', 'a']);
+  });
+
   it('detects a self-reference as a one-phase cycle', () => {
     const d = derivePhases(net([phase('a', 'planning', 4, [{ phase_id: 'a', type: 'FS', lag_months: 0 }])]));
     expect('cycle' in d).toBe(true);
@@ -150,5 +166,78 @@ describe('derivePhases — §18.2', () => {
       phase('b', 'design', 2, [{ phase_id: 'a', type: 'FS', lag_months: 0 }]),
     ]);
     expect(order).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('float and the critical path — §18.4', () => {
+  // a(4) -> c(9); b(2) runs alongside a with 2 months of slack.
+  const slackNet = () => net([
+    phase('a', 'planning', 4),
+    phase('b', 'design', 2),
+    phase('c', 'construction', 9, [
+      { phase_id: 'a', type: 'FS', lag_months: 0 },
+      { phase_id: 'b', type: 'FS', lag_months: 0 },
+    ]),
+  ]);
+
+  it('the driving chain has zero float and the slack phase has positive float', () => {
+    const d = derivePhases(slackNet());
+    if ('cycle' in d) throw new Error('unexpected cycle');
+    expect(d.byId.a.total_float_months).toBe(0);
+    expect(d.byId.c.total_float_months).toBe(0);
+    expect(d.byId.b.total_float_months).toBe(2);
+    expect(d.critical_path).toEqual(['a', 'c']);
+    expect(d.finish_month).toBe(13);
+  });
+
+  it('GUARD 1a: slipping a phase WITH float does not move the programme finish', () => {
+    const n = slackNet();
+    n.phases[1].slip_months = 2; // b has exactly 2 months of float
+    const d = derivePhases(n);
+    if ('cycle' in d) throw new Error('unexpected cycle');
+    expect(d.finish_month).toBe(13);          // absolute, not a direction
+    expect(d.byId.b.start_month).toBe(2);     // b did move
+    expect(d.byId.c.start_month).toBe(4);     // c did not
+    expect(d.byId.b.total_float_months).toBe(0); // float consumed exactly
+  });
+
+  it('GUARD 1b: slipping a CRITICAL phase by n moves the finish by exactly n', () => {
+    const n = slackNet();
+    n.phases[0].slip_months = 3; // a is critical
+    const d = derivePhases(n);
+    if ('cycle' in d) throw new Error('unexpected cycle');
+    expect(d.finish_month).toBe(16);       // 13 + 3, absolute
+    expect(d.byId.c.start_month).toBe(7);  // 4 + 3, absolute
+  });
+
+  it('the fixture used by GUARD 1 really does contain a phase with non-zero float', () => {
+    // Without this, GUARD 1a passes vacuously on a network where every phase is
+    // critical — both arms would then be the same arm. R11's fourth vacuous
+    // guard was exactly this shape.
+    const d = derivePhases(slackNet());
+    if ('cycle' in d) throw new Error('unexpected cycle');
+    expect(d.phases.some((p) => p.total_float_months > 0)).toBe(true);
+  });
+
+  it('an SS link carries float correctly', () => {
+    const d = derivePhases(net([
+      phase('a', 'construction', 10),
+      phase('b', 'marketing', 2, [{ phase_id: 'a', type: 'SS', lag_months: 6 }]),
+    ]));
+    if ('cycle' in d) throw new Error('unexpected cycle');
+    expect(d.byId.b.start_month).toBe(6);
+    expect(d.finish_month).toBe(10);
+    expect(d.byId.b.total_float_months).toBe(2); // b could start at 8
+    expect(d.byId.a.total_float_months).toBe(0);
+  });
+
+  it('a trailing milestone is on the critical path', () => {
+    const d = derivePhases(net([
+      phase('c', 'construction', 9),
+      phase('t', 'maturity_tail', 0, [{ phase_id: 'c', type: 'FS', lag_months: 3 }]),
+    ]));
+    if ('cycle' in d) throw new Error('unexpected cycle');
+    expect(d.byId.t.total_float_months).toBe(0);
+    expect(d.critical_path).toEqual(['c', 't']);
   });
 });
