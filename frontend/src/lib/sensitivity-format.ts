@@ -38,12 +38,24 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   phase_slip: 'Slip',
 };
 
-/** R12: `phase_slip` needs a phase-target picker, which lands with the phase
- *  editor (Task 17). Until then it is engine- and API-selectable but not
- *  offered in the UI — a dropdown entry whose validation error the user
- *  cannot satisfy blanks the whole matrix. */
-export const SELECTABLE_LEVERS: readonly SensitivityLever[] =
-  LEVER_ORDER.filter((l) => l !== 'phase_slip');
+/**
+ * R12 Task 17: the lever dropdown's own offer list. `phase_slip` needs a
+ * phase target (the picker SensitivityPage.tsx shows next to the lever
+ * select), and that target can only be populated from a document that
+ * actually carries a phase network — a `programme = null` document has no
+ * phase to slip. Offering the lever there would reproduce exactly the defect
+ * this replaces: a dropdown entry whose validation error the user has no
+ * control to satisfy, which used to blank the whole matrix and tornado
+ * (`outcome = issues.length > 0 ? null : run(...)`).
+ *
+ * `hasPhaseNetwork` is the caller's own `isProgrammeNetwork` check (the sole
+ * sanctioned discriminator, programme.ts) — this module stays outside
+ * `lib/model/` and takes the already-resolved boolean rather than the
+ * document itself.
+ */
+export function selectableLevers(hasPhaseNetwork: boolean): readonly SensitivityLever[] {
+  return hasPhaseNetwork ? LEVER_ORDER : LEVER_ORDER.filter((l) => l !== 'phase_slip');
+}
 
 /** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
 function decimalsFor(lever: SensitivityLever): number {

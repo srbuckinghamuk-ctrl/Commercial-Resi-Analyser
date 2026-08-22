@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { AnyCalculatorInputs } from '../../lib/model';
+import { isProgrammeNetwork } from '../../lib/model';
 import {
   defaultSensitivityConfig, validateSensitivityConfig, MAX_AXIS_STEPS,
 } from '../../lib/model/sensitivity';
@@ -8,7 +9,7 @@ import type {
 } from '../../lib/model/sensitivity';
 import { safeRunSensitivity } from '../../lib/safe-sensitivity';
 import {
-  LEVER_LABEL, LEVER_SHORT, SELECTABLE_LEVERS, SENSITIVITY_METRICS,
+  LEVER_LABEL, LEVER_SHORT, selectableLevers, SENSITIVITY_METRICS,
   formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
   unmeasuredCellNotes, unmeasuredCellNote,
 } from '../../lib/sensitivity-format';
@@ -79,29 +80,58 @@ export default function SensitivityPage({ inputs }: Props) {
   const [colLever, setColLever] = useState<SensitivityLever>(DEFAULTS.cols.lever);
   const [rowStepsText, setRowStepsText] = useState(stepsToText(DEFAULTS.rows.steps));
   const [colStepsText, setColStepsText] = useState(stepsToText(DEFAULTS.cols.steps));
+  // R12 (spec §18.9). `phase_slip`'s target -- null until the user picks one,
+  // in which case the config below falls back to the document's first phase
+  // so choosing the lever alone never lands on an unsatisfiable axis.
+  const [rowPhaseId, setRowPhaseId] = useState<string | null>(null);
+  const [colPhaseId, setColPhaseId] = useState<string | null>(null);
+
+  // `isProgrammeNetwork` is the sole sanctioned discriminator (programme.ts) --
+  // a `programme = null` document, or a v4-v8 document still carrying the
+  // legacy `{ packages }` shape, has no phase to target, and `phase_slip`
+  // stays off the lever dropdown for exactly that document (§18.9: "on a
+  // programme = null document [the lever] has no field to write").
+  const rawProgramme = 'programme' in inputs ? inputs.programme : null;
+  const network = rawProgramme != null && isProgrammeNetwork(rawProgramme) ? rawProgramme : null;
+  // Memoised on `network` (a stable reference across renders that do not
+  // change `inputs.programme`) so the `config` useMemo below, which reads
+  // `phases`, is not invalidated by a fresh `[]` literal on every render of a
+  // `programme = null` document.
+  const phases = useMemo(() => network?.phases ?? [], [network]);
+  const levers = selectableLevers(network != null);
 
   const resetToDefaults = () => {
     setRowLever(DEFAULTS.rows.lever);
     setColLever(DEFAULTS.cols.lever);
     setRowStepsText(stepsToText(DEFAULTS.rows.steps));
     setColStepsText(stepsToText(DEFAULTS.cols.steps));
+    setRowPhaseId(null);
+    setColPhaseId(null);
   };
 
   // The tornado ranges stay at the spec §12.4 defaults in R4b — only the matrix
   // axes are editable, which is the whole of design §5.1's third region.
   const config: SensitivityConfig = useMemo(() => ({
-    rows: { lever: rowLever, steps: parseSteps(rowStepsText) },
-    cols: { lever: colLever, steps: parseSteps(colStepsText) },
+    rows: {
+      lever: rowLever,
+      phase_id: rowLever === 'phase_slip' ? (rowPhaseId ?? phases[0]?.id ?? null) : null,
+      steps: parseSteps(rowStepsText),
+    },
+    cols: {
+      lever: colLever,
+      phase_id: colLever === 'phase_slip' ? (colPhaseId ?? phases[0]?.id ?? null) : null,
+      steps: parseSteps(colStepsText),
+    },
     tornado: DEFAULTS.tornado,
-  }), [rowLever, rowStepsText, colLever, colStepsText]);
+  }), [rowLever, rowPhaseId, rowStepsText, colLever, colPhaseId, colStepsText, phases]);
 
   // Spec §12.6 config errors only. A position whose *levered document* is invalid is no
   // longer this component's problem: §12.7 makes the engine report it per position, which
   // is strictly more informative than refusing the grid — the analyst sees which steps
-  // work and which do not.
+  // work and which do not. Passing `inputs` activates §18.9's phase-existence check too.
   const issues = useMemo(
-    () => validateSensitivityConfig(config).map((issue) => issue.message),
-    [config],
+    () => validateSensitivityConfig(config, inputs).map((issue) => issue.message),
+    [config, inputs],
   );
 
   // Spec §12.6 errors are input errors: report them and compute nothing, rather
@@ -123,11 +153,28 @@ export default function SensitivityPage({ inputs }: Props) {
           onChange={(e) => setRowLever(e.target.value as SensitivityLever)}
           style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
         >
-          {SELECTABLE_LEVERS.map((lever) => (
+          {levers.map((lever) => (
             <option key={lever} value={lever}>{LEVER_LABEL[lever]}</option>
           ))}
         </select>
       </label>
+      {/* R12 spec §18.9: `phase_slip` needs a target as well as a magnitude.
+          Shown only when the row lever is phase_slip, so every other lever's
+          editor looks exactly as it did before this release. */}
+      {rowLever === 'phase_slip' && (
+        <label style={{ color: MUTED, fontSize: 13 }}>
+          Row phase
+          <select
+            value={rowPhaseId ?? phases[0]?.id ?? ''}
+            onChange={(e) => setRowPhaseId(e.target.value)}
+            style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
+          >
+            {phases.map((p) => (
+              <option key={p.id} value={p.id}>{p.label || p.id}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <label style={{ color: MUTED, fontSize: 13 }}>
         Row steps
         <input
@@ -144,11 +191,25 @@ export default function SensitivityPage({ inputs }: Props) {
           onChange={(e) => setColLever(e.target.value as SensitivityLever)}
           style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
         >
-          {SELECTABLE_LEVERS.map((lever) => (
+          {levers.map((lever) => (
             <option key={lever} value={lever}>{LEVER_LABEL[lever]}</option>
           ))}
         </select>
       </label>
+      {colLever === 'phase_slip' && (
+        <label style={{ color: MUTED, fontSize: 13 }}>
+          Column phase
+          <select
+            value={colPhaseId ?? phases[0]?.id ?? ''}
+            onChange={(e) => setColPhaseId(e.target.value)}
+            style={{ display: 'block', marginTop: 4, padding: '4px 8px', background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, color: TEXT, fontSize: 13 }}
+          >
+            {phases.map((p) => (
+              <option key={p.id} value={p.id}>{p.label || p.id}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <label style={{ color: MUTED, fontSize: 13 }}>
         Column steps
         <input

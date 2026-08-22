@@ -3,8 +3,8 @@ import { render, screen, within, fireEvent } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import SensitivityPage from './SensitivityPage';
-import { runAppraisal, migrateInputsToV8 } from '../../lib/model';
-import type { CalculatorInputsV8 } from '../../lib/model';
+import { runAppraisal, migrateInputsToV8, migrateV8toV9 } from '../../lib/model';
+import type { CalculatorInputsV8, CalculatorInputsV9, ProgrammeNetwork } from '../../lib/model';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -13,6 +13,27 @@ const fixtureF = JSON.parse(
 
 function buildInputs(): CalculatorInputsV8 {
   return migrateInputsToV8(fixtureF.inputs);
+}
+
+const NETWORK: ProgrammeNetwork = {
+  anchor_month: null,
+  phases: [
+    {
+      id: 'design', code: 'design', label: 'Design', duration_months: 2, slip_months: 0,
+      start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [],
+    },
+    {
+      id: 'construction', code: 'construction', label: 'Construction', duration_months: 8, slip_months: 0,
+      start_offset: 0, curve: { kind: 'straight_line' },
+      predecessors: [{ phase_id: 'design', type: 'FS', lag_months: 0 }],
+    },
+  ],
+  category_phase_ids: { construction: 'construction', professional: 'design', statutory: 'design' },
+};
+
+function buildNetworkInputs(): CalculatorInputsV9 {
+  const v9 = migrateV8toV9(buildInputs());
+  return { ...v9, programme: NETWORK };
 }
 
 describe('SensitivityPage — two-way matrix', () => {
@@ -353,5 +374,49 @@ describe('SensitivityPage — unmeasured tornado endpoint omission', () => {
       expect(cell).not.toHaveAttribute('title');
       expect(cell.getAttribute('aria-describedby')).toBe(note.id);
     }
+  });
+});
+
+// R12 Task 17 (spec §18.9). `phase_slip` was withheld from the lever dropdown
+// (Task 14) because its validation error had no control the user could
+// satisfy -- and worse, `outcome = issues.length > 0 ? null : run(...)`
+// blanked the whole matrix and tornado. The picker restores the lever with a
+// target to hand, but only for a document that carries a phase network.
+describe('SensitivityPage — the phase_slip lever and its phase-target picker', () => {
+  it('does NOT offer phase_slip on a programme = null document (no phase to target)', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    const rowLeverOptions = within(screen.getByLabelText(/row lever/i)).getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(rowLeverOptions).not.toContain('Phase slip');
+    const colLeverOptions = within(screen.getByLabelText(/column lever/i)).getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(colLeverOptions).not.toContain('Phase slip');
+    // No picker either -- there is nothing for it to populate from.
+    expect(screen.queryByLabelText(/row phase/i)).not.toBeInTheDocument();
+  });
+
+  it('offers phase_slip, and shows the phase picker only once it is selected', () => {
+    render(<SensitivityPage inputs={buildNetworkInputs()} />);
+    expect(screen.queryByLabelText(/row phase/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'phase_slip' } });
+    const picker = screen.getByLabelText(/row phase/i);
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['Design', 'Construction']);
+  });
+
+  it('the phase picker is independent per axis -- selecting it for rows does not show it for columns', () => {
+    render(<SensitivityPage inputs={buildNetworkInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'phase_slip' } });
+    expect(screen.getByLabelText(/row phase/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/column phase/i)).not.toBeInTheDocument();
+  });
+
+  it('running phase_slip against a named phase produces a real (non-blanked) matrix', () => {
+    render(<SensitivityPage inputs={buildNetworkInputs()} />);
+    fireEvent.change(screen.getByLabelText(/row lever/i), { target: { value: 'phase_slip' } });
+    fireEvent.change(screen.getByLabelText(/row phase/i), { target: { value: 'construction' } });
+    expect(screen.queryByText(/does not describe a valid grid/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be calculated/i)).not.toBeInTheDocument();
+    const matrix = screen.getByRole('table', { name: /two-way sensitivity/i });
+    expect(within(matrix).getAllByRole('rowheader')[0]).toHaveTextContent('Slip -5 months');
   });
 });
