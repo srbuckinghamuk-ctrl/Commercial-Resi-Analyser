@@ -5,16 +5,20 @@ import { validateInputs, reconcile } from './validation';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
-import { migrateV2toV3, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6, migrateV6toV7 } from './migrate';
+import {
+  migrateV2toV3, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6, migrateV6toV7,
+  migrateInputsToV8, migrateInputsToV9, migrateV8toV9, PROGRAMME_FIELD_ALIASES,
+} from './migrate';
 import { runAppraisal } from './index';
 import { DEFAULT_AREA_BRIDGE } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
   CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8,
-  ProgrammePackage, RefinanceInputs,
+  CalculatorInputsV9, ProgrammePackage, RefinanceInputs,
 } from './finance-types';
-import type { CostPackage, FeeLine } from './cost-plan';
+import type { CostPackage, CostPlanInputs, FeeLine } from './cost-plan';
+import type { Phase, ProgrammeNetwork } from './programme';
 import { DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments } from './vat';
 import type { VatChargeCategory, VatOverride, VatTreatment } from './vat';
 
@@ -1766,5 +1770,254 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     expect(validateInputs(inputs).some(
       (i) => i.field === 'vat.repayment_lag_months' && i.severity === 'warning',
     )).toBe(false);
+  });
+});
+
+// --- R12 §18.8 — v9 programme network validation ---------------------------
+
+/** A fresh v9 document from the migration chain's own defaults — `programme`,
+ *  `sales_phasing` and `refinance` all null, exactly like a brand-new
+ *  document, so it carries no error of its own before a test adds a network. */
+function v9Document(): CalculatorInputsV9 {
+  return migrateInputsToV9({});
+}
+
+/** A fresh v8 document, for the migration-identity control below. */
+function v8Document(): CalculatorInputsV8 {
+  return migrateInputsToV8({});
+}
+
+/** Mirrors programme.test.ts's own `phase()` helper exactly — a phase with no
+ *  overrides is predecessor-free, at `start_offset` 0, with no slip. */
+function phase(
+  id: string, code: string, duration: number,
+  preds: Phase['predecessors'] = [], extra: Partial<Phase> = {},
+): Phase {
+  return {
+    id, code: code as Phase['code'], label: id,
+    duration_months: duration, slip_months: 0, start_offset: 0,
+    curve: { kind: 'straight_line' }, predecessors: preds, ...extra,
+  };
+}
+
+/** A v9 document carrying the given phases as its programme network.
+ *  `category_phase_ids` defaults every category onto `phases[0]` — the tests
+ *  below that care about `category_phase_ids` override it explicitly. */
+function docWith(
+  phases: Phase[], term = 24, extra: Partial<ProgrammeNetwork> = {},
+): CalculatorInputsV9 {
+  return {
+    ...v9Document(),
+    finance: { ...v9Document().finance, term_months: term },
+    programme: {
+      anchor_month: null,
+      phases,
+      category_phase_ids: {
+        construction: phases[0]?.id ?? 'x', professional: phases[0]?.id ?? 'x', statutory: phases[0]?.id ?? 'x',
+      },
+      ...extra,
+    },
+  };
+}
+
+/** A minimal, structurally-valid detailed cost plan — one package, no fee
+ *  lines — for the tests that tag a cost line onto a phase. */
+function detailedCostPlan(): CostPlanInputs {
+  return {
+    mode: 'detailed',
+    packages: [{
+      id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
+      contingency_class: 'general', lender_eligible: true, notes: '',
+      vat_override: null, phase_id: null,
+    }],
+    contingency: [
+      { name: 'general', pct: 5 }, { name: 'existing_building', pct: 0 }, { name: 'abnormal', pct: 0 },
+    ],
+    fee_lines: [],
+  };
+}
+
+const errs = (d: unknown) => validateInputs(d as never).filter((i) => i.severity === 'error');
+
+describe('programme network validation — spec §18.8', () => {
+  it('rejects a duplicate phase id', () => {
+    const e = errs(docWith([phase('a', 'planning', 2), phase('a', 'design', 2)]));
+    expect(e.some((i) => i.field === 'programme.phases.a' && /Duplicate phase id/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a dependency naming an absent phase', () => {
+    const e = errs(docWith([phase('a', 'planning', 2, [{ phase_id: 'ghost', type: 'FS', lag_months: 0 }])]));
+    expect(e.some((i) => /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a self-reference', () => {
+    const e = errs(docWith([phase('a', 'planning', 2, [{ phase_id: 'a', type: 'FS', lag_months: 0 }])]));
+    expect(e.some((i) => /cannot depend on itself/.test(i.message))).toBe(true);
+  });
+
+  it('names the cycle in order', () => {
+    const e = errs(docWith([
+      phase('a', 'planning', 2, [{ phase_id: 'b', type: 'FS', lag_months: 0 }]),
+      phase('b', 'conditions', 2, [{ phase_id: 'a', type: 'FS', lag_months: 0 }]),
+    ]));
+    expect(e.some((i) => i.field === 'programme.phases' && /→/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a negative duration, lag or start_offset but ALLOWS a negative slip', () => {
+    expect(errs(docWith([phase('a', 'planning', -1)])).length).toBeGreaterThan(0);
+    expect(errs(docWith([phase('a', 'planning', 2, [], { start_offset: -1 })])).length).toBeGreaterThan(0);
+    expect(errs(docWith([phase('a', 'planning', 2, [{ phase_id: 'a2', type: 'FS', lag_months: -1 }]),
+      phase('a2', 'design', 1)])).length).toBeGreaterThan(0);
+    // signed slip is legal (§18.2) as long as the resolved start stays >= 0
+    expect(errs(docWith([phase('a', 'planning', 2, [], { start_offset: 3, slip_months: -1 })]))).toEqual([]);
+  });
+
+  it('rejects a fractional slip', () => {
+    const e = errs(docWith([phase('a', 'planning', 2, [], { slip_months: 1.5 })]));
+    expect(e.some((i) => /whole number of months/.test(i.message))).toBe(true);
+  });
+
+  it('rejects over-acceleration below month 0 rather than clamping it', () => {
+    const e = errs(docWith([phase('a', 'planning', 2, [], { start_offset: 1, slip_months: -3 })]));
+    expect(e.some((i) => i.field === 'programme.phases.a' && /before month 0/.test(i.message))).toBe(true);
+  });
+
+  it('rejects category_phase_ids pointing at an absent phase or a milestone', () => {
+    const ms = [phase('a', 'construction', 4), phase('pc', 'practical_completion', 0)];
+    expect(errs(docWith(ms, 24, { category_phase_ids: { construction: 'ghost', professional: 'a', statutory: 'a' } }))
+      .some((i) => i.field === 'programme.category_phase_ids.construction')).toBe(true);
+    expect(errs(docWith(ms, 24, { category_phase_ids: { construction: 'pc', professional: 'a', statutory: 'a' } }))
+      .some((i) => /milestone/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a cost line tagged to a milestone or an absent phase', () => {
+    const d = docWith([phase('a', 'construction', 4), phase('pc', 'practical_completion', 0)]);
+    d.cost_plan = { ...detailedCostPlan(), packages: [{ ...detailedCostPlan().packages[0], phase_id: 'pc' }] };
+    expect(errs(d).some((i) => /milestone/.test(i.message))).toBe(true);
+  });
+
+  it('rejects an empty phases array', () => {
+    expect(errs(docWith([])).some((i) => i.field === 'programme.phases')).toBe(true);
+  });
+
+  it('§18.8 OVERRUN: names the phase and the overrun in months', () => {
+    const e = errs(docWith([
+      phase('c', 'construction', 9),
+      phase('m', 'marketing', 15, [{ phase_id: 'c', type: 'FS', lag_months: 0 }]),
+    ], 18));
+    const overrun = e.find((i) => /after maturity/.test(i.message));
+    expect(overrun).toBeDefined();
+    expect(overrun!.message).toContain("Phase 'm'");
+    expect(overrun!.message).toContain('6 months'); // finish 24 vs term 18
+  });
+
+  it('§18.8 TAIL: binds pre-completion codes and NOT marketing', () => {
+    // construction (finish 24) breaches the tail — the boundary is finish <=
+    // term - 1 = 23, so finish 23 (duration 23) is exactly LEGAL; duration 24
+    // is the first illegal window, confirmed against the identical formula
+    // the migration-identity test below exercises via the legacy rule.
+    expect(errs(docWith([phase('c', 'construction', 24)], 24))
+      .some((i) => /sale tail/.test(i.message))).toBe(true);
+    // ...but marketing finishing there does not
+    expect(errs(docWith([phase('m', 'marketing', 23)], 24))
+      .some((i) => /sale tail/.test(i.message))).toBe(false);
+  });
+
+  it('§18.8 TAIL: `other` gets the weaker overrun rule, not the tail rule', () => {
+    expect(errs(docWith([phase('o', 'other', 23)], 24))
+      .some((i) => /sale tail/.test(i.message))).toBe(false);
+  });
+
+  it('a migrated three-phase network produces the SAME tail issue as its v8 twin', () => {
+    // This is the property Task 8's alias map depends on. Asserted here too,
+    // at the rule, so a scope change to PRE_COMPLETION_CODES fails twice.
+    const v8 = {
+      ...v8Document(),
+      finance: { ...v8Document().finance, term_months: 6 },
+      programme: {
+        anchor_month: null,
+        packages: {
+          construction: { start_offset: 0, duration_months: 6, curve: { kind: 'straight_line' as const } },
+          professional: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' as const } },
+          statutory: { start_offset: 0, duration_months: 1, curve: { kind: 'straight_line' as const } },
+        },
+      },
+    };
+    const beforeFields = validateInputs(v8 as never).map((i) => i.field).sort();
+    const afterFields = validateInputs(migrateV8toV9(v8 as never)).map((i) => i.field).sort();
+    expect(afterFields).toEqual(beforeFields.map((f) => PROGRAMME_FIELD_ALIASES[f] ?? f).sort());
+  });
+});
+
+describe('anchors and scenario slip — §18.6/§18.8/§18.9', () => {
+  /** Three independent (non-chained) phases so that slipping one does not
+   *  cascade a start onto the others through a dependency — the crossing
+   *  test below needs a genuine crossing, not one the derivation would have
+   *  propagated for it. */
+  function networkDoc(term = 24): CalculatorInputsV9 {
+    return docWith([
+      phase('planning', 'planning', 3),
+      phase('unit_completions', 'unit_completions', 0, [], { start_offset: 10 }),
+      phase('sales', 'sales', 5, [], { start_offset: 11 }),
+    ], term);
+  }
+
+  function docWithTranche(tr: { anchor: { phase_id: string; offset_months: number } | null; month_offset: number; pct_of_gross_receipts?: number }): CalculatorInputsV9 {
+    const d = networkDoc();
+    return { ...d, sales_phasing: { tranches: [{ pct_of_gross_receipts: 100, ...tr }] } };
+  }
+
+  function docWithTranches(trs: Array<{ anchor: { phase_id: string; offset_months: number } | null; month_offset: number; pct_of_gross_receipts: number }>): CalculatorInputsV9 {
+    const d = networkDoc();
+    return { ...d, sales_phasing: { tranches: trs } };
+  }
+
+  function withSlip(d: CalculatorInputsV9, phaseId: string, months: number): CalculatorInputsV9 {
+    return {
+      ...d,
+      programme: {
+        ...d.programme!,
+        phases: d.programme!.phases.map((p) => (
+          p.id === phaseId ? { ...p, slip_months: p.slip_months + months } : p
+        )),
+      },
+    };
+  }
+
+  it('rejects an anchor naming an absent phase', () => {
+    const d = docWithTranche({ anchor: { phase_id: 'ghost', offset_months: 0 }, month_offset: 0 });
+    expect(errs(d).some((i) => i.field === 'sales_phasing.tranches[0].anchor'
+      && /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
+  it('rejects RESOLVED tranche months that are not strictly increasing', () => {
+    // Two tranches anchored to DIFFERENT phases can cross when one slips. The
+    // rule reads the resolved months, not the entered ones — a document whose
+    // entered offsets ascend can still resolve out of order.
+    const d = docWithTranches([
+      { anchor: { phase_id: 'unit_completions', offset_months: 0 }, month_offset: 0, pct_of_gross_receipts: 40 },
+      { anchor: { phase_id: 'sales', offset_months: 0 }, month_offset: 0, pct_of_gross_receipts: 60 },
+    ]);
+    const crossed = withSlip(d, 'unit_completions', 9); // pushes tranche 0 past tranche 1
+    expect(errs(crossed).some((i) => i.field === 'sales_phasing.tranches[1]'
+      && /strictly increasing/.test(i.message))).toBe(true);
+    // Negative control: unslipped, the same document is clean.
+    expect(errs(d)).toEqual([]);
+  });
+
+  it('rejects a scenario phase_slip_phase_id naming an absent phase', () => {
+    const d = { ...networkDoc() };
+    d.scenarios.downside = { ...d.scenarios.downside, phase_slip_phase_id: 'ghost', phase_slip_months: 3 };
+    expect(errs(d).some((i) => i.field === 'scenarios.downside.phase_slip_phase_id'
+      && /no phase with id "ghost"/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a scenario phase_slip_phase_id set while programme is null', () => {
+    // A slip with nothing to slip must not be a silent no-op — that is what
+    // would make the lever look live while doing nothing (§18.9).
+    const d = { ...v9Document(), programme: null };
+    d.scenarios.downside = { ...d.scenarios.downside, phase_slip_phase_id: 'planning', phase_slip_months: 3 };
+    expect(errs(d).some((i) => i.field === 'scenarios.downside.phase_slip_phase_id'
+      && /has no programme network/.test(i.message))).toBe(true);
   });
 });
