@@ -981,18 +981,32 @@ describe('golden fixtures (shared with the Python engine)', () => {
 // stayed green throughout. Gate 1 cannot see that axis; gate 2 is written
 // for exactly it.
 //
-// Fix round 1, Finding 1 — what gate 1 actually proves today, stated
-// honestly. Every fixture in this gate's scope has `programme: null` (Rule
-// 2 excludes the only two that don't), so `migrateV8toV9`'s three-package →
-// precedence-network conversion NEVER EXECUTES for any document gate 1 runs.
-// What gate 1 proves today is narrower: that the migration's five additive
-// no-ops — `phase_id: null` on every cost package and fee line, `anchor:
-// null` on every sales-phasing tranche and on refinance, and
-// `phase_slip_phase_id: null` / `phase_slip_months: 0` on all four scenarios
-// — move no computed figure. The network conversion itself is untested by
-// this gate while Rule 2's exclusion stands; Task 12, which deletes that
-// exclusion once both engines support a populated v9 network, is the run
-// that actually exercises it.
+// R12 Task 12b — what gate 1 proves NOW. Task 8's exclusion of the two
+// programme-bearing fixtures is gone (the network arms it existed for are
+// wired: Tasks 9–12a), so the gate runs over every fixture with a v8
+// antecedent and covers BOTH of the migration's arms:
+//
+//   (a) the five additive no-ops — `phase_id: null` on every cost package
+//       and fee line, `anchor: null` on every sales-phasing tranche and on
+//       refinance, `phase_slip_phase_id: null` / `phase_slip_months: 0` on
+//       all four scenarios — move no computed figure. Every fixture in
+//       scope exercises this arm.
+//
+//   (b) the three-package → precedence-network conversion moves no computed
+//       figure either. Exercised by `h-programme-scurve` and
+//       `r-vat-quarterly`, the only two in-scope fixtures whose stored
+//       `programme` is non-null (asserted below, so this claim cannot go
+//       vacuous if a fixture is edited). This holds because migration
+//       writes no per-line `phase_id`: every cost line resolves to its
+//       category default, the (phase, category) bucket total IS the
+//       category total, and the derived-window spread is bit-identical to
+//       the legacy arm's single spread.
+//
+// What gate 1 still does NOT compare is `schedule.programme` itself — null
+// on the v8 side, the derived network on the v9 side. That block is a v9
+// addition with no v8 counterpart, so there is nothing to be identical to;
+// it is pinned by the programme fixtures' own expectations and by Task
+// 9–12a's derivation tests, not here.
 //
 // Fixture stems, correlated by index with `fixtures` (both built off the
 // same `fixtureFiles` scan above) rather than parsed from the human-readable
@@ -1000,27 +1014,27 @@ describe('golden fixtures (shared with the Python engine)', () => {
 const fixtureStemsByFixture = new Map(fixtures.map((fx, i) => [fx, fixtureFiles[i].replace(/\.json$/, '')]));
 const fixtureByStem = new Map(fixtures.map((fx, i) => [fixtureFiles[i].replace(/\.json$/, ''), fx]));
 
-// Rule 2 (TEMPORARY): both engines fail loudly on a populated v9 programme
-// network today — schedule.ts and export-investment-memo.ts throw,
-// validation.ts hard-errors — because the network arms are not wired until
-// later tasks (Task 9, Task 11). Migrating either of these two fixtures
-// (both carry a non-null v8 `programme` block) produces exactly that shape,
-// so they are excluded here until a later task deletes this filter.
-//
-// Rule 3: the exclusion is self-policing — a named constant, asserted below
-// to have EXACTLY two entries, both named. An exclusion list that can grow
-// in silence is how a gate quietly stops gating.
-const MIGRATION_V9_GATE_EXCLUDED_STEMS = ['h-programme-scurve', 'r-vat-quarterly'] as const;
+// Rule 2 (Task 8's TEMPORARY exclusion of `h-programme-scurve` and
+// `r-vat-quarterly`) is DELETED here, Task 12b. It existed because both
+// engines were deliberately made to fail loudly on a populated v9 programme
+// network before the network arms were wired; Tasks 9–12a wired them, so
+// the exclusion has served its purpose and the two programme-bearing
+// fixtures are now the most valuable documents in this gate's scope — they
+// are the only ones that make the migration's network conversion execute.
+// Rule 3 (the exclusion is self-policing) goes with it; an empty exclusion
+// needs no policing, and the test below now polices the opposite property.
 
-// Rule 1: only fixtures whose STORED inputs_version is 8 or below have a v8
-// antecedent to migrate from — migrateInputsToV8 called on an already-v9
-// document would throw, and there would be nothing to compare. No v9-tagged
-// fixture exists yet; a later task adds one, so the filter is written now
-// rather than left to break then.
-const migrationV9GateFixtures = appraisalFixtures.filter((fx) => {
-  const stem = fixtureStemsByFixture.get(fx)!;
-  return versionOf(fx) <= 8 && !(MIGRATION_V9_GATE_EXCLUDED_STEMS as readonly string[]).includes(stem);
-});
+// Rule 1 (RETAINED): only fixtures whose STORED inputs_version is 8 or below
+// have a v8 antecedent to migrate from — migrateInputsToV8 called on an
+// already-v9 document would throw, and there would be nothing to compare.
+// No v9-tagged fixture exists yet; a later release adds one, so the filter
+// stays.
+const migrationV9GateFixtures = appraisalFixtures.filter((fx) => versionOf(fx) <= 8);
+
+// The two fixtures whose stored `programme` is non-null, and therefore the
+// only ones for which migration builds a precedence network at all. Named
+// here so the gate can assert they are IN scope rather than merely hoping.
+const PROGRAMME_BEARING_STEMS = ['h-programme-scurve', 'r-vat-quarterly'] as const;
 
 // Fix round 1, Finding 6: keyed by file STEM, not the human-readable `name`
 // field. Two fixtures sharing a display name would silently shadow one
@@ -1054,6 +1068,36 @@ const sortIssuesForV9Gate = (xs: ValidationIssue[]) =>
   xs.map(canonicalIssue)
     .sort((a, b) => (a.severity + a.field + a.message).localeCompare(b.severity + b.field + b.message));
 
+// Task 12b. Gate 2 used to assert exact issue-set equality. With the two
+// programme-bearing fixtures in scope that assertion is WRONG, not merely
+// strict: the legacy three-package validation arm has NO OVERRUN RULE AT
+// ALL, so a migrated document legitimately reports errors its v8 antecedent
+// could never have produced. (Both fixtures breach the sale-tail rule at all
+// three synthetic terms on BOTH sides — that part still matches exactly; it
+// is only the overrun errors that are new.)
+//
+// The exemption is a NAMED LIST of v9-only RULES, asserted below to hold
+// exactly one entry — the same self-policing discipline
+// PROGRAMME_FIELD_ALIASES already carries. It is deliberately NOT the same
+// kind of thing as that alias map: an alias is a field RENAME across the
+// boundary, where the rule fires identically on both sides; this list is for
+// rules that exist on one side only.
+const V9_ONLY_VALIDATION_RULES: Record<string, (i: { message: string }) => boolean> = {
+  // spec §18.8. A phase whose derived finish runs past facility maturity.
+  // It is a property of the DERIVED network, and the legacy arm derives
+  // nothing, so there is no v8 counterpart to compare against.
+  overrun: (i) => /^Programme finishes month -?\d+; facility term is -?\d+\. Phase '.+' ends -?\d+ months after maturity\.$/
+    .test(i.message),
+};
+
+/** Applied to the POST-migration side only. Filtering both sides would let a
+ *  legacy issue that happens to match a predicate vanish in silence, which is
+ *  exactly the failure mode an exemption must not have. */
+const isV9OnlyRuleIssue = (i: { message: string }) =>
+  Object.values(V9_ONLY_VALIDATION_RULES).some((matches) => matches(i));
+
+const hardIssues = (xs: ValidationIssue[]) => xs.filter((i) => i.severity === 'error');
+
 /** Gate 1 compares the WHOLE computed result, not a hand-picked list of
  *  metrics — a chosen list is a guard that only watches what its author
  *  remembered.
@@ -1070,9 +1114,12 @@ const sortIssuesForV9Gate = (xs: ValidationIssue[]) =>
  *  alias could in principle appear inside it too.
  *
  *  `calc_version` (2.10.0 vs 2.11.0) and the new `schedule.programme` block
- *  (null vs the migrated network's derivation, once Task 11 wires the
- *  network arm) legitimately differ and are the only two fields stripped
- *  out of the four compared members. */
+ *  legitimately differ and are the only two fields stripped out of the four
+ *  compared members. Since Task 12b removed the exclusion, `schedule.programme`
+ *  really does differ for the two programme-bearing fixtures — null on the v8
+ *  side, the derived network on the v9 side — because it is a v9 addition with
+ *  no v8 counterpart. Everything the network FEEDS (the monthly spend, the
+ *  facility, every metric) is inside the comparison and must be identical. */
 function stripVersionFields(run: AppraisalRun): unknown {
   const { calc_version: _calc_version, ...metrics } = run.metrics;
   const { programme: _programme, ...schedule } = run.schedule;
@@ -1088,30 +1135,63 @@ function withTermMonths(inputs: AnyCalculatorInputs, termMonths: number): Record
   return doc;
 }
 
-describe('v8 → v9 migration gate scope — spec §18.7 Rules 1–3', () => {
-  it('the exclusion names exactly the two programme-bearing fixtures', () => {
-    expect(MIGRATION_V9_GATE_EXCLUDED_STEMS).toHaveLength(2);
-    expect([...MIGRATION_V9_GATE_EXCLUDED_STEMS].sort())
-      .toEqual(['h-programme-scurve', 'r-vat-quarterly']);
+/** Every gate-2 case: each in-scope fixture at its STORED term, plus the same
+ *  fixture at synthetic terms 1, 2 and 3. The three properties below each run
+ *  over the whole list, so a defect that only shows at a short term is caught
+ *  by the same assertion as one that shows at the stored term. */
+const V9_GATE_CASES: Array<[string, Record<string, unknown>]> = GATE_FIXTURE_STEMS.flatMap((stem) => {
+  const raw = loadFixture(stem);
+  const cases: Array<[string, Record<string, unknown>]> = [
+    [`${stem} @ stored term`, JSON.parse(JSON.stringify(raw.inputs)) as Record<string, unknown>],
+  ];
+  for (const term of [1, 2, 3]) cases.push([`${stem} @ term ${term}`, withTermMonths(raw.inputs, term)]);
+  return cases;
+});
+
+describe('v8 → v9 migration gate scope — spec §18.7 Rule 1', () => {
+  it('the gate fixture set is non-empty and excludes ONLY v9-born fixtures', () => {
+    // Non-vacuity, and: without this, a fixture dropped from the gate for a
+    // SECOND, unstated reason would pass silently rather than fail here.
+    expect(GATE_FIXTURE_STEMS.length).toBeGreaterThan(0);
+    const excluded = appraisalFixtures.filter((fx) => !migrationV9GateFixtures.includes(fx));
+    // The only legitimate reason to be out of scope is having no v8
+    // antecedent. Today that set is empty; when a v9-born fixture is added
+    // this still passes, and any OTHER exclusion fails.
+    expect(excluded.map((fx) => fixtureStemsByFixture.get(fx))).toEqual(
+      appraisalFixtures.filter((fx) => versionOf(fx) > 8).map((fx) => fixtureStemsByFixture.get(fx)),
+    );
   });
 
-  it('the gate fixture set is non-empty and excludes only the named fixtures', () => {
-    // Non-vacuity, and: without this, a fixture dropped from the gate for a
-    // FOURTH, unstated reason would pass silently rather than fail here.
-    expect(GATE_FIXTURE_STEMS.length).toBeGreaterThan(0);
-    const excludedStems = appraisalFixtures
-      .filter((fx) => !migrationV9GateFixtures.includes(fx))
-      .map((fx) => fixtureStemsByFixture.get(fx));
-    expect(excludedStems.sort()).toEqual([...MIGRATION_V9_GATE_EXCLUDED_STEMS].sort());
+  it('both programme-bearing fixtures are IN scope, and really do carry a legacy programme', () => {
+    // The point of Task 12b. If either of these ever drops out of scope —
+    // by exclusion, by being re-stamped v9, or by losing its `programme`
+    // block — the migration's network conversion silently stops being
+    // covered by gate 1, which is the state Task 8 shipped and this task
+    // exists to end.
+    for (const stem of PROGRAMME_BEARING_STEMS) {
+      expect(GATE_FIXTURE_STEMS).toContain(stem);
+      const raw = loadFixture(stem);
+      expect((raw.inputs as unknown as { programme?: unknown }).programme).not.toBeNull();
+      expect((raw.inputs as unknown as { programme?: unknown }).programme).toBeDefined();
+      // And migration really does build a network from it.
+      const migrated = migrateInputsToV9(raw.inputs as unknown as Record<string, unknown>) as unknown as
+        { programme: { phases: unknown[] } | null };
+      expect(migrated.programme?.phases).toHaveLength(3);
+    }
+    // And no OTHER in-scope fixture carries one — so the two named above are
+    // exhaustive, not merely examples.
+    const bearing = GATE_FIXTURE_STEMS.filter(
+      (stem) => (loadFixture(stem).inputs as unknown as { programme?: unknown }).programme != null,
+    );
+    expect(bearing.sort()).toEqual([...PROGRAMME_BEARING_STEMS].sort());
   });
 });
 
-// Fix round 1, Finding 1: this gate proves the migration's five additive
-// no-ops move no computed figure (see the file-level comment above for the
-// full statement). It does NOT exercise the three-package → network
-// conversion — every in-scope fixture has `programme: null`, so that code
-// path never runs here.
-describe('v8 → v9 migration identity — spec §18.7 gate 1 (numeric, no-ops only — see comment above)', () => {
+// Task 12b: this gate now proves BOTH arms of the migration move no computed
+// figure — the five additive no-ops on every fixture, and the three-package →
+// precedence-network conversion on the two programme-bearing ones. See the
+// file-level comment above for the full statement.
+describe('v8 → v9 migration identity — spec §18.7 gate 1 (numeric, both migration arms)', () => {
   it.each(GATE_FIXTURE_STEMS)('%s: every computed figure is penny-identical', (stem) => {
     const raw = loadFixture(stem);
     const before = runAppraisal(migrateInputsToV8(raw.inputs as unknown as Record<string, unknown>));
@@ -1136,43 +1216,99 @@ describe('v8 → v9 migration identity — spec §18.7 gate 2 (validation)', () 
     }
   });
 
-  it.each(GATE_FIXTURE_STEMS)('%s: the same issue set before and after', (stem) => {
-    const raw = loadFixture(stem);
-    expect(sortIssuesForV9Gate(validateInputs(migrateInputsToV9(raw.inputs as unknown as Record<string, unknown>))))
-      .toEqual(sortIssuesForV9Gate(validateInputs(migrateInputsToV8(raw.inputs as unknown as Record<string, unknown>))));
+  it('the v9-only rule list has EXACTLY one entry, named', () => {
+    // Same discipline as the alias map above, for a different kind of
+    // exemption. An unpoliced list of "rules we do not compare" is a gate
+    // that stops gating one rule at a time.
+    expect(Object.keys(V9_ONLY_VALIDATION_RULES)).toEqual(['overrun']);
   });
 
-  // R11's actual failure: the v8 migration gave every document a block whose
-  // default made every term<=2 appraisal a hard error, so the migration
-  // silently downgraded them to DRAFT while the numeric gate stayed green.
-  // Term 3 goes one step further than R11's own boundary, so a rule
-  // re-narrowed to a fixed "<= 2" cutoff — rather than derived from the
-  // migrated `first_period_end_month` — would still be caught.
-  it.each([1, 2, 3])('term-%i synthetic documents keep their issue set', (term) => {
-    for (const stem of GATE_FIXTURE_STEMS) {
-      const raw = loadFixture(stem);
-      const shortened = withTermMonths(raw.inputs, term);
-      expect(sortIssuesForV9Gate(validateInputs(migrateInputsToV9(shortened))))
-        .toEqual(sortIssuesForV9Gate(validateInputs(migrateInputsToV8(shortened))));
+  // The three properties. R11's actual failure: the v8 migration gave every
+  // document a block whose default made every term<=2 appraisal a hard
+  // error, so the migration silently downgraded them to DRAFT while the
+  // numeric gate stayed green. Terms 1–3 are run alongside each fixture's
+  // stored term because that is where the interesting behaviour lives; term
+  // 3 goes one step further than R11's own boundary, so a rule re-narrowed
+  // to a fixed "<= 2" cutoff would still be caught.
+  it.each(V9_GATE_CASES)('%s: property 1 — a valid document never becomes INVALID', (_label, doc) => {
+    const before = hardIssues(validateInputs(migrateInputsToV8(doc)));
+    if (before.length > 0) return; // premise false; property 2 covers this case
+    // UNCONDITIONAL — no v9-only-rule exemption applies here. This is the
+    // historical defect: a document that validated clean before migration
+    // and reports DRAFT after it.
+    expect(hardIssues(validateInputs(migrateInputsToV9(doc)))).toEqual([]);
+  });
+
+  it.each(V9_GATE_CASES)('%s: property 2 — an invalid document never becomes VALID', (_label, doc) => {
+    const before = hardIssues(validateInputs(migrateInputsToV8(doc)));
+    if (before.length === 0) return; // premise false; property 1 covers this case
+    // Also UNCONDITIONAL, and it catches a real sibling of the R11 defect:
+    // v9 treats a zero-duration phase as a legal milestone where the legacy
+    // arm rejected `duration < 1`, so a migration could silently UPGRADE a
+    // broken document to report-safe.
+    expect(hardIssues(validateInputs(migrateInputsToV9(doc))).length).toBeGreaterThan(0);
+  });
+
+  it.each(V9_GATE_CASES)('%s: property 3 — issue sets equal, except v9-only rules', (_label, doc) => {
+    const before = sortIssuesForV9Gate(validateInputs(migrateInputsToV8(doc)));
+    const after = sortIssuesForV9Gate(validateInputs(migrateInputsToV9(doc)))
+      .filter((i) => !isV9OnlyRuleIssue(i));
+    expect(after).toEqual(before);
+  });
+
+  it('the three properties are not vacuous over the corpus', () => {
+    // Property 1's premise, property 2's premise, and property 3's exemption
+    // must each be satisfied by at least one case — otherwise a property can
+    // pass by never applying to anything.
+    let cleanBefore = 0; let dirtyBefore = 0; let exempted = 0;
+    for (const [, doc] of V9_GATE_CASES) {
+      if (hardIssues(validateInputs(migrateInputsToV8(doc))).length === 0) cleanBefore += 1;
+      else dirtyBefore += 1;
+      exempted += validateInputs(migrateInputsToV9(doc)).filter(isV9OnlyRuleIssue).length;
     }
+    expect(cleanBefore).toBeGreaterThan(0);
+    expect(dirtyBefore).toBeGreaterThan(0);
+    expect(exempted).toBeGreaterThan(0);
+  });
+
+  it('the overrun rule really fires — excluding it from gate 2 cannot hide a dead rule', () => {
+    // Without this, property 3's exemption would keep passing if the overrun
+    // rule were deleted, broken, or reworded out of its own predicate.
+    // Fixture H's migrated network finishes month 7; at a 3-month term all
+    // three phases run past maturity.
+    const shortened = withTermMonths(loadFixture('h-programme-scurve').inputs, 3);
+    const issues = validateInputs(migrateInputsToV9(shortened));
+    const overruns = issues.filter(V9_ONLY_VALIDATION_RULES.overrun);
+    expect(overruns).toHaveLength(3);
+    expect(overruns.every((i) => i.severity === 'error')).toBe(true);
+    expect(overruns.map((i) => i.field).sort()).toEqual([
+      'programme.phases.construction', 'programme.phases.professional', 'programme.phases.statutory',
+    ]);
+    // Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
+    // round 1, Finding 1) — so the exemption is not swallowing a rule that
+    // has silently degenerated to one message repeated three times.
+    expect(new Set(overruns.map((i) => i.message)).size).toBe(3);
+    // And it does NOT fire at the stored term: a predicate that matched
+    // everything would satisfy the assertions above just as well.
+    expect(validateInputs(migrateInputsToV9(
+      loadFixture('h-programme-scurve').inputs as unknown as Record<string, unknown>,
+    )).filter(isV9OnlyRuleIssue)).toEqual([]);
   });
 
   it('a term-2 document from a GATED fixture really does produce a genuine short-term issue', () => {
-    // Fix round 1, Finding 3: the original version of this control asserted
-    // on fixture H, which is EXCLUDED from this gate (Rule 2) — and the
-    // error satisfying it was the temporary "v9 programme network... not yet
-    // implemented (Task 9)" placeholder that Task 9 deletes, at which point
-    // the control would have silently stopped testing anything. It proved
-    // neither that a GATED document produces issues, nor that a short-term
-    // RULE is what fires.
+    // Fix round 1, Finding 3 (Task 8): the original version of this control
+    // asserted on fixture H, and the error satisfying it was the temporary
+    // "v9 programme network... not yet implemented" placeholder that Task 9
+    // deletes, at which point the control would have silently stopped
+    // testing anything. It proved neither that a GATED document produces
+    // issues, nor that a short-term RULE is what fires.
     //
-    // This version uses fixture I, which IS in the gate's scope (its
-    // `programme` is null; Rule 2 does not touch it) and carries a
-    // `sales_phasing` block whose three tranches sit at months 9/10/11 of a
-    // 12-month term. Shortened to a 2-month term, `term - 1 = 1`, so every
-    // tranche breaches sales_phasing's own permanent term bound — a rule
-    // with nothing to do with programme scaffolding, and one that survives
-    // Task 9/10/11/12 unchanged.
+    // This version uses fixture I, which carries a `sales_phasing` block
+    // whose three tranches sit at months 9/10/11 of a 12-month term.
+    // Shortened to a 2-month term, `term - 1 = 1`, so every tranche breaches
+    // sales_phasing's own permanent term bound — a rule with nothing to do
+    // with programme scaffolding, and one that is NOT on the v9-only list,
+    // so property 3 compares it on both sides.
     const raw = loadFixture('i-phased-sales');
     const shortened = withTermMonths(raw.inputs, 2);
     const issues = validateInputs(migrateInputsToV9(shortened));

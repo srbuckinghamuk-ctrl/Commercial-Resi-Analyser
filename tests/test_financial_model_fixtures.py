@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -351,54 +352,91 @@ def test_fixture_r_reproduces_its_metrics_after_migration_to_v8(path: Path) -> N
 # stayed green throughout. Gate 1 cannot see that axis; gate 2 is written for
 # exactly it.
 #
-# Fix round 1, Finding 1 -- what gate 1 actually proves today, stated
-# honestly. Every fixture in this gate's scope has `programme: None` (Rule 2
-# excludes the only two that don't), so `migrate_v8_to_v9`'s three-package ->
-# precedence-network conversion NEVER EXECUTES for any document gate 1 runs.
-# What gate 1 proves today is narrower: that the migration's five additive
-# no-ops -- `phase_id: None` on every cost package and fee line, `anchor:
-# None` on every sales-phasing tranche and on refinance, and
-# `phase_slip_phase_id: None` / `phase_slip_months: 0` on all four scenarios
-# -- move no computed figure. The network conversion itself is untested by
-# this gate while Rule 2's exclusion stands; Task 12, which deletes that
-# exclusion once both engines support a populated v9 network, is the run
-# that actually exercises it.
+# R12 Task 12b -- what gate 1 proves NOW. Task 8's exclusion of the two
+# programme-bearing fixtures is gone (the network arms it existed for are
+# wired: Tasks 9-12a), so the gate runs over every fixture with a v8
+# antecedent and covers BOTH of the migration's arms:
+#
+#   (a) the five additive no-ops -- `phase_id: None` on every cost package
+#       and fee line, `anchor: None` on every sales-phasing tranche and on
+#       refinance, `phase_slip_phase_id: None` / `phase_slip_months: 0` on
+#       all four scenarios -- move no computed figure. Every fixture in
+#       scope exercises this arm.
+#
+#   (b) the three-package -> precedence-network conversion moves no computed
+#       figure either. Exercised by `h-programme-scurve` and
+#       `r-vat-quarterly`, the only two in-scope fixtures whose stored
+#       `programme` is non-null (asserted below, so this claim cannot go
+#       vacuous if a fixture is edited). This holds because migration writes
+#       no per-line `phase_id`: every cost line resolves to its category
+#       default, the (phase, category) bucket total IS the category total,
+#       and the derived-window spread is bit-identical to the legacy arm's
+#       single spread.
+#
+# What gate 1 still does NOT compare is `schedule.programme` itself -- None
+# on the v8 side, the derived network on the v9 side. That block is a v9
+# addition with no v8 counterpart, so there is nothing to be identical to;
+# it is pinned by the programme fixtures' own expectations and by Task
+# 9-12a's derivation tests, not here.
 # ---------------------------------------------------------------------------
 
-# Rule 2 (TEMPORARY): both engines fail loudly on a populated v9 programme
-# network today -- schedule.py raises, validation.py hard-errors -- because
-# the network arms are not wired until later tasks. Migrating either of these
-# two fixtures (both carry a non-null v8 `programme` block) produces exactly
-# that shape, so they are excluded here until a later task deletes this
-# filter.
-#
-# Rule 3: the exclusion is self-policing -- a named constant, asserted below
-# to have EXACTLY two entries, both named. An exclusion list that can grow in
-# silence is how a gate quietly stops gating.
-_MIGRATION_V9_GATE_EXCLUDED_STEMS = ("h-programme-scurve", "r-vat-quarterly")
+# Rule 2 (Task 8's TEMPORARY exclusion of `h-programme-scurve` and
+# `r-vat-quarterly`) is DELETED here, Task 12b. It existed because both
+# engines were deliberately made to fail loudly on a populated v9 programme
+# network before the network arms were wired; Tasks 9-12a wired them, so the
+# exclusion has served its purpose and the two programme-bearing fixtures are
+# now the most valuable documents in this gate's scope -- they are the only
+# ones that make the migration's network conversion execute. Rule 3 (the
+# exclusion is self-policing) goes with it; an empty exclusion needs no
+# policing, and the test below now polices the opposite property.
 
-# Rule 1: only fixtures whose STORED inputs_version is 8 or below have a v8
-# antecedent to migrate from -- migrate_inputs_to_v8 called on an already-v9
-# document would raise, and there would be nothing to compare. No v9-tagged
-# fixture exists yet; a later task adds one, so the filter is written now
-# rather than left to break then.
+# Rule 1 (RETAINED): only fixtures whose STORED inputs_version is 8 or below
+# have a v8 antecedent to migrate from -- migrate_inputs_to_v8 called on an
+# already-v9 document would raise, and there would be nothing to compare. No
+# v9-tagged fixture exists yet; a later release adds one, so the filter stays.
 _MIGRATION_V9_GATE_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES
-    if _version_of(_load_fixture(p)) <= 8 and p.stem not in _MIGRATION_V9_GATE_EXCLUDED_STEMS
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) <= 8
 ]
 
+# The two fixtures whose stored `programme` is non-null, and therefore the
+# only ones for which migration builds a precedence network at all. Named here
+# so the gate can assert they are IN scope rather than merely hoping.
+_PROGRAMME_BEARING_STEMS = ("h-programme-scurve", "r-vat-quarterly")
 
-def test_migration_v9_gate_exclusion_names_exactly_the_two_programme_bearing_fixtures() -> None:
-    assert len(_MIGRATION_V9_GATE_EXCLUDED_STEMS) == 2
-    assert sorted(_MIGRATION_V9_GATE_EXCLUDED_STEMS) == ["h-programme-scurve", "r-vat-quarterly"]
 
-
-def test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_the_named_fixtures() -> None:
+def test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_v9_born_fixtures() -> None:
     """Non-vacuity, and: without this, a fixture dropped from the gate for a
-    FOURTH, unstated reason would pass silently rather than fail here."""
+    SECOND, unstated reason would pass silently rather than fail here. The
+    only legitimate reason to be out of scope is having no v8 antecedent;
+    today that set is empty, and when a v9-born fixture is added this still
+    passes while any OTHER exclusion fails."""
     assert len(_MIGRATION_V9_GATE_FIXTURES) > 0
     excluded = [p.stem for p in APPRAISAL_FIXTURES if p not in _MIGRATION_V9_GATE_FIXTURES]
-    assert sorted(excluded) == sorted(_MIGRATION_V9_GATE_EXCLUDED_STEMS)
+    assert excluded == [p.stem for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) > 8]
+
+
+def test_both_programme_bearing_fixtures_are_in_gate_scope_and_really_carry_a_legacy_programme() -> None:
+    """The point of Task 12b. If either of these ever drops out of scope -- by
+    exclusion, by being re-stamped v9, or by losing its `programme` block --
+    the migration's network conversion silently stops being covered by gate 1,
+    which is the state Task 8 shipped and this task exists to end. Mirrors
+    golden-fixtures.test.ts's identically-named test."""
+    stems = [p.stem for p in _MIGRATION_V9_GATE_FIXTURES]
+    for stem in _PROGRAMME_BEARING_STEMS:
+        assert stem in stems
+        inputs = _load_fixture(FIXTURE_DIR / f"{stem}.json")["inputs"]
+        assert inputs.get("programme") is not None
+        # And migration really does build a network from it.
+        migrated = migrate_inputs_to_v9(inputs)
+        assert migrated.programme is not None
+        assert len(migrated.programme.phases) == 3
+    # And no OTHER in-scope fixture carries one -- so the two named above are
+    # exhaustive, not merely examples.
+    bearing = [
+        p.stem for p in _MIGRATION_V9_GATE_FIXTURES
+        if _load_fixture(p)["inputs"].get("programme") is not None
+    ]
+    assert sorted(bearing) == sorted(_PROGRAMME_BEARING_STEMS)
 
 
 def _issue_triples(issues) -> list[tuple[str, str, str]]:
@@ -430,20 +468,22 @@ def _strip_version_fields(run: AppraisalRun) -> dict:
     the DRAFT flag this whole task exists to protect -- and a programme-field
     alias could in principle appear inside it too.
 
-    `calc_version` (2.10.0 vs 2.11.0) legitimately differs and is the only
-    field stripped out of the four compared members. Task 12a gave the Python
-    Schedule dataclass its own `programme` field, matching finance-types.ts's
-    Schedule -- but every fixture in THIS gate's scope has `programme: None`
-    on both sides (Rule 2 excludes the only two that don't), so the field
-    compares None == None here and needs no stripping of its own. Task 12b,
-    which deletes Rule 2's exclusion, is what actually exercises it inside
-    this gate."""
+    `calc_version` (2.10.0 vs 2.11.0) and the new `schedule.programme` block
+    legitimately differ and are the only two fields stripped out of the four
+    compared members. Since Task 12b removed the exclusion,
+    `schedule.programme` really does differ for the two programme-bearing
+    fixtures -- None on the v8 side, the derived network on the v9 side --
+    because it is a v9 addition with no v8 counterpart. Everything the network
+    FEEDS (the monthly spend, the facility, every metric) is inside the
+    comparison and must be identical."""
     metrics = asdict(run.metrics)
     del metrics["calc_version"]
+    schedule = asdict(run.schedule)
+    del schedule["programme"]
     reconciliation = asdict(run.reconciliation)
     reconciliation["issues"] = _issue_triples(run.reconciliation.issues)
     return {
-        "metrics": metrics, "model": asdict(run.model), "schedule": asdict(run.schedule),
+        "metrics": metrics, "model": asdict(run.model), "schedule": schedule,
         "reconciliation": reconciliation,
     }
 
@@ -454,13 +494,69 @@ def _with_term_months(inputs: dict, term_months: int) -> dict:
     return doc
 
 
+# Task 12b. Gate 2 used to assert exact issue-set equality. With the two
+# programme-bearing fixtures in scope that assertion is WRONG, not merely
+# strict: the legacy three-package validation arm has NO OVERRUN RULE AT ALL,
+# so a migrated document legitimately reports errors its v8 antecedent could
+# never have produced. (Both fixtures breach the sale-tail rule at all three
+# synthetic terms on BOTH sides -- that part still matches exactly; it is only
+# the overrun errors that are new.)
+#
+# The exemption is a NAMED LIST of v9-only RULES, asserted below to hold
+# exactly one entry -- the same self-policing discipline
+# PROGRAMME_FIELD_ALIASES already carries. It is deliberately NOT the same
+# kind of thing as that alias map: an alias is a field RENAME across the
+# boundary, where the rule fires identically on both sides; this list is for
+# rules that exist on one side only. Mirrors golden-fixtures.test.ts's
+# V9_ONLY_VALIDATION_RULES.
+_OVERRUN_MESSAGE_RE = re.compile(
+    r"^Programme finishes month -?\d+; facility term is -?\d+\. "
+    r"Phase '.+' ends -?\d+ months after maturity\.$"
+)
+
+_V9_ONLY_VALIDATION_RULES = {
+    # spec Sec 18.8. A phase whose derived finish runs past facility maturity.
+    # It is a property of the DERIVED network, and the legacy arm derives
+    # nothing, so there is no v8 counterpart to compare against.
+    "overrun": lambda i: bool(_OVERRUN_MESSAGE_RE.match(i.message)),
+}
+
+
+def _is_v9_only_rule_issue(issue) -> bool:
+    """Applied to the POST-migration side only. Filtering both sides would let
+    a legacy issue that happens to match a predicate vanish in silence, which
+    is exactly the failure mode an exemption must not have."""
+    return any(matches(issue) for matches in _V9_ONLY_VALIDATION_RULES.values())
+
+
+def _hard_issues(issues) -> list:
+    return [i for i in issues if i.severity == "error"]
+
+
+# Every gate-2 case: each in-scope fixture at its STORED term, plus the same
+# fixture at synthetic terms 1, 2 and 3. The three properties below each run
+# over the whole list, so a defect that only shows at a short term is caught
+# by the same assertion as one that shows at the stored term.
+_V9_GATE_CASES = [
+    (f"{p.stem} @ {label}", doc)
+    for p in _MIGRATION_V9_GATE_FIXTURES
+    for label, doc in (
+        [("stored term", copy.deepcopy(_load_fixture(p)["inputs"]))]
+        + [(f"term {t}", _with_term_months(_load_fixture(p)["inputs"], t)) for t in (1, 2, 3)]
+    )
+]
+
+
+_V9_GATE_CASE_IDS = [label for label, _doc in _V9_GATE_CASES]
+
+
 @pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
 def test_v9_migration_gate_1_every_computed_figure_is_penny_identical(path: Path) -> None:
-    """Fix round 1, Finding 1: this gate proves the migration's five additive
-    no-ops move no computed figure (see the module-level comment above for
-    the full statement). It does NOT exercise the three-package -> network
-    conversion -- every in-scope fixture has `programme: None`, so that code
-    path never runs here."""
+    """Task 12b: this gate now proves BOTH arms of the migration move no
+    computed figure -- the five additive no-ops on every fixture, and the
+    three-package -> precedence-network conversion on the two
+    programme-bearing ones. See the module-level comment above for the full
+    statement."""
     doc = _load_fixture(path)
     before = run_appraisal(migrate_inputs_to_v8(doc["inputs"]))
     after = run_appraisal(migrate_inputs_to_v9(doc["inputs"]))
@@ -495,46 +591,106 @@ def test_programme_field_aliases_has_exactly_three_entries_and_each_maps_name_to
         assert to == from_.replace(".packages.", ".phases.")
 
 
-@pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
-def test_v9_migration_gate_2_the_same_issue_set_before_and_after(path: Path) -> None:
-    doc = _load_fixture(path)
-    before = _issue_triples(validate_inputs(migrate_inputs_to_v8(doc["inputs"])))
-    after = _issue_triples(validate_inputs(migrate_inputs_to_v9(doc["inputs"])))
-    assert after == before
+def test_v9_only_validation_rule_list_has_exactly_one_entry_named() -> None:
+    """Same discipline as the alias map above, for a different kind of
+    exemption. An unpoliced list of "rules we do not compare" is a gate that
+    stops gating one rule at a time. Mirrors golden-fixtures.test.ts."""
+    assert list(_V9_ONLY_VALIDATION_RULES) == ["overrun"]
 
 
-# R11's actual failure: the v8 migration gave every document a block whose
-# default made every term<=2 appraisal a hard error, so the migration
-# silently downgraded them to DRAFT while the numeric gate stayed green. Term
-# 3 goes one step further than R11's own boundary, so a rule re-narrowed to a
-# fixed "<= 2" cutoff -- rather than derived from the migrated
-# `first_period_end_month` -- would still be caught.
-@pytest.mark.parametrize("term", [1, 2, 3])
-def test_v9_migration_gate_2_term_synthetic_documents_keep_their_issue_set(term: int) -> None:
-    for path in _MIGRATION_V9_GATE_FIXTURES:
-        doc = _load_fixture(path)
-        shortened = _with_term_months(doc["inputs"], term)
-        before = _issue_triples(validate_inputs(migrate_inputs_to_v8(shortened)))
-        after = _issue_triples(validate_inputs(migrate_inputs_to_v9(shortened)))
-        assert after == before, path.stem
+# The three properties. R11's actual failure: the v8 migration gave every
+# document a block whose default made every term<=2 appraisal a hard error, so
+# the migration silently downgraded them to DRAFT while the numeric gate
+# stayed green. Terms 1-3 are run alongside each fixture's stored term because
+# that is where the interesting behaviour lives; term 3 goes one step further
+# than R11's own boundary, so a rule re-narrowed to a fixed "<= 2" cutoff
+# would still be caught.
+@pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
+def test_v9_migration_gate_2_property_1_a_valid_document_never_becomes_invalid(label: str, doc: dict) -> None:
+    before = _hard_issues(validate_inputs(migrate_inputs_to_v8(doc)))
+    if before:
+        return  # premise false; property 2 covers this case
+    # UNCONDITIONAL -- no v9-only-rule exemption applies here. This is the
+    # historical defect: a document that validated clean before migration and
+    # reports DRAFT after it.
+    assert _hard_issues(validate_inputs(migrate_inputs_to_v9(doc))) == [], label
+
+
+@pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
+def test_v9_migration_gate_2_property_2_an_invalid_document_never_becomes_valid(label: str, doc: dict) -> None:
+    before = _hard_issues(validate_inputs(migrate_inputs_to_v8(doc)))
+    if not before:
+        return  # premise false; property 1 covers this case
+    # Also UNCONDITIONAL, and it catches a real sibling of the R11 defect: v9
+    # treats a zero-duration phase as a legal milestone where the legacy arm
+    # rejected `duration < 1`, so a migration could silently UPGRADE a broken
+    # document to report-safe.
+    assert len(_hard_issues(validate_inputs(migrate_inputs_to_v9(doc)))) > 0, label
+
+
+@pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
+def test_v9_migration_gate_2_property_3_issue_sets_equal_except_v9_only_rules(label: str, doc: dict) -> None:
+    before = _issue_triples(validate_inputs(migrate_inputs_to_v8(doc)))
+    after = _issue_triples(
+        i for i in validate_inputs(migrate_inputs_to_v9(doc)) if not _is_v9_only_rule_issue(i)
+    )
+    assert after == before, label
+
+
+def test_v9_migration_gate_2_the_three_properties_are_not_vacuous_over_the_corpus() -> None:
+    """Property 1's premise, property 2's premise, and property 3's exemption
+    must each be satisfied by at least one case -- otherwise a property can
+    pass by never applying to anything."""
+    clean_before = dirty_before = exempted = 0
+    for _label, doc in _V9_GATE_CASES:
+        if _hard_issues(validate_inputs(migrate_inputs_to_v8(doc))):
+            dirty_before += 1
+        else:
+            clean_before += 1
+        exempted += sum(1 for i in validate_inputs(migrate_inputs_to_v9(doc)) if _is_v9_only_rule_issue(i))
+    assert clean_before > 0
+    assert dirty_before > 0
+    assert exempted > 0
+
+
+def test_v9_migration_gate_2_the_overrun_rule_really_fires() -> None:
+    """Excluding a rule from gate 2 cannot be allowed to hide a dead rule.
+    Without this, property 3's exemption would keep passing if the overrun
+    rule were deleted, broken, or reworded out of its own predicate. Fixture
+    H's migrated network finishes month 7; at a 3-month term all three phases
+    run past maturity. Mirrors golden-fixtures.test.ts."""
+    inputs = _load_fixture(FIXTURE_DIR / "h-programme-scurve.json")["inputs"]
+    issues = validate_inputs(migrate_inputs_to_v9(_with_term_months(inputs, 3)))
+    overruns = [i for i in issues if _V9_ONLY_VALIDATION_RULES["overrun"](i)]
+    assert len(overruns) == 3
+    assert all(i.severity == "error" for i in overruns)
+    assert sorted(i.field for i in overruns) == [
+        "programme.phases.construction", "programme.phases.professional",
+        "programme.phases.statutory",
+    ]
+    # Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
+    # round 1, Finding 1) -- so the exemption is not swallowing a rule that has
+    # silently degenerated to one message repeated three times.
+    assert len({i.message for i in overruns}) == 3
+    # And it does NOT fire at the stored term: a predicate that matched
+    # everything would satisfy the assertions above just as well.
+    assert [i for i in validate_inputs(migrate_inputs_to_v9(inputs)) if _is_v9_only_rule_issue(i)] == []
 
 
 def test_v9_migration_gate_2_a_term_2_document_from_a_gated_fixture_really_does_produce_a_genuine_short_term_issue() -> None:
-    """Fix round 1, Finding 3: the original version of this control asserted
-    on fixture H, which is EXCLUDED from this gate (Rule 2) -- and the error
-    satisfying it was the temporary "v9 programme network... not yet
-    implemented (Task 10)" placeholder that Task 10 deletes, at which point
-    the control would have silently stopped testing anything. It proved
-    neither that a GATED document produces issues, nor that a short-term RULE
-    is what fires.
+    """Fix round 1, Finding 3 (Task 8): the original version of this control
+    asserted on fixture H, and the error satisfying it was the temporary "v9
+    programme network... not yet implemented" placeholder that Task 10
+    deletes, at which point the control would have silently stopped testing
+    anything. It proved neither that a GATED document produces issues, nor
+    that a short-term RULE is what fires.
 
-    This version uses fixture I, which IS in the gate's scope (its
-    `programme` is None; Rule 2 does not touch it) and carries a
-    `sales_phasing` block whose three tranches sit at months 9/10/11 of a
-    12-month term. Shortened to a 2-month term, `term - 1 == 1`, so every
-    tranche breaches sales_phasing's own permanent term bound -- a rule with
-    nothing to do with programme scaffolding, and one that survives Task
-    9/10/11/12 unchanged."""
+    This version uses fixture I, which carries a `sales_phasing` block whose
+    three tranches sit at months 9/10/11 of a 12-month term. Shortened to a
+    2-month term, `term - 1 == 1`, so every tranche breaches sales_phasing's
+    own permanent term bound -- a rule with nothing to do with programme
+    scaffolding, and one that is NOT on the v9-only list, so property 3
+    compares it on both sides."""
     doc = _load_fixture(FIXTURE_DIR / "i-phased-sales.json")
     shortened = _with_term_months(doc["inputs"], 2)
     issues = validate_inputs(migrate_inputs_to_v9(shortened))
