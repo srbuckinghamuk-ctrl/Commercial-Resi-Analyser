@@ -1,4 +1,6 @@
-import type { AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, Schedule } from './finance-types';
+import type {
+  AnyCalculatorInputs, MonthReceipts, MonthUses, ProgrammePackage, ProgrammeNetwork, Schedule,
+} from './finance-types';
 import {
   calculateGdv, calculateTotalAcquisitionCost, unitAncillaryValuePence,
 } from '../conversion-calc-engine';
@@ -6,7 +8,7 @@ import { developedAreaSqm } from './areas';
 import { spreadByCurve } from './curves';
 import { computeCostPlan } from './cost-plan';
 import { computeVat } from './vat';
-import { isProgrammeNetwork, isLegacyProgramme } from './programme';
+import { isProgrammeNetwork, isLegacyProgramme, derivePhases } from './programme';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -15,6 +17,16 @@ export function spreadStraightLine(total: number, months: number): number[] {
   const out: number[] = new Array(months).fill(per);
   out[months - 1] = total - per * (months - 1);
   return out;
+}
+
+/** §18.5. The ONE resolution rule, both cost modes. A line's override and the
+ *  category default can never both apply. */
+export function resolvedPhaseId(
+  phaseId: string | null,
+  category: 'construction' | 'professional' | 'statutory',
+  network: ProgrammeNetwork,
+): string {
+  return phaseId ?? network.category_phase_ids[category];
 }
 
 function emptyUses(): MonthUses {
@@ -53,55 +65,120 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const receipts: MonthReceipts[] = Array.from({ length: term }, emptyReceipts);
 
   uses[0].acquisition_pence = acquisitionTotal;
-  uses[0].statutory_pence += priorApproval;
 
   // R12 (spec §18.1): `programme` is a two-state INPUT field across the version
   // union — the legacy `{ packages: {...} }` shape (v4-v8) or a v9 precedence
-  // network (`{ phases: [...] }`). Task 11 wires the network arm; until then a
-  // v9 network must fail loudly here rather than silently fall through to the
-  // auto-window arm below (Task 4 fix round 1, Finding 4) — this throw is
-  // unreachable today (no v9 document exists yet) and becomes a loud failure
-  // at the wiring site the moment Task 6's migration produces the first one.
+  // network (`{ phases: [...] }`). Task 11 wires the network arm (spec §18.5).
   const rawProgramme = 'programme' in inputs ? inputs.programme : null;
-  if (rawProgramme != null && isProgrammeNetwork(rawProgramme)) {
-    throw new Error('v9 programme network not yet supported (Task 11 wires the network arm)');
-  }
-  const programme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
+  const network = rawProgramme != null && isProgrammeNetwork(rawProgramme) ? rawProgramme : null;
+  const legacyProgramme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
 
-  if (programme == null) {
-    // auto windows — calc 2.1.0 behaviour, byte-identical (spec §6)
-    if (term === 1) {
-      uses[0].construction_pence = constructionTotal;
-      uses[0].professional_pence = professionalTotal;
-      uses[0].statutory_pence += statutorySpreadTotal;
-    } else {
-      const constructionWindow = Math.max(1, term - 2); // months 1..constructionWindow
-      const professionalWindow = Math.max(1, Math.ceil(constructionWindow / 2));
-      const constructionSpread = spreadStraightLine(constructionTotal, constructionWindow);
-      const professionalSpread = spreadStraightLine(professionalTotal, professionalWindow);
-      const statutorySpread = spreadStraightLine(statutorySpreadTotal, professionalWindow);
-      constructionSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].construction_pence += v; });
-      professionalSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].professional_pence += v; });
-      statutorySpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].statutory_pence += v; });
+  let programmeResult: Schedule['programme'] = null;
+
+  if (network != null) {
+    // §18.5. The ONE resolution rule places every resolved total over ITS OWN
+    // phase's derived window, with that phase's curve. The auto/legacy arms'
+    // month-0 lump (`uses[0].statutory_pence += priorApproval`, below) is
+    // deliberately NOT applied here — §18.5's second surviving anchor is
+    // decided per LINE, not per category: an untagged prior_approval fee
+    // stays pinned at month 0, but a tagged one must be free to leave, and a
+    // single lump sum can't tell those two cases apart.
+    const derivation = derivePhases(network);
+    const phaseById = new Map(network.phases.map((p) => [p.id, p]));
+    // Defensive, mirroring the legacy arm's belt-and-braces clamp below:
+    // unreachable for any document that passes validation — a cycle, or a
+    // phase_id / category_phase_ids entry naming an absent phase, are hard
+    // validation errors owned by validation.ts, not this file. Degrades to a
+    // defined month-0, one-month placement instead of crashing an
+    // unvalidated caller.
+    const placeInPhase = (total: number, phaseId: string, add: (m: number, v: number) => void) => {
+      const phase = phaseById.get(phaseId);
+      const derived = !('cycle' in derivation) ? derivation.byId[phaseId] : undefined;
+      const start = derived?.start_month ?? 0;
+      const duration = derived?.duration_months ?? 1;
+      const curve = phase?.curve ?? { kind: 'straight_line' as const };
+      spreadByCurve(total, duration, curve)
+        .forEach((v, i) => add(Math.min(Math.max(0, Math.floor(start + i)), term - 1), v));
+    };
+
+    // Construction: each package's own amount lands in its resolved phase.
+    // The remainder — contingency and compliance, or a headline document's
+    // WHOLE total, since headline mode carries no package rows at all — is
+    // not itself a "line" and always resolves through the category default.
+    let constructionRemainder = constructionTotal;
+    costPlan.packages.forEach((pkg) => {
+      const id = resolvedPhaseId(pkg.phase_id, 'construction', network);
+      placeInPhase(pkg.amount_pence, id, (m, v) => { uses[m].construction_pence += v; });
+      constructionRemainder -= pkg.amount_pence;
+    });
+    placeInPhase(
+      constructionRemainder, resolvedPhaseId(null, 'construction', network),
+      (m, v) => { uses[m].construction_pence += v; },
+    );
+
+    // Professional and statutory: every fee line sums exactly to its
+    // category total (computeCostPlan's totalFor()), so no remainder term is
+    // needed here.
+    costPlan.fees.forEach((fee) => {
+      if (fee.code === 'prior_approval' && fee.phase_id == null) {
+        uses[0].statutory_pence += fee.amount_pence;
+        return;
+      }
+      const add = fee.category === 'professional'
+        ? (m: number, v: number) => { uses[m].professional_pence += v; }
+        : (m: number, v: number) => { uses[m].statutory_pence += v; };
+      placeInPhase(fee.amount_pence, resolvedPhaseId(fee.phase_id, fee.category, network), add);
+    });
+
+    // §18.10: a derived block is only ever produced for a document that
+    // asked for one. A cycle has no dates to report — validation.ts hard-
+    // errors it, so `programme` stays null rather than publishing a
+    // half-formed derivation to an unvalidated caller.
+    if (!('cycle' in derivation)) {
+      programmeResult = {
+        finish_month: derivation.finish_month,
+        critical_path: derivation.critical_path,
+        phases: derivation.phases,
+      };
     }
   } else {
-    // explicit programme (spec §6.1); windows validated in validation.ts —
-    // the clamp is belt-and-braces, mirroring the auto path. The lower
-    // Math.max(0, …) mirrors schedule.py's documented lower clamp (CRITICAL 1c):
-    // an unvalidated negative start_offset must not reach `uses[-1]`, which in
-    // JS is `undefined` and throws on the very next property access (unlike
-    // Python's negative indexing, which would silently wrap to the end of the
-    // list). validation.ts hard-rejects start_offset < 0, so this is
-    // unreachable for any document that passes validation; it exists so the
-    // unvalidated path degrades to a defined, in-range placement instead of a
-    // crash.
-    const place = (pkg: ProgrammePackage, total: number, add: (m: number, v: number) => void) => {
-      spreadByCurve(total, pkg.duration_months, pkg.curve)
-        .forEach((v, i) => add(Math.min(Math.max(0, Math.floor(pkg.start_offset + i)), term - 1), v));
-    };
-    place(programme.packages.construction, constructionTotal, (m, v) => { uses[m].construction_pence += v; });
-    place(programme.packages.professional, professionalTotal, (m, v) => { uses[m].professional_pence += v; });
-    place(programme.packages.statutory, statutorySpreadTotal, (m, v) => { uses[m].statutory_pence += v; });
+    uses[0].statutory_pence += priorApproval;
+
+    if (legacyProgramme == null) {
+      // auto windows — calc 2.1.0 behaviour, byte-identical (spec §6)
+      if (term === 1) {
+        uses[0].construction_pence = constructionTotal;
+        uses[0].professional_pence = professionalTotal;
+        uses[0].statutory_pence += statutorySpreadTotal;
+      } else {
+        const constructionWindow = Math.max(1, term - 2); // months 1..constructionWindow
+        const professionalWindow = Math.max(1, Math.ceil(constructionWindow / 2));
+        const constructionSpread = spreadStraightLine(constructionTotal, constructionWindow);
+        const professionalSpread = spreadStraightLine(professionalTotal, professionalWindow);
+        const statutorySpread = spreadStraightLine(statutorySpreadTotal, professionalWindow);
+        constructionSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].construction_pence += v; });
+        professionalSpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].professional_pence += v; });
+        statutorySpread.forEach((v, i) => { uses[Math.min(i + 1, term - 1)].statutory_pence += v; });
+      }
+    } else {
+      // explicit programme (spec §6.1); windows validated in validation.ts —
+      // the clamp is belt-and-braces, mirroring the auto path. The lower
+      // Math.max(0, …) mirrors schedule.py's documented lower clamp (CRITICAL 1c):
+      // an unvalidated negative start_offset must not reach `uses[-1]`, which in
+      // JS is `undefined` and throws on the very next property access (unlike
+      // Python's negative indexing, which would silently wrap to the end of the
+      // list). validation.ts hard-rejects start_offset < 0, so this is
+      // unreachable for any document that passes validation; it exists so the
+      // unvalidated path degrades to a defined, in-range placement instead of a
+      // crash.
+      const place = (pkg: ProgrammePackage, total: number, add: (m: number, v: number) => void) => {
+        spreadByCurve(total, pkg.duration_months, pkg.curve)
+          .forEach((v, i) => add(Math.min(Math.max(0, Math.floor(pkg.start_offset + i)), term - 1), v));
+      };
+      place(legacyProgramme.packages.construction, constructionTotal, (m, v) => { uses[m].construction_pence += v; });
+      place(legacyProgramme.packages.professional, professionalTotal, (m, v) => { uses[m].professional_pence += v; });
+      place(legacyProgramme.packages.statutory, statutorySpreadTotal, (m, v) => { uses[m].statutory_pence += v; });
+    }
   }
 
   // Exit: which units sell?
@@ -197,11 +274,11 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       irrecoverable_vat_pence: vat.total_irrecoverable_pence,
     },
     vat,
-    // R12 spec §18.10. A v9 network document throws above, before reaching this
-    // return — so every document that gets here is on the auto-window or
-    // legacy-explicit-programme path, and this is null, exactly as the input
-    // is. Task 11 replaces this with the real derivation once it removes the
-    // throw and wires the network arm.
-    programme: null,
+    // R12 spec §18.10/§18.5. null on the auto-window and legacy-explicit-
+    // programme paths, exactly as their input is (decision 6); the derived
+    // `{finish_month, critical_path, phases}` block for a v9 network,
+    // computed above and null-only if that network contains a cycle
+    // (unreachable post-validation).
+    programme: programmeResult,
   };
 }

@@ -193,6 +193,11 @@ export interface CostPackageLine {
   amount_pence: number;
   contingency_class: ContingencyClassName;
   lender_eligible: boolean;
+  /** R12 spec §18.5. Carried straight through from the input line so
+   *  schedule.ts's `resolvedPhaseId()` (Task 11) can read it without
+   *  re-deriving the cost plan a second time. null on every migrated row and
+   *  on every line the user has not re-tagged. */
+  phase_id: string | null;
 }
 
 export interface ContingencyLine {
@@ -211,6 +216,11 @@ export interface FeeLineResult {
   basis: FeeBasis;
   base_pence: number;
   amount_pence: number;
+  /** R12 spec §18.5. Carried straight through from the input line so
+   *  schedule.ts's `resolvedPhaseId()` (Task 11) can read it without
+   *  re-deriving the cost plan a second time. null on every migrated row and
+   *  on every line the user has not re-tagged. */
+  phase_id: string | null;
 }
 
 /** Spec §16. The ONLY shape the UI and the memo may read cost from. Every
@@ -265,6 +275,13 @@ export function computeCostPlan(
   const packages: CostPackageLine[] = plan.packages.map((p) => ({
     id: p.id, code: p.code, label: p.label, amount_pence: p.amount_pence,
     contingency_class: p.contingency_class, lender_eligible: p.lender_eligible,
+    // `?? null`, not a bare passthrough: a raw pre-R12 stored document (run
+    // through the golden-fixture corpus's OWN inputs_version, unmigrated) has
+    // no `phase_id` key on this line at all, so `p.phase_id` reads
+    // `undefined` there -- and `undefined !== null` would make the v8->v9
+    // migration identity gate fail on a field this release added, not on
+    // anything the migration actually changed.
+    phase_id: p.phase_id ?? null,
   }));
 
   // Spec §1.1: the fractional-area product rounds once, at source.
@@ -314,6 +331,8 @@ export function computeCostPlan(
     return {
       id: f.id, code: f.code, category: f.category, label: f.label,
       basis: f.basis, base_pence: base, amount_pence: amount,
+      // See the matching comment on the package mapping above.
+      phase_id: f.phase_id ?? null,
     };
   });
 

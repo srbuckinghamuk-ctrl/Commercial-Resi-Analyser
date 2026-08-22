@@ -1,11 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { buildSchedule, spreadStraightLine } from './schedule';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV7 } from '../conversion-defaults';
-import type { CalculatorInputsV2, CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8 } from './finance-types';
-import { migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4 } from './migrate';
+import type {
+  CalculatorInputsV2, CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
+} from './finance-types';
+import {
+  migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4,
+  migrateV2toV3, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
+} from './migrate';
 import type { ProposedUnitV6 } from '../conversion-types';
 import { costPlanFromLegacyCosts, defaultContingencyClasses } from './cost-plan';
 import { DEFAULT_VAT, defaultVatTreatments } from './vat';
+import { runAppraisal } from './index';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -470,5 +476,245 @@ describe('buildSchedule VAT (spec §17.6)', () => {
     expect(schedule.uses.every((u) => u.vat_pence === 0)).toBe(true);
     expect(schedule.receipts.every((r) => r.vat_reclaim_pence === 0)).toBe(true);
     expect(schedule.totals.vat_pence).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R12 Task 11 (spec §18.5) — phase-driven spend. Cost lines resolve to phases
+// via `resolvedPhaseId`, and each phase's derived window/curve determines
+// when its money lands in the monthly ledger.
+// ---------------------------------------------------------------------------
+
+function clone<T>(x: T): T {
+  return JSON.parse(JSON.stringify(x)) as T;
+}
+
+function migrateToV9(v2: CalculatorInputsV2): CalculatorInputsV9 {
+  const v3 = migrateV2toV3(v2);
+  const v4 = migrateV3toV4(v3);
+  const v5 = migrateV4toV5(v4);
+  const v6 = migrateV5toV6(v5);
+  const v7 = migrateV6toV7(v6);
+  const v8 = migrateV7toV8(v7);
+  return migrateV8toV9(v8);
+}
+
+/**
+ * Three predecessor-free phases: `design` [0,2), `strip_out` [0,2),
+ * `construction` [4,8) — the last matches the brief's worked example
+ * verbatim. Categories default construction -> construction, professional
+ * and statutory -> design. cost_plan/conversion_costs are whatever
+ * `baseInputs()` produces (professional total 2,800,000p; statutory total
+ * 238,400p, of which 38,400p is prior_approval).
+ */
+function baseNetworkDoc(): CalculatorInputsV9 {
+  const v9 = migrateToV9(baseInputs());
+  v9.programme = {
+    anchor_month: null,
+    phases: [
+      { id: 'design', code: 'design', label: 'Design', duration_months: 2,
+        slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [] },
+      { id: 'strip_out', code: 'strip_out', label: 'Strip out', duration_months: 2,
+        slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [] },
+      { id: 'construction', code: 'construction', label: 'Construction', duration_months: 4,
+        slip_months: 0, start_offset: 4, curve: { kind: 'straight_line' }, predecessors: [] },
+    ],
+    category_phase_ids: { construction: 'construction', professional: 'design', statutory: 'design' },
+  };
+  return v9;
+}
+
+describe('phase-driven spend — §18.5', () => {
+  it('headline totals spread over the phase named by category_phase_ids.construction', () => {
+    // construction phase occupies [4,8) — ABSOLUTE months 4,5,6,7.
+    const s = buildSchedule(baseNetworkDoc());
+    const c = s.uses.map((u) => u.construction_pence);
+    expect(c.slice(0, 4)).toEqual([0, 0, 0, 0]);
+    expect(c.slice(4, 8).every((v) => v > 0)).toBe(true);
+    expect(c.slice(4, 8).reduce((a, b) => a + b, 0)).toBe(s.totals.construction_pence);
+    expect(c[8]).toBe(0);
+  });
+
+  it('GUARD 5: repointing category_phase_ids.professional changes the spend profile', () => {
+    // Two documents identical but for the map. Without this, the map could be
+    // read by nothing and every other test would still pass.
+    const a = baseNetworkDoc(); // professional -> design [0,2)
+    const b = baseNetworkDoc();
+    b.programme!.category_phase_ids.professional = 'construction'; // [4,8)
+    expect(buildSchedule(a).uses.map((u) => u.professional_pence))
+      .not.toEqual(buildSchedule(b).uses.map((u) => u.professional_pence));
+  });
+
+  it('a per-line phase_id override lands in its own window, not the category default', () => {
+    const doc = baseNetworkDoc();
+    doc.cost_plan = {
+      mode: 'detailed',
+      packages: [{
+        id: 'p1', code: 'structure', label: 'Structure', amount_pence: 6_000_000,
+        contingency_class: 'general', lender_eligible: true, notes: '',
+        vat_override: null, phase_id: 'strip_out',
+      }],
+      contingency: defaultContingencyClasses(0),
+      fee_lines: [],
+    };
+    const s = buildSchedule(doc);
+    // strip_out window is months 0-1; the package's whole amount must land there.
+    expect(s.uses[0].construction_pence + s.uses[1].construction_pence).toBe(6_000_000);
+    // construction window (category default, months 4-7) gets none of it — the
+    // remainder (base build minus the one tagged package) is zero here.
+    expect(s.uses.slice(4, 8).every((u) => u.construction_pence === 0)).toBe(true);
+    expect(s.totals.construction_pence).toBe(6_000_000);
+  });
+
+  it('acquisition stays at month 0 regardless of the acquisition phase window', () => {
+    const doc = baseNetworkDoc();
+    doc.programme!.phases.push({
+      id: 'acquisition', code: 'acquisition', label: 'Acquisition', duration_months: 1,
+      slip_months: 0, start_offset: 6, curve: { kind: 'straight_line' }, predecessors: [],
+    });
+    const s = buildSchedule(doc);
+    expect(s.totals.acquisition_pence).toBeGreaterThan(0);
+    expect(s.uses[0].acquisition_pence).toBe(s.totals.acquisition_pence);
+  });
+
+  it('prior_approval stays at month 0 by default and moves only when tagged', () => {
+    const untagged = baseNetworkDoc();
+    // Isolate: zero the other statutory fee (building_control; cil_s106 is
+    // already 0 in baseInputs()) and move the statutory category default
+    // itself off month 0, so any month-0 statutory spend can only be the
+    // prior_approval pin.
+    untagged.cost_plan.fee_lines = untagged.cost_plan.fee_lines.map((f) => (
+      f.code === 'building_control' ? { ...f, amount_pence: 0 } : f
+    ));
+    untagged.programme!.category_phase_ids.statutory = 'construction'; // [4,8), nowhere near month 0
+    const tagged = clone(untagged);
+    tagged.cost_plan.fee_lines = tagged.cost_plan.fee_lines.map((f) => (
+      f.code === 'prior_approval' ? { ...f, phase_id: 'construction' } : f
+    ));
+
+    expect(buildSchedule(untagged).uses[0].statutory_pence).toBeGreaterThan(0);
+    expect(buildSchedule(tagged).uses[0].statutory_pence).toBe(0);
+  });
+
+  it('every window still sums to its total exactly (the residue invariant)', () => {
+    const doc = baseNetworkDoc();
+    doc.programme!.category_phase_ids.professional = 'construction'; // exercises a >1-month curve too
+    const s = buildSchedule(doc);
+    expect(s.uses.reduce((t, u) => t + u.construction_pence, 0)).toBe(s.totals.construction_pence);
+    expect(s.uses.reduce((t, u) => t + u.professional_pence, 0)).toBe(s.totals.professional_pence);
+    expect(s.uses.reduce((t, u) => t + u.statutory_pence, 0)).toBe(s.totals.statutory_pence);
+  });
+
+  it('the auto path is untouched when programme is null (byte-identical to calc 2.10.0)', () => {
+    const v2 = baseInputs();
+    const v8 = migrateV7toV8(migrateV6toV7(migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(v2))))));
+    const v9 = migrateV8toV9(v8);
+    expect(v9.programme).toBeNull();
+    expect(buildSchedule(v9)).toEqual(buildSchedule(v8));
+    expect(buildSchedule(v9).programme).toBeNull();
+  });
+
+  /**
+   * GUARD 2. `planning` [0,2), FS-predecessor of `construction` [duration 3),
+   * lag 0. Acquisition (42,150,000p, established by the "places acquisition..."
+   * test above) is fully funded by a matching committed cash equity source —
+   * zero facility involvement, zero interest contribution from it — isolating
+   * the whole interest/peak-debt story to the 300,000,000p construction spend
+   * (400 sqm x 750,000p/sqm, headline, 0% contingency, 0 compliance; straight
+   * line over 3 months = 100,000,000p/month exactly, no rounding residue).
+   * Facility: rolled-up interest at 12%pa (1%/month), 0% arrangement/exit fee,
+   * 100% development-cost advance, a facility ceiling far above anything drawn.
+   * retain_all / 8-month term: no sale, no repayment before the final month,
+   * so the balance is monotonic and the final month's pre-repayment balance
+   * IS the peak.
+   *
+   * BASE (planning start 0, finish 2 -> construction start 2, finish 5;
+   * draws at months 2,3,4; rolled-up interest at 1%/month on the RUNNING
+   * balance, i.e. interest_m = round((opening_m + draw_m) * 0.01)):
+   *   m0-1: opening 0, draw 0, interest 0, balance 0.
+   *   m2: opening 0,           draw 100,000,000 -> interest   1,000,000 -> balance 101,000,000
+   *   m3: opening 101,000,000, draw 100,000,000 -> interest   2,010,000 -> balance 203,010,000
+   *   m4: opening 203,010,000, draw 100,000,000 -> interest   3,030,100 -> balance 306,040,100
+   *   m5: opening 306,040,100, draw 0            -> interest   3,060,401 -> balance 309,100,501
+   *   m6: opening 309,100,501, draw 0            -> interest   3,091,005 -> balance 312,191,506
+   *   m7: opening 312,191,506, draw 0            -> interest   3,121,915 -> balance 315,313,421 (peak, final month)
+   *   total interest = 1,000,000+2,010,000+3,030,100+3,060,401+3,091,005+3,121,915 = 15,313,421
+   *   (identity check: 300,000,000 draws + 15,313,421 interest = 315,313,421 = peak, matches)
+   *
+   * SLIPPED (planning.slip_months = +3: start 3, finish 5 -> construction
+   * start 5, finish 8; draws at months 5,6,7 — the LAST three months of the
+   * 8-month term, so the peak is captured at m7 with no idle post-draw months):
+   *   m0-4: balance 0.
+   *   m5: opening 0,           draw 100,000,000 -> interest 1,000,000 -> balance 101,000,000
+   *   m6: opening 101,000,000, draw 100,000,000 -> interest 2,010,000 -> balance 203,010,000
+   *   m7: opening 203,010,000, draw 100,000,000 -> interest 3,030,100 -> balance 306,040,100 (peak, final month)
+   *   total interest = 1,000,000+2,010,000+3,030,100 = 6,040,100
+   *   (identity check: 300,000,000 draws + 6,040,100 interest = 306,040,100 = peak, matches)
+   */
+  function guard2Doc(): CalculatorInputsV9 {
+    const v9 = migrateToV9(baseInputs());
+    v9.finance = {
+      ...v9.finance,
+      term_months: 8,
+      annual_interest_rate_pct: 12,
+      arrangement_fee_pct: 0,
+      exit_fee_pct: 0,
+      committed_net_facility_pence: 5_000_000_000,
+      day_one_advance_pence: null,
+    };
+    v9.equity_sources = [{
+      id: 'eq1', classification: 'cash', amount_pence: 42_150_000,
+      timing_month: 0, repayment_priority: 1, evidence_status: 'confirmed', notes: '',
+    }];
+    v9.exit_strategy = {
+      route: 'retain_all', selling_agent_fee_pct: 0, selling_legal_fee_pence: 0, retained_units: [],
+    };
+    v9.conversion_costs = {
+      ...v9.conversion_costs,
+      construction_cost_per_sqm_pence: 750_000, total_construction_sqm: 400,
+    };
+    v9.cost_plan = {
+      mode: 'headline', packages: [], contingency: defaultContingencyClasses(0), fee_lines: [],
+    };
+    v9.programme = {
+      anchor_month: null,
+      phases: [
+        { id: 'planning', code: 'planning', label: 'Planning', duration_months: 2,
+          slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [] },
+        { id: 'construction', code: 'construction', label: 'Construction', duration_months: 3,
+          slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' },
+          predecessors: [{ phase_id: 'planning', type: 'FS', lag_months: 0 }] },
+      ],
+      category_phase_ids: { construction: 'construction', professional: 'planning', statutory: 'planning' },
+    };
+    return v9;
+  }
+
+  function withPlanningSlip(doc: CalculatorInputsV9, months: number): CalculatorInputsV9 {
+    const c = clone(doc);
+    c.programme!.phases.find((p) => p.id === 'planning')!.slip_months = months;
+    return c;
+  }
+
+  it('GUARD 2: slipping a critical phase moves the successor start AND peak debt/interest, absolutely', () => {
+    const base = runAppraisal(guard2Doc());
+    const slipped = runAppraisal(withPlanningSlip(guard2Doc(), 3));
+
+    const startOf = (r: typeof base, id: string) =>
+      r.schedule.programme!.phases.find((p) => p.id === id)!.start_month;
+
+    expect(startOf(base, 'construction')).toBe(2);
+    expect(startOf(slipped, 'construction')).toBe(5);
+
+    // Hand-derived above — not read off a prior run of this code.
+    expect(base.metrics.peak_debt_pence).toBe(315_313_421);
+    expect(base.model.totals.interest_pence).toBe(15_313_421);
+    expect(slipped.metrics.peak_debt_pence).toBe(306_040_100);
+    expect(slipped.model.totals.interest_pence).toBe(6_040_100);
+
+    // Absolute, not directional — R11 shipped a direction-only guard that was
+    // blind to a constant added to both sides.
+    expect(slipped.metrics.peak_debt_pence).not.toBe(base.metrics.peak_debt_pence);
+    expect(slipped.model.totals.interest_pence).not.toBe(base.model.totals.interest_pence);
   });
 });
