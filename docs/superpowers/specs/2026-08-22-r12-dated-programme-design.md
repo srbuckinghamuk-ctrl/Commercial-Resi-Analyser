@@ -231,8 +231,11 @@ so is a funder's first-draw date or a warranty sign-off.
 A backward pass over the reverse topological order:
 
 ```
-late_finish(p) = programme_finish                          if p has no successors
-               = min over successors s of late_ref(p, s)   otherwise
+own_bound(p)   = programme_finish       if duration_months(p) >= 1
+               = programme_finish − 1   if duration_months(p) = 0   (milestone)
+
+late_finish(p) = min( own_bound(p),
+                      min over successors s of late_ref(p, s) )
 
 late_ref(p, s) = late_start(s) − lag_months(d)                        if d.type = 'FS'
                = late_start(s) + duration_months(p) − lag_months(d)   if d.type = 'SS'
@@ -243,7 +246,46 @@ total_float(p) = late_start(p) − start(p)
 is_critical(p) = total_float(p) == 0
 ```
 
-(`d` is the dependency on `s` that names `p`.)
+(`d` is the dependency on `s` that names `p`. The inner `min` over an empty
+successor list is `+infinity`, so a phase with no successors takes its
+`own_bound`.)
+
+### `own_bound` applies to every phase, not only the successorless ones [corrected during R12 implementation]
+
+The textbook formulation bounds late finish by the project end **only** for
+activities with no successors, and takes the successor minimum otherwise. That is
+wrong here, and this spec carried the error until Task 2's float tests caught it.
+
+**An `SS` edge constrains the successor's *start*. It says nothing about the
+predecessor's *finish*.** So a phase can have successors and still be the phase
+whose own finish defines the end of the programme:
+
+> `construction` runs 10 months from month 0. `marketing` starts `SS + 6` and runs
+> 2 months, finishing at month 8. The programme finishes at month 10 — set by
+> construction. The successor-only rule gives
+> `late_finish(construction) = late_start(marketing) + 10 − 6 = 12`, hence a total
+> float of **2**. Delay construction by one month and the programme finishes at 11.
+> Its true float is **0**.
+
+A lender reading that report would see two months of free buffer on the one
+activity that has none. Taking the minimum against `own_bound` for every phase is
+what standard CPM achieves with an implicit project-end node that every activity
+ultimately feeds; stating it as a bound rather than a node is the same rule
+without the phantom vertex.
+
+The milestone arm of `own_bound` mirrors §18.2's programme-finish formula: a
+zero-duration phase contributes `start + 1` to the finish, so its own bound is
+`programme_finish − 1`. Without it a trailing `maturity_tail` milestone — the
+phase that *defines* the finish — reports a float of 1.
+
+Neither correction can produce negative float. For `duration >= 1`,
+`programme_finish >= finish(p)` by construction of §18.2's maximum, so
+`own_bound(p) − duration(p) >= start(p)`; for a milestone,
+`programme_finish >= start(p) + 1`, so `own_bound(p) >= start(p)`. Adding a term
+to a `min` only lowers `late_finish`, so it cannot mask a negative float arising
+elsewhere either. (Negative float **is** still reachable through a negative
+`slip_months` on a successor — §18.2 permits acceleration — and that is a
+validation matter, not a derivation one.)
 
 `critical_path` is reported as the list of phase ids with zero float, in
 topological order.
