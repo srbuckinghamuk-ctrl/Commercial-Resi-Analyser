@@ -470,18 +470,53 @@ engine ignores. The v8→v9 gate is therefore the pair:
 
 1. **Numeric identity** — every fixture, every computed figure, penny-identical
    across migration, both engines.
-2. **Validation identity** — `validateInputs` returns the **same issue set**
-   before and after migration, over every fixture plus synthetic **term-1** and
-   **term-2** documents.
+2. **Validation identity** — three separately-falsifiable properties, over every
+   fixture plus synthetic **term-1**, **term-2** and **term-3** documents.
 
-**The one exemption to (2), and how it is bounded.** The v8 sale-tail rule
-reports its field as `programme.packages.<name>`; the v9 rule reports
-`programme.phases.<id>`. Migration assigns `id = <name>` precisely so these
-correspond one-to-one, and the gate compares issue sets under a declared alias
-map of exactly three entries. A test asserts the alias map has **three** entries
-and that every other issue matches on field and message with no aliasing at all.
-The exemption cannot be widened without failing that test, which is the property
-R11 required of it: narrow by construction, not narrow by intention.
+### Validation identity is three properties, not one equality [corrected during R12 implementation]
+
+This spec originally required `validateInputs` to return the **same issue set**
+before and after migration. That is the wrong assertion once v9 carries rules v8
+never had, and it was corrected during implementation after a review ran the
+comparison with the fixture exclusion bypassed.
+
+**§18.8's overrun rule has no v8 counterpart at all** — the legacy arm validates
+window bounds but has no concept of a programme finishing after maturity. Both
+programme-bearing fixtures breach the sale-tail rule at all three synthetic terms,
+so exact equality would fail on behaviour that is new *and correct*. Relaxing the
+comparison generally would have been the easy answer and the wrong one: it would
+weaken the gate everywhere to accommodate one rule.
+
+The three properties:
+
+1. **No valid document becomes invalid.** If the pre-migration document has no
+   hard (`severity: 'error'`) issue, the post-migration document has none either.
+   **Unconditional — no filter, no exemption.** This is R11's actual defect and
+   the only property that describes a silent DRAFT downgrade.
+2. **No invalid document becomes valid.** The converse, also unconditional. This
+   is not symmetry for its own sake: v9 treats a zero-duration phase as a legal
+   milestone where the legacy arm rejected `duration_months < 1`, so a migration
+   could silently *upgrade* a broken document to report-safe.
+3. **Issue sets equal, except issues from a named list of v9-only rules.** The
+   list holds exactly **one** entry — the overrun rule — asserted as such, with a
+   separate control proving the overrun rule still fires. Excluding a rule from
+   the comparison must never be able to hide a rule that has stopped working.
+
+**Two exemptions of different shapes, and they must not be conflated.** The
+three-entry `PROGRAMME_FIELD_ALIASES` map is a **field rename** across the
+boundary: the v8 sale-tail rule reports `programme.packages.<name>` where v9
+reports `programme.phases.<id>`, and migration assigns `id = <name>` precisely so
+they correspond one-to-one. The one-entry v9-only-rule list is a **rule that has
+no v8 counterpart**. Both are asserted to their exact sizes, so neither can be
+widened without a test failing — the property R11 required: narrow by
+construction, not narrow by intention.
+
+**Property 3's exemption is applied to the post-migration side only**, and that
+one-sidedness is load-bearing. Applying it symmetrically would let a v9-only-rule
+issue on the *pre-migration* side be silently dropped too, which is a hole rather
+than an exemption. Because the pre-migration side never carries such an issue
+today, a symmetric refactor would be a silent no-op — so the one-sidedness is
+pinned by its own test rather than by a comment.
 
 ---
 
@@ -743,7 +778,8 @@ Without the second arm, `anchor` is indistinguishable from a no-op.
 professional spend profiles. Without this, the map could be read by nothing.
 
 **6. Migration identity, both axes.** §18.7's numeric and validation gates, with
-the three-entry alias assertion bounding the one exemption.
+the three-entry alias assertion and the one-entry v9-only-rule assertion bounding
+   the two exemptions, which are of different shapes and must not be conflated.
 
 **7. Lever order-independence.** All five levers applied in several orders to one
 document give identical results (§18.9).
