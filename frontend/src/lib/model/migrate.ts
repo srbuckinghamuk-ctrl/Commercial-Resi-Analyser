@@ -879,10 +879,18 @@ export function migrateV8toV9(v8: CalculatorInputsV8): CalculatorInputsV9 {
   }
   const { inputs_version: _v8Version, cost_plan, programme, sales_phasing, refinance, scenarios, ...rest } = v8;
 
-  const network: ProgrammeNetwork | null = programme == null ? null : {
-    anchor_month: programme.anchor_month,
-    phases: (Object.keys(PACKAGE_TO_PHASE) as Array<keyof typeof PACKAGE_TO_PHASE>).map((name) => {
+  const network: ProgrammeNetwork | null = programme == null ? null : (() => {
+    const phases = (Object.keys(PACKAGE_TO_PHASE) as Array<keyof typeof PACKAGE_TO_PHASE>).map((name) => {
       const pkg = programme.packages[name];
+      // Loud and NAMED: a stored `programme` missing one of its three packages
+      // is malformed data, not a type this function's signature can rule out
+      // (a hand-edited or hand-crafted stored row is not bound by the compiler).
+      // An anonymous TypeError reading `.duration_months` off `undefined` here
+      // would send whoever hits this hunting through a stack trace instead of
+      // straight to the missing key.
+      if (pkg == null) {
+        throw new Error(`migrateV8toV9: stored programme is missing its "${name}" package`);
+      }
       return {
         id: name,
         code: PACKAGE_TO_PHASE[name].code,
@@ -893,11 +901,15 @@ export function migrateV8toV9(v8: CalculatorInputsV8): CalculatorInputsV9 {
         curve: pkg.curve,
         predecessors: [],
       };
-    }),
-    category_phase_ids: {
-      construction: 'construction', professional: 'professional', statutory: 'statutory',
-    },
-  };
+    });
+    // DERIVED from the phases just built, not restated -- id === package name
+    // (asserted in migrate.test.ts) is what makes this correct, the same
+    // discipline PROGRAMME_FIELD_ALIASES applies to its own map.
+    const categoryPhaseIds = Object.fromEntries(
+      phases.map((p) => [p.id, p.id]),
+    ) as ProgrammeNetwork['category_phase_ids'];
+    return { anchor_month: programme.anchor_month, phases, category_phase_ids: categoryPhaseIds };
+  })();
 
   const withSlip = (s: ScenarioOverrides): ScenarioOverrides => ({
     ...s, phase_slip_phase_id: null, phase_slip_months: 0,
