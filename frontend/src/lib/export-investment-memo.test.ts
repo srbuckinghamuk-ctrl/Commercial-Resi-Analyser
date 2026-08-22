@@ -5,7 +5,7 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV6, CalculatorInputsV8,
-  AreaBridgeInputs,
+  CalculatorInputsV9, AreaBridgeInputs,
 } from './model';
 import {
   runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
@@ -20,6 +20,7 @@ import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity'
 import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
 import { LEVER_LABEL } from './sensitivity-format';
+import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -1606,5 +1607,158 @@ describe('R11 — VAT draft gate and memo section', () => {
     const blob = generateInvestmentMemo(mockProject, run, mockEligibility, prov);
     const info = await inspectPdf(blob);
     expect(info.pages.flatMap(watermarkTexts)).toEqual([]);
+  });
+});
+
+// R12 (Task 18, spec §18.10). Fixture S (`s-dated-programme.json`) is the
+// ONLY v9 document in the corpus carrying a POPULATED phase network — it is
+// the sole fixture able to exercise the memo's programme section at all,
+// which is exactly why the earlier throw on a v9 network (removed by this
+// task) never fired across Tasks 1-17. Loaded by explicit filename, matching
+// every other fixture this file reads (never a directory scan).
+describe('R12 memo programme section (spec §18.10, Task 18)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+  const fixtureS = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8'),
+  ) as { inputs: CalculatorInputsV9 };
+
+  function cloneS(): CalculatorInputsV9 {
+    return JSON.parse(JSON.stringify(fixtureS.inputs)) as CalculatorInputsV9;
+  }
+
+  it('renders the phase table, the critical path and the derived finish against the facility term (fixture S)', async () => {
+    const inputs = cloneS();
+    const run = runAppraisal(inputs);
+    const prog = run.schedule.programme;
+    expect(prog).not.toBeNull();
+    const p = prog!;
+    // Fixture S's own hand-derived, pre-registered figures (fixture note + expected_metrics).
+    expect(p.finish_month).toBe(22);
+    expect(inputs.finance.term_months).toBe(24);
+    expect(p.critical_path).toEqual([
+      'acquisition', 'planning', 'conditions', 'strip_out', 'construction',
+      'testing', 'building_control', 'practical_completion', 'unit_completions',
+      'sales', 'maturity_tail',
+    ]);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    const anchor = programmeAnchor(inputs);
+    const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
+
+    // The phase table: every phase's own label and derived start/finish
+    // (read off schedule.programme, never recomputed here) appear, and the
+    // two duration-0 phases (practical_completion, maturity_tail) are marked
+    // "Milestone" rather than "0 mo".
+    for (const dp of p.phases) {
+      expect(text).toContain(dp.label);
+      expect(text).toContain(monthLabel(dp.start_month));
+      expect(text).toContain(monthLabel(dp.finish_month));
+    }
+    expect(text).toContain('Milestone');
+    // marketing's total float is 7 (fixture note (c)) — no phase's duration or
+    // slip is 7, so this figure can only have come from the float column.
+    expect(text).toContain('7 mo');
+
+    // Critical path — the engine's own order (schedule.programme.critical_path),
+    // transcribed as labels, not re-derived. ' -> ', not '→': jsPDF's standard
+    // helvetica font has no WinAnsi glyph for the arrow (see the generator's
+    // own comment at this line).
+    const expectedPath = p.critical_path
+      .map((id) => p.phases.find((ph) => ph.id === id)!.label)
+      .join(' -> ');
+    expect(text).toContain(`Critical path: ${expectedPath}.`);
+
+    // Derived finish against the facility term: 22 vs 24 is 2 months of headroom.
+    expect(text).toContain(
+      `Derived finish: ${monthLabel(22)}, within the facility term of 24 months (2 month(s) of headroom).`,
+    );
+
+    // The unmodified base case carries no slip (fixture S states this of itself).
+    expect(text).toContain('No slip recorded on the base case.');
+
+    // Ruling A's memo arm: a v9 network document must NOT be silently
+    // rendered as auto-windows — the exact defect the throw existed to
+    // prevent (Task 4 fix round 1, Finding 1; progress.md's "Ruling A").
+    expect(text).toContain('Programme: dated phase network, 14 phases');
+    expect(text).not.toContain('Programme: auto-derived from term');
+    expect(text).not.toContain('Key dates — start on site, practical completion, sales/letting period');
+    expect(text).not.toContain('Critical path, long-lead items');
+  });
+
+  it('a programme == null document renders the §6 auto-window disclosure and no phase table', async () => {
+    const inputs = cloneS();
+    inputs.programme = null;
+    const run = runAppraisal(inputs);
+    expect(run.schedule.programme).toBeNull();
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    // The negative control for the assertions above: the SAME document minus
+    // the network takes the auto path and says so.
+    expect(text).toContain('Programme: auto-derived from term (spec §6).');
+    expect(text).toContain('Key dates — start on site, practical completion, sales/letting period');
+    expect(text).toContain('Critical path, long-lead items');
+
+    // No phase table and no derived-programme prose: the auto path has no
+    // dependency structure to report (spec §18.10's first stated limitation).
+    expect(text).not.toContain('Critical path:');
+    expect(text).not.toContain('Derived finish:');
+    expect(text).not.toContain('Slip recorded on the base case');
+    expect(text).not.toContain('Technical design'); // a phase label unique to the network
+  });
+
+  it("a slip within a phase's own float leaves the finish unchanged and is reported as a base-case slip", async () => {
+    const inputs = cloneS();
+    // Fixture note (c): design carries exactly 1 month of float.
+    const design = inputs.programme!.phases.find((ph) => ph.id === 'design')!;
+    design.slip_months = 1;
+    const run = runAppraisal(inputs);
+    const prog = run.schedule.programme!;
+    const dp = prog.phases.find((ph) => ph.id === 'design')!;
+    expect(dp.slip_months).toBe(1);
+    // Guard 1 (spec §13): slipping a phase with float >= 1 leaves the
+    // programme finish unchanged.
+    expect(prog.finish_month).toBe(22);
+    expect(run.reconciliation.report_safe).toBe(true);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+    expect(text).toContain('Slip recorded on the base case: Technical design +1 month(s).');
+    expect(text).not.toContain('No slip recorded on the base case.');
+    expect(text).toContain(
+      `Derived finish: ${formatProgrammeMonth(programmeAnchor(inputs), 22)}, within the facility term of 24 months (2 month(s) of headroom).`,
+    );
+  });
+
+  it('an overrunning document is DRAFT via the existing report_safe / §13.3 mechanism, with no new DraftReason', async () => {
+    const inputs = cloneS();
+    // construction is on the critical path with zero float — slipping it
+    // moves the programme finish by exactly the same amount (Guard 1).
+    const construction = inputs.programme!.phases.find((ph) => ph.id === 'construction')!;
+    construction.slip_months = 3;
+    const run = runAppraisal(inputs);
+    const prog = run.schedule.programme!;
+    expect(prog.finish_month).toBe(25);
+    expect(prog.finish_month).toBeGreaterThan(inputs.finance.term_months);
+    // programme.overrun is a hard validation error (validation.ts), so
+    // report_safe is false — no new DraftReason, the existing §13.3 gate.
+    expect(run.reconciliation.report_safe).toBe(false);
+
+    const prov = buildProvenance(run, null);
+    expect(prov.draftReason).toBe('unreconciled');
+    expect(prov.documentStatus).toBe('DRAFT');
+
+    const blob = generateInvestmentMemo(mockProject, run, null, prov);
+    const info = await inspectPdf(blob);
+    expect(info.pages.flatMap(watermarkTexts))
+      .toContain('DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE');
+
+    const text = documentProse(info);
+    expect(text).toContain(
+      `Derived finish: ${formatProgrammeMonth(programmeAnchor(inputs), 25)} — 1 month(s) after the facility term of 24 months.`,
+    );
   });
 });
