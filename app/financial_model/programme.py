@@ -16,6 +16,18 @@ from dataclasses import dataclass, field
 from .types import Dependency, Phase, ProgrammeNetwork
 
 
+def is_programme_network(p: object) -> bool:
+    """Spec Sec 18.1. `programme` is a two-state field. These are the ONLY
+    sanctioned discriminators -- Tasks 10/12 replace the scaffolding arms and
+    change these, not every call site. Mirror of programme.ts's
+    isProgrammeNetwork/isLegacyProgramme."""
+    return hasattr(p, "phases")
+
+
+def is_legacy_programme(p: object) -> bool:
+    return hasattr(p, "packages")
+
+
 @dataclass
 class DerivedPhase:
     id: str

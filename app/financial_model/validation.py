@@ -12,6 +12,7 @@ from .areas import area_bridge
 from .cost_plan import compute_cost_plan
 from .engine import MonthlyModel, pct
 from .lender_valuation import compute_lender_gdv
+from .programme import is_legacy_programme, is_programme_network
 from .schedule import Schedule
 from .types import FEE_CODE_CATEGORY, AnyCalculatorInputs
 from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
@@ -737,8 +738,20 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     # [0, term-2] -- the schedule's programme arm only clamps the upper bound,
     # so a negative start_offset or an oversized window must be caught here as
     # a hard error.
+    # R12 (spec Sec 18.1): `programme` is a two-state field across the version
+    # union -- the legacy `{ packages: {...} }` shape (v4-v8) or a v9
+    # precedence network (`{ phases: [...] }`). `is_legacy_programme` narrows
+    # to the legacy shape this block validates. A v9 network cannot silently
+    # skip validation: this function returns issues rather than raising, so it
+    # reports a hard error instead -- Task 10 replaces this arm with the
+    # network's own rules. Mirrors validation.ts's isProgrammeNetwork branch.
     programme = getattr(inputs, "programme", None)
-    if programme is not None:
+    if programme is not None and is_programme_network(programme):
+        err(
+            "programme",
+            "This document carries a v9 programme network, which validation does not yet implement (Task 10).",
+        )
+    elif programme is not None and is_legacy_programme(programme):
         term = max(1, math.floor(inputs.finance.term_months))
         # validation.ts walks `Object.entries(inputs.programme.packages)`;
         # ProgrammePackages is a Pydantic model rather than a plain map, so the

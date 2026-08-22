@@ -25,6 +25,7 @@ from .cost_plan import compute_cost_plan
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
+from .programme import is_legacy_programme, is_programme_network
 from .types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
@@ -255,7 +256,17 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
 
     programme = getattr(inputs, "programme", None)
 
-    if programme is None:
+    # R12 (spec Sec 18.1): `programme` is a two-state field across the version
+    # union -- the legacy `{ packages: {...} }` shape (v4-v8) or a v9
+    # precedence network (`{ phases: [...] }`). Nothing constructs a v9
+    # document yet (Task 7 wires the migration), so this raise is unreachable
+    # today; it becomes a loud failure the moment one exists, rather than the
+    # silent misread the legacy `programme.packages` read below would give it.
+    # Mirrors schedule.ts's isProgrammeNetwork guard.
+    if programme is not None and is_programme_network(programme):
+        raise ValueError("v9 programme network not yet supported (Task 12 wires the network arm)")
+
+    if programme is None or not is_legacy_programme(programme):
         # auto windows -- calc 2.1.0 behaviour, byte-identical (spec Sec 6)
         if term == 1:
             uses[0].construction_pence = construction_total

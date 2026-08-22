@@ -148,6 +148,11 @@ class ScenarioOverrides(Model):
     construction_cost_adjustment_pct: float
     timeline_adjustment_months: float
     interest_rate_adjustment_pct: float
+    # R12 spec Sec 18.9. Defaulted so every existing construction site and
+    # fixture keeps parsing; the v9 MIGRATION writes them explicitly anyway
+    # (Sec 18.7), which is what the identity gate actually asserts.
+    phase_slip_phase_id: str | None = None
+    phase_slip_months: int = 0
 
 
 class Scenarios(Model):
@@ -388,6 +393,27 @@ class RefinanceInputs(Model):
     legal_costs_pence: int
 
 
+class PhaseAnchor(Model):
+    """Spec Sec 18.6. ``offset_months`` carries no lower bound for the same
+    reason SalesPhasingTranche.month_offset does not: validation.py owns the
+    window rule and the spec-worded message."""
+
+    phase_id: str
+    offset_months: int = Field(ge=-1200, le=1200)
+
+
+class SalesPhasingTrancheV9(SalesPhasingTranche):
+    anchor: PhaseAnchor | None = None
+
+
+class SalesPhasingInputsV9(Model):
+    tranches: list[SalesPhasingTrancheV9] = Field(default_factory=list, max_length=1200)
+
+
+class RefinanceInputsV9(RefinanceInputs):
+    anchor: PhaseAnchor | None = None
+
+
 class CalculatorInputsV4(CalculatorInputsV3):
     """Mirrors CalculatorInputsV3 plus the three additive (nullable)
     Release 3a blocks (spec Sec 6.1, calc 2.2.0).
@@ -600,6 +626,9 @@ class CostPackage(Model):
     # (validation, Task 9). None on every migrated line and on every line the
     # user has not overridden. Read ONLY through resolve_vat_treatment().
     vat_override: VatOverride | None = None
+    # R12 spec Sec 18.5. Overrides the category default; None on every migrated
+    # row. Read ONLY through resolved_phase_id() (Task 12).
+    phase_id: str | None = None
 
 
 class ContingencyClass(Model):
@@ -626,6 +655,9 @@ class FeeLine(Model):
     # (validation, Task 9). None on every migrated line and on every line the
     # user has not overridden. Read ONLY through resolve_vat_treatment().
     vat_override: VatOverride | None = None
+    # R12 spec Sec 18.5. Overrides the category default; None on every migrated
+    # row. Read ONLY through resolved_phase_id() (Task 12).
+    phase_id: str | None = None
 
 
 class CostPlanInputs(Model):
@@ -771,9 +803,28 @@ class CalculatorInputsV8(CalculatorInputsV7):
     vat: VatInputs = Field(default_factory=lambda: DEFAULT_VAT.model_copy(deep=True))
 
 
+class CalculatorInputsV9(CalculatorInputsV8):
+    """Mirrors CalculatorInputsV8 with the Sec 18 programme network. Subclasses
+    V8 for the same reason V8 subclasses V7: the engine dispatches on it, and a
+    flat re-declaration would make those isinstance checks silently False for
+    v9 documents.
+
+    ``programme`` NARROWS from ``ProgrammeInputs | None`` to
+    ``ProgrammeNetwork | None`` -- the v8 three-package shape does not survive
+    migration (Sec 18.7). A v8 document therefore fails
+    ``CalculatorInputsV9.model_validate`` on its programme block, which is the
+    intended mutual exclusion, not an accident."""
+
+    inputs_version: Literal[9] = 9  # type: ignore[assignment]
+    programme: ProgrammeNetwork | None = None  # type: ignore[assignment]
+    sales_phasing: SalesPhasingInputsV9 | None = None  # type: ignore[assignment]
+    refinance: RefinanceInputsV9 | None = None  # type: ignore[assignment]
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
+    | CalculatorInputsV9
 )
 
 
@@ -785,6 +836,12 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v9 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # programme network and every other post-v2 field -- R8's silent-corruption
+    # defect, which returned 201 while dropping a confirmed equity source.
+    if version == 9:
+        return CalculatorInputsV9.model_validate(doc)
     # R11 ruling R10: without this branch a v8 document falls through every
     # check below to the CalculatorInputsV2 default, silently dropping the VAT
     # block and every other post-v2 field -- R8's silent-corruption class of
@@ -817,4 +874,4 @@ FlagCode = Literal[
     "vat_funding_gap",
 ]
 
-CALC_VERSION = "2.10.0"
+CALC_VERSION = "2.11.0"
