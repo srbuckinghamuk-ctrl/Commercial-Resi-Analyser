@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import AcquisitionPage from './AcquisitionPage';
-import { runAppraisal, migrateV6toV7, migrateV7toV8 } from '../../lib/model';
-import type { CalculatorInputsV8 } from '../../lib/model';
+import { runAppraisal, migrateV6toV7, migrateV7toV8, migrateV8toV9 } from '../../lib/model';
+import type { CalculatorInputsV9 } from '../../lib/model';
 import {
   welshInputs as welshInputsV6, scottishInputs as scottishInputsV6,
   unconfirmedJurisdictionInputs as unconfirmedJurisdictionInputsV6,
@@ -10,26 +10,27 @@ import {
 
 // R10 Task 12. memo-fixtures.ts is shared with export-investment-memo.test.ts
 // and accessor-guard.test.ts and these three fixtures still return
-// CalculatorInputsV6 (out of scope for that task's V6->V7 prop rename, and for
-// R11 Task 10's V7->V8 one). AcquisitionPage is now typed on
-// CalculatorInputsV8, so every fixture is migrated once, here, rather than
-// widening the shared fixture file for one caller.
+// CalculatorInputsV6 (out of scope for that task's V6->V7 prop rename, for
+// R11 Task 10's V7->V8 one, and for R12 Task 18b's V8->V9 one).
+// AcquisitionPage is now typed on CalculatorInputsV9, so every fixture is
+// migrated once, here, rather than widening the shared fixture file for one
+// caller.
 //
 // Fix round 1: that containment is safe specifically because its failure
 // mode is loud. `migrateV6toV7` refuses an already-v7 document ("input is
-// already a v7 document") and `migrateV7toV8` an already-v8 one, so the day
-// memo-fixtures.ts is widened to return CalculatorInputsV8 -- making these
-// calls redundant -- every wrapper below throws immediately and every test in
-// this file fails at setup, not a silent double-migration or a quietly wrong
-// document.
-function welshInputs(): CalculatorInputsV8 {
-  return migrateV7toV8(migrateV6toV7(welshInputsV6()));
+// already a v7 document"), `migrateV7toV8` an already-v8 one and
+// `migrateV8toV9` an already-v9 one, so the day memo-fixtures.ts is widened to
+// return CalculatorInputsV9 -- making these calls redundant -- every wrapper
+// below throws immediately and every test in this file fails at setup, not a
+// silent double-migration or a quietly wrong document.
+function welshInputs(): CalculatorInputsV9 {
+  return migrateV8toV9(migrateV7toV8(migrateV6toV7(welshInputsV6())));
 }
-function scottishInputs(): CalculatorInputsV8 {
-  return migrateV7toV8(migrateV6toV7(scottishInputsV6()));
+function scottishInputs(): CalculatorInputsV9 {
+  return migrateV8toV9(migrateV7toV8(migrateV6toV7(scottishInputsV6())));
 }
-function unconfirmedJurisdictionInputs(): CalculatorInputsV8 {
-  return migrateV7toV8(migrateV6toV7(unconfirmedJurisdictionInputsV6()));
+function unconfirmedJurisdictionInputs(): CalculatorInputsV9 {
+  return migrateV8toV9(migrateV7toV8(migrateV6toV7(unconfirmedJurisdictionInputsV6())));
 }
 
 /**
@@ -50,7 +51,7 @@ function unconfirmedJurisdictionInputs(): CalculatorInputsV8 {
 const PROJECT = { address_postcode: 'YO1 8AN' };
 
 /** welshInputs()/scottishInputs() with the jurisdiction proposed, not evidenced. */
-function derivedUnconfirmed(base: CalculatorInputsV8): CalculatorInputsV8 {
+function derivedUnconfirmed(base: CalculatorInputsV9): CalculatorInputsV9 {
   return {
     ...base,
     acquisition: {
@@ -61,7 +62,7 @@ function derivedUnconfirmed(base: CalculatorInputsV8): CalculatorInputsV8 {
   };
 }
 
-function setup(inputs: CalculatorInputsV8, onChange = vi.fn()) {
+function setup(inputs: CalculatorInputsV9, onChange = vi.fn()) {
   const run = runAppraisal(inputs);
   render(<AcquisitionPage inputs={inputs} onChange={onChange} run={run} project={PROJECT} />);
   return { onChange, run };
@@ -162,10 +163,10 @@ describe('AcquisitionPage — the jurisdiction control (R8 defect B)', () => {
   // Fix round 1: the 'migrated_default' source line had no assertion at all --
   // the reviewer corrupted the string to garbage and all 125 calculator tests
   // still passed. It is the line every brand-new document renders, because
-  // defaultCalculatorInputsV8 deliberately records no jurisdiction of its own.
+  // defaultCalculatorInputsV9 deliberately records no jurisdiction of its own.
   it('says a defaulted jurisdiction was never recorded, and flags it unconfirmed', () => {
     const base = welshInputs();
-    const migrated: CalculatorInputsV8 = {
+    const migrated: CalculatorInputsV9 = {
       ...base,
       acquisition: {
         ...base.acquisition,
@@ -186,7 +187,7 @@ describe('AcquisitionPage — the jurisdiction control (R8 defect B)', () => {
   // DRAFT - TAX BASIS UNCONFIRMED watermark.
   it('does not claim a confirmed basis when the acquisition date is still outstanding', () => {
     const base = welshInputs();
-    const noDate: CalculatorInputsV8 = {
+    const noDate: CalculatorInputsV9 = {
       ...base, acquisition: { ...base.acquisition, acquisition_date: null },
     };
     setup(noDate);
@@ -235,7 +236,7 @@ describe('AcquisitionPage — the acquisition date', () => {
 
   it('says so when no usable date was recorded and the current band set is assumed', () => {
     const base = welshInputs();
-    const noDate: CalculatorInputsV8 = {
+    const noDate: CalculatorInputsV9 = {
       ...base, acquisition: { ...base.acquisition, acquisition_date: null },
     };
     const { run } = setup(noDate);
@@ -245,7 +246,7 @@ describe('AcquisitionPage — the acquisition date', () => {
 
   it('surfaces the engine\'s own error for a date no band set covers', () => {
     const base = welshInputs();
-    const tooEarly: CalculatorInputsV8 = {
+    const tooEarly: CalculatorInputsV9 = {
       ...base, acquisition: { ...base.acquisition, acquisition_date: '2015-01-01' },
     };
     setup(tooEarly);
@@ -254,7 +255,7 @@ describe('AcquisitionPage — the acquisition date', () => {
 });
 
 describe('AcquisitionPage — the tax override', () => {
-  function overridden(pence: number | null, reason: string): CalculatorInputsV8 {
+  function overridden(pence: number | null, reason: string): CalculatorInputsV9 {
     const base = welshInputs();
     return {
       ...base,

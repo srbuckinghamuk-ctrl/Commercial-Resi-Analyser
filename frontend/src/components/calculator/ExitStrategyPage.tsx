@@ -1,11 +1,13 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
-import type { CalculatorInputsV8, AppraisalRun, SalesPhasingInputs, RefinanceInputs } from '../../lib/model';
+import type {
+  CalculatorInputsV9, AppraisalRun, SalesPhasingInputsV9, RefinanceInputsV9,
+} from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV8;
-  onChange: (partial: Partial<CalculatorInputsV8>) => void;
+  inputs: CalculatorInputsV9;
+  onChange: (partial: Partial<CalculatorInputsV9>) => void;
   run: AppraisalRun;
 }
 
@@ -69,17 +71,27 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const pctSum = phasing?.tranches.reduce((a, b) => a + b.pct_of_gross_receipts, 0) ?? 0;
 
+  // R12 Task 18b. A tranche this page creates is written `anchor: null` --
+  // BIT-IDENTICAL to what `migrateV8toV9` writes on every stored tranche
+  // (spec §18.6: null means "use `month_offset`"). A tranche born here and a
+  // tranche migrated here therefore behave the same, which is the same
+  // discipline `defaultCalculatorInputsV9` keeps against the migration.
+  //
+  // This page has no control for the anchor itself: the engine reads one
+  // (§18.6) but nothing in the UI writes a non-null value yet, so every
+  // tranche and every refinance created or edited on this screen stays on its
+  // absolute month. That is a UI gap, not a silent behaviour change.
   const togglePhasing = () => onChange({
     sales_phasing: phasing ? null
-      : { tranches: [{ month_offset: term - 1, pct_of_gross_receipts: 100 }] },
+      : { tranches: [{ month_offset: term - 1, pct_of_gross_receipts: 100, anchor: null }] },
   });
-  const updateTranche = (i: number, partial: Partial<SalesPhasingInputs['tranches'][number]>) => {
+  const updateTranche = (i: number, partial: Partial<SalesPhasingInputsV9['tranches'][number]>) => {
     if (!phasing) return;
     const tranches = phasing.tranches.map((t, j) => (j === i ? { ...t, ...partial } : t));
     onChange({ sales_phasing: { tranches } });
   };
   const addTranche = () => phasing && onChange({ sales_phasing: {
-    tranches: [...phasing.tranches, { month_offset: term - 1, pct_of_gross_receipts: 0 }],
+    tranches: [...phasing.tranches, { month_offset: term - 1, pct_of_gross_receipts: 0, anchor: null }],
   } });
   const removeTranche = (i: number) => phasing && onChange({ sales_phasing: {
     tranches: phasing.tranches.filter((_, j) => j !== i),
@@ -92,7 +104,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   // a block valid (e.g. blended for both, or retain_all for refinance) leaves
   // it untouched.
   const selectRoute = (route: ExitRoute) => {
-    const partial: Partial<CalculatorInputsV8> = { exit_strategy: { ...exit, route } };
+    const partial: Partial<CalculatorInputsV9> = { exit_strategy: { ...exit, route } };
     if (route === 'retain_all') partial.sales_phasing = null;
     if (route === 'sell_all') partial.refinance = null;
     onChange(partial);
@@ -101,10 +113,10 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   const toggleRefinance = () => onChange({
     refinance: refinance ? null : {
       month_offset: term - 1, investment_value_pence: retainedCapitalValue,
-      ltv_pct: 65, arrangement_fee_pence: 0, legal_costs_pence: 0,
+      ltv_pct: 65, arrangement_fee_pence: 0, legal_costs_pence: 0, anchor: null,
     },
   });
-  const updateRefinance = (partial: Partial<RefinanceInputs>) => {
+  const updateRefinance = (partial: Partial<RefinanceInputsV9>) => {
     if (!refinance) return;
     onChange({ refinance: { ...refinance, ...partial } });
   };

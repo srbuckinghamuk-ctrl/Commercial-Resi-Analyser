@@ -166,7 +166,10 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     # R8 Task 10: the server normalisation chain now runs v1 -> v2 -> v3 -> v4
     # -> v5. R9 Task 3 extends it to v6. R10 Task 6 extends it to v7. R11
     # Task 10 extends it to v8 (spec Sec 17.11), adding the inert VAT block.
-    assert body["inputs_snapshot"]["inputs_version"] == 8
+    # R12 Task 18b extends it to v9 (spec Sec 18.7): a v1 document has no
+    # programme, so the network stays null and the Sec 6 auto windows still
+    # drive the schedule, exactly as they did before R12.
+    assert body["inputs_snapshot"]["inputs_version"] == 9
     assert body["inputs_snapshot"]["vat"]["registered"] is False
     assert len(body["inputs_snapshot"]["vat"]["treatments"]) == 6
     assert body["inputs_snapshot"]["lender_valuation"] is None
@@ -211,7 +214,7 @@ async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, 
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 8
+    assert snapshot["inputs_version"] == 9
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
     # A v5 row is not a legacy v1 migration -- it must not be stamped as one.
@@ -527,8 +530,15 @@ async def test_in_range_programme_violation_still_422s_with_the_spec_worded_issu
 
     assert resp.status_code == 422, resp.text
     detail = resp.json()["detail"]
+    # R12 Task 18b: the server now normalises to v9, so the v9 rule reports
+    # this. Spec Sec 18.7's ONE licensed exemption to the validation-identity
+    # gate: the v8 rule named `programme.packages.construction`, the v9 rule
+    # names `programme.phases.construction`, and they correspond only because
+    # the migration assigns `id = <package name>` (PROGRAMME_FIELD_ALIASES
+    # derives that mapping rather than restating it). The severity and the spec
+    # wording are unchanged, which is the part a caller reads.
     assert any(
-        d.get("field") == "programme.packages.construction"
+        d.get("field") == "programme.phases.construction"
         and d.get("severity") == "error"
         and "cannot be negative" in d.get("message", "")
         for d in detail
@@ -562,8 +572,140 @@ async def test_nan_user_defined_weights_are_a_422_not_a_500(client, project):
 
     assert resp.status_code == 422, resp.text
     detail = resp.json()["detail"]
+    # R12 Task 18b: `programme.phases.<id>` for the same reason as above --
+    # spec Sec 18.7's field-name exemption. The message is unchanged.
     assert any(
-        d.get("field") == "programme.packages.construction"
+        d.get("field") == "programme.phases.construction"
         and "finite numbers" in d.get("message", "")
         for d in detail
     ), detail
+
+
+# ---------------------------------------------------------------------------
+# R12 Task 18b (spec Sec 18.7): the persistence boundary is v9.
+#
+# Every unit test in this repo can pass with the server still normalising to
+# v8 -- migrate_inputs_to_v9 is tested directly, the schedule's network arm is
+# tested directly, the memo's programme section is tested directly. None of
+# them touches the one line in app/api/app.py that decides which version a
+# user's saved document actually is. These do, end to end, through the real
+# endpoints: they are the proof the boundary moved rather than the proof that
+# it could.
+# ---------------------------------------------------------------------------
+
+
+async def test_saved_appraisal_round_trips_as_v9(client, project):
+    """POST then GET: the stored document, the returned document and the
+    governance column are all v9.
+
+    The governance column is asserted separately from the snapshot's own
+    `inputs_version` because they are written by two different lines and feed
+    two different things -- the column feeds audit_hash (spec Sec 13.2), so the
+    two disagreeing means a stored report's provenance describes a version the
+    same response does not return."""
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "v9 round trip",
+        "inputs_snapshot": fixture_a_inputs(),
+    })
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["inputs_version"] == 9
+    assert created["inputs_snapshot"]["inputs_version"] == 9
+
+    fetched = (await client.get(f"/api/v1/appraisals/{project['id']}")).json()
+    assert fetched["inputs_version"] == 9
+    assert fetched["inputs_snapshot"]["inputs_version"] == 9
+    # Fixture A carries no programme, so v9's two-state field stays null and
+    # the Sec 6 auto windows still drive the schedule.
+    assert fetched["inputs_snapshot"]["programme"] is None
+    # A v9 document is not a legacy migration. `is_v2_or_later` had to learn
+    # is_v9 in this commit: without it every appraisal saved from the v9
+    # calculator would come back stamped "legacy_unreconciled" on its FIRST
+    # save, because the client now posts exactly what this test posts back.
+    assert fetched["status"] != "legacy_unreconciled"
+
+
+async def test_resaving_the_v9_document_the_server_returned_is_not_legacy(client, project):
+    """The round trip the calculator actually performs: post, adopt what came
+    back, post that. The second POST carries a v9 snapshot, which is the shape
+    `was_v1` classifies."""
+    first = (await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "First save",
+        "inputs_snapshot": fixture_a_inputs(),
+    })).json()
+
+    second = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Second save",
+        "inputs_snapshot": first["inputs_snapshot"],
+    })
+    assert second.status_code == 201, second.text
+    assert second.json()["inputs_version"] == 9
+    assert second.json()["status"] != "legacy_unreconciled"
+
+
+async def test_stored_explicit_programme_becomes_a_network_without_moving_a_figure(
+    client, project,
+):
+    """A stored document with an explicit three-package programme -- the shape
+    every pre-R12 appraisal that used the feature holds -- comes back as a
+    precedence network, and the figures are unchanged.
+
+    This is the case the whole release turns on. It is the only stored shape
+    the v9 step rewrites rather than adds to, and it is the one that now flows
+    through the engine's NEW network arm in production for the first time. The
+    figures are pinned against the same document run through the v8 entry point
+    in-process (the before/after comparison the migration identity gates make
+    corpus-wide, asserted here across the real HTTP boundary), so "the network
+    derives the same windows" is measured rather than assumed.
+    """
+    from app.financial_model import migrate_inputs_to_v8, run_appraisal
+
+    inputs = fixture_a_inputs()
+    inputs["programme"] = _programme(
+        {"start_offset": 1, "duration_months": 8, "curve": {"kind": "s_curve"}},
+    )
+
+    before = run_appraisal(migrate_inputs_to_v8(copy.deepcopy(inputs)))
+
+    resp = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"],
+        "name": "Explicit programme",
+        "inputs_snapshot": inputs,
+    })
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    programme = body["inputs_snapshot"]["programme"]
+    assert body["inputs_snapshot"]["inputs_version"] == 9
+    # The v8 shape did not survive; the v9 one is what got stored.
+    assert "packages" not in programme
+    assert [p["id"] for p in programme["phases"]] == [
+        "construction", "professional", "statutory",
+    ]
+    # Predecessor-free is what makes the windows identical: each phase's
+    # derived start is its own start_offset floor (spec Sec 18.1).
+    assert all(p["predecessors"] == [] for p in programme["phases"])
+    assert programme["category_phase_ids"] == {
+        "construction": "construction",
+        "professional": "professional",
+        "statutory": "statutory",
+    }
+
+    # Not a figure moved.
+    assert body["gdv_pence"] == before.metrics.gdv_pence
+    assert body["total_cost_pence"] == before.metrics.total_development_cost_pence
+    assert body["rlv_pence"] == before.metrics.rlv_pence
+    # Non-vacuity: the explicit programme is doing something. Fixture A is
+    # all-cash, so its headline cost is insensitive to WHEN money is spent --
+    # the equalities above would hold for any programme, including none. The
+    # monthly construction profile is what the programme actually moves, and
+    # it differs from the Sec 6 auto windows, so the network arm really is
+    # reproducing this document's own windows rather than the default ones.
+    auto = run_appraisal(migrate_inputs_to_v8(fixture_a_inputs()))
+    explicit_spend = [u.construction_pence for u in before.schedule.uses]
+    auto_spend = [u.construction_pence for u in auto.schedule.uses]
+    assert explicit_spend != auto_spend
+    assert sum(explicit_spend) == sum(auto_spend)

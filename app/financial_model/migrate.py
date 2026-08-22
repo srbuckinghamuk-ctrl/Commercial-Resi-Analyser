@@ -314,13 +314,19 @@ def is_v6(snapshot: dict[str, Any]) -> bool:
 
 
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
+    # R12 Task 18b: is_v9 belongs here for the same reason is_v8 did one
+    # release earlier -- the server boundary now migrates to v9, so the
+    # calculator posts v9 documents, and a v9 raw payload that fell through
+    # this check would be tagged `legacy_unreconciled` (app.py's `was_v1`).
+    # Every appraisal saved after this release would have carried the red
+    # "Legacy -- recalculation required" banner on the very first save.
     # R11: is_v8 belongs here for the same reason is_v7 did -- the server
     # boundary now migrates to v8, and a v8 raw payload that fell through this
     # check would be tagged `legacy_unreconciled` (app.py's `was_v1`).
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
-        or is_v8(snapshot)
+        or is_v8(snapshot) or is_v9(snapshot)
     )
 
 

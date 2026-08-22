@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV8 } from '../../lib/model';
-import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV9 } from '../../lib/model';
+import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 import { penceToPounds } from '../../lib/format';
 
 // Same fixture directory the shared golden-fixtures test reads from (frontend/src/lib/model/golden-fixtures.test.ts)
@@ -17,7 +17,7 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // version the file actually holds rather than the v4 it used to claim.
 const fixtureG = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV8 };
+) as { inputs: CalculatorInputsV9 };
 
 // R11 spec §17.13 (ruling R45). The pinned VAT fixture itself is fully
 // recoverable (total_irrecoverable_pence 0 by construction, so the §17.5
@@ -26,17 +26,17 @@ const fixtureG = JSON.parse(
 // irrecoverable figure without touching the fixture on disk.
 const vatFixture = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV8 };
+) as { inputs: CalculatorInputsV9 };
 
-function inputsWithIrrecoverableVat(): CalculatorInputsV8 {
-  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV8;
+function inputsWithIrrecoverableVat(): CalculatorInputsV9 {
+  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV9;
   const construction = cloned.vat.treatments.find((t) => t.category === 'construction')!;
   construction.recoverable_pct = 50;
   return cloned;
 }
 
 describe('AppraisalSummaryPage — null lender state', () => {
-  const inputs = defaultCalculatorInputsV8();
+  const inputs = defaultCalculatorInputsV9();
   const run = runAppraisal(inputs);
 
   it('renders the existing not-available treatment for lender GDV and LTGDV lender', () => {

@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type {
-  CalculatorInputsV8, AppraisalRun, FacilityTerms, EquitySource, LenderValuation,
+  CalculatorInputsV9, AppraisalRun, FacilityTerms, EquitySource, LenderValuation,
   FundingSource, InterestType, ArrangementFeeBasis, ExitFeeBasis, EquityDrawRule,
   EquityClassification, EvidenceStatus,
 } from '../../lib/model';
@@ -10,8 +10,8 @@ import ReconciliationStrip from './ReconciliationStrip';
 import LenderValuationCard from './LenderValuationCard';
 
 interface Props {
-  inputs: CalculatorInputsV8;
-  onChange: (partial: Partial<CalculatorInputsV8>) => void;
+  inputs: CalculatorInputsV9;
+  onChange: (partial: Partial<CalculatorInputsV9>) => void;
   run: AppraisalRun;
 }
 

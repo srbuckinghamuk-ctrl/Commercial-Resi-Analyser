@@ -25,23 +25,34 @@ from .cost_plan import CostPlanResult, compute_cost_plan
 from .curves import spread_back_loaded, spread_by_curve, spread_s_curve, spread_user_defined
 from .engine import MonthlyModel, run_ledger
 from .metrics import AppraisalResultV2, breakeven_flags, derive_metrics
+# R12 Task 18b (spec Sec 18.7). This package's surface was a version behind
+# until the cutover: is_v8, migrate_inputs_to_v8 and CalculatorInputsV8 were
+# re-exported while none of their v9 equivalents were. That was deliberate --
+# they land in the same commit that makes v9 reachable at all.
+# PACKAGE_TO_PHASE belongs with the migrators: it is the map migrate_v8_to_v9
+# derives every migrated phase's id, code and label from, and the TS barrel
+# (frontend/src/lib/model/index.ts) already exports its twin.
 from .migrate import (
+    PACKAGE_TO_PHASE,
     is_v4,
     is_v5,
     is_v6,
     is_v7,
     is_v8,
+    is_v9,
     migrate_inputs,
     migrate_inputs_to_v4,
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
     migrate_inputs_to_v7,
     migrate_inputs_to_v8,
+    migrate_inputs_to_v9,
     migrate_v3_to_v4,
     migrate_v4_to_v5,
     migrate_v5_to_v6,
     migrate_v6_to_v7,
     migrate_v7_to_v8,
+    migrate_v8_to_v9,
 )
 from .schedule import Schedule, build_schedule
 from .types import (
@@ -56,6 +67,7 @@ from .types import (
     CalculatorInputsV6,
     CalculatorInputsV7,
     CalculatorInputsV8,
+    CalculatorInputsV9,
     ProposedUnitV6,
     UnitAncillary,
     UnitMixInputsV6,
@@ -117,8 +129,10 @@ __all__ = [
     "CalculatorInputsV6",
     "CalculatorInputsV7",
     "CalculatorInputsV8",
+    "CalculatorInputsV9",
     "CostPlanResult",
     "MonthlyModel",
+    "PACKAGE_TO_PHASE",
     "PhasedSeniorBreakevenTerms",
     "ProposedUnitV6",
     "ReconciliationStatus",
@@ -140,17 +154,20 @@ __all__ = [
     "is_v6",
     "is_v7",
     "is_v8",
+    "is_v9",
     "migrate_inputs",
     "migrate_inputs_to_v4",
     "migrate_inputs_to_v5",
     "migrate_inputs_to_v6",
     "migrate_inputs_to_v7",
     "migrate_inputs_to_v8",
+    "migrate_inputs_to_v9",
     "migrate_v3_to_v4",
     "migrate_v4_to_v5",
     "migrate_v5_to_v6",
     "migrate_v6_to_v7",
     "migrate_v7_to_v8",
+    "migrate_v8_to_v9",
     "parse_calculator_inputs",
     "phased_replay_redeems",
     "reconcile",

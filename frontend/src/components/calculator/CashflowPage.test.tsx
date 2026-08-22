@@ -4,26 +4,26 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import CashflowPage from './CashflowPage';
 import { runAppraisal } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV8 } from '../../lib/model';
-import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV9 } from '../../lib/model';
+import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 
 // Same fixture directory as AppraisalSummaryPage.test.tsx / export-investment-memo.test.ts.
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureH = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'h-programme-scurve.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV8 };
+) as { inputs: CalculatorInputsV9 };
 // v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureJ = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV8 };
+) as { inputs: CalculatorInputsV9 };
 // v8 on disk, registered for VAT -- the R11 §17.4 worked cycle.
 const fixtureVat = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV8 };
+) as { inputs: CalculatorInputsV9 };
 
 describe('CashflowPage — no programme, no sales phasing (default v4)', () => {
-  const inputs = defaultCalculatorInputsV8();
+  const inputs = defaultCalculatorInputsV9();
   const run = runAppraisal(inputs);
 
   it('keeps the original assumptions note verbatim', () => {
@@ -97,14 +97,14 @@ describe('CashflowPage — refinance modelled (fixture J)', () => {
 // VAT component, read from run.metrics.vat, never recomputed here.
 describe('CashflowPage — the cost total is VAT-inclusive, and says so (ruling R25)', () => {
   it('labels the Costs column as VAT-inclusive', () => {
-    const inputs = defaultCalculatorInputsV8();
+    const inputs = defaultCalculatorInputsV9();
     const run = runAppraisal(inputs);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.getByRole('columnheader', { name: 'Costs (VAT-incl.)' })).toBeInTheDocument();
   });
 
   it('does not show a VAT disclosure line on a document with no VAT charged', () => {
-    const inputs = defaultCalculatorInputsV8();
+    const inputs = defaultCalculatorInputsV9();
     const run = runAppraisal(inputs);
     expect(run.metrics.vat.total_input_vat_pence).toBe(0);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);

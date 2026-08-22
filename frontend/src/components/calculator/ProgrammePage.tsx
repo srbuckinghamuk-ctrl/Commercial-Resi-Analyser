@@ -17,12 +17,14 @@ import ProgrammeGantt from './ProgrammeGantt';
  * carries, and a v9 `{ phases: [...] }` network. `isProgrammeNetwork` /
  * `isLegacyProgramme` (programme.ts) are the sole sanctioned discriminators.
  *
- * The real app (ConversionCalculator.tsx) is v8-only for this release, so T
- * resolves to CalculatorInputsV8 there and this component behaves exactly as
- * before for every existing call site. A future caller wiring the app to v9
- * end-to-end passes CalculatorInputsV9 instead -- both compile against the
- * SAME component because Props is generic over the two shapes `programme` can
- * legally live on, and `onChange` stays typed to whichever one the caller has.
+ * R12 Task 18b (spec §18.7) wired the app end-to-end to v9, so T resolves to
+ * CalculatorInputsV9 at the real call site (ConversionCalculator.tsx) and the
+ * legacy `{ packages: {...} }` arm below is now reachable only from a caller
+ * still holding a v8 document -- the tests, and any future one. Props stays
+ * generic over both shapes `programme` can legally live on, and `onChange`
+ * stays typed to whichever one the caller has, so both compile against the
+ * SAME component. Keeping the v8 arm is deliberate: it is what proves the
+ * legacy discriminator still works, and it costs nothing at the v9 call site.
  */
 type ProgrammeCarrier = CalculatorInputsV8 | CalculatorInputsV9;
 

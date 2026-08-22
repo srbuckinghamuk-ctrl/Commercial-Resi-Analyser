@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import VatPage from './VatPage';
 import { runAppraisal, vatBasisGate } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV8, VatTreatment } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV9, VatTreatment } from '../../lib/model';
 import { draftReason } from '../../lib/report-provenance';
 import { computeSpider } from '../../lib/deal-spider';
 
@@ -18,13 +18,13 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // proof below.
 const vatFixture = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV8 };
+) as { inputs: CalculatorInputsV9 };
 
 afterEach(() => {
   cleanup();
 });
 
-function baseInputs(): CalculatorInputsV8 {
+function baseInputs(): CalculatorInputsV9 {
   // structuredClone so mutating the result never touches the fixture on disk
   // or leaks between tests.
   return structuredClone(vatFixture.inputs);
@@ -216,7 +216,7 @@ describe('VatPage — confirming a row moves both the draft reason and the spide
     fireEvent.change(screen.getByRole('combobox', { name: /construction evidence status/i }), { target: { value: 'confirmed' } });
     const writtenTreatments = onChange.mock.calls[0][0].vat.treatments as VatTreatment[];
 
-    const after: CalculatorInputsV8 = { ...before, vat: { ...before.vat, treatments: writtenTreatments } };
+    const after: CalculatorInputsV9 = { ...before, vat: { ...before.vat, treatments: writtenTreatments } };
     const runAfter = runAppraisal(after);
 
     const gateAfter = vatBasisGate(runAfter.metrics.vat);
