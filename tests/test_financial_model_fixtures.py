@@ -3,6 +3,7 @@ import json
 import re
 from dataclasses import asdict
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -21,7 +22,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v9,
 )
 from app.financial_model.schedule import build_schedule
-from app.financial_model.validation import validate_inputs
+from app.financial_model.validation import ValidationIssue, validate_inputs
 from app.financial_model.sensitivity import (
     DEFAULT_SENSITIVITY_CONFIG,
     SensitivityAxis,
@@ -405,12 +406,17 @@ _PROGRAMME_BEARING_STEMS = ("h-programme-scurve", "r-vat-quarterly")
 
 
 def test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_v9_born_fixtures() -> None:
-    """Non-vacuity, and: without this, a fixture dropped from the gate for a
-    SECOND, unstated reason would pass silently rather than fail here. The
-    only legitimate reason to be out of scope is having no v8 antecedent;
-    today that set is empty, and when a v9-born fixture is added this still
-    passes while any OTHER exclusion fails."""
-    assert len(_MIGRATION_V9_GATE_FIXTURES) > 0
+    """The only legitimate reason to be out of scope is having no v8
+    antecedent; today that set is empty, and when a v9-born fixture is added
+    this still passes while any OTHER exclusion fails.
+
+    Fix round 1, Finding 3: a PINNED FLOOR, not `> 0`. The equality below
+    compares `not (version <= 8)` against `version > 8` -- both derived from
+    the same expression -- so it catches an ADDED second filter clause (its
+    purpose) but not a NARROWED one (`<= 7`), which moves both sides together.
+    The floor is what catches a silently shrinking corpus: 13 is today's count
+    and the corpus only ever grows."""
+    assert len(_MIGRATION_V9_GATE_FIXTURES) >= 13
     excluded = [p.stem for p in APPRAISAL_FIXTURES if p not in _MIGRATION_V9_GATE_FIXTURES]
     assert excluded == [p.stem for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) > 8]
 
@@ -439,6 +445,23 @@ def test_both_programme_bearing_fixtures_are_in_gate_scope_and_really_carry_a_le
     assert sorted(bearing) == sorted(_PROGRAMME_BEARING_STEMS)
 
 
+class _CanonicalIssue(NamedTuple):
+    """An issue with its field canonicalised under PROGRAMME_FIELD_ALIASES.
+    A NamedTuple so it compares and sorts exactly as the plain triple it
+    replaces, while still answering ``.severity`` / ``.field`` / ``.message``
+    -- which lets the v9-only-rule predicate run on the CANONICAL form, the
+    same form the comparison itself sees. Mirrors golden-fixtures.test.ts's
+    ``canonicalIssue``."""
+
+    severity: str
+    field: str
+    message: str
+
+
+def _canonical_issue(i) -> _CanonicalIssue:
+    return _CanonicalIssue(i.severity, PROGRAMME_FIELD_ALIASES.get(i.field, i.field), i.message)
+
+
 def _issue_triples(issues) -> list[tuple[str, str, str]]:
     """Canonicalises under PROGRAMME_FIELD_ALIASES and nothing else -- every
     other issue matches on field AND message with no aliasing at all.
@@ -446,10 +469,7 @@ def _issue_triples(issues) -> list[tuple[str, str, str]]:
     as-is): sorts the FULL (severity, field, message) triple, not field+message
     alone -- two issues sharing a field and message but differing in severity
     must not be treated as interchangeable."""
-    return sorted(
-        (i.severity, PROGRAMME_FIELD_ALIASES.get(i.field, i.field), i.message)
-        for i in issues
-    )
+    return sorted(tuple(_canonical_issue(i)) for i in issues)
 
 
 def _strip_version_fields(run: AppraisalRun) -> dict:
@@ -509,6 +529,11 @@ def _with_term_months(inputs: dict, term_months: int) -> dict:
 # boundary, where the rule fires identically on both sides; this list is for
 # rules that exist on one side only. Mirrors golden-fixtures.test.ts's
 # V9_ONLY_VALIDATION_RULES.
+#
+# The overrun rule's MESSAGE shape is kept separate from the predicate: the
+# "overrun really fires" control keys on this alone and then asserts severity
+# and field independently. A control that reused the whole predicate could not
+# tell a rule that stopped firing from a predicate narrowed past it.
 _OVERRUN_MESSAGE_RE = re.compile(
     r"^Programme finishes month -?\d+; facility term is -?\d+\. "
     r"Phase '.+' ends -?\d+ months after maturity\.$"
@@ -518,15 +543,47 @@ _V9_ONLY_VALIDATION_RULES = {
     # spec Sec 18.8. A phase whose derived finish runs past facility maturity.
     # It is a property of the DERIVED network, and the legacy arm derives
     # nothing, so there is no v8 counterpart to compare against.
-    "overrun": lambda i: bool(_OVERRUN_MESSAGE_RE.match(i.message)),
+    #
+    # Fix round 1, Finding 2: keyed on ALL THREE of the keys a ValidationIssue
+    # actually has, not on the message alone. There is no stable rule id in
+    # either engine, so message text is unavoidable -- but an unrelated field
+    # emitting this shape, or this rule downgraded to a warning, must NOT be
+    # exempted. Both would be a real change across the migration boundary and
+    # gate 2 exists to see them.
+    "overrun": lambda i: (
+        i.severity == "error"
+        and i.field.startswith("programme.phases.")
+        and bool(_OVERRUN_MESSAGE_RE.match(i.message))
+    ),
 }
 
 
 def _is_v9_only_rule_issue(issue) -> bool:
-    """Applied to the POST-migration side only. Filtering both sides would let
-    a legacy issue that happens to match a predicate vanish in silence, which
-    is exactly the failure mode an exemption must not have."""
     return any(matches(issue) for matches in _V9_ONLY_VALIDATION_RULES.values())
+
+
+def _compare_ex_v9_only(before_issues, after_issues) -> tuple[list, list]:
+    """Property 3's comparison, extracted (fix round 1, Finding 1) so that its
+    ONE-SIDEDNESS can be tested directly rather than asserted in prose.
+
+    The v9-only exemption is applied to the ``after`` side ONLY. A v9-only-rule
+    issue appearing on the ``before`` side would mean a LEGACY rule had started
+    emitting a shape it has no business emitting -- that must fail the
+    comparison, not be quietly dropped alongside its v9 twin.
+
+    This matters more than it reads: the pre-migration side carries no such
+    issue on any case today, so a "tidy-up" to a symmetric filter would be a
+    SILENT no-op. R11 was defined by a guard that died from being widened, so
+    the one-sidedness is pinned by its own synthetic test below.
+
+    Returns the ``(before, after)`` pair rather than a bool so a gate failure
+    still prints a readable diff. Mirrors golden-fixtures.test.ts's
+    ``compareExV9Only``."""
+    before = _issue_triples(before_issues)
+    after = sorted(
+        tuple(c) for c in map(_canonical_issue, after_issues) if not _is_v9_only_rule_issue(c)
+    )
+    return before, after
 
 
 def _hard_issues(issues) -> list:
@@ -630,11 +687,57 @@ def test_v9_migration_gate_2_property_2_an_invalid_document_never_becomes_valid(
 
 @pytest.mark.parametrize("label,doc", _V9_GATE_CASES, ids=_V9_GATE_CASE_IDS)
 def test_v9_migration_gate_2_property_3_issue_sets_equal_except_v9_only_rules(label: str, doc: dict) -> None:
-    before = _issue_triples(validate_inputs(migrate_inputs_to_v8(doc)))
-    after = _issue_triples(
-        i for i in validate_inputs(migrate_inputs_to_v9(doc)) if not _is_v9_only_rule_issue(i)
+    before, after = _compare_ex_v9_only(
+        validate_inputs(migrate_inputs_to_v8(doc)), validate_inputs(migrate_inputs_to_v9(doc)),
     )
     assert after == before, label
+
+
+def test_v9_migration_gate_2_property_3_comparison_is_one_sided() -> None:
+    """Fix round 1, Finding 1a. Synthetic, because no real case can produce
+    this shape on the before side -- which is precisely why a symmetric filter
+    would be a silent no-op over the corpus and needs a test that dies on the
+    refactor rather than a comment asking nobody to do it. Mirrors
+    golden-fixtures.test.ts's identically-named test."""
+    overrun_shaped = ValidationIssue(
+        severity="error",
+        field="programme.phases.construction",
+        message=(
+            "Programme finishes month 7; facility term is 3. "
+            "Phase 'Construction' ends 4 months after maturity."
+        ),
+    )
+    shared = ValidationIssue(severity="warning", field="vat.registered", message="shared")
+    assert _is_v9_only_rule_issue(overrun_shaped)  # the predicate really recognises it
+
+    # AFTER side carries it -> exempted, comparison AGREES. The exemption doing
+    # its job; without this half, deleting the filter outright would still pass
+    # the half below.
+    before, after = _compare_ex_v9_only([shared], [shared, overrun_shaped])
+    assert after == before
+
+    # BEFORE side carries it -> NOT exempted, comparison DISAGREES. A symmetric
+    # filter strips it here too and makes these equal, so this assertion fails
+    # on exactly the refactor that would weaken the gate.
+    before, after = _compare_ex_v9_only([shared, overrun_shaped], [shared])
+    assert after != before
+
+
+def test_v9_migration_gate_2_no_pre_migration_document_carries_a_v9_only_rule_issue() -> None:
+    """Fix round 1, Finding 1b: the invariant that makes the one-sidedness
+    above safe today, asserted directly instead of assumed. The day a legacy
+    rule starts emitting the overrun shape, this fails loudly. Checked on the
+    CANONICALISED before side, because that is what the comparison actually
+    sees (a legacy `programme.packages.*` field is aliased to
+    `programme.phases.*` before any predicate runs)."""
+    offenders = [
+        label for label, doc in _V9_GATE_CASES
+        if any(
+            _is_v9_only_rule_issue(c)
+            for c in map(_canonical_issue, validate_inputs(migrate_inputs_to_v8(doc)))
+        )
+    ]
+    assert offenders == []
 
 
 def test_v9_migration_gate_2_the_three_properties_are_not_vacuous_over_the_corpus() -> None:
@@ -661,13 +764,21 @@ def test_v9_migration_gate_2_the_overrun_rule_really_fires() -> None:
     run past maturity. Mirrors golden-fixtures.test.ts."""
     inputs = _load_fixture(FIXTURE_DIR / "h-programme-scurve.json")["inputs"]
     issues = validate_inputs(migrate_inputs_to_v9(_with_term_months(inputs, 3)))
-    overruns = [i for i in issues if _V9_ONLY_VALIDATION_RULES["overrun"](i)]
+    # Fix round 1, Finding 2: selected by MESSAGE SHAPE alone, then severity
+    # and field asserted independently. Selecting with the full predicate would
+    # make those two assertions tautological, and a predicate narrowed past the
+    # real rule would then look like a rule that still fires.
+    overruns = [i for i in issues if _OVERRUN_MESSAGE_RE.match(i.message)]
     assert len(overruns) == 3
     assert all(i.severity == "error" for i in overruns)
     assert sorted(i.field for i in overruns) == [
         "programme.phases.construction", "programme.phases.professional",
         "programme.phases.statutory",
     ]
+    # ... and the predicate really does cover every one of them, so property
+    # 3's exemption and the rule that fires are the same set, not two sets that
+    # merely overlap.
+    assert all(_is_v9_only_rule_issue(i) for i in overruns)
     # Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
     # round 1, Finding 1) -- so the exemption is not swallowing a rule that has
     # silently degenerated to one message repeated three times.

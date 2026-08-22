@@ -1082,19 +1082,56 @@ const sortIssuesForV9Gate = (xs: ValidationIssue[]) =>
 // kind of thing as that alias map: an alias is a field RENAME across the
 // boundary, where the rule fires identically on both sides; this list is for
 // rules that exist on one side only.
-const V9_ONLY_VALIDATION_RULES: Record<string, (i: { message: string }) => boolean> = {
+/** The overrun rule's MESSAGE shape (spec §18.8), kept separate from the
+ *  predicate below. The "overrun really fires" control keys on this alone and
+ *  then asserts severity and field independently: a control that reused the
+ *  whole predicate could not tell a rule that stopped firing from a predicate
+ *  that had been narrowed past it. */
+const OVERRUN_MESSAGE_RE =
+  /^Programme finishes month -?\d+; facility term is -?\d+\. Phase '.+' ends -?\d+ months after maturity\.$/;
+
+type CanonicalIssue = ReturnType<typeof canonicalIssue>;
+
+const V9_ONLY_VALIDATION_RULES: Record<string, (i: CanonicalIssue) => boolean> = {
   // spec §18.8. A phase whose derived finish runs past facility maturity.
   // It is a property of the DERIVED network, and the legacy arm derives
   // nothing, so there is no v8 counterpart to compare against.
-  overrun: (i) => /^Programme finishes month -?\d+; facility term is -?\d+\. Phase '.+' ends -?\d+ months after maturity\.$/
-    .test(i.message),
+  //
+  // Fix round 1, Finding 2: keyed on ALL THREE of the keys a ValidationIssue
+  // actually has, not on the message alone. There is no stable rule id in
+  // either engine, so message text is unavoidable — but an unrelated field
+  // emitting this shape, or this rule downgraded to a warning, must NOT be
+  // exempted. Both would be a real change across the migration boundary and
+  // gate 2 exists to see them.
+  overrun: (i) => i.severity === 'error'
+    && i.field.startsWith('programme.phases.')
+    && OVERRUN_MESSAGE_RE.test(i.message),
 };
 
-/** Applied to the POST-migration side only. Filtering both sides would let a
- *  legacy issue that happens to match a predicate vanish in silence, which is
- *  exactly the failure mode an exemption must not have. */
-const isV9OnlyRuleIssue = (i: { message: string }) =>
+const isV9OnlyRuleIssue = (i: CanonicalIssue) =>
   Object.values(V9_ONLY_VALIDATION_RULES).some((matches) => matches(i));
+
+/** Property 3's comparison, extracted (fix round 1, Finding 1) so that its
+ *  ONE-SIDEDNESS can be tested directly rather than asserted in prose.
+ *
+ *  The v9-only exemption is applied to the `after` side ONLY. A v9-only-rule
+ *  issue appearing on the `before` side would mean a LEGACY rule had started
+ *  emitting a shape it has no business emitting — that must fail the
+ *  comparison, not be quietly dropped alongside its v9 twin.
+ *
+ *  This matters more than it reads: the pre-migration side carries no such
+ *  issue on any case today, so a "tidy-up" to a symmetric filter would be a
+ *  SILENT no-op. R11 was defined by a guard that died from being widened, so
+ *  the one-sidedness is pinned by its own synthetic test below.
+ *
+ *  Returns the pair rather than a boolean so a gate failure still prints a
+ *  readable diff. */
+function compareExV9Only(beforeIssues: ValidationIssue[], afterIssues: ValidationIssue[]) {
+  return {
+    before: sortIssuesForV9Gate(beforeIssues),
+    after: sortIssuesForV9Gate(afterIssues).filter((i) => !isV9OnlyRuleIssue(i)),
+  };
+}
 
 const hardIssues = (xs: ValidationIssue[]) => xs.filter((i) => i.severity === 'error');
 
@@ -1150,9 +1187,13 @@ const V9_GATE_CASES: Array<[string, Record<string, unknown>]> = GATE_FIXTURE_STE
 
 describe('v8 → v9 migration gate scope — spec §18.7 Rule 1', () => {
   it('the gate fixture set is non-empty and excludes ONLY v9-born fixtures', () => {
-    // Non-vacuity, and: without this, a fixture dropped from the gate for a
-    // SECOND, unstated reason would pass silently rather than fail here.
-    expect(GATE_FIXTURE_STEMS.length).toBeGreaterThan(0);
+    // Fix round 1, Finding 3: a PINNED FLOOR, not `> 0`. The equality below
+    // compares `!(version <= 8)` against `version > 8` — both derived from
+    // the same expression — so it catches an ADDED second filter clause (its
+    // purpose) but not a NARROWED one (`<= 7`), which moves both sides
+    // together. The floor is what catches a silently shrinking corpus: 13 is
+    // today's count and the corpus only ever grows.
+    expect(GATE_FIXTURE_STEMS.length).toBeGreaterThanOrEqual(13);
     const excluded = appraisalFixtures.filter((fx) => !migrationV9GateFixtures.includes(fx));
     // The only legitimate reason to be out of scope is having no v8
     // antecedent. Today that set is empty; when a v9-born fixture is added
@@ -1250,10 +1291,49 @@ describe('v8 → v9 migration identity — spec §18.7 gate 2 (validation)', () 
   });
 
   it.each(V9_GATE_CASES)('%s: property 3 — issue sets equal, except v9-only rules', (_label, doc) => {
-    const before = sortIssuesForV9Gate(validateInputs(migrateInputsToV8(doc)));
-    const after = sortIssuesForV9Gate(validateInputs(migrateInputsToV9(doc)))
-      .filter((i) => !isV9OnlyRuleIssue(i));
+    const { before, after } = compareExV9Only(
+      validateInputs(migrateInputsToV8(doc)), validateInputs(migrateInputsToV9(doc)),
+    );
     expect(after).toEqual(before);
+  });
+
+  it("property 3's comparison is ONE-SIDED — a v9-only issue on the BEFORE side fails it", () => {
+    // Fix round 1, Finding 1a. Synthetic, because no real case can produce
+    // this shape on the before side — which is precisely why a symmetric
+    // filter would be a silent no-op over the corpus and needs a test that
+    // dies on the refactor rather than a comment asking nobody to do it.
+    const overrunShaped: ValidationIssue = {
+      severity: 'error',
+      field: 'programme.phases.construction',
+      message: "Programme finishes month 7; facility term is 3. Phase 'Construction' ends 4 months after maturity.",
+    };
+    const shared: ValidationIssue = { severity: 'warning', field: 'vat.registered', message: 'shared' };
+    expect(isV9OnlyRuleIssue(overrunShaped)).toBe(true); // the predicate really recognises it
+
+    // AFTER side carries it → exempted, comparison AGREES. The exemption
+    // doing its job; without this half, deleting the filter outright would
+    // still pass the half below.
+    const onAfter = compareExV9Only([shared], [shared, overrunShaped]);
+    expect(onAfter.after).toEqual(onAfter.before);
+
+    // BEFORE side carries it → NOT exempted, comparison DISAGREES. A
+    // symmetric filter strips it here too and makes these equal, so this
+    // assertion fails on exactly the refactor that would weaken the gate.
+    const onBefore = compareExV9Only([shared, overrunShaped], [shared]);
+    expect(onBefore.after).not.toEqual(onBefore.before);
+  });
+
+  it('no PRE-migration document in the corpus carries a v9-only-rule issue', () => {
+    // Fix round 1, Finding 1b: the invariant that makes the one-sidedness
+    // above safe today, asserted directly instead of assumed. The day a
+    // legacy rule starts emitting the overrun shape, this fails loudly.
+    // Checked on the CANONICALISED before side, because that is what the
+    // comparison actually sees (a legacy `programme.packages.*` field is
+    // aliased to `programme.phases.*` before any predicate runs).
+    const offenders = V9_GATE_CASES
+      .filter(([, doc]) => sortIssuesForV9Gate(validateInputs(migrateInputsToV8(doc))).some(isV9OnlyRuleIssue))
+      .map(([label]) => label);
+    expect(offenders).toEqual([]);
   });
 
   it('the three properties are not vacuous over the corpus', () => {
@@ -1278,12 +1358,20 @@ describe('v8 → v9 migration identity — spec §18.7 gate 2 (validation)', () 
     // three phases run past maturity.
     const shortened = withTermMonths(loadFixture('h-programme-scurve').inputs, 3);
     const issues = validateInputs(migrateInputsToV9(shortened));
-    const overruns = issues.filter(V9_ONLY_VALIDATION_RULES.overrun);
+    // Fix round 1, Finding 2: selected by MESSAGE SHAPE alone, then severity
+    // and field asserted independently. Selecting with the full predicate
+    // would make those two assertions tautological, and a predicate narrowed
+    // past the real rule would then look like a rule that still fires.
+    const overruns = issues.filter((i) => OVERRUN_MESSAGE_RE.test(i.message));
     expect(overruns).toHaveLength(3);
     expect(overruns.every((i) => i.severity === 'error')).toBe(true);
     expect(overruns.map((i) => i.field).sort()).toEqual([
       'programme.phases.construction', 'programme.phases.professional', 'programme.phases.statutory',
     ]);
+    // ... and the predicate really does cover every one of them, so property
+    // 3's exemption and the rule that fires are the same set, not two sets
+    // that merely overlap.
+    expect(overruns.every(isV9OnlyRuleIssue)).toBe(true);
     // Each phase quotes ITS OWN lateness, not the programme's (Task 9's fix
     // round 1, Finding 1) — so the exemption is not swallowing a rule that
     // has silently degenerated to one message repeated three times.
