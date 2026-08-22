@@ -350,6 +350,19 @@ def test_fixture_r_reproduces_its_metrics_after_migration_to_v8(path: Path) -> N
 # otherwise ignored, silently downgrading its report to DRAFT while gate 1
 # stayed green throughout. Gate 1 cannot see that axis; gate 2 is written for
 # exactly it.
+#
+# Fix round 1, Finding 1 -- what gate 1 actually proves today, stated
+# honestly. Every fixture in this gate's scope has `programme: None` (Rule 2
+# excludes the only two that don't), so `migrate_v8_to_v9`'s three-package ->
+# precedence-network conversion NEVER EXECUTES for any document gate 1 runs.
+# What gate 1 proves today is narrower: that the migration's five additive
+# no-ops -- `phase_id: None` on every cost package and fee line, `anchor:
+# None` on every sales-phasing tranche and on refinance, and
+# `phase_slip_phase_id: None` / `phase_slip_months: 0` on all four scenarios
+# -- move no computed figure. The network conversion itself is untested by
+# this gate while Rule 2's exclusion stands; Task 12, which deletes that
+# exclusion once both engines support a populated v9 network, is the run
+# that actually exercises it.
 # ---------------------------------------------------------------------------
 
 # Rule 2 (TEMPORARY): both engines fail loudly on a populated v9 programme
@@ -388,17 +401,48 @@ def test_migration_v9_gate_fixture_set_is_non_empty_and_excludes_only_the_named_
     assert sorted(excluded) == sorted(_MIGRATION_V9_GATE_EXCLUDED_STEMS)
 
 
+def _issue_triples(issues) -> list[tuple[str, str, str]]:
+    """Canonicalises under PROGRAMME_FIELD_ALIASES and nothing else -- every
+    other issue matches on field AND message with no aliasing at all.
+    Fix round 1, Finding 4 (already correct on this side of the port, kept
+    as-is): sorts the FULL (severity, field, message) triple, not field+message
+    alone -- two issues sharing a field and message but differing in severity
+    must not be treated as interchangeable."""
+    return sorted(
+        (i.severity, PROGRAMME_FIELD_ALIASES.get(i.field, i.field), i.message)
+        for i in issues
+    )
+
+
 def _strip_version_fields(run: AppraisalRun) -> dict:
     """Gate 1 compares the WHOLE computed result, not a hand-picked list of
     metrics -- a chosen list is a guard that only watches what its author
-    remembered. `calc_version` (2.10.0 vs 2.11.0) legitimately differs and is
-    the only field stripped before comparison: unlike finance-types.ts's
-    Schedule, the Python Schedule dataclass carries no `programme` field yet
-    (a later task wires the network arm in), so there is nothing else to
-    strip on this side of the port."""
+    remembered.
+
+    Fix round 1, Finding 2: `AppraisalRun` has six fields. Four are compared
+    here -- `metrics`, `model`, `schedule`, `reconciliation` -- and two are
+    deliberately left out, named rather than silently dropped: `inputs`
+    differs by construction (it IS the migrated document, v8 shape vs v9
+    shape), and `validation` is covered by gate 2 below, which already
+    asserts on it directly with the alias canonicalisation this comparison
+    would otherwise have to duplicate. `reconciliation.issues` gets that same
+    canonicalisation here, because `reconciliation` carries `report_safe` --
+    the DRAFT flag this whole task exists to protect -- and a programme-field
+    alias could in principle appear inside it too.
+
+    `calc_version` (2.10.0 vs 2.11.0) legitimately differs and is the only
+    field stripped out of the four compared members: unlike
+    finance-types.ts's Schedule, the Python Schedule dataclass carries no
+    `programme` field yet (a later task wires the network arm in), so there
+    is nothing else to strip on this side of the port."""
     metrics = asdict(run.metrics)
     del metrics["calc_version"]
-    return {"metrics": metrics, "model": asdict(run.model), "schedule": asdict(run.schedule)}
+    reconciliation = asdict(run.reconciliation)
+    reconciliation["issues"] = _issue_triples(run.reconciliation.issues)
+    return {
+        "metrics": metrics, "model": asdict(run.model), "schedule": asdict(run.schedule),
+        "reconciliation": reconciliation,
+    }
 
 
 def _with_term_months(inputs: dict, term_months: int) -> dict:
@@ -409,6 +453,11 @@ def _with_term_months(inputs: dict, term_months: int) -> dict:
 
 @pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
 def test_v9_migration_gate_1_every_computed_figure_is_penny_identical(path: Path) -> None:
+    """Fix round 1, Finding 1: this gate proves the migration's five additive
+    no-ops move no computed figure (see the module-level comment above for
+    the full statement). It does NOT exercise the three-package -> network
+    conversion -- every in-scope fixture has `programme: None`, so that code
+    path never runs here."""
     doc = _load_fixture(path)
     before = run_appraisal(migrate_inputs_to_v8(doc["inputs"]))
     after = run_appraisal(migrate_inputs_to_v9(doc["inputs"]))
@@ -421,21 +470,26 @@ def test_programme_field_aliases_has_exactly_three_entries_and_each_maps_name_to
     because the map is derived from PACKAGE_TO_PHASE it constrains the
     migration's phase ids at the same time. Mirrors
     tests/test_migrate_v9.py::test_programme_field_aliases_is_derived_and_has_exactly_three_entries
-    (Task 6/7) and golden-fixtures.test.ts's identically-named test."""
+    (Task 6/7) and golden-fixtures.test.ts's identically-named test.
+
+    Fix round 1, Finding 5: the three names are pinned as LITERALS, not
+    re-derived from PACKAGE_TO_PHASE and compared to themselves -- that
+    would be tautological (a renamed package would pass this test while
+    failing golden-fixtures.test.ts's literal-pinned twin, a mirror weaker
+    than the original it mirrors)."""
     assert len(PROGRAMME_FIELD_ALIASES) == 3
-    assert sorted(PROGRAMME_FIELD_ALIASES) == sorted(f"programme.packages.{n}" for n in PACKAGE_TO_PHASE)
+    assert sorted(PROGRAMME_FIELD_ALIASES) == [
+        "programme.packages.construction", "programme.packages.professional", "programme.packages.statutory",
+    ]
+    # PACKAGE_TO_PHASE is still exercised here, but as the SOURCE of a second,
+    # independent check (its keys must be exactly these three names too), not
+    # as the thing the alias map's own keys are compared against.
+    assert sorted(PACKAGE_TO_PHASE) == [
+        "construction", "professional", "statutory",
+    ]
     for from_, to in PROGRAMME_FIELD_ALIASES.items():
         # The alias is legitimate ONLY because migration writes id = package name.
         assert to == from_.replace(".packages.", ".phases.")
-
-
-def _issue_triples(issues) -> list[tuple[str, str, str]]:
-    """Canonicalises under PROGRAMME_FIELD_ALIASES and nothing else -- every
-    other issue matches on field AND message with no aliasing at all."""
-    return sorted(
-        (i.severity, PROGRAMME_FIELD_ALIASES.get(i.field, i.field), i.message)
-        for i in issues
-    )
 
 
 @pytest.mark.parametrize("path", _MIGRATION_V9_GATE_FIXTURES, ids=lambda p: p.stem)
@@ -462,17 +516,31 @@ def test_v9_migration_gate_2_term_synthetic_documents_keep_their_issue_set(term:
         assert after == before, path.stem
 
 
-def test_v9_migration_gate_2_a_term_2_document_with_a_programme_really_does_produce_issues() -> None:
-    """Negative control: if the synthetic documents happened to be valid, the
-    test above would pass while asserting nothing. This proves the term-2
-    case is the hard case -- exactly where R11's defect lived. Deliberately
-    reaches past the gate's own excluded set (Rule 2) to fixture H, which
-    still carries a v8 `programme` block, precisely so migrating it to v9
-    yields a populated network and something for validate_inputs to reject."""
-    doc = _load_fixture(FIXTURE_DIR / "h-programme-scurve.json")
+def test_v9_migration_gate_2_a_term_2_document_from_a_gated_fixture_really_does_produce_a_genuine_short_term_issue() -> None:
+    """Fix round 1, Finding 3: the original version of this control asserted
+    on fixture H, which is EXCLUDED from this gate (Rule 2) -- and the error
+    satisfying it was the temporary "v9 programme network... not yet
+    implemented (Task 10)" placeholder that Task 10 deletes, at which point
+    the control would have silently stopped testing anything. It proved
+    neither that a GATED document produces issues, nor that a short-term RULE
+    is what fires.
+
+    This version uses fixture I, which IS in the gate's scope (its
+    `programme` is None; Rule 2 does not touch it) and carries a
+    `sales_phasing` block whose three tranches sit at months 9/10/11 of a
+    12-month term. Shortened to a 2-month term, `term - 1 == 1`, so every
+    tranche breaches sales_phasing's own permanent term bound -- a rule with
+    nothing to do with programme scaffolding, and one that survives Task
+    9/10/11/12 unchanged."""
+    doc = _load_fixture(FIXTURE_DIR / "i-phased-sales.json")
     shortened = _with_term_months(doc["inputs"], 2)
     issues = validate_inputs(migrate_inputs_to_v9(shortened))
-    assert any(i.severity == "error" for i in issues)
+    tail_issues = [i for i in issues if i.severity == "error" and i.field.startswith("sales_phasing.tranches")]
+    assert len(tail_issues) > 0
+    assert all(i.message == "Tranche month must be a whole month between 0 and 1." for i in tail_issues)
+    # Sanity: this must not be satisfied by the scaffolding placeholder the
+    # original control (mistakenly) relied on.
+    assert not any("not yet implement" in i.message for i in issues)
 
 
 # R9 Task 12. A fixture may pin the appraisal produced by one of its OWN named scenarios
