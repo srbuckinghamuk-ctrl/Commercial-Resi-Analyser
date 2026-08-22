@@ -1710,6 +1710,51 @@ describe('R12 memo programme section (spec §18.10, Task 18)', () => {
     expect(text).not.toContain('Technical design'); // a phase label unique to the network
   });
 
+  // Fix round 1, Finding 1. Before this fix, `network != null` but
+  // `schedule.programme == null` (a dependency cycle) fell through every
+  // branch in Section 6 and rendered nothing -- silently, on a document
+  // whose Section 3 line still asserted a working network. This is the
+  // third, distinct state a v9 document can be in: neither the resolved
+  // fixture-S state above nor the `programme == null` auto-window state.
+  it('a v9 network with a dependency cycle states the failure instead of silently omitting the section', async () => {
+    const inputs = cloneS();
+    // The cheapest cycle: acquisition already has no predecessors, and
+    // planning's sole predecessor is acquisition (FS) -- adding the reverse
+    // edge closes a 2-node cycle (acquisition -> planning -> acquisition).
+    const acquisition = inputs.programme!.phases.find((ph) => ph.id === 'acquisition')!;
+    acquisition.predecessors = [{ phase_id: 'planning', type: 'FS', lag_months: 0 }];
+    const run = runAppraisal(inputs);
+    expect(run.schedule.programme).toBeNull();
+    expect(run.reconciliation.report_safe).toBe(false);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    // The stated failure note (Section 6) -- not a blank section.
+    expect(text).toContain('Programme could not be derived: the phase network contains a dependency cycle.');
+    // Section 3's provenance line is qualified, not left claiming an
+    // unqualified working network.
+    expect(text).toContain(
+      'Programme: dated phase network, 14 phases — could not be derived (dependency cycle; see Section 6).',
+    );
+
+    // Distinguishes this state from the RESOLVED-network state (fixture S
+    // unmodified, above): no phase table, no critical path, no finish/slip
+    // sentences.
+    expect(text).not.toContain('Critical path:');
+    expect(text).not.toContain('Derived finish:');
+    expect(text).not.toContain('Slip recorded on the base case');
+    expect(text).not.toContain('No slip recorded on the base case.');
+
+    // Distinguishes this state from the `programme == null` AUTO-WINDOW
+    // state (immediately above): no auto-derived text, no auto-path gap
+    // markers -- this document does have a programme block, it just could
+    // not be resolved.
+    expect(text).not.toContain('Programme: auto-derived from term');
+    expect(text).not.toContain('Key dates — start on site, practical completion, sales/letting period');
+    expect(text).not.toContain('Critical path, long-lead items');
+  });
+
   it("a slip within a phase's own float leaves the finish unchanged and is reported as a base-case slip", async () => {
     const inputs = cloneS();
     // Fixture note (c): design carries exactly 1 month of float.

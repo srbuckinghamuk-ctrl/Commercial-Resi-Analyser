@@ -1276,7 +1276,14 @@ export function generateInvestmentMemo(
   y = bodyText(
     y,
     network != null
-      ? `Programme: dated phase network, ${network.phases.length} phases${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
+      ? schedule.programme != null
+        ? `Programme: dated phase network, ${network.phases.length} phases${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
+        // Fix round 1, Finding 1: a working network is asserted here and
+        // nowhere else in the document, so this line must say so itself
+        // rather than stay silent while Section 6 reports the failure —
+        // qualified, not suppressed, because dropping the line entirely
+        // would read as "no network was ever supplied", which is false.
+        : `Programme: dated phase network, ${network.phases.length} phases — could not be derived (dependency cycle; see Section 6).`
       : programme != null
         ? `Programme: explicit${anchor != null ? ` (anchored ${anchor})` : ' (no calendar anchor)'}.`
         : 'Programme: auto-derived from term (spec §6).',
@@ -1656,6 +1663,19 @@ export function generateInvestmentMemo(
         ? `Slip recorded on the base case: ${slipped.map((p) => `${p.label} ${p.slip_months > 0 ? '+' : ''}${p.slip_months} month(s)`).join('; ')}.`
         : 'No slip recorded on the base case.',
     );
+  } else if (network != null) {
+    // Fix round 1, Finding 1: `network != null` but `schedule.programme` is
+    // null — the phase network contains a dependency cycle. validation.ts
+    // hard-errors this (which is what makes report_safe false and the report
+    // DRAFT, below); schedule.ts deliberately withholds a derived block
+    // rather than publish a half-formed one off an unresolved cycle (spec
+    // §18.10). Neither the resolved-network branch above nor the legacy
+    // branch below applies, so without this branch the section would render
+    // nothing at all — silently, on a document whose Section 3 line (above)
+    // already asserts a network exists. A PDF must never silently omit a
+    // section it was asked to produce; state the failure instead.
+    const cycleNote = 'Programme could not be derived: the phase network contains a dependency cycle.';
+    y = withTextStyle(INFO, () => writeLines(y, wrap(cycleNote, INFO), INFO, 5)) + 2;
   } else if (programme != null) {
     // Explicit dated programme (spec §6.1) — one row per package, straight from
     // the recorded input windows; Start/Finish are display-only calendar labels.
