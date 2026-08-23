@@ -2,6 +2,7 @@ import type {
   AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule,
   RefinanceInputsV9, RefinanceInputsV10, SalesPhasingTrancheV9,
 } from './finance-types';
+import { MONITORING_CATEGORIES } from './finance-types';
 import { OPEX_CODES, resolveStabilisationMonth } from './investment-case';
 import { computeLenderGdv } from './lender-valuation';
 // R9 fix wave: `selectBandSet` is restricted by the single-accessor guard
@@ -1200,7 +1201,76 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
   });
 
+  validateMonitoring(inputs, issues);
+
   return issues;
+}
+
+/**
+ * R14 spec §20.3 — the monitoring statement's INPUT-only rules. The three
+ * result-derived flags (`monitoring_shortfall`, `monitoring_cost_variance`,
+ * `monitoring_dated_after_redemption`) are Task 9's own — they need the
+ * computed statement, which this function (inputs only) cannot see, so they
+ * are raised as `FlagCode`s in metrics, not here. Read structurally, exactly
+ * like `investment_case`/`lender_valuation` above: a pre-v11 document has no
+ * `monitoring` key at all, and a v11 document with `monitoring: null` (every
+ * migrated document) adds no issue either.
+ */
+export function validateMonitoring(inputs: AnyCalculatorInputs, issues: ValidationIssue[]): void {
+  const monitoring = 'monitoring' in inputs ? inputs.monitoring : null;
+  if (monitoring == null) return;
+
+  const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
+  const warn = (field: string, message: string) => issues.push({ severity: 'warning', field, message });
+
+  const term = Math.max(1, Math.floor(inputs.finance.term_months));
+  if (!Number.isInteger(monitoring.reporting_month)
+    || monitoring.reporting_month < 1 || monitoring.reporting_month > term) {
+    err('monitoring.reporting_month', `reporting_month must be between 1 and the term (${term})`);
+  }
+
+  // Exactly one line per category, any order, no duplicates (spec §20.1). A
+  // category set of size 5 that contains all five required categories can
+  // only BE those five categories, so this also catches an unrecognised
+  // category value without a separate membership check.
+  const categories = monitoring.lines.map((l) => l.category);
+  const categorySet = new Set(categories);
+  const validShape = categories.length === MONITORING_CATEGORIES.length
+    && categorySet.size === MONITORING_CATEGORIES.length
+    && MONITORING_CATEGORIES.every((c) => categorySet.has(c));
+  if (!validShape) {
+    err('monitoring.lines',
+      'monitoring must carry exactly one line per category (acquisition, construction, professional, statutory, contingency)');
+  }
+
+  monitoring.lines.forEach((line, i) => {
+    if (line.paid_to_date_pence > line.certified_to_date_pence) {
+      err(`monitoring.lines[${i}].paid_to_date_pence`, 'paid to date cannot exceed certified to date');
+    }
+    if (line.certified_to_date_pence > line.committed_to_date_pence) {
+      err(`monitoring.lines[${i}].certified_to_date_pence`, 'certified to date cannot exceed committed to date');
+    }
+  });
+
+  const committedNet = inputs.finance.funding_source === 'cash'
+    ? 0
+    : (inputs.finance.committed_net_facility_pence ?? 0);
+  if (monitoring.debt_drawn_to_date_pence > committedNet) {
+    err('monitoring.debt_drawn_to_date_pence', 'debt drawn to date cannot exceed the committed net facility');
+  }
+
+  // Spec §5.10's cash-classified, non-rejected filter — the same one
+  // cost-to-complete.ts and monthly-engine.ts already carry under this
+  // comment — restated here because validateMonitoring has no access to
+  // either module's computed total (inputs only).
+  const cashEquityTotal = inputs.equity_sources
+    .filter((s) => s.classification === 'cash' && s.evidence_status !== 'rejected')
+    .reduce((sum, s) => sum + s.amount_pence, 0);
+  if (monitoring.cash_equity_injected_to_date_pence > cashEquityTotal) {
+    // Spec §20.3: "not an error — the audit's 'additional equity injected'
+    // case; it is a warning."
+    warn('monitoring.cash_equity_injected_to_date_pence', 'equity injected beyond committed sources');
+  }
 }
 
 export function reconcile(
