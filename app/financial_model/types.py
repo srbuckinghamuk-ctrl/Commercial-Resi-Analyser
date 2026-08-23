@@ -956,6 +956,16 @@ FlagCode = Literal[
     # month's VAT can fall through to a funding gap even where the build itself is
     # fully advanced. Narrows the generic funding_gap -- both fire.
     "vat_funding_gap",
+    # R13 spec Sec 19.7. Fires when the investment case's stabilised annual NOI
+    # is <= 0 -- the take-out then sizes to nothing (Sec 19.4's size_takeout floor).
+    "investment_case_noi_non_positive",
+    # R13 spec Sec 19.7. Fires when stabilisation_month + ramp_months >
+    # term_months -- NOT an error (refinancing mid-lease-up is a real
+    # structure), but the valuation reads the stabilised figure regardless.
+    "stabilisation_incomplete_at_maturity",
+    # R13 spec Sec 19.7. Fires when the take-out's binding_constraint is dscr
+    # or icr -- coverage, not value, is what limits the quantum.
+    "takeout_constrained_by_coverage",
 ]
 
 CALC_VERSION = "2.12.0"
