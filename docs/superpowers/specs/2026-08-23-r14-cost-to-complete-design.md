@@ -210,8 +210,22 @@ The ratio is **reported** on the cost-plan result as
 **Guard:** a detailed-mode fixture pair differing only in one package's
 `lender_eligible` flag. The ineligible twin must show a strictly smaller
 cumulative draw and — with equity held constant — a strictly larger cumulative
-`funding_gap_pence`. Every existing fixture is all-eligible (the flag defaults
-`true`) and must be bit-identical.
+`funding_gap_pence`.
+
+**Two existing fixtures are not all-eligible.** Q (`q-detailed-cost-plan.json`,
+externals 3,000,000p of a 47,000,000p base build, ratio `44/47`) and S
+(`s-dated-programme.json`, externals 6,000,000p) each carry a
+`lender_eligible: false` package whose flag has been inert since R10. Wiring
+the cap may move their ledger-dependent pins (draws, peak debt, finance costs,
+`funding_gap_pence`, the two `cost_to_complete_*` figures) — or may not, if the
+smaller cap never binds against an ample facility. Either outcome must be
+**shown**, not assumed: where a pin moves, the new figure is hand-derived from
+the scaled cap base before it is written (Q's ledger pins were
+invariant-cross-checked rather than hand-replayed in R10, so this is the first
+time the cap base on Q is derived by hand); where nothing moves, the task
+report states which month's cap would have had to bind and why it did not.
+Every fixture whose packages are all eligible, and every headline-mode
+fixture, is bit-identical.
 
 Spec edits: §4.2(b) gains the ratio; §16.2's "recorded and displayed only"
 sentence, §16.8's output note and §16.9's limitation are rewritten to say
