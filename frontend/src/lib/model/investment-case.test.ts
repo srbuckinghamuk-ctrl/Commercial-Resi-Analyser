@@ -54,6 +54,16 @@ describe('operatingCostAt (§19.2)', () => {
   it('is zero for an empty line schedule', () => {
     expect(operatingCostAt([], 500_000)).toBe(0);
   });
+
+  it('R13 fix-wave Minor 7: rounds a non-integer fixed-pence value half-up, matching the Python engine', () => {
+    // `value` carries no integer constraint (§19.1) and validation permits a
+    // non-integer fixed-pence line. The identical assertion (money_round, not
+    // int()-truncation) lives in test_financial_model_investment_case.py.
+    const fractional: OperatingLine[] = [
+      { id: 'l1', code: 'insurance', label: 'Insurance', basis: 'fixed_pence_per_month', value: 25_000.5 },
+    ];
+    expect(operatingCostAt(fractional, 500_000)).toBe(25_001);
+  });
 });
 
 describe('noiSeries (§19.2)', () => {
@@ -242,11 +252,14 @@ describe('sizeTakeout (§19.4)', () => {
     expect(s.binding_constraint).toBe('dscr');
     expect(s.ltv_cap_pence).toBe(30_539_731);
     expect(s.icr_cap_pence).toBe(35_366_153);
-    // The DSCR cap's exact pence value depends on the annuity factor's
-    // precision; a result outside this band means the annuity factor is
-    // wrong, not that this bound needs widening.
-    expect(s.dscr_cap_pence).toBeGreaterThanOrEqual(27_400_000);
-    expect(s.dscr_cap_pence).toBeLessThanOrEqual(27_500_000);
+    // R13 fix-wave Minor 5. This is the binding cap -- the only figure a
+    // lender actually sizes against -- so it is pinned to the pence rather
+    // than banded. Hand-derived from a = 12 x i/(1-(1+i)^-300), i = 0.005,
+    // N = 300: a = 0.07731616817826173 (float64). floor(2_758_560 /
+    // (1.3 x a)) = floor(27_445_349.152...) = 27_445_349. This sits inside
+    // the former 27_400_000..27_500_000 band, so the band was correct; it is
+    // now redundant with the exact pin and removed.
+    expect(s.dscr_cap_pence).toBe(27_445_349);
     expect(s.quantum_pence).toBe(s.dscr_cap_pence);
   });
 });

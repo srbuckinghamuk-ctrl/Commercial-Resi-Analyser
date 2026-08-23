@@ -387,13 +387,17 @@ export interface MonthReceipts {
   agent_fee_pence: number;
   selling_legal_pence: number;
   /** R11 spec §17.6. Written back from `computeVat`'s `months[].reclaimed_pence`.
-   *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt, so
-   *  no GDV-, LTGDV- or break-even-denominated metric may read it. */
+   *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt. Narrowed
+   *  per §19.5 -- it never enters `gross_sale_pence` or `gdv_pence`, but
+   *  debt-denominated metrics (LTGDV, senior break-even) legitimately move,
+   *  because the debt they are computed from legitimately moves. */
   vat_reclaim_pence: number;
   /** R13 spec §19.5. Written back from `computeInvestmentCase`'s
-   *  `months[].noi_pence`, its own class of receipt — NOT a sale receipt, so
-   *  no GDV-, LTGDV- or gross-sales-denominated metric may read it. Zero on
-   *  every month of a document whose `investment_case` is null. */
+   *  `months[].noi_pence`, its own class of receipt — not a sale receipt. It
+   *  never enters `gross_sale_pence` or `gdv_pence`, but debt-denominated
+   *  metrics legitimately move, because the debt they are computed from
+   *  legitimately moves. Zero on every month of a document whose
+   *  `investment_case` is null. */
   net_operating_income_pence: number;
 }
 

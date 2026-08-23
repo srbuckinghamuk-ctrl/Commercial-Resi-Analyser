@@ -1280,13 +1280,20 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             err("investment_case.takeout.term_years", "The take-out term must be greater than zero.")
 
         # Rule 11 -- an EMPTY schedule is legal: NOI is then gross rent.
+        # R13 fix-wave Minor 6. seen.add(line.id) used to run unconditionally,
+        # including on the blank-id branch -- so a SECOND blank-id line raised
+        # both "Every operating line needs an id" and a spurious
+        # `Duplicate operating line id ""`, because the first blank id had
+        # already been added to `seen`. Only a genuinely non-empty, non-seen
+        # id gets added.
         seen: set[str] = set()
         for line in ic.operating_lines:
             if line.id.strip() == "":
                 err("investment_case.operating_lines", "Every operating line needs an id.")
             elif line.id in seen:
                 err("investment_case.operating_lines", f"Duplicate operating line id \"{line.id}\".")
-            seen.add(line.id)
+            else:
+                seen.add(line.id)
             if line.code not in OPEX_CODES:
                 err(
                     f"investment_case.operating_lines.{line.id}.code",

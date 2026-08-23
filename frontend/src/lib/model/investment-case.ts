@@ -100,10 +100,17 @@ export function grossPotentialMonthlyPence(
 }
 
 /** §19.2. A percentage line is a percent of the month's EFFECTIVE gross rent —
- *  a management fee is charged on rent collected, not on rent hoped for. */
+ *  a management fee is charged on rent collected, not on rent hoped for.
+ *
+ *  R13 fix-wave Minor 7. `value` carries no integer constraint (§19.1) and
+ *  validation permits a non-integer fixed-pence line, so the fixed basis is
+ *  `Math.round`'d here exactly like the percentage basis — not passed
+ *  through raw. A raw pass-through let a fractional pence value leak into a
+ *  nominally-integer-pence total; Python's `operating_cost_at` is fixed to
+ *  match (money_round, not int()-truncation) for the same reason. */
 export function operatingCostAt(lines: readonly OperatingLine[], egrPence: number): number {
   return lines.reduce((sum, l) => sum + (
-    l.basis === 'fixed_pence_per_month' ? l.value : Math.round((egrPence * l.value) / 100)
+    l.basis === 'fixed_pence_per_month' ? Math.round(l.value) : Math.round((egrPence * l.value) / 100)
   ), 0);
 }
 
@@ -294,10 +301,11 @@ export function computeInvestmentCase(
       monthly_noi_pence: stabEgr - stabOpex,
       annual_noi_pence: annualNoi,
     },
+    // R13 fix-wave Minor 7 -- see operatingCostAt's comment above.
     operating_lines: ic.operating_lines.map((l) => ({
       ...l,
       stabilised_monthly_pence: l.basis === 'fixed_pence_per_month'
-        ? l.value : Math.round((stabEgr * l.value) / 100),
+        ? Math.round(l.value) : Math.round((stabEgr * l.value) / 100),
     })),
     valuation: {
       cap_yield_pct: ic.valuation.cap_yield_pct,

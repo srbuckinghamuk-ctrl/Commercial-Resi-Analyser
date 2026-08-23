@@ -1115,12 +1115,19 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     // Rule 11 — an EMPTY schedule is legal: NOI is then gross rent.
     const seen = new Set<string>();
     for (const l of ic.operating_lines) {
+      // R13 fix-wave Minor 6. `seen.add(l.id)` used to run unconditionally,
+      // including on the blank-id branch -- so a SECOND blank-id line raised
+      // both "Every operating line needs an id" and a spurious
+      // `Duplicate operating line id ""`, because the first blank id had
+      // already been added to `seen`. Only a genuinely non-empty, non-seen
+      // id gets added.
       if (l.id.trim() === '') {
         err('investment_case.operating_lines', 'Every operating line needs an id.');
       } else if (seen.has(l.id)) {
         err('investment_case.operating_lines', `Duplicate operating line id "${l.id}".`);
+      } else {
+        seen.add(l.id);
       }
-      seen.add(l.id);
       if (!OPEX_CODES.includes(l.code)) {
         err(`investment_case.operating_lines.${l.id}.code`, `"${l.code}" is not a recognised operating cost code.`);
       }

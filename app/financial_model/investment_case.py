@@ -78,11 +78,22 @@ def _line_field(line: Any, name: str) -> Any:
 
 def operating_cost_at(lines: list[Any], egr_pence: int) -> int:
     """Sec 19.2. A percentage line is a percent of the month's EFFECTIVE gross
-    rent -- a management fee is charged on rent collected."""
+    rent -- a management fee is charged on rent collected.
+
+    R13 fix-wave Minor 7. `value` carries no Pydantic integer bound (Sec
+    19.1) and validation permits a non-integer fixed-pence line, so the fixed
+    basis is money_round'd here exactly like the percentage basis two lines
+    down -- not int()-truncated. Truncation silently discarded any fractional
+    pence and, unlike round-half-up, is not the rounding convention Sec 1.1
+    states for money elsewhere in this engine. TypeScript's `operatingCostAt`
+    is fixed to match (Math.round, not a raw pass-through) rather than the
+    other way around, for the same reason: an unrounded fractional value
+    leaking into a nominally-integer-pence total is the more wrong of the two
+    prior behaviours."""
     total = 0
     for line in lines:
         if _line_field(line, "basis") == "fixed_pence_per_month":
-            total += int(_line_field(line, "value"))
+            total += money_round(_line_field(line, "value"))
         else:
             total += money_round((egr_pence * _line_field(line, "value")) / 100)
     return total
@@ -265,8 +276,9 @@ def compute_investment_case(
     refi = getattr(inputs, "refinance", None)
 
     def _stabilised_monthly(line: Any) -> int:
+        # R13 fix-wave Minor 7 -- see operating_cost_at's comment above.
         if _line_field(line, "basis") == "fixed_pence_per_month":
-            return int(_line_field(line, "value"))
+            return money_round(_line_field(line, "value"))
         return money_round((stab_egr * _line_field(line, "value")) / 100)
 
     return {

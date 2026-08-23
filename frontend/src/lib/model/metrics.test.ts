@@ -1165,10 +1165,22 @@ describe('§19.6 result block and flags', () => {
   }
 
   it('republishes the schedule\'s investment case rather than recomputing it', () => {
-    const s = buildSchedule(investmentCaseDoc());
-    const r = icMetrics(investmentCaseDoc());
+    // R13 fix-wave Minor 4. The previous version built TWO independent
+    // schedules (one via buildSchedule, one inside icMetrics's own
+    // buildSchedule call) and compared them with toEqual -- a deriveMetrics
+    // that recomputed investment_case from scratch would produce a
+    // deep-equal object on the same input and pass just as well. Sharing
+    // ONE schedule and asserting reference identity (toBe) is the only
+    // assertion that actually distinguishes "republished" from "recomputed
+    // to an identical result", mirroring run_appraisal's own
+    // `metrics.investment_case is schedule.investment_case` in the Python
+    // engine.
+    const doc = investmentCaseDoc();
+    const s = buildSchedule(doc);
+    const model = runLedger(s, doc.finance, doc.equity_sources);
+    const r = deriveMetrics(doc, s, model);
     // §17.12's treatment of `vat`, applied here: ONE computation, republished.
-    expect(r.investment_case).toEqual(s.investment_case);
+    expect(r.investment_case).toBe(s.investment_case);
   });
 
   it('is null on the explicit path, exactly as the input is', () => {

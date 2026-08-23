@@ -2318,6 +2318,25 @@ describe('§19.7 investment case validation', () => {
     expect(errFields(icDoc({}))).not.toContain('investment_case.operating_lines');
   });
 
+  it('rule 11 (fix-wave Minor 6): two blank-id lines raise "needs an id" twice, not a spurious duplicate-id error', () => {
+    // Previously `seen.add(l.id)` ran unconditionally, including on the
+    // blank-id branch -- so the FIRST blank id got added to `seen`, and the
+    // SECOND blank-id line then also failed `seen.has('')`, raising a
+    // spurious `Duplicate operating line id ""` alongside the legitimate
+    // "needs an id" message.
+    const doc = icDoc({
+      lines: [
+        { id: '', code: 'management', label: 'Management fee', basis: 'pct_of_gross_rent', value: 10 },
+        { id: '', code: 'insurance', label: 'Buildings insurance', basis: 'fixed_pence_per_month', value: 25000 },
+      ],
+    });
+    const messages = errs(doc)
+      .filter((i) => i.field === 'investment_case.operating_lines')
+      .map((i) => i.message);
+    expect(messages.filter((m) => m === 'Every operating line needs an id.')).toHaveLength(2);
+    expect(messages.some((m) => m.includes('Duplicate operating line id'))).toBe(false);
+  });
+
   it('rule 11: rejects an unrecognised operating cost code, accepts a real one', () => {
     expect(errFields(icDoc({ invalidLineCode: true })))
       .toContain('investment_case.operating_lines.l1.code');

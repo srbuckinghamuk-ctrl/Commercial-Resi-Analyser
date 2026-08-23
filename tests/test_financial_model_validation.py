@@ -42,6 +42,7 @@ from app.financial_model.types import (
     EquitySource,
     FeeLine,
     LenderValuation,
+    OperatingLine,
     Phase,
     PhaseAnchor,
     ProgrammeInputs,
@@ -2414,6 +2415,28 @@ class TestInvestmentCaseValidation:
     def test_rule_11_rejects_a_blank_line_id_accepts_its_named_twin(self):
         assert "investment_case.operating_lines" in self._err_fields(ic_doc({"blank_line_id": True}))
         assert "investment_case.operating_lines" not in self._err_fields(ic_doc())
+
+    def test_rule_11_fix_wave_minor_6_two_blank_ids_raise_needs_an_id_twice_not_a_spurious_duplicate(self):
+        # R13 fix-wave Minor 6. `seen.add(line.id)` used to run unconditionally,
+        # including on the blank-id branch -- so the FIRST blank id got added
+        # to `seen`, and the SECOND blank-id line then also failed
+        # `line.id in seen`, raising a spurious `Duplicate operating line id
+        # ""` alongside the legitimate "needs an id" message.
+        doc = ic_doc({
+            "lines": [
+                OperatingLine(id="", code="management", label="Management fee", basis="pct_of_gross_rent", value=10),
+                OperatingLine(
+                    id="", code="insurance", label="Buildings insurance",
+                    basis="fixed_pence_per_month", value=25000,
+                ),
+            ],
+        })
+        messages = [
+            i.message for i in validate_inputs(doc)
+            if i.severity == "error" and i.field == "investment_case.operating_lines"
+        ]
+        assert messages.count("Every operating line needs an id.") == 2
+        assert not any("Duplicate operating line id" in m for m in messages)
 
     def test_rule_11_rejects_an_unrecognised_operating_cost_code_accepts_a_real_one(self):
         assert "investment_case.operating_lines.l1.code" in self._err_fields(ic_doc({"invalid_line_code": True}))

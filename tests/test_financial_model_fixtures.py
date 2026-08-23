@@ -226,9 +226,17 @@ def _resolve_path(root, path: str):
     metrics object. A plain key is just a one-segment path. Mirrors
     golden-fixtures.test.ts's ``resolvePath``: AreaBridgeResult has 23 fields, and
     pinning them individually keeps the fixture JSON language-neutral -- pinning the
-    whole object would compare this dataclass against a JSON dict and never pass."""
+    whole object would compare this dataclass against a JSON dict and never pass.
+
+    R13 fix-wave BLOCKING 2. `metrics.investment_case` (spec Sec 19.6) is a plain
+    dict at runtime -- `InvestmentCaseResult` and its nested `stabilised`/
+    `valuation`/`takeout` are all TypedDicts, not dataclasses -- so a segment
+    that lands on one needs `[part]`, not `getattr`. `resolvePath` in
+    golden-fixtures.test.ts never had this problem: JS bracket access works
+    identically on a class instance or a plain object, so only this engine's
+    getattr-only walk needed widening."""
     for part in path.split("."):
-        root = getattr(root, part)
+        root = root[part] if isinstance(root, dict) else getattr(root, part)
     return root
 
 

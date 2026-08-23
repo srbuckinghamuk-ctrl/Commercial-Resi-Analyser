@@ -186,6 +186,13 @@
     "cost_plan.statutory_total_pence": 0,
     "cost_plan.conversion_total_pence": 38500000,
     "cost_plan.lender_eligible_base_pence": 0,
-    "cost_plan.implied_rate_pence_per_sqm": 100000
+    "cost_plan.implied_rate_pence_per_sqm": 100000,
+    "investment_case.stabilised.annual_noi_pence": 2594592,
+    "investment_case.valuation.investment_value_pence": 44191475,
+    "investment_case.takeout.ltv_cap_pence": 28724458,
+    "investment_case.takeout.dscr_cap_pence": 25814005,
+    "investment_case.takeout.icr_cap_pence": 33264000,
+    "investment_case.takeout.quantum_pence": 25814005,
+    "investment_case.takeout.binding_constraint": "dscr"
   }
 }

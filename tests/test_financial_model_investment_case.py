@@ -49,6 +49,18 @@ def test_percentage_line_charges_on_effective_gross_rent():
     assert operating_cost_at([], 500_000) == 0
 
 
+def test_rounds_a_non_integer_fixed_pence_value_half_up_matching_the_ts_engine():
+    # R13 fix-wave Minor 7. `value` carries no integer constraint (Sec 19.1)
+    # and validation permits a non-integer fixed-pence line. The identical
+    # assertion (Math.round, not a raw pass-through) lives in
+    # investment-case.test.ts.
+    fractional = [
+        {"id": "l1", "code": "insurance", "label": "Insurance",
+         "basis": "fixed_pence_per_month", "value": 25_000.5},
+    ]
+    assert operating_cost_at(fractional, 500_000) == 25_001
+
+
 def test_gross_potential_sums_the_retained_rent_roll():
     assert gross_potential_monthly_pence(
         [{"monthly_rent_pence": 140_000}, {"monthly_rent_pence": 155_000}],
@@ -188,9 +200,12 @@ def test_cross_engine_pinned_triple():
     assert s["ltv_cap_pence"] == 30_539_731
     assert s["icr_cap_pence"] == 35_366_153
     assert s["binding_constraint"] == "dscr"
-    # <hand-derive> the DSCR cap to the pence from a = 12 x i/(1-(1+i)^-300),
-    # i = 0.005, then floor(noi / (1.3 x a)). It sits near 27_449_000; a result
-    # outside 27_400_000..27_500_000 means the annuity factor is wrong, not that
-    # this bound needs widening.
-    assert 27_400_000 <= s["dscr_cap_pence"] <= 27_500_000
+    # R13 fix-wave Minor 5. This is the binding cap -- the only figure a
+    # lender actually sizes against -- so it is pinned to the pence rather
+    # than banded. Hand-derived from a = 12 x i/(1-(1+i)^-300), i = 0.005,
+    # N = 300: a = 0.07731616817826173 (float64). floor(2_758_560 /
+    # (1.3 x a)) = floor(27_445_349.152...) = 27_445_349. This sits inside
+    # the former 27_400_000..27_500_000 band, so the band was correct; it is
+    # now redundant with the exact pin and removed.
+    assert s["dscr_cap_pence"] == 27_445_349
     assert s["quantum_pence"] == s["dscr_cap_pence"]

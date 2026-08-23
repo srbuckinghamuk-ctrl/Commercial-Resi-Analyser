@@ -1148,10 +1148,20 @@ def _ic_metrics(doc):
 
 
 def test_republishes_the_schedules_investment_case_rather_than_recomputing_it():
-    s = build_schedule(investment_case_doc())
-    r = _ic_metrics(investment_case_doc())
+    # R13 fix-wave Minor 4. The previous version built TWO independent
+    # schedules (one directly, one inside _ic_metrics's own build_schedule
+    # call) and compared with == -- a derive_metrics that recomputed
+    # investment_case from scratch would produce an equal dict on the same
+    # input and pass just as well. Sharing ONE schedule and asserting object
+    # identity (`is`) is the only assertion that actually distinguishes
+    # "republished" from "recomputed to an identical result", mirroring
+    # run_appraisal's own `metrics.investment_case is schedule.investment_case`.
+    doc = investment_case_doc()
+    s = build_schedule(doc)
+    model = run_ledger(s, doc.finance, doc.equity_sources)
+    r = derive_metrics(doc, s, model)
     # Sec 17.12's treatment of vat, applied here: ONE computation, republished.
-    assert r.investment_case == s.investment_case
+    assert r.investment_case is s.investment_case
 
 
 def test_investment_case_is_none_on_the_explicit_path_exactly_as_the_input_is():

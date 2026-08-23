@@ -87,6 +87,11 @@ export default function CashflowPage({ run }: Props) {
   const equityInTotal = model.totals.equity_contributed_pence + model.totals.additional_equity_pence;
   const hasRefi = model.months.some((m) => m.refinance_proceeds_pence > 0);
   const refiTotal = model.months.reduce((s, m) => s + m.refinance_proceeds_pence, 0);
+  // R13 spec §19.6: "CashflowPage gains the NOI row". `net_operating_income_pence`
+  // is signed (§19.5) -- a negative month is an operating shortfall, not a blank
+  // or an absolute value. Read from `model.months[]`, never recomputed here.
+  const hasNoi = model.months.some((m) => m.net_operating_income_pence !== 0);
+  const noiTotal = model.months.reduce((s, m) => s + m.net_operating_income_pence, 0);
 
   return (
     <div>
@@ -126,7 +131,8 @@ export default function CashflowPage({ run }: Props) {
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
               {['Month', 'Costs (VAT-incl.)', 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
-                'Undrawn net', 'Headroom', 'Receipts (net)', ...(hasRefi ? ['Refi proceeds'] : []),
+                'Undrawn net', 'Headroom', ...(hasNoi ? ['NOI'] : []), 'Receipts (net)',
+                ...(hasRefi ? ['Refi proceeds'] : []),
                 'Repayment', 'Distribution', 'Gap'].map((h) => (
                 <th key={h} style={th}>{h}</th>
               ))}
@@ -147,6 +153,11 @@ export default function CashflowPage({ run }: Props) {
                 <td style={{ ...td, color: m.facility_headroom_pence != null && m.facility_headroom_pence < 0 ? '#ef4444' : '#94a3b8' }}>
                   {pence(m.facility_headroom_pence)}
                 </td>
+                {hasNoi && (
+                  <td style={{ ...td, color: m.net_operating_income_pence < 0 ? '#ef4444' : '#22c55e' }}>
+                    {penceToPounds(m.net_operating_income_pence)}
+                  </td>
+                )}
                 <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(m.net_receipts_pence)}</td>
                 {hasRefi && <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(m.refinance_proceeds_pence)}</td>}
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.repayment_pence)}</td>
@@ -169,6 +180,7 @@ export default function CashflowPage({ run }: Props) {
               <td style={td}>—</td>
               <td style={td}>—</td>
               <td style={td}>—</td>
+              {hasNoi && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(noiTotal)}</td>}
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(netReceiptsTotal)}</td>
               {hasRefi && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(refiTotal)}</td>}
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.repayments_pence)}</td>
