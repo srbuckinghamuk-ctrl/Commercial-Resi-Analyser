@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ExitStrategyPage from './ExitStrategyPage';
-import { runAppraisal } from '../../lib/model';
+import { runAppraisal, validateInputs } from '../../lib/model';
 import type { CalculatorInputsV9, SalesPhasingInputsV9, RefinanceInputsV9 } from '../../lib/model';
 import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import { penceToPounds } from '../../lib/format';
 import type { ProgrammeNetwork } from '../../lib/model';
+import { retainAllDocMissingRents } from '../../lib/model/__fixtures__/investment-case-docs';
 
 function buildInputs(overrides: Partial<CalculatorInputsV9> = {}): CalculatorInputsV9 {
   const base = defaultCalculatorInputsV9();
@@ -446,5 +447,41 @@ describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9,
     expect(run.schedule.resolved_exit_months.tranches).toEqual([11]);
     expect(run.schedule.resolved_exit_months.refinance).toBe(11);
     expect(screen.getAllByText(/resolves to month 11/i)).toHaveLength(2);
+  });
+});
+
+// R13 Task 15 (spec §19.6/§19.7 rule 2). `retainAllDocMissingRents()` is a
+// v10 document -- `ExitStrategyPage` is generic over `CalculatorInputsV9 |
+// CalculatorInputsV10` for exactly this reason (see the page's own header
+// comment). Its base fixture (t-investment-case.json) already carries an
+// investment case and a refinance block seeded with a null value/LTV pair
+// (spec §19.7 rule 5), so "Add an investment case" is exercised here as the
+// completeness action it is documented to be -- idempotent on an EXISTING
+// case -- not as a null-to-non-null toggle; the missing row on unit u2 is
+// the only defect the click needs to fix.
+describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', () => {
+  it('populates a rent row for every unit when the route is retain_all', () => {
+    const doc = retainAllDocMissingRents();
+    const run = runAppraisal(doc);
+    const onChange = vi.fn();
+    render(<ExitStrategyPage inputs={doc} onChange={onChange} run={run} />);
+
+    // Sanity: the fixture really is missing exactly u2's row before the click.
+    expect(doc.exit_strategy.retained_units).toHaveLength(doc.unit_mix.units.length - 1);
+
+    fireEvent.click(screen.getByRole('button', { name: /add an investment case/i }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = { ...doc, ...onChange.mock.calls.at(-1)![0] };
+    expect(next.exit_strategy.retained_units).toHaveLength(next.unit_mix.units.length);
+    expect(next.exit_strategy.retained_units.map((r: { unit_id: string }) => r.unit_id).sort())
+      .toEqual(next.unit_mix.units.map((u: { id: string }) => u.id).sort());
+    expect(validateInputs(next).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('does not offer the investment case section on a v9 document', () => {
+    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'retain_all' } });
+    setup(inputs);
+    expect(screen.queryByRole('button', { name: /add an investment case/i })).not.toBeInTheDocument();
   });
 });
