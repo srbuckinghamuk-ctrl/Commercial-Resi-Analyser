@@ -400,18 +400,28 @@ lender-ancillary-fees line populated by `buildSchedule` in the current engine �
 defensively per the spec formula regardless). Committed cash equity = 30,000,000 (single
 confirmed source).
 
-| label `m` | remaining cost | remaining funding | surplus |
-|---:|---:|---:|---:|
-| 1 | 26,049,224 | 39,000,000 | 12,950,776 |
-| 2 | 10,736,124 | 24,000,000 | 13,263,876 |
-| 3 | 369,893 | 14,000,000 | 13,630,107 |
-| 4 | 0 | 14,000,000 | 14,000,000 |
+**R14 update (C1, spec §5.10 rewritten).** Fixture B's facility rolls up interest with a
+real reserve — `committed_gross_facility_pence` 55,000,000 against
+`committed_net_facility_pence` 50,000,000, a 5,000,000p reserve. R14 credits the reserve's
+unconsumed part (5,000,000 − cumulative `interest_capitalised_pence` through `m − 1`, which
+equals cumulative `interest_accrued_pence` since every month here is rolled-up: 310,000 /
+623,100 / 989,331 / 1,359,224) to remaining funding. Remaining cost is untouched.
+
+| label `m` | remaining cost | undrawn net at m−1 | reserve headroom at m−1 | uncontributed cash equity at m−1 | remaining funding | surplus |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 26,049,224 | 19,000,000 | 4,690,000 | 20,000,000 | 43,690,000 | 17,640,776 |
+| 2 | 10,736,124 | 19,000,000 | 4,376,900 | 5,000,000 | 28,376,900 | 17,640,776 |
+| 3 | 369,893 | 14,000,000 | 4,010,669 | 0 | 18,010,669 | 17,640,776 |
+| 4 | 0 | 14,000,000 | 3,640,776 | 0 | 17,640,776 | 17,640,776 |
 
 Worked example (`m = 1`): remaining cost = uses[1..3] (15,000,000 + 10,000,000 + 0) +
-interest[1..3] (313,100 + 366,231 + 369,893) + capFees[1..3] (0) = 26,049,224. Remaining funding =
-undrawn at ledger month 0 (19,000,000) + (30,000,000 committed equity − 10,000,000 contributed
-through month 0) = 39,000,000. Surplus = 12,950,776 > 0. Fully funded throughout:
-`first_shortfall_month = null`, `max_shortfall_pence = 0`.
+interest[1..3] (313,100 + 366,231 + 369,893) + capFees[1..3] (0) = 26,049,224. Reserve headroom
+= 5,000,000 − 310,000 (interest capitalised at ledger month 0) = 4,690,000. Remaining funding =
+undrawn at ledger month 0 (19,000,000) + reserve headroom (4,690,000) + (30,000,000 committed
+equity − 10,000,000 contributed through month 0) = 43,690,000. Surplus = 17,640,776 > 0. Fully
+funded throughout: `first_shortfall_month = null`, `max_shortfall_pence = 0` — unchanged by the
+reserve credit, since this fixture was never in shortfall (unlike Fixture P, spec §1.1's phantom
+case, and Fixture H, whose real shortfall shrinks but does not close).
 
 **Step 2 — worksheet, cash-deal path** (self-review requirement: the cash path must be tested,
 not just typed as `| 0`). Same USES/SALE as Fixture B, `funding_source: 'cash'`, equity
@@ -479,6 +489,18 @@ permanent regression tests):**
   both present, `first_shortfall_month = 1`); every other fixture satisfies it vacuously (no
   shortfall). A parametrised test over every file in `fixtures/financial-model/*.json` checks this
   too, alongside the two hand-built positive/negative cases above.
+
+  **R14 note (C1).** `cost-to-complete.test.ts`/`test_financial_model_cost_to_complete.py`'s own
+  copy of Fixture E (this file's "shortfall direction" describe block, not
+  `monthly-engine.test.ts`'s original) additionally sets `committed_gross_facility_pence =
+  40,000,000` — TERMS' own 5,000,000 reserve preserved at the lower net facility — where it had
+  previously left gross at TERMS' 55,000,000. Left unchanged, the gap between that unmodified
+  55,000,000 gross and the lowered 35,000,000 net is 20,000,000 — four times TERMS' real reserve
+  and far more than this schedule's total interest — so crediting it (this task) would swallow the
+  whole shortfall and the fixture would stop demonstrating "gap ⇒ shortfall" at all. With the
+  reserve kept proportionate, the real shortfall survives (`funding_gap_pence = 5,700,000`
+  unaffected, since gross only throttles draws below what net already throttles here):
+  `first_shortfall_month = 1`, `max_shortfall_pence = 2,032,973`.
 
 Spec §5.10 has been amended with a "Known limitation" paragraph recording this scope precisely
 (`docs/financial-model/calculation-specification.md`), so a future reader of the spec — not just
@@ -743,20 +765,35 @@ fees after month 0, no lender ancillary fees):
 |---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
 | uses + interest | 4,215,202 | 12,378,033 | 16,475,842 | 17,592,348 | 13,389,136 | 4,430,334 | 413,837 | 416,596 | 419,373 | 422,169 | 424,984 |
 
-| m | Remaining cost (Σ from k = m) | Undrawn net at m−1 | Uncontributed cash equity at m−1 | Remaining funding | Surplus |
-|--:|--:|--:|--:|--:|--:|
-| 1 | 70,577,854 | 30,800,000 | 20,811,600 | 51,611,600 | **−18,966,254** |
-| 2 | 66,362,652 | 30,800,000 | 16,792,362 | 47,592,362 | −18,770,290 |
-| 3 | 53,984,619 | 30,800,000 | 4,611,600 | 35,411,600 | −18,573,019 |
-| 4 | 37,508,777 | 19,211,600 | 0 | 19,211,600 | −18,297,177 |
-| 5 | 19,916,429 | 2,011,600 | 0 | 2,011,600 | −17,904,829 |
-| 6 | 6,527,293 | 0 | 0 | 0 | −6,527,293 |
-| 7 | 2,096,959 | 0 | 0 | 0 | −2,096,959 |
-| 8 | 1,683,122 | 0 | 0 | 0 | −1,683,122 |
-| 9 | 1,266,526 | 0 | 0 | 0 | −1,266,526 |
-| 10 | 847,153 | 0 | 0 | 0 | −847,153 |
-| 11 | 424,984 | 0 | 0 | 0 | −424,984 |
-| 12 | 0 | 0 | 0 | 0 | 0 |
+**R14 update (C1, spec §5.10 rewritten).** This facility rolls up interest with a real
+interest reserve — `committed_gross_facility_pence` 66,000,000 against
+`committed_net_facility_pence` 60,000,000, a 6,000,000p reserve. R14 credits the
+reserve's unconsumed part (6,000,000 − cumulative `interest_capitalised_pence` through
+`m − 1`) to remaining funding, so every row below moves versus the pre-R14 table: the
+"Reserve headroom at m−1" column is new, "Remaining funding" and "Surplus" both shift by
+exactly that amount, and "Remaining cost" is untouched (§4 corrects only the funding
+side).
+
+| m | Remaining cost (Σ from k = m) | Undrawn net at m−1 | Reserve headroom at m−1 | Uncontributed cash equity at m−1 | Remaining funding | Surplus |
+|--:|--:|--:|--:|--:|--:|--:|
+| 1 | 70,577,854 | 30,800,000 | 5,805,333 | 20,811,600 | 57,416,933 | **−13,160,921** |
+| 2 | 66,362,652 | 30,800,000 | 5,609,369 | 16,792,362 | 53,201,731 | −13,160,921 |
+| 3 | 53,984,619 | 30,800,000 | 5,412,098 | 4,611,600 | 40,823,698 | −13,160,921 |
+| 4 | 37,508,777 | 19,211,600 | 5,136,256 | 0 | 24,347,856 | −13,160,921 |
+| 5 | 19,916,429 | 2,011,600 | 4,743,908 | 0 | 6,755,508 | −13,160,921 |
+| 6 | 6,527,293 | 0 | 4,335,534 | 0 | 4,335,534 | −2,191,759 |
+| 7 | 2,096,959 | 0 | 3,924,438 | 0 | 3,924,438 | 1,827,479 |
+| 8 | 1,683,122 | 0 | 3,510,601 | 0 | 3,510,601 | 1,827,479 |
+| 9 | 1,266,526 | 0 | 3,094,005 | 0 | 3,094,005 | 1,827,479 |
+| 10 | 847,153 | 0 | 2,674,632 | 0 | 2,674,632 | 1,827,479 |
+| 11 | 424,984 | 0 | 2,252,463 | 0 | 2,252,463 | 1,827,479 |
+| 12 | 0 | 0 | 1,827,479 | 0 | 1,827,479 | 1,827,479 |
+
+Reserve headroom at `m`: `6,000,000 − Σ interest_capitalised_pence` through ledger month
+`m − 2` inclusive (the cumulative total *before* label `m`'s own ledger month `m − 1` is
+folded in — e.g. at `m = 1` only ledger month 0's 194,667 has capitalised, giving
+`6,000,000 − 194,667 = 5,805,333`; the cumulative total across all 12 ledger months is
+4,172,521, matching the fixture's total finance cost).
 
 Telescoping check (spec §5.10): `remaining_cost(1) = remaining_cost(2) + (uses+interest at k=1)` →
 `66,362,652 + 4,215,202 = 70,577,854` ✓; and `remaining_cost(1) = ` total cost ex-selling +
@@ -764,9 +801,14 @@ total interest + capitalised fees − month-0 spend = `108,788,400 + 4,172,521 +
 (42,188,400 + 194,667 + 1,200,000) = 114,160,921 − 43,583,067 = 70,577,854` ✓.
 
 → `cost_to_complete_first_shortfall_month = **1**`,
-`cost_to_complete_max_shortfall_pence = **18,966,254**` (the largest deficit, at m = 1). Consistent
+`cost_to_complete_max_shortfall_pence = **13,160,921**` (the largest deficit, tied across
+m = 1..5, all short by the same amount since the undrawn-facility-plus-reserve total and
+remaining cost fall together in lockstep until the facility is exhausted). Consistent
 with the ledger's own `funding_gap_pence > 0`, i.e. the one implication the suite asserts
-("shortfall ⇒ funding gap", §2 above) holds here as a genuine positive case, not vacuously.
+("shortfall ⇒ funding gap", §2 above) holds here as a genuine positive case, not vacuously —
+and it is still a genuine shortfall, not C1's phantom, because H's `funding_gap_pence` of
+14,988,400 is a real, independently-computed ledger shortfall the reserve credit does not
+touch.
 
 #### Pinned `expected_metrics`
 
@@ -796,7 +838,7 @@ with the ledger's own `funding_gap_pence > 0`, i.e. the one implication the suit
 | `irr_annual_pct` | — | 65.92% |
 | `funding_gap_pence` | 14,988,400 | £149,884 |
 | `cost_to_complete_first_shortfall_month` | 1 | — |
-| `cost_to_complete_max_shortfall_pence` | 18,966,254 | £189,662.54 |
+| `cost_to_complete_max_shortfall_pence` | 13,160,921 | £131,609.21 |
 
 **Governance note.** Every figure above was derived on this worksheet *before* the fixture was run
 against either engine (`docs/financial-model/model-governance.md`): the spread tables come from the

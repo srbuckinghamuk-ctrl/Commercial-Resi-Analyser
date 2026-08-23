@@ -562,7 +562,15 @@ export interface MonthlyModel {
 export interface CostToCompleteSummary {
   first_shortfall_month: number | null;
   max_shortfall_pence: number;
-  months: { month: number; remaining_cost_pence: number; remaining_funding_pence: number; surplus_pence: number }[];
+  months: {
+    month: number;
+    remaining_cost_pence: number;
+    remaining_funding_pence: number;
+    /** Spec §5.10 (R14, C1): the rolled-up facility's unconsumed interest reserve credited
+     *  to remaining funding; 0 for serviced interest and cash deals. */
+    remaining_interest_reserve_headroom_pence: number;
+    surplus_pence: number;
+  }[];
 }
 
 export interface AppraisalResultV2 {

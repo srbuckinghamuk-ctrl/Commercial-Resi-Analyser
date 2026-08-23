@@ -1237,14 +1237,15 @@ _NEGATIVE_CONTROLS = [
     # and receipts are DIFFERENT numbers (74,500,000 vs 32,000,000), so a mapper wired to
     # the wrong total is caught. A control on a sell_all fixture could not tell them apart.
     ("o-ancillary-value", {"gross_sales_pence": 74_500_000}),
-    # Fixture P holds spec Sec 5.10's deferred-defect figures. They are documented in the
-    # spec and in test-cases Sec 14.9, so they must be pinned by something that fails when
-    # the behaviour changes -- otherwise the deferral relies on someone remembering to
-    # re-read the prose.
+    # Fixture P's cost-to-complete pair used to hold spec Sec 5.10's C1 defect (a phantom
+    # shortfall from double-counting rolled-up interest against the net facility). R14
+    # closed C1 (spec Sec 5.10 rewritten, calc 2.13.0): the reserve credit clears the
+    # series at every month, so the true pins are None / 0 and the old phantom figures
+    # (1 / 392483) are now what the negative control must catch instead.
     ("p-scotland-levered", {
         "gross_sales_pence": 143_999_999,
-        "cost_to_complete_first_shortfall_month": 2,
-        "cost_to_complete_max_shortfall_pence": 392_484,
+        "cost_to_complete_first_shortfall_month": 1,
+        "cost_to_complete_max_shortfall_pence": 392_483,
         "funding_gap_pence": 1,
     }),
     # R10 Task 11 fix round 1 (the same convention stated above): fixture Q adds ten

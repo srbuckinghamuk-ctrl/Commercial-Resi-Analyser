@@ -85,11 +85,14 @@ function cashEquity(amount: number): EquitySource[] {
   }];
 }
 
-// computeCostToComplete only reads inputs.equity_sources — every other field is default
-// filler from defaultCalculatorInputsV2(), matching metrics.test.ts's own convention.
-function inputsWithEquity(equitySources: EquitySource[]): CalculatorInputsV2 {
+// computeCostToComplete reads inputs.equity_sources and (R14, C1) inputs.finance.interest_type
+// — every other field is default filler from defaultCalculatorInputsV2(), matching
+// metrics.test.ts's own convention. `finance` defaults to that same default (rolled_up,
+// matching TERMS) and is only passed explicitly where a test's `terms` diverges from it.
+function inputsWithEquity(equitySources: EquitySource[], finance?: FacilityTerms): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
   inputs.equity_sources = equitySources;
+  if (finance) inputs.finance = finance;
   return inputs;
 }
 
@@ -112,14 +115,32 @@ describe('computeCostToComplete — Fixture B worksheet (spec §5.10, rolled-up 
   // this exact formula before being written here (see task-6-report.md).
   const schedule = mkSchedule(USES, SALE);
   const model = runLedger(schedule, TERMS, cashEquity(30_000_000));
-  const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(30_000_000)));
+  const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(30_000_000), TERMS));
 
+  // R14 (C1, spec §5.10 rewritten): TERMS is a rolled-up facility with a real
+  // 5,000,000p reserve (committed_gross 55,000,000 − committed_net 50,000,000), so
+  // remaining_funding_pence and surplus_pence both gain the reserve's unconsumed part
+  // (5,000,000 − cumulative interest_capitalised_pence through m − 1, i.e. 4,690,000 /
+  // 4,376,900 / 4,010,669 / 3,640,776 — hand-derived in docs/financial-model/test-cases.md
+  // Step 1, cross-checked against this exact computation). remaining_cost_pence is untouched.
   it('reproduces the hand-derived month series to the penny', () => {
     expect(ctc.months).toEqual([
-      { month: 1, remaining_cost_pence: 26_049_224, remaining_funding_pence: 39_000_000, surplus_pence: 12_950_776 },
-      { month: 2, remaining_cost_pence: 10_736_124, remaining_funding_pence: 24_000_000, surplus_pence: 13_263_876 },
-      { month: 3, remaining_cost_pence: 369_893, remaining_funding_pence: 14_000_000, surplus_pence: 13_630_107 },
-      { month: 4, remaining_cost_pence: 0, remaining_funding_pence: 14_000_000, surplus_pence: 14_000_000 },
+      {
+        month: 1, remaining_cost_pence: 26_049_224, remaining_funding_pence: 43_690_000,
+        remaining_interest_reserve_headroom_pence: 4_690_000, surplus_pence: 17_640_776,
+      },
+      {
+        month: 2, remaining_cost_pence: 10_736_124, remaining_funding_pence: 28_376_900,
+        remaining_interest_reserve_headroom_pence: 4_376_900, surplus_pence: 17_640_776,
+      },
+      {
+        month: 3, remaining_cost_pence: 369_893, remaining_funding_pence: 18_010_669,
+        remaining_interest_reserve_headroom_pence: 4_010_669, surplus_pence: 17_640_776,
+      },
+      {
+        month: 4, remaining_cost_pence: 0, remaining_funding_pence: 17_640_776,
+        remaining_interest_reserve_headroom_pence: 3_640_776, surplus_pence: 17_640_776,
+      },
     ]);
   });
 
@@ -165,14 +186,26 @@ describe('computeCostToComplete — cash-deal path (spec §5.10, undrawn facilit
   const schedule = mkSchedule(USES, SALE);
   const cashTerms: FacilityTerms = { ...TERMS, funding_source: 'cash' };
   const model = runLedger(schedule, cashTerms, cashEquity(65_000_000));
-  const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(65_000_000)));
+  const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(65_000_000), cashTerms));
 
   it('reproduces the hand-derived month series to the penny', () => {
     expect(ctc.months).toEqual([
-      { month: 1, remaining_cost_pence: 25_000_000, remaining_funding_pence: 25_000_000, surplus_pence: 0 },
-      { month: 2, remaining_cost_pence: 10_000_000, remaining_funding_pence: 10_000_000, surplus_pence: 0 },
-      { month: 3, remaining_cost_pence: 0, remaining_funding_pence: 0, surplus_pence: 0 },
-      { month: 4, remaining_cost_pence: 0, remaining_funding_pence: 0, surplus_pence: 0 },
+      {
+        month: 1, remaining_cost_pence: 25_000_000, remaining_funding_pence: 25_000_000,
+        remaining_interest_reserve_headroom_pence: 0, surplus_pence: 0,
+      },
+      {
+        month: 2, remaining_cost_pence: 10_000_000, remaining_funding_pence: 10_000_000,
+        remaining_interest_reserve_headroom_pence: 0, surplus_pence: 0,
+      },
+      {
+        month: 3, remaining_cost_pence: 0, remaining_funding_pence: 0,
+        remaining_interest_reserve_headroom_pence: 0, surplus_pence: 0,
+      },
+      {
+        month: 4, remaining_cost_pence: 0, remaining_funding_pence: 0,
+        remaining_interest_reserve_headroom_pence: 0, surplus_pence: 0,
+      },
     ]);
   });
 
@@ -184,14 +217,71 @@ describe('computeCostToComplete — cash-deal path (spec §5.10, undrawn facilit
   });
 });
 
+describe('computeCostToComplete — serviced interest gets no reserve credit (spec §5.10, R14 C1)', () => {
+  // C1 (spec §5.10, R14) credits a rolled-up facility's unconsumed interest reserve to
+  // remaining funding. Serviced interest is a committed-equity use (§4.3), not rolled up,
+  // so it must be unaffected: remaining_interest_reserve_headroom_pence is 0 throughout and
+  // remaining_funding_pence is exactly undrawn_net_facility + remaining_cash_equity,
+  // recomputed here from the ledger rather than read back off the summary (a constant added
+  // to both sides of that recomputation would slip past it — the golden fixtures' unchanged
+  // pins are the catch for that, per fixture reconciliation below).
+  //
+  // No golden fixture in fixtures/financial-model carries `interest_type: 'serviced'` — all
+  // sixteen are rolled-up (verified: `grep -rl serviced fixtures/financial-model` is empty) —
+  // so scanning the corpus the way the shortfall-direction test below does would vacuously
+  // pass with zero cases matched. This test instead builds its own local scenarios, the same
+  // way Fixture E/F above do, and asserts at least one actually ran.
+  const scenarios: Array<{ label: string; terms: FacilityTerms; equityPence: number }> = [
+    { label: 'Fixture B terms, serviced', terms: { ...TERMS, interest_type: 'serviced' }, equityPence: 30_000_000 },
+    {
+      label: 'Fixture E terms (lower net facility), serviced',
+      terms: { ...TERMS, interest_type: 'serviced', committed_net_facility_pence: 35_000_000 },
+      equityPence: 25_000_000,
+    },
+  ];
+  let sawServicedCase = false;
+
+  for (const { label, terms, equityPence } of scenarios) {
+    it(`${label}: zero reserve headroom, remaining_funding excludes it`, () => {
+      const schedule = mkSchedule(USES, SALE);
+      const model = runLedger(schedule, terms, cashEquity(equityPence));
+      const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(equityPence), terms));
+
+      let cumEquityContributed = 0;
+      for (let m = 1; m <= schedule.term_months; m++) {
+        const prevLedgerMonth = model.months[m - 1];
+        cumEquityContributed += prevLedgerMonth.equity_contribution_pence;
+        const undrawnFacility = prevLedgerMonth.undrawn_net_facility_pence ?? 0;
+        const remainingCashEquity = Math.max(0, equityPence - cumEquityContributed);
+        expect(ctc.months[m - 1].remaining_interest_reserve_headroom_pence, `month ${m}`).toBe(0);
+        expect(ctc.months[m - 1].remaining_funding_pence, `month ${m}`).toBe(undrawnFacility + remainingCashEquity);
+      }
+      sawServicedCase = true;
+    });
+  }
+
+  it('at least one serviced scenario was exercised', () => {
+    expect(sawServicedCase).toBe(true);
+  });
+});
+
 describe('computeCostToComplete — shortfall direction against funding_gap_pence (spec §5.10 note)', () => {
   it('Fixture E (real funding gap): the series also reports a genuine shortfall', () => {
     // monthly-engine.test.ts's Fixture E: committed_net_facility_pence lowered to 35,000,000,
     // equity lowered to 25,000,000 — a real, pinned funding_gap_pence of 5,700,000 at month 2.
-    const terms: FacilityTerms = { ...TERMS, committed_net_facility_pence: 35_000_000 };
+    // R14 (C1): monthly-engine.test.ts's Fixture E leaves committed_gross_facility_pence at
+    // TERMS' 55,000,000 while only cutting the net facility, so its reserve balloons to
+    // 20,000,000 — twenty times TERMS' own 5,000,000 reserve and far more than this schedule's
+    // total interest. Once the reserve is credited (this task), that oversized, unrealistic
+    // reserve swallows the whole shortfall, which would prove nothing about a genuine gap. This
+    // test keeps TERMS' 5,000,000 reserve proportion (committed_gross = net + 5,000,000) so the
+    // facility stays a plausible one and the gap the ledger reports is still genuinely unfunded.
+    const terms: FacilityTerms = {
+      ...TERMS, committed_net_facility_pence: 35_000_000, committed_gross_facility_pence: 40_000_000,
+    };
     const schedule = mkSchedule(USES, SALE);
     const model = runLedger(schedule, terms, cashEquity(25_000_000));
-    const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(25_000_000)));
+    const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(25_000_000), terms));
     expect(model.totals.funding_gap_pence).toBeGreaterThan(0);
     expect(ctc.first_shortfall_month).not.toBeNull();
     expect(ctc.max_shortfall_pence).toBeGreaterThan(0);
@@ -209,33 +299,27 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
     const terms: FacilityTerms = { ...TERMS, committed_gross_facility_pence: 36_500_000 };
     const schedule = mkSchedule(USES, SALE);
     const model = runLedger(schedule, terms, cashEquity(30_000_000));
-    const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(30_000_000)));
+    const ctc = computeCostToComplete(schedule, model, inputsWithEquity(cashEquity(30_000_000), terms));
     expect(model.totals.funding_gap_pence).toBe(484_487); // pinned in monthly-engine.test.ts
     expect(ctc.first_shortfall_month).toBeNull();
     expect(ctc.max_shortfall_pence).toBe(0);
   });
 
-  // R9 Task 12. Fixture P is a natural counter-example to the remaining direction, and it
-  // is named here rather than tuned away. Spec §5.10 already says the implication is
-  // verified across the current corpus, not proved as a law; fixture P is the first
-  // fixture that structures its facility the way a real rolled-up development facility is
-  // structured — a net facility sized to the COSTS (70,000,000p against 66,688,400p of
-  // draws and fees) with the interest reserve carved out of the gross facility
-  // (8,000,000p of headroom against 3,913,416p of rolled-up interest). §5.10's snapshot
-  // charges that interest against the NET facility, so it reports a 392,483p shortfall in
-  // month 1 while the ledger records no funding gap at all, because the interest
-  // capitalised into gross headroom exactly as intended.
-  //
-  // That is a real, reportable limitation of §5.10 for rolled-up facilities (see spec
-  // §5.10's Known limitation) — not a defect in the fixture, and not something to hide by
-  // widening the facility until the metric agrees. Mirrors the Python twin.
-  const SHORTFALL_WITHOUT_GAP_STEMS = ['p-scotland-levered.json'];
+  // R9 Task 12 found fixture P a natural counter-example to the remaining direction: a
+  // rolled-up facility structured the way a real one is (net sized to costs, reserve
+  // carved out of gross) reported a phantom shortfall because §5.10 charged rolled-up
+  // interest against the net facility alone. R14 closed that defect (C1, spec §5.10
+  // rewritten, calc 2.13.0) by crediting the unconsumed reserve to remaining funding, so
+  // fixture P's series now clears at every month and the list below is empty. It stays
+  // empty ON PURPOSE, not deleted: a future fixture that reproduces "shortfall with no
+  // gap" has a declared home here and must be listed deliberately rather than silently
+  // passing as a new positive case. Mirrors the Python twin.
+  const SHORTFALL_WITHOUT_GAP_STEMS: string[] = [];
 
   it('holds across every golden fixture: shortfall ⇒ some ledger month has funding_gap_pence > 0', () => {
     const fixtureDir = resolve(__dirname, '../../../../fixtures/financial-model');
     const files = readdirSync(fixtureDir).filter((f) => f.endsWith('.json'));
     let sawPositiveCase = false;
-    let sawCounterExample = false;
     for (const f of files) {
       const fx = JSON.parse(readFileSync(join(fixtureDir, f), 'utf-8')) as {
         kind: string; inputs: CalculatorInputsV3;
@@ -253,7 +337,6 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
         // drift off it in silence.
         expect(ctc.first_shortfall_month, f).not.toBeNull();
         expect(model.totals.funding_gap_pence, f).toBe(0);
-        sawCounterExample = true;
         continue;
       }
       if (ctc.first_shortfall_month !== null) {
@@ -263,6 +346,5 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
     }
     // Guards against the implication holding only vacuously across the corpus.
     expect(sawPositiveCase).toBe(true);
-    expect(sawCounterExample).toBe(true);
   });
 });

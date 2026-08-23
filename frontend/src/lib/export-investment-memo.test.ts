@@ -431,9 +431,18 @@ describe('generateInvestmentMemo', () => {
         first_shortfall_month: 3,
         max_shortfall_pence: 1_500_000,
         months: [
-          { month: 1, remaining_cost_pence: 50_000_000, remaining_funding_pence: 52_000_000, surplus_pence: 2_000_000 },
-          { month: 2, remaining_cost_pence: 40_000_000, remaining_funding_pence: 41_000_000, surplus_pence: 1_000_000 },
-          { month: 3, remaining_cost_pence: 30_000_000, remaining_funding_pence: 28_500_000, surplus_pence: -1_500_000 },
+          {
+            month: 1, remaining_cost_pence: 50_000_000, remaining_funding_pence: 52_000_000,
+            remaining_interest_reserve_headroom_pence: 0, surplus_pence: 2_000_000,
+          },
+          {
+            month: 2, remaining_cost_pence: 40_000_000, remaining_funding_pence: 41_000_000,
+            remaining_interest_reserve_headroom_pence: 0, surplus_pence: 1_000_000,
+          },
+          {
+            month: 3, remaining_cost_pence: 30_000_000, remaining_funding_pence: 28_500_000,
+            remaining_interest_reserve_headroom_pence: 0, surplus_pence: -1_500_000,
+          },
         ],
       };
       const blob = generateInvestmentMemo(mockProject, run, null);

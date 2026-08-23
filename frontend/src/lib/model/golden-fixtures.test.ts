@@ -647,18 +647,19 @@ describe('golden fixtures (shared with the Python engine)', () => {
                                        // mapper would return
       },
     },
-    // Fixture P holds spec §5.10's deferred-defect figures. They are documented in the
-    // spec and in test-cases §14.9, so they must be pinned by something that fails when
-    // the behaviour changes — otherwise the deferral relies on someone remembering to
-    // re-check the prose.
+    // Fixture P's cost-to-complete pair used to hold spec §5.10's C1 defect (a phantom
+    // shortfall from double-counting rolled-up interest against the net facility). R14
+    // closed C1 (spec §5.10 rewritten, calc 2.13.0): the reserve credit clears the series
+    // at every month, so the true pins are null / 0 and the old phantom figures (1 /
+    // 392483) are now what the negative control must catch instead.
     {
       namePrefix: 'P — Scottish acquisition',
       wrongValues: {
         gross_sales_pence: 143999999,                  // truly 144000000
-        cost_to_complete_first_shortfall_month: 2,     // truly 1
-        cost_to_complete_max_shortfall_pence: 392484,  // truly 392483
-        funding_gap_pence: 1,                          // truly 0 — the counter-example's
-                                                       // other half: a shortfall WITH no gap
+        cost_to_complete_first_shortfall_month: 1,     // truly null — R14 closed C1; 1 was calc ≤2.12.0's phantom
+        cost_to_complete_max_shortfall_pence: 392483,  // truly 0 — the old phantom figure is the control
+        funding_gap_pence: 1,                          // truly 0 — the ledger draws exactly
+                                                       // as intended, unrelated to the C1 fix
         peak_debt_pence: 70601817,                     // truly 70601816 (direct key)
       },
     },

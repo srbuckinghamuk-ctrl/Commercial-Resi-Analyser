@@ -112,9 +112,19 @@ def cash_equity(amount: int) -> list[EquitySource]:
     )]
 
 
-def inputs_with_equity(equity_sources: list[EquitySource]) -> CalculatorInputsV2:
+def inputs_with_equity(
+    equity_sources: list[EquitySource], finance: FacilityTerms | None = None,
+) -> CalculatorInputsV2:
+    """compute_cost_to_complete reads inputs.equity_sources and (R14, C1)
+    inputs.finance.interest_type -- every other field is default filler from
+    default_calculator_inputs_v2(), matching test_financial_model_metrics.py's own
+    convention. `finance` defaults to that same default (rolled_up, matching TERMS) and
+    is only passed explicitly where a test's `terms` diverges from it."""
     inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
-    return inputs.model_copy(update={"equity_sources": equity_sources})
+    update: dict = {"equity_sources": equity_sources}
+    if finance is not None:
+        update["finance"] = finance
+    return inputs.model_copy(update=update)
 
 
 USES = [
@@ -144,19 +154,28 @@ class TestFixtureBWorksheet:
     def ctc(self):
         schedule = self.schedule()
         model = run_ledger(schedule, TERMS, cash_equity(30_000_000))
-        return compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000)))
+        return compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000), TERMS))
 
+    # R14 (C1, spec Sec 5.10 rewritten): TERMS is a rolled-up facility with a real
+    # 5,000,000p reserve (committed_gross 55,000,000 - committed_net 50,000,000), so
+    # remaining_funding_pence and surplus_pence both gain the reserve's unconsumed part
+    # (5,000,000 - cumulative interest_capitalised_pence through m - 1, i.e. 4,690,000 /
+    # 4,376,900 / 4,010,669 / 3,640,776 -- hand-derived in docs/financial-model/test-cases.md
+    # Step 1, cross-checked against this exact computation). remaining_cost_pence is untouched.
     def test_reproduces_the_hand_derived_month_series_to_the_penny(self):
         ctc = self.ctc()
         got = [
-            (m.month, m.remaining_cost_pence, m.remaining_funding_pence, m.surplus_pence)
+            (
+                m.month, m.remaining_cost_pence, m.remaining_funding_pence,
+                m.remaining_interest_reserve_headroom_pence, m.surplus_pence,
+            )
             for m in ctc.months
         ]
         assert got == [
-            (1, 26_049_224, 39_000_000, 12_950_776),
-            (2, 10_736_124, 24_000_000, 13_263_876),
-            (3, 369_893, 14_000_000, 13_630_107),
-            (4, 0, 14_000_000, 14_000_000),
+            (1, 26_049_224, 43_690_000, 4_690_000, 17_640_776),
+            (2, 10_736_124, 28_376_900, 4_376_900, 17_640_776),
+            (3, 369_893, 18_010_669, 4_010_669, 17_640_776),
+            (4, 0, 17_640_776, 3_640_776, 17_640_776),
         ]
 
     def test_is_fully_funded_throughout_no_shortfall(self):
@@ -168,7 +187,7 @@ class TestFixtureBWorksheet:
         """remaining_cost(m) == remaining_cost(m + 1) + cost(month m + 1)."""
         schedule = self.schedule()
         model = self.model()
-        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000)))
+        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000), TERMS))
 
         def cost_of_label(m: int) -> int:
             u = schedule.uses[m - 1]
@@ -187,7 +206,7 @@ class TestFixtureBWorksheet:
     def test_boundary_identity_month_1_equals_total_cost_minus_month_0_spend(self):
         schedule = self.schedule()
         model = self.model()
-        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000)))
+        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000), TERMS))
         total_cost = sum(
             u.acquisition_pence + u.construction_pence + u.professional_pence
             + u.statutory_pence + u.lender_ancillary_fees_pence
@@ -213,20 +232,23 @@ class TestCashDealPath:
         schedule = mk_schedule(USES, SALE)
         cash_terms = replace(TERMS, funding_source="cash")
         model = run_ledger(schedule, cash_terms, cash_equity(65_000_000))
-        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(65_000_000)))
+        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(65_000_000), cash_terms))
         return schedule, model, ctc
 
     def test_reproduces_the_hand_derived_month_series_to_the_penny(self):
         _, _, ctc = self.build()
         got = [
-            (m.month, m.remaining_cost_pence, m.remaining_funding_pence, m.surplus_pence)
+            (
+                m.month, m.remaining_cost_pence, m.remaining_funding_pence,
+                m.remaining_interest_reserve_headroom_pence, m.surplus_pence,
+            )
             for m in ctc.months
         ]
         assert got == [
-            (1, 25_000_000, 25_000_000, 0),
-            (2, 10_000_000, 10_000_000, 0),
-            (3, 0, 0, 0),
-            (4, 0, 0, 0),
+            (1, 25_000_000, 25_000_000, 0, 0),
+            (2, 10_000_000, 10_000_000, 0, 0),
+            (3, 0, 0, 0, 0),
+            (4, 0, 0, 0, 0),
         ]
 
     def test_none_undrawn_net_facility_pence_contributes_0_not_a_crash_or_shortfall(self):
@@ -236,15 +258,71 @@ class TestCashDealPath:
         assert ctc.max_shortfall_pence == 0
 
 
+class TestServicedInterestGetsNoReserveCredit:
+    """C1 (spec Sec 5.10, R14) credits a rolled-up facility's unconsumed interest reserve
+    to remaining funding. Serviced interest is a committed-equity use (Sec 4.3), not
+    rolled up, so it must be unaffected: remaining_interest_reserve_headroom_pence is 0
+    throughout and remaining_funding_pence is exactly undrawn_net_facility +
+    remaining_cash_equity, recomputed here from the ledger rather than read back off the
+    summary (a constant added to both sides of that recomputation would slip past it --
+    the golden fixtures' unchanged pins are the catch for that).
+
+    No golden fixture in fixtures/financial-model carries interest_type == "serviced" --
+    all sixteen are rolled-up (verified: `grep -rl serviced fixtures/financial-model` is
+    empty) -- so scanning the corpus the way TestShortfallDirectionAgainstFundingGap does
+    below would vacuously pass with zero cases matched. This builds its own local
+    scenarios instead, the same way TestFixtureBWorksheet/TestShortfallDirectionAgainst
+    FundingGap do, and asserts at least one actually ran. Mirrors the TS twin."""
+
+    _SCENARIOS = [
+        ("Fixture B terms, serviced", replace(TERMS, interest_type="serviced"), 30_000_000),
+        (
+            "Fixture E terms (lower net facility), serviced",
+            replace(TERMS, interest_type="serviced", committed_net_facility_pence=35_000_000),
+            25_000_000,
+        ),
+    ]
+
+    def test_serviced_scenarios_get_zero_reserve_headroom(self):
+        saw_serviced_case = False
+        for label, terms, equity_pence in self._SCENARIOS:
+            schedule = mk_schedule(USES, SALE)
+            model = run_ledger(schedule, terms, cash_equity(equity_pence))
+            ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(equity_pence), terms))
+
+            cum_equity_contributed = 0
+            for m in range(1, schedule.term_months + 1):
+                prev_ledger_month = model.months[m - 1]
+                cum_equity_contributed += prev_ledger_month.equity_contribution_pence
+                undrawn_facility = prev_ledger_month.undrawn_net_facility_pence or 0
+                remaining_cash_equity = max(0, equity_pence - cum_equity_contributed)
+                ctc_month = ctc.months[m - 1]
+                assert ctc_month.remaining_interest_reserve_headroom_pence == 0, f"{label} month {m}"
+                assert ctc_month.remaining_funding_pence == undrawn_facility + remaining_cash_equity, (
+                    f"{label} month {m}"
+                )
+            saw_serviced_case = True
+        assert saw_serviced_case
+
+
 class TestShortfallDirectionAgainstFundingGap:
     """Spec Sec 5.10 note: only 'shortfall => some ledger funding_gap_pence > 0' is
     asserted, never the reverse and never a full iff."""
 
     def test_fixture_e_real_funding_gap_series_also_reports_a_genuine_shortfall(self):
-        terms = replace(TERMS, committed_net_facility_pence=35_000_000)
+        # R14 (C1): test_financial_model_engine.py's Fixture E leaves
+        # committed_gross_facility_pence at TERMS' 55,000,000 while only cutting the net
+        # facility, so its reserve balloons to 20,000,000 -- twenty times TERMS' own
+        # 5,000,000 reserve and far more than this schedule's total interest. Once the
+        # reserve is credited (this task), that oversized, unrealistic reserve swallows the
+        # whole shortfall, which would prove nothing about a genuine gap. This test keeps
+        # TERMS' 5,000,000 reserve proportion (committed_gross = net + 5,000,000) so the
+        # facility stays a plausible one and the gap the ledger reports is still genuinely
+        # unfunded. Mirrors the TS twin.
+        terms = replace(TERMS, committed_net_facility_pence=35_000_000, committed_gross_facility_pence=40_000_000)
         schedule = mk_schedule(USES, SALE)
         model = run_ledger(schedule, terms, cash_equity(25_000_000))
-        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(25_000_000)))
+        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(25_000_000), terms))
         assert model.totals.funding_gap_pence > 0
         assert ctc.first_shortfall_month is not None
         assert ctc.max_shortfall_pence > 0
@@ -261,26 +339,21 @@ class TestShortfallDirectionAgainstFundingGap:
         terms = replace(TERMS, committed_gross_facility_pence=36_500_000)
         schedule = mk_schedule(USES, SALE)
         model = run_ledger(schedule, terms, cash_equity(30_000_000))
-        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000)))
+        ctc = compute_cost_to_complete(schedule, model, inputs_with_equity(cash_equity(30_000_000), terms))
         assert model.totals.funding_gap_pence == 484_487  # pinned in test_financial_model_engine.py
         assert ctc.first_shortfall_month is None
         assert ctc.max_shortfall_pence == 0
 
-    # R9 Task 12. Fixture P is a natural counter-example to the remaining direction, and
-    # it is named here rather than tuned away. Spec Sec 5.10 already says the implication
-    # is verified across the current corpus, not proved as a law; fixture P is the first
-    # fixture that structures its facility the way a real rolled-up development facility
-    # is structured -- a net facility sized to the COSTS (70,000,000p against 66,688,400p
-    # of draws and fees) with the interest reserve carved out of the gross facility
-    # (8,000,000p of headroom against 3,913,416p of rolled-up interest). Sec 5.10's
-    # snapshot charges that interest against the NET facility, so it reports a
-    # 392,483p shortfall in month 1 while the ledger records no funding gap at all,
-    # because the interest capitalised into gross headroom exactly as intended.
-    #
-    # That is a real, reportable limitation of Sec 5.10 for rolled-up facilities (see the
-    # R9 Task 12 report and spec Sec 5.10's Known limitation) -- not a defect in the
-    # fixture, and not something to hide by widening the facility until the metric agrees.
-    _SHORTFALL_WITHOUT_GAP_STEMS = {"p-scotland-levered"}
+    # R9 Task 12 found fixture P a natural counter-example to the remaining direction: a
+    # rolled-up facility structured the way a real one is (net sized to costs, reserve
+    # carved out of gross) reported a phantom shortfall because Sec 5.10 charged rolled-up
+    # interest against the net facility alone. R14 closed that defect (C1, spec Sec 5.10
+    # rewritten, calc 2.13.0) by crediting the unconsumed reserve to remaining funding, so
+    # fixture P's series now clears at every month and the set below is empty. It stays
+    # empty ON PURPOSE, not deleted: a future fixture that reproduces "shortfall with no
+    # gap" has a declared home here and must be listed deliberately rather than silently
+    # passing as a new positive case. Mirrors the TS twin.
+    _SHORTFALL_WITHOUT_GAP_STEMS: set[str] = set()
 
     def test_holds_across_every_golden_fixture(self):
         # Release 3a Task 8: the whole corpus is in scope again -- `parse_calculator_inputs`
@@ -289,7 +362,6 @@ class TestShortfallDirectionAgainstFundingGap:
         # for this implication (shortfall AND funding gap both present), so it strengthens
         # this test rather than just widening it.
         saw_positive_case = False
-        saw_counter_example = False
         for path in sorted(FIXTURE_DIR.glob("*.json")):
             doc = json.loads(path.read_text())
             # Release 4a: Fixture K (kind "sensitivity", spec Sec 12) carries no `inputs`
@@ -307,11 +379,9 @@ class TestShortfallDirectionAgainstFundingGap:
                 # deliberately rather than drift off it in silence.
                 assert ctc.first_shortfall_month is not None, path.stem
                 assert model.totals.funding_gap_pence == 0, path.stem
-                saw_counter_example = True
                 continue
             if ctc.first_shortfall_month is not None:
                 assert model.totals.funding_gap_pence > 0, path.stem
                 saw_positive_case = True
         # Guards against the implication holding only vacuously across the corpus.
         assert saw_positive_case
-        assert saw_counter_example
