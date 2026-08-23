@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
 import { migrateInputsToV10 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV10 } from '../lib/model';
+import type { AppraisalRun, CalculatorInputsV10, CalculatorInputsV11 } from '../lib/model';
 import { defaultCalculatorInputsV10 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
@@ -371,7 +371,15 @@ export default function ConversionCalculator({ project }: Props) {
           <VatPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'finance' && (
-          <FinancePage inputs={inputs} onChange={updateInputs} run={run} />
+          <FinancePage
+            inputs={inputs}
+            // Task 14 cutover removes this: FinancePage.Props.onChange is
+            // Partial<CalculatorInputsV11> (spec §9's MonitoringEditor needs
+            // to pass a `monitoring` partial) but this component's own state
+            // is still CalculatorInputsV10 until the entry-point cutover.
+            onChange={updateInputs as (partial: Partial<CalculatorInputsV11>) => void}
+            run={run}
+          />
         )}
         {activePage === 'programme' && (
           <ProgrammePage inputs={inputs} onChange={updateInputs} run={run} />
