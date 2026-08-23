@@ -473,6 +473,15 @@ export interface LedgerMonth {
    *  Where it exceeds the balance plus the exit fee, or where there is no
    *  facility, the excess falls into `distribution_pence`. */
   vat_reclaim_pence: number;
+  /** R13 spec §19.5. The month's net operating income as applied to the
+   *  ledger — republished from `Schedule.receipts[].net_operating_income_pence`
+   *  (Task 8), not re-derived. Applied to senior debt in full (ignoring
+   *  `sales_sweep_pct`) and AFTER the VAT reclaim but BEFORE the sales sweep
+   *  and the §4.5 refinance event — the fixed within-month order. A negative
+   *  month never reduces the balance; it draws additional equity instead (see
+   *  `MonthlyModel.totals.operating_shortfall_equity_pence`). Zero on every
+   *  month of a schedule whose `investment_case` is null. */
+  net_operating_income_pence: number;
   /** Spec §4.5 — 0 when no refinance event occurs this month. */
   refinance_proceeds_pence: number;
   distribution_pence: number;
@@ -497,6 +506,15 @@ export interface MonthlyModel {
      * `additional_equity_pence`, the `additional_equity_required` flag, equity
      * contributed, and the equity cash-flow vector. Always 0 when `refinance` is null. */
     refinance_shortfall_equity_pence: number;
+    /** R13 spec §19.5/§4.3: additional uncommitted equity drawn specifically by
+     *  a negative-NOI month. The development facility never funds an operating
+     *  loss — a negative month's shortfall draws this instead of a facility
+     *  draw, mirroring `refinance_shortfall_equity_pence` exactly (a subset of
+     *  `additional_equity_pence`, and — like the refinance slice —
+     *  reconcile()'s §7 identity must exclude it, since it funds an operating
+     *  shortfall, not a project cost). Always 0 when every month's NOI is
+     *  non-negative. */
+    operating_shortfall_equity_pence: number;
     funding_gap_pence: number;
     distributions_pence: number;
     repayments_pence: number;

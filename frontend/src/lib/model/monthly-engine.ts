@@ -94,6 +94,11 @@ export function runLedger(
   // redemption (financing-side), not a project cost (see the field's own doc comment on
   // MonthlyModel.totals in finance-types.ts).
   let totalRefinanceShortfallEquity = 0;
+  // R13 spec §19.5/§4.3: additional equity injected specifically by a negative-NOI
+  // month's shortfall — mirrors totalRefinanceShortfallEquity exactly (a subset of
+  // totalAdditionalEquity that reconcile() (validation.ts) must exclude from
+  // sources, because it funds an operating shortfall, not a project cost).
+  let totalOperatingShortfallEquity = 0;
   let totalGap = 0;
   let totalDistributions = 0;
   let totalRepayments = 0;
@@ -249,6 +254,49 @@ export function runLedger(
       }
     }
 
+    // R13 spec §19.5. Order within the month is FIXED and stated: VAT reclaim,
+    // then NOI, then the sales sweep, then the refinance event. All four can
+    // fall in one month; any order could be defended, so the chosen one is
+    // written down here and pinned by a test rather than left to whatever order
+    // the code happens to run in.
+    //
+    // NOI is applied IN FULL, ignoring `sales_sweep_pct` — that percentage
+    // governs SALE receipts, and NOI is income from an asset, not realisation of
+    // one. Where it achieves the first full redemption the exit fee is charged
+    // then, under §4.4.1's existing once-only rule, exactly as a VAT reclaim
+    // that redeems does.
+    const noi = r.net_operating_income_pence;
+    if (noi > 0) {
+      if (balance > 0 && !isCash) {
+        const fee = facilityRedeemed ? 0 : exitFeeAmount(finance, grossFacility, peakDebt, balance);
+        if (noi >= balance + fee) {
+          repayment += balance;
+          exitFee += fee;
+          totalExitFee += fee;
+          facilityRedeemed = true;
+          distribution += noi - balance - fee;
+          balance = 0;
+        } else {
+          // The §4.4 clamp, for the same reason the reclaim and the sweep carry
+          // it: a payment landing in [balance, balance + fee) must not zero the
+          // balance, or the fee is never charged and never carried.
+          let applied = Math.min(noi, balance);
+          if (applied === balance) applied = Math.max(0, noi - fee);
+          repayment += applied;
+          balance -= applied;
+          distribution += noi - applied;
+        }
+      } else {
+        distribution += noi;
+      }
+    } else if (noi < 0) {
+      // §19.5: the DEVELOPMENT facility does not fund operating losses. The
+      // shortfall draws uncommitted additional equity through §4.3's existing
+      // mechanics, raising the existing `additional_equity_required` red flag.
+      additionalEquity += -noi;
+      totalOperatingShortfallEquity += -noi;
+    }
+
     if (!isCash && r.gross_sale_pence > 0) {
       redemptionBalanceAtDisposal = balance;
       redemptionSchedule.push({ month: m, balance_pence: balance });
@@ -382,6 +430,7 @@ export function runLedger(
       gross_receipts_pence: r.gross_sale_pence,
       net_receipts_pence: netReceipts,
       vat_reclaim_pence: vatReclaim,
+      net_operating_income_pence: noi,
       refinance_proceeds_pence: refinanceProceeds,
       distribution_pence: distribution,
     });
@@ -427,6 +476,7 @@ export function runLedger(
       equity_contributed_pence: totalEquity,
       additional_equity_pence: totalAdditionalEquity,
       refinance_shortfall_equity_pence: totalRefinanceShortfallEquity,
+      operating_shortfall_equity_pence: totalOperatingShortfallEquity,
       funding_gap_pence: totalGap,
       distributions_pence: totalDistributions,
       repayments_pence: totalRepayments,

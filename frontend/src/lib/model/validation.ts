@@ -1242,9 +1242,18 @@ export function reconcile(
   // and refinance-shortfall equity, model.totals.vat_reclaim_pence appears on NEITHER
   // side. Over the term sources therefore fund the GROSS VAT outflow even though most
   // of it returns — which is correct, and is the treatment sale proceeds already get.
+  //
+  // R13 spec §19.5: a negative-NOI month's shortfall equity is the FOURTH such
+  // exclusion, on the same terms as the refinance-shortfall slice above — it funds
+  // an operating loss, not a project cost, so operating_shortfall_equity_pence is
+  // excluded here too. Without this, a document with any negative-NOI month would
+  // fail sources_equal_uses: the shortfall counts in full toward
+  // additional_equity_pence (correctly — see that field's own doc comment) but has
+  // no matching entry on the uses side, since NOI never enters uses_total_pence.
   const sourcesTotal =
     model.totals.equity_contributed_pence
-    + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence)
+    + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence
+      - model.totals.operating_shortfall_equity_pence)
     + model.totals.funding_gap_pence // shown explicitly, never hidden
     + model.totals.draws_pence + capitalisedFees + rolledInterest
     + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence; // proceeds applied at source
