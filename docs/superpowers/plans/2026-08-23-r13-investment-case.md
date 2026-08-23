@@ -418,8 +418,10 @@ describe('annualDebtServiceFactor (§19.4)', () => {
 
 describe('investmentValuePence (§19.3)', () => {
   it('capitalises at the yield and deducts purchaser\'s costs in ONE rounding', () => {
-    // 4_020_000 pence a year at 5.5% = 73_090_909.09; / 1.0675 = 68_468_299.85
-    expect(investmentValuePence(4_020_000, 5.5, 6.75)).toBe(68_468_300);
+    // 402_000_000 / 5.5 = 73_090_909.0909; / 1.0675 = 68_469_235.68 -> 68_469_236.
+    // Hand-derived as one exact fraction, 321_600_000_000 / 4_697, to avoid
+    // compounding the intermediate rounding.
+    expect(investmentValuePence(4_020_000, 5.5, 6.75)).toBe(68_469_236);
   });
 
   it('is zero for a non-positive NOI', () => {
@@ -459,11 +461,16 @@ describe('sizeTakeout (§19.4)', () => {
   });
 
   it('floors every cap — a cap rounded up is a cap breached', () => {
-    // 1_000_001 / (1 × 0.06) = 16_666_683.33 -> floors to ...83, never ...84
-    const s = sizeTakeout(1_000_001, 999_999_999_999, {
+    // The numerator is chosen so the fractional part EXCEEDS 0.5, which is the
+    // only way this test can tell flooring from rounding:
+    //   1_000_006 / (1 × 0.06) = 16_666_766.67
+    //   floor -> 16_666_766      round-half-up -> 16_666_767
+    // An earlier draft used 1_000_001, whose .333 fraction rounds DOWN anyway,
+    // so the test named for this property proved nothing about it.
+    const s = sizeTakeout(1_000_006, 999_999_999_999, {
       ...IO, dscr_floor: 1, icr_floor: 1, ltv_cap_pct: 100,
     });
-    expect(s.dscr_cap_pence).toBe(16_666_683);
+    expect(s.dscr_cap_pence).toBe(16_666_766);
   });
 
   it('drops the coverage caps out of the minimum at a zero rate', () => {
@@ -735,7 +742,8 @@ def test_debt_service_factor_zero_rate_amortising_is_straight_line():
 
 
 def test_investment_value_one_rounding():
-    assert investment_value_pence(4_020_000, 5.5, 6.75) == 68_468_300
+    # 402_000_000 / 5.5 = 73_090_909.0909; / 1.0675 = 68_469_235.68 -> 68_469_236.
+    assert investment_value_pence(4_020_000, 5.5, 6.75) == 68_469_236
     assert investment_value_pence(0, 5.5, 6.75) == 0
     assert investment_value_pence(-1_000, 5.5, 6.75) == 0
 
@@ -765,9 +773,13 @@ def test_dscr_and_icr_separate_exactly_when_amortising():
 
 
 def test_caps_floor_never_round_up():
-    s = size_takeout(1_000_001, 999_999_999_999,
+    # The numerator is chosen so the fractional part EXCEEDS 0.5 -- the only way
+    # this test can tell flooring from rounding:
+    #   1_000_006 / (1 x 0.06) = 16_666_766.67
+    #   floor -> 16_666_766      round-half-up -> 16_666_767
+    s = size_takeout(1_000_006, 999_999_999_999,
                      {**IO, "dscr_floor": 1.0, "icr_floor": 1.0, "ltv_cap_pct": 100.0})
-    assert s["dscr_cap_pence"] == 16_666_683
+    assert s["dscr_cap_pence"] == 16_666_766
 
 
 def test_zero_rate_drops_the_coverage_caps_out_of_the_minimum():
