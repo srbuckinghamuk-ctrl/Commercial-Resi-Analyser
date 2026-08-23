@@ -558,6 +558,29 @@ class TestComputeCostPlanReportedExtras:
         assert r.lender_eligible_base_pence == 0
         assert r.lender_eligible_ratio == 1
 
+    # R14 fix round 1. The `not detailed` half of the guard, pinned on its own: a
+    # headline document CAN carry stray packages (apply_scenario scales them
+    # regardless of mode, and lender_eligible_base_pence sums them regardless of
+    # mode), so base_build == 0 is NOT what saves headline mode here. Base build
+    # is the rate * area product, the eligible base is 3,000,000 of a 4,000,000
+    # package sum, and the quotient would be neither 1 nor even meaningful -- the
+    # packages are not the base. Only `not detailed` gives the right answer.
+    def test_reports_a_lender_eligible_ratio_of_one_in_headline_mode_with_stray_packages(self):
+        r = compute_cost_plan(
+            doc({
+                "mode": "headline",
+                "packages": [pkg("p1", 3_000_000), pkg("p2", 1_000_000, {"lender_eligible": False})],
+                "contingency": CLASSES(0, 0, 0),
+            }, {"construction_cost_per_sqm_pence": 80_730}),
+            500, 1,
+        )
+        assert len(r.packages) == 2
+        assert r.base_build_pence == 40_365_000  # rate * area, not the package sum
+        assert r.lender_eligible_base_pence == 3_000_000
+        assert r.lender_eligible_ratio == 1
+        # Not the raw quotient, which would be a nonsense 0.0743...
+        assert r.lender_eligible_ratio != 3_000_000 / 40_365_000
+
     def test_reports_a_lender_eligible_ratio_of_one_when_base_build_is_zero(self):
         r = compute_cost_plan(
             doc({"mode": "detailed", "packages": [], "contingency": CLASSES(0, 0, 0)}),

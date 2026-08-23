@@ -158,6 +158,21 @@ function variants(
   ];
 }
 
+// R14 (spec §5, fix round 1). The profit identity below is GATED on
+// `fullyRealised`, so it can go quiet without failing. Wiring `lender_eligible`
+// to the §4.2(b) advance cap opened a real funding gap on fixtures Q and S —
+// the corpus's ONLY two detailed-mode documents — and `funding_gap_pence === 0`
+// is a term of `fullyRealised`, so neither reaches the identity any more. That
+// is correct behaviour on those fixtures, but it means the gate now needs a
+// witness: this counter proves at least one fixture/variant still reaches the
+// identity, so the whole block cannot fall vacuous unnoticed. It does NOT
+// restore detailed-mode coverage of the identity — no fixture provides that
+// today. Fixture W (R14 Task 8) is designed to be the detailed-mode carrier
+// that does; when it lands, this comment and the counter should be revisited
+// so the witness is asserted per COST MODE, not merely corpus-wide.
+// Mirrors `saw_fully_realised` in tests/test_financial_model_fixtures.py.
+let sawFullyRealised = false;
+
 describe('model invariants hold for every fixture and variant', () => {
   for (const fx of fixtures) {
     for (const v of variants(fx.inputs)) {
@@ -214,6 +229,7 @@ describe('model invariants hold for every fixture and variant', () => {
             && run.schedule.totals.retained_value_pence === 0
             && run.model.totals.funding_gap_pence === 0;
           if (fullyRealised) {
+            sawFullyRealised = true;
             expect(run.metrics.profit_pence)
               .toBe(run.model.equity_cashflows_pence.reduce((a, b) => a + b, 0));
             expect(run.reconciliation.sources_equal_uses).toBe(true);
@@ -245,6 +261,20 @@ describe('model invariants hold for every fixture and variant', () => {
       });
     }
   }
+
+  // R14 (spec §5, fix round 1). Declared LAST inside the same describe, so it
+  // runs after every fixture/variant above has had its turn (vitest runs a
+  // file's tests in declaration order). Guards the profit identity against
+  // holding only vacuously across the corpus, exactly as `saw_positive_case`
+  // does for the cost-to-complete corpus walk in cost-to-complete.test.ts.
+  //
+  // Accumulated, not re-derived, so the witness records the identity assertions
+  // that ACTUALLY RAN. The cost of that is that a filtered run (`-t`) which
+  // skips the loop above fails here — run the file whole. Mirrors
+  // `_SAW_FULLY_REALISED` in tests/test_financial_model_fixtures.py.
+  it('at least one fixture/variant actually reached the fullyRealised profit identity', () => {
+    expect(sawFullyRealised).toBe(true);
+  });
 });
 
 // Release 3b Task 10 (spec §4.4.1/§4.5, calc 2.3.0): phased-sale / refinance sweep
