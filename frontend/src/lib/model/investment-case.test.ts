@@ -223,4 +223,30 @@ describe('sizeTakeout (§19.4)', () => {
     expect(s.binding_constraint).toBeNull();
     expect(s.achieved_ltv_pct).toBeNull();
   });
+
+  it('agrees with the Python engine on the pinned triple', () => {
+    // The identical assertion lives in tests/test_financial_model_investment_case.py.
+    // If you change one of these numbers, change both files or the engines have diverged.
+    // NOTE: the LTV cap here (30_539_731) was hand-derived independently of the
+    // task brief's draft figure. floor(46_984_203 * 65 / 100) = floor(30_539_731.95)
+    // = 30_539_731 -- the brief's draft (30_540_036) did not reconcile by hand and
+    // has been corrected in both engines' tests.
+    const noi = stabilisedAnnualNoiPence({
+      termMonths: 24, stabilisationMonth: 0, rampMonths: 0,
+      stabilisedOccupancyPct: 96, grossPotentialMonthlyPence: 295_000, lines: LINES,
+    });
+    expect(noi).toBe(2_758_560);
+    const value = investmentValuePence(noi, 5.5, 6.75);
+    expect(value).toBe(46_984_203);
+    const s = sizeTakeout(noi, value, { ...IO, amortisation_years: 25 });
+    expect(s.binding_constraint).toBe('dscr');
+    expect(s.ltv_cap_pence).toBe(30_539_731);
+    expect(s.icr_cap_pence).toBe(35_366_153);
+    // The DSCR cap's exact pence value depends on the annuity factor's
+    // precision; a result outside this band means the annuity factor is
+    // wrong, not that this bound needs widening.
+    expect(s.dscr_cap_pence).toBeGreaterThanOrEqual(27_400_000);
+    expect(s.dscr_cap_pence).toBeLessThanOrEqual(27_500_000);
+    expect(s.quantum_pence).toBe(s.dscr_cap_pence);
+  });
 });
