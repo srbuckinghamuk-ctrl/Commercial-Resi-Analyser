@@ -790,10 +790,10 @@ side).
 | 12 | 0 | 0 | 1,827,479 | 0 | 1,827,479 | 1,827,479 |
 
 Reserve headroom at `m`: `6,000,000 − Σ interest_capitalised_pence` through ledger month
-`m − 2` inclusive (the cumulative total *before* label `m`'s own ledger month `m − 1` is
-folded in — e.g. at `m = 1` only ledger month 0's 194,667 has capitalised, giving
-`6,000,000 − 194,667 = 5,805,333`; the cumulative total across all 12 ledger months is
-4,172,521, matching the fixture's total finance cost).
+`m − 1` inclusive (the cumulative total up to and including label `m`'s own ledger month
+`m − 1`, but not yet ledger month `m` itself — e.g. at `m = 1` only ledger month 0's
+194,667 has capitalised, giving `6,000,000 − 194,667 = 5,805,333`; the cumulative total
+across all 12 ledger months is 4,172,521, matching the fixture's total finance cost).
 
 Telescoping check (spec §5.10): `remaining_cost(1) = remaining_cost(2) + (uses+interest at k=1)` →
 `66,362,652 + 4,215,202 = 70,577,854` ✓; and `remaining_cost(1) = ` total cost ex-selling +
@@ -3574,3 +3574,255 @@ ESLint's Node API and asserts `severity === 2`, not merely that a message
 appears, and pins the allowlist's exact contents. Every real-linter test in
 this file spawns a fresh ESLint instance and is therefore load-sensitive
 under the full suite — see the file's own `REAL_LINTER_TIMEOUT_MS` comment.
+
+## 20. Cost-to-complete corrected [R14 — calc 2.13.0]
+
+Spec §4 rewrites §5.10's funding side to credit a rolled-up facility's
+unconsumed interest reserve (`reserve_headroom`, §4's new
+`remaining_interest_reserve_headroom_pence` column) rather than leaving
+forecast interest an uncredited addition to remaining cost. Fixture P's old
+phantom pins (`cost_to_complete_first_shortfall_month: 1`,
+`cost_to_complete_max_shortfall_pence: 392483`) move to `null` / `0` (Task 1);
+this section hand-derives the release's companion **positive** case — a
+facility whose reserve is genuinely too small for the interest it must carry,
+so the correction still reports a real, non-zero shortfall once the reserve
+itself is exhausted.
+
+### 20.1 Fixture V — exhausted interest reserve (`fixtures/financial-model/v-exhausted-reserve.json`)
+
+**Purpose:** a hand-derivable rolled-up facility whose 200,000p interest
+reserve is consumed within a few months of a 1%-per-month accrual, while the
+gross facility (net 12,000,000p + reserve 200,000p = 12,200,000p, since
+`committed_gross_facility_pence` is `null`) is also tight enough against the
+net facility that the §4.2(c) gross-headroom draw cap binds before
+construction finishes. The result is a **genuine** shortfall with a
+**genuine**, non-zero `funding_gap_pence` — the corpus's positive case for
+"shortfall ⇒ funding gap" (§2 above), not a counter-example: fixture V's gap
+and its cost-to-complete shortfall are both real, unlike fixture P's now-closed
+phantom.
+
+**Inputs, verbatim from the task brief.** Headline cost mode, England/NI,
+single-tranche sale at term (`route: 'sell_all'`, no `sales_phasing`), no
+programme network (auto windows). Purchase price 10,000,000p; term 12 months;
+construction 6,000,000p (100,000p/sqm × 60 sqm, `contingency_pct: 0`, no
+compliance allowances); every professional/statutory fee field 0.
+`funding_source: 'development_finance'`, `interest_type: 'rolled_up'`,
+`annual_interest_rate_pct: 12` (1%/month), `committed_net_facility_pence:
+12,000,000`, `interest_reserve_pence: 200,000`,
+`committed_gross_facility_pence: null` (gross = 12,200,000),
+`development_cost_advance_pct: 100`, `day_one_advance_pence: 6,000,000`, every
+finance fee field 0. One confirmed cash equity source, 4,000,000p. GDV
+30,000,000p from two units (15,000,000p each).
+
+**Acquisition tax is 0p, by construction.** `calculateTotalAcquisitionCost`
+prices every acquisition on the **non-residential** SDLT band set regardless
+of the eventual use (`frontend/src/lib/conversion-calc-engine.ts`,
+`basis: 'non_residential'`), and that band set's nil-rate threshold is
+15,000,000p (`fixtures/tax/acquisition-tax-tables.json`, `SDLT`/`england_ni`/
+`non_residential`, `up_to_pence: 15000000, rate_pct: 0`). The 10,000,000p
+consideration falls entirely inside that band, so `sdlt = 0` and
+`acquisition_cost_pence = 10,000,000 + 0 + 0 + 0 + 0 + 0 = 10,000,000` (every
+other acquisition cost field is 0). This is deliberate — it keeps the
+worksheet below to two cost lines (acquisition, construction) instead of
+three.
+
+**Auto-window construction spread (spec §6, calc 2.1.0 behaviour).** Term 12
+→ `constructionWindow = max(1, 12 − 2) = 10` (ledger months 1..10),
+`professionalWindow = ceil(10 / 2) = 5` (unused here — professional and
+statutory totals are both 0). `spreadStraightLine(6,000,000, 10)`:
+`per = round(6,000,000 / 10) = 600,000` exactly, and `6,000,000 =
+600,000 × 10` leaves no residue for the final month to absorb — every one of
+ledger months 1..10 carries exactly 600,000p of construction spend.
+
+#### Step 1 — the ledger, hand-derived month by month
+
+`grossFacility = 12,200,000`, `monthlyRate = 0.01`, and the gross-headroom
+draw cap (spec §4.2(c)) is `floor(grossFacility / 1.01) − opening − capFees
+= 12,079,207 − opening` throughout (no arrangement fee, so `capFees = 0`
+every month; `12,200,000 / 1.01 = 12,079,207.920792…`, floor `12,079,207`).
+`interest_capitalised_pence == interest_accrued_pence` at every month —
+the whole facility is rolled up, so nothing is serviced.
+
+Month 0: `draw = min(day_one_advance 6,000,000; undrawn net 12,000,000;
+cashUses 10,000,000; headroomCap 12,079,207) = 6,000,000`. The remaining
+4,000,000p of the 10,000,000p acquisition cost is funded whole from the
+4,000,000p confirmed equity source — **exhausting it completely**: every
+later month's `equity_contribution_pence` is 0, and `remainingCashEquity`
+in the §5.10 series below is 0 for every `m ≥ 1`. `interest = round(6,000,000
+× 0.01) = 60,000`. Closing balance `6,060,000`.
+
+Months 1–8: construction due each month is 600,000p, equity is exhausted so
+the whole 600,000p falls to the facility, and neither the net facility
+(`undrawn` stays ≥ 1,200,000p throughout this stretch) nor the gross-headroom
+cap binds yet (the smallest headroom in this stretch, month 8's, is
+`12,079,207 − 10,868,543 = 1,210,664`, still comfortably above 600,000p) — so
+every draw succeeds in full and `interest = round((opening + 600,000) ×
+0.01)` compounds the balance forward exactly as a plain rolled-up facility
+would.
+
+| ledger month `k` | uses (acq./constr.) | draw | interest accrued = capitalised | closing balance | undrawn net (post-draw) | funding gap |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 10,000,000 | 6,000,000 | 60,000 | 6,060,000 | 6,000,000 | 0 |
+| 1 | 600,000 | 600,000 | 66,600 | 6,726,600 | 5,400,000 | 0 |
+| 2 | 600,000 | 600,000 | 73,266 | 7,399,866 | 4,800,000 | 0 |
+| 3 | 600,000 | 600,000 | 79,999 | 8,079,865 | 4,200,000 | 0 |
+| 4 | 600,000 | 600,000 | 86,799 | 8,766,664 | 3,600,000 | 0 |
+| 5 | 600,000 | 600,000 | 93,667 | 9,460,331 | 3,000,000 | 0 |
+| 6 | 600,000 | 600,000 | 100,603 | 10,160,934 | 2,400,000 | 0 |
+| 7 | 600,000 | 600,000 | 107,609 | 10,868,543 | 1,800,000 | 0 |
+| 8 | 600,000 | 600,000 | 114,685 | 11,583,228 | 1,200,000 | 0 |
+| **9** | 600,000 | **495,979** | 120,792 | 12,199,999 | 704,021 | **104,021** |
+| **10** | 600,000 | **0** | 122,000 | 12,321,999 | 704,021 | **600,000** |
+| 11 | 0 | 0 | 123,220 | 12,445,219 | 704,021 | 0 |
+
+Worked example, month 9 (the first month the gross-headroom cap binds):
+`headroomCap = 12,079,207 − opening(11,583,228) = 495,979`, strictly less
+than the 600,000p of construction due and less than the 1,200,000p of
+undrawn net facility — so the cap, not the net facility, is what binds.
+`draw = 495,979`; the un-financed remainder, 600,000 − 495,979 = **104,021**,
+falls straight to `funding_gap_pence` (spec §4.2 step 3: cost overruns —
+here, a draw the facility itself cannot advance — never create facility).
+`interest = round((11,583,228 + 495,979) × 0.01) = round(12,079,207 × 0.01) =
+120,792` — note `opening + draw` lands exactly on the cap's own
+`floor(grossFacility / 1.01)`, by construction of the cap formula. Closing
+balance `12,079,207 + 120,792 = 12,199,999` (1p under the 12,200,000p gross
+facility, as the `floor` is designed to guarantee).
+
+Month 10: `headroomCap = max(0, 12,079,207 − 12,199,999) = 0` — the facility
+already sits above the point the cap would allow a fresh draw from, so
+`draw = 0` and the **whole** 600,000p of construction due this month falls to
+`funding_gap_pence`. Interest still accrues on the standing balance alone:
+`interest = round(12,199,999 × 0.01) = 122,000`, closing balance
+`12,321,999` — already 121,999p **above** the 12,200,000p gross facility,
+because the cap constrains new draws only; it does not — and cannot — stop
+interest already on the balance from compounting past the ceiling once no
+further draw is available to keep the pre-interest balance under it. (This
+also fires the ledger's own `facility_exceeded` flag at month 10 — expected,
+not a defect: the flag and the cost-to-complete shortfall below are two
+independent readings of the same exhausted facility.)
+
+Month 11 (final month, no cost due, single-tranche sale of both units):
+`interest = round(12,321,999 × 0.01) = 123,220`, closing balance (pre-sale)
+`12,445,219` — the series' peak, since every earlier month's balance is
+strictly smaller and the sale itself only reduces the balance, never raises
+it.
+
+**`funding_gap_pence = 104,021 + 600,000 = 704,021`** (months 9 and 10 only;
+every other month's draw covers its cost in full). **`peak_debt_pence =
+12,445,219`, `peak_debt_month = 11`** — the pre-sale balance calculated
+above, since `runLedger` records `peakDebt` before that month's receipts are
+applied and no earlier month's balance exceeds it.
+
+#### Step 2 — the §5.10 series, `m = 1..12`
+
+`reserve_headroom(m) = max(0, 200,000 − C(m−1))`, where `C(j)` is the
+cumulative `interest_capitalised_pence` through ledger month `j` inclusive
+(§4's `cum_interest_capitalised(L)`, `L = model.months[m−1]`) —
+`C(0..11) = 60,000; 126,600; 199,866; 279,865; 366,664; 460,331; 560,934;
+668,543; 783,228; 904,020; 1,026,020; 1,149,240`. The reserve is consumed
+partway through ledger month 3: `C(2) = 199,866` is still under the
+200,000p reserve, but `C(3) = 279,865` is over it, so `reserve_headroom(4)`
+and every later month's is floored at 0. `remainingCashEquity(m) = 0` for
+every `m ≥ 1` (the whole 4,000,000p equity source is contributed in ledger
+month 0, per Step 1).
+
+| `m` | Remaining cost (Σ from `k = m`) | Undrawn net at `m−1` | Reserve headroom at `m−1`→`m` | Remaining funding | Surplus |
+|--:|--:|--:|--:|--:|--:|
+| 1 | 7,089,240 | 6,000,000 | 140,000 | 6,140,000 | **−949,240** |
+| 2 | 6,422,640 | 5,400,000 | 73,400 | 5,473,400 | **−949,240** |
+| 3 | 5,749,374 | 4,800,000 | 134 | 4,800,134 | **−949,240** |
+| 4 | 5,069,375 | 4,200,000 | 0 | 4,200,000 | −869,375 |
+| 5 | 4,382,576 | 3,600,000 | 0 | 3,600,000 | −782,576 |
+| 6 | 3,688,909 | 3,000,000 | 0 | 3,000,000 | −688,909 |
+| 7 | 2,988,306 | 2,400,000 | 0 | 2,400,000 | −588,306 |
+| 8 | 2,280,697 | 1,800,000 | 0 | 1,800,000 | −480,697 |
+| 9 | 1,566,012 | 1,200,000 | 0 | 1,200,000 | −366,012 |
+| 10 | 845,220 | 704,021 | 0 | 704,021 | −141,199 |
+| 11 | 123,220 | 704,021 | 0 | 704,021 | 580,801 |
+| 12 | 0 | 704,021 | 0 | 704,021 | 704,021 |
+
+Worked example (`m = 1`, matching the brief's own formula exactly):
+`remaining_cost(1)` = uses[1..11] (600,000 × 10) + interest[1..11]
+(66,600+73,266+79,999+86,799+93,667+100,603+107,609+114,685+120,792+122,000+
+123,220 = 1,089,240) = 6,000,000 + 1,089,240 = 7,089,240. Cross-checked via
+the boundary identity: total cost ex-selling (10,000,000 + 6,000,000) + total
+interest (1,149,240) − month-0 spend (10,000,000 + 60,000) = 17,149,240 −
+10,060,000 = 7,089,240 ✓. `remaining_funding(1) = undrawn_net(0) +
+(12,200,000 − 12,000,000 − interest_capitalised(0)) + (4,000,000 −
+equity_contribution(0)) = 6,000,000 + (200,000 − 60,000) + (4,000,000 −
+4,000,000) = 6,000,000 + 140,000 + 0 = 6,140,000`. Surplus `6,140,000 −
+7,089,240 = −949,240`. Telescoping: `remaining_cost(1) = remaining_cost(2) +
+(uses+interest at k=1) → 6,422,640 + 666,600 = 7,089,240` ✓.
+
+→ **`cost_to_complete_first_shortfall_month = 1`**, **`cost_to_complete_
+max_shortfall_pence = 949,240`** (tied across `m = 1..3` — while the reserve
+still has headroom, the credited amount falls by exactly the same 600,000p
+of construction draw plus interest that remaining cost picks up each month,
+so the surplus does not move; once the reserve floors at 0 in month 4, the
+gap between remaining cost and remaining funding starts closing as
+construction spend tapers off, and it turns positive at `m = 11` once the
+final month's near-zero remaining cost is reached). Consistent with the
+ledger's own `funding_gap_pence = 704,021 > 0`: this is a genuine positive
+case for "shortfall ⇒ funding gap", not vacuous, and not C1's phantom —
+fixture V's gap comes from the gross-headroom cap actually binding, exactly
+as pinned in Step 1.
+
+#### Step 3 — the rejected correction (spec §11 guard 2, NOT committed)
+
+Spec §4's decision was to credit `reserve_headroom` on the funding side,
+leaving remaining cost untouched. The **rejected** alternative — drop
+`interest_accrued_pence` from remaining cost instead, leaving the funding
+side as `undrawn_net_facility(m−1) + remainingCashEquity(m−1)` only, with NO
+reserve term — must report **no shortfall at any `m`** on this fixture, or
+this fixture would not be evidence that decision 2 (not the rejected
+alternative) is the one that keeps a genuine shortfall visible while closing
+C1's phantom.
+
+`remaining_cost'(m) = Σ_{k=m}^{11} uses_sum[k]` (no interest term).
+`remaining_funding'(m) = undrawn_net(m−1) + 0` (no reserve credit, equity
+still 0 throughout).
+
+| `m` | Remaining cost′ | Remaining funding′ | Surplus′ |
+|--:|--:|--:|--:|
+| 1 | 6,000,000 | 6,000,000 | 0 |
+| 2 | 5,400,000 | 5,400,000 | 0 |
+| 3 | 4,800,000 | 4,800,000 | 0 |
+| 4 | 4,200,000 | 4,200,000 | 0 |
+| 5 | 3,600,000 | 3,600,000 | 0 |
+| 6 | 3,000,000 | 3,000,000 | 0 |
+| 7 | 2,400,000 | 2,400,000 | 0 |
+| 8 | 1,800,000 | 1,800,000 | 0 |
+| 9 | 1,200,000 | 1,200,000 | 0 |
+| 10 | 600,000 | 704,021 | 104,021 |
+| 11 | 0 | 704,021 | 704,021 |
+| 12 | 0 | 704,021 | 704,021 |
+
+Every surplus′ is `≥ 0` (exactly 0 for `m = 1..9`, since — absent interest on
+either side — remaining cost′ is just the construction spend still to come
+and remaining funding′ is exactly the undrawn net facility that was sized to
+carry it before the gross-headroom cap started binding; strictly positive
+from `m = 10` once the cap-constrained months fall out of the remaining-cost
+window). **The rejected correction reports `first_shortfall_month = null`,
+`max_shortfall_pence = 0` at every month on this fixture** — it would hide
+the very shortfall decision 2 exists to show, which is why decision 2 (crediting
+the reserve, not dropping interest) is the one spec §4 adopts. This table is
+the worksheet-level record of why; `docs/superpowers/sdd/2026-08-23-r14-cost-
+to-complete/task-2-report.md` records the one live-engine run that confirmed
+it (temporarily edited, then reverted — not committed).
+
+#### Pinned `expected_metrics`
+
+| Metric | Value | £ |
+|---|---:|---:|
+| `gdv_pence` | 30,000,000 | £300,000 |
+| `peak_debt_pence` | 12,445,219 | £124,452.19 |
+| `funding_gap_pence` | 704,021 | £7,040.21 |
+| `cost_to_complete_first_shortfall_month` | 1 | — |
+| `cost_to_complete_max_shortfall_pence` | 949,240 | £9,492.40 |
+
+**Governance note.** Every figure above was derived on this worksheet
+*before* the fixture was run against either engine
+(`docs/financial-model/model-governance.md`): the ledger from the §4 monthly
+loop (Step 1), the §5.10 series from §4's own formula (Step 2), and the
+rejected-correction comparison from the same formula with decision 2's credit
+removed (Step 3). The engine was run only to confirm agreement, and did.

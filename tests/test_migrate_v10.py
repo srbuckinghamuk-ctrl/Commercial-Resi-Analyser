@@ -116,6 +116,11 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     plus the two v10-native fixtures), not 2. The assertion below isolates
     the v10-native exclusion specifically -- the thing Task 5b's guard is
     actually meant to pin -- rather than the brief's literal expression.
+
+    R14 Task 2: v-exhausted-reserve.json is also stored at inputs v10
+    (spec Sec 4's hand-derived fixture; v11 does not exist until this
+    release's later migration task), so the `<= 9` arm excludes it too and
+    the exclusion bound moves from two v10-native fixtures to three.
     """
     assert len(FIXTURES) >= 14
     version_excluded = [
@@ -123,12 +128,12 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 9
     ]
-    assert len(version_excluded) == 2, (
+    assert len(version_excluded) == 3, (
         "the v10-native fixture count changed -- confirm the new fixture is meant "
         "to be outside the migration gate, then update this bound deliberately"
     )
     assert sorted(p.stem for p in version_excluded) == [
-        "t-investment-case", "u-investment-case-ltv-binds",
+        "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
     ]
 
 

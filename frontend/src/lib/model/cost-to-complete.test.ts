@@ -271,7 +271,7 @@ describe('computeCostToComplete — shortfall direction against funding_gap_penc
     // equity lowered to 25,000,000 — a real, pinned funding_gap_pence of 5,700,000 at month 2.
     // R14 (C1): monthly-engine.test.ts's Fixture E leaves committed_gross_facility_pence at
     // TERMS' 55,000,000 while only cutting the net facility, so its reserve balloons to
-    // 20,000,000 — twenty times TERMS' own 5,000,000 reserve and far more than this schedule's
+    // 20,000,000 — four times TERMS' own 5,000,000 reserve and far more than this schedule's
     // total interest. Once the reserve is credited (this task), that oversized, unrealistic
     // reserve swallows the whole shortfall, which would prove nothing about a genuine gap. This
     // test keeps TERMS' 5,000,000 reserve proportion (committed_gross = net + 5,000,000) so the

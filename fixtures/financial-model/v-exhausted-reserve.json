@@ -1,0 +1,127 @@
+{
+  "name": "V — exhausted interest reserve, rolled-up development finance",
+  "kind": "pipeline",
+  "note": "R14 spec §4 (the C1 correction). A hand-derivable positive case for the NEW reserve-headroom term: a rolled-up facility whose interest reserve (200,000p) is far smaller than the interest the 12-month, 1%-per-month schedule actually accrues, so the reserve is consumed within a few months while the facility keeps drawing against construction. The gross facility (net 12,000,000 + reserve 200,000 = 12,200,000, since committed_gross_facility_pence is null) is also tight enough against the net facility that the gross-headroom draw cap (spec §4.2(c)) binds before construction finishes — ledger month 9's draw is capped to 495,979p (not the full 600,000p due) and month 10 draws nothing at all, so `funding_gap_pence` is a genuine, independently-computed 704,021p. This is a POSITIVE case for the corpus's 'shortfall ⇒ funding_gap' implication (test-cases.md §2), not a counter-example: unlike fixture P (calc ≤2.12.0's phantom, now closed) this fixture's shortfall and its funding gap are both real.\n\nFull month-by-month ledger, the §5.10 series for m = 1..12, and the rejected-correction comparison (spec §11 guard 2) are hand-derived in docs/financial-model/test-cases.md §20.1, BEFORE either engine ran on this document.\n\nDESIGN, verbatim from the R14 Task 2 brief: headline cost mode, England/NI, single-tranche sale at term (route sell_all, no sales_phasing), retain_all: false, no programme network (auto windows: construction spreads straight-line over months 1..10 for a 12-month term, spec §6). Purchase price 10,000,000p (acquisition tax 0p — the non-residential SDLT band's nil-rate threshold is 15,000,000p, spec/fixtures/tax/acquisition-tax-tables.json, so a 10,000,000p consideration falls entirely in the 0% band); construction 6,000,000p (100,000p/sqm × 60 sqm, contingency_pct 0, no compliance allowances); every professional/statutory fee field 0; day-one advance 6,000,000p against the 10,000,000p acquisition, the balance (4,000,000p) funded from the single confirmed cash equity source, which is then fully exhausted — every construction draw from ledger month 1 onward falls to the facility alone. GDV 30,000,000p from two units (15,000,000p each), sold whole at term (month 11).\n\nWHY THE RESERVE IS SIZED THIS WAY: at 1%/month, ledger month 0 alone accrues 60,000p of rolled-up interest — already 30% of the 200,000p reserve — and the reserve is fully consumed partway through ledger month 3 (cumulative capitalised interest crosses 200,000p between C(2) = 199,866p and C(3) = 279,865p). From ledger month 3 onward `reserve_headroom` is pinned at 0 by the max(0, …) floor, so every month's forecast interest beyond that point is an uncredited addition to remaining cost with nothing on the funding side to offset it — the exhausted-reserve scenario the fixture is named for.",
+  "inputs": {
+    "inputs_version": 10,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 10000000,
+      "legal_fees_pence": 0,
+      "survey_cost_pence": 0,
+      "broker_fee_pct": 0,
+      "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-08-01",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": {
+      "units": [
+        { "id": "u1", "type": "2bed", "floor_area_sqm": 70, "estimated_value_pence": 15000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u2", "type": "2bed", "floor_area_sqm": 70, "estimated_value_pence": 15000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } }
+      ]
+    },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 0, "cil_s106_pence": 0,
+      "architect_pence": 0, "structural_engineer_pence": 0, "mande_pence": 0,
+      "planning_consultant_pence": 0, "building_control_pence": 0,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 100000,
+      "total_construction_sqm": 60, "contingency_pct": 0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "cost_plan": {
+      "mode": "headline",
+      "packages": [],
+      "contingency": [
+        { "name": "general", "pct": 0 },
+        { "name": "existing_building", "pct": 0 },
+        { "name": "abnormal", "pct": 0 }
+      ],
+      "fee_lines": []
+    },
+    "programme": null,
+    "vat": {
+      "registered": false,
+      "return_frequency": "quarterly",
+      "first_period_end_month": 2,
+      "repayment_lag_months": 1,
+      "treatments": [
+        { "category": "acquisition", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "construction", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "professional", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "statutory", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "selling", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "lender_ancillary", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" }
+      ],
+      "purchase": {
+        "vendor_opted_to_tax": false,
+        "togc_treatment": "unconfirmed",
+        "evidence_status": "unconfirmed",
+        "notes": ""
+      }
+    },
+    "finance": {
+      "funding_source": "development_finance", "day_one_advance_pence": 6000000,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 12000000,
+      "committed_gross_facility_pence": null, "annual_interest_rate_pct": 12.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": 200000, "term_months": 12, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 4000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "sell_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 500000, "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2, "phase_slip_phase_id": null, "phase_slip_months": 0 }
+    },
+    "sales_phasing": null,
+    "refinance": null,
+    "investment_case": null,
+    "deal_spider": {
+      "storeys": 2, "building_height_m": 8, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 3, "exit_sell": true, "exit_refinance": false, "exit_hold": false,
+      "exit_part_sale": false, "prior_approval_window_months": 2, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 30000000,
+    "peak_debt_pence": 12445219,
+    "funding_gap_pence": 704021,
+    "cost_to_complete_first_shortfall_month": 1,
+    "cost_to_complete_max_shortfall_pence": 949240
+  }
+}

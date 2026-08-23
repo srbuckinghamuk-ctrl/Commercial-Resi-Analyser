@@ -91,6 +91,7 @@ const EXPECTED_FIXTURE_STEMS = [
   's-dated-programme',
   't-investment-case',
   'u-investment-case-ltv-binds',
+  'v-exhausted-reserve',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -270,7 +271,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // RECOGNISED_INPUTS_VERSIONS_V8 stops at 8). Its own properties are asserted
   // by its pinned expected_metrics and by the v9-specific tests further down.
   const v9Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 9);
-  // R13 Task 5b: the two v10-native investment-case fixtures (spec §19).
+  // R13 Task 5b: the two v10-native investment-case fixtures (spec §19). R14
+  // Task 2 adds a third — v-exhausted-reserve.json (spec §4) — also stored at
+  // v10, since v11 does not exist until this release's later migration task.
   const v10Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 10);
 
   it('every fixture is v5, v6, v7, v8, v9 or v10, and each group is non-empty', () => {
@@ -296,6 +299,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
     expect(v10Fixtures.map((f) => f.name).sort()).toEqual([
       'T — retain-all with an investment case, DSCR binds',
       'U — retain-all with an investment case, LTV binds',
+      'V — exhausted interest reserve, rolled-up development finance',
     ]);
   });
 
@@ -460,6 +464,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'S — fourteen-phase dated programme, slack phases, anchored two-tranche sale, tagged package',
       'T — retain-all with an investment case, DSCR binds',
       'U — retain-all with an investment case, LTV binds',
+      'V — exhausted interest reserve, rolled-up development finance',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
     // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
@@ -475,7 +480,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // R13 Task 5b widens it once more to include 10: fixtures T and U are BORN at
     // v10 for the same reason S was born at v9 — they did not exist before R8, and
     // stamping them v3/v4 would additionally strip the R13 investment case the
-    // fixtures are entirely about.
+    // fixtures are entirely about. R14 Task 2 adds a third v10-native fixture, V,
+    // for the same reason: it did not exist before R8 and is stored at v10 because
+    // v11 does not exist yet (Task 6's gate migrates it).
     //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
@@ -739,6 +746,21 @@ describe('golden fixtures (shared with the Python engine)', () => {
         programme_phase_start_months: [0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 8, 16, 18, 21],
         programme_phase_finish_months: [1, 4, 6, 5, 7, 8, 14, 15, 16, 17, 15, 18, 21, 21],
         programme_phase_total_float_months: [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      },
+    },
+    // R14 (the same convention this block states): fixture V is the release's own
+    // hand-derived positive case for the reserve-headroom correction (spec §4), so
+    // its five pins each get a pin ± 1 control, matching every other fixture's
+    // convention exactly (see docs/financial-model/test-cases.md §20.1 for the
+    // worksheet these pins come from).
+    {
+      namePrefix: 'V — exhausted interest reserve',
+      wrongValues: {
+        gdv_pence: 30000001,                          // truly 30000000
+        peak_debt_pence: 12445220,                     // truly 12445219 (direct key)
+        funding_gap_pence: 704022,                     // truly 704021
+        cost_to_complete_first_shortfall_month: 2,     // truly 1
+        cost_to_complete_max_shortfall_pence: 949241,  // truly 949240
       },
     },
   ];

@@ -993,12 +993,17 @@ describe('v10 migration -- spec §19.9', () => {
     // today (K, plus the two v10-native fixtures), not 2. This isolates the
     // v10-native exclusion specifically, matching test_migrate_v10.py's
     // Python twin.
+    //
+    // R14 Task 2: v-exhausted-reserve.json is also stored at inputs v10 (spec
+    // Sec 4's hand-derived fixture; v11 does not exist until this release's
+    // later migration task), so the `<= 9` arm excludes it too and the
+    // exclusion bound moves from two v10-native fixtures to three.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(2);
+    expect(versionExcluded.length).toBe(3);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
-      't-investment-case.json', 'u-investment-case-ltv-binds.json',
+      't-investment-case.json', 'u-investment-case-ltv-binds.json', 'v-exhausted-reserve.json',
     ]);
   });
 

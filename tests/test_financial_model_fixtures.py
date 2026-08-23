@@ -75,6 +75,7 @@ EXPECTED_FIXTURE_STEMS = [
     "s-dated-programme",
     "t-investment-case",
     "u-investment-case-ltv-binds",
+    "v-exhausted-reserve",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -291,7 +292,9 @@ _V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) =
 # stops at 8). Its own properties are asserted by its pinned expected_metrics and by
 # the v9-specific tests further down.
 _V9_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 9]
-# R13 Task 5b: the two v10-native investment-case fixtures (spec §19).
+# R13 Task 5b: the two v10-native investment-case fixtures (spec §19). R14
+# Task 2 adds a third, v-exhausted-reserve, also stored at v10 (spec §4; v11
+# does not exist yet).
 _V10_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 10]
 
 
@@ -311,7 +314,7 @@ def test_every_fixture_is_v5_v6_v7_v8_v9_or_v10_and_each_group_is_non_empty() ->
     assert [p.stem for p in _V8_FIXTURES] == ["r-vat-quarterly"]
     assert [p.stem for p in _V9_FIXTURES] == ["s-dated-programme"]
     assert [p.stem for p in _V10_FIXTURES] == [
-        "t-investment-case", "u-investment-case-ltv-binds",
+        "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
     ]
 
 
@@ -1066,7 +1069,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     assert [p.stem for p in excluded] == [
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
         "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
-        "t-investment-case", "u-investment-case-ltv-binds",
+        "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -1082,7 +1085,9 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # R13 Task 5b widens it once more to include 10: fixtures T and U are BORN at
     # v10 for the same reason S was born at v9 -- they did not exist before R8,
     # and stamping them v3/v4 would additionally strip the R13 investment case
-    # the fixtures are entirely about.
+    # the fixtures are entirely about. R14 Task 2 adds a third v10-native
+    # fixture, V, for the same reason: it did not exist before R8 and is stored
+    # at v10 because v11 does not exist yet (Task 6's gate migrates it).
     #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
@@ -1317,6 +1322,19 @@ _NEGATIVE_CONTROLS = [
         "programme_phase_start_months": [0, 1, 4, 1, 5, 6, 8, 14, 15, 16, 8, 16, 18, 21],
         "programme_phase_finish_months": [1, 4, 6, 5, 7, 8, 14, 15, 16, 17, 15, 18, 21, 21],
         "programme_phase_total_float_months": [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    }),
+    # R14 (the same convention stated above): fixture V is the release's own
+    # hand-derived positive case for the reserve-headroom correction (spec Sec 4),
+    # so its five pins each get a pin +/- 1 control, matching every other
+    # fixture's convention exactly (see docs/financial-model/test-cases.md
+    # Sec 20.1 for the worksheet these pins come from). Mirrors
+    # golden-fixtures.test.ts's negativeControls entry for fixture V.
+    ("v-exhausted-reserve", {
+        "gdv_pence": 30_000_001,                          # truly 30000000
+        "peak_debt_pence": 12_445_220,                     # truly 12445219 (direct key)
+        "funding_gap_pence": 704_022,                      # truly 704021
+        "cost_to_complete_first_shortfall_month": 2,       # truly 1
+        "cost_to_complete_max_shortfall_pence": 949_241,   # truly 949240
     }),
 ]
 
