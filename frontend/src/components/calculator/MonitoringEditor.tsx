@@ -118,8 +118,8 @@ export default function MonitoringEditor({ monitoring, termMonths, issues, onCha
       <div style={{ padding: 16, background: PANEL, borderRadius: 8, border: `1px dashed ${BORDER}`, marginBottom: 20 }}>
         <div style={{ color: TEXT, fontWeight: 600, fontSize: 14, marginBottom: 6 }}>Monitoring statement</div>
         <div style={{ color: MUTED, fontSize: 13, marginBottom: 12 }}>
-          No monitoring statement recorded — cost-to-complete reserve headroom and the summary
-          page's monitoring statement are unavailable until one is added.
+          No monitoring statement recorded — the summary page's monitoring statement is
+          unavailable until one is added.
         </div>
         <button
           type="button"
