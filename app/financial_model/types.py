@@ -425,6 +425,63 @@ class RefinanceInputsV9(RefinanceInputs):
     anchor: PhaseAnchor | None = None
 
 
+class OperatingLine(Model):
+    """R13 spec Sec 19.1. `value` carries no upper Pydantic bound on the
+    percentage basis -- the <= 100 rule is a spec rule owned by validation.py,
+    which reports a spec-worded ValidationIssue rather than a generic 422.
+    Same reasoning as SalesPhasingTranche.month_offset's."""
+
+    id: str
+    code: Literal[
+        "management", "letting_and_re_letting", "insurance",
+        "repairs_and_maintenance", "service_charge_shortfall", "ground_rent",
+        "utilities_on_voids", "compliance_and_safety", "bad_debt", "other",
+    ]
+    label: str = ""
+    basis: Literal["fixed_pence_per_month", "pct_of_gross_rent"]
+    value: float
+
+
+class StabilisationInputs(Model):
+    anchor: PhaseAnchor | None = None
+    month_offset: int = Field(le=1200)
+    ramp_months: int = Field(le=1200)
+    stabilised_occupancy_pct: float
+
+
+class ValuationInputs(Model):
+    cap_yield_pct: float
+    purchasers_costs_pct: float
+
+
+class TakeoutInputs(Model):
+    ltv_cap_pct: float
+    dscr_floor: float
+    icr_floor: float
+    annual_rate_pct: float
+    amortisation_years: float | None = None
+    term_years: float
+
+
+class InvestmentCaseInputs(Model):
+    stabilisation: StabilisationInputs
+    # `max_length` is the same resource-exhaustion backstop as
+    # SalesPhasingInputs.tranches' -- the real rules live in validation.py.
+    operating_lines: list[OperatingLine] = Field(default_factory=list, max_length=200)
+    valuation: ValuationInputs
+    takeout: TakeoutInputs
+
+
+class RefinanceInputsV10(RefinanceInputsV9):
+    """Sec 19.1. The two narrowings. Overriding a parent field's type is the
+    same pattern CalculatorInputsV9 uses to narrow `programme`."""
+
+    investment_value_pence: int | None = None  # type: ignore[assignment]
+    ltv_pct: float | None = None  # type: ignore[assignment]
+    arrangement_fee_basis: Literal["fixed_pence", "pct_of_quantum"] = "fixed_pence"
+    arrangement_fee_pct: float = 0.0
+
+
 class CalculatorInputsV4(CalculatorInputsV3):
     """Mirrors CalculatorInputsV3 plus the three additive (nullable)
     Release 3a blocks (spec Sec 6.1, calc 2.2.0).
@@ -832,10 +889,21 @@ class CalculatorInputsV9(CalculatorInputsV8):
     refinance: RefinanceInputsV9 | None = None  # type: ignore[assignment]
 
 
+class CalculatorInputsV10(CalculatorInputsV9):
+    """Mirrors CalculatorInputsV9 with the Sec 19 investment case. Subclasses V9
+    for the same reason V9 subclasses V8: the engine dispatches on it, and a flat
+    re-declaration would make those isinstance checks silently False for v10
+    documents."""
+
+    inputs_version: Literal[10] = 10  # type: ignore[assignment]
+    refinance: RefinanceInputsV10 | None = None  # type: ignore[assignment]
+    investment_case: InvestmentCaseInputs | None = None
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-    | CalculatorInputsV9
+    | CalculatorInputsV9 | CalculatorInputsV10
 )
 
 
@@ -847,6 +915,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v10 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # investment case and every other post-v2 field.
+    if version == 10:
+        return CalculatorInputsV10.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v9 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # programme network and every other post-v2 field -- R8's silent-corruption
@@ -885,4 +958,4 @@ FlagCode = Literal[
     "vat_funding_gap",
 ]
 
-CALC_VERSION = "2.11.0"
+CALC_VERSION = "2.12.0"

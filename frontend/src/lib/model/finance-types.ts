@@ -9,6 +9,12 @@ import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax'
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 import type { VatInputs, VatResult } from './vat';
 import type { ProgrammeNetwork, DerivedPhase } from './programme';
+// Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
+// rejects an unused type import, and the re-exports below do not count as uses.
+// `InvestmentCaseResult` is deliberately ABSENT: it does not exist until Task 8
+// writes `computeInvestmentCase`, and importing it here would not compile.
+// Task 8 adds both the import and the `Schedule.investment_case` field.
+import type { InvestmentCaseInputs } from './investment-case';
 
 export type { SpendCurve };
 
@@ -155,6 +161,12 @@ export type {
 } from './programme';
 export { PHASE_CODES, PRE_COMPLETION_CODES, isProgrammeNetwork, isLegacyProgramme } from './programme';
 
+export type {
+  OpexCode, OperatingLineBasis, OperatingLine, StabilisationInputs, TakeoutInputs,
+  InvestmentCaseInputs, InvestmentCaseMonth, TakeoutSizing, BindingConstraint,
+} from './investment-case';
+export { OPEX_CODES } from './investment-case';
+
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {
   phase_id: string;
@@ -271,10 +283,60 @@ export interface CalculatorInputsV9 extends Omit<CalculatorInputsV8,
   refinance: RefinanceInputsV9 | null;
 }
 
+/**
+ * R13 spec §19.1. Named `RefinanceArrangementFeeBasis`, not the brief's plain
+ * `ArrangementFeeBasis` — that name is already taken by `FacilityTerms`'s own
+ * arrangement-fee-basis type (line 17 above, `'committed_net_facility' |
+ * 'committed_gross_facility'`), a different enum for a different fee on a
+ * different tranche. Reusing the name would be a duplicate top-level
+ * declaration and would not compile; this is a brief defect, corrected here
+ * rather than silently worked around, per the standing instruction on this
+ * release.
+ */
+export type RefinanceArrangementFeeBasis = 'fixed_pence' | 'pct_of_quantum';
+
+/**
+ * R13 spec §19.1. `investment_value_pence` and `ltv_pct` NARROW to nullable:
+ * a non-null `investment_case` supersedes them, and both must then be null.
+ * Not "ignored" — §2's never-silently-ignored rule makes reading one and
+ * dropping the other the prohibited shape, so it is a validation error (§19.7
+ * rule 5) rather than a silent override.
+ *
+ * All refinance EVENT costs stay here, where they are today. Only the
+ * arrangement fee's basis is new, because a fixed-pence arrangement fee on a
+ * derived quantum is an odd thing to ask a user for. `takeout` is sizing
+ * policy; `refinance` is the event.
+ */
+export interface RefinanceInputsV10 extends Omit<RefinanceInputsV9,
+  'investment_value_pence' | 'ltv_pct'> {
+  investment_value_pence: number | null;
+  ltv_pct: number | null;
+  arrangement_fee_basis: RefinanceArrangementFeeBasis;
+  arrangement_fee_pct: number;
+}
+
+/**
+ * R13 spec §19.1. `investment_case` is a two-state field, top-level beside
+ * `programme`, `vat` and `cost_plan`: `null` = calc 2.11.0's explicit
+ * `investment_value_pence × ltv_pct` path, bit-identical; non-null = the
+ * derived case.
+ *
+ * Top-level rather than nested under `refinance` (design decision 3): a
+ * retained scheme earns rent whether or not it refinances, and nesting would
+ * make operating cash flow conditional on a financing event it has nothing to
+ * do with.
+ */
+export interface CalculatorInputsV10 extends Omit<CalculatorInputsV9,
+  'inputs_version' | 'refinance'> {
+  inputs_version: 10;
+  refinance: RefinanceInputsV10 | null;
+  investment_case: InvestmentCaseInputs | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9;
+  | CalculatorInputsV9 | CalculatorInputsV10;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -563,4 +625,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.11.0';
+export const CALC_VERSION = '2.12.0';
