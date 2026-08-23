@@ -206,22 +206,39 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
       - refinance.arrangement_fee_pence - refinance.legal_costs_pence
     : null;
 
-  // R13 Task 15 (spec §19.7 rule 2). The action that makes the completeness
-  // rule a non-event: for `retain_all`, every unit gets a rent row, an
-  // existing row is left untouched, and only a MISSING one gets the
-  // placeholder. Deliberately idempotent rather than a null-only toggle --
-  // clicking it again on a document that already has a case just repairs a
-  // rent roll that has fallen behind the unit mix (e.g. a unit added to
-  // `unit_mix` after the case was first authored), which is the same
-  // completeness guarantee, exercised a second time. `investment_case`
-  // itself is created from the default ONLY when absent; an existing case's
-  // policy is left exactly as the user set it. "Remove investment case",
-  // below, is the only control that nulls it back out.
+  // R13 Task 15 fix round 1 (spec §19.7 rule 2). Which units, under
+  // `retain_all`, lack a `retained_units` row -- the set the completeness
+  // rule requires be empty. `[]` under `blended` (rule 2 does not apply
+  // there: the retained set IS whichever units the user picked) and `[]`
+  // when there is no case to be complete about.
+  const missingRentUnitIds = exit.route === 'retain_all'
+    ? units.filter((u) => !exit.retained_units.some((r) => r.unit_id === u.id)).map((u) => u.id)
+    : [];
+
+  // R13 Task 15 fix round 1 (spec §19.7 rule 2). Two genuinely different
+  // actions share this handler -- CREATE a case from the default (only when
+  // `ic` is null) and REPAIR a rent roll that has fallen behind the unit mix
+  // (only when a row is actually missing) -- but each is wired to its own,
+  // honestly-labelled button below (`ic == null` shows "Add an investment
+  // case"; `missingRentUnitIds.length > 0` shows "Complete rent roll").
+  // Fix round 1 finding: the two used to be one always-visible "Add" button
+  // that stayed present even once a case existed and every row was already
+  // complete -- true of nothing in that state, read by a user as "nothing
+  // has been added yet". The short-circuit below means this handler is now
+  // a genuine no-op exactly when neither button would be showing, not only
+  // when the user cannot reach it: only the fields that actually change are
+  // in the emitted partial, so a repair on an already-complete document
+  // (unreachable via the UI, but a defensive guard against a future caller)
+  // emits nothing rather than an unchanged `retained_units` array. "Remove
+  // investment case", below, is the only control that nulls it back out.
   const addInvestmentCase = () => {
     if (!icCarrier) return;
-    const nextIc = ic ?? DEFAULT_INVESTMENT_CASE;
-    const partial: Record<string, unknown> = { investment_case: nextIc };
-    if (exit.route === 'retain_all') {
+    const creating = ic == null;
+    const repairing = missingRentUnitIds.length > 0;
+    if (!creating && !repairing) return;
+    const partial: Record<string, unknown> = {};
+    if (creating) partial.investment_case = DEFAULT_INVESTMENT_CASE;
+    if (repairing) {
       const existingRents = new Map(exit.retained_units.map((r) => [r.unit_id, r]));
       partial.exit_strategy = {
         ...exit,
@@ -486,12 +503,30 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
             <h4 style={{ color: '#94a3b8', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1, margin: 0 }}>Investment Case</h4>
-            <button
-              onClick={addInvestmentCase}
-              style={{ padding: '6px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
-            >
-              Add an investment case
-            </button>
+            {/* R13 Task 15 fix round 1. Exactly one of these three ever
+                shows at once, each honest about what it does: "Add" only
+                when there is no case yet; "Complete rent roll" only when a
+                case exists AND a row is genuinely missing; "Remove" is the
+                only affordance once the case is present and complete. The
+                previous version showed "Add" unconditionally alongside
+                "Remove" once a case existed, reading as though nothing had
+                been added. */}
+            {ic == null && (
+              <button
+                onClick={addInvestmentCase}
+                style={{ padding: '6px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                Add an investment case
+              </button>
+            )}
+            {ic != null && missingRentUnitIds.length > 0 && (
+              <button
+                onClick={addInvestmentCase}
+                style={{ padding: '6px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                {`Complete rent roll (${missingRentUnitIds.length} unit${missingRentUnitIds.length === 1 ? '' : 's'} missing)`}
+              </button>
+            )}
             {ic != null && (
               <button
                 onClick={removeInvestmentCase}

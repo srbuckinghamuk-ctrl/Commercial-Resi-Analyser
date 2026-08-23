@@ -7,7 +7,7 @@ import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import { penceToPounds } from '../../lib/format';
 import type { ProgrammeNetwork } from '../../lib/model';
-import { retainAllDocMissingRents } from '../../lib/model/__fixtures__/investment-case-docs';
+import { retainAllDocMissingRents, icDoc } from '../../lib/model/__fixtures__/investment-case-docs';
 
 function buildInputs(overrides: Partial<CalculatorInputsV9> = {}): CalculatorInputsV9 {
   const base = defaultCalculatorInputsV9();
@@ -450,17 +450,20 @@ describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9,
   });
 });
 
-// R13 Task 15 (spec §19.6/§19.7 rule 2). `retainAllDocMissingRents()` is a
-// v10 document -- `ExitStrategyPage` is generic over `CalculatorInputsV9 |
+// R13 Task 15 (spec §19.6/§19.7 rule 2), fix round 1. `retainAllDocMissingRents()`
+// is a v10 document -- `ExitStrategyPage` is generic over `CalculatorInputsV9 |
 // CalculatorInputsV10` for exactly this reason (see the page's own header
 // comment). Its base fixture (t-investment-case.json) already carries an
 // investment case and a refinance block seeded with a null value/LTV pair
-// (spec §19.7 rule 5), so "Add an investment case" is exercised here as the
-// completeness action it is documented to be -- idempotent on an EXISTING
-// case -- not as a null-to-non-null toggle; the missing row on unit u2 is
-// the only defect the click needs to fix.
+// (spec §19.7 rule 5) -- only unit u2's rent row is missing. Fix round 1: the
+// review found "Add an investment case" rendered unconditionally, alongside
+// "Remove investment case" once a case existed, which read as though nothing
+// had been added. The affordance for THIS fixture's exact state (a case that
+// exists but is incomplete) is now "Complete rent roll", not "Add an
+// investment case" -- see the render block's own comment for why exactly one
+// of the three buttons ever shows.
 describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', () => {
-  it('populates a rent row for every unit when the route is retain_all', () => {
+  it('offers "Complete rent roll", not "Add", for an existing case with a missing row', () => {
     const doc = retainAllDocMissingRents();
     const run = runAppraisal(doc);
     const onChange = vi.fn();
@@ -469,9 +472,17 @@ describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', ()
     // Sanity: the fixture really is missing exactly u2's row before the click.
     expect(doc.exit_strategy.retained_units).toHaveLength(doc.unit_mix.units.length - 1);
 
-    fireEvent.click(screen.getByRole('button', { name: /add an investment case/i }));
+    // The case already exists, so "Add" must not be offered -- only the
+    // honest "repair" affordance and "Remove" (both true of this state).
+    expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove investment case/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /complete rent roll/i }));
 
     expect(onChange).toHaveBeenCalledTimes(1);
+    // Repairing an already-existing case must not re-emit `investment_case`
+    // -- only the field that actually changed.
+    expect(onChange.mock.calls[0][0]).not.toHaveProperty('investment_case');
     const next = { ...doc, ...onChange.mock.calls.at(-1)![0] };
     expect(next.exit_strategy.retained_units).toHaveLength(next.unit_mix.units.length);
     expect(next.exit_strategy.retained_units.map((r: { unit_id: string }) => r.unit_id).sort())
@@ -479,9 +490,45 @@ describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', ()
     expect(validateInputs(next).filter((i) => i.severity === 'error')).toEqual([]);
   });
 
+  // Fix round 1's own regression guard: once the rent roll is genuinely
+  // complete, neither "Add" nor "Complete rent roll" should be offered --
+  // only "Remove". This is the state the finding was about.
+  it('offers only "Remove" once the case exists and every unit already has a rent row', () => {
+    const doc = icDoc(); // t-investment-case.json as-is -- every unit already has a row.
+    const run = runAppraisal(doc);
+    render(<ExitStrategyPage inputs={doc} onChange={vi.fn()} run={run} />);
+
+    expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove investment case/i })).toBeInTheDocument();
+  });
+
+  it('offers "Add an investment case" when there is no case yet, and creates one on click', () => {
+    const doc = icDoc({ investmentCase: null });
+    const run = runAppraisal(doc);
+    const onChange = vi.fn();
+    render(<ExitStrategyPage inputs={doc} onChange={onChange} run={run} />);
+
+    expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove investment case/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^add an investment case$/i }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = { ...doc, ...onChange.mock.calls.at(-1)![0] };
+    expect(next.investment_case).not.toBeNull();
+    // icDoc()'s own rent roll is already complete (this test only nulled
+    // `investment_case`, not any unit's row), so creating the case here
+    // needs no repair -- this just confirms rule 2 stays satisfied when
+    // there was nothing to fix in the first place.
+    expect(next.exit_strategy.retained_units).toHaveLength(next.unit_mix.units.length);
+    expect(validateInputs(next).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
   it('does not offer the investment case section on a v9 document', () => {
     const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'retain_all' } });
     setup(inputs);
-    expect(screen.queryByRole('button', { name: /add an investment case/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
   });
 });
