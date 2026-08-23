@@ -4103,3 +4103,335 @@ and both `cost_to_complete_*` figures are **unchanged**.
    show a real funding gap with no cost-to-complete shortfall. That is a stated
    limitation of §5.10, not a defect introduced here, and it is what makes Q and
    S the corpus's standing examples of the allowed direction.
+
+### 20.4 Fixture W — monitoring on site (`fixtures/financial-model/w-monitoring-on-site.json`)
+
+**Purpose:** the release's golden case for §20.2's statement and its
+cross-engine penny-agreement carrier — the first **inputs v11**-native fixture,
+detailed cost mode, one lender-ineligible package, and a `monitoring` block at
+reporting month 6. It is also, deliberately, the corpus's only **detailed-mode**
+document that reaches §7's fully-realised profit identity: wiring the §4.2(b)
+cap (§20.2/§20.3 above) opened real funding gaps on Q and S, the only other
+detailed-mode fixtures, and `funding_gap_pence == 0` is a term of that
+predicate, so the identity's detailed-mode arm had no witness left. W is that
+witness, and both invariant suites now assert per **cost mode**, not merely
+corpus-wide.
+
+Every figure below was derived before either engine ran on this document.
+
+**Inputs.** England/NI, term 18, no programme network (auto windows), VAT not
+registered, `investment_case: null`, single-tranche sale at term
+(`route: 'sell_all'`, no `sales_phasing`). Purchase price 20,000,000p with
+200,000p legal and 100,000p survey fees (`broker_fee_pct: 0`). Detailed cost
+plan: `enabling_strip_out_asbestos` 1,500,000p (eligible, class
+`existing_building`), `finishes` 4,000,000p (eligible, class `general`),
+`externals` 500,000p (**`lender_eligible: false`**, class `abnormal`); general
+contingency 10%, the other two classes 0%; one fixed `architect` fee 300,000p
+(professional) and one fixed `prior_approval` fee 20,000p (statutory).
+`funding_source: 'development_finance'`, `interest_type: 'rolled_up'`,
+`annual_interest_rate_pct: 10`, `committed_net_facility_pence: 22,000,000`,
+`interest_reserve_pence: 1,500,000`, `committed_gross_facility_pence: null`
+(gross = 23,500,000), `development_cost_advance_pct: 70`,
+`day_one_advance_pence: 12,000,000`, `arrangement_fee_pct: 1.0` on the
+committed **net** facility, every other finance fee 0,
+`equity_draw_rule: 'equity_first'`. One confirmed cash equity source,
+16,000,000p (sized below). GDV 45,000,000p from three units (15,000,000p each,
+80 sqm each), `selling_agent_fee_pct: 1.5`, `selling_legal_fee_pence: 500,000`.
+
+#### Step 1 — the cost plan and the eligible ratio
+
+Detailed mode, so `base_build` is the package sum and `compliance` is 0 (§3.2.1
+prices compliance inside the packages):
+
+| Quantity | Derivation | Pence |
+|---|---|---|
+| `base_build_pence` | 1,500,000 + 4,000,000 + 500,000 | **6,000,000** |
+| `lender_eligible_base_pence` | 1,500,000 + 4,000,000 (externals excluded) | **5,500,000** |
+| `lender_eligible_ratio` | 5,500,000 / 6,000,000 = 11/12 | **0.9166666666666666** |
+| contingency `general` | base `all_packages` = 6,000,000, 10% | **600,000** |
+| contingency `existing_building` | base `selected_packages` = 1,500,000, 0% | 0 |
+| contingency `abnormal` | base `selected_packages` = 500,000, 0% | 0 |
+| `contingency_total_pence` | sum of the three ROUNDED amounts | **600,000** |
+| `compliance_pence` | detailed mode | **0** |
+| `construction_total_pence` | 6,000,000 + 600,000 + 0 | **6,600,000** |
+| `professional_total_pence` | one fixed fee | **300,000** |
+| `statutory_total_pence` | one fixed `prior_approval` fee | **20,000** |
+| `conversion_total_pence` | 6,600,000 + 300,000 + 20,000 | **6,920,000** |
+| `implied_rate_pence_per_sqm` | round(6,000,000 / 300) | **20,000** |
+
+`0.9166666666666666` is the exact IEEE-754 double nearest 11/12 — the fixture
+pins that literal, and both engines must print it character for character. The
+neighbouring double `0.9166666666666667` is the negative control.
+
+#### Step 2 — acquisition and SDLT
+
+VAT is not registered, so the chargeable consideration is the raw price
+(§17.7). England/NI, `basis: 'non_residential'`, read from
+`fixtures/tax/acquisition-tax-tables.json` (bands 0% to 15,000,000p, 2% to
+25,000,000p, 5% above), slice basis:
+
+```
+SDLT = 0% x 15,000,000  +  2% x (20,000,000 - 15,000,000)
+     = 0                +  100,000                            = 100,000p
+```
+
+```
+acquisition_cost = 20,000,000 + 100,000 + 200,000 + 100,000 + 0 + 0 = 20,400,000p
+```
+
+That is the acquisition line's **original budget**, and the monitoring block's
+acquisition current budget is set equal to it so the acquisition variance is 0
+and the construction line carries the statement's only material variance.
+
+#### Step 3 — the uses schedule (auto windows, term 18)
+
+`construction_window = max(1, 18 - 2) = 16` (ledger months 1..16);
+`professional_window = ceil(16 / 2) = 8` (ledger months 1..8); the
+`prior_approval` fee lands in month 0 and `statutory_spread_total` is therefore
+0 (§3.4).
+
+- construction: 6,600,000 / 16 = **412,500** in each of months 1..16 (exact, no residue)
+- professional: 300,000 / 8 = **37,500** in each of months 1..8 (exact)
+- month 0: acquisition 20,400,000 + statutory 20,000 = **20,420,000**
+
+Sale receipts land in month `term - 1` = 17: gross 45,000,000, agent fee
+round(45,000,000 x 1.5%) = 675,000, selling legal 500,000, so
+`selling_costs_pence` = **1,175,000** and net receipts = **43,825,000**.
+
+#### Step 4 — the §4.2(b) scaled cap base, month by month
+
+The cap is never actually reached in this document (equity meets every month's
+cost first), but it is what forces the equity to be sized as it is, so it is
+derived here explicitly. Monthly rate `r` = 10 / 100 / 12.
+
+```
+eligible(m)    = round(construction(m) x 11/12) + professional(m) + statutory(m)
+advance_cap(m) = round(eligible(m) x 70 / 100)
+```
+
+| Ledger months | construction | x 11/12 | professional | eligible | advance cap (70%) | month's cash use |
+|---|---|---|---|---|---|---|
+| 1..8 | 412,500 | 378,125 | 37,500 | 415,625 | round(290,937.5) = **290,938** | 450,000 |
+| 9..16 | 412,500 | 378,125 | 0 | 378,125 | round(264,687.5) = **264,688** | 412,500 |
+| 17 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+412,500 x 11/12 is exact (412,500 / 12 = 34,375; x 11 = 378,125), so the
+scaling introduces no residue of its own; the one rounding is the 70% product.
+
+**The cap is below the month's cost in every single month.** With
+`equity_first`, the facility is only reached once committed equity is
+exhausted, and from that month on the shortfall (450,000 − 290,938 = 159,062,
+or 412,500 − 264,688 = 147,812) would fall straight into `funding_gap_pence`.
+There is therefore no equity figure that funds *part* of the programme without
+opening a gap: the equity must cover the whole of it.
+
+**Sizing the equity (the design choice this fixture rests on).**
+
+```
+month 0 residual after the 12,000,000 day-one advance : 20,420,000 - 12,000,000 =  8,420,000
+months 1..16 construction + professional              : 6,600,000 + 300,000     =  6,900,000
+minimum committed cash equity for a zero funding gap                            = 15,320,000
+```
+
+The fixture commits **16,000,000p** — the round figure above that minimum,
+leaving 680,000p of committed-but-uncalled equity so the statement's
+`remaining_cash_equity` term is genuinely non-zero at the end as well as at
+month 6.
+
+#### Step 5 — the ledger, hand-derived month by month
+
+Month 0: the arrangement fee capitalises first —
+round(22,000,000 x 1.0%) = **220,000** — so `cum_net_used` is 220,000 before
+any draw. The gross-headroom cap (§4.2(c)) is
+`floor(23,500,000 / (1 + r)) - 0 - 220,000 = 23,305,785 - 220,000 = 23,085,785`,
+and the net-facility headroom is 21,780,000, so the day-one draw is the
+requested 12,000,000 (the binding term is the request itself). Equity meets the
+remaining 8,420,000. Interest accrues on `opening + draw + cap_fees`:
+round(12,220,000 x r) = **101,833**.
+
+From month 1 on there is no draw at all: equity covers every month's cost in
+full, so `remainder` is 0 and the cap block never runs. Interest is
+`round(opening x r)` and capitalises.
+
+| m | cash uses | draw | cap fees | interest | equity | closing balance | cum. capitalised interest |
+|---|---|---|---|---|---|---|---|
+| 0 | 20,420,000 | 12,000,000 | 220,000 | 101,833 | 8,420,000 | 12,321,833 | 101,833 |
+| 1 | 450,000 | 0 | 0 | 102,682 | 450,000 | 12,424,515 | 204,515 |
+| 2 | 450,000 | 0 | 0 | 103,538 | 450,000 | 12,528,053 | 308,053 |
+| 3 | 450,000 | 0 | 0 | 104,400 | 450,000 | 12,632,453 | 412,453 |
+| 4 | 450,000 | 0 | 0 | 105,270 | 450,000 | 12,737,723 | 517,723 |
+| 5 | 450,000 | 0 | 0 | 106,148 | 450,000 | 12,843,871 | 623,871 |
+| 6 | 450,000 | 0 | 0 | 107,032 | 450,000 | 12,950,903 | 730,903 |
+| 7 | 450,000 | 0 | 0 | 107,924 | 450,000 | 13,058,827 | 838,827 |
+| 8 | 450,000 | 0 | 0 | 108,824 | 450,000 | 13,167,651 | 947,651 |
+| 9 | 412,500 | 0 | 0 | 109,730 | 412,500 | 13,277,381 | 1,057,381 |
+| 10 | 412,500 | 0 | 0 | 110,645 | 412,500 | 13,388,026 | 1,168,026 |
+| 11 | 412,500 | 0 | 0 | 111,567 | 412,500 | 13,499,593 | 1,279,593 |
+| 12 | 412,500 | 0 | 0 | 112,497 | 412,500 | 13,612,090 | 1,392,090 |
+| 13 | 412,500 | 0 | 0 | 113,434 | 412,500 | 13,725,524 | 1,505,524 |
+| 14 | 412,500 | 0 | 0 | 114,379 | 412,500 | 13,839,903 | 1,619,903 |
+| 15 | 412,500 | 0 | 0 | 115,333 | 412,500 | 13,955,236 | 1,735,236 |
+| 16 | 412,500 | 0 | 0 | 116,294 | 412,500 | 14,071,530 | 1,851,530 |
+| 17 | 0 | 0 | 0 | 117,263 | 0 | **0** (14,188,793 before the sweep) | 1,968,793 |
+
+Month 17: the balance reaches 14,071,530 + 117,263 = **14,188,793** — the peak,
+and `peak_debt_month` is 17 — and the 43,825,000 net sale receipt clears it
+whole at `sales_sweep_pct: 100` with `exit_fee_pct: 0`, so
+`senior_outstanding_at_maturity_pence` is 0 and `funding_gap_pence` is 0 across
+the whole term. Total equity contributed is 8,420,000 + 8 x 450,000 +
+8 x 412,500 = **15,320,000**; total interest is **1,968,793**.
+
+The interest reserve (1,500,000) is exhausted during ledger month 13
+(cumulative capitalised interest crosses it between 1,392,090 and 1,505,524),
+so the fixture also raises `interest_reserve_exhausted` — an amber flag that
+does not touch `report_safe`.
+
+**Cost stack and profit:**
+
+```
+cost_before_finance = 20,400,000 + 6,600,000 + 300,000 + 20,000 + 1,175,000 = 28,495,000
+finance_costs       = interest 1,968,793 + arrangement 220,000 + exit 0 + ancillary 0 = 2,188,793
+total_development_cost                                                     = 30,683,793
+profit              = 45,000,000 + 0 (nothing retained) - 30,683,793       = 14,316,207
+profit_on_cost_pct  = round(14,316,207 / 30,683,793 x 10,000) / 100        = 46.66
+profit_on_gdv_pct   = round(14,316,207 / 45,000,000 x 10,000) / 100        = 31.81
+```
+
+#### Step 6 — the §5.10 series, `m = 1..18`
+
+`remaining_cost(m)` sums ledger months `m..17`'s uses plus their interest and
+capitalised fees; `remaining_funding(m)` is
+`undrawn_net(m-1) + reserve_headroom(m) + remaining_cash_equity(m)`, with
+`undrawn_net` a constant 9,780,000 (22,000,000 − 12,220,000 drawn in month 0
+and never touched again) and
+`reserve_headroom(m) = max(0, 23,500,000 - 22,000,000 - cum_capitalised_interest(m-1))`.
+
+| m | remaining cost | reserve headroom | remaining funding | surplus |
+|---|---|---|---|---|
+| 1 | 8,766,960 | 1,398,167 | 18,758,167 | 9,991,207 |
+| 2 | 8,214,278 | 1,295,485 | 18,205,485 | 9,991,207 |
+| 3 | 7,660,740 | 1,191,947 | 17,651,947 | 9,991,207 |
+| 4 | 7,106,340 | 1,087,547 | 17,097,547 | 9,991,207 |
+| 5 | 6,551,070 | 982,277 | 16,542,277 | 9,991,207 |
+| 6 | 5,994,922 | 876,129 | 15,986,129 | 9,991,207 |
+| 7 | 5,437,890 | 769,097 | 15,429,097 | 9,991,207 |
+| 8 | 4,879,966 | 661,173 | 14,871,173 | 9,991,207 |
+| 9 | 4,321,142 | 552,349 | 14,312,349 | 9,991,207 |
+| 10 | 3,798,912 | 442,619 | 13,790,119 | 9,991,207 |
+| 11 | 3,275,767 | 331,974 | 13,266,974 | 9,991,207 |
+| 12 | 2,751,700 | 220,407 | 12,742,907 | 9,991,207 |
+| 13 | 2,226,703 | 107,910 | 12,217,910 | 9,991,207 |
+| 14 | 1,700,769 | 0 | 11,697,500 | 9,996,731 |
+| 15 | 1,173,890 | 0 | 11,285,000 | 10,111,110 |
+| 16 | 646,057 | 0 | 10,872,500 | 10,226,443 |
+| 17 | 117,263 | 0 | 10,460,000 | 10,342,737 |
+| 18 | 0 | 0 | 10,460,000 | 10,460,000 |
+
+The surplus is positive at every label, so
+`cost_to_complete_first_shortfall_month` is **null** and
+`cost_to_complete_max_shortfall_pence` is **0**. (The constant 9,991,207 for
+`m = 1..13` is not a coincidence worth pinning: while the reserve headroom is
+still positive, each month's fall in remaining cost is matched pence for pence
+by the fall in remaining equity plus reserve headroom. From `m = 14` the
+headroom is floored at 0 and the two stop tracking.)
+
+#### Step 7 — the §20.2 statement at `m = 6`
+
+Entered block: `reporting_month: 6`, `reporting_date: '2027-03-31'`,
+`debt_drawn_to_date_pence: 14,500,000`,
+`cash_equity_injected_to_date_pence: 8,000,000`. Original budgets come from
+§20.1's table (spec §6): acquisition 20,400,000 (Step 2), construction
+`base_build + compliance` = 6,000,000, professional 300,000, statutory 20,000,
+contingency 600,000 — and 6,000,000 + 600,000 is exactly the 6,600,000 the
+schedule spreads as construction, the split identity §6 requires.
+
+| Category | original | current | certified | paid | committed | committed − certified | forecast | est. final | vs original | vs current | remaining |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| acquisition | 20,400,000 | 20,400,000 | 20,400,000 | 20,400,000 | 20,400,000 | 0 | 0 | 20,400,000 | 0 | 0 | 0 |
+| construction | 6,000,000 | 6,100,000 | 2,000,000 | 1,800,000 | 5,900,000 | 3,900,000 | 400,000 | 6,300,000 | **+300,000** | +200,000 | 4,300,000 |
+| professional | 300,000 | 300,000 | 120,000 | 120,000 | 300,000 | 180,000 | 0 | 300,000 | 0 | 0 | 180,000 |
+| statutory | 20,000 | 20,000 | 20,000 | 20,000 | 20,000 | 0 | 0 | 20,000 | 0 | 0 | 0 |
+| contingency | 600,000 | 600,000 | 50,000 | 50,000 | 50,000 | 0 | 450,000 | 500,000 | −100,000 | −100,000 | 450,000 |
+| **totals** | **27,320,000** | **27,420,000** | **22,590,000** | **22,390,000** | **26,670,000** | **4,080,000** | **850,000** | **27,520,000** | **+200,000** | **+100,000** | **4,930,000** |
+
+`contingency_remaining_pence` = 600,000 − 50,000 = **550,000**.
+
+**Funding side at m = 6** (elapsed = ledger months 0..5):
+
+```
+cum_capitalised_interest(0..5) = 101,833 + 102,682 + 103,538 + 104,400 + 105,270 + 106,148 = 623,871
+undrawn_net_facility  = max(0, 22,000,000 - 14,500,000)                 =  7,500,000
+reserve_headroom      = max(0, 23,500,000 - 22,000,000 - 623,871)       =    876,129
+remaining_cash_equity = max(0, 16,000,000 -  8,000,000)                 =  8,000,000
+remaining_funding                                                       = 16,376,129
+```
+
+**Uses side at m = 6** (forecast = ledger months 6..17):
+
+```
+forecast_finance = 107,032 + 107,924 + 108,824 + 109,730 + 110,645 + 111,567
+                 + 112,497 + 113,434 + 114,379 + 115,333 + 116,294 + 117,263  = 1,344,922
+remaining_uses   = 4,930,000 + 1,344,922                                      = 6,274,922
+surplus          = 16,376,129 - 6,274,922                                     = 10,101,207
+monitoring_shortfall = max(0, -10,101,207)                                    =          0
+```
+
+A positive surplus is the honest answer for this document, and §20.2's own
+worksheet instruction says so: the shortfall pins 0 and the surplus carries the
+number. Every other column of the statement is still exercised, including all
+three funding terms.
+
+**Variances against the inception plan** (elapsed = ledger months 0..5):
+
+```
+cum(draw + capitalised fees)(0..5) = 12,000,000 + 220,000                     = 12,220,000
+debt_drawn_variance   = 14,500,000 - 12,220,000                               =  +2,280,000
+cum equity contributed(0..5) = 8,420,000 + 5 x 450,000                        = 10,670,000
+equity_injected_variance = 8,000,000 - 10,670,000                             =  -2,670,000
+cum planned cost(0..5) = 20,420,000 + 5 x 450,000                             = 22,670,000
+cost_to_date_variance = 22,590,000 - 22,670,000                               =     -80,000
+```
+
+Positive means ahead of plan in all three: the sponsor has drawn 2,280,000p
+more senior debt than the inception ledger forecast by month 6, injected
+2,670,000p less equity than planned, and certified 80,000p less cost than the
+plan spent.
+
+#### Pinned `expected_metrics`
+
+Hand-derived above, all of them:
+
+| Key | Value | From |
+|---|---|---|
+| `gdv_pence` | 45,000,000 | three units at 15,000,000 |
+| `acquisition_tax_pence` / `sdlt_pence` | 100,000 | Step 2 |
+| `acquisition_cost_pence` | 20,400,000 | Step 2 |
+| `construction_cost_pence` | 6,600,000 | Step 1 |
+| `professional_fees_pence` / `statutory_costs_pence` | 300,000 / 20,000 | Step 1 |
+| `selling_costs_pence` | 1,175,000 | Step 3 |
+| `cost_before_finance_pence` | 28,495,000 | Step 5 |
+| `finance_costs_pence` | 2,188,793 | Step 5 |
+| `total_development_cost_pence` | 30,683,793 | Step 5 |
+| `profit_pence` | 14,316,207 | Step 5 |
+| `profit_on_cost_pct` / `profit_on_gdv_pct` | 46.66 / 31.81 | Step 5 |
+| `peak_debt_pence` / `peak_debt_month` | 14,188,793 / 17 | Step 5 |
+| `day_one_advance_pence` | 12,000,000 | Step 5 |
+| `equity_contributed_pence` | 15,320,000 | Step 5 |
+| `funding_gap_pence` | 0 | Step 5 |
+| `cost_to_complete_first_shortfall_month` | null | Step 6 |
+| `cost_to_complete_max_shortfall_pence` | 0 | Step 6 |
+| `cost_plan.*` (ten keys, ratio included) | Step 1 | Step 1 |
+| `cost_plan_contingency_*` (six keys) | Step 1 | Step 1 |
+| `uses_construction_pence` | 0, then 412,500 x 16, then 0 | Step 3 |
+
+**Four keys are held back for Task 9.** Spec §20.4 asks this fixture to pin
+`monitoring_shortfall_pence` (**0**), `monitoring_estimated_final_cost_pence`
+(**27,520,000**), `monitoring_surplus_pence` (**10,101,207**) and the flat
+`lender_eligible_ratio` (**0.9166666666666666**) — all four derived in Step 7
+and Step 1 above. None of the four has a `FLAT_KEYS` mapper until Task 9 wires
+the statement into metrics, and the golden harness resolves an unmapped
+`expected_metrics` key as a **direct attribute of `metrics`**
+(`_resolve_path` / `resolvePath`), so pinning them today raises an attribute
+error rather than being ignored. Task 9 adds the mappers and these four pins
+together. The ratio is already pinned through the dotted
+`cost_plan.lender_eligible_ratio` path, which needs no mapper.

@@ -152,6 +152,24 @@ describe('computeMonitoringStatement (R14 spec §20.2)', () => {
     expect(construction.estimated_final_cost_pence).toBe(60_000_000);
     expect(construction.variance_vs_current_pence).toBe(0);
     expect(construction.remaining_to_spend_pence).toBe(35_000_000);
+
+    // R14 Task 8 (carried from Task 7's review): the construction/contingency SPLIT
+    // POINT itself, as two hand-derived integers rather than only as the sum identity
+    // swept in the corpus test below. `l-retain-all` is a v5 document, so
+    // `migrateInputsToV11` builds it a HEADLINE cost plan from the legacy fields:
+    //   base_build  = construction_cost_per_sqm_pence × developed_area_sqm
+    //               = 100,000 × 400            = 40,000,000
+    //   compliance  = fire_safety + sound_insulation + part_l = 0 + 0 + 0 = 0
+    //   construction original = base_build + compliance       = 40,000,000
+    //   contingency original  = contingency_pct × base_build
+    //               = 10% × 40,000,000                        =  4,000,000
+    // and 40,000,000 + 4,000,000 is the 44,000,000 the fixture already pins as
+    // `construction_cost_pence`. Without these two, an engine that put the WHOLE
+    // 44,000,000 on the construction line and 0 on contingency (or split it any other
+    // way) would still satisfy the sum identity.
+    expect(statement.lines[1].original_budget_pence).toBe(40_000_000);
+    expect(statement.lines[4].category).toBe('contingency');
+    expect(statement.lines[4].original_budget_pence).toBe(4_000_000);
   });
 
   it('totals are the column sums, and contingency_remaining is floored at 0', () => {
@@ -219,29 +237,35 @@ describe('computeMonitoringStatement (R14 spec §20.2)', () => {
     expect(checked).toBeGreaterThan(10);
   });
 
-  it('is inert to reporting_date: statements differing only in that field agree everywhere else', () => {
-    const base = loadV11('l-retain-all');
-    // Three dates, not two. Every well-formed ISO yyyy-mm-dd is ten characters long, so a
-    // pair of them cannot catch an engine that reads only the string's LENGTH — the exact
-    // way this test was watched fail (the engine temporarily added `reporting_date.length`
-    // to `surplus_pence`). The third is a timestamp-shaped value: not what §20.1 asks for,
-    // but nothing in this module validates the field, and it is what a caller stamping
-    // `new Date().toISOString()` would store. Its length differs, so the sweep below is
-    // sensitive to both the value and the length of the string.
-    const dates = ['2026-06-30', '2031-12-31', '2026-06-30T09:15:00.000Z'];
-    expect(new Set(dates.map((d) => d.length)).size).toBeGreaterThan(1);
+  // R14 Task 8 (carried from Task 7's review) runs the sweep on the LEVERED, rolled-up
+  // `f-dev-finance-12mo` as well as on the all-cash `l-retain-all`: on a cash deal the
+  // reserve-headroom and undrawn-facility terms are structurally 0, so a date-dependent
+  // break hiding in either of them has nothing to move.
+  for (const stem of ['l-retain-all', 'f-dev-finance-12mo']) {
+    it(`is inert to reporting_date on ${stem}: statements differing only in that field agree everywhere else`, () => {
+      const base = loadV11(stem);
+      // Three dates, not two. Every well-formed ISO yyyy-mm-dd is ten characters long, so a
+      // pair of them cannot catch an engine that reads only the string's LENGTH — the exact
+      // way this test was watched fail (the engine temporarily added `reporting_date.length`
+      // to `surplus_pence`). The third is a timestamp-shaped value: not what §20.1 asks for,
+      // but nothing in this module validates the field, and it is what a caller stamping
+      // `new Date().toISOString()` would store. Its length differs, so the sweep below is
+      // sensitive to both the value and the length of the string.
+      const dates = ['2026-06-30', '2031-12-31', '2026-06-30T09:15:00.000Z'];
+      expect(new Set(dates.map((d) => d.length)).size).toBeGreaterThan(1);
 
-    const { schedule, model, costPlan } = runDoc(base);
-    const statements = dates.map((reporting_date) => {
-      const inputs = withMonitoring(base, mkMonitoring({ reporting_date }));
-      const s = computeMonitoringStatement(schedule, model, inputs, costPlan)!;
-      expect(s.reporting_date).toBe(reporting_date);
-      return s;
+      const { schedule, model, costPlan } = runDoc(base);
+      const statements = dates.map((reporting_date) => {
+        const inputs = withMonitoring(base, mkMonitoring({ reporting_date }));
+        const s = computeMonitoringStatement(schedule, model, inputs, costPlan)!;
+        expect(s.reporting_date).toBe(reporting_date);
+        return s;
+      });
+      for (const s of statements.slice(1)) {
+        expect({ ...s, reporting_date: '' }).toEqual({ ...statements[0], reporting_date: '' });
+      }
     });
-    for (const s of statements.slice(1)) {
-      expect({ ...s, reporting_date: '' }).toEqual({ ...statements[0], reporting_date: '' });
-    }
-  });
+  }
 
   it('reconciles the funding side on a serviced document (no interest reserve credited)', () => {
     // f-dev-finance-12mo is a levered, rolled-up document: net 60,000,000 against gross

@@ -69,16 +69,17 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     corpus emptied) this file would pass with zero parametrised cases and
     prove nothing.
 
-    The EXCLUSION BOUND is zero at this task: no v11-native fixture exists
-    yet -- Task 8 authors fixture W, the first one, and at that point this
-    literal (and the one below it) is the only thing that needs to change,
-    with a comment recording why, mirroring how test_migrate_v10.py phrased
-    its own T/U (now V) exclusion bound growing from two to three.
+    The EXCLUSION BOUND was zero at Task 6: no v11-native fixture existed yet.
+    Task 8 authors fixture W (w-monitoring-on-site.json, spec Sec 20.2), the
+    first one, so the bound is now exactly 1 -- the v11-native fixture is
+    covered by the golden suite instead. This mirrors how test_migrate_v10.py
+    phrased its own T/U exclusion bound growing from two to three (and, this
+    task, to four).
 
-    The corpus holds 18 files today (Task 2's v-exhausted-reserve.json is
-    already in it, stored at v10, so it is INCLUDED by the `<= 10` filter
-    above, not excluded); one (fixture K) is not an inputs document, leaving
-    17 in `FIXTURES`.
+    The corpus holds 19 files now (Task 2's v-exhausted-reserve.json, stored at
+    v10, is INCLUDED by the `<= 10` filter above, not excluded); one (fixture
+    K) is not an inputs document and one (fixture W) is v11-native, leaving 17
+    in `FIXTURES`.
     """
     assert len(FIXTURES) >= 17
     version_excluded = [
@@ -86,13 +87,11 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 10
     ]
-    # Task 8: change this to `== 1` and the stem list to include fixture W's
-    # stem once the first v11-native fixture lands.
-    assert len(version_excluded) == 0, (
+    assert len(version_excluded) == 1, (
         "the v11-native fixture count changed -- confirm the new fixture is meant "
         "to be outside the migration gate, then update this bound deliberately"
     )
-    assert sorted(p.stem for p in version_excluded) == []
+    assert sorted(p.stem for p in version_excluded) == ["w-monitoring-on-site"]
 
 
 def _metrics_dict(metrics) -> dict:

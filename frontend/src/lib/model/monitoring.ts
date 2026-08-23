@@ -113,12 +113,19 @@ export function originalBudgets(
  *
  * Validation (§20.3) is a separate concern and runs on inputs only: this engine sorts
  * the lines, it does not check them. Where a malformed block would otherwise make an
- * index undefined, the degradation is defined rather than defended: a category absent
- * from `lines` contributes its entered columns as zero (its original budget is still
- * the inception figure), a duplicated category takes its first occurrence, and a
- * `reporting_month` outside `1..term` simply moves the two loop bounds — a month past
- * the term forecasts no finance, a month at or below zero accumulates nothing. All
- * four are hard validation errors upstream and unreachable in a report-safe document.
+ * index undefined, the degradation is defined rather than defended:
+ *
+ * - a category absent from `lines` contributes its entered columns as zero (its
+ *   original budget is still the inception figure);
+ * - a duplicated category takes its FIRST occurrence;
+ * - a `reporting_month` outside `1..term` simply moves the two loop bounds. A month
+ *   PAST the term makes the elapsed slice the whole ledger and forecasts no finance.
+ *   A month at or below zero accumulates no elapsed figures — and its forecast slice
+ *   becomes the WHOLE term, not nothing, because `Math.max(0, m)` clamps the forecast
+ *   start back to ledger month 0.
+ *
+ * All four are hard validation errors upstream and unreachable in a report-safe
+ * document.
  */
 export function computeMonitoringStatement(
   schedule: Schedule,

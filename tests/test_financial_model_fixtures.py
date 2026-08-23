@@ -21,6 +21,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v8,
     migrate_inputs_to_v9,
     migrate_inputs_to_v10,
+    migrate_inputs_to_v11,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.validation import ValidationIssue, validate_inputs
@@ -76,6 +77,7 @@ EXPECTED_FIXTURE_STEMS = [
     "t-investment-case",
     "u-investment-case-ltv-binds",
     "v-exhausted-reserve",
+    "w-monitoring-on-site",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -296,14 +298,18 @@ _V9_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) =
 # Task 2 adds a third, v-exhausted-reserve, also stored at v10 (spec §4; v11
 # does not exist yet).
 _V10_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 10]
+# R14 Task 8: fixture W is BORN at v11 -- it is the corpus's first v11-native
+# document (spec Sec 20.2), so every migrate-to-vN parametrisation below excludes it
+# by the same design that excluded T/U/V from the v9 ones.
+_V11_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 11]
 
 
-def test_every_fixture_is_v5_v6_v7_v8_v9_or_v10_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_to_v11_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
-        + len(_V9_FIXTURES) + len(_V10_FIXTURES)
+        + len(_V9_FIXTURES) + len(_V10_FIXTURES) + len(_V11_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -316,6 +322,7 @@ def test_every_fixture_is_v5_v6_v7_v8_v9_or_v10_and_each_group_is_non_empty() ->
     assert [p.stem for p in _V10_FIXTURES] == [
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
     ]
+    assert [p.stem for p in _V11_FIXTURES] == ["w-monitoring-on-site"]
 
 
 def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
@@ -389,9 +396,11 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # same way (_RECOGNISED_VERSIONS_V6 stops at 6). R13 Task 5b widens it once
 # more to v10 -- migrate_inputs_to_v6 refuses a v10 document identically (it
 # would have to drop `vat`, `programme`'s v9 shape, `refinance`'s v10
-# narrowing AND `investment_case` to produce a v6 one).
+# narrowing AND `investment_case` to produce a v6 one). R14 Task 8 widens it
+# once more to v11 -- fixture W is v11-native and migrate_inputs_to_v6 refuses
+# it for the same reason, one version further on (`monitoring` too).
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11)
 ]
 
 
@@ -415,8 +424,9 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # migration_to_v8 below instead. R13 Task 5b widens it once more to v10 --
 # migrate_inputs_to_v7 refuses a v10 document identically (it would have to
 # drop `refinance`'s v10 narrowing and `investment_case` to produce a v7 one).
+# R14 Task 8 widens it once more to v11, for the identical reason (`monitoring`).
 _PRE_V8_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11)
 ]
 
 
@@ -1070,6 +1080,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
         "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
+        "w-monitoring-on-site",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -1089,12 +1100,17 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # fixture, V, for the same reason: it did not exist before R8 and is stored
     # at v10 because v11 does not exist yet (Task 6's gate migrates it).
     #
+    # R14 Task 8 widens it once more to include 11: fixture W is BORN at v11 for
+    # the same reason -- it did not exist before R8, and stamping it v3/v4 would
+    # additionally strip the R14 `monitoring` block and the detailed cost plan
+    # the fixture is entirely about.
+    #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
     # so it is vacuously true for every member and can never fail. Enumerating
-    # 6/7/8/9/10 keeps the check able to fail: it catches a fixture excluded for a
-    # SIXTH, unstated reason (e.g. a future non-v5..v10 fixture, or a change to
+    # 6/7/8/9/10/11 keeps the check able to fail: it catches a fixture excluded for a
+    # SEVENTH, unstated reason (e.g. a future non-v5..v11 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -1105,6 +1121,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 8
             or version == 9
             or version == 10
+            or version == 11
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -1336,6 +1353,24 @@ _NEGATIVE_CONTROLS = [
         "cost_to_complete_first_shortfall_month": 2,       # truly 1
         "cost_to_complete_max_shortfall_pence": 949_241,   # truly 949240
     }),
+    # R14 Task 8 (the same convention stated above): fixture W is the release's
+    # golden case for the Sec 20.2 monitoring statement and the cross-engine
+    # penny-agreement carrier, so its pins get pin +/- 1 controls too (see
+    # docs/financial-model/test-cases.md Sec 20.2 for the worksheet they come
+    # from). W's four R14-specific pins are held back until Task 9 wires their
+    # FLAT_KEYS mappers -- when they land, they belong here as well. Mirrors
+    # golden-fixtures.test.ts's negativeControls entry for fixture W.
+    ("w-monitoring-on-site", {
+        "gdv_pence": 45_000_001,                           # truly 45000000
+        "peak_debt_pence": 14_188_794,                     # truly 14188793 (direct key)
+        "funding_gap_pence": 1,                            # truly 0
+        "cost_to_complete_first_shortfall_month": 1,       # truly None (no shortfall)
+        "cost_to_complete_max_shortfall_pence": 1,         # truly 0
+        # The Sec 4.2(b) ratio, pinned through the dotted path rather than the
+        # flat key Task 9 adds. 11/12 is not representable, so the control is a
+        # neighbouring double rather than "the pin + 1".
+        "cost_plan.lender_eligible_ratio": 0.9166666666666667,
+    }),
 ]
 
 
@@ -1472,7 +1507,16 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # and `investment_case`). `isinstance(programmed, CalculatorInputsV9)` still
     # holds for a v10 result unchanged: CalculatorInputsV10 subclasses
     # CalculatorInputsV9, the same relationship V9/V8 already had above.
-    if inputs.inputs_version >= 10:
+    #
+    # R14 Task 8: and once more for v11 -- a v11-born fixture (W) cannot go through
+    # migrate_inputs_to_v10 either, by the identical design one version further on
+    # (migrate_inputs_to_v10 refuses a v11 document -- it would have to drop
+    # `monitoring`). `isinstance(programmed, CalculatorInputsV9)` still holds for a
+    # v11 result unchanged: CalculatorInputsV11 subclasses CalculatorInputsV10
+    # subclasses CalculatorInputsV9.
+    if inputs.inputs_version >= 11:
+        programmed = migrate_inputs_to_v11(inputs.model_dump(mode="json"))
+    elif inputs.inputs_version >= 10:
         programmed = migrate_inputs_to_v10(inputs.model_dump(mode="json"))
     elif inputs.inputs_version >= 9:
         programmed = migrate_inputs_to_v9(inputs.model_dump(mode="json"))
@@ -1674,19 +1718,35 @@ def test_the_fully_realised_profit_identity_is_not_vacuous() -> None:
     the appraisals, which is cheap beside the seven assertions each already
     carries.
 
-    What it does NOT prove: that any DETAILED-MODE document reaches the
-    identity. None does today. Fixture W (R14 Task 8) is designed to be that
-    carrier; when it lands, this witness should be tightened to assert per COST
-    MODE rather than merely corpus-wide. Mirrors invariants.test.ts's 'at least
-    one fixture/variant actually reaches the fullyRealised profit identity'."""
+    R14 Task 8 TIGHTENS it per COST MODE, which is what the Task 3 comment this
+    replaces asked for. Corpus-wide non-emptiness alone would still go quiet on
+    the thing the cap actually broke: every document that reached the identity
+    could be HEADLINE mode, and the detailed-mode arm -- the one the Sec 4.2(b)
+    ratio scales -- would prove nothing. Fixture W is the detailed-mode carrier
+    (spec Sec 20.2, funding gap 0, senior repaid whole in ledger month 17,
+    nothing retained), so the second assertion below names the mode rather than
+    the fixture: another detailed-mode document reaching the identity would keep
+    it green, and W silently drifting out of full realisation would not.
+    Mirrors invariants.test.ts's 'at least one fixture/variant actually reaches
+    the fullyRealised profit identity'."""
     reached = [
-        f"{stem}[{label}]"
+        (stem, label, run)
         for stem, label, inputs in _FIXTURE_VARIANTS
-        if _is_fully_realised(run_appraisal(inputs))
+        for run in [run_appraisal(inputs)]
+        if _is_fully_realised(run)
     ]
     assert reached != [], (
         "no fixture/variant reaches the fully-realised profit identity -- the gated "
         "assertion in TestInvariantMatrix is now vacuous across the whole corpus."
+    )
+    detailed = [
+        f"{stem}[{label}]" for stem, label, run in reached
+        if run.metrics.cost_plan.mode == "detailed"
+    ]
+    assert detailed != [], (
+        "no DETAILED-mode fixture/variant reaches the fully-realised profit identity "
+        "-- the gated assertion in TestInvariantMatrix is vacuous on exactly the cost "
+        "mode the Sec 4.2(b) lender_eligible cap applies to."
     )
 
 

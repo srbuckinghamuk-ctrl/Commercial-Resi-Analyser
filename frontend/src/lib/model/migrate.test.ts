@@ -1000,12 +1000,18 @@ describe('v10 migration -- spec §19.9', () => {
     // Sec 4's hand-derived fixture; v11 does not exist until this release's
     // later migration task), so the `<= 9` arm excludes it too and the
     // exclusion bound moves from two v10-native fixtures to three.
+    //
+    // R14 Task 8: w-monitoring-on-site.json is stored at inputs v11 (spec
+    // §20.2's hand-derived golden case). This filter is `<= 9`, so it excludes
+    // every version ABOVE 9, v11 included, and the bound moves from three to
+    // four. `fixtures.length` is unchanged -- W was never inside this gate.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(3);
+    expect(versionExcluded.length).toBe(4);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
-      't-investment-case.json', 'u-investment-case-ltv-binds.json', 'v-exhausted-reserve.json',
+      't-investment-case.json', 'u-investment-case-ltv-binds.json',
+      'v-exhausted-reserve.json', 'w-monitoring-on-site.json',
     ]);
   });
 
@@ -1233,19 +1239,22 @@ describe('v11 migration -- spec §20.1', () => {
   );
 
   it('the migration corpus is not empty and did not silently shrink', () => {
-    // The corpus holds 18 files today; one (fixture K) is not an inputs
-    // document, leaving 17 in `fixtures` (the `<= 10` filter includes
-    // v-exhausted-reserve.json, stored at v10, unlike the `<= 9` filter one
-    // migration back).
+    // The corpus holds 19 files now; one (fixture K) is not an inputs document
+    // and one (fixture W) is v11-native, leaving 17 in `fixtures` (the `<= 10`
+    // filter includes v-exhausted-reserve.json, stored at v10, unlike the
+    // `<= 9` filter one migration back).
     expect(fixtures.length).toBeGreaterThanOrEqual(17);
-    // Task 8: change this to `1` and the file-name list to include fixture
-    // W's file name once the first v11-native fixture lands, mirroring how
-    // the v10 block above records its own T/U/V exclusion bound growing.
+    // R14 Task 8: the v11-native exclusion is now real -- w-monitoring-on-site
+    // .json is `inputs_version: 11`, so the `<= 10` arm of `fixtures`'s filter
+    // excludes it and it is covered by the golden suite instead. Mirrors how
+    // the v10 block above records its own T/U/V/W exclusion bound growing.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
     );
-    expect(versionExcluded.length).toBe(0);
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([]);
+    expect(versionExcluded.length).toBe(1);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'w-monitoring-on-site.json',
+    ]);
   });
 
   // `calc_version` is constant for the whole engine run, not version-

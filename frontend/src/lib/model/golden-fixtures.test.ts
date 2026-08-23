@@ -92,6 +92,7 @@ const EXPECTED_FIXTURE_STEMS = [
   't-investment-case',
   'u-investment-case-ltv-binds',
   'v-exhausted-reserve',
+  'w-monitoring-on-site',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -275,11 +276,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // Task 2 adds a third — v-exhausted-reserve.json (spec §4) — also stored at
   // v10, since v11 does not exist until this release's later migration task.
   const v10Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 10);
+  // R14 Task 8: fixture W is BORN at v11 -- the corpus's first v11-native
+  // document (spec §20.2) -- so every migrate-to-vN loop below excludes it by
+  // the same design that excluded T/U/V from the v9 loops.
+  const v11Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 11);
 
-  it('every fixture is v5, v6, v7, v8, v9 or v10, and each group is non-empty', () => {
+  it('every fixture is v5 through v11, and each group is non-empty', () => {
     expect(
       v5Fixtures.length + v6Fixtures.length + v7Fixtures.length
-      + v8Fixtures.length + v9Fixtures.length + v10Fixtures.length,
+      + v8Fixtures.length + v9Fixtures.length + v10Fixtures.length
+      + v11Fixtures.length,
     ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
@@ -300,6 +306,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'T — retain-all with an investment case, DSCR binds',
       'U — retain-all with an investment case, LTV binds',
       'V — exhausted interest reserve, rolled-up development finance',
+    ]);
+    expect(v11Fixtures.map((f) => f.name)).toEqual([
+      'W — monitoring statement on site, detailed cost plan, one ineligible package',
     ]);
   });
 
@@ -371,8 +380,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // exclusion to v7 or v8 -- migrateInputsToV6 refuses v8 by the same design
   // (RECOGNISED_INPUTS_VERSIONS_V6 stops at 6).
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV6
-  // refuses a v10 document identically.
-  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10].includes(versionOf(f)))) {
+  // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
+  // for the identical reason one version further on (`monitoring`).
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -390,8 +400,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // document by design (RECOGNISED_INPUTS_VERSIONS_V7 stops at 7). Fixture R (v8)
   // asserts its own identity guarantee in the v8 it.each table further below instead.
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV7
-  // refuses a v10 document identically.
-  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10].includes(versionOf(f)))) {
+  // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
+  // for the identical reason one version further on (`monitoring`).
+  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11].includes(versionOf(f)))) {
     // R10: the same identity guarantee one version further on, and the one that now
     // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
@@ -449,7 +460,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -465,6 +476,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'T — retain-all with an investment case, DSCR binds',
       'U — retain-all with an investment case, LTV binds',
       'V — exhausted interest reserve, rolled-up development finance',
+      'W — monitoring statement on site, detailed cost plan, one ineligible package',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
     // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
@@ -484,18 +496,23 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // for the same reason: it did not exist before R8 and is stored at v10 because
     // v11 does not exist yet (Task 6's gate migrates it).
     //
+    // R14 Task 8 widens it once more to include 11: fixture W is BORN at v11 for
+    // the same reason — it did not exist before R8, and stamping it v3/v4 would
+    // additionally strip the R14 `monitoring` block and the detailed cost plan
+    // the fixture is entirely about.
+    //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
     // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
     // so it is vacuously true for every member and can never fail. Enumerating
-    // 6/7/8/9/10 keeps the check able to fail: it catches a fixture excluded for a
-    // SIXTH, unstated reason (e.g. a future non-v5..v10 fixture, or a change to
+    // 6/7/8/9/10/11 keeps the check able to fail: it catches a fixture excluded for
+    // a SEVENTH, unstated reason (e.g. a future non-v5..v11 fixture, or a change to
     // preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
         jurisdictionOf(fx) !== 'england_ni'
           || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8
-          || versionOf(fx) === 9 || versionOf(fx) === 10,
+          || versionOf(fx) === 9 || versionOf(fx) === 10 || versionOf(fx) === 11,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -763,6 +780,27 @@ describe('golden fixtures (shared with the Python engine)', () => {
         cost_to_complete_max_shortfall_pence: 949241,  // truly 949240
       },
     },
+    // R14 Task 8 (the same convention this block states): fixture W is the release's
+    // golden case for the §20.2 monitoring statement and the cross-engine
+    // penny-agreement carrier, so its pins get pin ± 1 controls too (see
+    // docs/financial-model/test-cases.md §20.2 for the worksheet they come from).
+    // W's four R14-specific pins are held back until Task 9 wires their FLAT_KEYS
+    // mappers -- when they land, they belong here as well. Mirrors
+    // tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS entry for W.
+    {
+      namePrefix: 'W — monitoring statement on site',
+      wrongValues: {
+        gdv_pence: 45000001,                           // truly 45000000
+        peak_debt_pence: 14188794,                     // truly 14188793 (direct key)
+        funding_gap_pence: 1,                          // truly 0
+        cost_to_complete_first_shortfall_month: 1,     // truly null (no shortfall)
+        cost_to_complete_max_shortfall_pence: 1,       // truly 0
+        // The §4.2(b) ratio, pinned through the dotted path rather than the flat key
+        // Task 9 adds. 11/12 is not representable, so the control is a neighbouring
+        // double rather than "the pin + 1".
+        'cost_plan.lender_eligible_ratio': 0.9166666666666667,
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -800,8 +838,8 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV6
   // refuses a v10 document identically (it would have to drop `vat`,
   // `programme`'s v9 shape, `refinance`'s v10 narrowing AND `investment_case`
-  // to produce a v6 one).
-  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10].includes(versionOf(f))).map((f) => f.name))(
+  // to produce a v6 one). R14 Task 8 widens it once more to v11 (`monitoring`).
+  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -866,8 +904,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // the v8 table below.
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV7
   // refuses a v10 document identically (it would have to drop `refinance`'s
-  // v10 narrowing and `investment_case` to produce a v7 one).
-  it.each(appraisalFixtures.filter((f) => ![8, 9, 10].includes(versionOf(f))).map((f) => f.name))(
+  // v10 narrowing and `investment_case` to produce a v7 one). R14 Task 8
+  // widens it once more to v11 (`monitoring`).
+  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -921,8 +960,10 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R's own identity-through-merge property is asserted separately, below.
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV8
   // refuses a v10 document identically (it would have to drop `refinance`'s
-  // v10 narrowing and `investment_case` to produce a v8 one).
-  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10].includes(versionOf(f)));
+  // v10 narrowing and `investment_case` to produce a v8 one). R14 Task 8
+  // widens it once more to v11 (`monitoring`); `preV8Fixtures` therefore stays
+  // at 12, since fixture W was never inside this gate.
+  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11].includes(versionOf(f)));
 
   it.each(preV8Fixtures.map((f) => f.name))(
     'migrating %s to v8 moves no computed figure, and writes the specified block',
