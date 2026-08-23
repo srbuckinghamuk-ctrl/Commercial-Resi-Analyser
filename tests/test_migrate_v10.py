@@ -49,6 +49,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v10,
     migrate_v9_to_v10,
 )
+from app.financial_model.types import CalculatorInputsV10
 from app.financial_model.validation import validate_inputs
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
@@ -163,32 +164,47 @@ ALIAS: dict[str, str] = {}   # no field renames this release; kept so a future
                              # assertion.
 
 
-# Property 2 and Property 3 are NOT implemented in this file.
-#
-# Property 2 ("every Sec 19.7 rule is inert on a migrated document") and
-# Property 3 ("a control document that DOES trip a v10-only rule", which is
-# what stops Property 2 being vacuously true) are a matched pair by design --
-# the brief itself says Property 3 is "the one that stops property 2 being
-# vacuous", and that R12 shipped Property 2's shape alone and had to rewrite
-# it mid-release once that was noticed.
-#
-# Checked against both engines before writing anything (`grep -n
-# "investment_case" app/financial_model/validation.py
-# frontend/src/lib/model/validation.ts`): NEITHER engine has a rule that fires
-# when `investment_case` is non-null. validation.ts:945-955 carries only a
-# narrowing guard for the nullable refinance pair, with an explicit comment
-# that "R13 Task 6 adds the real cross-field rule ... this guard is not that
-# rule." Task 6 (frontend/src/lib/model/validation.ts, not yet run as of this
-# task) is what adds Sec 19.7's twelve rules, including the
-# `stabilised_occupancy_pct` rule this file's brief asks Property 3 to fire.
-#
-# Writing Property 3 now would mean fabricating a validation rule ahead of
-# the task that owns it -- the standing instruction for this release
-# forbids inventing behaviour to make a test pass. Writing Property 2 alone,
-# without Property 3, would reproduce the exact defect shape this task exists
-# to avoid repeating. So both are deferred together to whichever task lands
-# after Sec 19.7's rules exist in both engines (Task 6 for TypeScript, plus
-# its Python mirror) -- see Task 5's report for this read spelled out.
+# Property 2 and Property 3, adopted by Task 7 (R13 spec Sec 19.9). Task 5
+# built the gate but could implement only Property 1 -- Properties 2 and 3
+# need a v10-only validation rule that actually fires, and no such rule
+# existed until Task 6 (TypeScript) and this task (Python) wrote Sec 19.7.
+# They are a matched pair by design: Property 3 is the one that stops
+# Property 2 being vacuous. Writing Property 2 alone would reproduce exactly
+# the defect shape R12 shipped and had to rewrite mid-release.
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_property_2_v10_only_rules_are_silent_on_a_migrated_document(path):
+    """Property 2 of three. Migration writes `investment_case: null`, so every
+    Sec 19.7 rule is inert on a migrated document."""
+    doc = _load_fixture(path)["inputs"]
+    issues = validate_inputs(migrate_inputs_to_v10(doc, None))
+    assert not [i for i in issues if i.field.startswith("investment_case")]
+
+
+def test_property_3_the_v10_only_rules_can_actually_fire():
+    """Property 3 of three, and the one that stops Property 2 being vacuous.
+
+    Without this, a release that wired the new rules to nothing would pass
+    Property 2 perfectly. R12 shipped exactly that shape and had to rewrite
+    the gate mid-release.
+
+    Watched red first: with Sec 19.7 rule 8's stabilised_occupancy_pct check
+    commented out in validation.py, this test fails (see Task 7's report for
+    the exact failure captured before the rule was restored)."""
+    doc = _load_fixture(FIXTURE_DIR / "l-retain-all.json")["inputs"]
+    v10 = migrate_inputs_to_v10(doc, None).model_dump()
+    v10["investment_case"] = {
+        "stabilisation": {"anchor": None, "month_offset": 3, "ramp_months": 3,
+                           "stabilised_occupancy_pct": 0.0},  # <- rule 8 violation
+        "operating_lines": [],
+        "valuation": {"cap_yield_pct": 5.5, "purchasers_costs_pct": 6.75},
+        "takeout": {"ltv_cap_pct": 65.0, "dscr_floor": 1.3, "icr_floor": 1.3,
+                    "annual_rate_pct": 6.0, "amortisation_years": 25.0,
+                    "term_years": 5.0},
+    }
+    issues = validate_inputs(CalculatorInputsV10.model_validate(v10))
+    assert "investment_case.stabilisation.stabilised_occupancy_pct" in {i.field for i in issues}
 
 
 def test_migration_writes_only_nulls_and_zeroes():

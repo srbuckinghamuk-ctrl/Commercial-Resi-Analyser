@@ -53,6 +53,9 @@ def test_gross_potential_sums_the_retained_rent_roll():
     assert gross_potential_monthly_pence(
         [{"monthly_rent_pence": 140_000}, {"monthly_rent_pence": 155_000}],
     ) == 295_000
+    # Task 3's own TS twin (investment-case.test.ts) also asserts the empty
+    # case; the Python mirror had no counterpart until Task 7 closed the gap.
+    assert gross_potential_monthly_pence([]) == 0
 
 
 def test_noi_series_books_nothing_before_stabilisation():

@@ -13,7 +13,7 @@ import {
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV7, CalculatorInputsV8,
+  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV10,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
@@ -1034,23 +1034,51 @@ describe('v10 migration -- spec §19.9', () => {
     });
   }
 
-  // Property 2 ("every §19.7 rule is inert on a migrated document") and
-  // Property 3 ("a control document that DOES trip a v10-only rule", which is
-  // what stops Property 2 being vacuously true) are NOT implemented here.
-  //
-  // Checked before writing anything: neither engine has a rule that fires
-  // when `investment_case` is non-null yet. validation.ts:945-955 carries
-  // only a narrowing guard for the nullable refinance pair, with an explicit
-  // comment that "R13 Task 6 adds the real cross-field rule ... this guard is
-  // not that rule." Task 6 (this same file, not yet run as of this task) is
-  // what adds §19.7's twelve rules.
-  //
-  // Writing Property 3 now would mean fabricating a validation rule ahead of
-  // the task that owns it. Writing Property 2 alone, without Property 3,
-  // would reproduce the exact defect shape this task exists to avoid
-  // repeating (R12 shipped that shape and had to rewrite it mid-release). So
-  // both are deferred together to the task that lands after §19.7's rules
-  // exist here -- see Task 5's report for this read spelled out in full.
+  // Property 2 and Property 3, adopted by Task 7 (R13 spec §19.9). Task 5
+  // built the gate but could implement only Property 1 — Properties 2 and 3
+  // need a v10-only validation rule that actually fires, and no such rule
+  // existed until Task 6 wrote §19.7 here. They are a matched pair by design:
+  // Property 3 is the one that stops Property 2 being vacuous. Writing
+  // Property 2 alone would reproduce exactly the defect shape R12 shipped and
+  // had to rewrite mid-release.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v10-only rule stays silent on a migrated document (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV10(inputs));
+      expect(issues.filter((i) => i.field.startsWith('investment_case'))).toEqual([]);
+    });
+  }
+
+  it('the v10-only rules can actually fire (property 3 of three)', () => {
+    // Property 3 of three, and the one that stops Property 2 being vacuous.
+    // Without this, a release that wired the new rules to nothing would pass
+    // Property 2 perfectly. R12 shipped exactly that shape and had to
+    // rewrite the gate mid-release.
+    //
+    // Watched red first: with §19.7 rule 8's stabilised_occupancy_pct check
+    // commented out in validation.ts, this test fails (see Task 7's report
+    // for the exact failure captured before the rule was restored).
+    const raw = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'l-retain-all.json'), 'utf-8'),
+    ) as FixtureFile;
+    const v10 = migrateInputsToV10(raw.inputs!);
+    const poisoned: CalculatorInputsV10 = {
+      ...v10,
+      investment_case: {
+        stabilisation: {
+          anchor: null, month_offset: 3, ramp_months: 3, stabilised_occupancy_pct: 0, // <- rule 8 violation
+        },
+        operating_lines: [],
+        valuation: { cap_yield_pct: 5.5, purchasers_costs_pct: 6.75 },
+        takeout: {
+          ltv_cap_pct: 65, dscr_floor: 1.3, icr_floor: 1.3,
+          annual_rate_pct: 6, amortisation_years: 25, term_years: 5,
+        },
+      },
+    };
+    const issues = validateInputs(poisoned);
+    expect(issues.some((i) => i.field === 'investment_case.stabilisation.stabilised_occupancy_pct')).toBe(true);
+  });
 
   it('migration writes only nulls and zeroes (spec §19.9)', () => {
     const raw = JSON.parse(

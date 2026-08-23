@@ -63,6 +63,8 @@ from app.financial_model.types import (
 from app.financial_model.validation import reconcile, validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_vat_treatments
 
+from .fixtures_investment_case import ic_doc
+
 
 def base_inputs() -> CalculatorInputsV2:
     inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
@@ -2284,3 +2286,257 @@ class TestAnchorsAndScenarioSlip:
             and "has no programme network" in i.message
             for i in e
         )
+
+
+class TestInvestmentCaseValidation:
+    """Python twin of validation.test.ts's '§19.7 investment case validation'
+    describe block (R13 Task 7). Ported from Task 6's final TS state (twelve
+    rules, nine accepting twins and five branch tests added in its fix round)
+    -- not the brief's own pseudocode, per this task's brief. Uses
+    tests/fixtures_investment_case.py's ic_doc builder throughout, never a
+    hand-authored document."""
+
+    @staticmethod
+    def _err_fields(doc) -> list[str]:
+        return [i.field for i in validate_inputs(doc) if i.severity == "error"]
+
+    def test_rule_1_rejects_an_investment_case_on_a_sell_all_route(self):
+        assert "investment_case" in self._err_fields(ic_doc({"route": "sell_all"}))
+        assert "investment_case" not in self._err_fields(ic_doc())
+
+    def test_rule_2_rejects_retain_all_with_a_rent_row_missing_for_any_unit(self):
+        # The silent-understatement trap: every unit is retained, but only
+        # listed units carry a rent, so a short list understates NOI, value
+        # and quantum with no error anywhere.
+        short = ic_doc({"drop_retained_unit": "u2"})
+        assert "exit_strategy.retained_units" in self._err_fields(short)
+        assert "exit_strategy.retained_units" not in self._err_fields(ic_doc())
+
+    def test_rule_3_rejects_a_rent_row_naming_a_unit_that_does_not_exist_accepts_its_real_unit_twin(self):
+        assert "exit_strategy.retained_units" in self._err_fields(ic_doc({"add_retained_unit_id": "ghost"}))
+        assert "exit_strategy.retained_units" not in self._err_fields(ic_doc())
+
+    def test_rule_4_rejects_a_zero_rent_roll_accepts_its_priced_twin(self):
+        assert "exit_strategy.retained_units" in self._err_fields(ic_doc({"all_rents_zero": True}))
+        assert "exit_strategy.retained_units" not in self._err_fields(ic_doc())
+
+    def test_rule_2_the_missing_unit_message_agrees_in_number_lender_facing_copy(self):
+        # drop_retained_unit removes exactly one of the five retained units,
+        # so this is the singular case; the plural form is not separately
+        # exercised (the builder only drops one at a time) but the same
+        # ternary drives both.
+        issue = next(
+            i for i in validate_inputs(ic_doc({"drop_retained_unit": "u2"}))
+            if i.field == "exit_strategy.retained_units"
+        )
+        assert issue.message.endswith("1 unit has none.")
+        assert "unit(s)" not in issue.message
+
+    def test_rule_5_rejects_a_non_null_explicit_value_alongside_an_investment_case(self):
+        assert "refinance.investment_value_pence" in self._err_fields(ic_doc({"explicit_value": 5_000_000_00}))
+
+    def test_rule_5_other_arm_rejects_a_null_explicit_value_with_no_investment_case(self):
+        assert "refinance.investment_value_pence" in self._err_fields(
+            ic_doc({"investment_case": None, "explicit_value": None}),
+        )
+
+    def test_rule_5_third_arm_a_null_refinance_alongside_an_investment_case_is_legal(self):
+        # The indicative case of Sec 19.1 -- sizing computed and reported,
+        # nothing booked.
+        assert self._err_fields(ic_doc({"refinance": None})) == []
+
+    def test_rule_6_rejects_a_stabilisation_anchor_naming_an_absent_phase_accepts_its_real_phase_twin(self):
+        assert "investment_case.stabilisation.anchor" in self._err_fields(
+            ic_doc({"anchor_phase_id": "no_such_phase"}),
+        )
+        # ic_doc()'s own default anchors to 'practical_completion', a real phase.
+        assert "investment_case.stabilisation.anchor" not in self._err_fields(ic_doc())
+
+    def test_rule_7_rejects_a_stabilisation_month_past_maturity_accepts_its_in_term_twin(self):
+        assert "investment_case.stabilisation.month_offset" in self._err_fields(
+            ic_doc({"stabilisation_month": 24, "term_months": 24}),
+        )
+        assert "investment_case.stabilisation.month_offset" not in self._err_fields(
+            ic_doc({"stabilisation_month": 23, "term_months": 24}),
+        )
+
+    def test_rule_8_rejects_an_occupancy_outside_0_100_and_a_fractional_ramp(self):
+        assert "investment_case.stabilisation.stabilised_occupancy_pct" in self._err_fields(
+            ic_doc({"occupancy_pct": 0}),
+        )
+        assert "investment_case.stabilisation.stabilised_occupancy_pct" in self._err_fields(
+            ic_doc({"occupancy_pct": 100.1}),
+        )
+        assert "investment_case.stabilisation.stabilised_occupancy_pct" not in self._err_fields(
+            ic_doc({"occupancy_pct": 100}),
+        )
+        assert "investment_case.stabilisation.ramp_months" in self._err_fields(ic_doc({"ramp_months": 2.5}))
+        # Accepting twin: same field, a valid whole-month value.
+        assert "investment_case.stabilisation.ramp_months" not in self._err_fields(ic_doc({"ramp_months": 6}))
+
+    def test_rule_9_rejects_a_non_positive_yield_accepts_a_positive_one(self):
+        assert "investment_case.valuation.cap_yield_pct" in self._err_fields(ic_doc({"cap_yield_pct": 0}))
+        assert "investment_case.valuation.cap_yield_pct" not in self._err_fields(ic_doc({"cap_yield_pct": 5}))
+
+    def test_rule_9_rejects_negative_purchasers_costs_accepts_zero(self):
+        assert "investment_case.valuation.purchasers_costs_pct" in self._err_fields(
+            ic_doc({"purchasers_costs_pct": -1}),
+        )
+        assert "investment_case.valuation.purchasers_costs_pct" not in self._err_fields(
+            ic_doc({"purchasers_costs_pct": 0}),
+        )
+
+    def test_rule_10_rejects_each_out_of_range_takeout_term_accepts_each_in_range_twin(self):
+        assert "investment_case.takeout.ltv_cap_pct" in self._err_fields(ic_doc({"ltv_cap_pct": 0}))
+        assert "investment_case.takeout.ltv_cap_pct" not in self._err_fields(ic_doc({"ltv_cap_pct": 60}))
+        assert "investment_case.takeout.dscr_floor" in self._err_fields(ic_doc({"dscr_floor": 0}))
+        assert "investment_case.takeout.dscr_floor" not in self._err_fields(ic_doc({"dscr_floor": 1.5}))
+        assert "investment_case.takeout.icr_floor" in self._err_fields(ic_doc({"icr_floor": -1}))
+        assert "investment_case.takeout.icr_floor" not in self._err_fields(ic_doc({"icr_floor": 1.5}))
+        assert "investment_case.takeout.amortisation_years" in self._err_fields(ic_doc({"amortisation_years": 0}))
+        assert "investment_case.takeout.amortisation_years" not in self._err_fields(
+            ic_doc({"amortisation_years": None}),
+        )
+
+    def test_rule_10_rejects_a_negative_take_out_rate_accepts_zero(self):
+        assert "investment_case.takeout.annual_rate_pct" in self._err_fields(ic_doc({"annual_rate_pct": -1}))
+        assert "investment_case.takeout.annual_rate_pct" not in self._err_fields(ic_doc({"annual_rate_pct": 0}))
+
+    def test_rule_10_rejects_a_non_positive_take_out_term_accepts_a_positive_one(self):
+        assert "investment_case.takeout.term_years" in self._err_fields(ic_doc({"term_years": 0}))
+        assert "investment_case.takeout.term_years" not in self._err_fields(ic_doc({"term_years": 5}))
+
+    def test_rule_11_rejects_duplicate_line_ids_and_an_over_100_percentage_line_allows_an_empty_schedule(self):
+        assert "investment_case.operating_lines" in self._err_fields(ic_doc({"duplicate_line_ids": True}))
+        assert "investment_case.operating_lines.l1.value" in self._err_fields(ic_doc({"pct_line_value": 101}))
+        assert self._err_fields(ic_doc({"lines": []})) == []
+
+    def test_rule_11_rejects_a_blank_line_id_accepts_its_named_twin(self):
+        assert "investment_case.operating_lines" in self._err_fields(ic_doc({"blank_line_id": True}))
+        assert "investment_case.operating_lines" not in self._err_fields(ic_doc())
+
+    def test_rule_11_rejects_an_unrecognised_operating_cost_code_accepts_a_real_one(self):
+        assert "investment_case.operating_lines.l1.code" in self._err_fields(ic_doc({"invalid_line_code": True}))
+        assert "investment_case.operating_lines.l1.code" not in self._err_fields(ic_doc())
+
+    def test_rule_12_rejects_an_out_of_range_arrangement_fee_percentage_even_with_no_investment_case_accepts_an_in_range_one(self):
+        assert "refinance.arrangement_fee_pct" in self._err_fields(
+            ic_doc({"investment_case": None, "arrangement_fee_pct": 101}),
+        )
+        assert "refinance.arrangement_fee_pct" not in self._err_fields(ic_doc({"investment_case": None}))
+
+
+def _extract_ts_err_message(block: str, i: int) -> tuple[str, int]:
+    """Reads one quoted string (``'``, ``"`` or `` ` ``-delimited) starting at
+    ``block[i]``, honouring a backslash escape, and returns ``(content,
+    index_after_closing_quote)``."""
+    quote = block[i]
+    j = i + 1
+    buf: list[str] = []
+    while block[j] != quote:
+        if block[j] == "\\":
+            buf.append(block[j])
+            buf.append(block[j + 1])
+            j += 2
+            continue
+        buf.append(block[j])
+        j += 1
+    return "".join(buf), j + 1
+
+
+def _extract_ts_err_messages(block: str) -> list[str]:
+    """Every ``err(field, message)`` call's raw message argument in ``block``.
+
+    The brief's own extractor (a single ``[^']+`` regex) breaks on rule 2's
+    pluralisation ternary -- a template literal containing a NESTED single
+    quote (`` `...${n === 1 ? '' : 's'}...` ``) closes the regex's character
+    class early and silently truncates the match. This walks the source
+    character-by-character instead, matching whichever quote character each
+    string actually opens with, so a different quote type nested inside is
+    just content."""
+    import re
+
+    out: list[str] = []
+    for m in re.finditer(r"\berr\(", block):
+        i = m.end()
+        while block[i] in " \n\t":
+            i += 1
+        _field, i = _extract_ts_err_message(block, i)  # the field argument, discarded
+        while block[i] in " \n\t":
+            i += 1
+        assert block[i] == ",", f"unexpected err() call shape at {block[i:i + 40]!r}"
+        i += 1
+        while block[i] in " \n\t":
+            i += 1
+        message, i = _extract_ts_err_message(block, i)
+        out.append(message)
+    return out
+
+
+def test_validation_messages_match_the_typescript_engine():
+    """Governance Sec 1: every rule added to validation.ts is added to
+    validation.py with the SAME field string and the SAME message text. This
+    test reads the TS source and requires each Sec 19.7 message to appear in
+    the Python source verbatim -- the two files drift silently otherwise, and
+    a lender reading two different wordings for one rule is the visible
+    symptom.
+
+    Two robustness fixes over the brief's own Step-4 pseudocode (both
+    necessary -- the brief's version does not run; see this task's report):
+
+    1. TS extraction is scoped to the Sec 19.7 block (``const ic = ...`` to
+       the jurisdiction block that follows it), not matched by field-prefix
+       across the WHOLE file. The brief's `err\\('(?:investment_case|
+       refinance|exit_strategy)...` pattern also catches pre-existing,
+       out-of-scope rules (e.g. the Release 3b sell-all refinance guard) that
+       this task does not own and that already carry an unrelated ASCII-hyphen
+       vs em-dash drift between the two engines -- scoping by source location
+       is both more correct (it is what "Sec 19.7 message" means) and avoids
+       failing on a pre-existing, unrelated mismatch.
+    2. Python-side matching walks the AST (`ast.parse`) instead of doing a raw
+       substring search on file text. Two things a text search gets wrong and
+       the AST does not: (a) this file wraps long messages across adjacent
+       string literals to stay under the 100-column limit -- adjacent Python
+       string literals are ONE token to the parser but not to a text search,
+       so a message split at the "wrong" point reads as absent even though it
+       is present; (b) a message containing an embedded `"` is written here as
+       either `f'...' + '"'`-free single-quoted text or an escaped `\\"`
+       inside a double-quoted string -- the AST's `Constant.value` is the
+       actual (unescaped) string, so either spelling matches, where a text
+       search over raw source only matches the one that happens not to need
+       escaping.
+    """
+    import ast
+    from pathlib import Path
+
+    ts = Path("frontend/src/lib/model/validation.ts").read_text(encoding="utf-8")
+    py = Path("app/financial_model/validation.py").read_text(encoding="utf-8")
+
+    start = ts.index("const ic = 'investment_case' in inputs")
+    end = ts.index("if ('jurisdiction' in inputs.acquisition) {")
+    ts_msgs = _extract_ts_err_messages(ts[start:end])
+    assert len(ts_msgs) >= 20, "the extractor stopped matching — fix it, do not lower the bound"
+
+    tree = ast.parse(py)
+    py_strings: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            py_strings.append(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            # The constant prefix ahead of the first `{...}` interpolation --
+            # the same slice `prefix = m.split("${")[0])` takes on the TS side.
+            prefix_parts: list[str] = []
+            for part in node.values:
+                if isinstance(part, ast.Constant):
+                    prefix_parts.append(part.value)
+                else:
+                    break
+            if prefix_parts:
+                py_strings.append("".join(prefix_parts))
+
+    for m in ts_msgs:
+        # Template literals are compared on their fixed prefix, which is what
+        # makes a reworded message fail while an interpolated id does not.
+        prefix = m.split("${")[0].strip()
+        if len(prefix) > 20:
+            assert any(prefix in s for s in py_strings), f"message missing from the Python engine: {prefix!r}"

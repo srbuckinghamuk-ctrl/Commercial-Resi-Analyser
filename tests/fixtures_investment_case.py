@@ -91,10 +91,11 @@ def ic_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV10:
     documents, snake_cased: route, refinance, investment_case, explicit_value,
     arrangement_fee_pct, drop_retained_unit, add_retained_unit_id,
     all_rents_zero, anchor_phase_id, stabilisation_month, ramp_months,
-    term_months, occupancy_pct, cap_yield_pct, ltv_cap_pct, dscr_floor,
-    icr_floor, amortisation_years, lines, duplicate_line_ids, pct_line_value,
-    opex_heavy, opex_exceeds_rent, ltv_binds, takeout_shortfall,
-    sales_sweep_pct.
+    term_months, occupancy_pct, cap_yield_pct, purchasers_costs_pct,
+    ltv_cap_pct, dscr_floor, icr_floor, annual_rate_pct, amortisation_years,
+    term_years, lines, duplicate_line_ids, pct_line_value, blank_line_id,
+    invalid_line_code, opex_heavy, opex_exceeds_rent, ltv_binds,
+    takeout_shortfall, sales_sweep_pct.
     """
     doc = migrate_inputs_to_v10(_load_fixture_inputs("t-investment-case"))
     return _apply_ic_doc_overrides(doc, overrides or {})
@@ -152,16 +153,41 @@ def _apply_ic_doc_overrides(
             ic.stabilisation.stabilised_occupancy_pct = o["occupancy_pct"]
         if "cap_yield_pct" in o:
             ic.valuation.cap_yield_pct = o["cap_yield_pct"]
+        # R13 Task 7: the five keys below (purchasers_costs_pct, annual_rate_pct,
+        # term_years, blank_line_id, invalid_line_code) were missing from this
+        # builder -- investment-case-docs.ts's IcDocOverrides already documents
+        # them, but this Python port (Task 5b) predates the TS fix round that
+        # exercises them (Task 6). Added here, mirroring the TS arms exactly,
+        # because Sec 19.7 rules 9 and 10's own out-of-range/accepting-twin
+        # tests and rule 11's two remaining branches need them and the brief
+        # for this task says "do not hand-author documents".
+        if "purchasers_costs_pct" in o:
+            ic.valuation.purchasers_costs_pct = o["purchasers_costs_pct"]
         if "ltv_cap_pct" in o:
             ic.takeout.ltv_cap_pct = o["ltv_cap_pct"]
         if "dscr_floor" in o:
             ic.takeout.dscr_floor = o["dscr_floor"]
         if "icr_floor" in o:
             ic.takeout.icr_floor = o["icr_floor"]
+        if "annual_rate_pct" in o:
+            ic.takeout.annual_rate_pct = o["annual_rate_pct"]
         if "amortisation_years" in o:
             ic.takeout.amortisation_years = o["amortisation_years"]
+        if "term_years" in o:
+            ic.takeout.term_years = o["term_years"]
         if "lines" in o:
             ic.operating_lines = list(o["lines"])
+        # Sec 19.7 rule 11's blank-id arm -- 'l1's id blanked, everything else
+        # untouched (parallel to duplicate_line_ids's single deviation).
+        if o.get("blank_line_id") and len(ic.operating_lines) >= 1:
+            ic.operating_lines[0].id = ""
+        # Sec 19.7 rule 11's OPEX_CODES membership arm -- 'l1's code set to a
+        # string no OpexCode names. Assigned directly (bypassing the Literal
+        # type, exactly as the TS builder casts at the write site) precisely
+        # to construct the malformed-at-runtime document validation must
+        # defend against.
+        if o.get("invalid_line_code") and len(ic.operating_lines) >= 1:
+            ic.operating_lines[0].code = "not_a_real_code"  # type: ignore[assignment]
         if o.get("duplicate_line_ids") and len(ic.operating_lines) >= 2:
             ic.operating_lines[1].id = ic.operating_lines[0].id
         # 'l1' is ic_doc()'s management line -- see the matching TS comment.

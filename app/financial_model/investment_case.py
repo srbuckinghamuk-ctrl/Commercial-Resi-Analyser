@@ -13,6 +13,7 @@ import math
 from typing import Any, Literal, TypedDict
 
 from .engine import money_round
+from .programme import derive_phases, is_programme_network
 
 OpexCode = Literal[
     "management", "letting_and_re_letting", "insurance",
@@ -85,6 +86,34 @@ def operating_cost_at(lines: list[Any], egr_pence: int) -> int:
         else:
             total += money_round((egr_pence * _line_field(line, "value")) / 100)
     return total
+
+
+def resolve_stabilisation_month(inputs: Any, stabilisation: Any) -> int:
+    """Sec 19.7/19.6. The stabilisation month under Sec 18.6's resolution rule.
+    Lives here, not in validation.py and not inlined in the ledger, because a
+    rule written twice is a rule that drifts. Mirror of investment-case.ts's
+    resolveStabilisationMonth -- added by the TypeScript rule 6/7 fix round and
+    ported here for the first time (Task 7): the earlier Python NOI port
+    predates its existence in either engine.
+
+    Accepts a dict or Pydantic model for both arguments, exactly like this
+    module's other helpers (`_line_field` is a generic field-name accessor
+    despite its name) -- validation.py's `inputs` is always a Pydantic model,
+    but tests are free to pass a plain dict."""
+    month_offset = _line_field(stabilisation, "month_offset")
+    anchor = _line_field(stabilisation, "anchor")
+    if anchor is None:
+        return month_offset
+    prog = inputs.get("programme") if isinstance(inputs, dict) else getattr(inputs, "programme", None)
+    if prog is None or not is_programme_network(prog):
+        return month_offset
+    d = derive_phases(prog)
+    if d.cycle is not None:
+        return month_offset
+    phase_id = _line_field(anchor, "phase_id")
+    offset_months = _line_field(anchor, "offset_months")
+    ph = d.by_id.get(phase_id)
+    return ph.start_month + offset_months if ph is not None else month_offset
 
 
 def noi_series(
