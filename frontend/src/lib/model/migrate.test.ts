@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import {
   migrateInputs, migrateV2toV3, migrateInputsToV3, isV3,
   migrateV3toV4, migrateInputsToV4,
@@ -7,6 +9,7 @@ import {
   migrateV6toV7, migrateInputsToV7,
   migrateV7toV8, migrateInputsToV8, isV8,
   migrateV8toV9, migrateInputsToV9, PACKAGE_TO_PHASE,
+  migrateV9toV10, migrateInputsToV10,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
@@ -14,6 +17,8 @@ import type {
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
+import { runAppraisal } from './index';
+import { validateInputs } from './validation';
 
 const V1_SNAPSHOT = {
   project_id: 'p1',
@@ -925,5 +930,179 @@ describe('migrateInputsToV9 merge-onto-defaults branch', () => {
     expect(merged.programme!.phases.map((p) => p.id)).toEqual(['construction', 'professional', 'statutory']);
     expect(merged.programme!.phases.map((p) => p.start_offset)).toEqual([2, 0, 1]);
     expect(merged.programme!.phases.map((p) => p.duration_months)).toEqual([9, 5, 4]);
+  });
+});
+
+// --- Release 13 (calc 2.11.0 -> 2.12.0): v9 -> v10, spec §19.9 ------------
+//
+// TS twin of tests/test_migrate_v10.py. Reads the fixture corpus with
+// readdirSync exactly as golden-fixtures.test.ts already does — see that
+// file's `FIXTURE_DIR`/`fixtureFiles`/`versionOf`.
+//
+// Same three corrections as the Python file's docstring records against the
+// brief's Step 1 text (see tests/test_migrate_v10.py for the full reasoning):
+// each fixture's `inputs_version` lives under `fx.inputs`, not at the top
+// level of the fixture file; every migration call needs `fx.inputs`, not the
+// fixture wrapper; and the numeric-identity gate is `runAppraisal(...)` +
+// `toEqual`, not a `deriveMetrics(...)` call with the wrong arity.
+describe('v10 migration -- spec §19.9', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+  interface FixtureFile {
+    name: string;
+    kind: string;
+    inputs?: Record<string, unknown>;
+  }
+
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file,
+    doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+
+  // Fixture K (kind 'sensitivity') carries no `inputs` of its own — it names a
+  // `base_fixture` instead — so it is excluded here the same way
+  // golden-fixtures.test.ts's `appraisalFixtures` already excludes it.
+  //
+  // migrateInputsToV9 refuses a v10 document by design, so the two v10-NATIVE
+  // fixtures Task 5b authors are excluded here too (via the version filter)
+  // and are covered by the golden-fixture suite instead. Both exclusions are
+  // derived from each fixture's own content, never hard-coded to filenames.
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+
+  const fixtures = fixtureDocs.filter(
+    ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) <= 9,
+  );
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    // Pinned figure does not reconcile with the brief's 15 -- see
+    // tests/test_migrate_v10.py's matching guard for the full reasoning. The
+    // corpus holds 15 files; one (fixture K) is not an inputs document, so 14
+    // is the correct bound for this task.
+    expect(fixtures.length).toBeGreaterThanOrEqual(14);
+  });
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v9 to v10`, () => {
+      const inputs = doc.inputs!;
+      const v9Run = runAppraisal(migrateInputsToV9(inputs));
+      const v10Run = runAppraisal(migrateInputsToV10(inputs));
+      expect(v10Run.metrics, `${file}: metrics moved`).toEqual(v9Run.metrics);
+      expect(v10Run.model, `${file}: a ledger figure moved`).toEqual(v9Run.model);
+      expect(v10Run.schedule, `${file}: a schedule figure moved`).toEqual(v9Run.schedule);
+    });
+  }
+
+  // Property 1 of three. Field strings may be renamed under a stated alias
+  // map; the SET of issues raised must not grow or shrink. No field renames
+  // this release; kept so a future rename has a declared home rather than a
+  // loosened assertion.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v9 validation issue has a v10 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v9Issues = new Set(
+        validateInputs(migrateInputsToV9(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v10Issues = new Set(
+        validateInputs(migrateInputsToV10(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v10Issues).toEqual(v9Issues);
+    });
+  }
+
+  // Property 2 ("every §19.7 rule is inert on a migrated document") and
+  // Property 3 ("a control document that DOES trip a v10-only rule", which is
+  // what stops Property 2 being vacuously true) are NOT implemented here.
+  //
+  // Checked before writing anything: neither engine has a rule that fires
+  // when `investment_case` is non-null yet. validation.ts:945-955 carries
+  // only a narrowing guard for the nullable refinance pair, with an explicit
+  // comment that "R13 Task 6 adds the real cross-field rule ... this guard is
+  // not that rule." Task 6 (this same file, not yet run as of this task) is
+  // what adds §19.7's twelve rules.
+  //
+  // Writing Property 3 now would mean fabricating a validation rule ahead of
+  // the task that owns it. Writing Property 2 alone, without Property 3,
+  // would reproduce the exact defect shape this task exists to avoid
+  // repeating (R12 shipped that shape and had to rewrite it mid-release). So
+  // both are deferred together to the task that lands after §19.7's rules
+  // exist here -- see Task 5's report for this read spelled out in full.
+
+  it('migration writes only nulls and zeroes (spec §19.9)', () => {
+    const raw = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
+    ) as FixtureFile;
+    const v10 = migrateInputsToV10(raw.inputs!);
+    expect(v10.investment_case).toBeNull();
+    expect(v10.refinance).not.toBeNull();
+    expect(v10.refinance!.arrangement_fee_basis).toBe('fixed_pence');
+    expect(v10.refinance!.arrangement_fee_pct).toBe(0);
+    // The explicit pair survives untouched -- this is the path that stays live.
+    expect(v10.refinance!.investment_value_pence).not.toBeNull();
+    expect(v10.refinance!.ltv_pct).not.toBeNull();
+  });
+
+  // No TS twin of Python's test_is_v2_or_later_recognises_v10: `is_v2_or_later`
+  // is a Python-only server-persistence-boundary concept (app.py's `was_v1`
+  // guard). There is no TypeScript function of that name or shape to mirror —
+  // confirmed by grep across frontend/src before writing this comment.
+});
+
+describe('migrateInputsToV10 refusals', () => {
+  it('refuses an unrecognised version — tested with 11, the neighbour', () => {
+    // R10 found a version predicate loosened from `=== 6` to `!== 5`, the literal
+    // negation of the set's own definition, which could never fail. Testing the
+    // NEIGHBOUR is what catches that shape.
+    expect(() => migrateInputsToV10({ inputs_version: 11 } as never))
+      .toThrow(/migrateInputsToV10: unrecognised inputs_version 11/);
+  });
+
+  it('refuses a document tagged v10 that fails the structural check', () => {
+    expect(() => migrateInputsToV10({ inputs_version: 10 } as never))
+      .toThrow(/fails the v10 structural check/);
+  });
+});
+
+describe('migrateInputsToV10 merge-onto-defaults branch', () => {
+  it('carries a saved, non-null investment_case through the merge branch, not the default null', () => {
+    const v10 = migrateV9toV10(migrateV8toV9(defaultV8Document()));
+    const snapshot = {
+      ...JSON.parse(JSON.stringify(v10)),
+      investment_case: {
+        stabilisation: {
+          anchor: null, month_offset: 3, ramp_months: 3, stabilised_occupancy_pct: 92,
+        },
+        operating_lines: [],
+        valuation: { cap_yield_pct: 5.5, purchasers_costs_pct: 6.75 },
+        takeout: {
+          ltv_cap_pct: 65, dscr_floor: 1.3, icr_floor: 1.3,
+          annual_rate_pct: 6, amortisation_years: 25, term_years: 5,
+        },
+      },
+    };
+    const merged = migrateInputsToV10(snapshot);
+    expect(merged.investment_case).not.toBeNull();
+    expect(merged.investment_case!.stabilisation.stabilised_occupancy_pct).toBe(92);
+  });
+
+  it('carries a saved, live refinance block through the merge branch with its own v10 fields, not defaults', () => {
+    const v10 = migrateV9toV10(migrateV8toV9(defaultV8Document()));
+    const snapshot = {
+      ...JSON.parse(JSON.stringify(v10)),
+      refinance: {
+        month_offset: 6, investment_value_pence: 5_000_000, ltv_pct: 60,
+        arrangement_fee_pence: 10_000, legal_costs_pence: 2_000, anchor: null,
+        arrangement_fee_basis: 'pct_of_quantum', arrangement_fee_pct: 1.5,
+      },
+    };
+    const merged = migrateInputsToV10(snapshot);
+    expect(merged.refinance).not.toBeNull();
+    expect(merged.refinance!.arrangement_fee_basis).toBe('pct_of_quantum');
+    expect(merged.refinance!.arrangement_fee_pct).toBe(1.5);
   });
 });
