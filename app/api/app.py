@@ -543,13 +543,18 @@ def calculate_authoritative(
             "client_mismatches": mismatches,
         },
         "calc_version": CALC_VERSION,
-        # R13 Task 18: moved 9 -> 10 with the migration boundary above (R12
-        # Task 18b moved it 8 -> 9 for the same reason; R11 Task 10 moved it
-        # 7 -> 8 before that). This is the GOVERNANCE column and it feeds
-        # audit_hash (spec Sec 13.2) -- left at 9 it would record a v9
-        # provenance for a document the same response returns as v10, which
-        # is the split R10 shipped in a different form.
-        "inputs_version": 10,
+        # Fix round 1 (spec Sec 19.9 review). R11, R12 and R13 Task 18 each
+        # bumped this GOVERNANCE column as a hand-written literal (7 -> 8 ->
+        # 9 -> 10) instead of deriving it -- the fourth release in which that
+        # literal needed a manual, easy-to-miss bump, and R13's own cutover
+        # shipped it stale (at 9) for exactly that reason before the v10-arm
+        # proof caught it. `inputs` is already a `CalculatorInputsV10` here
+        # (the `migrate_inputs_to_v10(raw)` call above), whose
+        # `inputs_version` field is `Literal[10] = 10` -- the SAME value this
+        # dict's `inputs_snapshot` already carries, for the same reason. Read
+        # off the document instead of restating it, so a future version bump
+        # cannot leave this column behind again.
+        "inputs_version": inputs.inputs_version,
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
@@ -559,7 +564,7 @@ def calculate_authoritative(
         "audit_hash": audit_hash(
             project_id=str(payload.project_id),
             calc_version=CALC_VERSION,
-            inputs_version=10,
+            inputs_version=inputs.inputs_version,
             status=status,
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),

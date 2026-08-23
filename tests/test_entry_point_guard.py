@@ -238,3 +238,16 @@ async def test_the_server_round_trips_a_v10_document_as_reconciled(_guard_client
     assert saved["inputs_snapshot"]["inputs_version"] == 10
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["investment_case"] is not None
+    # Fix round 1 (spec Sec 19.9 review): the GOVERNANCE `inputs_version`
+    # column -- distinct from `inputs_snapshot`'s own field, written by a
+    # separate line in app.py's response builder and the value `audit_hash`
+    # is keyed on -- used to be a hand-written literal, bumped by hand at
+    # each cutover and left stale at 9 on THIS release's first pass despite
+    # the migration call site itself already reading v10. It is now derived
+    # (`inputs.inputs_version`) rather than restated, so this assertion is the
+    # one that would have caught it, and the one that stops it recurring at
+    # v11: it does not hardcode "10" precisely so it keeps holding without
+    # edits after the next cutover, the same way this file's own NEWEST
+    # constant does.
+    assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
+    assert saved["inputs_version"] == 10
