@@ -79,4 +79,25 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
             if phase.id == overrides.phase_slip_phase_id:
                 phase.slip_months += overrides.phase_slip_months
 
+    # R13 spec Sec 19.8. Three levers stressing the investment case: exit_yield
+    # ADDS percentage points to the capitalisation yield; operating_cost SCALES
+    # every operating line's `value` on both bases; vacancy SUBTRACTS
+    # percentage points from stabilised occupancy, so a POSITIVE lever value is
+    # an ADVERSE move on every one of the three, matching the sign convention
+    # every other lever already uses in the tornado. Gated on presence
+    # (getattr(out, "investment_case", None) is not None), mirroring the
+    # programme arm above -- a v2-v9 document is left untouched, and a v10
+    # document whose investment_case is None is a no-op by construction.
+    investment_case = getattr(out, "investment_case", None)
+    if investment_case is not None:
+        investment_case.stabilisation.stabilised_occupancy_pct -= overrides.vacancy_adjustment_pct
+        cost_scale = 1 + overrides.operating_cost_adjustment_pct / 100
+        for line in investment_case.operating_lines:
+            scaled = line.value * cost_scale
+            # fixed_pence_per_month is money, rounded exactly like every other
+            # pence figure above; pct_of_gross_rent is a percentage, not pence,
+            # and stays exact.
+            line.value = money_round(scaled) if line.basis == "fixed_pence_per_month" else scaled
+        investment_case.valuation.cap_yield_pct += overrides.exit_yield_adjustment_pct
+
     return out

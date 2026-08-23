@@ -11,12 +11,15 @@
  *
  * Test-support only; not imported by the application.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Project, EligibilityAssessment } from '../../types';
 import type {
   CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, CalculatorInputsV7,
   CalculatorInputsV8, AcquisitionInputsV5,
 } from '../model';
-import { migrateV5toV6, migrateV6toV7, migrateV7toV8 } from '../model';
+import { migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV10 } from '../model';
+import type { CalculatorInputsV10 } from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -156,10 +159,10 @@ export function sellAllInputs(): CalculatorInputsV4 {
       { id: 'r4', description: 'Sales absorption slower than modelled', likelihood: 'medium', impact: 'medium', mitigation: 'Retain-and-refinance contingent exit' },
     ],
     scenarios: {
-      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0 },
-      upside: { label: 'Upside', gdv_adjustment_pct: 8, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0 },
-      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 12, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0 },
-      severe: { label: 'Severe', gdv_adjustment_pct: -18, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0 },
+      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
+      upside: { label: 'Upside', gdv_adjustment_pct: 8, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
+      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 12, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
+      severe: { label: 'Severe', gdv_adjustment_pct: -18, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
     },
     deal_spider: {
       storeys: 3,
@@ -497,4 +500,24 @@ export function detailedCostPlanInputs(): CalculatorInputsV8 {
       }),
     },
   });
+}
+
+/**
+ * R13 (Task 16, spec §19.6). A v10 document with a derived investment case —
+ * the release gate's standing corpus above tops out at v8, so nothing in
+ * `ROUTES` (memo-release-gate.test.ts) exercised the new NOI-bridge/value/
+ * three-caps section at all before this fixture. Built from the same
+ * hand-derived JSON fixture `icDoc()` (frontend/src/lib/model/__fixtures__/
+ * investment-case-docs.ts) uses -- retain-all, five units, DSCR binds -- but
+ * loaded independently here, not imported from that module: this suite's own
+ * doc comment above is explicit that a fixture satisfying one suite must not
+ * quietly move another's ground.
+ */
+const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+export function investmentCaseInputs(): CalculatorInputsV10 {
+  const raw = JSON.parse(
+    readFileSync(resolve(FIXTURE_DIR, 't-investment-case.json'), 'utf-8'),
+  ) as { inputs: Record<string, unknown> };
+  return migrateInputsToV10(raw.inputs);
 }

@@ -21,7 +21,8 @@ function uses(partial: Partial<MonthUses>): MonthUses {
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
   return {
-    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0, ...partial,
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0,
+    net_operating_income_pence: 0, ...partial,
   };
 }
 // R11: no test in this file exercises VAT — an inert result of the schedule's
@@ -55,9 +56,12 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       vat_pence: sum((x) => x.vat_pence),
       vat_reclaim_pence: r.reduce((a, x) => a + x.vat_reclaim_pence, 0),
       irrecoverable_vat_pence: 0,
+      net_operating_income_pence: r.reduce((a, x) => a + x.net_operating_income_pence, 0),
     },
     vat: emptyVat(u.length),
     programme: null,
+    investment_case: null,
+    resolved_exit_months: { tranches: [], refinance: null },
   };
 }
 

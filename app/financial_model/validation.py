@@ -11,6 +11,7 @@ from .acquisition_tax import regime_for, select_band_set
 from .areas import area_bridge
 from .cost_plan import compute_cost_plan
 from .engine import MonthlyModel, pct
+from .investment_case import OPEX_CODES, resolve_stabilisation_month
 from .lender_valuation import compute_lender_gdv
 from .programme import ProgrammeDerivation, derive_phases, is_legacy_programme, is_programme_network
 from .schedule import Schedule
@@ -1088,10 +1089,14 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             )
         if not isinstance(rf.month_offset, int) or rf.month_offset < 0 or rf.month_offset > term - 1:
             err("refinance", f"Refinance month must be a whole month between 0 and {term - 1}.")
-        if not math.isfinite(rf.investment_value_pence) or rf.investment_value_pence < 0:
-            err("refinance", "Refinance investment value must be zero or more.")
-        if not math.isfinite(rf.ltv_pct) or rf.ltv_pct <= 0 or rf.ltv_pct > 100:
-            err("refinance", "Refinance LTV must be greater than 0 and at most 100.")
+        # R13 spec Sec 19.7 rule 5 owns investment_value_pence/ltv_pct in full,
+        # below, in the investment-case block (it needs `investment_case` in
+        # scope, which this block does not have). The range check that used to
+        # sit here (against the generic 'refinance' field) MOVED under the
+        # specific field names, alongside the presence/absence checks it adds
+        # -- not duplicated here, which is what would leave two overlapping
+        # checks on one field. Mirrors validation.ts's identical move (see its
+        # comment at the same point in its refinance block).
         if not math.isfinite(rf.arrangement_fee_pence) or rf.arrangement_fee_pence < 0:
             err("refinance", "Refinance arrangement fee must be zero or more.")
         if not math.isfinite(rf.legal_costs_pence) or rf.legal_costs_pence < 0:
@@ -1104,6 +1109,206 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 f"Refinance anchor references phase \"{rf_anchor.phase_id}\", but there is no "
                 f"phase with id \"{rf_anchor.phase_id}\".",
             )
+
+    # R13 spec Sec 19.7. Gated on presence, not on `inputs_version >= 10`,
+    # matching every other block here: a v9 document has no `investment_case`
+    # attribute, so the whole block is skipped without a version test.
+    ic = getattr(inputs, "investment_case", None)
+    refi = getattr(inputs, "refinance", None)
+
+    # Rule 12 first: it applies whenever `refinance` is non-null, whether or
+    # not there is an investment case, so it must not sit inside the `ic is
+    # not None` arm.
+    if refi is not None and hasattr(refi, "arrangement_fee_pct"):
+        p = refi.arrangement_fee_pct
+        if not math.isfinite(p) or p < 0 or p > 100:
+            err(
+                "refinance.arrangement_fee_pct",
+                "Refinance arrangement fee percentage must be between 0 and 100.",
+            )
+
+    if ic is None:
+        # Rule 5, the other arm -- a refinance with no investment case must
+        # carry the explicit pair, or it has no quantum at all. Also carries
+        # the range check that used to live on the generic 'refinance' field
+        # above (see that block's comment) -- now under this rule's own
+        # specific field names. The v4 refinance suite's negative/out-of-range
+        # assertions still need this, so it is moved here, not dropped.
+        if refi is not None and hasattr(refi, "investment_value_pence"):
+            if refi.investment_value_pence is None:
+                err(
+                    "refinance.investment_value_pence",
+                    "Refinance investment value is required when there is no investment case.",
+                )
+            elif not math.isfinite(refi.investment_value_pence) or refi.investment_value_pence < 0:
+                err("refinance.investment_value_pence", "Refinance investment value must be zero or more.")
+            if refi.ltv_pct is None:
+                err(
+                    "refinance.ltv_pct",
+                    "Refinance LTV is required when there is no investment case.",
+                )
+            elif not math.isfinite(refi.ltv_pct) or refi.ltv_pct <= 0 or refi.ltv_pct > 100:
+                err("refinance.ltv_pct", "Refinance LTV must be greater than 0 and at most 100.")
+    else:
+        st = ic.stabilisation
+        term = max(1, math.floor(inputs.finance.term_months))
+        route = inputs.exit_strategy.route
+        rents = inputs.exit_strategy.retained_units
+        unit_ids = {u.id for u in inputs.unit_mix.units}
+
+        # Rule 1
+        if route == "sell_all":
+            err(
+                "investment_case",
+                "An investment case requires retained units — a sell-all exit retains none.",
+            )
+
+        # Rule 2 -- the silent-understatement trap of Sec 19.2. For
+        # `retain_all` EVERY unit is retained but only listed units carry a
+        # rent, so a short list understates NOI, the value and the take-out
+        # with no error anywhere.
+        if route == "retain_all":
+            rented = {r.unit_id for r in rents}
+            missing = [u for u in inputs.unit_mix.units if u.id not in rented]
+            if len(missing) > 0:
+                n = len(missing)
+                err(
+                    "exit_strategy.retained_units",
+                    "A retain-all investment case needs a rent for every unit; "
+                    f"{n} unit{'' if n == 1 else 's'} {'has' if n == 1 else 'have'} none.",
+                )
+
+        # Rule 3
+        for r in rents:
+            if r.unit_id not in unit_ids:
+                err(
+                    "exit_strategy.retained_units",
+                    f"Retained unit \"{r.unit_id}\" does not exist in the unit mix.",
+                )
+
+        # Rule 4
+        if sum(r.monthly_rent_pence for r in rents) <= 0:
+            err("exit_strategy.retained_units", "An investment case needs a rent roll greater than zero.")
+
+        # Rule 5 -- supersession is an ERROR, never a silent override (Sec 2).
+        if refi is not None and hasattr(refi, "investment_value_pence"):
+            if refi.investment_value_pence is not None:
+                err(
+                    "refinance.investment_value_pence",
+                    "Remove the explicit refinance investment value — the investment case "
+                    "derives it.",
+                )
+            if refi.ltv_pct is not None:
+                err(
+                    "refinance.ltv_pct",
+                    "Remove the explicit refinance LTV — the investment case take-out supplies "
+                    "the cap.",
+                )
+
+        # Rule 6 -- reuses Sec 18.8's anchor rule rather than restating it.
+        if st.anchor is not None:
+            net = programme if programme is not None and is_programme_network(programme) else None
+            if net is None:
+                err(
+                    "investment_case.stabilisation.anchor",
+                    "A stabilisation anchor needs a programme network to anchor to.",
+                )
+            elif not any(p.id == st.anchor.phase_id for p in net.phases):
+                err(
+                    "investment_case.stabilisation.anchor",
+                    f"Stabilisation is anchored to phase \"{st.anchor.phase_id}\", which does "
+                    "not exist.",
+                )
+
+        # Rule 7 -- a hard error on Sec 18.8's reasoning: income that never
+        # starts inside the term books zero NOI silently.
+        resolved = resolve_stabilisation_month(inputs, st)
+        if not float(resolved).is_integer() or resolved < 0 or resolved > term - 1:
+            err(
+                "investment_case.stabilisation.month_offset",
+                "Stabilisation must start within the facility term (month 0 to "
+                f"{term - 1}); it resolves to month {resolved}.",
+            )
+
+        # Rule 8
+        if (
+            not math.isfinite(st.stabilised_occupancy_pct)
+            or st.stabilised_occupancy_pct <= 0
+            or st.stabilised_occupancy_pct > 100
+        ):
+            err(
+                "investment_case.stabilisation.stabilised_occupancy_pct",
+                "Stabilised occupancy must be greater than 0% and at most 100%.",
+            )
+        if not float(st.ramp_months).is_integer() or st.ramp_months < 0:
+            err(
+                "investment_case.stabilisation.ramp_months",
+                "The stabilisation ramp must be a whole number of months, zero or more.",
+            )
+
+        # Rule 9
+        if not math.isfinite(ic.valuation.cap_yield_pct) or ic.valuation.cap_yield_pct <= 0:
+            err(
+                "investment_case.valuation.cap_yield_pct",
+                "The capitalisation yield must be greater than zero.",
+            )
+        if not math.isfinite(ic.valuation.purchasers_costs_pct) or ic.valuation.purchasers_costs_pct < 0:
+            err("investment_case.valuation.purchasers_costs_pct", "Purchaser's costs cannot be negative.")
+
+        # Rule 10
+        t = ic.takeout
+        if not math.isfinite(t.ltv_cap_pct) or t.ltv_cap_pct <= 0 or t.ltv_cap_pct > 100:
+            err(
+                "investment_case.takeout.ltv_cap_pct",
+                "The take-out LTV cap must be greater than 0% and at most 100%.",
+            )
+        if not math.isfinite(t.dscr_floor) or t.dscr_floor <= 0:
+            err("investment_case.takeout.dscr_floor", "The DSCR floor must be greater than zero.")
+        if not math.isfinite(t.icr_floor) or t.icr_floor <= 0:
+            err("investment_case.takeout.icr_floor", "The ICR floor must be greater than zero.")
+        if not math.isfinite(t.annual_rate_pct) or t.annual_rate_pct < 0:
+            err("investment_case.takeout.annual_rate_pct", "The take-out interest rate cannot be negative.")
+        if t.amortisation_years is not None and (
+            not math.isfinite(t.amortisation_years) or t.amortisation_years <= 0
+        ):
+            err(
+                "investment_case.takeout.amortisation_years",
+                "The amortisation period must be greater than zero, or empty for an "
+                "interest-only take-out.",
+            )
+        if not math.isfinite(t.term_years) or t.term_years <= 0:
+            err("investment_case.takeout.term_years", "The take-out term must be greater than zero.")
+
+        # Rule 11 -- an EMPTY schedule is legal: NOI is then gross rent.
+        # R13 fix-wave Minor 6. seen.add(line.id) used to run unconditionally,
+        # including on the blank-id branch -- so a SECOND blank-id line raised
+        # both "Every operating line needs an id" and a spurious
+        # `Duplicate operating line id ""`, because the first blank id had
+        # already been added to `seen`. Only a genuinely non-empty, non-seen
+        # id gets added.
+        seen: set[str] = set()
+        for line in ic.operating_lines:
+            if line.id.strip() == "":
+                err("investment_case.operating_lines", "Every operating line needs an id.")
+            elif line.id in seen:
+                err("investment_case.operating_lines", f"Duplicate operating line id \"{line.id}\".")
+            else:
+                seen.add(line.id)
+            if line.code not in OPEX_CODES:
+                err(
+                    f"investment_case.operating_lines.{line.id}.code",
+                    f"\"{line.code}\" is not a recognised operating cost code.",
+                )
+            if not math.isfinite(line.value) or line.value < 0:
+                err(
+                    f"investment_case.operating_lines.{line.id}.value",
+                    "An operating line value cannot be negative.",
+                )
+            elif line.basis == "pct_of_gross_rent" and line.value > 100:
+                err(
+                    f"investment_case.operating_lines.{line.id}.value",
+                    "A percentage operating line cannot exceed 100% of gross rent.",
+                )
 
     # R8 (spec Sec 14). Mirrors validation.ts's `'jurisdiction' in inputs.acquisition`
     # guard: v2-v4 documents carry none of these fields via getattr(..., None) and
@@ -1227,9 +1432,21 @@ def reconcile(
     # refinance-shortfall equity, model.totals.vat_reclaim_pence appears on NEITHER
     # side. Over the term sources therefore fund the GROSS VAT outflow even though most
     # of it returns -- which is correct, and is the treatment sale proceeds already get.
+    #
+    # R13 spec Sec 19.5: a negative-NOI month's shortfall equity is the FOURTH such
+    # exclusion, on the same terms as the refinance-shortfall slice above -- it funds
+    # an operating loss, not a project cost, so operating_shortfall_equity_pence is
+    # excluded here too. Without this, a document with any negative-NOI month would
+    # fail sources_equal_uses: the shortfall counts in full toward
+    # additional_equity_pence (correctly -- see that field's own doc comment) but has
+    # no matching entry on the uses side, since NOI never enters uses_total_pence.
     sources_total = (
         model.totals.equity_contributed_pence
-        + (model.totals.additional_equity_pence - model.totals.refinance_shortfall_equity_pence)
+        + (
+            model.totals.additional_equity_pence
+            - model.totals.refinance_shortfall_equity_pence
+            - model.totals.operating_shortfall_equity_pence
+        )
         + model.totals.funding_gap_pence  # shown explicitly, never hidden
         + model.totals.draws_pence + capitalised_fees + rolled_interest
         + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence  # proceeds applied at source

@@ -1,23 +1,64 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
 import type {
-  CalculatorInputsV9, AppraisalRun, SalesPhasingInputsV9, RefinanceInputsV9,
+  CalculatorInputsV9, CalculatorInputsV10, AppraisalRun, SalesPhasingInputsV9,
+  InvestmentCaseInputs,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
+import ExitAnchorControl from './ExitAnchorControl';
+import OperatingScheduleEditor from './OperatingScheduleEditor';
+import InvestmentCaseCard from './InvestmentCaseCard';
 
-interface Props {
-  inputs: CalculatorInputsV9;
-  onChange: (partial: Partial<CalculatorInputsV9>) => void;
+/**
+ * R13 Task 15 (spec §19.1/§19.6). `investment_case` exists on v10 only --
+ * `ExitStrategyPage` is generic over the version carrier exactly as
+ * `ProgrammePage` is over `CalculatorInputsV8 | CalculatorInputsV9` for the
+ * same reason: the real call site (`ConversionCalculator.tsx`) is still on
+ * v9 until Task 18's entry-point cutover, so this page must keep compiling
+ * against a v9 document that has no `investment_case` key at all, while also
+ * accepting a v10 document (this task's own tests, and Task 18's eventual
+ * call site) that does. `hasInvestmentCase` is the sole discriminator; the
+ * investment-case section below simply does not render for a v9 caller --
+ * there is nothing to author yet, exactly as the release note says.
+ */
+type ExitCarrier = CalculatorInputsV9 | CalculatorInputsV10;
+
+function hasInvestmentCase<T extends ExitCarrier>(x: T): x is T & CalculatorInputsV10 {
+  return 'investment_case' in x;
+}
+
+/** A blank starting policy for a case that has never been authored. Every
+ *  figure here is a placeholder the user is expected to review -- none of
+ *  it is derived from the scheme. */
+const DEFAULT_INVESTMENT_CASE: InvestmentCaseInputs = {
+  stabilisation: { anchor: null, month_offset: 0, ramp_months: 0, stabilised_occupancy_pct: 95 },
+  operating_lines: [],
+  valuation: { cap_yield_pct: 6, purchasers_costs_pct: 5.8 },
+  takeout: {
+    ltv_cap_pct: 65, dscr_floor: 1.25, icr_floor: 1.25, annual_rate_pct: 6,
+    amortisation_years: 25, term_years: 5,
+  },
+};
+
+/** A non-zero placeholder rent for a unit §19.7 rule 2 requires a row for but
+ *  that has never had one -- a real figure the user must review, not a
+ *  silent zero that would fail rule 4's rent-roll-greater-than-zero check on
+ *  a document with only ever-zero rows. */
+const DEFAULT_RETAINED_RENT_PENCE = 100_000;
+
+interface Props<T extends ExitCarrier> {
+  inputs: T;
+  onChange: (partial: Partial<T>) => void;
   run: AppraisalRun;
 }
 
-export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
+export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChange, run }: Props<T>) {
   const exit = inputs.exit_strategy;
   const units = inputs.unit_mix.units;
 
   const updateExit = useCallback(
     (partial: Partial<typeof exit>) => {
-      onChange({ exit_strategy: { ...exit, ...partial } });
+      onChange({ exit_strategy: { ...exit, ...partial } } as Partial<T>);
     },
     [exit, onChange],
   );
@@ -71,65 +112,148 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const pctSum = phasing?.tranches.reduce((a, b) => a + b.pct_of_gross_receipts, 0) ?? 0;
 
-  // R12 Task 18b. A tranche this page creates is written `anchor: null` --
-  // BIT-IDENTICAL to what `migrateV8toV9` writes on every stored tranche
-  // (spec §18.6: null means "use `month_offset`"). A tranche born here and a
-  // tranche migrated here therefore behave the same, which is the same
-  // discipline `defaultCalculatorInputsV9` keeps against the migration.
-  //
-  // This page has no control for the anchor itself: the engine reads one
-  // (§18.6) but nothing in the UI writes a non-null value yet, so every
-  // tranche and every refinance created or edited on this screen stays on its
-  // absolute month. That is a UI gap, not a silent behaviour change.
+  // R12 Task 18b / R13 Task 14. A tranche this page creates is SEEDED
+  // `anchor: null` -- BIT-IDENTICAL to what `migrateV8toV9` writes on every
+  // stored tranche (spec §18.6: null means "use `month_offset`"). A tranche
+  // born here and a tranche migrated here therefore behave the same, which
+  // is the same discipline `defaultCalculatorInputsV9` keeps against the
+  // migration. `ExitAnchorControl` below is what lets the user move a
+  // tranche or the refinance OFF that default onto a phase anchor -- it
+  // reads the programme's phases and emits `PhaseAnchor | null`; it performs
+  // no month arithmetic itself.
+  const phasesForAnchor = inputs.programme?.phases ?? [];
   const togglePhasing = () => onChange({
     sales_phasing: phasing ? null
       : { tranches: [{ month_offset: term - 1, pct_of_gross_receipts: 100, anchor: null }] },
-  });
+  } as Partial<T>);
   const updateTranche = (i: number, partial: Partial<SalesPhasingInputsV9['tranches'][number]>) => {
     if (!phasing) return;
     const tranches = phasing.tranches.map((t, j) => (j === i ? { ...t, ...partial } : t));
-    onChange({ sales_phasing: { tranches } });
+    onChange({ sales_phasing: { tranches } } as Partial<T>);
   };
   const addTranche = () => phasing && onChange({ sales_phasing: {
     tranches: [...phasing.tranches, { month_offset: term - 1, pct_of_gross_receipts: 0, anchor: null }],
-  } });
+  } } as Partial<T>);
   const removeTranche = (i: number) => phasing && onChange({ sales_phasing: {
     tranches: phasing.tranches.filter((_, j) => j !== i),
-  } });
+  } } as Partial<T>);
+
+  // R13 Task 15 (spec §19.7). Present only on a v10 document -- see
+  // `hasInvestmentCase`'s own note. `ic` is `null` both when the document
+  // cannot carry one (v9) and when it can but does not yet have one.
+  const icCarrier = hasInvestmentCase(inputs);
+  const ic: InvestmentCaseInputs | null = icCarrier ? inputs.investment_case : null;
+  const icResult = run.metrics.investment_case;
 
   // IMPORTANT 3: switching route must clear whichever block the new route makes
   // invalid, in the SAME payload — otherwise the editor hides an orphaned
   // sales_phasing/refinance block (its own validation rule rejects it) while it
   // still moves money on screen via schedule/monthly-engine. A route that keeps
   // a block valid (e.g. blended for both, or retain_all for refinance) leaves
-  // it untouched.
+  // it untouched. R13 Task 15 extends the same rule to `investment_case`
+  // (spec §19.7 rule 1): a sell-all exit retains nothing, so a non-null case
+  // is invalid the moment the route changes, not merely unreachable in the UI.
   const selectRoute = (route: ExitRoute) => {
-    const partial: Partial<CalculatorInputsV9> = { exit_strategy: { ...exit, route } };
+    const partial: Record<string, unknown> = { exit_strategy: { ...exit, route } };
     if (route === 'retain_all') partial.sales_phasing = null;
-    if (route === 'sell_all') partial.refinance = null;
-    onChange(partial);
+    if (route === 'sell_all') {
+      partial.refinance = null;
+      if (icCarrier) partial.investment_case = null;
+    }
+    onChange(partial as Partial<T>);
   };
 
-  const toggleRefinance = () => onChange({
-    refinance: refinance ? null : {
+  const toggleRefinance = () => {
+    if (refinance) {
+      onChange({ refinance: null } as Partial<T>);
+      return;
+    }
+    const base = {
       month_offset: term - 1, investment_value_pence: retainedCapitalValue,
       ltv_pct: 65, arrangement_fee_pence: 0, legal_costs_pence: 0, anchor: null,
-    },
-  });
-  const updateRefinance = (partial: Partial<RefinanceInputsV9>) => {
+    };
+    // R13 spec §19.1 gives a v10 refinance block an explicit arrangement-fee
+    // basis; spec §19.7 rule 5 then forbids setting investment_value_pence/
+    // ltv_pct at all once an investment case exists (they are DERIVED) --
+    // setting them here would be the exact silent override §2 forbids.
+    const seeded: Record<string, unknown> = icCarrier
+      ? {
+        ...base,
+        investment_value_pence: ic != null ? null : base.investment_value_pence,
+        ltv_pct: ic != null ? null : base.ltv_pct,
+        arrangement_fee_basis: 'pct_of_quantum',
+        arrangement_fee_pct: 0,
+      }
+      : base;
+    onChange({ refinance: seeded } as unknown as Partial<T>);
+  };
+  const updateRefinance = (partial: Record<string, unknown>) => {
     if (!refinance) return;
-    onChange({ refinance: { ...refinance, ...partial } });
+    onChange({ refinance: { ...refinance, ...partial } } as Partial<T>);
   };
 
   // Display-only mirror of spec §4.5's net-proceeds formula
   // (investment_value_pence * ltv_pct / 100, rounded, minus fees). The engine's
   // Schedule.refinance.net_proceeds_pence is not reachable from a prop-driven
   // preview before the block is saved and re-run, so this recomputes the same
-  // arithmetic locally for preview purposes only.
-  const refinanceNetProceeds = refinance
+  // arithmetic locally for preview purposes only. `null` (not 0) once an
+  // investment case supplies the pair instead of an explicit value -- there is
+  // no preview arithmetic to show until the case is booked and the engine
+  // sizes the take-out.
+  const refinanceNetProceeds = refinance && refinance.investment_value_pence != null
+    && refinance.ltv_pct != null
     ? Math.round(refinance.investment_value_pence * (refinance.ltv_pct / 100))
       - refinance.arrangement_fee_pence - refinance.legal_costs_pence
-    : 0;
+    : null;
+
+  // R13 Task 15 fix round 1 (spec §19.7 rule 2). Which units, under
+  // `retain_all`, lack a `retained_units` row -- the set the completeness
+  // rule requires be empty. `[]` under `blended` (rule 2 does not apply
+  // there: the retained set IS whichever units the user picked) and `[]`
+  // when there is no case to be complete about.
+  const missingRentUnitIds = exit.route === 'retain_all'
+    ? units.filter((u) => !exit.retained_units.some((r) => r.unit_id === u.id)).map((u) => u.id)
+    : [];
+
+  // R13 Task 15 fix round 1 (spec §19.7 rule 2). Two genuinely different
+  // actions share this handler -- CREATE a case from the default (only when
+  // `ic` is null) and REPAIR a rent roll that has fallen behind the unit mix
+  // (only when a row is actually missing) -- but each is wired to its own,
+  // honestly-labelled button below (`ic == null` shows "Add an investment
+  // case"; `missingRentUnitIds.length > 0` shows "Complete rent roll").
+  // Fix round 1 finding: the two used to be one always-visible "Add" button
+  // that stayed present even once a case existed and every row was already
+  // complete -- true of nothing in that state, read by a user as "nothing
+  // has been added yet". The short-circuit below means this handler is now
+  // a genuine no-op exactly when neither button would be showing, not only
+  // when the user cannot reach it: only the fields that actually change are
+  // in the emitted partial, so a repair on an already-complete document
+  // (unreachable via the UI, but a defensive guard against a future caller)
+  // emits nothing rather than an unchanged `retained_units` array. "Remove
+  // investment case", below, is the only control that nulls it back out.
+  const addInvestmentCase = () => {
+    if (!icCarrier) return;
+    const creating = ic == null;
+    const repairing = missingRentUnitIds.length > 0;
+    if (!creating && !repairing) return;
+    const partial: Record<string, unknown> = {};
+    if (creating) partial.investment_case = DEFAULT_INVESTMENT_CASE;
+    if (repairing) {
+      const existingRents = new Map(exit.retained_units.map((r) => [r.unit_id, r]));
+      partial.exit_strategy = {
+        ...exit,
+        retained_units: units.map((u) => existingRents.get(u.id)
+          ?? { unit_id: u.id, monthly_rent_pence: DEFAULT_RETAINED_RENT_PENCE }),
+      };
+    }
+    onChange(partial as Partial<T>);
+  };
+  const removeInvestmentCase = () => icCarrier
+    && onChange({ investment_case: null } as unknown as Partial<T>);
+  const updateInvestmentCase = (next: InvestmentCaseInputs) => {
+    if (!icCarrier) return;
+    onChange({ investment_case: next } as unknown as Partial<T>);
+  };
 
   return (
     <div>
@@ -216,31 +340,47 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
           {phasing && (
             <div>
               {phasing.tranches.map((t, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                  <label style={{ color: '#94a3b8', fontSize: 13, width: 50 }}>Month</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={term - 1}
-                    value={t.month_offset}
-                    onChange={(e) => updateTranche(i, { month_offset: Number(e.target.value) })}
-                    style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                  />
-                  <label style={{ color: '#94a3b8', fontSize: 13 }}>%</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={t.pct_of_gross_receipts}
-                    onChange={(e) => updateTranche(i, { pct_of_gross_receipts: Number(e.target.value) })}
-                    style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                  />
-                  <button
-                    onClick={() => removeTranche(i)}
-                    aria-label="Remove tranche"
-                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16 }}
-                  >
-                    ×
-                  </button>
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <label style={{ color: '#94a3b8', fontSize: 13, width: 50 }}>Month</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={term - 1}
+                      value={t.month_offset}
+                      onChange={(e) => updateTranche(i, { month_offset: Number(e.target.value) })}
+                      style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                    />
+                    <label style={{ color: '#94a3b8', fontSize: 13 }}>%</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={t.pct_of_gross_receipts}
+                      onChange={(e) => updateTranche(i, { pct_of_gross_receipts: Number(e.target.value) })}
+                      style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                    />
+                    <button
+                      onClick={() => removeTranche(i)}
+                      aria-label="Remove tranche"
+                      style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 62 }}>
+                    <ExitAnchorControl
+                      value={t.anchor}
+                      phases={phasesForAnchor}
+                      monthOffset={t.month_offset}
+                      onChange={(anchor) => updateTranche(i, { anchor })}
+                    />
+                    {/* R13 Task 14: the resolved month the ledger will actually use --
+                        read from schedule.resolved_exit_months (Task 8), never
+                        recomputed here. Same index as sales_phasing.tranches. */}
+                    <span style={{ color: '#64748b', fontSize: 12 }}>
+                      resolves to month {run.schedule.resolved_exit_months.tranches[i]}
+                    </span>
+                  </div>
                 </div>
               ))}
               <button
@@ -289,6 +429,7 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
                     <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
                     <input
                       type="number"
+                      disabled={ic != null}
                       value={refinance.investment_value_pence ? refinance.investment_value_pence / 100 : ''}
                       onChange={(e) => updateRefinance({ investment_value_pence: Math.round(Number(e.target.value) * 100) })}
                       style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
@@ -300,11 +441,17 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
                   <input
                     type="number"
                     step="0.1"
-                    value={refinance.ltv_pct}
+                    disabled={ic != null}
+                    value={refinance.ltv_pct ?? ''}
                     onChange={(e) => updateRefinance({ ltv_pct: Number(e.target.value) })}
                     style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                   />
                 </div>
+                {ic != null && (
+                  <span style={{ color: '#64748b', fontSize: 12, alignSelf: 'center' }}>
+                    derived from the investment case
+                  </span>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <label style={{ color: '#94a3b8', fontSize: 13 }}>Arrangement fee (£)</label>
                   <div style={{ position: 'relative', width: 140, display: 'inline-block' }}>
@@ -330,10 +477,86 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
                   </div>
                 </div>
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <ExitAnchorControl
+                  value={refinance.anchor}
+                  phases={phasesForAnchor}
+                  monthOffset={refinance.month_offset}
+                  onChange={(anchor) => updateRefinance({ anchor })}
+                />
+                {/* R13 Task 14: resolved month the ledger uses, read from
+                    schedule.resolved_exit_months (Task 8), never recomputed here. */}
+                <span style={{ color: '#64748b', fontSize: 12 }}>
+                  resolves to month {run.schedule.resolved_exit_months.refinance}
+                </span>
+              </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: 14 }}>
-                <span>Net refinance proceeds (preview)</span><span>{penceToPounds(refinanceNetProceeds)}</span>
+                <span>Net refinance proceeds (preview)</span>
+                <span>{refinanceNetProceeds == null ? 'derived once the investment case is booked' : penceToPounds(refinanceNetProceeds)}</span>
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {icCarrier && exit.route !== 'sell_all' && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <h4 style={{ color: '#94a3b8', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1, margin: 0 }}>Investment Case</h4>
+            {/* R13 Task 15 fix rounds 1-2. Each affordance below is shown
+                exactly when what it SAYS is true of the current state --
+                that is the invariant, not a count of how many render
+                together. "Add" only when there is no case yet. "Complete
+                rent roll (N missing)" only when a case exists AND a
+                retain_all row is genuinely missing. "Remove" whenever a
+                case exists, REGARDLESS of whether rows are missing --
+                repair and Remove can and do render side by side, because
+                both are true then, and Remove must stay reachable so a
+                user is never trapped with an incomplete case they cannot
+                delete. The original defect this fixed was a button whose
+                label was false of the state it was shown in ("Add" on a
+                document that already had a case), not the number of
+                buttons on screen at once. */}
+            {ic == null && (
+              <button
+                onClick={addInvestmentCase}
+                style={{ padding: '6px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                Add an investment case
+              </button>
+            )}
+            {ic != null && missingRentUnitIds.length > 0 && (
+              <button
+                onClick={addInvestmentCase}
+                style={{ padding: '6px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                {`Complete rent roll (${missingRentUnitIds.length} unit${missingRentUnitIds.length === 1 ? '' : 's'} missing)`}
+              </button>
+            )}
+            {ic != null && (
+              <button
+                onClick={removeInvestmentCase}
+                style={{ padding: '6px 16px', background: '#1e3a5f', color: '#e2e8f0', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                Remove investment case
+              </button>
+            )}
+          </div>
+
+          {ic != null && icResult != null && (
+            <>
+              <OperatingScheduleEditor
+                lines={ic.operating_lines}
+                result={icResult}
+                onChange={(lines) => updateInvestmentCase({ ...ic, operating_lines: lines })}
+              />
+              <InvestmentCaseCard
+                inputs={ic}
+                result={icResult}
+                phases={phasesForAnchor}
+                onChange={updateInvestmentCase}
+              />
+            </>
           )}
         </div>
       )}

@@ -18,13 +18,14 @@ the same calculator away from schedule.ts)."""
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .areas import developed_area_sqm
 from .cost_plan import compute_cost_plan
 from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
+from .investment_case import InvestmentCaseResult, compute_investment_case
 from .programme import DerivedPhase, derive_phases, is_legacy_programme, is_programme_network
 from .types import (
     AcquisitionInputs,
@@ -148,9 +149,18 @@ class MonthReceipts:
     agent_fee_pence: int
     selling_legal_pence: int
     # R11 spec Sec 17.6. Written back from compute_vat's months[].reclaimed_pence.
-    # Deliberately NOT part of gross_sale_pence: it is not a sale receipt, so no
-    # GDV-, LTGDV- or break-even-denominated metric may read it.
+    # Deliberately NOT part of gross_sale_pence: it is not a sale receipt. Narrowed
+    # per Sec 19.5 -- it never enters gross_sale_pence or gdv_pence, but
+    # debt-denominated metrics (LTGDV, senior break-even) legitimately move,
+    # because the debt they are computed from legitimately moves.
     vat_reclaim_pence: int
+    # R13 spec Sec 19.5. Written back from compute_investment_case's
+    # months[].noi_pence, its own class of receipt -- not a sale receipt. It
+    # never enters gross_sale_pence or gdv_pence, but debt-denominated
+    # metrics legitimately move, because the debt they are computed from
+    # legitimately moves. Zero on every month of a document whose
+    # investment_case is None.
+    net_operating_income_pence: int = 0
 
 
 @dataclass
@@ -172,6 +182,11 @@ class ScheduleTotals:
     vat_pence: int
     vat_reclaim_pence: int
     irrecoverable_vat_pence: int
+    # R13 spec Sec 19.5. The schedule-wide total of receipts[].net_operating_
+    # income_pence -- identical to investment_case.totals.noi_pence where
+    # non-None (republished, never re-derived; Sec 19's result block is
+    # computed once) and 0 on the None path.
+    net_operating_income_pence: int
 
 
 @dataclass
@@ -191,6 +206,21 @@ class ScheduleProgramme:
     finish_month: int
     critical_path: list[str]
     phases: list[DerivedPhase]
+
+
+@dataclass
+class ScheduleResolvedExitMonths:
+    """R13 spec Sec 19.6, closing Sec 18.10 limitation 9. Mirrors
+    Schedule['resolved_exit_months'] in finance-types.ts. The memo and
+    CashflowPage print a tranche's or the refinance's month; before this
+    field existed they printed the RAW month_offset while the ledger used
+    the resolved one, so an anchored tranche/refinance on a slipped
+    programme was reported at a month the ledger never used. They read this
+    instead. Empty tranches list when there is no sales_phasing input; None
+    refinance when there is no refinance input."""
+
+    tranches: list[int]
+    refinance: int | None
 
 
 @dataclass
@@ -214,6 +244,15 @@ class Schedule:
     # in build_schedule, and None-only if that network contains a cycle
     # (unreachable post-validation).
     programme: ScheduleProgramme | None = None
+    # R13 spec Sec 19.6. compute_investment_case's full result, computed once
+    # in build_schedule and republished -- never recomputed -- onto
+    # AppraisalResultV2 by Task 11 (Sec 17.12's `vat` treatment). None exactly
+    # when the INPUT investment_case is None: no block is synthesised for a
+    # document that never asked for one.
+    investment_case: InvestmentCaseResult | None = None
+    resolved_exit_months: ScheduleResolvedExitMonths = field(
+        default_factory=lambda: ScheduleResolvedExitMonths(tranches=[], refinance=None),
+    )
 
 
 @dataclass
@@ -528,18 +567,50 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
                 receipts[m].agent_fee_pence += agent
                 receipts[m].selling_legal_pence += legal
 
+    # R13 spec Sec 19.6. Computed here -- after resolve_anchor_month exists and
+    # after receipts are fully built by the exit/sales section above -- because
+    # Sec 19's whole point is that it runs in ONE direction: it must not see a
+    # ledger balance, and nothing downstream may feed a figure back into it.
+    # Placed AFTER the exit/sales section deliberately: that section's
+    # single-disposal arm does a full `receipts[term - 1] = MonthReceipts(...)`
+    # replace, which would silently wipe an NOI figure written before it.
+    investment_case = compute_investment_case(inputs, term, resolve_anchor_month)
+    if investment_case is not None:
+        for m, mo in enumerate(investment_case["months"]):
+            receipts[m].net_operating_income_pence = mo["noi_pence"]
+
     # Spec Sec 4.5 net refinance proceeds -- wired into the ledger by engine.py.
     refinance_input = getattr(inputs, "refinance", None)
     refinance = None
     if refinance_input is not None:
+        legal = refinance_input.legal_costs_pence
+        # R13 spec Sec 19.4/Sec 19.5. A non-None investment case SUPERSEDES the
+        # explicit pair: the advance is the sized quantum, and the arrangement
+        # fee may be a percentage of it. investment_value_pence/ltv_pct are
+        # None on that path (Sec 19.7 rule 5), which is why this branches
+        # rather than multiplying.
+        if investment_case is not None:
+            quantum = investment_case["takeout"]["quantum_pence"]
+            basis = getattr(refinance_input, "arrangement_fee_basis", "fixed_pence")
+            fee = (
+                money_round((quantum * getattr(refinance_input, "arrangement_fee_pct", 0)) / 100)
+                if basis == "pct_of_quantum"
+                else refinance_input.arrangement_fee_pence
+            )
+            net_proceeds_pence = quantum - fee - legal
+        else:
+            net_proceeds_pence = (
+                money_round(
+                    ((refinance_input.investment_value_pence or 0)
+                     * (refinance_input.ltv_pct or 0)) / 100,
+                )
+                - refinance_input.arrangement_fee_pence - legal
+            )
         refinance = ScheduleRefinance(
             month=min(max(0, math.floor(resolve_anchor_month(
                 getattr(refinance_input, "anchor", None), refinance_input.month_offset,
             ))), term - 1),
-            net_proceeds_pence=(
-                money_round((refinance_input.investment_value_pence * refinance_input.ltv_pct) / 100)
-                - refinance_input.arrangement_fee_pence - refinance_input.legal_costs_pence
-            ),
+            net_proceeds_pence=net_proceeds_pence,
         )
 
     selling_costs = agent_fee + selling_legal if gross_sales > 0 else 0
@@ -555,6 +626,22 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         uses[m].vat_pence = mo.incurred_pence
         receipts[m].vat_reclaim_pence = mo.reclaimed_pence
 
+    # R13 spec Sec 19.6, closing Sec 18.10 limitation 9. See
+    # ScheduleResolvedExitMonths's own docstring for the full rationale.
+    resolved_exit_months = ScheduleResolvedExitMonths(
+        tranches=(
+            []
+            if sales_phasing is None
+            else [
+                min(max(0, math.floor(resolve_anchor_month(
+                    getattr(tr, "anchor", None), tr.month_offset,
+                ))), term - 1)
+                for tr in sales_phasing.tranches
+            ]
+        ),
+        refinance=None if refinance is None else refinance.month,
+    )
+
     return Schedule(
         term_months=term,
         uses=uses,
@@ -562,6 +649,12 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         vat=vat,
         refinance=refinance,
         programme=programme_result,
+        # R13 spec Sec 19.6. None exactly when the INPUT investment_case is
+        # None -- no block is synthesised for a document that never asked for
+        # one. Computed once, above, and republished (never recomputed) onto
+        # AppraisalResultV2 by Task 11.
+        investment_case=investment_case,
+        resolved_exit_months=resolved_exit_months,
         totals=ScheduleTotals(
             acquisition_pence=acquisition_total,
             construction_pence=construction_total,
@@ -577,5 +670,12 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             vat_pence=vat.total_input_vat_pence,
             vat_reclaim_pence=vat.total_reclaimed_pence,
             irrecoverable_vat_pence=vat.total_irrecoverable_pence,
+            # R13 spec Sec 19.5/Sec 19.6. Republished from
+            # investment_case["totals"]["noi_pence"] -- the schedule-wide sum
+            # already computed once inside compute_investment_case -- never
+            # re-summed here. 0 on the None path.
+            net_operating_income_pence=(
+                0 if investment_case is None else investment_case["totals"]["noi_pence"]
+            ),
         ),
     )

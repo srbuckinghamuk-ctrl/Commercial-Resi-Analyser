@@ -29,6 +29,12 @@ from app.financial_model.types import (
 )
 from app.financial_model.validation import reconcile
 from app.financial_model.vat import VatMonthLine, VatResult
+from .fixtures_investment_case import (
+    all_four_in_one_month_doc,
+    noi_doc,
+    noi_redeems_doc,
+)
+from .fixtures_investment_case import run_ledger as run_ic_ledger
 
 DEFAULT_FACILITY_TERMS = FacilityTerms(**DEFAULT_FACILITY_TERMS_DICT)
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
@@ -97,6 +103,7 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
             vat_pence=sum_(lambda x: x.vat_pence),
             vat_reclaim_pence=sum(x.vat_reclaim_pence for x in r),
             irrecoverable_vat_pence=0,
+            net_operating_income_pence=sum(x.net_operating_income_pence for x in r),
         ),
     )
 
@@ -817,3 +824,118 @@ def test_keeps_sources_equal_to_uses_to_the_penny_with_vat_live():
         rec = reconcile(inputs, schedule, model)
         assert rec.sources_equal_uses is True, kwargs
         assert rec.debt_rollforward_ok is True, kwargs
+
+
+# --- Sec 19.5 NOI in the ledger ---------------------------------------------
+#
+# Transliteration of monthly-engine.test.ts's "Sec 19.5 NOI in the ledger"
+# describe block. Every pinned figure is hand-derived against noi_doc()/
+# noi_redeems_doc()/all_four_in_one_month_doc()'s ACTUAL schedule output (via
+# a throwaway inspection script), never against this task's own new NOI
+# block -- see task-9-report.md for the full derivation. Two of the plan
+# brief's own illustrative numbers proved wrong and are corrected here exactly
+# as in the TS file: the month-8 NOI is 93,720 pence (not 335,000), and
+# all_four_in_one_month_doc's four-flow month is month 6 of its 12-month term
+# (not month 18, which does not exist in that document), and
+# noi_redeems_doc's first full redemption is month 2 (not month 9).
+
+def test_applies_noi_in_full_ignoring_sales_sweep_pct():
+    # sales_sweep_pct governs SALE receipts. NOI is income from an asset the
+    # lender has security over; it is applied whole, like the VAT reclaim.
+    m = run_ic_ledger(noi_doc({"sales_sweep_pct": 50}))
+    month = m.months[8]
+    assert month.net_operating_income_pence == 93_720
+    assert month.repayment_pence == 93_720
+    assert month.distribution_pence == 0
+
+
+def test_reduces_peak_debt_terminal_balance_and_total_interest_absolute():
+    with_noi = run_ic_ledger(noi_doc({}))
+    without = run_ic_ledger(noi_doc({"all_rents_zero": True}))
+    # Hand-derived (see task-9-report.md): draws/capitalised fees are provably
+    # NOI-independent for this document (the gross facility headroom is never
+    # binding), so the "without" figures equal what the pre-Task-9 ledger
+    # already computes for this document. The "withNoi" figures are the
+    # month-by-month recurrence walked by hand against the real per-month NOI
+    # (93,720 pence/month from month 1) and draw schedule. ABSOLUTE figures,
+    # not directions -- a ledger applying NOI at a hundredth of its size would
+    # still pass a "less than" assertion.
+    assert with_noi.peak_debt_pence == 59_434_134
+    assert without.peak_debt_pence == 61_661_679
+    assert with_noi.totals.interest_pence == 6_307_574
+    assert without.totals.interest_pence == 6_473_279
+
+
+def test_runs_in_the_stated_within_month_order():
+    # All four in month 6 of this document's 12-month term (not month 18 --
+    # all_four_in_one_month_doc's own doc comment says "converging in month 6").
+    # Hand-derived by walking VAT reclaim (6,000,000), NOI (135,960), sale
+    # (gross 140,000,000, fees 2,100,000 + 100,000, 100% sweep) and refinance
+    # (net proceeds 15,938,766, schedule-level) in the stated order.
+    m = run_ic_ledger(all_four_in_one_month_doc())
+    assert m.months[6].closing_balance_pence == 0
+    assert m.months[6].repayment_pence == 46_257_441
+    assert m.months[6].exit_fee_pence == 1_700_000
+
+
+def test_funds_a_negative_noi_month_from_additional_equity_never_a_draw():
+    m = run_ic_ledger(noi_doc({"opex_heavy": True}))
+    month = m.months[8]
+    # opex_heavy scales every operating line x5, giving a constant -107,400
+    # pence/month from month 1 (rent stays fixed; costs exceed it). The total
+    # is 23 such months (1..23 of this 24-month term) at -107,400 each.
+    assert month.net_operating_income_pence < 0
+    assert month.draw_pence == 0
+    assert month.additional_equity_pence == 107_400
+    assert m.totals.operating_shortfall_equity_pence == 2_470_200
+
+
+def test_charges_the_exit_fee_once_when_noi_achieves_first_full_redemption():
+    # This document's facility is tiny (net 8,000,000) relative to its NOI
+    # (347,160/month once stabilised), and NOI first exceeds balance + fee in
+    # month 2 -- not month 9.
+    m = run_ic_ledger(noi_redeems_doc())
+    fee_months = [x for x in m.months if x.exit_fee_pence > 0]
+    assert len(fee_months) == 1
+    assert fee_months[0].month == 2
+
+
+def test_excludes_the_operating_shortfall_from_sec7_sources_pinned_identity():
+    # Fix round 1 finding: the reconcile() exclusion added alongside the NOI
+    # block shipped with zero coverage. This document (opex_heavy) drives its
+    # ENTIRE additional_equity_pence from the operating shortfall alone
+    # (refinance_shortfall_equity_pence is 0 -- no refinance, and
+    # interest_type: rolled_up means interest service never contributes
+    # additional equity either), so it is the sharpest available document for
+    # pinning that the exclusion is real: if a future change stopped
+    # excluding operating_shortfall_equity_pence from Sec 7's sources total,
+    # sources would overshoot uses by exactly this figure and
+    # sources_equal_uses would flip false.
+    doc = noi_doc({"opex_heavy": True})
+    schedule = build_schedule(doc)
+    model = run_ledger(schedule, doc.finance, doc.equity_sources)
+
+    # Hand-derived (task-9-report.md): opex_heavy gives a constant -107,400
+    # pence/month for 23 months (months 1..23 of this 24-month term):
+    # 107,400 x 23 = 2,470,200.
+    assert model.totals.operating_shortfall_equity_pence == 2_470_200
+    assert model.totals.additional_equity_pence == 2_470_200
+    assert model.totals.refinance_shortfall_equity_pence == 0
+
+    # The uses-side total, independently summed from the ledger's own
+    # exposed per-month/total fields via Sec 7's stated formula (never read
+    # from reconcile()'s private sources_total, which isn't exposed) --
+    # pinning the actual number, not just that some boolean is true.
+    serviced_interest = sum(mo.interest_serviced_pence for mo in model.months)
+    rolled_interest = sum(mo.interest_capitalised_pence for mo in model.months)
+    uses_total = (
+        sum(mo.uses_total_pence for mo in model.months)
+        + serviced_interest + rolled_interest + model.totals.capitalised_fees_pence
+        + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence
+    )
+    assert uses_total == 99_071_679
+
+    inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+    rec = reconcile(inputs, schedule, model)
+    assert rec.sources_equal_uses is True
+    assert rec.debt_rollforward_ok is True

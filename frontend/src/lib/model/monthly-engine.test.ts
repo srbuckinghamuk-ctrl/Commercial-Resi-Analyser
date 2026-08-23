@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 import { runLedger } from './monthly-engine';
 import { buildSchedule } from './schedule';
 import { reconcile } from './validation';
+import {
+  noiDoc, allFourInOneMonthDoc, noiRedeemsDoc, runLedger as runIcLedger,
+} from './__fixtures__/investment-case-docs';
 import { DEFAULT_FACILITY_TERMS, defaultCalculatorInputsV2 } from '../conversion-defaults';
 import type {
   CalculatorInputsV3, EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule,
@@ -18,7 +21,8 @@ function uses(partial: Partial<MonthUses>): MonthUses {
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
   return {
-    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0, ...partial,
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0,
+    net_operating_income_pence: 0, ...partial,
   };
 }
 // R11: the VAT block itself is never read by the ledger — the ledger reads only
@@ -54,9 +58,12 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       vat_pence: sum((x) => x.vat_pence),
       vat_reclaim_pence: r.reduce((a, x) => a + x.vat_reclaim_pence, 0),
       irrecoverable_vat_pence: 0,
+      net_operating_income_pence: r.reduce((a, x) => a + x.net_operating_income_pence, 0),
     },
     vat: emptyVat(u.length),
     programme: null,
+    investment_case: null,
+    resolved_exit_months: { tranches: [], refinance: null },
   };
 }
 
@@ -721,5 +728,129 @@ describe('VAT reclaims: sweep and redemption (spec §17.6)', () => {
       expect(rec.sources_equal_uses).toBe(true);
       expect(rec.debt_rollforward_ok).toBe(true);
     }
+  });
+});
+
+describe('§19.5 NOI in the ledger', () => {
+  // Every pinned figure below is hand-derived against noiDoc()/noiRedeemsDoc()/
+  // allFourInOneMonthDoc()'s ACTUAL schedule output (via a throwaway inspection
+  // script, since deriving 24-36 months of compounding rolled-up interest and
+  // draws by literal mental arithmetic is not reliable) — never against this
+  // task's own new NOI block. See task-9-report.md for the full derivation,
+  // including two corrections to the brief's own illustrative numbers: the
+  // month-8 NOI here is 93,720 pence (not 335,000), and allFourInOneMonthDoc's
+  // four-flow month is month 6 of its 12-month term (not month 18, which does
+  // not exist in that document), and noiRedeemsDoc's first full redemption is
+  // month 2 (not month 9).
+
+  it('applies NOI in full to the facility, ignoring sales_sweep_pct', () => {
+    // sales_sweep_pct governs SALE receipts. NOI is income from an asset the
+    // lender has security over; it is applied whole, like the VAT reclaim.
+    // Would NOT catch a deleted NOI block: repayment_pence would be 0, not
+    // 93,720, so this test fails hard without the feature.
+    const m = runIcLedger(noiDoc({ salesSweepPct: 50 }));
+    const month = m.months[8];
+    expect(month.net_operating_income_pence).toBe(93_720);
+    expect(month.repayment_pence).toBe(93_720);
+    expect(month.distribution_pence).toBe(0);
+  });
+
+  it('reduces peak debt, terminal balance and total interest — on ABSOLUTE figures', () => {
+    const withNoi = runIcLedger(noiDoc({}));
+    const without = runIcLedger(noiDoc({ allRentsZero: true }));
+    // Hand-derived (see task-9-report.md): draws/capitalised fees are provably
+    // NOI-independent for this document (the gross facility headroom is never
+    // binding — reducing the balance via NOI only widens headroom, never
+    // narrows it), so the "without" figures equal what the pre-Task-9 ledger
+    // already computes for this document (NOI never touches balance either
+    // way when it is <= 0 every month). The "withNoi" figures are the
+    // month-by-month recurrence — draw/interest/NOI-repayment — walked by
+    // hand against the real per-month NOI (93,720/month from month 1) and
+    // draw schedule. ABSOLUTE figures, not directions: `toBeLessThan` would
+    // pass on a ledger that applied NOI at a hundredth of its size, which is
+    // precisely the class of defect a sweep guard exists to catch.
+    expect(withNoi.peak_debt_pence).toBe(59_434_134);
+    expect(without.peak_debt_pence).toBe(61_661_679);
+    expect(withNoi.totals.interest_pence).toBe(6_307_574);
+    expect(without.totals.interest_pence).toBe(6_473_279);
+  });
+
+  it('runs in the stated within-month order: VAT reclaim, NOI, sale, refinance', () => {
+    // All four in month 6 of this document's 12-month term (not month 18 —
+    // allFourInOneMonthDoc's own doc comment says "converging in month 6").
+    // Hand-derived (see task-9-report.md) by walking the four flows in the
+    // stated order against the document's real VAT reclaim (6,000,000), NOI
+    // (135,960), sale (gross 140,000,000, fees 2,100,000 + 100,000, 100%
+    // sweep) and refinance (net proceeds 15,938,766, schedule-level and
+    // unaffected by the ledger). If the order changes these numbers change --
+    // which is the entire point of pinning them rather than asserting the
+    // balance alone.
+    const m = runIcLedger(allFourInOneMonthDoc());
+    expect(m.months[6].closing_balance_pence).toBe(0);
+    expect(m.months[6].repayment_pence).toBe(46_257_441);
+    expect(m.months[6].exit_fee_pence).toBe(1_700_000);
+  });
+
+  it('funds a negative NOI month from additional equity, never a facility draw', () => {
+    const m = runIcLedger(noiDoc({ opexHeavy: true }));
+    const month = m.months[8];
+    // Hand-derived: opexHeavy scales every operating line x5, giving a
+    // constant -107,400 pence/month from month 1 (rent stays fixed; costs
+    // exceed it). additional_equity_pence at month 8 is the whole shortfall —
+    // rolled-up interest never itself draws additional equity, so nothing else
+    // contributes this month. The total is 23 such months (1..23 of this
+    // 24-month term) at -107,400 each = 2,470,200.
+    expect(month.net_operating_income_pence).toBeLessThan(0);
+    expect(month.draw_pence).toBe(0);
+    expect(month.additional_equity_pence).toBe(107_400);
+    expect(m.totals.operating_shortfall_equity_pence).toBe(2_470_200);
+  });
+
+  it('charges the exit fee once when NOI achieves the first full redemption', () => {
+    // Hand-derived (see task-9-report.md): this document's facility is tiny
+    // (net 8,000,000) relative to its NOI (347,160/month once stabilised),
+    // and NOI first exceeds balance + fee in month 2 — not month 9.
+    const m = runIcLedger(noiRedeemsDoc());
+    const feeMonths = m.months.filter((x) => x.exit_fee_pence > 0);
+    expect(feeMonths).toHaveLength(1);
+    expect(feeMonths[0].month).toBe(2);
+  });
+
+  it('excludes the operating shortfall from §7 sources — pinned identity, not just the boolean', () => {
+    // Fix round 1 finding: the reconcile() exclusion added alongside the NOI
+    // block shipped with zero coverage. This document (opexHeavy) drives its
+    // ENTIRE additional_equity_pence from the operating shortfall alone
+    // (refinance_shortfall_equity_pence is 0 here — no refinance, and
+    // interest_type: rolled_up means interest service never contributes
+    // additional equity either), so it is the sharpest available document for
+    // pinning that the exclusion is real: if a future change stopped
+    // excluding operating_shortfall_equity_pence from §7's sources total,
+    // sources would overshoot uses by exactly this figure and
+    // sources_equal_uses would flip false.
+    const doc = noiDoc({ opexHeavy: true });
+    const schedule = buildSchedule(doc);
+    const model = runLedger(schedule, doc.finance, doc.equity_sources);
+
+    // Hand-derived (task-9-report.md): opexHeavy gives a constant -107,400
+    // pence/month for 23 months (months 1..23 of this 24-month term):
+    // 107,400 × 23 = 2,470,200.
+    expect(model.totals.operating_shortfall_equity_pence).toBe(2_470_200);
+    expect(model.totals.additional_equity_pence).toBe(2_470_200);
+    expect(model.totals.refinance_shortfall_equity_pence).toBe(0);
+
+    // The uses-side total, independently summed from the ledger's own
+    // exposed per-month/total fields via §7's stated formula (never read
+    // from reconcile()'s private sourcesTotal, which isn't exposed) —
+    // pinning the actual number, not just that some boolean is true.
+    const servicedInterest = model.months.reduce((s, mo) => s + mo.interest_serviced_pence, 0);
+    const rolledInterest = model.months.reduce((s, mo) => s + mo.interest_capitalised_pence, 0);
+    const usesTotal = model.months.reduce((s, mo) => s + mo.uses_total_pence, 0)
+      + servicedInterest + rolledInterest + model.totals.capitalised_fees_pence
+      + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence;
+    expect(usesTotal).toBe(99_071_679);
+
+    const rec = reconcile(defaultCalculatorInputsV2(), schedule, model);
+    expect(rec.sources_equal_uses).toBe(true);
+    expect(rec.debt_rollforward_ok).toBe(true);
   });
 });

@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.11.0`.
-**Date:** 22 August 2026
+**Status:** Authoritative. Calculation version `2.12.0`.
+**Date:** 23 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.12.0** — the investment case (§19, R13), with inputs v10 adding a top-level `investment_case: InvestmentCase | null` beside `programme`, `vat` and `cost_plan`: a stabilisation schedule (an occupancy ramp reusing §18.6's `PhaseAnchor` resolution), a user-managed schedule of operating lines (a ten-value `OpexCode` enum plus `other`, each fixed pence or a percent of effective gross rent), a net-initial-yield valuation, and a take-out sized as `min(LTV cap, DSCR cap, ICR cap)` with the binding constraint named and all three caps published. `refinance` narrows `investment_value_pence` and `ltv_pct` to nullable — non-null when `investment_case` is null (today's explicit path, unchanged), both null when it is not (§19.1) — and gains an `arrangement_fee_basis`/`arrangement_fee_pct` pair for a percentage arrangement fee on the derived quantum. NOI enters the ledger as its own signed receipt class, applied in full to the senior facility, in the fixed within-month order VAT reclaim → NOI → sales sweep → refinance (§19.5); it is never a sale receipt, so it never enters `gross_sale_pence` or GDV, and it never enters §3 profit — but it legitimately moves every debt-denominated metric (LTGDV, senior break-even, profit-on-GDV) by repaying the facility early, same as any other debt-reducing receipt. `Schedule` gains `investment_case: InvestmentCaseResult | null` (republished, never recomputed) and `resolved_exit_months`, which closes §18.10 limitation 9: the investment memo and `CashflowPage` now read the resolved tranche/refinance month instead of the raw `month_offset` (Task 12; Task 14 shipped the anchor UI control, not this reporting fix — see §18.10 limitation 9's rewrite). §12.1's lever table goes from five levers to eight (`exit_yield`, `operating_cost`, `vacancy`), still disjoint and order-independent; §12.2 gains the take-out carve-out — the take-out is not the committed facility and is re-solved in every cell, deliberately, or the three new levers would be inert. Cell validity for the three degenerate cases (non-positive yield, non-positive occupancy, a negative operating-line value) is existing validation (§19.7 rules 8, 9, 11), not new sensitivity logic — `measure()` already routes every levered document through validation before appraising (§12.7). The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties (§19.9), following §18.7's corrected shape from the start. §4.5 is **superseded for the `investment_case != null` case**; its explicit `investment_value_pence × ltv_pct` path is unchanged and remains live. **No existing computed value changed** — `investment_case = null` is bit-identical to calc 2.11.0, corpus-wide, in both engines.
 - **2.11.0** — the dated, dependent programme (§18, R12), with inputs v9 carrying `programme` as a **precedence network**: phases with an `id`, a fourteen-value `code` enum plus `other`, a signed `slip_months`, an earliest-start floor `start_offset` and `FS`/`SS` predecessors with lags; a derivation that computes every start, a backward pass that reports total float and the critical path; cost lines that resolve to a phase (`line.phase_id ?? category_phase_ids[line.category]`, §18.5) and spend over that phase's derived window; sale tranches and `refinance` that may **anchor** to a phase; a fifth sensitivity lever, `phase_slip` (§12.1, §18.9); and a hard `programme.overrun` error where the derived finish passes maturity — never a clamp (§18.8). **No existing computed value changed** — `programme = null` remains the auto-window path of §6, bit-identical to calc 2.10.0, and the v8 three-package shape migrates to three predecessor-free phases whose derived windows *are* the old windows by construction rather than by arithmetic coincidence (§18.7). §6.1 is **superseded for the explicit-programme case** and §6's auto-window text is unchanged and remains live. The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties rather than one set equality (§18.7), because §18.8's overrun rule has no v8 counterpart at all. §12.1's lever table goes from four levers to five, still writing to disjoint fields and still order-independent; §12.6 gains the `phase_id` target rules; §16 gains the phase-resolution note for packages and fee lines. Spreading is per **(phase, category) bucket**, not per line — the auto and legacy arms spread a category total exactly once, and bucketing is what keeps penny-identity true by construction (§18.5, §18.10 limitation 7).
 - **2.10.0** — VAT and TOGC (§17, R11), with inputs v8 carrying a `vat` block: registration, a return cycle (monthly or quarterly, with a repayment lag), six fixed per-category treatment rows (rate, recoverable proportion, recovery basis, evidence status) resolved through one accessor, and a purchase/TOGC block that decides whether acquisition VAT is chargeable and whether the acquisition tax base is VAT-inclusive. **No existing computed value changed, with one named exception (ruling R46)** — migration writes `registered: false`, six zeroed treatment rows and an inert purchase block, which drives every resolved rate to zero and the chargeable consideration back to the exclusive price, so all twelve-plus golden fixtures (now thirteen, with the VAT worked cycle pinned as fixture R) reproduce every reported metric to the penny, and the gate is numeric **and** structural for the same reason §16.3's was (§17.11). §3.8 gains `irrecoverable_vat_pence` as a cost-before-finance component; §7 gains the VAT reclaim as a third flow excluded from both sides of the sources-and-uses identity, alongside sale-proceeds repayments and refinance-shortfall equity; §16.3's contingency base is now the package tag, mode-dependently, with the input fields `basis`/`package_ids` deleted (the *result* shape is unchanged). **The one figure this release does move**: §17.8 makes the package's `contingency_class` tag live, so a detailed-mode document carrying a non-zero percentage on `existing_building` or `abnormal` while no package carries that tag now resolves that class's base to zero, where before every class resolved against the whole base build regardless of tag — the same reachable shape §17.8's planted-divergence guard exists to catch, here on the validation side rather than the numeric one. §17.9 adds a **warning** naming it (not an error — see ruling R46, and the R38/R39 regression gate this does not touch, since it reads `cost_plan` which is unchanged either side of the v7→v8 boundary), and no fixture in the corpus is in that shape. §16.9 loses the `contingency_class`-not-live limitation (now resolved) and the "No VAT" limitation (now superseded by §17.13's own list, which is where a VAT limitation belongs from this release on).
 - **2.9.0** — cost plan modes (§16, R10), with inputs v7 carrying a `cost_plan` block: a `headline` mode (rate × area, unchanged) and a mutually exclusive `detailed` mode (a priced package schedule), three named contingency classes each rounding independently against its own resolved base, and professional/statutory fee lines carrying a fixed or percentage basis. **No existing computed value changed** — migration copies `contingency_pct` into the `general` class on the `all_packages` basis and the eight legacy fee fields into `fixed` fee lines, and both engines route every document, pre- and post-migration, through the same `cost_plan` engine, so "all twelve golden fixtures identical to the penny" is an assertion that could fail rather than one that is structurally blind (§16, following R9's precedent). §3.4's contingency term is replaced with the three-class formula; §3.5/§3.6 are replaced with the fee-line formulation and its two base definitions; §1.6 records inputs v7. §13.2 gains a stated limitation: a stored appraisal not yet re-saved across this boundary prints an `inputs_version` beside an `audit_hash` computed under the prior version, so the hash cannot be recomputed from the printed fields for that row.
@@ -54,7 +55,7 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
 
 Calc 2.7.0 (R8) adds §14's jurisdiction-aware acquisition tax. **It changes no existing computed value.** Every document that existed before it was implicitly an England/NI one, the migration to inputs v5 stamps exactly that, and the England/NI non-residential bands have not moved since 17 March 2016 — so every stored appraisal reproduces its figures to the penny. What 2.7.0 changes is what a *non*-English appraisal computes (previously wrong) and what every report *says* about its own tax basis (§14.6).
 
@@ -346,7 +347,14 @@ the residue absorption above regardless). A non-null block with
 `route = 'retain_all'` is an error — tranches apply to the sold portion and a
 retain-all exit has none (§2: never silently ignored).
 
-#### 4.5 Refinance event [R3b — calc 2.3.0]
+#### 4.5 Refinance event [R3b — calc 2.3.0] [superseded for `investment_case != null` — §19.4, R13, calc 2.12.0]
+
+**This section is superseded when `investment_case` is non-null: §19.4 derives
+the take-out quantum from NOI and the three caps, and §19.4's "the refinance
+event" subsection restates this section's mechanics — the sweep-first order,
+the once-only exit fee, the shortfall-to-equity treatment — against that
+derived quantum instead of the explicit one below. Where `investment_case` is
+null, this section is unchanged and remains the live path, byte-identical.**
 
 Inputs v4's `refinance` block models a refinance of the retained portion at
 `month_offset`. `null` (the migration default) = no event — byte-identical to
@@ -596,7 +604,7 @@ the three named scenarios (`base`, `upside`, `downside`), which share its lever 
 
 ### 12.1 Levers
 
-A **lever** is one named adjustment applied to an inputs document. There are five:
+A **lever** is one named adjustment applied to an inputs document. There are eight:
 
 | Lever | Unit | Effect on the inputs document |
 |---|---|---|
@@ -605,13 +613,33 @@ A **lever** is one named adjustment applied to an inputs document. There are fiv
 | `timeline` | months | adds to `finance.term_months` |
 | `interest_rate` | percentage points | adds to `finance.annual_interest_rate_pct` |
 | `phase_slip` [R12 — calc 2.11.0] | months | adds to `programme.phases[<id>].slip_months` for a **named** phase (§18.9) |
+| `exit_yield` [R13 — calc 2.12.0] | percentage points | adds to `investment_case.valuation.cap_yield_pct` (§19.8) |
+| `operating_cost` [R13 — calc 2.12.0] | percent | scales every `investment_case.operating_lines[].value` (§19.8) |
+| `vacancy` [R13 — calc 2.12.0] | percentage points | **subtracts** from `investment_case.stabilisation.stabilised_occupancy_pct` (§19.8) |
 
 A percent lever of `p` multiplies its target by `(1 + p/100)` and rounds half-up to
 integer pence (§1.1). A months or percentage-point lever adds its value directly.
+`vacancy` is the one exception to "adds": it subtracts, because a vacancy stress
+lowers occupancy — a positive `vacancy` value is a worse position, matching the sign
+convention every other stress lever already carries (a positive `interest_rate` or
+`construction_cost` value is also the adverse direction).
 
-The five levers write to **disjoint input fields**, so applying several to one document
+The eight levers write to **disjoint input fields**, so applying several to one document
 is order-independent. Any lever added in a later release that shares a field with an
 existing lever must define its composition order in this section at the same time.
+
+**`exit_yield`, `operating_cost` and `vacancy`'s composition order, stated at the time
+they are added, as this section requires.** The three write
+`investment_case.valuation.cap_yield_pct`, `investment_case.operating_lines[].value` and
+`investment_case.stabilisation.stabilised_occupancy_pct` respectively, and nothing else
+under `investment_case` and nothing outside it — no other lever touches any of those three
+fields, so all eight levers remain disjoint and their application remains
+**order-independent**, asserted by the existing all-levers-in-several-orders test gaining
+three entries rather than merely stated. None of the three carries a target, so — unlike
+`phase_slip`, which keys its duplicate checks on `(lever, phase_id)` — their duplicate
+checks key on `lever` alone. On a document with `investment_case = null` all three are
+**no-ops by construction**, exactly as `phase_slip` is on a `programme = null` document: a
+zero-width tornado bar is the honest report of a lever with nothing to move.
 
 **`phase_slip`'s composition order, stated at the time it is added, as this section
 requires.** `phase_slip` writes `programme.phases[<id>].slip_months` and nothing else.
@@ -637,6 +665,25 @@ assumptions would require more debt than the committed facility does not receive
 debt: it raises `facility_exceeded` and/or `funding_gap`, and that flag is the finding.
 The suite measures a committed structure against adverse assumptions; it does not
 re-underwrite the deal at every grid point.
+
+**The carve-out [R13 — calc 2.12.0]: the take-out is not the committed facility, and is
+re-solved in every cell, deliberately.** §19.4's take-out quantum — `min(LTV cap, DSCR
+cap, ICR cap)` — is not one of the invariant fields this section names, and read
+carelessly against this section's opening sentence it would seem to be: the facility
+being invariant could be misread as *all* debt being invariant, which would hold the
+take-out at its base-document value in every cell and make `exit_yield`, `operating_cost`
+and `vacancy` — all three of §12.1's new levers — inert, since none of them writes
+anything the *development* facility reads. §11.8's prohibition is about not
+re-underwriting the development debt to rescue an adverse cell; it says nothing about a
+sizing calculation whose entire purpose is to answer "how much take-out debt does this
+cell's income support", which is a different question in every cell by design. A yield
+lever that expanded the exit yield and left the take-out quantum unchanged would measure
+nothing. So: `finance.committed_net_facility_pence`, `finance.committed_gross_facility_pence`,
+`finance.day_one_advance_pence` and `equity_sources` stay held at base in every cell,
+exactly as before; `investment_case.takeout`'s LTV/DSCR/ICR caps and the quantum they
+produce are **not** on that list and are recomputed from each cell's own NOI, value and
+rate — because that recomputation, not an invariant hold, is what a coverage-driven
+sizing lever is testing.
 
 ### 12.3 The two-way matrix
 
@@ -1915,7 +1962,7 @@ ProgrammeResult:
 6. **`FF` and `SF` dependency types are not supported.** No realistic construction link in this model needs them, and each would be another arm of the derivation to test.
 7. **Rounding residue is absorbed per (phase, category) bucket.** Two lines resolving to the same phase in the same category are spread once, as their combined total. This matches the auto and legacy arms, which spread the category total exactly once, and it is what keeps §18.7's penny-identity gate true by construction rather than by arithmetic coincidence (§18.5).
 8. **Total float only.** `total_float_months` is float against the programme finish. Free float — the delay a phase can absorb without moving its immediate successors — is not derived. Total float is what answers the lender's question; free float would be a second number readers would have to be taught to tell apart from the first.
-9. **Exit anchors are engine-complete but have no UI control, and are unreported.** §18.6's `anchor` is fully implemented, validated and tested in both engines, and an anchored tranche's receipts move with a programme slip — but **no screen writes a non-null `anchor`**, so the feature is reachable only through the API and through stored documents authored elsewhere. Nothing regressed *numerically*: `anchor: null` is the correct default and §18.6 defines null as "use `month_offset`", which makes a UI-born tranche behaviourally identical to a migrated one and to every pre-R12 tranche, and the ledger places every receipt — anchored or not — at the correct resolved month regardless. But for an API-authored anchored tranche, the two surfaces that *name* a tranche's month — the investment memo (`export-investment-memo.ts`) and the cashflow assumptions note (`CashflowPage.tsx`) — print the raw `month_offset`, not the resolved month `schedule.ts` actually placed the receipt at, because `Schedule` publishes no resolved tranche month for either surface to read. Those two surfaces therefore state a month the ledger did not use, on the one document shape this limitation already flags as reachable only outside the UI. **This is recorded as a deferral, not a defect** — the control belongs with the exit work of R13, which owns exit economics, and shipping a control here would have put the timing switch on one screen and the economics it changes on another. R13 inherits the reporting fix along with the control: a new field on the result block for the resolved tranche month, read by both surfaces in place of the raw offset.
+9. **CLOSED — R13, calc 2.12.0 (Tasks 12 and 14).** §18.6's `anchor` was engine-complete but had no UI control, and the two surfaces that name a tranche's month printed the raw `month_offset` rather than the resolved month the ledger actually used. R13 closed both halves — `ExitStrategyPage` now writes anchors (Task 14), and `Schedule` gained `resolved_exit_months` for the reporting surfaces to read (Task 12, §19.6). **This limitation's original text overstated the reporting half of the defect, and the correction is recorded here rather than silently rewritten.** The memo's refinance clause was never wrong: it already read `schedule.refinance.month`, which `resolveAnchorMonth` (§18.6) has resolved since this section was written, independently of and predating `resolved_exit_months` — only the memo's *sales-phasing* clause read the raw offset. `CashflowPage`, by contrast, had both clauses wrong: its sales-phasing **and** its refinance clause both read the raw `month_offset`. R13's fix reads `resolved_exit_months.tranches`/`resolved_exit_months.refinance` on both surfaces' sales-phasing clauses and on `CashflowPage`'s refinance clause; the memo's refinance clause is untouched, because it was never broken. A test anchored a tranche on a slipped programme and confirmed it failed against pre-R13 `main` before the fix landed, per the standing rule that a carried defect is fixed only behind a failing assertion.
 
 ### Guards this release must watch fail
 
@@ -1932,3 +1979,599 @@ Per the standing rule that every guard be planted against and watched failing be
 | Lever order-independence (§18.9) | All five levers applied in several orders to one document give identical results |
 
 **Guards deliberately not written**, because they would be vacuous by construction: any assertion that every phase's `code` is in `PhaseCode` (the type guarantees it); any assertion that `finish = start + duration` (true by construction of the implementation's own addition).
+
+---
+
+## 19. The investment case [R13 — calc 2.12.0]
+
+Before this release, a retained scheme's refinance (§4.5) modelled the refinance
+of *an asserted value*: `investment_value_pence` was "an explicit input, never
+yield-derived", and nothing in the model connected it to the scheme's rent, its
+operating costs, or the income a take-out lender would actually underwrite
+against. `ExitStrategyInputs.retained_units[].monthly_rent_pence` had been
+captured, edited and printed since R1 and **read by no calculation** — a rent
+roll with no NOI, an operating asset with no operating costs, a hold period
+with no vacancy, letting-up or stabilisation. There was no DSCR, no ICR, and no
+debt-service concept at all. §19 closes that: audit §7.8's *"a lender needs
+evidence that take-out debt can service and repay, not only that a percentage
+LTV is below a valuation"*, and §7.9's standard buttons *"refinance yield
+expansion, lower refinance LTV and operating-cost/vacancy stress"*.
+
+**This is half of §7.8, deliberately.** Unit-specific completion timing,
+sales-agent/legal costs by unit and deposits are the sold portion's *receipt
+timing*; §19 is the retained portion's *income and take-out*. The two share no
+arithmetic, and taking both in one release would have opened a second live
+sales path alongside a second live valuation path in the same release — one
+new live path per axis is the rule R12 arrived at the hard way (§18). The
+unit-level sales ledger is deferred to its own release (§19.10 limitation 1,
+and the release plan).
+
+**§4.5 is superseded for the `investment_case != null` case.** Where
+`investment_case` is null, §4.5's explicit `investment_value_pence × ltv_pct`
+path is unchanged and remains live, byte-identical.
+
+### 19.1 The schema
+
+Inputs v10 is purely additive plus two narrowings on `refinance`. `calc_version`
+`2.12.0`, `inputs_version` `10`.
+
+```
+investment_case: InvestmentCase | null        -- top level, null = today
+
+InvestmentCase:
+  stabilisation:
+    anchor:                    PhaseAnchor | null   -- §18.6 resolution, reused
+    month_offset:              integer >= 0
+    ramp_months:               integer >= 0
+    stabilised_occupancy_pct:  number in (0, 100]
+  operating_lines: Array<{
+    id:     string                     -- unique, non-empty
+    code:   OpexCode
+    label:  string
+    basis:  'fixed_pence_per_month' | 'pct_of_gross_rent'
+    value:  number >= 0                -- pence, or percent
+  }>                                    -- may be empty
+  valuation:
+    cap_yield_pct:        number > 0
+    purchasers_costs_pct: number >= 0
+  takeout:
+    ltv_cap_pct:        number in (0, 100]
+    dscr_floor:         number > 0
+    icr_floor:          number > 0
+    annual_rate_pct:    number >= 0
+    amortisation_years: number > 0 | null   -- null = interest-only
+    term_years:         number > 0
+```
+
+`OpexCode` is a ten-value enum: `management`, `letting_and_re_letting`,
+`insurance`, `repairs_and_maintenance`, `service_charge_shortfall`,
+`ground_rent`, `utilities_on_voids`, `compliance_and_safety`, `bad_debt`,
+`other` — the same codes-plus-`other` shape R10 used for cost packages and R12
+for phases. `operating_lines` is a **user-managed list**, not a required
+closed set of fields: `OpexCode` is the enum a value must belong to, not a
+list of rows every document carries.
+
+`stabilisation` reuses `PhaseAnchor` verbatim. `anchor: null` means "use
+`month_offset`", exactly as §18.6 defines it for tranches and `refinance`, so
+there is one month-resolution rule in the model and not two.
+
+**The two narrowings on `refinance`:**
+
+```
+RefinanceInputsV10 extends RefinanceInputsV9:
+  investment_value_pence:  number | null      -- was number
+  ltv_pct:                 number | null      -- was number
+  arrangement_fee_basis:  'fixed_pence' | 'pct_of_quantum'
+  arrangement_fee_pct:     number in [0, 100]
+```
+
+When `investment_case` is non-null it **supersedes** the explicit value and
+LTV, and both must be `null`. This is a validation error, not a silent
+override: §2's never-silently-ignored rule makes "we read one and dropped the
+other" the prohibited shape (§19.7 rule 5). When `investment_case` is null,
+both must be non-null — today's rule, restated as the other arm.
+
+All refinance *event* costs stay on `refinance`, where they are today. Only
+the arrangement fee's **basis** is new, because a fixed-pence arrangement fee
+on a derived quantum is an odd thing to ask a user for. `takeout` is sizing
+policy; `refinance` is the event. Migration writes `arrangement_fee_basis:
+'fixed_pence'`, `arrangement_fee_pct: 0`, which reproduces today's arithmetic
+exactly (§19.9).
+
+**The type is named `RefinanceArrangementFeeBasis`, not `ArrangementFeeBasis`.**
+`ArrangementFeeBasis` (`'committed_net_facility' | 'committed_gross_facility'`)
+already names `FacilityTerms`'s own arrangement-fee basis — a different enum,
+for a different fee, on a different tranche (the *development* facility's
+arrangement fee, sized against the committed facility, versus the *take-out*'s
+arrangement fee, sized against the derived quantum). Reusing the name would be
+a duplicate top-level declaration. The **field** name `arrangement_fee_basis`
+is shared across both objects, as `arrangement_fee_pence`/`arrangement_fee_pct`
+already were; only the type name differs.
+
+### `takeout` is not nullable
+
+Every non-null `investment_case` carries a `takeout` block, and the sizing is
+always computed and reported. When `refinance` is null nothing is booked and
+the result is marked `is_booked: false` — an **indicative** exit route, which
+is what a lender wants to see on a retain-and-hold case. A nullable block
+inside a nullable block buys nothing and doubles the arms to test.
+
+### 19.2 The NOI derivation
+
+Runs **strictly before** the ledger and reads nothing from it — §17.5's
+one-direction rule, applied to the second engine that could have been made
+cyclic. `investment-case.ts`/`investment_case.py` must never import the
+monthly engine, the metrics module or the schedule.
+
+**The retained set, and the trap in it.** Retention is decided by
+`exit_strategy.route`: `retain_all` retains every unit; `blended` retains the
+units named in `retained_units[]`; `sell_all` retains none. For `blended`,
+`retained_units[]` *is* the retained set, so a rent exists for every retained
+unit by construction. **For `retain_all` it is not** — every unit is retained,
+but only those listed in `retained_units[]` carry a rent, and the list may be
+short or empty. A `retain_all` document with three of eight units listed would
+produce an NOI understated by five units' rent, silently, and therefore a
+value and a take-out understated with it. So: **`investment_case` non-null
+with `route = 'retain_all'` requires a `retained_units` entry for every unit
+in `unit_mix`** (§19.7 rule 2). Validation refuses the document that lacks
+them; silent understatement of the figure the whole release exists to derive
+is not smoothed over.
+
+**Occupancy.** Let `s` = the resolved stabilisation month (§18.6's rule,
+reused via `resolveStabilisationMonth`), `R` = `ramp_months`,
+`U` = `stabilised_occupancy_pct`:
+
+```
+m < s            →  occupancy = 0
+s <= m < s + R   →  occupancy = U × (m − s + 1) / R
+m >= s + R       →  occupancy = U
+```
+
+`R = 0` collapses the middle arm: occupancy is `U` from month `s`. The ramp is
+`R` months long and **reaches `U` in its final month**, `s + R − 1`.
+
+**The monthly series.**
+
+```
+gross_potential_monthly = Σ over exit_strategy.retained_units[] of monthly_rent_pence
+egr[m]  = round_half_up(gross_potential_monthly × occupancy[m] / 100)
+opex[m] = 0 for m < s; otherwise Σ over lines of
+            fixed_pence_per_month →  value
+            pct_of_gross_rent     →  round_half_up(egr[m] × value / 100)
+noi[m]  = egr[m] − opex[m]          -- SIGNED
+```
+
+The sum is over `retained_units[]`, not over `unit_mix`. For `blended` that
+list **is** the retained set; for `retain_all` §19.7 rule 2 makes it complete.
+Those two facts together are the only reason one expression serves both
+routes. Operating costs start with the income, not with the term: a scheme
+incurs management and letting cost against a let asset, so opex is 0 before
+`s`, not from month 0.
+
+**A percentage operating line is a percent of that month's *effective* gross
+rent, not of potential rent.** A management fee is charged on rent collected.
+
+**A negative NOI month is an operating shortfall funded by uncommitted
+additional equity**, through §4.3's existing mechanics and its existing
+`additional_equity_required` red flag. The development facility does not fund
+operating losses.
+
+**Stabilised NOI is the stabilised year, not the ramp average.**
+
+```
+egr_stab   = round_half_up(gross_potential_monthly × U / 100)
+opex_stab  = Σ lines evaluated at egr_stab
+noi_annual = 12 × (egr_stab − opex_stab)
+```
+
+Twelve times the *stabilised month*, never the sum of the first twelve actual
+months and never an average over the term. Valuation (§19.3) and both
+coverage ratios (§19.4) read this figure and only this figure. Capitalising
+ramp-period NOI is the classic error in this calculation.
+
+If `noi_annual <= 0`: the investment value is 0, all three caps are 0, the
+quantum is 0, `binding_constraint` is `null`, and a **red** flag
+`investment_case_noi_non_positive` fires. Not an error — the arithmetic is
+sound and the finding is the point.
+
+### 19.3 Investment value
+
+The net-initial-yield convention, stated rather than left implicit:
+
+```
+gross_value = noi_annual / (cap_yield_pct / 100)
+value       = round_half_up(noi_annual × 100 / cap_yield_pct
+                            / (1 + purchasers_costs_pct / 100))
+```
+
+`gross_value` is published for the report's bridge but is **not** an
+intermediate the value is computed from: the value is a single expression
+with a **single rounding**, so a two-step derivation cannot drift a penny
+from the published one.
+
+### 19.4 Sizing, and which constraint binds
+
+Let `r = annual_rate_pct / 100`.
+
+**The annual debt-service factor per £1 of debt**, `a`:
+
+```
+amortisation_years == null  →  a = r                     (interest-only)
+otherwise                   →  i = r / 12
+                               N = amortisation_years × 12
+                               a = 12 × ( i == 0 ? 1 / N
+                                                 : i / (1 − (1 + i)^(−N)) )
+```
+
+**When `amortisation_years` is null, `a = r`, so the DSCR and ICR caps are
+equal by construction whenever the floors are equal.** That is a feature: the
+two ratios diverge exactly when there is amortisation.
+
+**The three caps**, each floored to integer pence:
+
+| Cap | Formula | Not binding when |
+|---|---|---|
+| LTV | `floor(value × ltv_cap_pct / 100)` | — |
+| DSCR | `floor(noi_annual / (dscr_floor × a))` | `a == 0` (zero rate, interest-only) |
+| ICR | `floor(noi_annual / (icr_floor × r))` | `r == 0` |
+
+```
+quantum            = max(0, min over the applicable caps)
+binding_constraint = the argmin, precedence LTV → DSCR → ICR on an exact tie,
+                      or null when quantum == 0
+```
+
+**All three caps are published**, not only the binding one. A reader who sees
+`LTV 4,200,000 / DSCR 3,610,000 / ICR 4,050,000 — DSCR binds` learns the shape
+of the constraint; a reader given only `3,610,000` learns a number.
+
+**Floor, not half-up.** A deliberate departure from §1.1, called out here
+rather than left to be discovered as an inconsistency. A cap rounded up is a
+cap breached by a penny.
+
+**Achieved ratios**, published alongside the floors:
+
+```
+achieved_ltv_pct = value > 0             ? quantum / value × 100        : null
+achieved_dscr    = a > 0 && quantum > 0  ? noi_annual / (quantum × a)   : null
+achieved_icr     = r > 0 && quantum > 0  ? noi_annual / (quantum × r)   : null
+```
+
+Because the caps floor, the binding constraint's achieved ratio is **at least**
+its floor and better than it by less than one pence of debt.
+
+**The refinance event.**
+
+```
+arrangement_fee = fixed_pence    → arrangement_fee_pence
+                  pct_of_quantum → round_half_up(quantum × arrangement_fee_pct / 100)
+net_proceeds    = quantum − arrangement_fee − legal_costs_pence
+```
+
+From there §4.5 is unchanged: negative net proceeds apply as 0 and are funded
+by uncommitted additional equity; the sales sweep runs first within the
+month; the facility is fully redeemed if it has a balance; the exit fee is
+charged once under §4.4.1's once-only rule; a shortfall is absorbed by
+additional equity and raises the existing red flag.
+
+A new **amber** flag `takeout_constrained_by_coverage` fires when
+`binding_constraint` is `dscr` or `icr` — the lender-relevant finding that
+income, not value, is what limits the take-out.
+
+### 19.5 The ledger
+
+**A receipt class of its own.** `MonthReceipts` and `LedgerMonth` gain
+`net_operating_income_pence` (signed). It is isolated the same way R11
+isolated `vat_reclaim_pence`: deliberately **not** part of `gross_sale_pence`,
+because it is not a sale receipt.
+
+**What that isolation actually proves — narrower than it first reads.** NOI
+being outside `gross_sale_pence` means no GDV-, LTGDV- or break-even-
+denominated **formula** takes NOI as an input. It does **not** mean those
+metrics are numerically unchanged by NOI's presence. NOI is applied in full
+to the senior facility and repays it early, so peak debt moves — and
+`ltgdv_developer_pct`, `ltgdv_lender_pct` and `senior_breakeven_pence` are all
+**debt-denominated**: they move because the debt they are computed from
+legitimately moves. `profit_on_gdv_pct` moves for the same reason
+`profit_pence` moves through lower interest (below). **Only `gdv_pence` is
+structurally invariant** — `calculateGdv` takes unit values alone and has no
+ledger argument, in either engine, so it cannot read a receipt regardless of
+what the receipt is. The true, tested property is: NOI is never a *sale
+receipt*, so it never enters `gross_sale_pence` or `gdv_pence`; the
+debt-denominated metrics are legitimately live, not accidentally leaked into.
+
+*(A related, pre-existing doc comment on `finance-types.ts`'s
+`vat_reclaim_pence` — inherited unmodified from R11 — reads more absolutely
+than this: it says no GDV-/LTGDV-/break-even-denominated metric "may read"
+`vat_reclaim_pence`, which is true of the formula but invites the same
+misreading NOI's design text made. VAT reclaim moves debt exactly as NOI does,
+for exactly the same reason. Noted here because this task touched the
+adjacent area; correcting that comment is optional and not required by this
+release.)*
+
+**Order within the month, fixed and stated:**
+
+```
+VAT reclaim  →  NOI  →  sales sweep  →  refinance event
+```
+
+All four can fall in one month. The order is arbitrary in the sense that any
+order could be defended, and therefore it must be **written down and
+asserted** rather than left to the order the code happens to run in.
+
+NOI is applied **in full** to the senior facility, ignoring `sales_sweep_pct`
+— which governs *sale* receipts — and any surplus distributes to equity that
+month. Where NOI achieves the first full redemption, the exit fee is charged
+then, under §4.4.1's existing once-only rule.
+
+A negative NOI month draws uncommitted additional equity, never the facility.
+`MonthlyModel.totals` gains `operating_shortfall_equity_pence`, the slice of
+`additional_equity_pence` that funded operating losses — mirroring
+`refinance_shortfall_equity_pence` exactly.
+
+**§7 sources and uses.** Both new flows sit **outside** §7's identity, for the
+reason `vat_reclaim_pence` does: §7 balances project *funding* against project
+*costs*, and hold-period operating income is neither.
+`operating_shortfall_equity_pence` is excluded on the same basis as
+`refinance_shortfall_equity_pence`, and still counts toward additional-equity
+flags, equity contributed and the equity cash-flow vector.
+
+**What this deliberately does not move.** **NOI does not enter §3's profit.**
+Profit stays `GDV − TDC`, the development residual. NOI reaches the return
+metrics the honest way — through lower interest (a real ledger effect) and
+through `equity_cashflows_pence`, which drives IRR and the equity multiple. A
+guard asserts `profit_pence` is unchanged between two documents that differ
+only in NOI, at equal finance costs (the finance-cost qualifier matters: NOI
+*does* change finance costs, by design, so the guard holds costs equal rather
+than asserting the schedules are otherwise identical).
+
+**One consequence to test rather than discover.** NOI distributions enter
+`equity_cashflows_pence`, so a `retain_all` case can now produce an IRR where
+`irr_unavailable` used to fire — an IRR that measures the income stream and
+ignores the retained asset entirely. `has_realisation_event` stays **false**
+(income is not realisation) and §3.16.1's unrealised labelling is unchanged,
+so the guard rails hold.
+
+### 19.6 Outputs and reporting
+
+**The result block.** `Schedule` gains `investment_case`:
+
+```
+InvestmentCaseResult:
+  stabilisation_month: integer
+  months: Array<{ month, occupancy_pct, gross_potential_rent_pence,
+                  effective_gross_rent_pence, operating_cost_pence, noi_pence }>
+  stabilised: { effective_gross_rent_pence, operating_cost_pence,
+                monthly_noi_pence, annual_noi_pence }
+  operating_lines: Array<{ id, code, label, basis, value,
+                           stabilised_monthly_pence }>
+  valuation: { cap_yield_pct, purchasers_costs_pct,
+               gross_value_pence, investment_value_pence }
+  takeout: { ltv_cap_pence,
+             dscr_cap_pence: integer | null,
+             icr_cap_pence:  integer | null,
+             quantum_pence,
+             binding_constraint: 'ltv' | 'dscr' | 'icr' | null,
+             annual_debt_service_factor,
+             achieved_ltv_pct: number | null,
+             achieved_dscr:    number | null,
+             achieved_icr:     number | null,
+             is_booked: boolean }
+  totals: { effective_gross_rent_pence, operating_cost_pence, noi_pence }
+```
+
+`Schedule.investment_case: InvestmentCaseResult | null` — **republished,
+never recomputed**, the treatment §17.12 gave `vat`. `AppraisalResultV2`
+republishes the same object. The UI and the report read it and never call the
+engine. `null` on the `investment_case = null` path, exactly as the input is
+— no block is synthesised for a document that never asked for one (§18.10
+limitation 1's reasoning, unchanged).
+
+**§18.10 limitation 9, closed.** `Schedule` gains:
+
+```
+resolved_exit_months: { tranches: number[]; refinance: number | null }
+```
+
+This is the field §18.10 limitation 9 named as missing, and closing it is
+narrower than that limitation's original text suggested. Of the two surfaces
+that name a tranche's or the refinance's month:
+
+- **The investment memo**'s refinance clause was **never wrong** — it already
+  read `schedule.refinance.month`, resolved by `resolveAnchorMonth` (§18.6)
+  since that resolver existed, independently of and predating this field.
+  Only its **sales-phasing** clause read the raw `month_offset`; that clause
+  now reads `resolved_exit_months.tranches`.
+- **`CashflowPage`** had **both** clauses wrong: its sales-phasing clause and
+  its refinance clause both read the raw `month_offset`. Both now read
+  `resolved_exit_months`.
+
+A test anchored a tranche on a slipped programme and was confirmed to fail
+against pre-fix `main` before the fix landed — a carried defect fixed without
+a failing assertion behind it is a claim, not a fix.
+
+**Screens.**
+
+- **`ExitStrategyPage`** gains the anchor controls R12 never shipped (tranches
+  and refinance), plus the investment case, split into
+  `OperatingScheduleEditor.tsx` and `InvestmentCaseCard.tsx` so no single file
+  absorbs the whole release. For `retain_all`, the page populates a
+  `retained_units` row for every unit, which is what makes §19.7 rule 2's
+  completeness rule a non-event in the UI.
+- **`CashflowPage`** gains the NOI row and reads `resolved_exit_months`.
+- **The investment memo** gains an investment-case section: the rent roll,
+  the NOI bridge (potential → effective → less operating lines → NOI), the
+  value with the yield and purchaser's costs stated, **all three candidate
+  quanta with the binding one named**, the achieved ratios, and any residual
+  balance the take-out fails to clear. Where the case is indicative
+  (`is_booked: false`) the section says so.
+
+### 19.7 Validation
+
+Input errors, not flags. Applying only when `investment_case` is non-null
+unless stated:
+
+1. `route = 'sell_all'` with a non-null `investment_case` — nothing is
+   retained.
+2. `route = 'retain_all'` requires a `retained_units` entry for **every** unit
+   in `unit_mix` (§19.2's silent-understatement trap).
+3. Every `retained_units[].unit_id` names a unit that exists.
+4. Total gross potential rent > 0.
+5. When `refinance` is non-null and `investment_case` is non-null:
+   `investment_value_pence` and `ltv_pct` must both be `null`. **And, when
+   `investment_case` is null and `refinance` is non-null, both must be
+   non-null** — today's rule, restated as the other arm. A null `refinance`
+   alongside a non-null `investment_case` is legal and is the indicative case
+   of §19.1.
+6. `stabilisation.anchor` names a phase that exists, and requires `programme`
+   non-null (§18.8's rule, reused).
+7. The resolved stabilisation month lies in `[0, term_months − 1]`. Otherwise
+   a hard error, on §18.8's reasoning: income that never starts inside the
+   term books zero NOI silently.
+8. `stabilised_occupancy_pct` finite, in `(0, 100]`; `ramp_months` a whole
+   number >= 0.
+9. `cap_yield_pct` finite > 0; `purchasers_costs_pct` finite >= 0.
+10. `takeout`: `ltv_cap_pct` in `(0, 100]`; `dscr_floor` > 0; `icr_floor` > 0;
+    `annual_rate_pct` finite >= 0; `amortisation_years` null or > 0;
+    `term_years` > 0.
+11. `operating_lines`: ids unique and non-empty; `code` in the enum; `basis`
+    in the enum; `value` finite >= 0; and <= 100 on the `pct_of_gross_rent`
+    basis. An empty array is legal — NOI is then gross rent.
+12. `refinance.arrangement_fee_basis` in the enum; `arrangement_fee_pct`
+    finite in `[0, 100]`. Applies whenever `refinance` is non-null, whether
+    or not `investment_case` is.
+
+**Flags** (not errors):
+
+| Code | Severity | Fires when |
+|---|---|---|
+| `investment_case_noi_non_positive` | red | stabilised annual NOI <= 0 |
+| `stabilisation_incomplete_at_maturity` | amber | `s + ramp_months > term_months` — the value capitalises a stabilisation the term never reaches |
+| `takeout_constrained_by_coverage` | amber | `binding_constraint` is `dscr` or `icr` |
+
+A ramp running past maturity is **not** an error: refinancing mid-lease-up is
+a real structure. It is flagged because the valuation reads the stabilised
+figure regardless, and that gap should be visible rather than inferred.
+
+### 19.8 Sensitivity: three levers, and the §12.2 carve-out
+
+§12.1's table goes from five rows to eight (§12.1). The three new rows —
+`exit_yield`, `operating_cost`, `vacancy` — write fields no other lever
+touches, so §12.1's order-independence property holds unchanged and the
+existing all-levers-in-several-orders test gains three entries. None carries
+a target, so their duplicate checks key on `lever` alone — unlike
+`phase_slip`, which keys on `(lever, phase_id)`.
+
+On a document with `investment_case = null` all three are **no-ops by
+construction**, exactly as `phase_slip` is on a null programme. A zero-width
+tornado bar is the honest report of a lever with nothing to move.
+
+**§12.2 gains the carve-out this release needs** (stated there in full): the
+take-out is **not** the committed facility and is **re-solved in every cell**,
+deliberately. Without it, §12.2's opening sentence reads as though all debt —
+take-out included — is held at base, which would make `exit_yield`,
+`operating_cost` and `vacancy` measure nothing.
+
+**Cell validity (§12.7) is existing validation, not new sensitivity logic.**
+The design intent behind this release was to give `sensitivity.ts`/
+`sensitivity.py` three new degenerate-cell rules — `cap_yield_pct <= 0`,
+`stabilised_occupancy_pct <= 0`, an operating line's `value < 0`. **No new
+code was needed in either sensitivity module.** §19.7 rules 8, 9 and 11
+already reject exactly those three shapes as validation errors, and §12.7's
+existing mechanism (`measure()` validates the levered document before
+appraising, and an error-severity issue yields an unmeasured, invalid
+position, never a clamp) already routes every levered `investment_case`
+document through them. The three degenerate cases are therefore cell-invalid
+by the same path every other invalid cell already takes — a case of the
+mechanism doing the work a new rule would otherwise have had to.
+
+### 19.9 Migration and the persistence boundary
+
+```
+v9 investment_case: (absent)   →  v10 null
+v9 refinance: null             →  v10 null
+v9 refinance: non-null         →  v10 same, plus
+                                    arrangement_fee_basis: 'fixed_pence'
+                                    arrangement_fee_pct:    0
+                                  (investment_value_pence and ltv_pct unchanged
+                                   and still non-null — the explicit path)
+```
+
+**No existing appraisal's computed values move.** The migration gate is
+numeric **and** validation-side, and the validation side is **three
+separately falsifiable properties, not one set equality** — §18.7's
+correction, applied from the start this time:
+
+1. Every issue a v9 document raises has a v10 counterpart under a stated
+   alias map.
+2. The v10-only rules of §19.7 raise no issue on a migrated document.
+3. A control document that *does* trip a v10-only rule raises it — proving
+   the new rules can fire at all, so property 2 is not vacuously true.
+
+**Property 1 was built with the migration gate itself; properties 2 and 3
+needed a v10-only validation rule that actually fired, and none existed until
+§19.7 was written — so property 1's home is the schema/migration task and
+properties 2 and 3's home is the validation task**, later in the same
+release. They are a matched pair by design: property 3 is what stops property
+2 being vacuous, and writing property 2 alone would reproduce the exact
+defect shape R12 shipped and had to rewrite mid-release (§18.7).
+
+Both engines run the numeric gate corpus-wide.
+
+### 19.10 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **No unit-level sale timing or per-unit selling costs**, and no deposits —
+   the deferred half of §7.8, scheduled as its own release (the release
+   plan).
+2. **Rent is flat in nominal terms** over the hold. No review pattern, no
+   indexation, no stepped rent.
+3. **Occupancy is scheme-level.** There are no per-unit voids or per-unit
+   letting dates; the ramp applies uniformly to the retained rent roll.
+4. **Purchaser's costs are one percentage**, not an itemised build of
+   acquisition tax, agency and legal.
+5. **The take-out is sized, not underwritten.** No covenant testing over the
+   take-out's life, no cash sweep in the take-out, no rate hedging, no
+   interest holiday.
+6. **The valuation capitalises the stabilised year**; it does not discount
+   the ramp. A DCF of the hold period is a different instrument.
+7. **DSCR and ICR are equal by construction** on an interest-only take-out
+   (§19.4).
+8. **NOI does not enter §3 profit** (§19.5). It reaches returns through
+   interest and the equity cash-flow vector only.
+9. **Operating lines carry no source, date or status.** The evidence model is
+   R15's, on the same reasoning §14.6, §15.9 and §16.9 already record.
+
+### Guards this release must watch fail
+
+Per the standing rule that every guard be planted against and watched failing
+before it is trusted:
+
+| Guard | Watched by |
+|---|---|
+| Rent liveness | Changing one retained unit's `monthly_rent_pence` changes NOI, investment value, the quantum, total interest and the closing balance — on **absolute** figures. This is the defect the release exists to fix: the input was inert for eight input versions |
+| Binding-constraint liveness | Three fixtures engineered so a different constraint binds in each; assert the named constraint **and** that the quantum equals that cap to the pence |
+| DSCR/ICR divergence | Two documents differing only in `amortisation_years`: null gives equal ratios, non-null gives divergent ones |
+| Stabilised ≠ ramp average | A fixture where 12 × the stabilised month and the sum of the first twelve months differ; the value must follow the former |
+| NOI isolation | Two documents with identical sale receipts, one with NOI and one without: `gdv_pence` is **identical**, re-derived from unit values directly rather than read back off the result (§19.5) |
+| NOI does not enter profit | `profit_pence` unchanged between the same two documents once finance costs are held equal |
+| Sweep liveness | NOI reduces peak debt, terminal balance and total interest — on **absolute** month numbers and figures, not directions |
+| Within-month order | A month carrying VAT reclaim, NOI, a sale tranche and the refinance event together reproduces a hand-derived closing balance |
+| Negative NOI | An opex-heavy fixture draws additional equity, never a facility draw; `operating_shortfall_equity_pence` matches and §7 still reconciles |
+| Null-path identity | `investment_case = null` is bit-identical to calc 2.11.0 corpus-wide, in both engines |
+| Migration identity, both axes | The numeric gate plus the three validation properties of §19.9 |
+| Resolved exit month (R12 carry) | An anchored tranche on a slipped programme: memo and cashflow print the **resolved** month. Confirmed to fail against pre-fix `main` first |
+| Retain-all rent completeness | A `retain_all` document missing a `retained_units` row is rejected; its complete twin, differing by one row, is accepted and has a higher NOI |
+| Stabilisation-after-maturity | Errors; its in-term twin, differing by one month, does not |
+| Lever order-independence | All **eight** levers applied in several orders give identical results |
+| Lever inertness on the null path | The three new levers on an `investment_case = null` document produce a zero-width tornado bar, not an error and not a silent value change |
+| Cell validity | Yield and occupancy driven to zero produce **invalid cells**, not clamped ones — via §19.7's existing validation rules, not new sensitivity logic (§19.8) |
+| §1.6 version list | A test reads the specification's inputs-version list and requires v10 — the guard missed twice running |
+| Entry-point cutover (Task 18) | A real POST through the live server boundary with a v10 document (not two v9 runs) comes back `inputs_version: 10`, not `legacy_unreconciled`, with `investment_case` intact. Found a live defect the static entry-point guard cannot see: `app/api/app.py`'s response builder hard-coded the GOVERNANCE `inputs_version` (and `audit_hash`'s own `inputs_version` argument) to `9`, left over from R12, even after the migration call site itself moved to `migrate_inputs_to_v10` — a v10 snapshot would have been stored and returned correctly while its own governance column and audit hash still recorded v9, silently misdating every report's provenance |
+
+**Guards deliberately not written**, because they would be vacuous by
+construction: any assertion that an `OpexCode` is in the enum (the type
+guarantees it); any assertion that `noi = egr − opex` (true by construction
+of the implementation's own subtraction); any assertion that the quantum is
+<= the minimum cap (that is the definition of `min`).

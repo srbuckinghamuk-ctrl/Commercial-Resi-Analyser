@@ -18,6 +18,7 @@ from .breakeven import (
 from .cost_plan import CostPlanResult, compute_cost_plan
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, run_ledger
+from .investment_case import InvestmentCaseResult
 from .lender_valuation import compute_lender_gdv
 # Sec 17.12's counterfactual runs the pipeline's first two stages a second time.
 # Imported HERE rather than reached through run_appraisal, which is what makes the
@@ -222,6 +223,11 @@ class AppraisalResultV2:
     developer_breakeven_pence: int | None
     # Wired in Task 6 (spec Sec 5.10).
     cost_to_complete: CostToCompleteSummary | None
+    # R13 spec Sec 19.6. The SCHEDULE's investment_case, republished -- not a
+    # second derivation, the treatment Sec 17.12 gave vat. None exactly when
+    # the INPUT investment_case is None. The UI and the report read it from
+    # here and never call compute_investment_case.
+    investment_case: InvestmentCaseResult | None
     # Ledger flags (model.flags, unmutated) followed by metric flags computed by
     # derive_metrics itself (senior/developer breakeven unsolvable, cap-exhausted).
     # Wired in Release 3a Task 6 -- derive_metrics is pure and no longer mutates
@@ -267,6 +273,43 @@ def breakeven_flags(
                 "break-even solver range exhausted — inputs are implausible; treat all "
                 "break-even figures as unavailable"
             ),
+        ))
+    return out
+
+
+def investment_case_flags(
+    ic: InvestmentCaseResult | None, ramp_months: int, term_months: int,
+) -> list[ModelFlag]:
+    """R13 spec Sec 19.7's flag table. Pure, like breakeven_flags above: takes
+    the already-computed InvestmentCaseResult (never recomputes it) plus the
+    two figures the table's second row needs that the result itself does not
+    carry -- ramp_months (an INPUT field, not part of the published result)
+    and term_months (the schedule's, not the case's). [] when ic is None: no
+    block, no flags, exactly as the null path publishes no result."""
+    if ic is None:
+        return []
+    out: list[ModelFlag] = []
+    if ic["stabilised"]["annual_noi_pence"] <= 0:
+        out.append(ModelFlag(
+            code="investment_case_noi_non_positive", severity="red", month=None,
+            amount_pence=ic["stabilised"]["annual_noi_pence"],
+            message="stabilised annual NOI is non-positive — the take-out sizes to nothing",
+        ))
+    if ic["stabilisation_month"] + ramp_months > term_months:
+        out.append(ModelFlag(
+            code="stabilisation_incomplete_at_maturity", severity="amber", month=None,
+            amount_pence=None,
+            message=(
+                "the stabilisation ramp does not finish before the term ends — the "
+                "valuation still reads the stabilised figure"
+            ),
+        ))
+    binding = ic["takeout"]["binding_constraint"]
+    if binding in ("dscr", "icr"):
+        out.append(ModelFlag(
+            code="takeout_constrained_by_coverage", severity="amber", month=None,
+            amount_pence=ic["takeout"]["quantum_pence"],
+            message=f"the take-out is capped by {binding.upper()} coverage, not by value",
         ))
     return out
 
@@ -601,6 +644,14 @@ def derive_metrics(
     # Optional only because it was declared that way, unwired, in Task 1).
     cost_to_complete = compute_cost_to_complete(schedule, model, inputs)
 
+    # Sec 19.6/19.7. schedule.investment_case republished, never recomputed --
+    # Sec 17.12's vat treatment. ramp_months reads the INPUT block (the result
+    # itself does not carry it); getattr mirrors compute_investment_case's own
+    # None-safe read of a field that only exists on v10+ inputs.
+    ic_inputs = getattr(inputs, "investment_case", None)
+    ramp_months = 0 if ic_inputs is None else ic_inputs.stabilisation.ramp_months
+    flags.extend(investment_case_flags(schedule.investment_case, ramp_months, schedule.term_months))
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -675,5 +726,8 @@ def derive_metrics(
         senior_breakeven_fall_from_lender_gdv_pct=senior_breakeven_fall_from_lender_gdv_pct,
         developer_breakeven_pence=developer_breakeven,
         cost_to_complete=cost_to_complete,
+        # Sec 17.12's vat treatment, applied here: the SCHEDULE's investment
+        # case, republished -- not a second derivation.
+        investment_case=schedule.investment_case,
         flags=flags,
     )

@@ -38,10 +38,40 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
 /** The migration module defines the versions; it is exempt from its own rule,
  *  as is the barrel that re-exports them for the tests and gates that call the
  *  older entry points deliberately (the migration identity gates use the v8
- *  entry point as the "before" side of a before/after comparison). */
+ *  entry point as the "before" side of a before/after comparison).
+ *
+ *  R13 Task 5b: `lib/model/__fixtures__/investment-case-docs.ts` is also
+ *  exempt -- not because it calls an old version (it always calls the
+ *  NEWEST one, `migrateInputsToV10`, correctly), but because it is not a
+ *  PRODUCTION entry point at all. This guard's own stated purpose is "if a
+ *  production entry point keeps calling the old migration, no user ever
+ *  holds a [new] document" -- a `__fixtures__` file is imported only by
+ *  `.test.ts` files (mirroring Jest/Vitest's own `__mocks__`/`__snapshots__`
+ *  convention for test-only code) and reaches no user at all. Without this
+ *  exemption the file would still pass the "calls only the newest version"
+ *  test below (it does) but would fail the file-enumeration test's exact
+ *  pinned list, for a reason that has nothing to do with a stale call site --
+ *  exactly the kind of false positive this guard must not produce, or a real
+ *  offender risks being lost in the noise.
+ *
+ *  R13 Task 18: `lib/report-qa/memo-fixtures.ts` is exempt for the identical
+ *  reason. Task 16 gave it a migration call (also correctly the NEWEST one,
+ *  `migrateInputsToV10`), so it is not a stale-call-site offender either
+ *  way -- the question is only whether it belongs in the file-enumeration
+ *  list at all. Its own header comment already states "Test-support only;
+ *  not imported by the application", and grepping every import of it in this
+ *  tree confirms that: every consumer is a `.test.ts`/`.test.tsx` file
+ *  (`memo-release-gate.test.ts`, `quick-report-gate.test.ts`,
+ *  `report-provenance.test.ts`, `AcquisitionPage.test.tsx`). It fails the
+ *  `__fixtures__` naming convention only because it predates that
+ *  convention, not because it reaches a user -- it does not. Exempting it
+ *  keeps the pinned enumeration list naming only files a real user's browser
+ *  can load. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
+  'lib/model/__fixtures__/investment-case-docs.ts',
+  'lib/report-qa/memo-fixtures.ts',
 ]);
 
 const MIGRATE_SOURCE = readFileSync(resolve(FRONTEND_SRC, 'lib/model/migrate.ts'), 'utf-8');
@@ -94,8 +124,8 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(9);
-    expect(VERSIONS).toContain(8);
+    expect(NEWEST).toBe(10);
+    expect(VERSIONS).toContain(9);
   });
 
   it('enumerates the production files that actually hold the entry points', () => {

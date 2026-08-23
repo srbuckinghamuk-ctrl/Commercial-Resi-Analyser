@@ -1,9 +1,9 @@
-import type { CalculatorInputsV9, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV10, AppraisalRun } from '../../lib/model';
 import type { AreaBridgeInputs } from '../../lib/model';
 
 interface Props {
-  inputs: CalculatorInputsV9;
-  onChange: (partial: Partial<CalculatorInputsV9>) => void;
+  inputs: CalculatorInputsV10;
+  onChange: (partial: Partial<CalculatorInputsV10>) => void;
   run: AppraisalRun;
 }
 

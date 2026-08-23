@@ -7,11 +7,13 @@ import { DEFAULT_AREA_BRIDGE } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8, EquitySource,
-  FacilityTerms, MonthReceipts, MonthUses, Schedule,
+  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8, CalculatorInputsV10,
+  EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
 import type { VatResult } from './vat';
 import { DEFAULT_VAT, defaultVatTreatments } from './vat';
+import { buildSchedule } from './schedule';
+import { investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
 
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
@@ -23,7 +25,8 @@ function uses(partial: Partial<MonthUses>): MonthUses {
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
   return {
-    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0, ...partial,
+    gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0,
+    net_operating_income_pence: 0, ...partial,
   };
 }
 // R11: no test in this file exercises VAT — an inert result of the schedule's
@@ -57,9 +60,12 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
       vat_pence: sum((x) => x.vat_pence),
       vat_reclaim_pence: r.reduce((a, x) => a + x.vat_reclaim_pence, 0),
       irrecoverable_vat_pence: 0,
+      net_operating_income_pence: r.reduce((a, x) => a + x.net_operating_income_pence, 0),
     },
     vat: emptyVat(u.length),
     programme: null,
+    investment_case: null,
+    resolved_exit_months: { tranches: [], refinance: null },
   };
 }
 
@@ -1144,5 +1150,80 @@ describe('ruling R31 — carry interest and profit impact are two quantities', (
     // fee basis.
     expect(on.metrics.vat_carry_interest_pence)
       .toBe(on.model.totals.interest_pence - off.model.totals.interest_pence);
+  });
+});
+
+describe('§19.6 result block and flags', () => {
+  // Mirrors runAppraisal's own two-call composition (buildSchedule then
+  // runLedger) so these tests exercise the real deriveMetrics(inputs,
+  // schedule, model) signature directly, never through runAppraisal — the
+  // republish-not-recompute test below needs to call deriveMetrics itself.
+  function icMetrics(doc: CalculatorInputsV10) {
+    const schedule = buildSchedule(doc);
+    const model = runLedger(schedule, doc.finance, doc.equity_sources);
+    return deriveMetrics(doc, schedule, model);
+  }
+
+  it('republishes the schedule\'s investment case rather than recomputing it', () => {
+    // R13 fix-wave Minor 4. The previous version built TWO independent
+    // schedules (one via buildSchedule, one inside icMetrics's own
+    // buildSchedule call) and compared them with toEqual -- a deriveMetrics
+    // that recomputed investment_case from scratch would produce a
+    // deep-equal object on the same input and pass just as well. Sharing
+    // ONE schedule and asserting reference identity (toBe) is the only
+    // assertion that actually distinguishes "republished" from "recomputed
+    // to an identical result", mirroring run_appraisal's own
+    // `metrics.investment_case is schedule.investment_case` in the Python
+    // engine.
+    const doc = investmentCaseDoc();
+    const s = buildSchedule(doc);
+    const model = runLedger(s, doc.finance, doc.equity_sources);
+    const r = deriveMetrics(doc, s, model);
+    // §17.12's treatment of `vat`, applied here: ONE computation, republished.
+    expect(r.investment_case).toBe(s.investment_case);
+  });
+
+  it('is null on the explicit path, exactly as the input is', () => {
+    expect(icMetrics(explicitRefinanceDoc()).investment_case).toBeNull();
+  });
+
+  it('raises a red flag on a non-positive stabilised NOI, and sizes to nothing', () => {
+    const r = icMetrics(investmentCaseDoc({ opexExceedsRent: true }));
+    const f = r.flags.find((x) => x.code === 'investment_case_noi_non_positive')!;
+    expect(f.severity).toBe('red');
+    expect(r.investment_case!.takeout.quantum_pence).toBe(0);
+    expect(r.investment_case!.takeout.binding_constraint).toBeNull();
+
+    // Its near-twin — the unmodified base document, where NOI is comfortably
+    // positive — must NOT raise it.
+    const clean = icMetrics(investmentCaseDoc());
+    expect(clean.investment_case!.stabilised.annual_noi_pence).toBeGreaterThan(0);
+    expect(clean.flags.map((x) => x.code)).not.toContain('investment_case_noi_non_positive');
+  });
+
+  it('raises an amber flag when the ramp has not finished by maturity', () => {
+    // NOT an error: refinancing mid-lease-up is a real structure. Flagged
+    // because the valuation reads the STABILISED figure regardless, and that
+    // gap should be visible rather than inferred.
+    const r = icMetrics(investmentCaseDoc({ stabilisationMonth: 20, rampMonths: 8, termMonths: 24 }));
+    expect(r.flags.find((x) => x.code === 'stabilisation_incomplete_at_maturity')!.severity)
+      .toBe('amber');
+
+    // Its near-twin — the base document, whose ramp (month 16 + 3 = 19)
+    // completes well inside its 24-month term — must NOT raise it.
+    const clean = icMetrics(investmentCaseDoc());
+    expect(clean.flags.map((x) => x.code)).not.toContain('stabilisation_incomplete_at_maturity');
+  });
+
+  it('raises an amber flag when coverage — not value — limits the take-out', () => {
+    const dscrBinds = icMetrics(investmentCaseDoc());
+    expect(dscrBinds.investment_case!.takeout.binding_constraint).toBe('dscr');
+    expect(dscrBinds.flags.map((f) => f.code)).toContain('takeout_constrained_by_coverage');
+
+    // Its LTV-binding twin must NOT raise it — a flag that fires on every
+    // document tells a reader nothing.
+    const ltvBinds = icMetrics(investmentCaseDoc({ ltvBinds: true }));
+    expect(ltvBinds.investment_case!.takeout.binding_constraint).toBe('ltv');
+    expect(ltvBinds.flags.map((f) => f.code)).not.toContain('takeout_constrained_by_coverage');
   });
 });

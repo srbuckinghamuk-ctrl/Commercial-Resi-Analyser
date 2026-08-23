@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v9
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v10
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
@@ -472,16 +472,16 @@ def calculate_authoritative(
         # when that block is absent (spec Sec 2) and falls back to the calc
         # 2.1.0 auto windows when `programme` is None (spec Sec 6). This is
         # also what gets persisted as inputs_snapshot. Like
-        # migrate_inputs_to_v6, migrate_inputs_to_v9 already returns a
+        # migrate_inputs_to_v6, migrate_inputs_to_v10 already returns a
         # validated model -- no separate .model_validate call is needed here.
-        inputs = migrate_inputs_to_v9(raw)
+        inputs = migrate_inputs_to_v10(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # A malformed or unsupported-version inputs_snapshot must 4xx, never
-        # 500 (Task 10 known item #1). migrate_inputs_to_v9 -- like
-        # migrate_inputs_to_v8, migrate_inputs_to_v7, migrate_inputs_to_v6 and
-        # migrate_inputs_to_v5 before it, and the
+        # 500 (Task 10 known item #1). migrate_inputs_to_v10 -- like
+        # migrate_inputs_to_v9, migrate_inputs_to_v8, migrate_inputs_to_v7,
+        # migrate_inputs_to_v6 and migrate_inputs_to_v5 before it, and the
         # merge helper all three delegate to -- raises plain Python
         # exceptions, not ValidationError, for
         # shapes it cannot interpret: e.g. a document already refused by an
@@ -543,12 +543,18 @@ def calculate_authoritative(
             "client_mismatches": mismatches,
         },
         "calc_version": CALC_VERSION,
-        # R12 Task 18b: moved 8 -> 9 with the migration boundary above (R11
-        # Task 10 moved it 7 -> 8 for the same reason). This is the GOVERNANCE
-        # column and it feeds audit_hash (spec Sec 13.2) -- left at 8 it would
-        # record a v8 provenance for a document the same response returns as
-        # v9, which is the split R10 shipped in a different form.
-        "inputs_version": 9,
+        # Fix round 1 (spec Sec 19.9 review). R11, R12 and R13 Task 18 each
+        # bumped this GOVERNANCE column as a hand-written literal (7 -> 8 ->
+        # 9 -> 10) instead of deriving it -- the fourth release in which that
+        # literal needed a manual, easy-to-miss bump, and R13's own cutover
+        # shipped it stale (at 9) for exactly that reason before the v10-arm
+        # proof caught it. `inputs` is already a `CalculatorInputsV10` here
+        # (the `migrate_inputs_to_v10(raw)` call above), whose
+        # `inputs_version` field is `Literal[10] = 10` -- the SAME value this
+        # dict's `inputs_snapshot` already carries, for the same reason. Read
+        # off the document instead of restating it, so a future version bump
+        # cannot leave this column behind again.
+        "inputs_version": inputs.inputs_version,
         "status": status,
         "input_hash": input_hash(inputs),
         "outputs_hash": canonical_hash(outputs),
@@ -558,7 +564,7 @@ def calculate_authoritative(
         "audit_hash": audit_hash(
             project_id=str(payload.project_id),
             calc_version=CALC_VERSION,
-            inputs_version=9,
+            inputs_version=inputs.inputs_version,
             status=status,
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),

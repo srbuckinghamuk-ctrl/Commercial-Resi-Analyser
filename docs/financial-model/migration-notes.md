@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v9)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v10)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -889,3 +889,76 @@ no-ops — `phase_id: null` on its fee lines, and the two `phase_slip` fields at
 `null`/`0` on all four scenarios. Its post-R12 behaviour is exactly the R11 row
 with those written defaults attached. It shows no float and no critical path,
 which is limitation 1 of spec §18.10, stated rather than discovered.
+
+---
+
+## 13. v9 → v10 (Release 13, calc `2.12.0`)
+
+**What's added.** `CalculatorInputsV10` is `CalculatorInputsV9` plus a new
+top-level `investment_case: InvestmentCase | null` and two narrowings on
+`refinance` (spec §19.1). `CalculatorInputsV10` subclasses `CalculatorInputsV9`,
+for the same reason every prior version extended rather than replaced.
+
+| v9 field | v10 field | Behaviour |
+|---|---|---|
+| *(absent)* | `investment_case` | Written `null`. The migration default; `null` is the explicit `investment_value_pence × ltv_pct` path (spec §4.5), unchanged. |
+| `refinance` (whole block) | `refinance` | `null` stays `null`. A non-null block carries across with `investment_value_pence` and `ltv_pct` **unchanged and still non-null** — the explicit path survives the boundary exactly, because `investment_case` migrates to `null` alongside it, and §19.1's supersession rule only fires when `investment_case` is non-null. |
+| *(absent, non-null `refinance` only)* | `refinance.arrangement_fee_basis` | Written `'fixed_pence'`. |
+| *(absent, non-null `refinance` only)* | `refinance.arrangement_fee_pct` | Written `0`. |
+
+**The two written no-ops reproduce today's arithmetic exactly.**
+`arrangement_fee_basis: 'fixed_pence'` with `arrangement_fee_pct: 0` means the
+fee is read entirely from the unchanged `arrangement_fee_pence` field (spec
+§19.4's `arrangement_fee` formula takes the `fixed_pence` arm and ignores the
+percentage), so a migrated document's refinance arithmetic is untouched. This
+is the same shape as R11's `registered: false` and R12's `phase_slip_months: 0`
+— a written value, not an absence, that the engine reads and finds inert.
+
+**Implementation** (`migrateV9toV10` / `migrate_v9_to_v10`, `migrateInputsToV10`
+/ `migrate_inputs_to_v10`). The entry point mirrors `migrateInputsToV9`'s shape,
+including its two refusals — an unrecognised `inputs_version` throws, and a
+document declaring version 10 that fails the v10 structural check throws
+rather than falling through to a permissive earlier path.
+
+### 13.1 The identity claim, and where it is tested
+
+**Claim: the v9 → v10 migration moves no computed figure and adds no
+validation issue that is not a genuinely new rule. Every existing appraisal
+produces byte-identical output either side of it.**
+
+The gate is a pair, and the validation half is **three separately-falsifiable
+properties, not one set equality** (spec §19.9) — R12's §18.7 correction,
+applied from the start of this release rather than arrived at mid-release:
+
+1. **Every v9 issue has a v10 counterpart.** No live alias map was needed:
+   v10 adds no field rename that a pre-existing validation rule reports
+   against, so this property holds without a `PROGRAMME_FIELD_ALIASES`-style
+   table.
+2. **The v10-only rules of spec §19.7 raise no issue on a migrated document.**
+   `investment_case` migrates to `null`, so none of §19.7's twelve rules —
+   every one of them gated on `investment_case` being non-null, or on
+   `refinance` carrying the new arrangement-fee fields whenever it is
+   non-null — has anything to fire against on a document that never asked
+   for an investment case.
+3. **A control document that trips a v10-only rule raises it.** Built by
+   taking a migrated `retain_all` fixture and poisoning one field the v10-only
+   rules cover (`stabilised_occupancy_pct: 0`, spec §19.7 rule 8), proving the
+   new rules can fire at all — property 2 alone, without property 3, would
+   pass identically whether the new rules were wired up or silently inert,
+   which is the exact shape R12 shipped and had to rewrite mid-release.
+
+Property 1 is asserted alongside the migration/schema work; properties 2 and 3
+are asserted alongside spec §19.7's validation rules, because they need those
+rules to exist and to fire before they can be written as anything but a
+tautology.
+
+Both engines run the numeric gate corpus-wide.
+
+### 13.2 The York appraisal after R13
+
+The Stonegate record (§10.2) carries no `investment_case` and its `refinance`
+block is `null`, so it takes the untouched arm on both counts: it gains only
+`investment_case: null`, and there is no `refinance` block for the two new
+arrangement-fee fields to attach to. Its post-R13 behaviour is exactly the R12
+row with that one written default attached. It reports no investment case,
+which is expected — it never asked for one.

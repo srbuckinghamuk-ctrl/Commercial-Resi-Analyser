@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ExitStrategyPage from './ExitStrategyPage';
-import { runAppraisal } from '../../lib/model';
+import { runAppraisal, validateInputs } from '../../lib/model';
 import type { CalculatorInputsV9, SalesPhasingInputsV9, RefinanceInputsV9 } from '../../lib/model';
 import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import { penceToPounds } from '../../lib/format';
+import type { ProgrammeNetwork } from '../../lib/model';
+import { retainAllDocMissingRents, icDoc } from '../../lib/model/__fixtures__/investment-case-docs';
 
 function buildInputs(overrides: Partial<CalculatorInputsV9> = {}): CalculatorInputsV9 {
   const base = defaultCalculatorInputsV9();
@@ -39,6 +41,25 @@ const SEEDED_REFINANCE: RefinanceInputsV9 = {
 const UNIT_A = {
   id: 'u1', type: '2bed' as const, floor_area_sqm: 60, estimated_value_pence: 30_000_000,
   comparable_notes: '', ancillary: { ...DEFAULT_UNIT_ANCILLARY },
+};
+
+// R13 Task 14. A minimal network to anchor to: a non-milestone phase feeding
+// every category slot (so §18.5's category_phase_ids checks are non-issues,
+// irrelevant to what these tests assert) plus one milestone phase to anchor
+// against.
+const NETWORK: ProgrammeNetwork = {
+  anchor_month: null,
+  phases: [
+    {
+      id: 'construction', code: 'construction', label: 'Construction', duration_months: 6,
+      slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [],
+    },
+    {
+      id: 'pc', code: 'practical_completion', label: 'Practical completion', duration_months: 0,
+      slip_months: 0, start_offset: 6, curve: { kind: 'straight_line' }, predecessors: [],
+    },
+  ],
+  category_phase_ids: { construction: 'construction', professional: 'construction', statutory: 'construction' },
 };
 
 describe('ExitStrategyPage — section visibility by route', () => {
@@ -360,5 +381,156 @@ describe('ExitStrategyPage — refinance field editing and preview', () => {
     const expected = Math.round(SEEDED_REFINANCE.investment_value_pence * (SEEDED_REFINANCE.ltv_pct / 100))
       - SEEDED_REFINANCE.arrangement_fee_pence - SEEDED_REFINANCE.legal_costs_pence;
     expect(screen.getByText(penceToPounds(expected))).toBeInTheDocument();
+  });
+});
+
+// R13 Task 14. This is the wiring test for ExitAnchorControl.test.tsx's
+// isolated component — it confirms the page passes the RIGHT phases/value/
+// onChange through, and that the resolved-month readout comes off
+// `run.schedule.resolved_exit_months` rather than the raw `month_offset`.
+describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9, closed)', () => {
+  it('choosing a phase for a tranche anchors that tranche only, leaving its other fields untouched', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'sell_all' },
+      programme: NETWORK,
+      sales_phasing: SEEDED_PHASING,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pc' } });
+    expect(onChange).toHaveBeenCalledWith({
+      sales_phasing: {
+        tranches: [{ ...SEEDED_PHASING.tranches[0], anchor: { phase_id: 'pc', offset_months: 0 } }],
+      },
+    });
+  });
+
+  it('choosing a phase for the refinance anchors the refinance block only', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'retain_all' },
+      programme: NETWORK,
+      refinance: SEEDED_REFINANCE,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pc' } });
+    expect(onChange).toHaveBeenCalledWith({
+      refinance: { ...SEEDED_REFINANCE, anchor: { phase_id: 'pc', offset_months: 0 } },
+    });
+  });
+
+  it('with no programme network, both anchor controls render disabled', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'blended' },
+      programme: null,
+      sales_phasing: SEEDED_PHASING,
+      refinance: SEEDED_REFINANCE,
+    });
+    setup(inputs);
+    const comboboxes = screen.getAllByRole('combobox');
+    expect(comboboxes).toHaveLength(2); // one tranche row + refinance row
+    comboboxes.forEach((box) => expect(box).toBeDisabled());
+  });
+
+  // The readout is the whole point of Task 8/14 together: it must be the
+  // RESOLVED month (schedule.resolved_exit_months), not the raw month_offset
+  // this page also lets the user edit directly. They coincide here (anchor:
+  // null means "use month_offset"), so this pins the SOURCE, not just the
+  // value -- a stub that echoed month_offset back would also pass a
+  // value-only assertion.
+  it('the resolved-month readout comes from schedule.resolved_exit_months, not a component-local echo', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'blended' },
+      programme: NETWORK,
+      sales_phasing: SEEDED_PHASING,
+      refinance: SEEDED_REFINANCE,
+    });
+    const { run } = setup(inputs);
+    expect(run.schedule.resolved_exit_months.tranches).toEqual([11]);
+    expect(run.schedule.resolved_exit_months.refinance).toBe(11);
+    expect(screen.getAllByText(/resolves to month 11/i)).toHaveLength(2);
+  });
+});
+
+// R13 Task 15 (spec §19.6/§19.7 rule 2), fix rounds 1-2. `retainAllDocMissingRents()`
+// is a v10 document -- `ExitStrategyPage` is generic over `CalculatorInputsV9 |
+// CalculatorInputsV10` for exactly this reason (see the page's own header
+// comment). Its base fixture (t-investment-case.json) already carries an
+// investment case and a refinance block seeded with a null value/LTV pair
+// (spec §19.7 rule 5) -- only unit u2's rent row is missing. Fix round 1: the
+// review found "Add an investment case" rendered unconditionally, alongside
+// "Remove investment case" once a case existed, which read as though nothing
+// had been added. The affordance for THIS fixture's exact state (a case that
+// exists but is incomplete) is now "Complete rent roll", not "Add an
+// investment case" -- see the render block's own comment for the actual
+// invariant (each affordance is shown exactly when it is true of the state;
+// "Complete rent roll" and "Remove" legitimately render together here, since
+// both are true of a case that exists but has a row missing).
+describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', () => {
+  it('offers "Complete rent roll", not "Add", for an existing case with a missing row', () => {
+    const doc = retainAllDocMissingRents();
+    const run = runAppraisal(doc);
+    const onChange = vi.fn();
+    render(<ExitStrategyPage inputs={doc} onChange={onChange} run={run} />);
+
+    // Sanity: the fixture really is missing exactly u2's row before the click.
+    expect(doc.exit_strategy.retained_units).toHaveLength(doc.unit_mix.units.length - 1);
+
+    // The case already exists, so "Add" must not be offered -- only the
+    // honest "repair" affordance and "Remove" (both true of this state).
+    expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove investment case/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /complete rent roll/i }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    // Repairing an already-existing case must not re-emit `investment_case`
+    // -- only the field that actually changed.
+    expect(onChange.mock.calls[0][0]).not.toHaveProperty('investment_case');
+    const next = { ...doc, ...onChange.mock.calls.at(-1)![0] };
+    expect(next.exit_strategy.retained_units).toHaveLength(next.unit_mix.units.length);
+    expect(next.exit_strategy.retained_units.map((r: { unit_id: string }) => r.unit_id).sort())
+      .toEqual(next.unit_mix.units.map((u: { id: string }) => u.id).sort());
+    expect(validateInputs(next).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  // Fix round 1's own regression guard: once the rent roll is genuinely
+  // complete, neither "Add" nor "Complete rent roll" should be offered --
+  // only "Remove". This is the state the finding was about.
+  it('offers only "Remove" once the case exists and every unit already has a rent row', () => {
+    const doc = icDoc(); // t-investment-case.json as-is -- every unit already has a row.
+    const run = runAppraisal(doc);
+    render(<ExitStrategyPage inputs={doc} onChange={vi.fn()} run={run} />);
+
+    expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove investment case/i })).toBeInTheDocument();
+  });
+
+  it('offers "Add an investment case" when there is no case yet, and creates one on click', () => {
+    const doc = icDoc({ investmentCase: null });
+    const run = runAppraisal(doc);
+    const onChange = vi.fn();
+    render(<ExitStrategyPage inputs={doc} onChange={onChange} run={run} />);
+
+    expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove investment case/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^add an investment case$/i }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = { ...doc, ...onChange.mock.calls.at(-1)![0] };
+    expect(next.investment_case).not.toBeNull();
+    // icDoc()'s own rent roll is already complete (this test only nulled
+    // `investment_case`, not any unit's row), so creating the case here
+    // needs no repair -- this just confirms rule 2 stays satisfied when
+    // there was nothing to fix in the first place.
+    expect(next.exit_strategy.retained_units).toHaveLength(next.unit_mix.units.length);
+    expect(validateInputs(next).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('does not offer the investment case section on a v9 document', () => {
+    const inputs = buildInputs({ exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'retain_all' } });
+    setup(inputs);
+    expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
   });
 });

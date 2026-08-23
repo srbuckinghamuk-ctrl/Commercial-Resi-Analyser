@@ -1,6 +1,8 @@
 import type {
-  AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, ModelFlag, MonthlyModel, Schedule,
+  AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
+  ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
+import type { InvestmentCaseResult } from './investment-case';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
 import { calculateAcquisitionTax, resolveAcquisitionDate } from '../tax/acquisition-tax';
@@ -56,6 +58,37 @@ export function breakevenFlags(
   if ((seniorNull || developerNull) && !unsolvable && seniorUnsolvableReason == null) out.push({
     code: 'breakeven_cap_exhausted', severity: 'red', month: null, amount_pence: null,
     message: 'break-even solver range exhausted — inputs are implausible; treat all break-even figures as unavailable',
+  });
+  return out;
+}
+
+/** R13 spec §19.7's flag table. Pure, like `breakevenFlags` above: takes the
+ *  already-computed `InvestmentCaseResult` (never recomputes it) plus the two
+ *  figures the table's second row needs that the result itself does not
+ *  carry — `rampMonths` (an INPUT field, not part of the published result)
+ *  and `termMonths` (the schedule's, not the case's). `[]` when `ic` is
+ *  null: no block, no flags, exactly as the null path publishes no result. */
+export function investmentCaseFlags(
+  ic: InvestmentCaseResult | null, rampMonths: number, termMonths: number,
+): ModelFlag[] {
+  if (ic == null) return [];
+  const out: ModelFlag[] = [];
+  if (ic.stabilised.annual_noi_pence <= 0) out.push({
+    code: 'investment_case_noi_non_positive', severity: 'red', month: null,
+    amount_pence: ic.stabilised.annual_noi_pence,
+    message: 'stabilised annual NOI is non-positive — the take-out sizes to nothing',
+  });
+  if (ic.stabilisation_month + rampMonths > termMonths) out.push({
+    code: 'stabilisation_incomplete_at_maturity', severity: 'amber', month: null, amount_pence: null,
+    message:
+      'the stabilisation ramp does not finish before the term ends — the valuation '
+      + 'still reads the stabilised figure',
+  });
+  if (ic.takeout.binding_constraint === 'dscr' || ic.takeout.binding_constraint === 'icr') out.push({
+    code: 'takeout_constrained_by_coverage', severity: 'amber', month: null,
+    amount_pence: ic.takeout.quantum_pence,
+    message: `the take-out is capped by ${ic.takeout.binding_constraint.toUpperCase()} `
+      + 'coverage, not by value',
   });
   return out;
 }
@@ -118,12 +151,15 @@ function vatCarryInterestPence(
 ): number {
   // Structural, exactly as `computeVat` and `chargeableConsiderationPence` read
   // it, and written as a narrowing guard rather than a ternary so the spread
-  // below is typed as the v8-or-v9 member of the union — a pre-v8 document has
+  // below is typed as the v8/v9/v10 member of the union — a pre-v8 document has
   // no `vat` key to force, and `{ ...v7doc, vat: ... }` is a `tsc` error, correctly.
+  // R13: `CalculatorInputsV10` added to the counterfactual's own union alongside
+  // the V10 addition to `AnyCalculatorInputs` -- VAT is untouched by the
+  // investment case, so the widening is mechanical.
   if (!('vat' in inputs)) return 0;
   const vat = inputs.vat;
   if (!vat.registered) return 0;
-  const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 = {
+  const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10 = {
     ...inputs,
     vat: { ...vat, registered: false },
     // R33. `buildSchedule` charges acquisition tax through its own site
@@ -373,6 +409,14 @@ export function deriveMetrics(
   // because it was declared that way, unwired, in Task 1).
   const costToComplete = computeCostToComplete(schedule, model, inputs);
 
+  // §19.6/§19.7. `schedule.investment_case` republished, never recomputed —
+  // §17.12's `vat` treatment. `rampMonths` reads the INPUT block (the result
+  // itself does not carry it); guarded the same way `computeInvestmentCase`
+  // itself is null exactly when this guard is false.
+  const rampMonths = 'investment_case' in inputs && inputs.investment_case != null
+    ? inputs.investment_case.stabilisation.ramp_months : 0;
+  flags.push(...investmentCaseFlags(schedule.investment_case, rampMonths, schedule.term_months));
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -441,6 +485,9 @@ export function deriveMetrics(
     senior_breakeven_fall_from_lender_gdv_pct: seniorBreakevenFallFromLenderGdvPct,
     developer_breakeven_pence: developerBreakeven,
     cost_to_complete: costToComplete,
+    // §17.12's `vat` treatment, applied here: the SCHEDULE's investment case,
+    // republished — not a second derivation.
+    investment_case: schedule.investment_case,
     flags,
   };
 }

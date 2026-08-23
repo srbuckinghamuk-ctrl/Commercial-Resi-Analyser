@@ -30,6 +30,7 @@ from app.financial_model.schedule import (
     Schedule,
     ScheduleRefinance,
     ScheduleTotals,
+    build_schedule,
 )
 from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
 from app.financial_model.types import (
@@ -54,6 +55,8 @@ from app.financial_model.types import (
     UnitMixInputsV6,
 )
 from app.financial_model.vat import VatMonthLine, VatResult
+
+from .fixtures_investment_case import explicit_refinance_doc, investment_case_doc
 
 # --- helpers copied verbatim from test_financial_model_engine.py ---
 
@@ -119,6 +122,7 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
             vat_pence=sum_(lambda x: x.vat_pence),
             vat_reclaim_pence=sum(x.vat_reclaim_pence for x in r),
             irrecoverable_vat_pence=0,
+            net_operating_income_pence=sum(x.net_operating_income_pence for x in r),
         ),
     )
 
@@ -1129,3 +1133,78 @@ def test_carry_interest_and_profit_impact_separate_on_a_peak_debt_exit_fee():
     assert on.metrics.vat_carry_interest_pence == (
         on.model.totals.interest_pence - off.model.totals.interest_pence
     )
+
+
+# --- Sec 19.6 result block and flags -------------------------------------
+
+def _ic_metrics(doc):
+    """Mirrors run_appraisal's own two-call composition (build_schedule then
+    run_ledger) so these tests exercise the real derive_metrics(inputs,
+    schedule, model) signature directly, never through run_appraisal -- the
+    republish-not-recompute test below needs to call derive_metrics itself."""
+    schedule = build_schedule(doc)
+    model = run_ledger(schedule, doc.finance, doc.equity_sources)
+    return derive_metrics(doc, schedule, model)
+
+
+def test_republishes_the_schedules_investment_case_rather_than_recomputing_it():
+    # R13 fix-wave Minor 4. The previous version built TWO independent
+    # schedules (one directly, one inside _ic_metrics's own build_schedule
+    # call) and compared with == -- a derive_metrics that recomputed
+    # investment_case from scratch would produce an equal dict on the same
+    # input and pass just as well. Sharing ONE schedule and asserting object
+    # identity (`is`) is the only assertion that actually distinguishes
+    # "republished" from "recomputed to an identical result", mirroring
+    # run_appraisal's own `metrics.investment_case is schedule.investment_case`.
+    doc = investment_case_doc()
+    s = build_schedule(doc)
+    model = run_ledger(s, doc.finance, doc.equity_sources)
+    r = derive_metrics(doc, s, model)
+    # Sec 17.12's treatment of vat, applied here: ONE computation, republished.
+    assert r.investment_case is s.investment_case
+
+
+def test_investment_case_is_none_on_the_explicit_path_exactly_as_the_input_is():
+    assert _ic_metrics(explicit_refinance_doc()).investment_case is None
+
+
+def test_raises_a_red_flag_on_a_non_positive_stabilised_noi_and_sizes_to_nothing():
+    r = _ic_metrics(investment_case_doc({"opex_exceeds_rent": True}))
+    f = next(x for x in r.flags if x.code == "investment_case_noi_non_positive")
+    assert f.severity == "red"
+    assert r.investment_case["takeout"]["quantum_pence"] == 0
+    assert r.investment_case["takeout"]["binding_constraint"] is None
+
+    # Its near-twin -- the unmodified base document, where NOI is comfortably
+    # positive -- must NOT raise it.
+    clean = _ic_metrics(investment_case_doc())
+    assert clean.investment_case["stabilised"]["annual_noi_pence"] > 0
+    assert "investment_case_noi_non_positive" not in [x.code for x in clean.flags]
+
+
+def test_raises_an_amber_flag_when_the_ramp_has_not_finished_by_maturity():
+    # NOT an error: refinancing mid-lease-up is a real structure. Flagged
+    # because the valuation reads the STABILISED figure regardless, and that
+    # gap should be visible rather than inferred.
+    r = _ic_metrics(investment_case_doc(
+        {"stabilisation_month": 20, "ramp_months": 8, "term_months": 24},
+    ))
+    f = next(x for x in r.flags if x.code == "stabilisation_incomplete_at_maturity")
+    assert f.severity == "amber"
+
+    # Its near-twin -- the base document, whose ramp (month 16 + 3 = 19)
+    # completes well inside its 24-month term -- must NOT raise it.
+    clean = _ic_metrics(investment_case_doc())
+    assert "stabilisation_incomplete_at_maturity" not in [x.code for x in clean.flags]
+
+
+def test_raises_an_amber_flag_when_coverage_not_value_limits_the_takeout():
+    dscr_binds = _ic_metrics(investment_case_doc())
+    assert dscr_binds.investment_case["takeout"]["binding_constraint"] == "dscr"
+    assert "takeout_constrained_by_coverage" in [f.code for f in dscr_binds.flags]
+
+    # Its LTV-binding twin must NOT raise it -- a flag that fires on every
+    # document tells a reader nothing.
+    ltv_binds = _ic_metrics(investment_case_doc({"ltv_binds": True}))
+    assert ltv_binds.investment_case["takeout"]["binding_constraint"] == "ltv"
+    assert "takeout_constrained_by_coverage" not in [f.code for f in ltv_binds.flags]

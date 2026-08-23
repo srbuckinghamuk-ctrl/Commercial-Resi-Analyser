@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type {
-  AppraisalRun, CalculatorInputsV8, CalculatorInputsV9, ProgrammeInputs, ProgrammeNetwork, Phase,
+  AppraisalRun, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
+  ProgrammeInputs, ProgrammeNetwork, Phase,
 } from '../../lib/model';
 import { isProgrammeNetwork, isLegacyProgramme, PACKAGE_TO_PHASE } from '../../lib/model';
 import { derivePhases } from '../../lib/model/programme';
@@ -17,16 +18,19 @@ import ProgrammeGantt from './ProgrammeGantt';
  * carries, and a v9 `{ phases: [...] }` network. `isProgrammeNetwork` /
  * `isLegacyProgramme` (programme.ts) are the sole sanctioned discriminators.
  *
- * R12 Task 18b (spec §18.7) wired the app end-to-end to v9, so T resolves to
- * CalculatorInputsV9 at the real call site (ConversionCalculator.tsx) and the
- * legacy `{ packages: {...} }` arm below is now reachable only from a caller
- * still holding a v8 document -- the tests, and any future one. Props stays
- * generic over both shapes `programme` can legally live on, and `onChange`
- * stays typed to whichever one the caller has, so both compile against the
- * SAME component. Keeping the v8 arm is deliberate: it is what proves the
- * legacy discriminator still works, and it costs nothing at the v9 call site.
+ * R12 Task 18b (spec §18.7) wired the app end-to-end to v9; R13 Task 18 (spec
+ * §19.9) wires it to v10, so T now resolves to CalculatorInputsV10 at the
+ * real call site (ConversionCalculator.tsx) and the legacy `{ packages: {...} }`
+ * arm below is reachable only from a caller still holding a v8 document --
+ * the tests, and any future one. `programme` is unchanged in shape between
+ * v9 and v10 (only `refinance` and the new `investment_case` differ), so
+ * widening the union costs this page nothing. Props stays generic over every
+ * shape `programme` can legally live on, and `onChange` stays typed to
+ * whichever one the caller has, so all three compile against the SAME
+ * component. Keeping the v8 arm is deliberate: it is what proves the legacy
+ * discriminator still works, and it costs nothing at the v10 call site.
  */
-type ProgrammeCarrier = CalculatorInputsV8 | CalculatorInputsV9;
+type ProgrammeCarrier = CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10;
 
 interface Props<T extends ProgrammeCarrier> {
   inputs: T;

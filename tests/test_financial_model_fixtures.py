@@ -20,6 +20,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v7,
     migrate_inputs_to_v8,
     migrate_inputs_to_v9,
+    migrate_inputs_to_v10,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.validation import ValidationIssue, validate_inputs
@@ -72,6 +73,8 @@ EXPECTED_FIXTURE_STEMS = [
     "q-detailed-cost-plan",
     "r-vat-quarterly",
     "s-dated-programme",
+    "t-investment-case",
+    "u-investment-case-ltv-binds",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -223,9 +226,17 @@ def _resolve_path(root, path: str):
     metrics object. A plain key is just a one-segment path. Mirrors
     golden-fixtures.test.ts's ``resolvePath``: AreaBridgeResult has 23 fields, and
     pinning them individually keeps the fixture JSON language-neutral -- pinning the
-    whole object would compare this dataclass against a JSON dict and never pass."""
+    whole object would compare this dataclass against a JSON dict and never pass.
+
+    R13 fix-wave BLOCKING 2. `metrics.investment_case` (spec Sec 19.6) is a plain
+    dict at runtime -- `InvestmentCaseResult` and its nested `stabilised`/
+    `valuation`/`takeout` are all TypedDicts, not dataclasses -- so a segment
+    that lands on one needs `[part]`, not `getattr`. `resolvePath` in
+    golden-fixtures.test.ts never had this problem: JS bracket access works
+    identically on a class instance or a plain object, so only this engine's
+    getattr-only walk needed widening."""
     for part in path.split("."):
-        root = getattr(root, part)
+        root = root[part] if isinstance(root, dict) else getattr(root, part)
     return root
 
 
@@ -280,14 +291,16 @@ _V8_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) =
 # stops at 8). Its own properties are asserted by its pinned expected_metrics and by
 # the v9-specific tests further down.
 _V9_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 9]
+# R13 Task 5b: the two v10-native investment-case fixtures (spec §19).
+_V10_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 10]
 
 
-def test_every_fixture_is_v5_v6_v7_v8_or_v9_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_v6_v7_v8_v9_or_v10_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
-        + len(_V9_FIXTURES)
+        + len(_V9_FIXTURES) + len(_V10_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -297,6 +310,9 @@ def test_every_fixture_is_v5_v6_v7_v8_or_v9_and_each_group_is_non_empty() -> Non
     assert [p.stem for p in _V7_FIXTURES] == ["q-detailed-cost-plan"]
     assert [p.stem for p in _V8_FIXTURES] == ["r-vat-quarterly"]
     assert [p.stem for p in _V9_FIXTURES] == ["s-dated-programme"]
+    assert [p.stem for p in _V10_FIXTURES] == [
+        "t-investment-case", "u-investment-case-ltv-binds",
+    ]
 
 
 def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
@@ -367,9 +383,12 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # v7 document by design, mirroring the v5-fixtures restriction above. The stronger,
 # corpus-wide statement is test_fixtures_reproduce_their_metrics_after_migration_to_v7
 # below. R11 widens the exclusion to v7 or v8 -- migrate_inputs_to_v6 refuses v8 the
-# same way (_RECOGNISED_VERSIONS_V6 stops at 6).
+# same way (_RECOGNISED_VERSIONS_V6 stops at 6). R13 Task 5b widens it once
+# more to v10 -- migrate_inputs_to_v6 refuses a v10 document identically (it
+# would have to drop `vat`, `programme`'s v9 shape, `refinance`'s v10
+# narrowing AND `investment_case` to produce a v6 one).
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10)
 ]
 
 
@@ -390,9 +409,11 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # R11: restricted to the pre-v8 fixtures -- migrate_inputs_to_v7 refuses a v8
 # document by design (_RECOGNISED_VERSIONS_V7 stops at 7). Fixture R (v8) asserts
 # its own identity guarantee in test_fixture_r_reproduces_its_metrics_after_
-# migration_to_v8 below instead.
+# migration_to_v8 below instead. R13 Task 5b widens it once more to v10 --
+# migrate_inputs_to_v7 refuses a v10 document identically (it would have to
+# drop `refinance`'s v10 narrowing and `investment_case` to produce a v7 one).
 _PRE_V8_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10)
 ]
 
 
@@ -1045,6 +1066,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     assert [p.stem for p in excluded] == [
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
         "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
+        "t-investment-case", "u-investment-case-ltv-binds",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -1057,12 +1079,17 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # pre-R8 form at all -- it did not exist before R8, and stamping it v3/v4 would
     # additionally strip the R12 programme network the fixture is entirely about.
     #
+    # R13 Task 5b widens it once more to include 10: fixtures T and U are BORN at
+    # v10 for the same reason S was born at v9 -- they did not exist before R8,
+    # and stamping them v3/v4 would additionally strip the R13 investment case
+    # the fixtures are entirely about.
+    #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
-    # so it is vacuously true for every member and can never fail. Enumerating 6/7/8/9
-    # keeps the check able to fail: it catches a fixture excluded for a FOURTH,
-    # unstated reason (e.g. a future non-v5..v9 fixture, or a change to
+    # so it is vacuously true for every member and can never fail. Enumerating
+    # 6/7/8/9/10 keeps the check able to fail: it catches a fixture excluded for a
+    # SIXTH, unstated reason (e.g. a future non-v5..v10 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -1072,6 +1099,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 7
             or version == 8
             or version == 9
+            or version == 10
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -1418,8 +1446,20 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # all -- it refuses a v9 document by the same design that made it refuse nothing
     # below 9. It takes the v9 arm instead, and gets a v9 NETWORK fitted to its term
     # rather than the legacy three-package block.
-    if inputs.inputs_version >= 9:
+    #
+    # R13 Task 5b: a v10-born fixture (T, U) cannot go through migrate_inputs_to_v9
+    # either, by the identical design one version further on (migrate_inputs_to_v9
+    # refuses a v10 document -- it would have to drop `refinance`'s v10 narrowing
+    # and `investment_case`). `isinstance(programmed, CalculatorInputsV9)` still
+    # holds for a v10 result unchanged: CalculatorInputsV10 subclasses
+    # CalculatorInputsV9, the same relationship V9/V8 already had above.
+    if inputs.inputs_version >= 10:
+        programmed = migrate_inputs_to_v10(inputs.model_dump(mode="json"))
+    elif inputs.inputs_version >= 9:
         programmed = migrate_inputs_to_v9(inputs.model_dump(mode="json"))
+    else:
+        programmed = None
+    if programmed is not None:
         assert isinstance(programmed, CalculatorInputsV9)
         programmed.programme = _network_for_term(programmed.finance.term_months)
         # Replacing the network orphans any Sec 18.6 anchor that named one of the
@@ -1432,6 +1472,17 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
                 tranche.anchor = None
         if programmed.refinance is not None:
             programmed.refinance.anchor = None
+        # R13 Task 5b: the identical orphaning applies to a v10 document's
+        # investment-case stabilisation anchor (Sec 19.6) -- it is anchored to
+        # `practical_completion`, a phase `_network_for_term`'s three-phase
+        # network does not carry. `computeInvestmentCase` (Task 8) does not
+        # exist yet to read it, so nothing observably breaks today either way;
+        # cleared anyway to match the sales_phasing/refinance treatment above,
+        # rather than leaving a dangling anchor for Task 6's validation rule 6
+        # to trip over once it lands.
+        ic = getattr(programmed, "investment_case", None)
+        if ic is not None:
+            ic.stabilisation.anchor = None
     else:
         programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
         assert isinstance(programmed, CalculatorInputsV7)

@@ -15,6 +15,7 @@ import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 import { runAppraisal } from './index';
 import { validateInputs } from './validation';
 import { derivePhases } from './programme';
+import { anchoredSlippedDoc, investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -242,7 +243,15 @@ describe('buildSchedule with sales_phasing (spec §4.4.1)', () => {
     const v4 = phased();
     const single = buildSchedule(v4);
     v4.sales_phasing = { tranches: [{ month_offset: 11, pct_of_gross_receipts: 100 }] };
-    expect(buildSchedule(v4)).toEqual(single);   // single 100% tranche == null (identity)
+    const explicit = buildSchedule(v4);
+    // R13 spec §19.6: `resolved_exit_months` reflects the sales_phasing INPUT's
+    // shape, not the money it produces — a null input and an explicit single
+    // 100% tranche legitimately disagree here (`[]` vs `[11]`) even though
+    // every receipt, use and total below is still byte-identical (single
+    // 100% tranche == null, identity).
+    expect(explicit).toEqual({ ...single, resolved_exit_months: explicit.resolved_exit_months });
+    expect(single.resolved_exit_months.tranches).toEqual([]);
+    expect(explicit.resolved_exit_months.tranches).toEqual([11]);
   });
 
   it('splits gross and costs pro-rata with final-tranche residue absorption', () => {
@@ -977,13 +986,13 @@ describe('exit anchors — §18.6, guard 4', () => {
     // the whole total rather than a pro-rata share.
     expect(buildSchedule(anchored).receipts[17]).toEqual({
       gross_sale_pence: 120_000_000, agent_fee_pence: 1_800_000,
-      selling_legal_pence: 400_000, vat_reclaim_pence: 0,
+      selling_legal_pence: 400_000, vat_reclaim_pence: 0, net_operating_income_pence: 0,
     });
     // unanchored: month_offset is untouched by any phase's slip. Same total —
     // the two docs sell the same units — landing at the UNslipped month 14.
     expect(buildSchedule(absolute).receipts[14]).toEqual({
       gross_sale_pence: 120_000_000, agent_fee_pence: 1_800_000,
-      selling_legal_pence: 400_000, vat_reclaim_pence: 0,
+      selling_legal_pence: 400_000, vat_reclaim_pence: 0, net_operating_income_pence: 0,
     });
   });
 
@@ -1013,5 +1022,66 @@ describe('exit anchors — §18.6, guard 4', () => {
     const crossed = withSlip(d, 'unit_completions', 9);
     expect(validateInputs(crossed).some((i) => i.severity === 'error' && /strictly increasing/.test(i.message)))
       .toBe(true);
+  });
+});
+
+describe('§19.5/§19.6 investment case in the schedule', () => {
+  it('publishes resolved_exit_months for BOTH tranches and refinance', () => {
+    // The R12-carried gap: `Schedule` published no resolved tranche month, so
+    // the memo and CashflowPage had nothing to read and printed the raw offset.
+    // Hand-derived independently (see task-8-report.md): sales.start_month=11,
+    // maturity_tail.start_month=14 -> tranche[0] {sales,+3}=14,
+    // tranche[1]/refinance {maturity_tail,+4}=18. Confirmed by running
+    // derivePhases against this exact document before pinning these numbers.
+    const s = buildSchedule(anchoredSlippedDoc());
+    expect(s.resolved_exit_months.tranches).toEqual([14, 18]);
+    expect(s.resolved_exit_months.refinance).toBe(18);
+    // And the resolved month is where the receipts ACTUALLY landed.
+    expect(s.receipts[14].gross_sale_pence).toBeGreaterThan(0);
+    expect(s.receipts[12].gross_sale_pence).toBe(0);
+  });
+
+  it('writes the NOI series onto receipts as its own class', () => {
+    // investmentCaseDoc() (t-investment-case.json) anchors stabilisation to
+    // practical_completion + 1; practical_completion starts month 15 (see the
+    // fixture's own forward-pass note), so stabilisation is month 16 and NOI
+    // is zero at month 2 but fully live by month 20 (well past the ramp,
+    // which completes at month 18). The brief's illustrative month 8 predates
+    // that stabilisation month and would still be zero — corrected here.
+    const s = buildSchedule(investmentCaseDoc());
+    expect(s.receipts[2].net_operating_income_pence).toBe(0);
+    expect(s.receipts[20].net_operating_income_pence).toBeGreaterThan(0);
+    // Isolation: NOI is NOT a sale receipt.
+    expect(s.receipts[20].gross_sale_pence).toBe(0);
+    expect(s.totals.gross_sales_pence).toBe(0);   // retain_all
+  });
+
+  it('takes the refinance advance from the SIZED quantum when the case is non-null', () => {
+    const s = buildSchedule(investmentCaseDoc());
+    const ic = s.investment_case!;
+    expect(ic.takeout.binding_constraint).toBe('dscr');
+    // t-investment-case.json's refinance.legal_costs_pence is 450_000 (£4,500),
+    // not the brief's 45_000_00 (£45,000) — a brief/fixture mismatch, reported
+    // in task-8-report.md; using the fixture's actual value here.
+    expect(s.refinance!.net_proceeds_pence).toBe(
+      ic.takeout.quantum_pence
+      - Math.round((ic.takeout.quantum_pence * 1.5) / 100)   // pct_of_quantum basis
+      - 450_000,                                              // legal costs
+    );
+  });
+
+  it('leaves investment_case null — and the explicit path live — when the input is null', () => {
+    const s = buildSchedule(explicitRefinanceDoc());
+    expect(s.investment_case).toBeNull();
+    expect(s.refinance!.net_proceeds_pence).toBe(
+      Math.round((5_000_000_00 * 60) / 100) - 30_000_00 - 20_000_00,
+    );
+  });
+
+  it('marks the case indicative when there is no refinance to book', () => {
+    const s = buildSchedule(investmentCaseDoc({ refinance: null }));
+    expect(s.investment_case!.takeout.is_booked).toBe(false);
+    expect(s.investment_case!.takeout.quantum_pence).toBeGreaterThan(0);
+    expect(s.refinance).toBeNull();
   });
 });

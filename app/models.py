@@ -351,8 +351,8 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v9, not by this schema) -- may be any of v1 through
-    # v9. A v5+ document's `acquisition` block carries the R8 fields
+    # migrate_inputs_to_v10, not by this schema) -- may be any of v1 through
+    # v10. A v5+ document's `acquisition` block carries the R8 fields
     # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
     # `acquisition_date`, `acquisition_tax_override_pence`,
     # `acquisition_tax_override_reason`) defined on
@@ -368,8 +368,14 @@ class FinancialAppraisalCreate(BaseModel):
     # `programme` with a precedence network (phases, dependencies, derived
     # windows) and adds the per-line `phase_id`, the per-scenario
     # `phase_slip` lever and the per-tranche/per-refinance `anchor`, defined
-    # on `ProgrammeNetwork` / `CalculatorInputsV9` in the same module. Those
-    # are the typed schemas the fields are actually enforced against.
+    # on `ProgrammeNetwork` / `CalculatorInputsV9` in the same module; a v10
+    # document (R13, spec Sec 19) adds the top-level, two-state
+    # `investment_case` block (null = calc 2.11.0's explicit
+    # investment_value_pence x ltv_pct path; non-null = the derived case) and
+    # narrows `refinance.investment_value_pence`/`ltv_pct` to nullable,
+    # defined on `InvestmentCaseInputs` / `RefinanceInputsV10` /
+    # `CalculatorInputsV10` in the same module. Those are the typed schemas
+    # the fields are actually enforced against.
     inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the
     # server always recalculates and never trusts these for persistence:

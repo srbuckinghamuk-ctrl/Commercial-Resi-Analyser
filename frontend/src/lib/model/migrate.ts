@@ -5,6 +5,7 @@ import type {
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
+  CalculatorInputsV10,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -1015,4 +1016,151 @@ export function migrateInputsToV9(
     };
   }
   return migrateV8toV9(migrateInputsToV8(snapshot, project));
+}
+
+// --- Release 13 (calc 2.11.0 -> 2.12.0): the investment case (spec §19.9) --
+
+/**
+ * A v10 document is discriminated by `inputs_version === 10` AND the
+ * presence of the (possibly null) `investment_case` key.
+ *
+ * Unlike every other `isVN` above, this does NOT also check `finance`'s
+ * shape: the finance block is unchanged since v2 and so cannot discriminate
+ * v10 from v2-v9, whereas `investment_case` is a key that exists on no
+ * document before v10 — a strictly better, version-specific marker for this
+ * version.
+ *
+ * Kept module-private (no `export`), mirroring isV9's own visibility.
+ */
+function isV10(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV10 {
+  return snapshot.inputs_version === 10 && 'investment_case' in snapshot;
+}
+
+/**
+ * R13 spec §19.9. Four additions, all inert: `investment_case: null`, on a
+ * non-null `refinance`, `arrangement_fee_basis: 'fixed_pence'` and
+ * `arrangement_fee_pct: 0` — which reproduce today's arithmetic exactly, since
+ * the fixed basis reads `arrangement_fee_pence` and nothing else — and, on
+ * every one of the four named scenarios, `exit_yield_adjustment_pct: 0`,
+ * `operating_cost_adjustment_pct: 0` and `vacancy_adjustment_pct: 0` (spec
+ * §19.8). The three new scenario fields are written explicitly, mirroring
+ * `withSlip`'s treatment of `phase_slip_phase_id`/`phase_slip_months` one
+ * migration back — `ScenarioOverrides` already defaults all three, but only a
+ * written value (not a field default) is what the numeric identity gate
+ * actually exercises.
+ *
+ * `investment_value_pence` and `ltv_pct` are carried through NON-NULL. That is
+ * the point: a migrated document stays on the explicit path, which stays live.
+ *
+ * Precondition: `v9` must not already be a v10 document — this guards against
+ * double-migration (idempotence), same as migrateV8toV9.
+ */
+export function migrateV9toV10(v9: CalculatorInputsV9): CalculatorInputsV10 {
+  if (isV10(v9 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV9toV10: input is already a v10 document');
+  }
+  const withNewLevers = (s: ScenarioOverrides): ScenarioOverrides => ({
+    ...s,
+    exit_yield_adjustment_pct: 0,
+    operating_cost_adjustment_pct: 0,
+    vacancy_adjustment_pct: 0,
+  });
+  return {
+    ...v9,
+    inputs_version: 10,
+    investment_case: null,
+    refinance: v9.refinance == null ? null : {
+      ...v9.refinance,
+      arrangement_fee_basis: 'fixed_pence',
+      arrangement_fee_pct: 0,
+    },
+    scenarios: {
+      base: withNewLevers(v9.scenarios.base),
+      upside: withNewLevers(v9.scenarios.upside),
+      downside: withNewLevers(v9.scenarios.downside),
+      severe: withNewLevers(v9.scenarios.severe),
+    },
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V10: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+/**
+ * Normalises any stored snapshot (v1–v10) to v10. Mirrors migrateInputsToV9's
+ * shape exactly, including its two hardest-won refusals and the version
+ * predicate as MEMBERSHIP OF THE DECLARED TUPLE, never a range check or a
+ * negation — `RECOGNISED_INPUTS_VERSIONS_V10` is numerically equivalent to a
+ * `< 1 || > 10` bound for a well-formed integer version, but (unlike that
+ * bound) also rejects a non-integer value such as 9.5, the same protection
+ * every other migrateInputsToVN in this module gets from its own tuple.
+ * `migrate.test.ts` tests this one with a document tagged 11, the neighbour
+ * that catches a predicate loosened the way R10 found `=== 6` loosened to
+ * `!== 5`.
+ */
+export function migrateInputsToV10(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV10 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V10.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV10: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V10.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 10 && !isV10(snapshot)) {
+    throw new Error(
+      'migrateInputsToV10: inputs_version is 10 but the document fails the v10 structural check '
+      + '(missing `investment_case`) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV10(snapshot)) {
+    // Merge branch, mirroring migrateInputsToV9's: a document already at this
+    // version still gains any field a later patch adds to the defaults.
+    const defaults = migrateV9toV10(migrateV8toV9(migrateV7toV8(migrateV6toV7(migrateV5toV6(
+      migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project)))),
+    )))));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV10>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 10,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      // Mirrors migrateInputsToV9's own defensive trio (migrate.ts:1000-1002):
+      // `...saved` above already carries whatever `programme`/`sales_phasing`/
+      // `refinance`/`investment_case` the saved document has, so these four
+      // lines are currently redundant. Kept as a self-documenting mirror of
+      // the cost_plan/vat lines above, not a rescue of data the spread would
+      // otherwise have dropped.
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV9toV10(migrateInputsToV9(snapshot, project));
 }

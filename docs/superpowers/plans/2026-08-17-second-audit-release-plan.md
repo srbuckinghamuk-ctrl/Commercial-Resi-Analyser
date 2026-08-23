@@ -15,7 +15,8 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R10** — **DONE, shipped** | Cost-plan modes (headline vs detailed QS packages), contingency separation, fee bases | P1 | inputs v7, calc 2.9.0 |
 | **R11** | Line-level VAT and TOGC cash flow | P1 | inputs v8, calc minor |
 | **R12** | Dated, dependent programme phases | P1 | inputs v9, calc minor |
-| **R13** | Exit/refinance depth: unit sales, NOI, DSCR/ICR, constraint binding | P1 | inputs v10, calc minor |
+| **R13** | The investment case: hold-period NOI, operating costs/vacancy/stabilisation, a derived take-out sized on LTV/DSCR/ICR with the binding constraint named | P1 | inputs v10, calc minor |
+| **R13b** | Unit-level sales ledger: per-unit completion timing, per-unit selling costs, deposits — the half of audit §7.8 deferred out of R13 (§2 of the R13 design) | P1 | inputs version TBD (next after v10 at scheduling time), calc minor |
 | **R14** | Lender case governance + monitoring cost-to-complete **+ the §5.10 rolled-up-interest defect carried from R9 (see “Carried defects” below)** | P1 | new records, calc **minor** — §5.10's remaining-funding term moves |
 | **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v11 |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
@@ -28,6 +29,29 @@ professional/statutory fee lines with fixed and percentage bases — closing §7
 existing-building and abnormal-risk contingency" / "allow eligibility bases per
 package and show the base" / "fixed and percentage bases without double counting"
 asks. See spec §16.
+
+**R13 status (calc 2.12.0, inputs v10):** shipped. It gave a retained scheme a
+derived income and a derived take-out — hold-period NOI from the existing but
+previously-inert `retained_units[].monthly_rent_pence`, operating costs,
+vacancy/stabilisation, a net-initial-yield valuation, and a take-out sized as
+`min(LTV cap, DSCR cap, ICR cap)` with the binding constraint named — closing
+audit §7.8's "bulk/investment-sale yield and NOI", "operating costs, vacancy,
+stabilisation", "refinance interest coverage/DSCR" and "refinance fees" asks,
+and §7.9's "refinance yield expansion, lower refinance LTV and
+operating-cost/vacancy stress" sensitivity asks. See spec §19.
+
+**R13 deliberately took half of audit §7.8, and R13b is the other half,
+scheduled rather than left as a spec limitation.** §7.8 also asked for
+unit-specific completion timing, sales-agent/legal costs by unit, and deposits
+— the sold portion's *receipt timing*, as against R13's retained-portion
+*income and take-out*. The two subsystems share no arithmetic, and taking both
+in one release would have opened a second live sales path (per-unit alongside
+the existing aggregate `sales_phasing`) in the same release that opened a
+second live valuation path (yield-derived alongside explicit) — one new live
+path per axis is the rule R12 arrived at the hard way. R13b's row above is
+that deferral recorded as scheduled work; see the R13 design document (§2) for
+the split's full reasoning and spec §19.10 limitation 1 for the corresponding
+stated limitation.
 
 **§7.5 items R10 deliberately did not address, now R15's responsibility.** §7.5
 also asked for "QS source/date/status, fixed-price coverage, provisional sums,

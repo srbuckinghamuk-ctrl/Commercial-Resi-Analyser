@@ -75,6 +75,15 @@ class LedgerMonth:
     # Where it exceeds the balance plus the exit fee, or where there is no
     # facility, the excess falls into distribution_pence.
     vat_reclaim_pence: int
+    # R13 spec Sec 19.5. The month's net operating income as applied to the
+    # ledger -- republished from Schedule.receipts[].net_operating_income_pence
+    # (Task 8), not re-derived. Applied to senior debt in full (ignoring
+    # sales_sweep_pct) and AFTER the VAT reclaim but BEFORE the sales sweep and
+    # the Sec 4.5 refinance event -- the fixed within-month order. A negative
+    # month never reduces the balance; it draws additional equity instead (see
+    # MonthlyModelTotals.operating_shortfall_equity_pence). Zero on every month
+    # of a schedule whose investment_case is null.
+    net_operating_income_pence: int
     # Spec Sec 4.5 -- 0 for every month unless the refinance event fires in it.
     refinance_proceeds_pence: int
     distribution_pence: int
@@ -98,6 +107,15 @@ class MonthlyModelTotals:
     # toward additional_equity_pence, the additional_equity_required flag, equity
     # contributed, and the equity cash-flow vector. Always 0 when refinance is None.
     refinance_shortfall_equity_pence: int
+    # Spec Sec 19.5/Sec 4.3: additional uncommitted equity drawn specifically by
+    # a negative-NOI month. The development facility never funds an operating
+    # loss -- a negative month's shortfall draws this instead of a facility
+    # draw, mirroring refinance_shortfall_equity_pence exactly (a subset of
+    # additional_equity_pence, and -- like the refinance slice --
+    # reconcile()'s Sec 7 identity must exclude it, since it funds an operating
+    # shortfall, not a project cost). Always 0 when every month's NOI is
+    # non-negative.
+    operating_shortfall_equity_pence: int
     funding_gap_pence: int
     distributions_pence: int
     repayments_pence: int
@@ -246,6 +264,12 @@ def run_ledger(
     # sources, because it funds a facility redemption (financing-side), not a
     # project cost (see the field's own doc comment on MonthlyModelTotals above).
     total_refinance_shortfall_equity = 0
+    # R13 spec Sec 19.5/Sec 4.3: additional equity injected specifically by a
+    # negative-NOI month's shortfall -- mirrors total_refinance_shortfall_equity
+    # exactly (a subset of total_additional_equity that reconcile()
+    # (validation.py) must exclude from sources, because it funds an operating
+    # shortfall, not a project cost).
+    total_operating_shortfall_equity = 0
     total_gap = 0
     total_distributions = 0
     total_repayments = 0
@@ -412,6 +436,52 @@ def run_ledger(
                 # flows to the developer, exactly as sale receipts already do.
                 distribution += vat_reclaim
 
+        # R13 spec Sec 19.5. Order within the month is FIXED and stated: VAT
+        # reclaim, then NOI, then the sales sweep, then the refinance event. All
+        # four can fall in one month; any order could be defended, so the chosen
+        # one is written down here and pinned by a test rather than left to
+        # whatever order the code happens to run in.
+        #
+        # NOI is applied IN FULL, ignoring sales_sweep_pct -- that percentage
+        # governs SALE receipts, and NOI is income from an asset, not
+        # realisation of one. Where it achieves the first full redemption the
+        # exit fee is charged then, under Sec 4.4.1's existing once-only rule,
+        # exactly as a VAT reclaim that redeems does.
+        noi = r.net_operating_income_pence
+        if noi > 0:
+            if balance > 0 and not is_cash:
+                fee = (
+                    0 if facility_redeemed
+                    else exit_fee_amount(finance, gross_facility, peak_debt, balance)
+                )
+                if noi >= balance + fee:
+                    repayment += balance
+                    exit_fee += fee
+                    total_exit_fee += fee
+                    facility_redeemed = True
+                    distribution += noi - balance - fee
+                    balance = 0
+                else:
+                    # The Sec 4.4 clamp, for the same reason the reclaim and the
+                    # sweep carry it: a payment landing in
+                    # [balance, balance + fee) must not zero the balance, or the
+                    # fee is never charged and never carried.
+                    applied = min(noi, balance)
+                    if applied == balance:
+                        applied = max(0, noi - fee)
+                    repayment += applied
+                    balance -= applied
+                    distribution += noi - applied
+            else:
+                distribution += noi
+        elif noi < 0:
+            # Sec 19.5: the DEVELOPMENT facility does not fund operating losses.
+            # The shortfall draws uncommitted additional equity through Sec
+            # 4.3's existing mechanics, raising the existing
+            # additional_equity_required red flag.
+            additional_equity += -noi
+            total_operating_shortfall_equity += -noi
+
         if not is_cash and r.gross_sale_pence > 0:
             redemption_balance_at_disposal = balance
             redemption_schedule.append(RedemptionEntry(month=m, balance_pence=balance))
@@ -549,6 +619,7 @@ def run_ledger(
             gross_receipts_pence=r.gross_sale_pence,
             net_receipts_pence=net_receipts,
             vat_reclaim_pence=vat_reclaim,
+            net_operating_income_pence=noi,
             refinance_proceeds_pence=refinance_proceeds,
             distribution_pence=distribution,
         ))
@@ -596,6 +667,7 @@ def run_ledger(
             equity_contributed_pence=total_equity,
             additional_equity_pence=total_additional_equity,
             refinance_shortfall_equity_pence=total_refinance_shortfall_equity,
+            operating_shortfall_equity_pence=total_operating_shortfall_equity,
             funding_gap_pence=total_gap,
             distributions_pence=total_distributions,
             repayments_pence=total_repayments,

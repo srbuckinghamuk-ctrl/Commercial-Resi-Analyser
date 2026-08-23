@@ -9,6 +9,11 @@ import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax'
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 import type { VatInputs, VatResult } from './vat';
 import type { ProgrammeNetwork, DerivedPhase } from './programme';
+// Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
+// rejects an unused type import, and the re-exports below do not count as uses.
+// R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
+// return type) and `Schedule.investment_case` reads it below.
+import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
 
 export type { SpendCurve };
 
@@ -155,6 +160,15 @@ export type {
 } from './programme';
 export { PHASE_CODES, PRE_COMPLETION_CODES, isProgrammeNetwork, isLegacyProgramme } from './programme';
 
+export type {
+  OpexCode, OperatingLineBasis, OperatingLine, StabilisationInputs, TakeoutInputs,
+  InvestmentCaseInputs, InvestmentCaseMonth, TakeoutSizing, BindingConstraint,
+  // R13 Task 8: the assembled result block Schedule.investment_case publishes,
+  // republished (never recomputed) onto AppraisalResultV2 by Task 11.
+  InvestmentCaseResult,
+} from './investment-case';
+export { OPEX_CODES } from './investment-case';
+
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {
   phase_id: string;
@@ -271,10 +285,60 @@ export interface CalculatorInputsV9 extends Omit<CalculatorInputsV8,
   refinance: RefinanceInputsV9 | null;
 }
 
+/**
+ * R13 spec §19.1. Named `RefinanceArrangementFeeBasis`, not the brief's plain
+ * `ArrangementFeeBasis` — that name is already taken by `FacilityTerms`'s own
+ * arrangement-fee-basis type (line 17 above, `'committed_net_facility' |
+ * 'committed_gross_facility'`), a different enum for a different fee on a
+ * different tranche. Reusing the name would be a duplicate top-level
+ * declaration and would not compile; this is a brief defect, corrected here
+ * rather than silently worked around, per the standing instruction on this
+ * release.
+ */
+export type RefinanceArrangementFeeBasis = 'fixed_pence' | 'pct_of_quantum';
+
+/**
+ * R13 spec §19.1. `investment_value_pence` and `ltv_pct` NARROW to nullable:
+ * a non-null `investment_case` supersedes them, and both must then be null.
+ * Not "ignored" — §2's never-silently-ignored rule makes reading one and
+ * dropping the other the prohibited shape, so it is a validation error (§19.7
+ * rule 5) rather than a silent override.
+ *
+ * All refinance EVENT costs stay here, where they are today. Only the
+ * arrangement fee's basis is new, because a fixed-pence arrangement fee on a
+ * derived quantum is an odd thing to ask a user for. `takeout` is sizing
+ * policy; `refinance` is the event.
+ */
+export interface RefinanceInputsV10 extends Omit<RefinanceInputsV9,
+  'investment_value_pence' | 'ltv_pct'> {
+  investment_value_pence: number | null;
+  ltv_pct: number | null;
+  arrangement_fee_basis: RefinanceArrangementFeeBasis;
+  arrangement_fee_pct: number;
+}
+
+/**
+ * R13 spec §19.1. `investment_case` is a two-state field, top-level beside
+ * `programme`, `vat` and `cost_plan`: `null` = calc 2.11.0's explicit
+ * `investment_value_pence × ltv_pct` path, bit-identical; non-null = the
+ * derived case.
+ *
+ * Top-level rather than nested under `refinance` (design decision 3): a
+ * retained scheme earns rent whether or not it refinances, and nesting would
+ * make operating cash flow conditional on a financing event it has nothing to
+ * do with.
+ */
+export interface CalculatorInputsV10 extends Omit<CalculatorInputsV9,
+  'inputs_version' | 'refinance'> {
+  inputs_version: 10;
+  refinance: RefinanceInputsV10 | null;
+  investment_case: InvestmentCaseInputs | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9;
+  | CalculatorInputsV9 | CalculatorInputsV10;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -286,7 +350,17 @@ export type FlagCode =
   /** R11 spec §17.6: VAT is not eligible for the development-cost advance, so a
    *  month's VAT can fall through to a funding gap even where the build itself
    *  is fully advanced. Narrows the generic `funding_gap` — both fire. */
-  | 'vat_funding_gap';
+  | 'vat_funding_gap'
+  /** R13 spec §19.7. Fires when the investment case's stabilised annual NOI is
+   *  <= 0 — the take-out then sizes to nothing (§19.4's `size_takeout` floor). */
+  | 'investment_case_noi_non_positive'
+  /** R13 spec §19.7. Fires when `stabilisation_month + ramp_months >
+   *  term_months` — NOT an error (refinancing mid-lease-up is a real
+   *  structure), but the valuation reads the stabilised figure regardless. */
+  | 'stabilisation_incomplete_at_maturity'
+  /** R13 spec §19.7. Fires when the take-out's `binding_constraint` is `dscr`
+   *  or `icr` — coverage, not value, is what limits the quantum. */
+  | 'takeout_constrained_by_coverage';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -313,9 +387,18 @@ export interface MonthReceipts {
   agent_fee_pence: number;
   selling_legal_pence: number;
   /** R11 spec §17.6. Written back from `computeVat`'s `months[].reclaimed_pence`.
-   *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt, so
-   *  no GDV-, LTGDV- or break-even-denominated metric may read it. */
+   *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt. Narrowed
+   *  per §19.5 -- it never enters `gross_sale_pence` or `gdv_pence`, but
+   *  debt-denominated metrics (LTGDV, senior break-even) legitimately move,
+   *  because the debt they are computed from legitimately moves. */
   vat_reclaim_pence: number;
+  /** R13 spec §19.5. Written back from `computeInvestmentCase`'s
+   *  `months[].noi_pence`, its own class of receipt — not a sale receipt. It
+   *  never enters `gross_sale_pence` or `gdv_pence`, but debt-denominated
+   *  metrics legitimately move, because the debt they are computed from
+   *  legitimately moves. Zero on every month of a document whose
+   *  `investment_case` is null. */
+  net_operating_income_pence: number;
 }
 
 export interface Schedule {
@@ -339,6 +422,11 @@ export interface Schedule {
     vat_pence: number;
     vat_reclaim_pence: number;
     irrecoverable_vat_pence: number;
+    /** R13 spec §19.5. The schedule-wide total of `receipts[].net_operating_
+     *  income_pence` — identical to `investment_case.totals.noi_pence` where
+     *  non-null (republished, never re-derived; §19's result block is
+     *  computed once) and 0 on the null path. */
+    net_operating_income_pence: number;
   };
   /** R11 spec §17.5/§17.6. The full VAT result, computed strictly downstream of
    *  the finished uses/receipts arrays and written back into them — never the
@@ -352,6 +440,23 @@ export interface Schedule {
     critical_path: string[];
     phases: DerivedPhase[];
   } | null;
+  /** R13 spec §19.6. `computeInvestmentCase`'s full result, computed once
+   *  here and republished — never recomputed — onto `AppraisalResultV2` by
+   *  Task 11 (§17.12's `vat` treatment). null exactly when the INPUT
+   *  `investment_case` is null: no block is synthesised for a document that
+   *  never asked for one. */
+  investment_case: InvestmentCaseResult | null;
+  /** R13 spec §19.6, closing §18.10 limitation 9. The memo and CashflowPage
+   *  print a tranche's or the refinance's month; before this field existed
+   *  they printed the RAW `month_offset` while the ledger used the resolved
+   *  one, so an anchored tranche/refinance on a slipped programme was
+   *  reported at a month the ledger never used. They read this instead. `[]`
+   *  when there is no sales_phasing input; `null` refinance when there is no
+   *  refinance input. */
+  resolved_exit_months: {
+    tranches: number[];
+    refinance: number | null;
+  };
 }
 
 export interface LedgerMonth {
@@ -382,6 +487,15 @@ export interface LedgerMonth {
    *  Where it exceeds the balance plus the exit fee, or where there is no
    *  facility, the excess falls into `distribution_pence`. */
   vat_reclaim_pence: number;
+  /** R13 spec §19.5. The month's net operating income as applied to the
+   *  ledger — republished from `Schedule.receipts[].net_operating_income_pence`
+   *  (Task 8), not re-derived. Applied to senior debt in full (ignoring
+   *  `sales_sweep_pct`) and AFTER the VAT reclaim but BEFORE the sales sweep
+   *  and the §4.5 refinance event — the fixed within-month order. A negative
+   *  month never reduces the balance; it draws additional equity instead (see
+   *  `MonthlyModel.totals.operating_shortfall_equity_pence`). Zero on every
+   *  month of a schedule whose `investment_case` is null. */
+  net_operating_income_pence: number;
   /** Spec §4.5 — 0 when no refinance event occurs this month. */
   refinance_proceeds_pence: number;
   distribution_pence: number;
@@ -406,6 +520,15 @@ export interface MonthlyModel {
      * `additional_equity_pence`, the `additional_equity_required` flag, equity
      * contributed, and the equity cash-flow vector. Always 0 when `refinance` is null. */
     refinance_shortfall_equity_pence: number;
+    /** R13 spec §19.5/§4.3: additional uncommitted equity drawn specifically by
+     *  a negative-NOI month. The development facility never funds an operating
+     *  loss — a negative month's shortfall draws this instead of a facility
+     *  draw, mirroring `refinance_shortfall_equity_pence` exactly (a subset of
+     *  `additional_equity_pence`, and — like the refinance slice —
+     *  reconcile()'s §7 identity must exclude it, since it funds an operating
+     *  shortfall, not a project cost). Always 0 when every month's NOI is
+     *  non-negative. */
+    operating_shortfall_equity_pence: number;
     funding_gap_pence: number;
     distributions_pence: number;
     repayments_pence: number;
@@ -556,6 +679,11 @@ export interface AppraisalResultV2 {
   developer_breakeven_pence: number | null;
   /** Wired in Task 6 (spec §5.10). */
   cost_to_complete: CostToCompleteSummary | null;
+  /** R13 spec §19.6. The SCHEDULE's `investment_case`, republished — not a
+   *  second derivation, the treatment §17.12 gave `vat`. null exactly when
+   *  the INPUT `investment_case` is null. The UI and the report read it from
+   *  here and never call `computeInvestmentCase`. */
+  investment_case: InvestmentCaseResult | null;
   /** Ledger flags (model.flags, unmutated) followed by metric flags computed by
    * deriveMetrics itself (senior/developer breakeven unsolvable, cap-exhausted).
    * Wired in Release 3a Task 6 — deriveMetrics is pure and no longer mutates
@@ -563,4 +691,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.11.0';
+export const CALC_VERSION = '2.12.0';

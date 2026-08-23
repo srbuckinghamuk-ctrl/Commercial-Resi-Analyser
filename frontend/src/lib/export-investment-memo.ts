@@ -177,6 +177,27 @@ function fmtPctSafe(pct: number | null, naLabel = 'n/a'): string {
   return pct === null ? naLabel : fmtPct(pct);
 }
 
+/**
+ * A percentage at its own precision, up to two decimal places, rather than
+ * `fmtPct`'s fixed one. R13 §19.6's yield and purchaser's-costs figures are
+ * user-entered (e.g. 6.75%) — `fmtPct`'s single decimal would silently round
+ * that to "6.8%", printing a different number from the one the model priced.
+ * Rounds to two decimals first (so binary floating-point noise never leaks a
+ * third), then lets `Number` drop a trailing zero (5.50 -> "5.5") rather than
+ * a hand-rolled string trim.
+ */
+function fmtPctExact(pct: number): string {
+  return `${Number(pct.toFixed(2))}%`;
+}
+
+/** A coverage ratio (DSCR/ICR), or `null` when the cap could not be computed
+ *  at all (§19.4 — the annual rate or amortisation combination that zeros the
+ *  debt-service factor). Printed as "x.xxx" (e.g. "1.30x") — the standard
+ *  covenant idiom — never as a percentage, which these are not. */
+function fmtRatio(x: number | null): string {
+  return x === null ? 'n/a' : `${x.toFixed(2)}x`;
+}
+
 function fmtDate(iso: string | null): string {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -1305,7 +1326,12 @@ export function generateInvestmentMemo(
   y = bodyText(
     y,
     salesPhasing != null
-      ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${salesPhasing.tranches.map((t) => monthLabel(t.month_offset)).join(', ')}).`
+      // R13 spec §19.6, closing §18.10 limitation 9. `schedule.resolved_exit_months`
+      // is the ledger's own resolved month for each tranche (an anchored tranche's
+      // month_offset is only its ENTERED value, which schedule.ts may override via
+      // its anchor) — read, not recomputed, exactly like `schedule.refinance.month`
+      // in the refinance line below, which was never affected by this defect.
+      ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${schedule.resolved_exit_months.tranches.map((m) => monthLabel(m)).join(', ')}).`
       : schedule.totals.gross_sales_pence > 0
         ? 'Sales phasing: single disposal in final month.'
         : 'Sales phasing: not applicable — no units sold.',
@@ -2382,11 +2408,125 @@ export function generateInvestmentMemo(
     y = lastAutoTableFinalY(doc) + 6;
   }
 
-  if (refinance != null && schedule.refinance != null) {
+  // R13 spec §19.1/§19.7 rule 5: `investment_value_pence`/`ltv_pct` are null
+  // on a v10 document once a non-null `investment_case` supersedes them, so
+  // this explicit-pair sentence is skipped rather than printing a `?? 0`
+  // stand-in — a fabricated "investment value £0.00" would state a figure
+  // the model never computed. R13 Task 16 adds the investment-case section
+  // that reports the sized-quantum figures on that path instead.
+  if (refinance != null && schedule.refinance != null
+    && refinance.investment_value_pence != null && refinance.ltv_pct != null) {
     y = bodyText(
       y,
       `Refinance (${monthLabel(schedule.refinance.month)}): investment value ${fmt(refinance.investment_value_pence)}, LTV ${fmtPct(refinance.ltv_pct)}, net proceeds ${fmt(schedule.refinance.net_proceeds_pence)} — applied to senior redemption; surplus distributes to equity (spec §4.5).`,
     );
+  }
+
+  // R13 Task 16 (spec §19.6). The investment case: the retained portion's NOI
+  // bridge, the capitalised value with its yield and purchaser's costs
+  // stated, all three candidate take-out quanta with the binding one named,
+  // the achieved ratios at the sized quantum, and — where the sizing does not
+  // clear the balance it is applied against — the residual it leaves behind.
+  //
+  // Every figure below is read off `metrics.investment_case`
+  // (AppraisalResultV2's republication of Schedule's own result — computed
+  // once, never recomputed here, spec §19.6) or `model.totals.
+  // refinance_shortfall_equity_pence` (an existing authoritative engine
+  // total this memo already prints unmodified in the Funding Request
+  // section, spec §7); nothing here is a new ratio, cap or bridge line
+  // computed by this file.
+  //
+  // Omitted ENTIRELY — not printed empty — when `investment_case` is null:
+  // spec §13.5's layout invariants call a near-blank section a defect, and
+  // R7 shipped exactly that (a retain-all case leaving three short
+  // paragraphs in a section otherwise empty, sealed as a near-blank page by
+  // the next section's unconditional break).
+  const investmentCase = metrics.investment_case;
+  if (investmentCase != null) {
+    y = subHeading(y, 'Investment Case');
+
+    if (!investmentCase.takeout.is_booked) {
+      y = bodyText(
+        y,
+        'This investment case is indicative: no refinance event is booked on this document, so the figures below size the retained income\'s borrowing capacity without redeeming a facility.',
+      );
+    }
+
+    // The NOI bridge: gross potential -> effective (after occupancy) -> less
+    // each operating line -> NOI, at the stabilised month — the same month
+    // the valuation and both coverage caps are computed from (spec §19.2/
+    // §19.3/§19.4). `gross_potential_rent_pence` is constant across every
+    // month in `months[]` (occupancy is what varies), so reading it off the
+    // stabilisation month rather than summing or recomputing it is a plain
+    // read, not a derivation.
+    const stabMonth = investmentCase.months[investmentCase.stabilisation_month];
+    const bridgeRows: string[][] = [
+      ['Gross potential rent (monthly, stabilised)', fmt(stabMonth.gross_potential_rent_pence)],
+      ['Effective gross rent (monthly, stabilised)', fmt(investmentCase.stabilised.effective_gross_rent_pence)],
+      ...investmentCase.operating_lines.map((l) => [`  ${l.label}`, `(${fmt(l.stabilised_monthly_pence)})`]),
+      ['Net operating income (monthly, stabilised)', fmt(investmentCase.stabilised.monthly_noi_pence)],
+      ['Net operating income (annualised)', fmt(investmentCase.stabilised.annual_noi_pence)],
+    ];
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Rent roll and NOI bridge (stabilised)', 'Amount']],
+      body: bridgeRows,
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+
+    // The value, with the yield and purchaser's costs that produced it: a
+    // capitalisation figure whose yield is not shown is not auditable
+    // (Task 16 brief).
+    y = bodyText(
+      y,
+      `Capitalised at ${fmtPctExact(investmentCase.valuation.cap_yield_pct)}, less purchaser's costs of ${fmtPctExact(investmentCase.valuation.purchasers_costs_pct)}: investment value ${fmt(investmentCase.valuation.investment_value_pence)}.`,
+    );
+
+    // ALL THREE candidate quanta, not only the binding one: "LTV 4,200,000 /
+    // DSCR 3,610,000 / ICR 4,050,000 — DSCR binds" teaches the shape of the
+    // constraint (spec §19.4, quoted in the Task 16 brief).
+    const takeout = investmentCase.takeout;
+    const capsRows: string[][] = [
+      ['LTV cap', fmt(takeout.ltv_cap_pence)],
+      ['DSCR cap', takeout.dscr_cap_pence === null ? 'n/a' : fmt(takeout.dscr_cap_pence)],
+      ['ICR cap', takeout.icr_cap_pence === null ? 'n/a' : fmt(takeout.icr_cap_pence)],
+    ];
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Candidate take-out quantum', 'Amount']],
+      body: capsRows,
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+
+    const BINDING_LABEL: Record<'ltv' | 'dscr' | 'icr', string> = { ltv: 'LTV', dscr: 'DSCR', icr: 'ICR' };
+    y = bodyText(
+      y,
+      takeout.binding_constraint === null
+        ? 'The take-out does not size: every candidate cap resolves to zero or below at these terms.'
+        : `Sized quantum ${fmt(takeout.quantum_pence)} — ${BINDING_LABEL[takeout.binding_constraint]} binds. Achieved at that quantum: LTV ${fmtPctSafe(takeout.achieved_ltv_pct)}, DSCR ${fmtRatio(takeout.achieved_dscr)}, ICR ${fmtRatio(takeout.achieved_icr)}.`,
+    );
+
+    // Any residual balance the take-out fails to clear (Task 16 brief) — the
+    // same figure the Funding Request section already prints unmodified
+    // (spec §7) when a refinance event's proceeds do not fully redeem the
+    // facility or its own fees exceed the advance.
+    if (model.totals.refinance_shortfall_equity_pence > 0) {
+      y = bodyText(
+        y,
+        `The take-out does not clear the balance it is applied against: additional equity of ${fmt(model.totals.refinance_shortfall_equity_pence)} was required to close the refinance event (spec §4.5/§19.5).`,
+      );
+    }
   }
 
   y = subHeading(y, 'Contingent Exit');

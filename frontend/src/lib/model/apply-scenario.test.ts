@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { applyScenario } from './apply-scenario';
 import { migrateInputsToV6, migrateInputsToV9 } from './migrate';
 import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
+import { icDoc, explicitRefinanceDoc, applyLeversInOrder } from './__fixtures__/investment-case-docs';
 import {
   defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
 } from '../conversion-defaults';
@@ -13,6 +14,7 @@ import type {
 } from './';
 import type { Phase } from './programme';
 import type { ScenarioOverrides } from '../conversion-types';
+import type { SensitivityLever } from './sensitivity';
 
 // Neutral overrides — every lever at 0. Not defined elsewhere in this file, so
 // built here per the R10 Task 8 brief rather than reusing DEFAULT_SCENARIOS.base
@@ -25,6 +27,9 @@ const BASE_OVERRIDES: ScenarioOverrides = {
   interest_rate_adjustment_pct: 0,
   phase_slip_phase_id: null,
   phase_slip_months: 0,
+  exit_yield_adjustment_pct: 0,
+  operating_cost_adjustment_pct: 0,
+  vacancy_adjustment_pct: 0,
 };
 
 function fixtureInputs(): CalculatorInputsV2 {
@@ -46,6 +51,9 @@ describe('applyScenario', () => {
       interest_rate_adjustment_pct: 0,
       phase_slip_phase_id: null,
       phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0,
+      operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0,
     });
     expect(adjusted.unit_mix.units[0].estimated_value_pence).toBe(33_000_000);
     expect(adjusted.unit_mix.units[1].estimated_value_pence).toBe(22_000_000);
@@ -61,6 +69,9 @@ describe('applyScenario', () => {
       interest_rate_adjustment_pct: 1,
       phase_slip_phase_id: null,
       phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0,
+      operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0,
     });
     expect(adjusted.conversion_costs.construction_cost_per_sqm_pence).toBe(
       Math.round(base.conversion_costs.construction_cost_per_sqm_pence * 1.15),
@@ -99,6 +110,9 @@ describe('applyScenario', () => {
       interest_rate_adjustment_pct: 1.0,
       phase_slip_phase_id: null,
       phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0,
+      operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0,
     });
 
     const staged = applyScenario(
@@ -110,6 +124,9 @@ describe('applyScenario', () => {
         interest_rate_adjustment_pct: 0,
         phase_slip_phase_id: null,
         phase_slip_months: 0,
+        exit_yield_adjustment_pct: 0,
+        operating_cost_adjustment_pct: 0,
+        vacancy_adjustment_pct: 0,
       }),
       {
         label: 'Test',
@@ -119,6 +136,9 @@ describe('applyScenario', () => {
         interest_rate_adjustment_pct: 1.0,
         phase_slip_phase_id: null,
         phase_slip_months: 0,
+        exit_yield_adjustment_pct: 0,
+        operating_cost_adjustment_pct: 0,
+        vacancy_adjustment_pct: 0,
       },
     );
 
@@ -143,6 +163,9 @@ describe('applyScenario', () => {
       interest_rate_adjustment_pct: 1,
       phase_slip_phase_id: null,
       phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0,
+      operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0,
     });
     expect(out.finance.committed_net_facility_pence).toBe(v2Inputs.finance.committed_net_facility_pence);
     expect(out.finance.committed_gross_facility_pence).toBe(v2Inputs.finance.committed_gross_facility_pence);
@@ -179,6 +202,9 @@ describe('applyScenario', () => {
       interest_rate_adjustment_pct: 1,
       phase_slip_phase_id: null,
       phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0,
+      operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0,
     });
 
     // v3-only fields pass through identically — the generic's whole point:
@@ -227,6 +253,9 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
         label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
         phase_slip_phase_id: null, phase_slip_months: 0,
+        exit_yield_adjustment_pct: 0,
+        operating_cost_adjustment_pct: 0,
+        vacancy_adjustment_pct: 0,
       },
     );
 
@@ -246,6 +275,9 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
         label: 'downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 0,
         timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
         phase_slip_phase_id: null, phase_slip_months: 0,
+        exit_yield_adjustment_pct: 0,
+        operating_cost_adjustment_pct: 0,
+        vacancy_adjustment_pct: 0,
       },
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
@@ -462,6 +494,9 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   interest_rate_adjustment_pct: 0,
   phase_slip_phase_id: null,
   phase_slip_months: 0,
+  exit_yield_adjustment_pct: 0,
+  operating_cost_adjustment_pct: 0,
+  vacancy_adjustment_pct: 0,
 };
 
 /** Sets a phase's `slip_months` directly (not via `applyScenario`), so a test can
@@ -566,5 +601,64 @@ describe('phase_slip lever — spec §18.9, at the applyScenario level', () => {
     // the scalars — proof phase_slip is live, not silently absorbed.
     const onlyScalars = applyScenario(doc, scalars);
     expect(forward.programme).not.toEqual(onlyScalars.programme);
+  });
+});
+
+// R13 spec §19.8: the three levers stressing the investment case. `icDoc()`'s
+// fixture (fixtures/financial-model/t-investment-case.json) carries FOUR
+// operating lines — id l1 management (pct_of_gross_rent, 10), l2
+// letting_and_re_letting (pct_of_gross_rent, 2), l3 insurance
+// (fixed_pence_per_month, 25_000), l4 compliance_and_safety
+// (fixed_pence_per_month, 8_000) — not the two the brief's own Step 1 text
+// assumed; the assertions below are against what the fixture actually holds
+// (icDoc()'s own file header requires exactly that of every downstream task).
+// Its `cap_yield_pct` is 5.5 and `stabilised_occupancy_pct` is 96.
+describe('§19.8 the three exit levers', () => {
+  it('exit_yield ADDS percentage points to the capitalisation yield', () => {
+    const out = applyScenario(icDoc(), { ...ZERO_OVERRIDES, exit_yield_adjustment_pct: 1.5 });
+    expect(out.investment_case!.valuation.cap_yield_pct).toBeCloseTo(7.0, 9);
+  });
+
+  it('operating_cost SCALES every line value, on both bases', () => {
+    const out = applyScenario(icDoc(), { ...ZERO_OVERRIDES, operating_cost_adjustment_pct: 10 });
+    const lines = out.investment_case!.operating_lines;
+    expect(lines[0].value).toBeCloseTo(11, 9);      // l1 management, 10% pct line -> 11
+    expect(lines[1].value).toBeCloseTo(2.2, 9);      // l2 letting, 2% pct line -> 2.2
+    expect(lines[2].value).toBe(27_500);             // l3 insurance, 25_000 fixed pence
+    expect(lines[3].value).toBe(8_800);              // l4 compliance, 8_000 fixed pence
+  });
+
+  it('vacancy SUBTRACTS percentage points from stabilised occupancy', () => {
+    const out = applyScenario(icDoc(), { ...ZERO_OVERRIDES, vacancy_adjustment_pct: 6 });
+    expect(out.investment_case!.stabilisation.stabilised_occupancy_pct).toBeCloseTo(90, 9);
+  });
+
+  it('is a no-op by construction on an investment_case = null document', () => {
+    // Exactly as phase_slip is on a null programme. A lever with nothing to
+    // write writes nothing; it does not crash and it does not synthesise a block.
+    const doc = explicitRefinanceDoc();
+    expect(doc.investment_case).toBeNull();
+    const out = applyScenario(doc, {
+      ...ZERO_OVERRIDES, exit_yield_adjustment_pct: 2,
+      operating_cost_adjustment_pct: 50, vacancy_adjustment_pct: 10,
+    });
+    expect(out).toEqual(doc);
+    expect(out.investment_case).toBeNull();
+  });
+
+  it('keeps all EIGHT levers order-independent', () => {
+    const orders: SensitivityLever[][] = [
+      ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip', 'exit_yield', 'operating_cost', 'vacancy'],
+      ['vacancy', 'exit_yield', 'phase_slip', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost'],
+      ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip'],
+    ];
+    // deriveMetrics takes (inputs, schedule, model), not a single document — the
+    // brief's Step 1 text names it directly, but every other order-independence
+    // check in this codebase runs the full appraisal instead (see
+    // test_financial_model_apply_scenario.py's guard 7 and this file's own
+    // GUARD-7-shaped tests above); runAppraisal(...).metrics is that same shape.
+    const results = orders.map((o) => runAppraisal(applyLeversInOrder(icDoc(), o)).metrics);
+    expect(results[1]).toEqual(results[0]);
+    expect(results[2]).toEqual(results[0]);
   });
 });

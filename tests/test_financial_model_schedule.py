@@ -65,6 +65,7 @@ from app.financial_model.types import (
 from app.financial_model.programme import ProgrammeDerivation, derive_phases
 from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
+from .fixtures_investment_case import anchored_slipped_doc, explicit_refinance_doc, investment_case_doc
 
 PROGRAMME = {
     "anchor_month": None,
@@ -176,7 +177,15 @@ class TestBuildScheduleWithSalesPhasing:
         v4.sales_phasing = SalesPhasingInputs(
             tranches=[SalesPhasingTranche(month_offset=11, pct_of_gross_receipts=100)],
         )
-        assert build_schedule(v4) == single  # single 100% tranche == None (identity)
+        explicit = build_schedule(v4)
+        # R13 spec Sec 19.6: resolved_exit_months reflects the sales_phasing
+        # INPUT's shape, not the money it produces -- a None input and an
+        # explicit single 100% tranche legitimately disagree here ([] vs
+        # [11]) even though every receipt, use and total below is still
+        # byte-identical (single 100% tranche == None, identity).
+        assert asdict(explicit) == {**asdict(single), "resolved_exit_months": asdict(explicit)["resolved_exit_months"]}
+        assert single.resolved_exit_months.tranches == []
+        assert explicit.resolved_exit_months.tranches == [11]
 
     def test_splits_gross_and_costs_pro_rata_with_final_tranche_residue_absorption(self):
         v4 = _phased_v4()
@@ -1124,3 +1133,68 @@ class TestExitAnchors:
             i.severity == "error" and "strictly increasing" in i.message
             for i in validate_inputs(crossed)
         )
+
+
+class TestInvestmentCaseInSchedule:
+    """Sec 19.5/Sec 19.6 investment case in the schedule. Mirror of
+    schedule.test.ts's '\u00a719.5/\u00a719.6 investment case in the schedule' describe block."""
+
+    def test_publishes_resolved_exit_months_for_both_tranches_and_refinance(self):
+        # The R12-carried gap: Schedule published no resolved tranche month, so
+        # the memo and CashflowPage had nothing to read and printed the raw
+        # offset. Hand-derived independently (see task-8-report.md):
+        # sales.start_month=11, maturity_tail.start_month=14 ->
+        # tranche[0] {sales,+3}=14, tranche[1]/refinance {maturity_tail,+4}=18.
+        # Confirmed by running derive_phases against this exact document
+        # before pinning these numbers.
+        s = build_schedule(anchored_slipped_doc())
+        assert s.resolved_exit_months.tranches == [14, 18]
+        assert s.resolved_exit_months.refinance == 18
+        # And the resolved month is where the receipts ACTUALLY landed.
+        assert s.receipts[14].gross_sale_pence > 0
+        assert s.receipts[12].gross_sale_pence == 0
+
+    def test_writes_the_noi_series_onto_receipts_as_its_own_class(self):
+        # investment_case_doc() (t-investment-case.json) anchors stabilisation
+        # to practical_completion + 1; practical_completion starts month 15
+        # (see the fixture's own forward-pass note), so stabilisation is
+        # month 16 and NOI is zero at month 2 but fully live by month 20
+        # (well past the ramp, which completes at month 18). The brief's
+        # illustrative month 8 predates that stabilisation month and would
+        # still be zero -- corrected here.
+        s = build_schedule(investment_case_doc())
+        assert s.receipts[2].net_operating_income_pence == 0
+        assert s.receipts[20].net_operating_income_pence > 0
+        # Isolation: NOI is NOT a sale receipt.
+        assert s.receipts[20].gross_sale_pence == 0
+        assert s.totals.gross_sales_pence == 0   # retain_all
+
+    def test_takes_the_refinance_advance_from_the_sized_quantum_when_the_case_is_non_none(self):
+        s = build_schedule(investment_case_doc())
+        ic = s.investment_case
+        assert ic["takeout"]["binding_constraint"] == "dscr"
+        # t-investment-case.json's refinance.legal_costs_pence is 450_000
+        # (\u00a34,500), not the brief's 45_000_00 (\u00a345,000) -- a brief/fixture
+        # mismatch, reported in task-8-report.md; using the fixture's actual
+        # value here.
+        quantum = ic["takeout"]["quantum_pence"]
+        assert s.refinance.net_proceeds_pence == (
+            quantum
+            - money_round((quantum * 1.5) / 100)   # pct_of_quantum basis
+            - 450_000                               # legal costs
+        )
+
+    def test_leaves_investment_case_none_and_the_explicit_path_live_when_the_input_is_none(self):
+        s = build_schedule(explicit_refinance_doc())
+        assert s.investment_case is None
+        assert s.refinance.net_proceeds_pence == (
+            money_round((5_000_000_00 * 60) / 100) - 30_000_00 - 20_000_00
+        )
+
+    def test_marks_the_case_indicative_when_there_is_no_refinance_to_book(self):
+        doc = investment_case_doc()
+        doc.refinance = None
+        s = build_schedule(doc)
+        assert s.investment_case["takeout"]["is_booked"] is False
+        assert s.investment_case["takeout"]["quantum_pence"] > 0
+        assert s.refinance is None

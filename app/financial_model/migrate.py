@@ -30,6 +30,7 @@ from .types import (
     CalculatorInputsV7,
     CalculatorInputsV8,
     CalculatorInputsV9,
+    CalculatorInputsV10,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -314,6 +315,16 @@ def is_v6(snapshot: dict[str, Any]) -> bool:
 
 
 def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
+    # R13 Task 5 (spec Sec 19.9): is_v10 belongs here for the same reason
+    # is_v9 did one release earlier -- app.py's entry points do not move to
+    # migrate_inputs_to_v10 until Task 18, but this function's job is only to
+    # recognise a v10 raw payload as NOT legacy, and that must land NOW, not
+    # when the entry points move. A v10 raw payload that fell through this
+    # check would be tagged `legacy_unreconciled` (app.py's `was_v1`), and
+    # every appraisal saved after this release would have carried the red
+    # "Legacy -- recalculation required" banner on the very first save. This
+    # is the FOURTH consecutive release to need this exact fix: R12 for v9,
+    # R11 for v8, R10 for v7.
     # R12 Task 18b: is_v9 belongs here for the same reason is_v8 did one
     # release earlier -- the server boundary now migrates to v9, so the
     # calculator posts v9 documents, and a v9 raw payload that fell through
@@ -326,7 +337,7 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
-        or is_v8(snapshot) or is_v9(snapshot)
+        or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot)
     )
 
 
@@ -1466,3 +1477,165 @@ def migrate_inputs_to_v9(
             "refinance": snapshot.get("refinance"),
         })
     return migrate_v8_to_v9(migrate_inputs_to_v8(snapshot, project))
+
+
+# --- Release 13 (calc 2.11.0 -> 2.12.0): the investment case (spec Sec 19.9) -
+
+
+def is_v10(snapshot: dict[str, Any]) -> bool:
+    """A v10 document is discriminated by ``inputs_version == 10`` AND the
+    presence of the (possibly null) ``investment_case`` key. Port of isV10.
+
+    Unlike every other ``is_vN`` in this module, this does NOT also check
+    ``finance``'s shape: the finance block is unchanged since v2 and so
+    cannot discriminate v10 from v2-v9, whereas ``investment_case`` is a key
+    that exists on no document before v10 -- a strictly better, version-
+    specific marker for this version, mirrored exactly from isV10.
+
+    Python keeps the same public-by-default naming convention every other
+    ``is_vN`` in this module already uses (``is_v8``, ``is_v9``), since
+    Python has no equivalent per-symbol export boundary to preserve.
+    """
+    return snapshot.get("inputs_version") == 10 and "investment_case" in snapshot
+
+
+def _v10_scenarios(scenarios: dict[str, Any] | None) -> dict[str, Any]:
+    """The scenarios half of the v9 -> v10 write: ``exit_yield_adjustment_pct:
+    0``, ``operating_cost_adjustment_pct: 0`` and ``vacancy_adjustment_pct: 0``
+    on all four scenarios (spec Sec 19.8). Mirrors ``_v9_scenarios`` one
+    migration back -- ``ScenarioOverrides`` already defaults all three fields,
+    so only a WRITTEN value (not a field default) is what the numeric identity
+    gate actually exercises."""
+    out = dict(scenarios or {})
+    for key in ("base", "upside", "downside", "severe"):
+        s = dict(out.get(key) or {})
+        s["exit_yield_adjustment_pct"] = 0
+        s["operating_cost_adjustment_pct"] = 0
+        s["vacancy_adjustment_pct"] = 0
+        out[key] = s
+    return out
+
+
+def migrate_v9_to_v10(v9: dict[str, Any] | CalculatorInputsV9) -> CalculatorInputsV10:
+    """Upgrades a v9 document to v10 by stamping ``inputs_version: 10`` and
+    writing four inert additions: ``investment_case: None``, on a non-null
+    ``refinance``, ``arrangement_fee_basis: 'fixed_pence'`` and
+    ``arrangement_fee_pct: 0``, and on every one of the four named scenarios,
+    ``exit_yield_adjustment_pct: 0``, ``operating_cost_adjustment_pct: 0`` and
+    ``vacancy_adjustment_pct: 0`` (spec Sec 19.8/19.9, ``_v10_scenarios``).
+    Port of migrateV9toV10.
+
+    Purely additive by construction: the fixed basis reads
+    ``arrangement_fee_pence`` and nothing else, so writing it reproduces
+    today's arithmetic exactly. ``investment_value_pence`` and ``ltv_pct``
+    are carried through NON-NULL on a non-null refinance -- that is the
+    point, a migrated document stays on the explicit path, which stays live
+    -- so no migrated appraisal's computed values move. The three new
+    scenario fields are inert for the same reason: no production code reads
+    them except ``apply_scenario``, and nothing calls ``apply_scenario`` on a
+    document's own ``scenarios`` block during ``run_appraisal``.
+
+    Input is accepted as either a plain dict or an already-validated Pydantic
+    model, exactly as migrate_v8_to_v9 accepts both.
+
+    Precondition: `v9` must not already be a v10 document -- this guards
+    against double-migration (idempotence), same as migrate_v8_to_v9.
+    """
+    if isinstance(v9, CalculatorInputsV10):
+        raise ValueError("migrate_v9_to_v10: input is already a v10 document")
+    if isinstance(v9, BaseModel):
+        doc = v9.model_dump(mode="json")
+    else:
+        if is_v10(v9):
+            raise ValueError("migrate_v9_to_v10: input is already a v10 document")
+        doc = dict(v9)
+
+    refinance = doc.get("refinance")
+    doc["refinance"] = (
+        None if refinance is None
+        else {**refinance, "arrangement_fee_basis": "fixed_pence", "arrangement_fee_pct": 0}
+    )
+    doc["investment_case"] = None
+    doc["scenarios"] = _v10_scenarios(doc.get("scenarios"))
+    doc["inputs_version"] = 10
+    return CalculatorInputsV10.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V10 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+
+
+def migrate_inputs_to_v10(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV10:
+    """Normalises any stored snapshot (v1-v10) to v10. Port of
+    migrateInputsToV10, and structurally identical to migrate_inputs_to_v9
+    above: an already-v10 document is merged field-by-field onto v10
+    defaults so a field added to the schema after the row was saved is
+    default-filled rather than raising at this boundary or under-filling;
+    anything older routes through the existing chain.
+
+    The version predicate is MEMBERSHIP OF THE DECLARED TUPLE, deliberately
+    -- not a `version < 1 or version > 10` range check. For a well-formed
+    integer version the two are numerically equivalent, but the range check
+    would (unlike every other migrate_inputs_to_vN in this module) silently
+    accept a non-integer value such as 9.5 rather than rejecting it. R10
+    found a predicate loosened from ``== 6`` to ``!= 5`` -- the literal
+    negation of the set's own definition -- so it could never fail;
+    tests/test_migrate_v10.py tests this one with a document tagged 11, the
+    neighbour that catches that shape.
+
+    As in migrate_inputs_to_v9, a document declaring ``inputs_version``
+    2-9 that fails ITS OWN structural check is deliberately NOT refused:
+    that stays the existing, tested, permissive v1-fallback behaviour. Only
+    an entirely unplaceable version number, or a version-10 tag that is not
+    structurally v10, is refused here.
+    """
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V10:
+        raise ValueError(
+            f"migrate_inputs_to_v10: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V10}, or absent for a v1 document)"
+        )
+    if version == 10 and not is_v10(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v10: inputs_version is 10 but the document fails "
+            "the v10 structural check (missing `investment_case`) -- refusing to "
+            "silently reinterpret it via the v1 fallback path"
+        )
+    if is_v10(snapshot):
+        defaults = migrate_v9_to_v10(
+            migrate_v8_to_v9(
+                migrate_v7_to_v8(
+                    migrate_v6_to_v7(
+                        migrate_v5_to_v6(
+                            migrate_v4_to_v5(
+                                migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV10.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 10,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            # Mirrors migrate_inputs_to_v9's own trio of defensive lines
+            # (migrate.py:1464-1466): the shallow `_merge_saved_onto_defaults`
+            # spread above already carries a PRESENT `programme`/
+            # `sales_phasing`/`refinance`/`investment_case` key through from
+            # `snapshot`, so these four lines are currently redundant for any
+            # snapshot produced by `model_dump`. Kept as a self-documenting
+            # mirror of the cost_plan/vat lines above -- if
+            # `_merge_saved_onto_defaults` is ever narrowed to an explicit key
+            # allowlist that omits these four, THIS is what still carries a
+            # saved value through rather than reverting to the default
+            # document's None.
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+        })
+    return migrate_v9_to_v10(migrate_inputs_to_v9(snapshot, project))

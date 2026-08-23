@@ -48,7 +48,7 @@
 
 | File | Change |
 |---|---|
-| `frontend/src/lib/model/finance-types.ts` | `CalculatorInputsV10`, `RefinanceInputsV10`, `Schedule.investment_case`, `Schedule.resolved_exit_months`, `MonthReceipts.net_operating_income_pence`, `LedgerMonth.net_operating_income_pence`, `MonthlyModel.totals.operating_shortfall_equity_pence`, three `FlagCode`s, `AppraisalResultV2.investment_case`, `CALC_VERSION`. |
+| `frontend/src/lib/model/finance-types.ts` | **Task 4:** `CalculatorInputsV10`, `RefinanceInputsV10`, `RefinanceArrangementFeeBasis`, `CALC_VERSION`. **Task 8:** `Schedule.investment_case`, `Schedule.resolved_exit_months`, `Schedule.totals.net_operating_income_pence`, `MonthReceipts.net_operating_income_pence`, and the `InvestmentCaseResult` import (the type is born in Task 8, so Task 4 cannot reference it). **Task 9:** `LedgerMonth.net_operating_income_pence`, `MonthlyModel.totals.operating_shortfall_equity_pence`. **Task 11:** three `FlagCode`s, `AppraisalResultV2.investment_case`. |
 | `frontend/src/lib/model/schedule.ts:219-320` | Investment case computed; NOI written onto receipts; `resolved_exit_months` published; refinance proceeds taken from the sized quantum when `investment_case` is non-null. |
 | `frontend/src/lib/model/monthly-engine.ts:224-250` | The NOI block, between the VAT reclaim block and the sale-receipt block. |
 | `frontend/src/lib/model/metrics.ts:380-400` | `investment_case` republished; §7 exclusions; the three new flags. |
@@ -418,8 +418,10 @@ describe('annualDebtServiceFactor (§19.4)', () => {
 
 describe('investmentValuePence (§19.3)', () => {
   it('capitalises at the yield and deducts purchaser\'s costs in ONE rounding', () => {
-    // 4_020_000 pence a year at 5.5% = 73_090_909.09; / 1.0675 = 68_468_299.85
-    expect(investmentValuePence(4_020_000, 5.5, 6.75)).toBe(68_468_300);
+    // 402_000_000 / 5.5 = 73_090_909.0909; / 1.0675 = 68_469_235.68 -> 68_469_236.
+    // Hand-derived as one exact fraction, 321_600_000_000 / 4_697, to avoid
+    // compounding the intermediate rounding.
+    expect(investmentValuePence(4_020_000, 5.5, 6.75)).toBe(68_469_236);
   });
 
   it('is zero for a non-positive NOI', () => {
@@ -459,11 +461,16 @@ describe('sizeTakeout (§19.4)', () => {
   });
 
   it('floors every cap — a cap rounded up is a cap breached', () => {
-    // 1_000_001 / (1 × 0.06) = 16_666_683.33 -> floors to ...83, never ...84
-    const s = sizeTakeout(1_000_001, 999_999_999_999, {
+    // The numerator is chosen so the fractional part EXCEEDS 0.5, which is the
+    // only way this test can tell flooring from rounding:
+    //   1_000_006 / (1 × 0.06) = 16_666_766.67
+    //   floor -> 16_666_766      round-half-up -> 16_666_767
+    // An earlier draft used 1_000_001, whose .333 fraction rounds DOWN anyway,
+    // so the test named for this property proved nothing about it.
+    const s = sizeTakeout(1_000_006, 999_999_999_999, {
       ...IO, dscr_floor: 1, icr_floor: 1, ltv_cap_pct: 100,
     });
-    expect(s.dscr_cap_pence).toBe(16_666_683);
+    expect(s.dscr_cap_pence).toBe(16_666_766);
   });
 
   it('drops the coverage caps out of the minimum at a zero rate', () => {
@@ -735,7 +742,8 @@ def test_debt_service_factor_zero_rate_amortising_is_straight_line():
 
 
 def test_investment_value_one_rounding():
-    assert investment_value_pence(4_020_000, 5.5, 6.75) == 68_468_300
+    # 402_000_000 / 5.5 = 73_090_909.0909; / 1.0675 = 68_469_235.68 -> 68_469_236.
+    assert investment_value_pence(4_020_000, 5.5, 6.75) == 68_469_236
     assert investment_value_pence(0, 5.5, 6.75) == 0
     assert investment_value_pence(-1_000, 5.5, 6.75) == 0
 
@@ -765,9 +773,13 @@ def test_dscr_and_icr_separate_exactly_when_amortising():
 
 
 def test_caps_floor_never_round_up():
-    s = size_takeout(1_000_001, 999_999_999_999,
+    # The numerator is chosen so the fractional part EXCEEDS 0.5 -- the only way
+    # this test can tell flooring from rounding:
+    #   1_000_006 / (1 x 0.06) = 16_666_766.67
+    #   floor -> 16_666_766      round-half-up -> 16_666_767
+    s = size_takeout(1_000_006, 999_999_999_999,
                      {**IO, "dscr_floor": 1.0, "icr_floor": 1.0, "ltv_cap_pct": 100.0})
-    assert s["dscr_cap_pence"] == 16_666_683
+    assert s["dscr_cap_pence"] == 16_666_766
 
 
 def test_zero_rate_drops_the_coverage_caps_out_of_the_minimum():
@@ -1073,19 +1085,54 @@ Implements **§19.1**.
 
 **Interfaces:**
 - Consumes: `InvestmentCaseInputs` from `./investment-case` (TS), the same models newly declared in `types.py` (Python).
-- Produces: `CalculatorInputsV10`, `RefinanceInputsV10`, `ArrangementFeeBasis = 'fixed_pence' | 'pct_of_quantum'`, `CALC_VERSION = '2.12.0'`.
+- Produces: `CalculatorInputsV10`, `RefinanceInputsV10`, `RefinanceArrangementFeeBasis = 'fixed_pence' | 'pct_of_quantum'`, `CALC_VERSION = '2.12.0'`.
 
 - [ ] **Step 1: Write the failing test**
 
+`tests/test_financial_model_types.py` **does not exist** — this task creates it,
+along with its own `_minimal_v10_doc()` helper. An earlier draft of this brief
+said the helper already existed "in this file for v9"; it does not, and neither
+does the file. Build the helper from the fixture corpus through the migration
+chain rather than hand-authoring a document dict, so it cannot drift from what a
+real stored document looks like:
+
 ```python
 # tests/test_financial_model_types.py
+"""R13 spec Sec 19.1. The v10 input shape: the investment case and the two
+refinance narrowings."""
+import json
+from pathlib import Path
+
+from app.financial_model.migrate import migrate_inputs_to_v9
+
+
+def _minimal_v10_doc() -> dict:
+    """A valid v10 document, built by taking a real fixture up to v9 through the
+    existing migration chain and then applying v10's own additions by hand.
+
+    Built from a fixture rather than hand-authored so it cannot drift from the
+    shape a stored document actually has. It does NOT use `migrate_inputs_to_v10`
+    -- that function does not exist until Task 5, and a types test that depended
+    on the migration would be testing two things at once."""
+    raw = json.loads(
+        Path("fixtures/financial-model/l-retain-all.json").read_text(encoding="utf-8"),
+    )
+    doc = migrate_inputs_to_v9(raw, None).model_dump()
+    doc["inputs_version"] = 10
+    doc["investment_case"] = None
+    if doc.get("refinance") is not None:
+        doc["refinance"]["arrangement_fee_basis"] = "fixed_pence"
+        doc["refinance"]["arrangement_fee_pct"] = 0.0
+    return doc
+
+
 def test_v10_narrows_refinance_value_and_ltv_to_nullable():
     """Sec 19.1: `investment_case` SUPERSEDES the explicit pair, so the pair must
     be expressible as null. A v10 model that still required them would make the
     supersession unrepresentable and force validation to accept a contradiction."""
     from app.financial_model.types import CalculatorInputsV10, parse_calculator_inputs
 
-    doc = _minimal_v10_doc()          # helper already in this file for v9; copy and bump
+    doc = _minimal_v10_doc()
     doc["refinance"] = {
         "month_offset": 12, "investment_value_pence": None, "ltv_pct": None,
         "arrangement_fee_pence": 0, "legal_costs_pence": 0, "anchor": None,
@@ -1123,7 +1170,12 @@ Expected: FAIL — `ImportError: cannot import name 'CalculatorInputsV10'`.
 ```ts
 // frontend/src/lib/model/finance-types.ts — after CalculatorInputsV9
 
-export type ArrangementFeeBasis = 'fixed_pence' | 'pct_of_quantum';
+// NOT plain `ArrangementFeeBasis` — that name is already taken in this file by
+// `FacilityTerms`'s own arrangement-fee basis, whose values are entirely
+// different ('committed_net_facility' | 'committed_gross_facility'). The two
+// live on different objects and the FIELD name `arrangement_fee_basis` is
+// deliberately shared; only the type name has to differ.
+export type RefinanceArrangementFeeBasis = 'fixed_pence' | 'pct_of_quantum';
 
 /**
  * R13 spec §19.1. `investment_value_pence` and `ltv_pct` NARROW to nullable:
@@ -1141,7 +1193,7 @@ export interface RefinanceInputsV10 extends Omit<RefinanceInputsV9,
   'investment_value_pence' | 'ltv_pct'> {
   investment_value_pence: number | null;
   ltv_pct: number | null;
-  arrangement_fee_basis: ArrangementFeeBasis;
+  arrangement_fee_basis: RefinanceArrangementFeeBasis;
   arrangement_fee_pct: number;
 }
 
@@ -1174,11 +1226,13 @@ Add to the imports at the top of the file:
 ```ts
 // Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
 // rejects an unused type import, and the re-exports below do not count as uses.
-import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
+// `InvestmentCaseResult` is deliberately ABSENT: it does not exist until Task 8
+// writes `computeInvestmentCase`, and importing it here would not compile.
+// Task 8 adds both the import and the `Schedule.investment_case` field.
+import type { InvestmentCaseInputs } from './investment-case';
 export type {
   OpexCode, OperatingLineBasis, OperatingLine, StabilisationInputs, TakeoutInputs,
-  InvestmentCaseInputs, InvestmentCaseMonth, InvestmentCaseResult, TakeoutSizing,
-  BindingConstraint,
+  InvestmentCaseInputs, InvestmentCaseMonth, TakeoutSizing, BindingConstraint,
 } from './investment-case';
 export { OPEX_CODES } from './investment-case';
 ```
@@ -1343,12 +1397,12 @@ FIXTURES = [p for p in ALL_FIXTURES if _stored_version(p) <= 9]
 
 def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     """Guards the filter above. If every fixture became v10-native this file
-    would pass with zero parametrised cases and prove nothing."""
+    would pass with zero parametrised cases and prove nothing.
+
+    The EXCLUSION BOUND (how many fixtures sit outside the gate) is added by
+    Task 5b, not here: Task 5b authors the two v10-native fixtures, so at this
+    point the exclusion count is legitimately zero and asserting 2 would fail."""
     assert len(FIXTURES) >= 15
-    assert len(ALL_FIXTURES) - len(FIXTURES) == 2, (
-        "the v10-native fixture count changed -- confirm the new fixture is meant "
-        "to be outside the migration gate, then update this bound deliberately"
-    )
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
@@ -1632,6 +1686,39 @@ triple, so the fixture and the unit test pin the same arithmetic.
 `u-investment-case-ltv-binds.json` — the same scheme with `cap_yield_pct: 7.5`
 and `ltv_cap_pct: 55`, so the LTV cap falls below both coverage caps.
 
+- [ ] **Step 3b: Admit the two fixtures into the shared corpus**
+
+Adding a fixture is not just writing a file — several existing suites enumerate
+the corpus and will go red until they know about v10. This was missed when the
+plan was written; it is real work, not boilerplate.
+
+In `tests/test_financial_model_fixtures.py` and its mirror
+`frontend/src/lib/model/golden-fixtures.test.ts`:
+
+1. Add a `_V10_FIXTURES` group beside `_V5_FIXTURES`…`_V9_FIXTURES`.
+2. `test_every_fixture_is_v5_v6_v7_v8_or_v9_and_each_group_is_non_empty` pins an
+   exact stem list per version **and** asserts the groups sum to
+   `len(APPRAISAL_FIXTURES)`. Rename it for v10, add the group to the sum, and pin
+   the two new stems. Do NOT relax the sum to an inequality — that assertion is
+   what catches a fixture whose `inputs_version` was mistyped dropping silently
+   out of every parametrisation.
+3. The lower-version migration-parity runs filter with expressions like
+   `_version_of(...) not in (7, 8, 9)`. A v10 fixture cannot migrate *down*, so
+   add `10` to each such exclusion. Check every one; there is a chain of them.
+
+**`expected_metrics` may be partial.** `_assert_pins` iterates only the keys the
+fixture supplies, so pin the figures you can derive by hand and leave the rest
+out. Do NOT pin a figure by running the appraisal and pasting the output — that
+asserts only that the code agrees with itself, and this release has already
+caught three wrong constants that a harvested value would have concealed. Pin at
+minimum: `gdv_pence`, `investment_case.stabilised.annual_noi_pence`,
+`investment_case.valuation.investment_value_pence`, and
+`investment_case.takeout.binding_constraint`. The first three are hand-derivable
+from the rent roll and the yield; the fourth is the fixture's whole reason to
+exist. **Note that the `investment_case` result block does not exist until Task
+8** — if `run_appraisal` cannot yet produce it, pin only what exists now and say
+so in your report; Task 8 or 11 adds the rest.
+
 - [ ] **Step 4: Write both builders**
 
 Build from the JSON fixtures via `migrateInputsToV10`, so a fixture and a builder
@@ -1646,8 +1733,18 @@ Expected: PASS.
 
 Adding two fixtures changes the corpus every gate iterates.
 
+First, tighten Task 5's corpus guard now that the exclusion is real — append to
+`test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink`:
+
+```python
+    assert len(ALL_FIXTURES) - len(FIXTURES) == 2, (
+        "the v10-native fixture count changed -- confirm the new fixture is meant "
+        "to be outside the migration gate, then update this bound deliberately"
+    )
+```
+
 Run: `pytest tests/test_migrate_v10.py tests/test_golden_fixtures.py -q && cd frontend && npx vitest run src/lib/model/golden-fixtures.test.ts`
-Expected: PASS, and `test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink` confirms exactly two fixtures now sit outside the migration gate.
+Expected: PASS, with the bound above confirming exactly two fixtures sit outside the migration gate.
 
 - [ ] **Step 7: Commit**
 
@@ -2002,6 +2099,62 @@ Expected: FAIL, 14 tests.
 Port Task 6's block into `validate_inputs`, in the same position relative to the
 programme block. The only permitted deviations: `Number.isFinite` → `math.isfinite`,
 `Number.isInteger(x)` → `float(x).is_integer()`, `Set` → `set`.
+
+- [ ] **Step 3b: Adopt the two orphaned migration-gate properties**
+
+Task 5 built the v9→v10 migration gate but could implement only **Property 1**
+of §19.9's three. Properties 2 and 3 need a **v10-only validation rule that
+actually fires**, and no such rule existed until Task 6 (TypeScript) and this
+task (Python) wrote them. Task 5's implementer correctly refused to fabricate a
+rule to make the gate green — doing so would have reproduced R12's vacuous-gate
+defect exactly. No task owned them; this one now does.
+
+Add to `tests/test_migrate_v10.py`, and mirror in
+`frontend/src/lib/model/migrate.test.ts`:
+
+```python
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_property_2_v10_only_rules_are_silent_on_a_migrated_document(path):
+    """Property 2 of three. Migration writes `investment_case: null`, so every
+    Sec 19.7 rule is inert on a migrated document."""
+    doc = _load_fixture(path)["inputs"]
+    issues = validate_inputs(migrate_inputs_to_v10(doc, None))
+    assert not [i for i in issues if i.field.startswith("investment_case")]
+
+
+def test_property_3_the_v10_only_rules_can_actually_fire():
+    """Property 3 of three, and the one that stops Property 2 being vacuous.
+
+    Without this, a release that wired the new rules to nothing would pass
+    Property 2 perfectly. R12 shipped exactly that shape and had to rewrite the
+    gate mid-release."""
+    doc = _load_fixture(FIXTURE_DIR / "l-retain-all.json")["inputs"]
+    v10 = migrate_inputs_to_v10(doc, None).model_dump()
+    v10["investment_case"] = {
+        "stabilisation": {"anchor": None, "month_offset": 3, "ramp_months": 3,
+                          "stabilised_occupancy_pct": 0.0},   # <- rule 8 violation
+        "operating_lines": [],
+        "valuation": {"cap_yield_pct": 5.5, "purchasers_costs_pct": 6.75},
+        "takeout": {"ltv_cap_pct": 65.0, "dscr_floor": 1.3, "icr_floor": 1.3,
+                    "annual_rate_pct": 6.0, "amortisation_years": 25.0,
+                    "term_years": 5.0},
+    }
+    issues = validate_inputs(CalculatorInputsV10.model_validate(v10))
+    assert "investment_case.stabilisation.stabilised_occupancy_pct" in {i.field for i in issues}
+```
+
+**Watch Property 3 fail first** by temporarily commenting out rule 8 in
+`validation.py`; it must go red, then green when restored. A gate nobody has
+seen fail is a gate nobody has tested — and this is the specific gate R12
+shipped in a vacuous state.
+
+- [ ] **Step 3c: Close the Python/TypeScript test-parity gap Task 3 left**
+
+`frontend/src/lib/model/investment-case.test.ts` asserts
+`grossPotentialMonthlyPence([]) === 0`; `tests/test_financial_model_investment_case.py`
+has no counterpart. Add `assert gross_potential_monthly_pence([]) == 0` to
+`test_gross_potential_sums_the_retained_rent_roll`. One line, and "both engines
+mirror" is a Global Constraint of this release rather than a nicety.
 
 - [ ] **Step 4: Add the message-parity guard**
 
@@ -2663,12 +2816,21 @@ describe('§18.10 limitation 9 — the resolved exit month (R12 carry)', () => {
 });
 ```
 
-Run: `cd frontend && git stash && npx vitest run src/lib/export-investment-memo.test.ts -t "limitation 9"; git stash pop`
+Run: `cd frontend && npx vitest run src/lib/export-investment-memo.test.ts -t "limitation 9"`
 
-Expected: **FAIL on `main`** — the memo prints `Month 12`. Record the failure
-output in the commit message. If it PASSES on `main`, stop: either the fixture
-is not actually anchored, or the defect is not what §18.10 described, and the
-plan needs correcting before any code changes.
+Expected: **FAIL, at the branch head, before you touch either printer** — the
+memo prints `Month 12`. Record the failure output in the commit message.
+
+**Do not try to run this against `main`.** By this point the branch carries
+eleven committed tasks and `git stash` reverts working-tree changes, not commits,
+so stashing would prove nothing. The branch-head failure is exactly as strong a
+proof: Task 8 published `resolved_exit_months` but changed no printer, so the
+memo and `CashflowPage` still print the raw `month_offset` here — the failure you
+are watching IS the R12 carried defect, in the last run before it is fixed.
+
+If it PASSES, stop: either `anchoredSlippedDoc()` is not actually anchored (Task
+5b asserts it is — check that test first), or the defect is not what §18.10
+described, and the plan needs correcting before any code changes.
 
 - [ ] **Step 2: Fix both surfaces**
 
