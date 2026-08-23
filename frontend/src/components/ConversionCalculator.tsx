@@ -1,9 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV10 } from '../lib/model';
+import { migrateInputsToV11 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV10, CalculatorInputsV11 } from '../lib/model';
-import { defaultCalculatorInputsV10 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV11 } from '../lib/model';
+import { defaultCalculatorInputsV11 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
@@ -95,8 +95,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV10>(() =>
-    defaultCalculatorInputsV10(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV11>(() =>
+    defaultCalculatorInputsV11(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -106,7 +106,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV10(project));
+      setInputs(defaultCalculatorInputsV11(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -114,14 +114,21 @@ export default function ConversionCalculator({ project }: Props) {
       getAppraisal(project.id)
         .then((appraisal) => {
           if (appraisal.inputs_snapshot && typeof appraisal.inputs_snapshot === 'object') {
-            // Migrate onto v10 defaults so snapshots saved before newer
-            // sections (or v1-v9 snapshots) existed still load cleanly.
+            // Migrate onto v11 defaults so snapshots saved before newer
+            // sections (or v1-v10 snapshots) existed still load cleanly.
+            // R14 Task 14 (spec 20.1): the server boundary moved to v11
+            // (app/api/app.py) and this moved WITH IT, in the same commit --
+            // this is the move that makes R14's monitoring statement
+            // reachable at all. Every arm the release built (the funding-side
+            // correction, the draw cap, and the monitoring statement and its
+            // surfaces) is only ever exercised by a v11 document, and until
+            // this line named the v11 entry point no user could hold one.
             // R13 Task 18 (spec 19.9): the server boundary moved to v10
             // (app/api/app.py) and this moved WITH IT, in the same commit --
-            // this is the move that makes R13 reachable at all. Every arm the
+            // this is the move that made R13 reachable at all. Every arm that
             // release built (the investment case, its two-state field, and
-            // the memo/report sections that read it) is only ever exercised
-            // by a v10 document, and until this line named the v10 entry
+            // the memo/report sections that read it) was only ever exercised
+            // by a v10 document, and until that line named the v10 entry
             // point no user could hold one.
             // R12 Task 18b (spec 18.7): the server boundary moved to v9
             // (app/api/app.py) and this moved WITH IT, in the same commit --
@@ -152,15 +159,15 @@ export default function ConversionCalculator({ project }: Props) {
             // `legacyOnChange`) that used to sit below: every calculator
             // sub-page is now typed on the current document version directly,
             // so this component's state and every sub-page's props are the
-            // same shape (R13 Task 18 moved that shared type to
-            // CalculatorInputsV10, one version on from R12 Task 18b).
+            // same shape (R14 Task 14 moved that shared type to
+            // CalculatorInputsV11, one version on from R13 Task 18).
             //
             // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
             // that used to sit here: the migration's return type is the
             // state's type, so no cast is needed to bridge them at this call
             // site.
             setInputs(
-              migrateInputsToV10(appraisal.inputs_snapshot as Record<string, unknown>, project),
+              migrateInputsToV11(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -189,12 +196,12 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV10 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV11 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV10>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV11>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -228,7 +235,7 @@ export default function ConversionCalculator({ project }: Props) {
 
       // R8 Task 11 (defect B). The server is authoritative over the document,
       // not just over the metrics: `calculate_authoritative` normalises the
-      // snapshot to v10 (R13 Task 18; v9 through R12) and, on a project's
+      // snapshot to v11 (R14 Task 14; v10 through R13) and, on a project's
       // first appraisal, derives the tax jurisdiction from the postcode
       // (app/api/app.py). Before this, the
       // screen kept the england_ni document it posted while the store held the
@@ -238,7 +245,7 @@ export default function ConversionCalculator({ project }: Props) {
       // and the divergence surviving until the component remounted. Adopting
       // what came back makes the save the point at which the two agree.
       //
-      // Routed through the v10 migration rather than cast, for the same reason
+      // Routed through the v11 migration rather than cast, for the same reason
       // the load path is: the response is JSON of unknown provenance to this
       // component, and the migration is the one place that knows how to put a
       // stored snapshot onto the current shape.
@@ -255,9 +262,9 @@ export default function ConversionCalculator({ project }: Props) {
       // reconciles it. The migration runs outside the updater so the updater
       // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
-        let adopted: CalculatorInputsV10 | null = null;
+        let adopted: CalculatorInputsV11 | null = null;
         try {
-          adopted = migrateInputsToV10(result.inputs_snapshot, project);
+          adopted = migrateInputsToV11(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was
@@ -371,15 +378,7 @@ export default function ConversionCalculator({ project }: Props) {
           <VatPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'finance' && (
-          <FinancePage
-            inputs={inputs}
-            // Task 14 cutover removes this: FinancePage.Props.onChange is
-            // Partial<CalculatorInputsV11> (spec §9's MonitoringEditor needs
-            // to pass a `monitoring` partial) but this component's own state
-            // is still CalculatorInputsV10 until the entry-point cutover.
-            onChange={updateInputs as (partial: Partial<CalculatorInputsV11>) => void}
-            run={run}
-          />
+          <FinancePage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'programme' && (
           <ProgrammePage inputs={inputs} onChange={updateInputs} run={run} />

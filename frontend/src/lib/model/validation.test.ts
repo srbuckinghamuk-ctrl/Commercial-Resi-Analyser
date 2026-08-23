@@ -23,7 +23,9 @@ import { DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments } from './vat'
 import type { VatChargeCategory, VatOverride, VatTreatment } from './vat';
 import { icDoc } from './__fixtures__/investment-case-docs';
 import { MONITORING_CATEGORIES } from './finance-types';
-import type { CalculatorInputsV10, MonitoringCategory, MonitoringInputs, MonitoringLineInputs } from './finance-types';
+import type {
+  CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
+} from './finance-types';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -2179,10 +2181,11 @@ describe('anchors and scenario slip — §18.6/§18.8/§18.9', () => {
 });
 
 describe('§19.7 investment case validation', () => {
-  // `icDoc` builds a valid v10 retain-all document with an investment case;
-  // each test breaks exactly ONE thing, so a rule that fires for the wrong
-  // reason is visible.
-  const errFields = (d: CalculatorInputsV10) =>
+  // `icDoc` builds a valid v11 retain-all document with an investment case
+  // (R14 Task 14 moved investment-case-docs.ts's builders on from v10); each
+  // test breaks exactly ONE thing, so a rule that fires for the wrong reason
+  // is visible.
+  const errFields = (d: CalculatorInputsV11) =>
     validateInputs(d).filter((i) => i.severity === 'error').map((i) => i.field);
 
   it('rule 1: rejects an investment case on a sell_all route', () => {
@@ -2391,9 +2394,11 @@ describe('§20.3 monitoring validation', () => {
   }
 
   // `as never` at the `validateInputs`/`errs` call site: this builds a v11
-  // shape by spreading a v10 document (Task 6's migration does not exist
-  // yet), which `CalculatorInputsV10` cannot type — exactly the task brief's
-  // sanctioned "a spread literal is fine for a validation test".
+  // shape by spreading a v10 document via a literal rather than
+  // `migrateV10toV11` (which exists now, but did not when this test was
+  // written ahead of Task 6's migration landing), which `CalculatorInputsV10`
+  // cannot type — exactly the task brief's sanctioned "a spread literal is
+  // fine for a validation test".
   function v11Doc(monitoring: MonitoringInputs | null) {
     return { ...retainAllV10(), inputs_version: 11, monitoring };
   }

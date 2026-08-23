@@ -15,7 +15,7 @@ import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
-  CalculatorInputsV10, EquitySource, FacilityTerms,
+  CalculatorInputsV10, CalculatorInputsV11, EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
@@ -476,5 +476,27 @@ export function defaultCalculatorInputsV10(project?: {
     // even though the runtime value (`null`) is identical either way.
     refinance: null,
     investment_case: null,
+  };
+}
+
+/**
+ * R14 Task 14 (spec §20.1, the entry-point cutover): the client's persistence
+ * boundary moves on again. `monitoring` is the only addition -- a brand-new
+ * document has no monitoring statement entered yet, exactly as it has no
+ * investment case -- so every other field is inherited through the spread
+ * unchanged.
+ *
+ * Spelled out literally rather than calling `migrateV10toV11` for the same
+ * reason `defaultCalculatorInputsV10` is: `model/migrate.ts` imports this
+ * module, so importing it back would be a cycle. `conversion-defaults.test.ts`
+ * pins the two against each other field for field so they cannot drift.
+ */
+export function defaultCalculatorInputsV11(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV11 {
+  return {
+    ...defaultCalculatorInputsV10(project),
+    inputs_version: 11,
+    monitoring: null,
   };
 }

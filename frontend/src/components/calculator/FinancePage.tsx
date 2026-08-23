@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type {
-  CalculatorInputsV10, CalculatorInputsV11, AppraisalRun, FacilityTerms, EquitySource,
+  CalculatorInputsV11, AppraisalRun, FacilityTerms, EquitySource,
   LenderValuation, MonitoringInputs, FundingSource, InterestType, ArrangementFeeBasis,
   ExitFeeBasis, EquityDrawRule, EquityClassification, EvidenceStatus,
 } from '../../lib/model';
@@ -12,11 +12,7 @@ import MonitoringEditor from './MonitoringEditor';
 import { PenceRow, NumRow } from './form-rows';
 
 interface Props {
-  inputs: CalculatorInputsV10;
-  // Widened to v11 (R14 Task 10, spec §9/§20.4) so this page can pass
-  // `{ monitoring: ... }` partials up through `MonitoringEditor`. The `inputs`
-  // prop stays v10 -- `monitoring` is read off it structurally below -- until
-  // Task 14's entry-point cutover moves the state itself to v11.
+  inputs: CalculatorInputsV11;
   onChange: (partial: Partial<CalculatorInputsV11>) => void;
   run: AppraisalRun;
 }
@@ -116,12 +112,7 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
     [onChange],
   );
 
-  // `inputs` is still typed CalculatorInputsV10 (Task 14 cutover removes
-  // this) — read `monitoring` structurally so a v10 document (every existing
-  // caller today) renders the "Add monitoring statement" button rather than
-  // failing to compile or reading a field that isn't there.
-  const monitoring: MonitoringInputs | null =
-    'monitoring' in inputs ? (inputs.monitoring as MonitoringInputs | null) : null;
+  const monitoring: MonitoringInputs | null = inputs.monitoring;
   const monitoringIssues = run.validation.filter((i) => i.field.startsWith('monitoring'));
   const termMonths = Math.max(1, Math.floor(fin.term_months));
 

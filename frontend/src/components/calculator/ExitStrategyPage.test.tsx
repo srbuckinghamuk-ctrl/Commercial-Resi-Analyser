@@ -451,8 +451,9 @@ describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9,
 });
 
 // R13 Task 15 (spec §19.6/§19.7 rule 2), fix rounds 1-2. `retainAllDocMissingRents()`
-// is a v10 document -- `ExitStrategyPage` is generic over `CalculatorInputsV9 |
-// CalculatorInputsV10` for exactly this reason (see the page's own header
+// is a v11 document (R14 Task 14 moved investment-case-docs.ts's builders on) --
+// `ExitStrategyPage` is generic over `CalculatorInputsV9 | CalculatorInputsV10 |
+// CalculatorInputsV11` for exactly this reason (see the page's own header
 // comment). Its base fixture (t-investment-case.json) already carries an
 // investment case and a refinance block seeded with a null value/LTV pair
 // (spec §19.7 rule 5) -- only unit u2's rent row is missing. Fix round 1: the

@@ -10,7 +10,7 @@ import { DEFAULT_AREA_BRIDGE, developedAreaSqm } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8, CalculatorInputsV10,
+  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8,
   CalculatorInputsV11, EquitySource, FacilityTerms, MonitoringCategory, MonitoringInputs,
   MonitoringLineInputs, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
@@ -1169,7 +1169,7 @@ describe('§19.6 result block and flags', () => {
   // runLedger) so these tests exercise the real deriveMetrics(inputs,
   // schedule, model) signature directly, never through runAppraisal — the
   // republish-not-recompute test below needs to call deriveMetrics itself.
-  function icMetrics(doc: CalculatorInputsV10) {
+  function icMetrics(doc: CalculatorInputsV11) {
     const schedule = buildSchedule(doc);
     const model = runLedger(schedule, doc.finance, doc.equity_sources);
     return deriveMetrics(doc, schedule, model);
