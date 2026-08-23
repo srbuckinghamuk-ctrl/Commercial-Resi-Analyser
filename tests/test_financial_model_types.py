@@ -55,6 +55,85 @@ def test_parse_dispatch_routes_v10_to_v10():
     assert parsed.inputs_version == 10
 
 
-def test_calc_version_is_2_12_0():
+def _minimal_v11_doc(monitoring: dict | None = None) -> dict:
+    """A valid v11 document, built the same way `_minimal_v10_doc` is: a real
+    fixture migrated to v10 shape by hand, then v11's own top-level addition
+    applied. Does NOT use `migrate_inputs_to_v11` -- that function does not
+    exist until Task 6."""
+    doc = _minimal_v10_doc()
+    doc["inputs_version"] = 11
+    doc["monitoring"] = monitoring
+    return doc
+
+
+def _monitoring_line(category: str) -> dict:
+    return {
+        "category": category,
+        "current_budget_pence": 1_000_00,
+        "certified_to_date_pence": 500_00,
+        "paid_to_date_pence": 400_00,
+        "committed_to_date_pence": 600_00,
+        "forecast_to_complete_pence": 500_00,
+    }
+
+
+def _minimal_monitoring() -> dict:
+    return {
+        "reporting_month": 6,
+        "reporting_date": "2026-08-01",
+        "lines": [
+            _monitoring_line(c)
+            for c in (
+                "acquisition", "construction", "professional",
+                "statutory", "contingency",
+            )
+        ],
+        "debt_drawn_to_date_pence": 1_000_000_00,
+        "cash_equity_injected_to_date_pence": 200_000_00,
+        "author": "Jane QS",
+        "date": "2026-08-01",
+        "note": None,
+    }
+
+
+def test_parse_dispatch_routes_v11_to_v11_with_monitoring():
+    """Sec 20.1: a v11 document with a `monitoring` block parses to
+    `CalculatorInputsV11`, and the first line round-trips its category."""
+    from app.financial_model.types import CalculatorInputsV11, parse_calculator_inputs
+
+    doc = _minimal_v11_doc(_minimal_monitoring())
+    parsed = parse_calculator_inputs(doc)
+    assert isinstance(parsed, CalculatorInputsV11)
+    assert parsed.inputs_version == 11
+    assert parsed.monitoring.lines[0].category == "acquisition"
+
+
+def test_v11_monitoring_null_parses():
+    """Sec 20.1: `monitoring` is nullable -- a v11 document need not carry a
+    monitoring statement at all."""
+    from app.financial_model.types import CalculatorInputsV11, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v11_doc(None))
+    assert isinstance(parsed, CalculatorInputsV11)
+    assert parsed.monitoring is None
+
+
+def test_v11_reporting_month_zero_rejected():
+    """Sec 20.1: `reporting_month` is a ledger label >= 1 (Sec 5.10
+    convention), never 0."""
+    from pydantic import ValidationError
+
+    from app.financial_model.types import parse_calculator_inputs
+
+    monitoring = _minimal_monitoring()
+    monitoring["reporting_month"] = 0
+    try:
+        parse_calculator_inputs(_minimal_v11_doc(monitoring))
+    except ValidationError:
+        return
+    raise AssertionError("expected ValidationError for reporting_month=0")
+
+
+def test_calc_version_is_2_13_0():
     from app.financial_model.types import CALC_VERSION
-    assert CALC_VERSION == "2.12.0"
+    assert CALC_VERSION == "2.13.0"

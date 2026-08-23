@@ -374,7 +374,9 @@ class FinancialAppraisalCreate(BaseModel):
     # investment_value_pence x ltv_pct path; non-null = the derived case) and
     # narrows `refinance.investment_value_pence`/`ltv_pct` to nullable,
     # defined on `InvestmentCaseInputs` / `RefinanceInputsV10` /
-    # `CalculatorInputsV10` in the same module. Those are the typed schemas
+    # `CalculatorInputsV10` in the same module; a v11 document (R14, spec Sec
+    # 20) adds the top-level nullable `monitoring` block, defined on
+    # `MonitoringInputs` / `CalculatorInputsV11`. Those are the typed schemas
     # the fields are actually enforced against.
     inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the

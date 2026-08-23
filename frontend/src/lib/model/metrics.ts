@@ -1,5 +1,6 @@
 import type {
   AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
+  CalculatorInputsV11,
   ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
 import type { InvestmentCaseResult } from './investment-case';
@@ -155,11 +156,13 @@ function vatCarryInterestPence(
   // no `vat` key to force, and `{ ...v7doc, vat: ... }` is a `tsc` error, correctly.
   // R13: `CalculatorInputsV10` added to the counterfactual's own union alongside
   // the V10 addition to `AnyCalculatorInputs` -- VAT is untouched by the
-  // investment case, so the widening is mechanical.
+  // investment case, so the widening is mechanical. R14: `CalculatorInputsV11`
+  // added on the same basis -- VAT is untouched by the monitoring block too.
   if (!('vat' in inputs)) return 0;
   const vat = inputs.vat;
   if (!vat.registered) return 0;
-  const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10 = {
+  const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10
+    | CalculatorInputsV11 = {
     ...inputs,
     vat: { ...vat, registered: false },
     // R33. `buildSchedule` charges acquisition tax through its own site

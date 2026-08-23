@@ -914,10 +914,49 @@ class CalculatorInputsV10(CalculatorInputsV9):
     investment_case: InvestmentCaseInputs | None = None
 
 
+MonitoringCategory = Literal[
+    "acquisition", "construction", "professional", "statutory", "contingency",
+]
+
+MONITORING_CATEGORIES: tuple[MonitoringCategory, ...] = (
+    "acquisition", "construction", "professional", "statutory", "contingency",
+)
+
+
+class MonitoringLineInputs(Model):
+    category: MonitoringCategory
+    current_budget_pence: int = Field(ge=0)
+    certified_to_date_pence: int = Field(ge=0)
+    paid_to_date_pence: int = Field(ge=0)
+    committed_to_date_pence: int = Field(ge=0)
+    forecast_to_complete_pence: int = Field(ge=0)
+
+
+class MonitoringInputs(Model):
+    reporting_month: int = Field(ge=1)
+    reporting_date: str = Field(min_length=1)  # ISO yyyy-mm-dd; printed only, never read by arithmetic
+    lines: list[MonitoringLineInputs]
+    debt_drawn_to_date_pence: int = Field(ge=0)
+    cash_equity_injected_to_date_pence: int = Field(ge=0)
+    author: str = Field(min_length=1)
+    date: str = Field(min_length=1)
+    note: str | None = None
+
+
+class CalculatorInputsV11(CalculatorInputsV10):
+    """Mirrors CalculatorInputsV10 with the Sec 20 monitoring statement.
+    Subclasses V10 for the same reason V10 subclasses V9: the engine
+    dispatches on it, and a flat re-declaration would make those isinstance
+    checks silently False for v11 documents."""
+
+    inputs_version: Literal[11] = 11  # type: ignore[assignment]
+    monitoring: MonitoringInputs | None = None
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-    | CalculatorInputsV9 | CalculatorInputsV10
+    | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11
 )
 
 
@@ -929,6 +968,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v11 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # monitoring block and every other post-v2 field.
+    if version == 11:
+        return CalculatorInputsV11.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v10 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # investment case and every other post-v2 field.
@@ -982,4 +1026,4 @@ FlagCode = Literal[
     "takeout_constrained_by_coverage",
 ]
 
-CALC_VERSION = "2.12.0"
+CALC_VERSION = "2.13.0"

@@ -338,10 +338,54 @@ export interface CalculatorInputsV10 extends Omit<CalculatorInputsV9,
   investment_case: InvestmentCaseInputs | null;
 }
 
+export type MonitoringCategory =
+  'acquisition' | 'construction' | 'professional' | 'statutory' | 'contingency';
+
+export const MONITORING_CATEGORIES: readonly MonitoringCategory[] =
+  ['acquisition', 'construction', 'professional', 'statutory', 'contingency'];
+
+export interface MonitoringLineInputs {
+  category: MonitoringCategory;
+  current_budget_pence: number;
+  certified_to_date_pence: number;
+  paid_to_date_pence: number;
+  committed_to_date_pence: number;
+  forecast_to_complete_pence: number;
+}
+
+/**
+ * R14 spec §20.1. Top-level, nullable, beside `investment_case`: a monitoring
+ * statement is entered only once construction is under way, and most stored
+ * documents never carry one. `reporting_month` is a ledger label (Sec 5.10
+ * convention), not a calendar date; `reporting_date` is provenance only and
+ * the spec states that changing it changes no number.
+ */
+export interface MonitoringInputs {
+  reporting_month: number;
+  reporting_date: string;          // ISO yyyy-mm-dd; printed only, never read by arithmetic
+  lines: MonitoringLineInputs[];
+  debt_drawn_to_date_pence: number;
+  cash_equity_injected_to_date_pence: number;
+  author: string;
+  date: string;
+  note: string | null;
+}
+
+/**
+ * R14 spec §20.1. `monitoring` is the only addition: a two-state field, top
+ * level beside `investment_case`, `null` = no monitoring statement entered
+ * (every existing document, bit-identical per the v11 identity gate);
+ * non-null = a QS monitoring statement at `reporting_month`.
+ */
+export interface CalculatorInputsV11 extends Omit<CalculatorInputsV10, 'inputs_version'> {
+  inputs_version: 11;
+  monitoring: MonitoringInputs | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9 | CalculatorInputsV10;
+  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -705,4 +749,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.12.0';
+export const CALC_VERSION = '2.13.0';
