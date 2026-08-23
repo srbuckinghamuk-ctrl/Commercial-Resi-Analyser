@@ -1,6 +1,6 @@
 import type {
   AnyCalculatorInputs, MonthReceipts, MonthUses, PhaseAnchor, ProgrammePackage, ProgrammeNetwork,
-  RefinanceInputsV9, SalesPhasingTrancheV9, Schedule,
+  RefinanceInputsV9, RefinanceInputsV10, SalesPhasingTrancheV9, Schedule,
 } from './finance-types';
 import {
   calculateGdv, calculateTotalAcquisitionCost, unitAncillaryValuePence,
@@ -10,6 +10,7 @@ import { spreadByCurve } from './curves';
 import { computeCostPlan } from './cost-plan';
 import { computeVat } from './vat';
 import { isProgrammeNetwork, isLegacyProgramme, derivePhases } from './programme';
+import { computeInvestmentCase } from './investment-case';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -40,6 +41,7 @@ function emptyUses(): MonthUses {
 function emptyReceipts(): MonthReceipts {
   return {
     gross_sale_pence: 0, agent_fee_pence: 0, selling_legal_pence: 0, vat_reclaim_pence: 0,
+    net_operating_income_pence: 0,
   };
 }
 
@@ -261,6 +263,7 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
         agent_fee_pence: agentFee,
         selling_legal_pence: sellingLegal,
         vat_reclaim_pence: 0,
+        net_operating_income_pence: 0,
       };
     } else {
       // spec §4.4.1: tranche split with final-tranche residue absorption; selling
@@ -286,6 +289,20 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     }
   }
 
+  // R13 spec §19.6. Computed here — after `resolveAnchorMonth` exists and
+  // after receipts are fully built by the exit/sales section above — because
+  // §19's whole point is that it runs in ONE direction: it must not see a
+  // ledger balance, and nothing downstream may feed a figure back into it.
+  // Placed AFTER the exit/sales section deliberately: that section's
+  // single-disposal arm does a full `receipts[term - 1] = {...}` object
+  // replace, which would silently wipe an NOI figure written before it.
+  const investmentCase = computeInvestmentCase(inputs, term, resolveAnchorMonth);
+  if (investmentCase != null) {
+    investmentCase.months.forEach((mo, m) => {
+      receipts[m].net_operating_income_pence = mo.noi_pence;
+    });
+  }
+
   // spec §4.5 net refinance proceeds — wired into the ledger by the refinance task.
   const refinanceInput = 'refinance' in inputs ? inputs.refinance : null;
   const refinance = refinanceInput == null ? null : {
@@ -293,17 +310,24 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       'anchor' in refinanceInput ? (refinanceInput as RefinanceInputsV9).anchor : null,
       refinanceInput.month_offset,
     ))), term - 1),
-    // R13 spec §19.1: `investment_value_pence`/`ltv_pct` narrow to nullable on
-    // a v10 document (null when a non-null `investment_case` supersedes them,
-    // §19.7 rule 5). This task does not compute that case, so `?? 0` is the
-    // inert fallback for the explicit-pair path only — R13 Task 8 replaces
-    // this whole expression with the sized-quantum branch once
-    // `computeInvestmentCase` is wired in here, using this exact expression
-    // (its brief specifies it verbatim) as that branch's non-investment-case arm.
-    net_proceeds_pence:
-      Math.round(
+    // R13 spec §19.4/§19.5. A non-null investment case SUPERSEDES the explicit
+    // pair: the advance is the sized quantum, and the arrangement fee may be a
+    // percentage of it. `investment_value_pence`/`ltv_pct` are null on that path
+    // (§19.7 rule 5), which is why this branches rather than multiplying.
+    net_proceeds_pence: (() => {
+      const legal = refinanceInput.legal_costs_pence;
+      if (investmentCase != null) {
+        const q = investmentCase.takeout.quantum_pence;
+        const basis = (refinanceInput as RefinanceInputsV10).arrangement_fee_basis ?? 'fixed_pence';
+        const fee = basis === 'pct_of_quantum'
+          ? Math.round((q * (refinanceInput as RefinanceInputsV10).arrangement_fee_pct) / 100)
+          : refinanceInput.arrangement_fee_pence;
+        return q - fee - legal;
+      }
+      return Math.round(
         ((refinanceInput.investment_value_pence ?? 0) * (refinanceInput.ltv_pct ?? 0)) / 100,
-      ) - refinanceInput.arrangement_fee_pence - refinanceInput.legal_costs_pence,
+      ) - refinanceInput.arrangement_fee_pence - legal;
+    })(),
   };
 
   const sellingCosts = grossSales > 0 ? agentFee + sellingLegal : 0;
@@ -338,6 +362,10 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       vat_pence: vat.total_input_vat_pence,
       vat_reclaim_pence: vat.total_reclaimed_pence,
       irrecoverable_vat_pence: vat.total_irrecoverable_pence,
+      // R13 spec §19.5/§19.6. Republished from `investmentCase.totals.noi_pence`
+      // — the schedule-wide sum already computed once inside
+      // `computeInvestmentCase` — never re-summed here. 0 on the null path.
+      net_operating_income_pence: investmentCase?.totals.noi_pence ?? 0,
     },
     vat,
     // R12 spec §18.10/§18.5. null on the auto-window and legacy-explicit-
@@ -346,5 +374,23 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     // computed above and null-only if that network contains a cycle
     // (unreachable post-validation).
     programme: programmeResult,
+    // R13 spec §19.6. null exactly when the INPUT `investment_case` is null —
+    // no block is synthesised for a document that never asked for one. The
+    // result block is computed once, here, and republished (never
+    // recomputed) onto `AppraisalResultV2` by Task 11.
+    investment_case: investmentCase,
+    // R13 spec §19.6, closing §18.10 limitation 9. The memo and CashflowPage
+    // print a tranche's month; before this field existed they printed the RAW
+    // `month_offset` while the ledger used the resolved one, so an anchored
+    // tranche on a slipped programme was reported at a month the ledger never
+    // used. They read this instead.
+    resolved_exit_months: {
+      tranches: salesPhasing == null ? [] : salesPhasing.tranches.map((tr) => Math.min(
+        Math.max(0, Math.floor(resolveAnchorMonth(
+          'anchor' in tr ? (tr as SalesPhasingTrancheV9).anchor : null, tr.month_offset,
+        ))), term - 1,
+      )),
+      refinance: refinance == null ? null : refinance.month,
+    },
   };
 }

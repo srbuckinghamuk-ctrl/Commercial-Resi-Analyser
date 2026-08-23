@@ -11,10 +11,9 @@ import type { VatInputs, VatResult } from './vat';
 import type { ProgrammeNetwork, DerivedPhase } from './programme';
 // Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
 // rejects an unused type import, and the re-exports below do not count as uses.
-// `InvestmentCaseResult` is deliberately ABSENT: it does not exist until Task 8
-// writes `computeInvestmentCase`, and importing it here would not compile.
-// Task 8 adds both the import and the `Schedule.investment_case` field.
-import type { InvestmentCaseInputs } from './investment-case';
+// R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
+// return type) and `Schedule.investment_case` reads it below.
+import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
 
 export type { SpendCurve };
 
@@ -164,6 +163,9 @@ export { PHASE_CODES, PRE_COMPLETION_CODES, isProgrammeNetwork, isLegacyProgramm
 export type {
   OpexCode, OperatingLineBasis, OperatingLine, StabilisationInputs, TakeoutInputs,
   InvestmentCaseInputs, InvestmentCaseMonth, TakeoutSizing, BindingConstraint,
+  // R13 Task 8: the assembled result block Schedule.investment_case publishes,
+  // republished (never recomputed) onto AppraisalResultV2 by Task 11.
+  InvestmentCaseResult,
 } from './investment-case';
 export { OPEX_CODES } from './investment-case';
 
@@ -378,6 +380,11 @@ export interface MonthReceipts {
    *  Deliberately NOT part of `gross_sale_pence`: it is not a sale receipt, so
    *  no GDV-, LTGDV- or break-even-denominated metric may read it. */
   vat_reclaim_pence: number;
+  /** R13 spec §19.5. Written back from `computeInvestmentCase`'s
+   *  `months[].noi_pence`, its own class of receipt — NOT a sale receipt, so
+   *  no GDV-, LTGDV- or gross-sales-denominated metric may read it. Zero on
+   *  every month of a document whose `investment_case` is null. */
+  net_operating_income_pence: number;
 }
 
 export interface Schedule {
@@ -401,6 +408,11 @@ export interface Schedule {
     vat_pence: number;
     vat_reclaim_pence: number;
     irrecoverable_vat_pence: number;
+    /** R13 spec §19.5. The schedule-wide total of `receipts[].net_operating_
+     *  income_pence` — identical to `investment_case.totals.noi_pence` where
+     *  non-null (republished, never re-derived; §19's result block is
+     *  computed once) and 0 on the null path. */
+    net_operating_income_pence: number;
   };
   /** R11 spec §17.5/§17.6. The full VAT result, computed strictly downstream of
    *  the finished uses/receipts arrays and written back into them — never the
@@ -414,6 +426,23 @@ export interface Schedule {
     critical_path: string[];
     phases: DerivedPhase[];
   } | null;
+  /** R13 spec §19.6. `computeInvestmentCase`'s full result, computed once
+   *  here and republished — never recomputed — onto `AppraisalResultV2` by
+   *  Task 11 (§17.12's `vat` treatment). null exactly when the INPUT
+   *  `investment_case` is null: no block is synthesised for a document that
+   *  never asked for one. */
+  investment_case: InvestmentCaseResult | null;
+  /** R13 spec §19.6, closing §18.10 limitation 9. The memo and CashflowPage
+   *  print a tranche's or the refinance's month; before this field existed
+   *  they printed the RAW `month_offset` while the ledger used the resolved
+   *  one, so an anchored tranche/refinance on a slipped programme was
+   *  reported at a month the ledger never used. They read this instead. `[]`
+   *  when there is no sales_phasing input; `null` refinance when there is no
+   *  refinance input. */
+  resolved_exit_months: {
+    tranches: number[];
+    refinance: number | null;
+  };
 }
 
 export interface LedgerMonth {

@@ -224,6 +224,100 @@ export interface TakeoutSizing {
  *
  * Every cap FLOORS (§19.4), a deliberate departure from §1.1's half-up default.
  */
+export interface InvestmentCaseResult {
+  stabilisation_month: number;
+  months: InvestmentCaseMonth[];
+  stabilised: {
+    effective_gross_rent_pence: number; operating_cost_pence: number;
+    monthly_noi_pence: number; annual_noi_pence: number;
+  };
+  operating_lines: (OperatingLine & { stabilised_monthly_pence: number })[];
+  valuation: {
+    cap_yield_pct: number; purchasers_costs_pct: number;
+    gross_value_pence: number; investment_value_pence: number;
+  };
+  takeout: TakeoutSizing & { is_booked: boolean };
+  totals: {
+    effective_gross_rent_pence: number; operating_cost_pence: number; noi_pence: number;
+  };
+}
+
+/**
+ * §19.6. Runs strictly before the ledger. `_resolveAnchorMonth` is accepted
+ * (not recomputed here) to keep this function's public signature the one
+ * `schedule.ts` calls with its own `resolveAnchorMonth` closure — but the
+ * body below never calls it: stabilisation resolves through
+ * `resolveStabilisationMonth`, which derives its own phase network from
+ * `inputs` rather than sharing schedule.ts's derivation. Underscore-prefixed
+ * because it is genuinely unused by this function today (verified — do not
+ * remove the parameter to "fix" the lint warning without re-checking
+ * whether a later task starts reading it); tranches and refinance still go
+ * through the real `resolveAnchorMonth` in `schedule.ts` itself, never here.
+ */
+export function computeInvestmentCase(
+  inputs: AnyCalculatorInputs,
+  termMonths: number,
+  _resolveAnchorMonth: (anchor: PhaseAnchor | null, monthOffset: number) => number,
+): InvestmentCaseResult | null {
+  const ic = 'investment_case' in inputs ? inputs.investment_case : null;
+  if (ic == null) return null;
+
+  // Task 6's exported helper, NOT a second inline resolution. Stabilisation
+  // goes through the same §18.6 rule via this shared helper — it derives its
+  // own phase network from `inputs`, independently of schedule.ts's
+  // `resolveAnchorMonth` closure.
+  const s = Math.min(Math.max(0, Math.floor(
+    resolveStabilisationMonth(inputs, ic.stabilisation),
+  )), termMonths - 1);
+  const gross = grossPotentialMonthlyPence(inputs.exit_strategy.retained_units);
+  const args: NoiSeriesArgs = {
+    termMonths, stabilisationMonth: s, rampMonths: ic.stabilisation.ramp_months,
+    stabilisedOccupancyPct: ic.stabilisation.stabilised_occupancy_pct,
+    grossPotentialMonthlyPence: gross, lines: ic.operating_lines,
+  };
+  const months = noiSeries(args);
+  const annualNoi = stabilisedAnnualNoiPence(args);
+  const stabEgr = Math.round((gross * ic.stabilisation.stabilised_occupancy_pct) / 100);
+  const stabOpex = operatingCostAt(ic.operating_lines, stabEgr);
+  const value = investmentValuePence(
+    annualNoi, ic.valuation.cap_yield_pct, ic.valuation.purchasers_costs_pct,
+  );
+  const sizing = sizeTakeout(annualNoi, value, ic.takeout);
+  const refi = 'refinance' in inputs ? inputs.refinance : null;
+
+  return {
+    stabilisation_month: s,
+    months,
+    stabilised: {
+      effective_gross_rent_pence: stabEgr,
+      operating_cost_pence: stabOpex,
+      monthly_noi_pence: stabEgr - stabOpex,
+      annual_noi_pence: annualNoi,
+    },
+    operating_lines: ic.operating_lines.map((l) => ({
+      ...l,
+      stabilised_monthly_pence: l.basis === 'fixed_pence_per_month'
+        ? l.value : Math.round((stabEgr * l.value) / 100),
+    })),
+    valuation: {
+      cap_yield_pct: ic.valuation.cap_yield_pct,
+      purchasers_costs_pct: ic.valuation.purchasers_costs_pct,
+      // Published for the report's bridge, NOT an intermediate the value is
+      // computed from — §19.3 keeps the value a single expression with a single
+      // rounding so a two-step derivation cannot drift a penny from it.
+      gross_value_pence: annualNoi > 0 && ic.valuation.cap_yield_pct > 0
+        ? Math.round((annualNoi * 100) / ic.valuation.cap_yield_pct) : 0,
+      investment_value_pence: value,
+    },
+    takeout: { ...sizing, is_booked: refi != null },
+    totals: {
+      effective_gross_rent_pence: months.reduce((t, m) => t + m.effective_gross_rent_pence, 0),
+      operating_cost_pence: months.reduce((t, m) => t + m.operating_cost_pence, 0),
+      noi_pence: months.reduce((t, m) => t + m.noi_pence, 0),
+    },
+  };
+}
+
 export function sizeTakeout(
   annualNoiPence: number, valuePence: number, takeout: TakeoutInputs,
 ): TakeoutSizing {

@@ -86,6 +86,7 @@ def mk_schedule(u: list[MonthUses], r: list[MonthReceipts]) -> Schedule:
             vat_pence=sum_(lambda x: x.vat_pence),
             vat_reclaim_pence=sum(x.vat_reclaim_pence for x in r),
             irrecoverable_vat_pence=0,
+            net_operating_income_pence=sum(x.net_operating_income_pence for x in r),
         ),
     )
 

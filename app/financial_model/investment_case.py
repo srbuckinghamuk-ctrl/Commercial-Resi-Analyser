@@ -211,3 +211,95 @@ def size_takeout(annual_noi_pence: int, value_pence: int, takeout: Any) -> Takeo
         "achieved_dscr": noi / (quantum * a) if sized and a > 0 else None,
         "achieved_icr": noi / (quantum * r) if sized and r > 0 else None,
     }
+
+
+class InvestmentCaseResult(TypedDict):
+    stabilisation_month: int
+    months: list[InvestmentCaseMonth]
+    stabilised: dict[str, int]
+    operating_lines: list[dict[str, Any]]
+    valuation: dict[str, float | int]
+    takeout: dict[str, Any]
+    totals: dict[str, int]
+
+
+def compute_investment_case(
+    inputs: Any, term_months: int, _resolve_anchor_month: Any,
+) -> InvestmentCaseResult | None:
+    """Sec 19.6. Mirror of investment-case.ts's computeInvestmentCase. Runs
+    STRICTLY before the ledger. `_resolve_anchor_month` is accepted (not
+    recomputed here) to keep this function's public signature the one
+    schedule.py calls with its own resolve_anchor_month closure -- but the
+    body below never calls it: stabilisation resolves through
+    resolve_stabilisation_month, which derives its own phase network from
+    `inputs` rather than sharing schedule.py's derivation. Underscore-
+    prefixed because it is genuinely unused by this function today -- tranches
+    and refinance still go through the real resolve_anchor_month in
+    schedule.py itself, never here.
+    """
+    ic = getattr(inputs, "investment_case", None)
+    if ic is None:
+        return None
+
+    # Task 7's exported helper, NOT a second inline resolution. Stabilisation
+    # goes through the same Sec 18.6 rule via this shared helper -- it derives
+    # its own phase network from `inputs`, independently of schedule.py's
+    # resolve_anchor_month closure.
+    s = min(max(0, math.floor(
+        resolve_stabilisation_month(inputs, ic.stabilisation),
+    )), term_months - 1)
+    gross = gross_potential_monthly_pence(inputs.exit_strategy.retained_units)
+    months = noi_series(
+        term_months, s, ic.stabilisation.ramp_months,
+        ic.stabilisation.stabilised_occupancy_pct, gross, ic.operating_lines,
+    )
+    annual_noi = stabilised_annual_noi_pence(
+        ic.stabilisation.stabilised_occupancy_pct, gross, ic.operating_lines,
+    )
+    stab_egr = money_round((gross * ic.stabilisation.stabilised_occupancy_pct) / 100)
+    stab_opex = operating_cost_at(ic.operating_lines, stab_egr)
+    value = investment_value_pence(
+        annual_noi, ic.valuation.cap_yield_pct, ic.valuation.purchasers_costs_pct,
+    )
+    sizing = size_takeout(annual_noi, value, ic.takeout)
+    refi = getattr(inputs, "refinance", None)
+
+    def _stabilised_monthly(line: Any) -> int:
+        if _line_field(line, "basis") == "fixed_pence_per_month":
+            return int(_line_field(line, "value"))
+        return money_round((stab_egr * _line_field(line, "value")) / 100)
+
+    return {
+        "stabilisation_month": s,
+        "months": months,
+        "stabilised": {
+            "effective_gross_rent_pence": stab_egr,
+            "operating_cost_pence": stab_opex,
+            "monthly_noi_pence": stab_egr - stab_opex,
+            "annual_noi_pence": annual_noi,
+        },
+        "operating_lines": [
+            {**(line if isinstance(line, dict) else line.model_dump()),
+             "stabilised_monthly_pence": _stabilised_monthly(line)}
+            for line in ic.operating_lines
+        ],
+        "valuation": {
+            "cap_yield_pct": ic.valuation.cap_yield_pct,
+            "purchasers_costs_pct": ic.valuation.purchasers_costs_pct,
+            # Published for the report's bridge, NOT an intermediate the value
+            # is computed from -- Sec 19.3 keeps the value a single expression
+            # with a single rounding so a two-step derivation cannot drift a
+            # penny from it.
+            "gross_value_pence": (
+                money_round((annual_noi * 100) / ic.valuation.cap_yield_pct)
+                if annual_noi > 0 and ic.valuation.cap_yield_pct > 0 else 0
+            ),
+            "investment_value_pence": value,
+        },
+        "takeout": {**sizing, "is_booked": refi is not None},
+        "totals": {
+            "effective_gross_rent_pence": sum(m["effective_gross_rent_pence"] for m in months),
+            "operating_cost_pence": sum(m["operating_cost_pence"] for m in months),
+            "noi_pence": sum(m["noi_pence"] for m in months),
+        },
+    }
