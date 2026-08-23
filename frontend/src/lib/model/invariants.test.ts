@@ -9,6 +9,8 @@ import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './sensitivity';
+import { blendedDoc, retainAllNoiDoc, noiRedeemsDoc } from './__fixtures__/investment-case-docs';
+import { calculateGdv } from '../conversion-calc-engine';
 import type {
   AnyCalculatorInputs, CalculatorInputsV5,
   ProgrammeInputs, ProgrammeNetwork, SpendCurve,
@@ -631,5 +633,99 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
       .slice(1)
       .filter((m) => m.statutory_pence > 0).length;
     expect(statutoryWindowMonths).toBe(4);
+  });
+});
+
+// R13 Task 10 (spec §19.5): NOI is income from an asset, not realisation of one --
+// the same reason `vat_reclaim_pence` sits outside `gross_sale_pence` now governs
+// `net_operating_income_pence` (finance-types.ts's doc comment on that field). These
+// guards prove NOI cannot leak into a sale-denominated total, into profit, or into
+// the realisation flag.
+//
+// DEVIATION FROM THE TASK BRIEF, checked against the real engine before writing
+// anything here (per the brief's own "verify the reasoning holds… or pin a
+// different formulation" instruction):
+//
+// 1. The brief's Step 1 pseudocode asserts `ltgdv_developer_pct`, `ltgdv_lender_pct`,
+//    `senior_breakeven_pence` and `profit_on_gdv_pct` are BIT-IDENTICAL between
+//    `blendedDoc({rents:'market'})` and `blendedDoc({rents:'zero'})`. They are not:
+//    peak_debt_pence for this pair is 59,434,134 vs 61,661,679 pence -- already
+//    pinned in monthly-engine.test.ts's "reduces the balance" test as NOI's real,
+//    intended ledger effect (repaying the facility early). ltgdv_developer_pct
+//    (49.53% vs 51.38%) and senior_breakeven_pence (61,320,217 vs 63,676,831 pence)
+//    move with it; profit_on_gdv_pct moves too, for the same reason profit_pence
+//    itself moves (see guard 2 below). Asserting bit-identity on those four would
+//    contradict Task 9's own pinned behaviour, not test isolation. The design spec
+//    (docs/superpowers/specs/2026-08-23-r13-investment-case-design.md §8) is more
+//    precise than the brief here: "no GDV-…-denominated metric may read it [NOI]" --
+//    a claim about the FORMULA never taking NOI as an input, not about every
+//    downstream ratio staying fixed when NOI legitimately moves debt. `gdv_pence`
+//    itself is what that sentence actually promises stays untouched, and it does --
+//    proved two ways below, not just read back off the result object.
+// 2. The brief's Step 1 pseudocode uses `retainAllNoiDoc()` for the has_realisation_
+//    event/IRR guard. That document's facility (tens of millions, inherited from
+//    j-blended-refinance.json) is far larger than three retained units' NOI could
+//    ever redeem inside a 24-month term -- confirmed against the real engine:
+//    `irr_annual_pct` is null there, not the non-null value the guard needs.
+//    `noiRedeemsDoc()` -- the fixture investment-case-docs.ts built specifically
+//    because `retainAllNoiDoc()`'s facility is "far too large for NOI alone to ever
+//    redeem" -- is the document that actually clears this bar (monthly-engine.test.ts
+//    already pins its first full redemption at month 2). Used here instead, with
+//    `retainAllNoiDoc()`'s null IRR pinned alongside it so this comment cannot
+//    silently go stale.
+describe('§19.5 NOI isolation', () => {
+  it('leaves gdv_pence untouched by NOI', () => {
+    const withRun = runAppraisal(blendedDoc({ rents: 'market' }));
+    const withoutRun = runAppraisal(blendedDoc({ rents: 'zero' }));
+    const withNoi = withRun.metrics;
+    const without = withoutRun.metrics;
+
+    // Guard against vacuity: NOI must actually be flowing in the 'market' document,
+    // or every assertion below would pass even if gdv_pence read it.
+    const totalNoi = withRun.schedule.receipts.reduce((a, r) => a + r.net_operating_income_pence, 0);
+    expect(totalNoi).toBeGreaterThan(0);
+
+    // gdv_pence is calculateGdv(all units) -- a valuation total with zero structural
+    // path through the ledger or the receipts array at all. Re-derived here from the
+    // inputs directly (not from the schedule's own output), so a change that made
+    // gdv_pence read the ledger in ANY way -- NOI included -- would show up here.
+    const recomputedGdv = calculateGdv(withRun.inputs.unit_mix.units);
+    expect(withNoi.gdv_pence).toBe(recomputedGdv);
+    expect(withNoi.gdv_pence).toBe(without.gdv_pence);
+  });
+
+  it('does NOT enter profit — profit + finance costs is what stays equal', () => {
+    const withNoi = runAppraisal(blendedDoc({ rents: 'market' })).metrics;
+    const without = runAppraisal(blendedDoc({ rents: 'zero' })).metrics;
+
+    // Confirm the premise before relying on it: NOI must actually have moved
+    // finance_costs_pence (via lower interest from its own early repayment) and
+    // profit_pence, or the summed identity below would hold vacuously even with
+    // NOI wrongly added straight to profit.
+    expect(withNoi.finance_costs_pence).not.toBe(without.finance_costs_pence);
+    expect(withNoi.profit_pence).not.toBe(without.profit_pence);
+
+    // Profit is the development residual, GDV − TDC, and TDC includes finance
+    // costs — so with cost-before-finance and gross receipts unchanged (identical
+    // sale receipts, identical unit costs; only the retained unit's rent differs),
+    // profit + finance_costs_pence is the quantity that survives NOI moving one
+    // without the other.
+    expect(withNoi.profit_pence + withNoi.finance_costs_pence)
+      .toBe(without.profit_pence + without.finance_costs_pence);
+  });
+
+  it('keeps has_realisation_event false on a retain-all case that earns NOI', () => {
+    const r = runAppraisal(noiRedeemsDoc()).metrics;
+    expect(r.has_realisation_event).toBe(false);
+    expect(r.return_on_equity_is_unrealised).toBe(true);
+    expect(r.irr_annual_pct).not.toBeNull();
+
+    // The brief's own fixture choice, pinned alongside it: retainAllNoiDoc() stays
+    // unrealised too, but genuinely produces no IRR (see the file header note) —
+    // this is not the deviation being tested, it is why noiRedeemsDoc() is used above.
+    const retained = runAppraisal(retainAllNoiDoc()).metrics;
+    expect(retained.has_realisation_event).toBe(false);
+    expect(retained.return_on_equity_is_unrealised).toBe(true);
+    expect(retained.irr_annual_pct).toBeNull();
   });
 });
