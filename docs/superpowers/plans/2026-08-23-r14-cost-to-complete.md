@@ -196,15 +196,22 @@ Write `### 20.1` in `test-cases.md`: the month-by-month ledger (opening, draw, i
 
 Temporarily change the TS engine to drop `lm.interest_accrued_pence` from `remainingCost` instead of crediting the reserve, run the V golden test, confirm it reports **no** shortfall, revert. Put the observed figures in your task report. This is spec §11 guard 2.
 
+- [ ] **Step 4b: The corpus-count guards**
+
+V is stored at v10, so `tests/test_migrate_v10.py`'s and `migrate.test.ts`'s v10
+identity gates (filter `<= 9`) **exclude** it: their exclusion-bound assertions
+(currently "two v10-native fixtures, T and U") become three. Edit the count and
+the comment naming V. The corpus-count floor (`>= 15` / its TS twin) is unchanged.
+
 - [ ] **Step 5: Run**
 
-Run: `cd frontend && npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/cost-to-complete.test.ts` and `pytest tests/test_financial_model_fixtures.py tests/test_financial_model_cost_to_complete.py -q`
+Run: `cd frontend && npx vitest run src/lib/model/golden-fixtures.test.ts src/lib/model/cost-to-complete.test.ts src/lib/model/migrate.test.ts src/lib/model/invariants.test.ts` and `pytest tests/test_financial_model_fixtures.py tests/test_financial_model_cost_to_complete.py tests/test_migrate_v10.py -q`
 Expected: PASS, with V's shortfall pinned identically in both engines.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add fixtures/financial-model/v-exhausted-reserve.json docs/financial-model/test-cases.md frontend/src/lib/model/golden-fixtures.test.ts tests/test_financial_model_fixtures.py
+git add fixtures/financial-model/v-exhausted-reserve.json docs/financial-model/test-cases.md frontend/src/lib/model/golden-fixtures.test.ts frontend/src/lib/model/migrate.test.ts tests/test_financial_model_fixtures.py tests/test_migrate_v10.py
 git commit -m "test(r14): fixture V — an exhausted interest reserve is a real cost-to-complete shortfall"
 ```
 
@@ -574,12 +581,28 @@ Run: `pytest tests/test_financial_model_monitoring.py -q` — Expected: FAIL on 
 
 - [ ] **Step 4: Hand-derive the worksheet** in `test-cases.md` §20.2: the cost plan (`base_build`, contingency, ratio), the 18-month ledger with the **scaled cap base** shown per month, the statement's five lines and totals, the funding side's three terms at `m = 6`, `forecast_finance` from the ledger, surplus/shortfall, the three variances. Pins ⟨hand-derive⟩: `monitoring_shortfall_pence`, `monitoring_estimated_final_cost_pence`, `monitoring_surplus_pence`, `lender_eligible_ratio` (exact: `0.9166666666666666`), plus `gdv_pence`, `peak_debt_pence`, `funding_gap_pence`, `cost_to_complete_first_shortfall_month`, `cost_to_complete_max_shortfall_pence`. If the derivation shows the monitoring surplus is positive, that is fine — `shortfall` pins `0` and `surplus` carries the number; a statement with no shortfall is still the golden case for every other column.
 
-- [ ] **Step 5: Run** `pytest tests/test_financial_model_monitoring.py -q`. The golden pins cannot be asserted until Task 9 adds the mappers; leave W in the corpus now so Task 6's identity gate (filter `<= 10`) **excludes** it and the corpus-count guard in `test_migrate_v11.py` must be raised by one for the exclusion bound — do that here, with the comment R13 used ("the v11-native fixture is covered by the golden suite instead").
+- [ ] **Step 4b: Every corpus walker that calls a versioned migration**
+
+W is v11-native, and `migrateInputsToV10` / `migrate_inputs_to_v10` **refuse** a
+v11 document by design. Before W enters the corpus, fix each walker:
+  - `tests/test_financial_model_fixtures.py` (~line 1456) and
+    `frontend/src/lib/model/invariants.test.ts` (~line 112): add a
+    `>= 11` arm **above** the `>= 10` arm calling `migrate_inputs_to_v11` /
+    `migrateInputsToV11`, with the same R12/R13 comment extended one version
+    ("a v11-born fixture (W) cannot go through migrate_inputs_to_v10").
+  - `tests/test_migrate_v10.py` and `migrate.test.ts`'s v10 gate: exclusion
+    bound +1 (now T, U, V, W).
+  - `tests/test_migrate_v11.py` and its TS twin (Task 6, filter `<= 10`):
+    exclusion bound is exactly 1 (W), with the comment "the v11-native fixture
+    is covered by the golden suite instead".
+  - `grep -rn "migrate_inputs_to_v10\|migrateInputsToV10" tests frontend/src --include=*.test.* --include=*.py -l` and check every remaining hit either filters by stored version or is a deliberate before/after arm; list them in the report.
+
+- [ ] **Step 5: Run** `pytest tests/test_financial_model_monitoring.py tests/test_financial_model_fixtures.py tests/test_migrate_v10.py tests/test_migrate_v11.py -q` and `cd frontend && npx vitest run src/lib/model/invariants.test.ts src/lib/model/migrate.test.ts src/lib/model/golden-fixtures.test.ts`. W's four R14 pins cannot be asserted until Task 9 adds the mappers — the golden suites must still **load and run** W without error (its non-R14 pins — `gdv_pence`, `peak_debt_pence`, `funding_gap_pence`, the two `cost_to_complete_*` — are asserted now; if the suite rejects unknown `expected_metrics` keys, hold the four R14 keys back until Task 9 and say so).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/financial_model/monitoring.py tests/test_financial_model_monitoring.py fixtures/financial-model/w-monitoring-on-site.json docs/financial-model/test-cases.md tests/test_migrate_v11.py
+git add app/financial_model/monitoring.py tests/test_financial_model_monitoring.py fixtures/financial-model/w-monitoring-on-site.json docs/financial-model/test-cases.md tests/test_migrate_v11.py tests/test_migrate_v10.py tests/test_financial_model_fixtures.py frontend/src/lib/model/invariants.test.ts frontend/src/lib/model/migrate.test.ts
 git commit -m "feat(r14): monitoring statement Python mirror; fixture W authored and hand-derived (spec 20.2)"
 ```
 
