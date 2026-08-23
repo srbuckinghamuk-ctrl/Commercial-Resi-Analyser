@@ -1529,32 +1529,16 @@ _FIXTURE_VARIANTS = _fixture_variant_matrix()
 _FIXTURE_VARIANT_IDS = [f"{stem}[{label}]" for stem, label, _ in _FIXTURE_VARIANTS]
 
 
-# R14 (spec Sec 5, fix round 1). The profit identity below is GATED on
-# `fully_realised`, so it can go quiet without failing. Wiring `lender_eligible`
-# to the Sec 4.2(b) advance cap opened a real funding gap on fixtures Q and S --
-# the corpus's ONLY two detailed-mode documents -- and `funding_gap_pence == 0`
-# is a term of `fully_realised`, so neither reaches the identity any more. That
-# is correct behaviour on those fixtures, but it means the gate now needs a
-# witness. Every variant id that actually reached the identity is recorded here
-# and asserted non-empty by
-# `test_the_fully_realised_profit_identity_is_not_vacuous` below, so the whole
-# block cannot fall vacuous unnoticed.
-#
-# It does NOT restore detailed-mode coverage of the identity -- no fixture
-# provides that today. Fixture W (R14 Task 8) is designed to be the
-# detailed-mode carrier that does; when it lands, this comment and the witness
-# should be revisited so the witness is asserted per COST MODE, not merely
-# corpus-wide.
-#
-# Accumulate-then-assert (rather than a self-contained second walk like
-# `saw_positive_case` in test_financial_model_cost_to_complete.py) so the
-# witness records the identity assertions that ACTUALLY RAN. That makes it
-# order-dependent: the witness test is a module-level function declared AFTER
-# the class, and pytest runs a class-parametrised method's whole param sweep
-# before moving on, so the set is complete by then. There is no xdist and no
-# random-order plugin in this project's pyproject; adding one means moving this
-# to a self-contained walk. Mirrors `sawFullyRealised` in invariants.test.ts.
-_SAW_FULLY_REALISED: set[str] = set()
+def _is_fully_realised(run) -> bool:
+    """Spec Sec 7's fully-realised precondition, in ONE place: the gated profit
+    identity in TestInvariantMatrix and its Sec 5 witness below must apply the
+    same predicate, or the witness stops witnessing the thing it names.
+    Mirrors isFullyRealised in invariants.test.ts."""
+    return (
+        run.model.senior_outstanding_at_maturity_pence == 0
+        and run.schedule.totals.retained_value_pence == 0
+        and run.model.totals.funding_gap_pence == 0
+    )
 
 
 @pytest.mark.parametrize("stem,label,inputs", _FIXTURE_VARIANTS, ids=_FIXTURE_VARIANT_IDS)
@@ -1642,13 +1626,7 @@ class TestInvariantMatrix:
         self, stem: str, label: str, inputs: AnyCalculatorInputs,
     ) -> None:
         run = run_appraisal(inputs)
-        fully_realised = (
-            run.model.senior_outstanding_at_maturity_pence == 0
-            and run.schedule.totals.retained_value_pence == 0
-            and run.model.totals.funding_gap_pence == 0
-        )
-        if fully_realised:
-            _SAW_FULLY_REALISED.add(f"{stem}[{label}]")
+        if _is_fully_realised(run):
             assert run.metrics.profit_pence == sum(run.model.equity_cashflows_pence)
             assert run.reconciliation.sources_equal_uses is True
 
@@ -1681,17 +1659,34 @@ class TestInvariantMatrix:
 
 
 def test_the_fully_realised_profit_identity_is_not_vacuous() -> None:
-    """R14 (spec Sec 5, fix round 1). See _SAW_FULLY_REALISED's own comment above
-    TestInvariantMatrix for why this exists and what it does NOT prove. Declared
-    at module level, after the class, so the whole param sweep of
-    test_profit_equals_equity_flows_and_sources_equal_uses_when_fully_realised
-    has run by the time this executes. Mirrors invariants.test.ts's
-    'at least one fixture/variant actually reached the fullyRealised profit
-    identity'."""
-    assert _SAW_FULLY_REALISED, (
-        "no fixture/variant reached the fully-realised profit identity -- the gated "
-        "assertion in TestInvariantMatrix is now vacuous across the whole corpus. "
-        "Run the full class (this witness is accumulated, not re-derived)."
+    """R14 (spec Sec 5, fix round 1). The profit identity in TestInvariantMatrix
+    is GATED on `_is_fully_realised`, so it can go quiet without ever failing.
+    Wiring `lender_eligible` to the Sec 4.2(b) advance cap opened a real funding
+    gap on fixtures Q and S -- the corpus's ONLY two detailed-mode documents --
+    and `funding_gap_pence == 0` is a term of the predicate, so neither reaches
+    the identity any more. That is correct behaviour on those fixtures, but it
+    means the gate needs a witness.
+
+    SELF-CONTAINED: this walks the corpus itself rather than reading a counter
+    the parametrised sweep filled in, so it depends on no test ordering and a
+    filtered run (`-k`) cannot make it fail spuriously. Same shape as
+    `saw_positive_case` in test_financial_model_cost_to_complete.py. It re-runs
+    the appraisals, which is cheap beside the seven assertions each already
+    carries.
+
+    What it does NOT prove: that any DETAILED-MODE document reaches the
+    identity. None does today. Fixture W (R14 Task 8) is designed to be that
+    carrier; when it lands, this witness should be tightened to assert per COST
+    MODE rather than merely corpus-wide. Mirrors invariants.test.ts's 'at least
+    one fixture/variant actually reaches the fullyRealised profit identity'."""
+    reached = [
+        f"{stem}[{label}]"
+        for stem, label, inputs in _FIXTURE_VARIANTS
+        if _is_fully_realised(run_appraisal(inputs))
+    ]
+    assert reached != [], (
+        "no fixture/variant reaches the fully-realised profit identity -- the gated "
+        "assertion in TestInvariantMatrix is now vacuous across the whole corpus."
     )
 
 
