@@ -111,6 +111,36 @@ describe('MonitoringEditor — populated (fixture-shaped)', () => {
     expect(within(acquisitionRow).queryByText('Paid-to-date cannot exceed certified-to-date.')).not.toBeInTheDocument();
   });
 
+  it('matches a per-line issue to the line\'s STORED ARRAY POSITION, not its category\'s canonical position', () => {
+    // Reordered: contingency first, construction at index 3 (its canonical
+    // MONITORING_CATEGORIES position is 1; statutory is what canonically
+    // sits at index 3). A category-indexed lookup would misfile this issue
+    // onto statutory (or contingency); the correct, array-position lookup
+    // puts it on construction.
+    const reordered: MonitoringInputs = {
+      ...FIXTURE_MONITORING,
+      lines: [
+        FIXTURE_MONITORING.lines.find((l) => l.category === 'contingency')!,
+        FIXTURE_MONITORING.lines.find((l) => l.category === 'acquisition')!,
+        FIXTURE_MONITORING.lines.find((l) => l.category === 'professional')!,
+        FIXTURE_MONITORING.lines.find((l) => l.category === 'construction')!,
+        FIXTURE_MONITORING.lines.find((l) => l.category === 'statutory')!,
+      ],
+    };
+    const issues: ValidationIssue[] = [
+      { severity: 'error', field: 'monitoring.lines[3].paid_to_date_pence', message: 'Paid-to-date cannot exceed certified-to-date.' },
+    ];
+    render(<MonitoringEditor monitoring={reordered} termMonths={24} issues={issues} onChange={vi.fn()} />);
+
+    const constructionRow = screen.getByTestId('monitoring-line-construction');
+    expect(within(constructionRow).getByText('Paid-to-date cannot exceed certified-to-date.')).toBeInTheDocument();
+
+    const statutoryRow = screen.getByTestId('monitoring-line-statutory');
+    expect(within(statutoryRow).queryByText('Paid-to-date cannot exceed certified-to-date.')).not.toBeInTheDocument();
+    const contingencyRow = screen.getByTestId('monitoring-line-contingency');
+    expect(within(contingencyRow).queryByText('Paid-to-date cannot exceed certified-to-date.')).not.toBeInTheDocument();
+  });
+
   it('renders a reporting_month issue beside the reporting month field', () => {
     const issues: ValidationIssue[] = [
       { severity: 'error', field: 'monitoring.reporting_month', message: 'Reporting month must be within the facility term.' },

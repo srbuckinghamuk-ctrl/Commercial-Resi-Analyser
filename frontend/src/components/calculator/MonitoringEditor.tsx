@@ -268,9 +268,13 @@ export default function MonitoringEditor({ monitoring, termMonths, issues, onCha
       </div>
 
       {otherIssues.length > 0 && (
-        <div style={{ padding: '10px 14px', background: RED_BG, border: `1px solid ${RED}`, borderRadius: 6 }}>
+        <div style={{
+          padding: '10px 14px', background: RED_BG, border: `1px solid ${RED}`, borderRadius: 6,
+          display: 'flex', flexDirection: 'column', gap: 4,
+        }}
+        >
           {otherIssues.map((issue, i) => (
-            <div key={`${issue.field}-${i}`} style={{ color: RED_TEXT, fontSize: 12, marginBottom: i < otherIssues.length - 1 ? 4 : 0 }}>
+            <div key={`${issue.field}-${i}`} style={{ color: RED_TEXT, fontSize: 12 }}>
               {issue.message}
             </div>
           ))}
