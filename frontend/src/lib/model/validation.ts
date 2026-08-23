@@ -1,7 +1,8 @@
 import type {
   AcquisitionInputsV5, AnyCalculatorInputs, MonthlyModel, Schedule,
-  RefinanceInputsV9, SalesPhasingTrancheV9,
+  RefinanceInputsV9, RefinanceInputsV10, SalesPhasingTrancheV9,
 } from './finance-types';
+import { OPEX_CODES, resolveStabilisationMonth } from './investment-case';
 import { computeLenderGdv } from './lender-valuation';
 // R9 fix wave: `selectBandSet` is restricted by the single-accessor guard
 // (eslint.config.js) because it returns the raw band array. Validation's use is
@@ -947,21 +948,19 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     if (!Number.isInteger(rf.month_offset) || rf.month_offset < 0 || rf.month_offset > term - 1) {
       err('refinance', `Refinance month must be a whole month between 0 and ${term - 1}.`);
     }
-    // R13 spec §19.1/§19.7 rule 5: null is the VALID state once a non-null
-    // `investment_case` supersedes this pair -- guarding on non-null here
-    // keeps this single-field check from misfiring on that legitimate v10
-    // shape. R13 Task 6 adds the real cross-field rule (a non-null pair
-    // together with a non-null `investment_case` is the hard error; a null
-    // pair with no `investment_case` is a different one) — this guard is not
-    // that rule, only the minimal narrowing this task's type change requires.
-    if (rf.investment_value_pence != null
-      && (!Number.isFinite(rf.investment_value_pence) || rf.investment_value_pence < 0)) {
-      err('refinance', 'Refinance investment value must be zero or more.');
-    }
-    if (rf.ltv_pct != null
-      && (!Number.isFinite(rf.ltv_pct) || rf.ltv_pct <= 0 || rf.ltv_pct > 100)) {
-      err('refinance', 'Refinance LTV must be greater than 0 and at most 100.');
-    }
+    // R13 spec §19.7 rule 5 owns investment_value_pence/ltv_pct in full,
+    // below, in the investment-case block (it needs `investment_case` in
+    // scope, which this block does not have). Task 4's temporary range-only
+    // guards stood here (`!= null && (!Number.isFinite(...) || ...)`,
+    // field 'refinance'); rule 5 below MOVES that range check under the
+    // specific field names, alongside the presence/absence checks it adds —
+    // not duplicating it here, which is what would leave two overlapping
+    // checks on one field. The range check itself is not optional: the v4-v9
+    // explicit-pair path (`v4 refinance validation` below) still asserts
+    // `investment_value_pence: -1` and `ltv_pct: 0/101` are hard errors, and
+    // rule 5's own brief text (which shows only the null checks) would have
+    // silently dropped that if followed literally — flagged per this
+    // release's standing instruction rather than silently reconciled.
     if (!Number.isFinite(rf.arrangement_fee_pence) || rf.arrangement_fee_pence < 0) {
       err('refinance', 'Refinance arrangement fee must be zero or more.');
     }
@@ -972,6 +971,164 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     const rfAnchor = 'anchor' in rf ? (rf as RefinanceInputsV9).anchor : null;
     if (rfAnchor != null && !networkPhaseIds.has(rfAnchor.phase_id)) {
       err('refinance.anchor', `Refinance anchor references phase "${rfAnchor.phase_id}", but there is no phase with id "${rfAnchor.phase_id}".`);
+    }
+  }
+
+  // R13 spec §19.7. Gated on presence, not on `inputs_version >= 10`, matching
+  // every other block here: a v9 document has no `investment_case` key, so the
+  // whole block is skipped without a version test.
+  const ic = 'investment_case' in inputs ? inputs.investment_case : null;
+  const refi = 'refinance' in inputs ? inputs.refinance : null;
+
+  // Rule 12 first: it applies whenever `refinance` is non-null, whether or not
+  // there is an investment case, so it must not sit inside the `ic != null` arm.
+  if (refi != null && 'arrangement_fee_pct' in refi) {
+    const p = (refi as RefinanceInputsV10).arrangement_fee_pct;
+    if (!Number.isFinite(p) || p < 0 || p > 100) {
+      err('refinance.arrangement_fee_pct', 'Refinance arrangement fee percentage must be between 0 and 100.');
+    }
+  }
+
+  if (ic == null) {
+    // Rule 5, the other arm — a refinance with no investment case must carry
+    // the explicit pair, or it has no quantum at all. Also carries the range
+    // check Task 4's temporary guard used to make (see the comment in the
+    // general refinance block above) — now under this rule's own specific
+    // field names rather than the generic 'refinance' field it fired on
+    // before. The v4 refinance suite's negative/out-of-range assertions
+    // still need this, so it is moved here, not dropped, even though the
+    // brief's own rule 5 text shows only the null checks.
+    if (refi != null && ('investment_value_pence' in refi)) {
+      if (refi.investment_value_pence == null) {
+        err('refinance.investment_value_pence', 'Refinance investment value is required when there is no investment case.');
+      } else if (!Number.isFinite(refi.investment_value_pence) || refi.investment_value_pence < 0) {
+        err('refinance.investment_value_pence', 'Refinance investment value must be zero or more.');
+      }
+      if (refi.ltv_pct == null) {
+        err('refinance.ltv_pct', 'Refinance LTV is required when there is no investment case.');
+      } else if (!Number.isFinite(refi.ltv_pct) || refi.ltv_pct <= 0 || refi.ltv_pct > 100) {
+        err('refinance.ltv_pct', 'Refinance LTV must be greater than 0 and at most 100.');
+      }
+    }
+  } else {
+    const st = ic.stabilisation;
+    const term = Math.max(1, Math.floor(inputs.finance.term_months));
+    const route = inputs.exit_strategy.route;
+    const rents = inputs.exit_strategy.retained_units;
+    const unitIds = new Set(inputs.unit_mix.units.map((u) => u.id));
+
+    // Rule 1
+    if (route === 'sell_all') {
+      err('investment_case', 'An investment case requires retained units — a sell-all exit retains none.');
+    }
+
+    // Rule 2 — the silent-understatement trap of §19.2. For `retain_all` EVERY
+    // unit is retained but only listed units carry a rent, so a short list
+    // understates NOI, the value and the take-out with no error anywhere.
+    if (route === 'retain_all') {
+      const rented = new Set(rents.map((r) => r.unit_id));
+      const missing = inputs.unit_mix.units.filter((u) => !rented.has(u.id));
+      if (missing.length > 0) {
+        err('exit_strategy.retained_units', `A retain-all investment case needs a rent for every unit; ${missing.length} unit(s) have none.`);
+      }
+    }
+
+    // Rule 3
+    for (const r of rents) {
+      if (!unitIds.has(r.unit_id)) {
+        err('exit_strategy.retained_units', `Retained unit "${r.unit_id}" does not exist in the unit mix.`);
+      }
+    }
+
+    // Rule 4
+    if (rents.reduce((s, r) => s + r.monthly_rent_pence, 0) <= 0) {
+      err('exit_strategy.retained_units', 'An investment case needs a rent roll greater than zero.');
+    }
+
+    // Rule 5 — supersession is an ERROR, never a silent override (§2).
+    if (refi != null && 'investment_value_pence' in refi) {
+      if (refi.investment_value_pence != null) {
+        err('refinance.investment_value_pence', 'Remove the explicit refinance investment value — the investment case derives it.');
+      }
+      if (refi.ltv_pct != null) {
+        err('refinance.ltv_pct', 'Remove the explicit refinance LTV — the investment case take-out supplies the cap.');
+      }
+    }
+
+    // Rule 6 — reuses §18.8's anchor rule rather than restating it.
+    if (st.anchor != null) {
+      const net = 'programme' in inputs && inputs.programme != null
+        && isProgrammeNetwork(inputs.programme) ? inputs.programme : null;
+      if (net == null) {
+        err('investment_case.stabilisation.anchor', 'A stabilisation anchor needs a programme network to anchor to.');
+      } else if (!net.phases.some((p) => p.id === st.anchor!.phase_id)) {
+        err('investment_case.stabilisation.anchor', `Stabilisation is anchored to phase "${st.anchor.phase_id}", which does not exist.`);
+      }
+    }
+
+    // Rule 7 — a hard error on §18.8's reasoning: income that never starts
+    // inside the term books zero NOI silently.
+    const resolved = resolveStabilisationMonth(inputs, st);
+    if (!Number.isInteger(resolved) || resolved < 0 || resolved > term - 1) {
+      err('investment_case.stabilisation.month_offset', `Stabilisation must start within the facility term (month 0 to ${term - 1}); it resolves to month ${resolved}.`);
+    }
+
+    // Rule 8
+    if (!Number.isFinite(st.stabilised_occupancy_pct)
+      || st.stabilised_occupancy_pct <= 0 || st.stabilised_occupancy_pct > 100) {
+      err('investment_case.stabilisation.stabilised_occupancy_pct', 'Stabilised occupancy must be greater than 0% and at most 100%.');
+    }
+    if (!Number.isInteger(st.ramp_months) || st.ramp_months < 0) {
+      err('investment_case.stabilisation.ramp_months', 'The stabilisation ramp must be a whole number of months, zero or more.');
+    }
+
+    // Rule 9
+    if (!Number.isFinite(ic.valuation.cap_yield_pct) || ic.valuation.cap_yield_pct <= 0) {
+      err('investment_case.valuation.cap_yield_pct', 'The capitalisation yield must be greater than zero.');
+    }
+    if (!Number.isFinite(ic.valuation.purchasers_costs_pct) || ic.valuation.purchasers_costs_pct < 0) {
+      err('investment_case.valuation.purchasers_costs_pct', "Purchaser's costs cannot be negative.");
+    }
+
+    // Rule 10
+    const t = ic.takeout;
+    if (!Number.isFinite(t.ltv_cap_pct) || t.ltv_cap_pct <= 0 || t.ltv_cap_pct > 100) {
+      err('investment_case.takeout.ltv_cap_pct', 'The take-out LTV cap must be greater than 0% and at most 100%.');
+    }
+    if (!Number.isFinite(t.dscr_floor) || t.dscr_floor <= 0) {
+      err('investment_case.takeout.dscr_floor', 'The DSCR floor must be greater than zero.');
+    }
+    if (!Number.isFinite(t.icr_floor) || t.icr_floor <= 0) {
+      err('investment_case.takeout.icr_floor', 'The ICR floor must be greater than zero.');
+    }
+    if (!Number.isFinite(t.annual_rate_pct) || t.annual_rate_pct < 0) {
+      err('investment_case.takeout.annual_rate_pct', 'The take-out interest rate cannot be negative.');
+    }
+    if (t.amortisation_years != null
+      && (!Number.isFinite(t.amortisation_years) || t.amortisation_years <= 0)) {
+      err('investment_case.takeout.amortisation_years', 'The amortisation period must be greater than zero, or empty for an interest-only take-out.');
+    }
+    if (!Number.isFinite(t.term_years) || t.term_years <= 0) {
+      err('investment_case.takeout.term_years', 'The take-out term must be greater than zero.');
+    }
+
+    // Rule 11 — an EMPTY schedule is legal: NOI is then gross rent.
+    const seen = new Set<string>();
+    for (const l of ic.operating_lines) {
+      if (l.id.trim() === '') {
+        err('investment_case.operating_lines', 'Every operating line needs an id.');
+      } else if (seen.has(l.id)) {
+        err('investment_case.operating_lines', `Duplicate operating line id "${l.id}".`);
+      }
+      seen.add(l.id);
+      if (!OPEX_CODES.includes(l.code)) {
+        err(`investment_case.operating_lines.${l.id}.code`, `"${l.code}" is not a recognised operating cost code.`);
+      }
+      if (!Number.isFinite(l.value) || l.value < 0) {
+        err(`investment_case.operating_lines.${l.id}.value`, 'An operating line value cannot be negative.');
+      } else if (l.basis === 'pct_of_gross_rent' && l.value > 100) {
+        err(`investment_case.operating_lines.${l.id}.value`, 'A percentage operating line cannot exceed 100% of gross rent.');
+      }
     }
   }
 

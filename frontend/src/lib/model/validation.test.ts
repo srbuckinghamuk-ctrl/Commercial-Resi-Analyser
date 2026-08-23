@@ -21,6 +21,8 @@ import type { CostPackage, CostPlanInputs, FeeLine } from './cost-plan';
 import type { Phase, ProgrammeNetwork } from './programme';
 import { DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments } from './vat';
 import type { VatChargeCategory, VatOverride, VatTreatment } from './vat';
+import { icDoc } from './__fixtures__/investment-case-docs';
+import type { CalculatorInputsV10 } from './finance-types';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -2172,5 +2174,103 @@ describe('anchors and scenario slip — §18.6/§18.8/§18.9', () => {
     d.scenarios.downside = { ...d.scenarios.downside, phase_slip_phase_id: 'planning', phase_slip_months: 3 };
     expect(errs(d).some((i) => i.field === 'scenarios.downside.phase_slip_phase_id'
       && /has no programme network/.test(i.message))).toBe(true);
+  });
+});
+
+describe('§19.7 investment case validation', () => {
+  // `icDoc` builds a valid v10 retain-all document with an investment case;
+  // each test breaks exactly ONE thing, so a rule that fires for the wrong
+  // reason is visible.
+  const errFields = (d: CalculatorInputsV10) =>
+    validateInputs(d).filter((i) => i.severity === 'error').map((i) => i.field);
+
+  it('rule 1: rejects an investment case on a sell_all route', () => {
+    expect(errFields(icDoc({ route: 'sell_all' }))).toContain('investment_case');
+    expect(errFields(icDoc({}))).not.toContain('investment_case');
+  });
+
+  it('rule 2: rejects retain_all with a rent row missing for any unit', () => {
+    // The silent-understatement trap: every unit is retained, but only listed
+    // units carry a rent, so a short list understates NOI, value and quantum
+    // with no error anywhere.
+    const short = icDoc({ dropRetainedUnit: 'u2' });
+    expect(errFields(short)).toContain('exit_strategy.retained_units');
+    expect(errFields(icDoc({}))).not.toContain('exit_strategy.retained_units');
+  });
+
+  it('rule 3: rejects a rent row naming a unit that does not exist', () => {
+    expect(errFields(icDoc({ addRetainedUnitId: 'ghost' })))
+      .toContain('exit_strategy.retained_units');
+  });
+
+  it('rule 4: rejects a zero rent roll', () => {
+    expect(errFields(icDoc({ allRentsZero: true })))
+      .toContain('exit_strategy.retained_units');
+  });
+
+  it('rule 5: rejects a non-null explicit value alongside an investment case', () => {
+    expect(errFields(icDoc({ explicitValue: 5_000_000_00 })))
+      .toContain('refinance.investment_value_pence');
+  });
+
+  it('rule 5 (other arm): rejects a null explicit value with NO investment case', () => {
+    expect(errFields(icDoc({ investmentCase: null, explicitValue: null })))
+      .toContain('refinance.investment_value_pence');
+  });
+
+  it('rule 5 (third arm): a null refinance alongside an investment case is LEGAL', () => {
+    // The indicative case of §19.1 — sizing computed and reported, nothing booked.
+    expect(errFields(icDoc({ refinance: null }))).toEqual([]);
+  });
+
+  it('rule 6: rejects a stabilisation anchor naming an absent phase', () => {
+    expect(errFields(icDoc({ anchorPhaseId: 'no_such_phase' })))
+      .toContain('investment_case.stabilisation.anchor');
+  });
+
+  it('rule 7: rejects a stabilisation month past maturity, accepts its in-term twin', () => {
+    expect(errFields(icDoc({ stabilisationMonth: 24, termMonths: 24 })))
+      .toContain('investment_case.stabilisation.month_offset');
+    expect(errFields(icDoc({ stabilisationMonth: 23, termMonths: 24 })))
+      .not.toContain('investment_case.stabilisation.month_offset');
+  });
+
+  it('rule 8: rejects an occupancy outside (0, 100] and a fractional ramp', () => {
+    expect(errFields(icDoc({ occupancyPct: 0 })))
+      .toContain('investment_case.stabilisation.stabilised_occupancy_pct');
+    expect(errFields(icDoc({ occupancyPct: 100.1 })))
+      .toContain('investment_case.stabilisation.stabilised_occupancy_pct');
+    expect(errFields(icDoc({ occupancyPct: 100 })))
+      .not.toContain('investment_case.stabilisation.stabilised_occupancy_pct');
+    expect(errFields(icDoc({ rampMonths: 2.5 })))
+      .toContain('investment_case.stabilisation.ramp_months');
+  });
+
+  it('rule 9: rejects a non-positive yield', () => {
+    expect(errFields(icDoc({ capYieldPct: 0 })))
+      .toContain('investment_case.valuation.cap_yield_pct');
+  });
+
+  it('rule 10: rejects each out-of-range take-out term', () => {
+    expect(errFields(icDoc({ ltvCapPct: 0 }))).toContain('investment_case.takeout.ltv_cap_pct');
+    expect(errFields(icDoc({ dscrFloor: 0 }))).toContain('investment_case.takeout.dscr_floor');
+    expect(errFields(icDoc({ icrFloor: -1 }))).toContain('investment_case.takeout.icr_floor');
+    expect(errFields(icDoc({ amortisationYears: 0 })))
+      .toContain('investment_case.takeout.amortisation_years');
+    expect(errFields(icDoc({ amortisationYears: null })))
+      .not.toContain('investment_case.takeout.amortisation_years');
+  });
+
+  it('rule 11: rejects duplicate line ids and an over-100 percentage line, allows an empty schedule', () => {
+    expect(errFields(icDoc({ duplicateLineIds: true })))
+      .toContain('investment_case.operating_lines');
+    expect(errFields(icDoc({ pctLineValue: 101 })))
+      .toContain('investment_case.operating_lines.l1.value');
+    expect(errFields(icDoc({ lines: [] }))).toEqual([]);
+  });
+
+  it('rule 12: rejects an out-of-range arrangement fee percentage even with NO investment case', () => {
+    expect(errFields(icDoc({ investmentCase: null, arrangementFeePct: 101 })))
+      .toContain('refinance.arrangement_fee_pct');
   });
 });

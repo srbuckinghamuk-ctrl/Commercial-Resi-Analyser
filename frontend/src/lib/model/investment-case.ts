@@ -6,7 +6,8 @@
  *  been made cyclic). It must never import `monthly-engine`, `metrics` or
  *  `schedule` — a debt figure entering an NOI base is the one thing that would
  *  make this cyclic, exactly as a VAT figure entering a cost base would. */
-import type { PhaseAnchor } from './finance-types';
+import type { AnyCalculatorInputs, PhaseAnchor } from './finance-types';
+import { isProgrammeNetwork, derivePhases } from './programme';
 
 export type OpexCode =
   | 'management' | 'letting_and_re_letting' | 'insurance'
@@ -104,6 +105,21 @@ export function operatingCostAt(lines: readonly OperatingLine[], egrPence: numbe
   return lines.reduce((sum, l) => sum + (
     l.basis === 'fixed_pence_per_month' ? l.value : Math.round((egrPence * l.value) / 100)
   ), 0);
+}
+
+/** §19.7/§19.6. The stabilisation month under §18.6's resolution rule. Lives
+ *  here, not in validation.ts and not inlined in computeInvestmentCase, because
+ *  a rule written twice is a rule that drifts. */
+export function resolveStabilisationMonth(
+  inputs: AnyCalculatorInputs, stabilisation: StabilisationInputs,
+): number {
+  if (stabilisation.anchor == null) return stabilisation.month_offset;
+  const prog = 'programme' in inputs ? inputs.programme : null;
+  if (prog == null || !isProgrammeNetwork(prog)) return stabilisation.month_offset;
+  const d = derivePhases(prog);
+  if ('cycle' in d) return stabilisation.month_offset;
+  const ph = d.byId[stabilisation.anchor.phase_id];
+  return ph ? ph.start_month + stabilisation.anchor.offset_months : stabilisation.month_offset;
 }
 
 export interface NoiSeriesArgs {
