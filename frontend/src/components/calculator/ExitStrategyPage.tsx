@@ -4,6 +4,7 @@ import type {
   CalculatorInputsV9, AppraisalRun, SalesPhasingInputsV9, RefinanceInputsV9,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
+import ExitAnchorControl from './ExitAnchorControl';
 
 interface Props {
   inputs: CalculatorInputsV9;
@@ -71,16 +72,16 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
   const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const pctSum = phasing?.tranches.reduce((a, b) => a + b.pct_of_gross_receipts, 0) ?? 0;
 
-  // R12 Task 18b. A tranche this page creates is written `anchor: null` --
-  // BIT-IDENTICAL to what `migrateV8toV9` writes on every stored tranche
-  // (spec §18.6: null means "use `month_offset`"). A tranche born here and a
-  // tranche migrated here therefore behave the same, which is the same
-  // discipline `defaultCalculatorInputsV9` keeps against the migration.
-  //
-  // This page has no control for the anchor itself: the engine reads one
-  // (§18.6) but nothing in the UI writes a non-null value yet, so every
-  // tranche and every refinance created or edited on this screen stays on its
-  // absolute month. That is a UI gap, not a silent behaviour change.
+  // R12 Task 18b / R13 Task 14. A tranche this page creates is SEEDED
+  // `anchor: null` -- BIT-IDENTICAL to what `migrateV8toV9` writes on every
+  // stored tranche (spec §18.6: null means "use `month_offset`"). A tranche
+  // born here and a tranche migrated here therefore behave the same, which
+  // is the same discipline `defaultCalculatorInputsV9` keeps against the
+  // migration. `ExitAnchorControl` below is what lets the user move a
+  // tranche or the refinance OFF that default onto a phase anchor -- it
+  // reads the programme's phases and emits `PhaseAnchor | null`; it performs
+  // no month arithmetic itself.
+  const phasesForAnchor = inputs.programme?.phases ?? [];
   const togglePhasing = () => onChange({
     sales_phasing: phasing ? null
       : { tranches: [{ month_offset: term - 1, pct_of_gross_receipts: 100, anchor: null }] },
@@ -216,31 +217,47 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
           {phasing && (
             <div>
               {phasing.tranches.map((t, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                  <label style={{ color: '#94a3b8', fontSize: 13, width: 50 }}>Month</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={term - 1}
-                    value={t.month_offset}
-                    onChange={(e) => updateTranche(i, { month_offset: Number(e.target.value) })}
-                    style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                  />
-                  <label style={{ color: '#94a3b8', fontSize: 13 }}>%</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={t.pct_of_gross_receipts}
-                    onChange={(e) => updateTranche(i, { pct_of_gross_receipts: Number(e.target.value) })}
-                    style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
-                  />
-                  <button
-                    onClick={() => removeTranche(i)}
-                    aria-label="Remove tranche"
-                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16 }}
-                  >
-                    ×
-                  </button>
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <label style={{ color: '#94a3b8', fontSize: 13, width: 50 }}>Month</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={term - 1}
+                      value={t.month_offset}
+                      onChange={(e) => updateTranche(i, { month_offset: Number(e.target.value) })}
+                      style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                    />
+                    <label style={{ color: '#94a3b8', fontSize: 13 }}>%</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={t.pct_of_gross_receipts}
+                      onChange={(e) => updateTranche(i, { pct_of_gross_receipts: Number(e.target.value) })}
+                      style={{ width: 90, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                    />
+                    <button
+                      onClick={() => removeTranche(i)}
+                      aria-label="Remove tranche"
+                      style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 16 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 62 }}>
+                    <ExitAnchorControl
+                      value={t.anchor}
+                      phases={phasesForAnchor}
+                      monthOffset={t.month_offset}
+                      onChange={(anchor) => updateTranche(i, { anchor })}
+                    />
+                    {/* R13 Task 14: the resolved month the ledger will actually use --
+                        read from schedule.resolved_exit_months (Task 8), never
+                        recomputed here. Same index as sales_phasing.tranches. */}
+                    <span style={{ color: '#64748b', fontSize: 12 }}>
+                      resolves to month {run.schedule.resolved_exit_months.tranches[i]}
+                    </span>
+                  </div>
                 </div>
               ))}
               <button
@@ -329,6 +346,19 @@ export default function ExitStrategyPage({ inputs, onChange, run }: Props) {
                     />
                   </div>
                 </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <ExitAnchorControl
+                  value={refinance.anchor}
+                  phases={phasesForAnchor}
+                  monthOffset={refinance.month_offset}
+                  onChange={(anchor) => updateRefinance({ anchor })}
+                />
+                {/* R13 Task 14: resolved month the ledger uses, read from
+                    schedule.resolved_exit_months (Task 8), never recomputed here. */}
+                <span style={{ color: '#64748b', fontSize: 12 }}>
+                  resolves to month {run.schedule.resolved_exit_months.refinance}
+                </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: 14 }}>
                 <span>Net refinance proceeds (preview)</span><span>{penceToPounds(refinanceNetProceeds)}</span>

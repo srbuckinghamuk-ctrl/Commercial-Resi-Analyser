@@ -6,6 +6,7 @@ import type { CalculatorInputsV9, SalesPhasingInputsV9, RefinanceInputsV9 } from
 import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import { penceToPounds } from '../../lib/format';
+import type { ProgrammeNetwork } from '../../lib/model';
 
 function buildInputs(overrides: Partial<CalculatorInputsV9> = {}): CalculatorInputsV9 {
   const base = defaultCalculatorInputsV9();
@@ -39,6 +40,25 @@ const SEEDED_REFINANCE: RefinanceInputsV9 = {
 const UNIT_A = {
   id: 'u1', type: '2bed' as const, floor_area_sqm: 60, estimated_value_pence: 30_000_000,
   comparable_notes: '', ancillary: { ...DEFAULT_UNIT_ANCILLARY },
+};
+
+// R13 Task 14. A minimal network to anchor to: a non-milestone phase feeding
+// every category slot (so §18.5's category_phase_ids checks are non-issues,
+// irrelevant to what these tests assert) plus one milestone phase to anchor
+// against.
+const NETWORK: ProgrammeNetwork = {
+  anchor_month: null,
+  phases: [
+    {
+      id: 'construction', code: 'construction', label: 'Construction', duration_months: 6,
+      slip_months: 0, start_offset: 0, curve: { kind: 'straight_line' }, predecessors: [],
+    },
+    {
+      id: 'pc', code: 'practical_completion', label: 'Practical completion', duration_months: 0,
+      slip_months: 0, start_offset: 6, curve: { kind: 'straight_line' }, predecessors: [],
+    },
+  ],
+  category_phase_ids: { construction: 'construction', professional: 'construction', statutory: 'construction' },
 };
 
 describe('ExitStrategyPage — section visibility by route', () => {
@@ -360,5 +380,71 @@ describe('ExitStrategyPage — refinance field editing and preview', () => {
     const expected = Math.round(SEEDED_REFINANCE.investment_value_pence * (SEEDED_REFINANCE.ltv_pct / 100))
       - SEEDED_REFINANCE.arrangement_fee_pence - SEEDED_REFINANCE.legal_costs_pence;
     expect(screen.getByText(penceToPounds(expected))).toBeInTheDocument();
+  });
+});
+
+// R13 Task 14. This is the wiring test for ExitAnchorControl.test.tsx's
+// isolated component — it confirms the page passes the RIGHT phases/value/
+// onChange through, and that the resolved-month readout comes off
+// `run.schedule.resolved_exit_months` rather than the raw `month_offset`.
+describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9, closed)', () => {
+  it('choosing a phase for a tranche anchors that tranche only, leaving its other fields untouched', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'sell_all' },
+      programme: NETWORK,
+      sales_phasing: SEEDED_PHASING,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pc' } });
+    expect(onChange).toHaveBeenCalledWith({
+      sales_phasing: {
+        tranches: [{ ...SEEDED_PHASING.tranches[0], anchor: { phase_id: 'pc', offset_months: 0 } }],
+      },
+    });
+  });
+
+  it('choosing a phase for the refinance anchors the refinance block only', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'retain_all' },
+      programme: NETWORK,
+      refinance: SEEDED_REFINANCE,
+    });
+    const { onChange } = setup(inputs);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'pc' } });
+    expect(onChange).toHaveBeenCalledWith({
+      refinance: { ...SEEDED_REFINANCE, anchor: { phase_id: 'pc', offset_months: 0 } },
+    });
+  });
+
+  it('with no programme network, both anchor controls render disabled', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'blended' },
+      programme: null,
+      sales_phasing: SEEDED_PHASING,
+      refinance: SEEDED_REFINANCE,
+    });
+    setup(inputs);
+    const comboboxes = screen.getAllByRole('combobox');
+    expect(comboboxes).toHaveLength(2); // one tranche row + refinance row
+    comboboxes.forEach((box) => expect(box).toBeDisabled());
+  });
+
+  // The readout is the whole point of Task 8/14 together: it must be the
+  // RESOLVED month (schedule.resolved_exit_months), not the raw month_offset
+  // this page also lets the user edit directly. They coincide here (anchor:
+  // null means "use month_offset"), so this pins the SOURCE, not just the
+  // value -- a stub that echoed month_offset back would also pass a
+  // value-only assertion.
+  it('the resolved-month readout comes from schedule.resolved_exit_months, not a component-local echo', () => {
+    const inputs = buildInputs({
+      exit_strategy: { ...defaultCalculatorInputsV9().exit_strategy, route: 'blended' },
+      programme: NETWORK,
+      sales_phasing: SEEDED_PHASING,
+      refinance: SEEDED_REFINANCE,
+    });
+    const { run } = setup(inputs);
+    expect(run.schedule.resolved_exit_months.tranches).toEqual([11]);
+    expect(run.schedule.resolved_exit_months.refinance).toBe(11);
+    expect(screen.getAllByText(/resolves to month 11/i)).toHaveLength(2);
   });
 });
