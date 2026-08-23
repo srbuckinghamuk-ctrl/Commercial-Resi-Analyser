@@ -17,7 +17,7 @@ import {
   refinanceInputs, blendedInputs, legacyV1Snapshot,
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
-  detailedCostPlanInputs,
+  detailedCostPlanInputs, investmentCaseInputs,
 } from './memo-fixtures';
 import { humanise } from '../format';
 
@@ -101,6 +101,14 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   // past CONTENT_BOTTOM — under the longest-text route, not only the
   // shortest (England/NI, fully evidenced) one above.
   ['area bridge + ancillary, scotland (LBTT), unconfirmed jurisdiction', bridgeAncillaryScottishUnconfirmedInputs],
+  // R13 (Task 16, spec §19.6). The first v10 route in this sweep, and the
+  // only one carrying a non-null `investment_case` — every route above
+  // exercises the section's absence (no v10 fixture existed before this
+  // task), this one exercises its presence: the NOI bridge table, the
+  // capitalised-value sentence, the three-caps table and the binding-
+  // constraint sentence, under the same page-bounds/sparse-page/orphan-
+  // heading/footer/provenance checks every other route already passes.
+  ['investment case (DSCR binds)', investmentCaseInputs],
 ];
 
 describe('investment memorandum release gate', () => {

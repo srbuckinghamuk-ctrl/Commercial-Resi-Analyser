@@ -21,7 +21,9 @@ import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
 import { LEVER_LABEL } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
-import { anchoredSlippedDoc } from './model/__fixtures__/investment-case-docs';
+import {
+  anchoredSlippedDoc, investmentCaseDoc, explicitRefinanceDoc, memoText,
+} from './model/__fixtures__/investment-case-docs';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -1916,5 +1918,128 @@ describe('R12 final review wave: legacy programme package table "Finish" column 
 
     expect(text).toContain(`Statutory ${monthLabel(4)} ${monthLabel(4)} straight_line`);
     expect(text).not.toContain(`Statutory ${monthLabel(4)} ${monthLabel(3)}`);
+  });
+});
+
+// R13 (Task 16, spec §19.6). The memo's investment-case section: the NOI
+// bridge, the capitalised value with its yield and purchaser's costs stated,
+// all three candidate take-out quanta with the binding one named, the
+// achieved ratios, any residual the take-out fails to clear, and — where no
+// refinance is booked — that the case is indicative. Every figure is read off
+// `AppraisalResultV2.investment_case` (or the pre-existing
+// `model.totals.refinance_shortfall_equity_pence` the memo already prints
+// elsewhere): none is recomputed here. `investmentCaseDoc`/`explicitRefinanceDoc`/
+// `memoText` are the shared builders `investment-case-docs.ts` exists for
+// (its own doc comment) — the exact ones this file already uses for
+// `anchoredSlippedDoc` above.
+describe('§19.6 the memo investment-case section', () => {
+  it('prints the NOI bridge: potential, effective, each operating line, NOI', async () => {
+    const t = await memoText(investmentCaseDoc());
+    expect(t).toContain('Gross potential rent');
+    expect(t).toContain('Effective gross rent');
+    expect(t).toContain('Management');
+    expect(t).toContain('Net operating income');
+  });
+
+  it('states the yield and purchaser\'s costs alongside the value', async () => {
+    const t = await memoText(investmentCaseDoc());
+    // Fixture t-investment-case.json (hand-derived, independently re-verified
+    // for this task): cap_yield_pct 5.5, purchasers_costs_pct 6.75. A
+    // one-decimal formatter would silently round 6.75 to 6.8 — the precise
+    // reason this section needs its own percentage formatter rather than the
+    // memo's existing one-decimal `fmtPct`.
+    expect(t).toMatch(/5\.5%/);
+    expect(t).toMatch(/6\.75%/);
+  });
+
+  it('prints ALL THREE candidate quanta and names the binding one', async () => {
+    // A reader given only the quantum learns a number; a reader given all three
+    // learns the shape of the constraint (spec §19.4).
+    const t = await memoText(investmentCaseDoc());
+    expect(t).toContain('LTV cap');
+    expect(t).toContain('DSCR cap');
+    expect(t).toContain('ICR cap');
+    expect(t).toMatch(/DSCR.*binds/i);
+  });
+
+  it('states the residual balance the take-out cannot clear', async () => {
+    const t = await memoText(investmentCaseDoc({ takeoutShortfall: true }));
+    expect(t).toMatch(/take-out does not clear/i);
+  });
+
+  it('does not print a residual-balance sentence when the take-out clears in full', async () => {
+    // The positive control for the assertion above: the ordinary fixture's
+    // take-out clears, so the sentence must not appear on every document.
+    const t = await memoText(investmentCaseDoc());
+    expect(t).not.toMatch(/take-out does not clear/i);
+  });
+
+  it('says so when the case is indicative', async () => {
+    // Scoped to the section's own sentence, not a bare "indicative" search —
+    // `investmentCaseDoc()` is retain_all, and the Retained Portfolio table's
+    // gross-yield column already prints "indicative — not part of the
+    // appraisal" on every such document regardless of this section, which
+    // would make an unscoped assertion pass even with the section removed.
+    const t = await memoText(investmentCaseDoc({ refinance: null }));
+    expect(t).toMatch(/no refinance event is booked/i);
+  });
+
+  it('does not call a booked take-out indicative', async () => {
+    // The positive control: `investmentCaseDoc()` books a refinance
+    // (`is_booked: true`), so the indicative disclosure sentence must not
+    // fire for it. Scoped to the sentence itself, not a bare "indicative"
+    // substring search — the Retained Portfolio table's gross-yield column
+    // ("indicative — not part of the appraisal") legitimately prints that
+    // word on every retain-all/blended document regardless of this section.
+    const t = await memoText(investmentCaseDoc());
+    expect(t).not.toMatch(/no refinance event is booked/i);
+  });
+
+  it('omits the section entirely on the explicit path', async () => {
+    // Not an empty section with dashes — §13.5's layout invariants make a
+    // near-blank page a defect, and a document with no investment case has
+    // nothing to say here.
+    const t = await memoText(explicitRefinanceDoc());
+    expect(t).not.toContain('Net operating income');
+    expect(t).not.toContain('Gross potential rent');
+    expect(t).not.toContain('LTV cap');
+  });
+
+  it('prints every figure verbatim off the result block, never recomputing it', async () => {
+    // The hard constraint (Task 16 brief): no calculation in the report
+    // generator. Feed a deliberately inconsistent, hand-built result through
+    // the memo and assert the PRINTED figures are the ones the (wrong) result
+    // carries, not ones re-derived from its inputs — the same technique
+    // Task 15's equivalent rule is enforced by.
+    const doc = investmentCaseDoc();
+    const run = runAppraisal(doc);
+    const real = run.metrics.investment_case;
+    expect(real).not.toBeNull();
+    const tampered = {
+      ...real!,
+      stabilised: { ...real!.stabilised, annual_noi_pence: 999_900_00 },
+      valuation: { ...real!.valuation, investment_value_pence: 888_800_00 },
+      takeout: { ...real!.takeout, quantum_pence: 777_700_00, binding_constraint: 'icr' as const },
+    };
+    const tamperedRun = { ...run, metrics: { ...run.metrics, investment_case: tampered } };
+    const blob = generateInvestmentMemo(mockProject, tamperedRun, null);
+    const text = documentText(await inspectPdf(blob));
+    const fmt = (pence: number) =>
+      (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 });
+    // The tampered figures appear...
+    expect(text).toContain(fmt(999_900_00));
+    expect(text).toContain(fmt(888_800_00));
+    expect(text).toContain(fmt(777_700_00));
+    // ...including the tampered binding constraint (the real run's is DSCR,
+    // asserted below by the negation) — proof the memo prints what the
+    // result says, never recomputing the take-out sizing from the inputs.
+    expect(text).toMatch(/ICR.*binds/i);
+    expect(text).not.toMatch(/DSCR.*binds/i);
+    // The real, untampered annualised NOI does not appear either — the one
+    // figure above that is not also, by coincidence, equal to another cap
+    // this fixture prints unmodified (DSCR binds here, so the real
+    // `dscr_cap_pence` — deliberately left untampered — equals the real
+    // quantum and would still appear regardless of what this test proves).
+    expect(text).not.toContain(fmt(real!.stabilised.annual_noi_pence));
   });
 });
