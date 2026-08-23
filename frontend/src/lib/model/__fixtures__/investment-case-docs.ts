@@ -107,13 +107,24 @@ export interface IcDocOverrides {
   termMonths?: number;
   occupancyPct?: number;
   capYieldPct?: number;
+  purchasersCostsPct?: number;
   ltvCapPct?: number;
   dscrFloor?: number;
   icrFloor?: number;
+  annualRatePct?: number;
   amortisationYears?: number | null;
+  termYears?: number;
   lines?: OperatingLine[];
   duplicateLineIds?: boolean;
   pctLineValue?: number;
+  /** §19.7 rule 11's blank-id arm — 'l1's id blanked, everything else
+   *  untouched (parallel to `duplicateLineIds`'s single deviation). */
+  blankLineId?: boolean;
+  /** §19.7 rule 11's OPEX_CODES membership arm — 'l1's code set to a string
+   *  no `OpexCode` names. Cast at the write site, not the type: `OperatingLine`
+   *  stays honestly typed, and this override exists precisely to construct the
+   *  malformed-at-runtime document validation must defend against. */
+  invalidLineCode?: boolean;
   opexHeavy?: boolean;
   opexExceedsRent?: boolean;
   ltvBinds?: boolean;
@@ -202,6 +213,9 @@ function applyIcDocOverrides(doc: CalculatorInputsV10, o: IcDocOverrides): Calcu
     if (o.capYieldPct !== undefined) {
       ic = { ...ic, valuation: { ...ic.valuation, cap_yield_pct: o.capYieldPct } };
     }
+    if (o.purchasersCostsPct !== undefined) {
+      ic = { ...ic, valuation: { ...ic.valuation, purchasers_costs_pct: o.purchasersCostsPct } };
+    }
     if (o.ltvCapPct !== undefined) {
       ic = { ...ic, takeout: { ...ic.takeout, ltv_cap_pct: o.ltvCapPct } };
     }
@@ -211,11 +225,27 @@ function applyIcDocOverrides(doc: CalculatorInputsV10, o: IcDocOverrides): Calcu
     if (o.icrFloor !== undefined) {
       ic = { ...ic, takeout: { ...ic.takeout, icr_floor: o.icrFloor } };
     }
+    if (o.annualRatePct !== undefined) {
+      ic = { ...ic, takeout: { ...ic.takeout, annual_rate_pct: o.annualRatePct } };
+    }
     if (o.amortisationYears !== undefined) {
       ic = { ...ic, takeout: { ...ic.takeout, amortisation_years: o.amortisationYears } };
     }
+    if (o.termYears !== undefined) {
+      ic = { ...ic, takeout: { ...ic.takeout, term_years: o.termYears } };
+    }
     if (o.lines !== undefined) {
       ic = { ...ic, operating_lines: o.lines };
+    }
+    if (o.blankLineId) {
+      const lines = ic.operating_lines.map((l) => ({ ...l }));
+      if (lines.length >= 1) lines[0] = { ...lines[0], id: '' };
+      ic = { ...ic, operating_lines: lines };
+    }
+    if (o.invalidLineCode) {
+      const lines = ic.operating_lines.map((l) => ({ ...l }));
+      if (lines.length >= 1) lines[0] = { ...lines[0], code: 'not_a_real_code' as OperatingLine['code'] };
+      ic = { ...ic, operating_lines: lines };
     }
     if (o.duplicateLineIds) {
       const lines = ic.operating_lines.map((l) => ({ ...l }));

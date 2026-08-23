@@ -2198,14 +2198,26 @@ describe('§19.7 investment case validation', () => {
     expect(errFields(icDoc({}))).not.toContain('exit_strategy.retained_units');
   });
 
-  it('rule 3: rejects a rent row naming a unit that does not exist', () => {
+  it('rule 3: rejects a rent row naming a unit that does not exist, accepts its real-unit twin', () => {
     expect(errFields(icDoc({ addRetainedUnitId: 'ghost' })))
       .toContain('exit_strategy.retained_units');
+    expect(errFields(icDoc({}))).not.toContain('exit_strategy.retained_units');
   });
 
-  it('rule 4: rejects a zero rent roll', () => {
+  it('rule 4: rejects a zero rent roll, accepts its priced twin', () => {
     expect(errFields(icDoc({ allRentsZero: true })))
       .toContain('exit_strategy.retained_units');
+    expect(errFields(icDoc({}))).not.toContain('exit_strategy.retained_units');
+  });
+
+  it('rule 2: the missing-unit message agrees in number (lender-facing copy)', () => {
+    // dropRetainedUnit removes exactly one of the five retained units, so
+    // this is the singular case; the plural form is not separately exercised
+    // (the builder only drops one at a time) but the same ternary drives both.
+    const issue = validateInputs(icDoc({ dropRetainedUnit: 'u2' }))
+      .find((i) => i.field === 'exit_strategy.retained_units');
+    expect(issue?.message).toMatch(/1 unit has none\.$/);
+    expect(issue?.message).not.toMatch(/unit\(s\)/);
   });
 
   it('rule 5: rejects a non-null explicit value alongside an investment case', () => {
@@ -2223,9 +2235,11 @@ describe('§19.7 investment case validation', () => {
     expect(errFields(icDoc({ refinance: null }))).toEqual([]);
   });
 
-  it('rule 6: rejects a stabilisation anchor naming an absent phase', () => {
+  it('rule 6: rejects a stabilisation anchor naming an absent phase, accepts its real-phase twin', () => {
     expect(errFields(icDoc({ anchorPhaseId: 'no_such_phase' })))
       .toContain('investment_case.stabilisation.anchor');
+    // icDoc()'s own default anchors to 'practical_completion', a real phase.
+    expect(errFields(icDoc({}))).not.toContain('investment_case.stabilisation.anchor');
   });
 
   it('rule 7: rejects a stabilisation month past maturity, accepts its in-term twin', () => {
@@ -2244,21 +2258,50 @@ describe('§19.7 investment case validation', () => {
       .not.toContain('investment_case.stabilisation.stabilised_occupancy_pct');
     expect(errFields(icDoc({ rampMonths: 2.5 })))
       .toContain('investment_case.stabilisation.ramp_months');
+    // Accepting twin: same field, a valid whole-month value.
+    expect(errFields(icDoc({ rampMonths: 6 })))
+      .not.toContain('investment_case.stabilisation.ramp_months');
   });
 
-  it('rule 9: rejects a non-positive yield', () => {
+  it('rule 9: rejects a non-positive yield, accepts a positive one', () => {
     expect(errFields(icDoc({ capYieldPct: 0 })))
       .toContain('investment_case.valuation.cap_yield_pct');
+    expect(errFields(icDoc({ capYieldPct: 5 })))
+      .not.toContain('investment_case.valuation.cap_yield_pct');
   });
 
-  it('rule 10: rejects each out-of-range take-out term', () => {
+  it('rule 9: rejects negative purchasers costs, accepts zero', () => {
+    expect(errFields(icDoc({ purchasersCostsPct: -1 })))
+      .toContain('investment_case.valuation.purchasers_costs_pct');
+    expect(errFields(icDoc({ purchasersCostsPct: 0 })))
+      .not.toContain('investment_case.valuation.purchasers_costs_pct');
+  });
+
+  it('rule 10: rejects each out-of-range take-out term, accepts each in-range twin', () => {
     expect(errFields(icDoc({ ltvCapPct: 0 }))).toContain('investment_case.takeout.ltv_cap_pct');
+    expect(errFields(icDoc({ ltvCapPct: 60 }))).not.toContain('investment_case.takeout.ltv_cap_pct');
     expect(errFields(icDoc({ dscrFloor: 0 }))).toContain('investment_case.takeout.dscr_floor');
+    expect(errFields(icDoc({ dscrFloor: 1.5 }))).not.toContain('investment_case.takeout.dscr_floor');
     expect(errFields(icDoc({ icrFloor: -1 }))).toContain('investment_case.takeout.icr_floor');
+    expect(errFields(icDoc({ icrFloor: 1.5 }))).not.toContain('investment_case.takeout.icr_floor');
     expect(errFields(icDoc({ amortisationYears: 0 })))
       .toContain('investment_case.takeout.amortisation_years');
     expect(errFields(icDoc({ amortisationYears: null })))
       .not.toContain('investment_case.takeout.amortisation_years');
+  });
+
+  it('rule 10: rejects a negative take-out rate, accepts zero', () => {
+    expect(errFields(icDoc({ annualRatePct: -1 })))
+      .toContain('investment_case.takeout.annual_rate_pct');
+    expect(errFields(icDoc({ annualRatePct: 0 })))
+      .not.toContain('investment_case.takeout.annual_rate_pct');
+  });
+
+  it('rule 10: rejects a non-positive take-out term, accepts a positive one', () => {
+    expect(errFields(icDoc({ termYears: 0 })))
+      .toContain('investment_case.takeout.term_years');
+    expect(errFields(icDoc({ termYears: 5 })))
+      .not.toContain('investment_case.takeout.term_years');
   });
 
   it('rule 11: rejects duplicate line ids and an over-100 percentage line, allows an empty schedule', () => {
@@ -2269,8 +2312,22 @@ describe('§19.7 investment case validation', () => {
     expect(errFields(icDoc({ lines: [] }))).toEqual([]);
   });
 
-  it('rule 12: rejects an out-of-range arrangement fee percentage even with NO investment case', () => {
+  it('rule 11: rejects a blank line id, accepts its named twin', () => {
+    expect(errFields(icDoc({ blankLineId: true })))
+      .toContain('investment_case.operating_lines');
+    expect(errFields(icDoc({}))).not.toContain('investment_case.operating_lines');
+  });
+
+  it('rule 11: rejects an unrecognised operating cost code, accepts a real one', () => {
+    expect(errFields(icDoc({ invalidLineCode: true })))
+      .toContain('investment_case.operating_lines.l1.code');
+    expect(errFields(icDoc({}))).not.toContain('investment_case.operating_lines.l1.code');
+  });
+
+  it('rule 12: rejects an out-of-range arrangement fee percentage even with NO investment case, accepts an in-range one', () => {
     expect(errFields(icDoc({ investmentCase: null, arrangementFeePct: 101 })))
       .toContain('refinance.arrangement_fee_pct');
+    expect(errFields(icDoc({ investmentCase: null })))
+      .not.toContain('refinance.arrangement_fee_pct');
   });
 });

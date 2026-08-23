@@ -1029,7 +1029,7 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
       const rented = new Set(rents.map((r) => r.unit_id));
       const missing = inputs.unit_mix.units.filter((u) => !rented.has(u.id));
       if (missing.length > 0) {
-        err('exit_strategy.retained_units', `A retain-all investment case needs a rent for every unit; ${missing.length} unit(s) have none.`);
+        err('exit_strategy.retained_units', `A retain-all investment case needs a rent for every unit; ${missing.length} unit${missing.length === 1 ? '' : 's'} ${missing.length === 1 ? 'has' : 'have'} none.`);
       }
     }
 
