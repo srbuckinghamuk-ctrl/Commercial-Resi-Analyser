@@ -88,6 +88,18 @@ export interface ScenarioOverrides {
    *  base-case slip already on the document is stressed FROM its recorded
    *  position rather than overwritten by it. */
   phase_slip_months: number;
+  /** R13 spec §19.8. Percentage POINTS added to the capitalisation yield —
+   *  a yield expansion is the take-out's headline stress. */
+  exit_yield_adjustment_pct: number;
+  /** Percent, scaling every operating line's `value` on BOTH bases: scaling a
+   *  percentage line's percentage is the right stress for a management fee
+   *  whose rate is renegotiated, and scaling a fixed line's pence is the right
+   *  one for an insurance premium. */
+  operating_cost_adjustment_pct: number;
+  /** Percentage POINTS SUBTRACTED from stabilised occupancy. Subtracted, not
+   *  added, so a POSITIVE lever value is an ADVERSE move — matching every other
+   *  lever's sign convention in the tornado. */
+  vacancy_adjustment_pct: number;
 }
 
 export interface DealSpiderInputs {

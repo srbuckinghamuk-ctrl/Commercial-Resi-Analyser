@@ -13,7 +13,7 @@ import {
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV10,
+  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
@@ -1092,6 +1092,45 @@ describe('v10 migration -- spec §19.9', () => {
     // The explicit pair survives untouched -- this is the path that stays live.
     expect(v10.refinance!.investment_value_pence).not.toBeNull();
     expect(v10.refinance!.ltv_pct).not.toBeNull();
+    // §19.8: the three new levers, written zero on all four named scenarios —
+    // the numeric identity gate above (`no computed figure moves from v9 to
+    // v10`) is what proves these three written zeroes are inert.
+    (['base', 'upside', 'downside', 'severe'] as const).forEach((name) => {
+      expect(v10.scenarios[name].exit_yield_adjustment_pct).toBe(0);
+      expect(v10.scenarios[name].operating_cost_adjustment_pct).toBe(0);
+      expect(v10.scenarios[name].vacancy_adjustment_pct).toBe(0);
+    });
+  });
+
+  it('actively overwrites a stray non-zero scenario lever rather than relying on it already being zero (spec §19.8)', () => {
+    // Non-vacuity for the test above. Every scenario reaching migrateV9toV10 by
+    // the normal migrateInputsToV9 chain already carries these three fields at
+    // 0 (DEFAULT_SCENARIOS backfills them, and ScenarioOverrides has no field
+    // default of its own in TS — unlike the Python model, so this is not the
+    // identical trap, but the effect is the same: the test above would pass
+    // even with migrateV9toV10's `scenarios:` write deleted entirely, because
+    // its input already happens to be zero). Poisoning `base`'s three new
+    // fields with a nonzero value straight on the v9 document, THEN migrating,
+    // is what proves migrateV9toV10 actively resets them rather than merely
+    // passing an already-zero value through.
+    const raw = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
+    ) as FixtureFile;
+    const v9 = migrateInputsToV9(raw.inputs!);
+    const poisoned: CalculatorInputsV9 = {
+      ...v9,
+      scenarios: {
+        ...v9.scenarios,
+        base: {
+          ...v9.scenarios.base,
+          exit_yield_adjustment_pct: 99, operating_cost_adjustment_pct: 99, vacancy_adjustment_pct: 99,
+        },
+      },
+    };
+    const v10 = migrateV9toV10(poisoned);
+    expect(v10.scenarios.base.exit_yield_adjustment_pct).toBe(0);
+    expect(v10.scenarios.base.operating_cost_adjustment_pct).toBe(0);
+    expect(v10.scenarios.base.vacancy_adjustment_pct).toBe(0);
   });
 
   // No TS twin of Python's test_is_v2_or_later_recognises_v10: `is_v2_or_later`

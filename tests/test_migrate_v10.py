@@ -218,6 +218,14 @@ def test_migration_writes_only_nulls_and_zeroes():
     # The explicit pair survives untouched -- this is the path that stays live.
     assert v10.refinance.investment_value_pence is not None
     assert v10.refinance.ltv_pct is not None
+    # Sec 19.8: the three new levers, written zero on all four named scenarios --
+    # the numeric identity gate above (test_numeric_identity_corpus_wide) is
+    # what proves these three written zeroes are inert.
+    for name in ("base", "upside", "downside", "severe"):
+        scenario = getattr(v10.scenarios, name)
+        assert scenario.exit_yield_adjustment_pct == 0
+        assert scenario.operating_cost_adjustment_pct == 0
+        assert scenario.vacancy_adjustment_pct == 0
 
 
 def test_migration_actively_overwrites_stray_or_wrong_v10_fields_rather_than_relying_on_pydantic_defaults():
@@ -237,7 +245,15 @@ def test_migration_actively_overwrites_stray_or_wrong_v10_fields_rather_than_rel
     precedent one migration back), which is exactly the failure this test
     exists to produce. Poisoning `refinance` with values that are valid but
     WRONG -- the opposite of the target -- means a no-op migration would
-    validate cleanly and still fail these two assertions."""
+    validate cleanly and still fail these two assertions.
+
+    Task 13 extends the same non-vacuity check to its own three scenario
+    fields (Sec 19.8): `exit_yield_adjustment_pct` etc. ALSO default to `0.0`
+    on `ScenarioOverrides` itself, so `test_migration_writes_only_nulls_and_
+    zeroes` above is vacuous for them on its own -- poisoning a scenario's
+    field with a nonzero, otherwise-valid value is what proves
+    `_v10_scenarios` actually resets it, the same way poisoning `refinance`'s
+    two fields above proves `migrate_v9_to_v10` resets those."""
     raw = _load_fixture(FIXTURE_DIR / "j-blended-refinance.json")["inputs"]
     v9 = migrate_inputs_to_v9(raw, None)
     doc = v9.model_dump(mode="json")
@@ -248,11 +264,17 @@ def test_migration_actively_overwrites_stray_or_wrong_v10_fields_rather_than_rel
     assert doc["refinance"] is not None
     doc["refinance"]["arrangement_fee_basis"] = "pct_of_quantum"
     doc["refinance"]["arrangement_fee_pct"] = 3.5
+    doc["scenarios"]["base"]["exit_yield_adjustment_pct"] = 99.0
+    doc["scenarios"]["base"]["operating_cost_adjustment_pct"] = 99.0
+    doc["scenarios"]["base"]["vacancy_adjustment_pct"] = 99.0
 
     v10 = migrate_v9_to_v10(doc)
     assert v10.investment_case is None
     assert v10.refinance.arrangement_fee_basis == "fixed_pence"
     assert v10.refinance.arrangement_fee_pct == 0.0
+    assert v10.scenarios.base.exit_yield_adjustment_pct == 0.0
+    assert v10.scenarios.base.operating_cost_adjustment_pct == 0.0
+    assert v10.scenarios.base.vacancy_adjustment_pct == 0.0
 
 
 def test_is_v2_or_later_recognises_v10():

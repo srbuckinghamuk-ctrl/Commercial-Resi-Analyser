@@ -1037,10 +1037,17 @@ function isV10(snapshot: Record<string, unknown>): snapshot is Record<string, un
 }
 
 /**
- * R13 spec §19.9. Three additions, all inert: `investment_case: null`, and on a
+ * R13 spec §19.9. Four additions, all inert: `investment_case: null`, on a
  * non-null `refinance`, `arrangement_fee_basis: 'fixed_pence'` and
  * `arrangement_fee_pct: 0` — which reproduce today's arithmetic exactly, since
- * the fixed basis reads `arrangement_fee_pence` and nothing else.
+ * the fixed basis reads `arrangement_fee_pence` and nothing else — and, on
+ * every one of the four named scenarios, `exit_yield_adjustment_pct: 0`,
+ * `operating_cost_adjustment_pct: 0` and `vacancy_adjustment_pct: 0` (spec
+ * §19.8). The three new scenario fields are written explicitly, mirroring
+ * `withSlip`'s treatment of `phase_slip_phase_id`/`phase_slip_months` one
+ * migration back — `ScenarioOverrides` already defaults all three, but only a
+ * written value (not a field default) is what the numeric identity gate
+ * actually exercises.
  *
  * `investment_value_pence` and `ltv_pct` are carried through NON-NULL. That is
  * the point: a migrated document stays on the explicit path, which stays live.
@@ -1052,6 +1059,12 @@ export function migrateV9toV10(v9: CalculatorInputsV9): CalculatorInputsV10 {
   if (isV10(v9 as unknown as Record<string, unknown>)) {
     throw new Error('migrateV9toV10: input is already a v10 document');
   }
+  const withNewLevers = (s: ScenarioOverrides): ScenarioOverrides => ({
+    ...s,
+    exit_yield_adjustment_pct: 0,
+    operating_cost_adjustment_pct: 0,
+    vacancy_adjustment_pct: 0,
+  });
   return {
     ...v9,
     inputs_version: 10,
@@ -1060,6 +1073,12 @@ export function migrateV9toV10(v9: CalculatorInputsV9): CalculatorInputsV10 {
       ...v9.refinance,
       arrangement_fee_basis: 'fixed_pence',
       arrangement_fee_pct: 0,
+    },
+    scenarios: {
+      base: withNewLevers(v9.scenarios.base),
+      upside: withNewLevers(v9.scenarios.upside),
+      downside: withNewLevers(v9.scenarios.downside),
+      severe: withNewLevers(v9.scenarios.severe),
     },
   };
 }

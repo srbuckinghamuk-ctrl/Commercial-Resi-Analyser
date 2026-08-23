@@ -22,6 +22,10 @@ export const LEVER_LABEL: Record<SensitivityLever, string> = {
   // SensitivityLever must still resolve a label for a bar the engine can now
   // return.
   phase_slip: 'Phase slip',
+  // R13 spec §19.8. The three investment-case levers.
+  exit_yield: 'Exit yield',
+  operating_cost: 'Operating cost',
+  vacancy: 'Vacancy',
 };
 
 /**
@@ -36,6 +40,9 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   timeline: 'Timeline',
   interest_rate: 'Rate',
   phase_slip: 'Slip',
+  exit_yield: 'Yield',
+  operating_cost: 'Opex',
+  vacancy: 'Vacancy',
 };
 
 /**
@@ -57,9 +64,11 @@ export function selectableLevers(hasPhaseNetwork: boolean): readonly Sensitivity
   return hasPhaseNetwork ? LEVER_ORDER : LEVER_ORDER.filter((l) => l !== 'phase_slip');
 }
 
-/** Decimal places each lever's unit is quoted to. Rates are quoted to 0.1pp. */
+/** Decimal places each lever's unit is quoted to. Percentage-POINT levers are
+ *  quoted to 0.1pp — R13 spec §19.8's `exit_yield` and `vacancy` join
+ *  `interest_rate` in that unit, so they take the same precision. */
 function decimalsFor(lever: SensitivityLever): number {
-  return lever === 'interest_rate' ? 1 : 0;
+  return lever === 'interest_rate' || lever === 'exit_yield' || lever === 'vacancy' ? 1 : 0;
 }
 
 function signed(value: number, decimals: number): string {
@@ -69,16 +78,18 @@ function signed(value: number, decimals: number): string {
 /** One lever position in its own unit (spec §12.1): "+5%", "-3 months", "+1.0 pp". */
 export function formatStepLabel(lever: SensitivityLever, step: number): string {
   const text = signed(step, decimalsFor(lever));
-  if (lever === 'gdv' || lever === 'construction_cost') return `${text}%`;
+  // R13 spec §19.8: operating_cost is a percent, same unit as gdv/construction_cost.
+  if (lever === 'gdv' || lever === 'construction_cost' || lever === 'operating_cost') return `${text}%`;
   // R12 spec §18.9: phase_slip is months, same unit as timeline.
   if (lever === 'timeline' || lever === 'phase_slip') return `${text} months`;
+  // R13 spec §19.8: exit_yield and vacancy are percentage points, same unit as interest_rate.
   return `${text} pp`;
 }
 
 /** A tornado range with the unit stated once: "-10% to +10%", "-3 to +3 months". */
 export function formatRangeLabel(lever: SensitivityLever, low: number, high: number): string {
   const d = decimalsFor(lever);
-  if (lever === 'gdv' || lever === 'construction_cost') {
+  if (lever === 'gdv' || lever === 'construction_cost' || lever === 'operating_cost') {
     return `${signed(low, d)}% to ${signed(high, d)}%`;
   }
   const unit = lever === 'timeline' || lever === 'phase_slip' ? 'months' : 'pp';

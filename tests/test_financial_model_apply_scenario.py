@@ -10,6 +10,8 @@ term 12 months, rate 8.0%.
 import json
 from pathlib import Path
 
+import pytest
+
 from app.financial_model import compute_cost_plan, developed_area_sqm, run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7, migrate_inputs_to_v9
@@ -34,6 +36,7 @@ from app.financial_model.types import (
     UnitMixInputsV6,
     parse_calculator_inputs,
 )
+from .fixtures_investment_case import apply_levers_in_order, explicit_refinance_doc, ic_doc
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 
@@ -51,6 +54,9 @@ def _overrides(**kwargs):
         interest_rate_adjustment_pct=kwargs.get("interest_rate_adjustment_pct", 0.0),
         phase_slip_phase_id=kwargs.get("phase_slip_phase_id", None),
         phase_slip_months=kwargs.get("phase_slip_months", 0),
+        exit_yield_adjustment_pct=kwargs.get("exit_yield_adjustment_pct", 0.0),
+        operating_cost_adjustment_pct=kwargs.get("operating_cost_adjustment_pct", 0.0),
+        vacancy_adjustment_pct=kwargs.get("vacancy_adjustment_pct", 0.0),
     )
 
 
@@ -449,3 +455,58 @@ def test_phase_slip_composes_order_independently_with_the_other_four_levers():
     # application, proving both levers are live rather than one silently no-oping.
     only_scalars = apply_scenario(doc, scalars)
     assert forward.programme != only_scalars.programme
+
+
+# R13 spec Sec 19.8: the three levers stressing the investment case. ic_doc()'s
+# fixture (fixtures/financial-model/t-investment-case.json) carries FOUR
+# operating lines -- id l1 management (pct_of_gross_rent, 10), l2
+# letting_and_re_letting (pct_of_gross_rent, 2), l3 insurance
+# (fixed_pence_per_month, 25_000), l4 compliance_and_safety
+# (fixed_pence_per_month, 8_000). Its cap_yield_pct is 5.5 and
+# stabilised_occupancy_pct is 96. Mirror of the "Sec 19.8 the three exit
+# levers" describe block in apply-scenario.test.ts.
+
+def test_exit_yield_adds_percentage_points_to_the_capitalisation_yield():
+    out = apply_scenario(ic_doc(), _overrides(exit_yield_adjustment_pct=1.5))
+    assert out.investment_case.valuation.cap_yield_pct == pytest.approx(7.0)
+
+
+def test_operating_cost_scales_every_line_value_on_both_bases():
+    out = apply_scenario(ic_doc(), _overrides(operating_cost_adjustment_pct=10))
+    lines = out.investment_case.operating_lines
+    assert lines[0].value == pytest.approx(11)     # l1 management, 10% pct line -> 11
+    assert lines[1].value == pytest.approx(2.2)     # l2 letting, 2% pct line -> 2.2
+    assert lines[2].value == 27_500                 # l3 insurance, 25_000 fixed pence
+    assert lines[3].value == 8_800                  # l4 compliance, 8_000 fixed pence
+
+
+def test_vacancy_subtracts_percentage_points_from_stabilised_occupancy():
+    out = apply_scenario(ic_doc(), _overrides(vacancy_adjustment_pct=6))
+    assert out.investment_case.stabilisation.stabilised_occupancy_pct == pytest.approx(90.0)
+
+
+def test_the_three_levers_are_a_no_op_by_construction_on_an_investment_case_none_document():
+    """Exactly as phase_slip is on a programme=None document: a lever with
+    nothing to write writes nothing -- it does not crash and it does not
+    synthesise a block."""
+    doc = explicit_refinance_doc()
+    assert doc.investment_case is None
+    out = apply_scenario(doc, _overrides(
+        exit_yield_adjustment_pct=2, operating_cost_adjustment_pct=50, vacancy_adjustment_pct=10,
+    ))
+    assert out == doc
+    assert out.investment_case is None
+
+
+def test_keeps_all_eight_levers_order_independent():
+    orders = [
+        ["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+         "exit_yield", "operating_cost", "vacancy"],
+        ["vacancy", "exit_yield", "phase_slip", "gdv", "operating_cost", "interest_rate",
+         "timeline", "construction_cost"],
+        ["operating_cost", "timeline", "vacancy", "interest_rate", "gdv", "exit_yield",
+         "construction_cost", "phase_slip"],
+    ]
+    results = [run_appraisal(apply_levers_in_order(ic_doc(), order)).metrics for order in orders]
+    assert results[1] == results[0]
+    assert results[2] == results[0]

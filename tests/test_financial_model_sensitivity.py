@@ -33,6 +33,7 @@ from app.financial_model.types import (
     SimpleSpendCurve,
     parse_calculator_inputs,
 )
+from .fixtures_investment_case import explicit_refinance_doc, ic_doc
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 FIXTURE_I = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "i-phased-sales.json"
@@ -81,6 +82,7 @@ def test_default_tornado_matches_the_spec():
 def test_lever_order_matches_the_spec():
     assert list(LEVER_ORDER) == [
         "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+        "exit_yield", "operating_cost", "vacancy",
     ]
 
 
@@ -993,3 +995,84 @@ def test_phase_slip_leaves_finance_and_equity_sources_untouched():
     out = apply_scenario(doc, ScenarioOverrides(**overrides))
     assert out.finance == doc.finance
     assert out.equity_sources == doc.equity_sources
+
+
+# R13 spec Sec 19.8 cell validity (Sec 12.7): the mechanism is the pre-existing
+# one (validate_inputs rules 8/9/11 in validation.py feed _measure's unmeasured
+# path), unchanged here -- the fixture (ic_doc()) is new. Mirror of the
+# "Sec 19.8 cell validity" describe block in sensitivity.test.ts.
+
+def test_marks_a_cell_invalid_never_clamped_where_the_yield_reaches_zero():
+    # Base cap_yield_pct is 5.5 (ic_doc()'s fixture). exit_yield ADDS: -6 -> -0.5
+    # (invalid), -5.5 -> 0 (invalid, the boundary), -5 -> 0.5 (valid).
+    result = run_sensitivity(ic_doc(), SensitivityConfig(
+        rows=SensitivityAxis(lever="exit_yield", steps=[-6, -5.5, -5]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    ))
+    assert result.matrix[0][0].profit_pence is None
+    assert any(
+        e.field == "investment_case.valuation.cap_yield_pct"
+        for e in result.matrix[0][0].validation_errors
+    )
+    assert result.matrix[1][0].profit_pence is None   # 5.5 - 5.5 = 0
+    assert any(
+        e.field == "investment_case.valuation.cap_yield_pct"
+        for e in result.matrix[1][0].validation_errors
+    )
+    assert result.matrix[2][0].profit_pence is not None
+    assert result.matrix[2][0].validation_errors == []
+
+
+def test_marks_a_cell_invalid_where_vacancy_drives_occupancy_to_zero():
+    # Base stabilised_occupancy_pct is 96. vacancy SUBTRACTS: 90 -> 6 (valid),
+    # 96 -> 0 (invalid, the boundary), 100 -> -4 (invalid -- never clamped to 0).
+    result = run_sensitivity(ic_doc(), SensitivityConfig(
+        rows=SensitivityAxis(lever="vacancy", steps=[90, 96, 100]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    ))
+    assert result.matrix[0][0].profit_pence is not None
+    assert result.matrix[0][0].validation_errors == []
+    assert result.matrix[1][0].profit_pence is None   # 96 - 96 = 0
+    assert any(
+        e.field == "investment_case.stabilisation.stabilised_occupancy_pct"
+        for e in result.matrix[1][0].validation_errors
+    )
+    assert result.matrix[2][0].profit_pence is None
+    assert any(
+        e.field == "investment_case.stabilisation.stabilised_occupancy_pct"
+        for e in result.matrix[2][0].validation_errors
+    )
+
+
+def test_marks_a_cell_invalid_where_operating_cost_drives_a_line_negative():
+    # A lever below -100% scales every line's value negative; rule 11
+    # (validation.py) rejects a negative operating line value.
+    result = run_sensitivity(ic_doc(), SensitivityConfig(
+        rows=SensitivityAxis(lever="operating_cost", steps=[-150]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[],
+    ))
+    assert result.matrix[0][0].profit_pence is None
+    assert any(
+        e.field.startswith("investment_case.operating_lines.") and "cannot be negative" in e.message
+        for e in result.matrix[0][0].validation_errors
+    )
+
+
+def test_gives_a_zero_width_tornado_bar_not_an_error_on_a_null_investment_case():
+    # Exactly as phase_slip is on a programme=None document: a lever with
+    # nothing to write measures the SAME document at both endpoints, so the
+    # bar it produces has no span.
+    doc = explicit_refinance_doc()
+    assert doc.investment_case is None
+    result = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]),
+        cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[TornadoRange(lever="exit_yield", low=-1, high=1)],
+    ))
+    bar = result.tornado[0]
+    assert bar.low.profit_pence is not None
+    assert bar.low.profit_pence == bar.high.profit_pence
+    assert bar.span_pence == 0

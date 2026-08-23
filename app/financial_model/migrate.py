@@ -1499,18 +1499,41 @@ def is_v10(snapshot: dict[str, Any]) -> bool:
     return snapshot.get("inputs_version") == 10 and "investment_case" in snapshot
 
 
+def _v10_scenarios(scenarios: dict[str, Any] | None) -> dict[str, Any]:
+    """The scenarios half of the v9 -> v10 write: ``exit_yield_adjustment_pct:
+    0``, ``operating_cost_adjustment_pct: 0`` and ``vacancy_adjustment_pct: 0``
+    on all four scenarios (spec Sec 19.8). Mirrors ``_v9_scenarios`` one
+    migration back -- ``ScenarioOverrides`` already defaults all three fields,
+    so only a WRITTEN value (not a field default) is what the numeric identity
+    gate actually exercises."""
+    out = dict(scenarios or {})
+    for key in ("base", "upside", "downside", "severe"):
+        s = dict(out.get(key) or {})
+        s["exit_yield_adjustment_pct"] = 0
+        s["operating_cost_adjustment_pct"] = 0
+        s["vacancy_adjustment_pct"] = 0
+        out[key] = s
+    return out
+
+
 def migrate_v9_to_v10(v9: dict[str, Any] | CalculatorInputsV9) -> CalculatorInputsV10:
     """Upgrades a v9 document to v10 by stamping ``inputs_version: 10`` and
-    writing three inert additions: ``investment_case: None``, and on a
-    non-null ``refinance``, ``arrangement_fee_basis: 'fixed_pence'`` and
-    ``arrangement_fee_pct: 0``. Port of migrateV9toV10 (spec Sec 19.9).
+    writing four inert additions: ``investment_case: None``, on a non-null
+    ``refinance``, ``arrangement_fee_basis: 'fixed_pence'`` and
+    ``arrangement_fee_pct: 0``, and on every one of the four named scenarios,
+    ``exit_yield_adjustment_pct: 0``, ``operating_cost_adjustment_pct: 0`` and
+    ``vacancy_adjustment_pct: 0`` (spec Sec 19.8/19.9, ``_v10_scenarios``).
+    Port of migrateV9toV10.
 
     Purely additive by construction: the fixed basis reads
     ``arrangement_fee_pence`` and nothing else, so writing it reproduces
     today's arithmetic exactly. ``investment_value_pence`` and ``ltv_pct``
     are carried through NON-NULL on a non-null refinance -- that is the
     point, a migrated document stays on the explicit path, which stays live
-    -- so no migrated appraisal's computed values move.
+    -- so no migrated appraisal's computed values move. The three new
+    scenario fields are inert for the same reason: no production code reads
+    them except ``apply_scenario``, and nothing calls ``apply_scenario`` on a
+    document's own ``scenarios`` block during ``run_appraisal``.
 
     Input is accepted as either a plain dict or an already-validated Pydantic
     model, exactly as migrate_v8_to_v9 accepts both.
@@ -1533,6 +1556,7 @@ def migrate_v9_to_v10(v9: dict[str, Any] | CalculatorInputsV9) -> CalculatorInpu
         else {**refinance, "arrangement_fee_basis": "fixed_pence", "arrangement_fee_pct": 0}
     )
     doc["investment_case"] = None
+    doc["scenarios"] = _v10_scenarios(doc.get("scenarios"))
     doc["inputs_version"] = 10
     return CalculatorInputsV10.model_validate(doc)
 

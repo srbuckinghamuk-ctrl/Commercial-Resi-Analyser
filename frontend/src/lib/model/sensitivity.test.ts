@@ -10,6 +10,7 @@ import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
 import { migrateInputsToV9 } from './migrate';
 import { derivePhases } from './programme';
+import { icDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
 import type { AnyCalculatorInputs, SalesPhasingInputs, CalculatorInputsV9 } from './finance-types';
 import type { Phase } from './programme';
@@ -64,7 +65,10 @@ describe('sensitivity defaults (spec §12.3, §12.4)', () => {
   });
 
   it('pins the tie-break lever order', () => {
-    expect(LEVER_ORDER).toEqual(['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip']);
+    expect(LEVER_ORDER).toEqual([
+      'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
+      'exit_yield', 'operating_cost', 'vacancy',
+    ]);
   });
 
   it('accepts the defaults without complaint', () => {
@@ -360,6 +364,9 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
       interest_rate_adjustment_pct: 0,
       phase_slip_phase_id: null,
       phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0,
+      operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0,
     });
     expect(levered.finance.committed_net_facility_pence).toBe(inputs.finance.committed_net_facility_pence);
     expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);
@@ -692,6 +699,9 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   interest_rate_adjustment_pct: 0,
   phase_slip_phase_id: null,
   phase_slip_months: 0,
+  exit_yield_adjustment_pct: 0,
+  operating_cost_adjustment_pct: 0,
+  vacancy_adjustment_pct: 0,
 };
 
 /** Applies all five §12.1/§18.9 levers to `doc` via `applyScenario`, once per lever,
@@ -800,6 +810,9 @@ describe('phase_slip lever — §18.9', () => {
     const doc = networkDoc(20);
     const levers: Record<SensitivityLever, number> = {
       gdv: 5, construction_cost: -3, timeline: 2, interest_rate: 1, phase_slip: 2,
+      // Unused by this guard's `orders` below — R13's own eight-lever
+      // order-independence test lives in apply-scenario.test.ts.
+      exit_yield: 0, operating_cost: 0, vacancy: 0,
     };
     const orders: SensitivityLever[][] = [
       ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip'],
@@ -1057,5 +1070,85 @@ describe('phase_slip lever — §18.9', () => {
     });
     expect(out.finance).toEqual(doc.finance);
     expect(out.equity_sources).toEqual(doc.equity_sources);
+  });
+});
+
+// R13 spec §19.8 cell validity (§12.7): the mechanism is the pre-existing one
+// (validateInputs rules 8/9/11 in validation.ts feed measure()'s unmeasured
+// path — see sensitivity.ts's `measure`), unchanged here. The brief's Step 1
+// text describes a `grid.cells[i][j].valid` API this codebase does not have —
+// every existing §12.7 test in this file (see the phase_slip overrun tests
+// just above) reads `result.matrix[row][col].profit_pence`/`.validation_errors`
+// instead, so these tests do the same, matching the fixture's actual shape.
+describe('§19.8 cell validity', () => {
+  it('marks a cell invalid — never clamped — where the yield reaches zero', () => {
+    // Base cap_yield_pct is 5.5 (icDoc()'s fixture). exit_yield ADDS: -6 -> -0.5
+    // (invalid), -5.5 -> 0 (invalid, the boundary), -5 -> 0.5 (valid).
+    const result = runSensitivity(icDoc(), {
+      rows: { lever: 'exit_yield', steps: [-6, -5.5, -5] },
+      cols: { lever: 'gdv', steps: [0] },
+      tornado: [],
+    });
+    expect(result.matrix[0][0].profit_pence).toBeNull();
+    expect(result.matrix[0][0].validation_errors.some(
+      (e) => e.field === 'investment_case.valuation.cap_yield_pct',
+    )).toBe(true);
+    expect(result.matrix[1][0].profit_pence).toBeNull();   // 5.5 − 5.5 = 0
+    expect(result.matrix[1][0].validation_errors.some(
+      (e) => e.field === 'investment_case.valuation.cap_yield_pct',
+    )).toBe(true);
+    expect(result.matrix[2][0].profit_pence).not.toBeNull();
+    expect(result.matrix[2][0].validation_errors).toEqual([]);
+  });
+
+  it('marks a cell invalid where vacancy drives occupancy to zero', () => {
+    // Base stabilised_occupancy_pct is 96. vacancy SUBTRACTS: 90 -> 6 (valid),
+    // 96 -> 0 (invalid, the boundary), 100 -> -4 (invalid — never clamped to 0).
+    const result = runSensitivity(icDoc(), {
+      rows: { lever: 'vacancy', steps: [90, 96, 100] },
+      cols: { lever: 'gdv', steps: [0] },
+      tornado: [],
+    });
+    expect(result.matrix[0][0].profit_pence).not.toBeNull();
+    expect(result.matrix[0][0].validation_errors).toEqual([]);
+    expect(result.matrix[1][0].profit_pence).toBeNull();   // 96 − 96 = 0
+    expect(result.matrix[1][0].validation_errors.some(
+      (e) => e.field === 'investment_case.stabilisation.stabilised_occupancy_pct',
+    )).toBe(true);
+    expect(result.matrix[2][0].profit_pence).toBeNull();
+    expect(result.matrix[2][0].validation_errors.some(
+      (e) => e.field === 'investment_case.stabilisation.stabilised_occupancy_pct',
+    )).toBe(true);
+  });
+
+  it('marks a cell invalid where operating_cost drives a line negative', () => {
+    // A lever below -100% scales every line's value negative; rule 11
+    // (validation.ts) rejects a negative operating line value.
+    const result = runSensitivity(icDoc(), {
+      rows: { lever: 'operating_cost', steps: [-150] },
+      cols: { lever: 'gdv', steps: [0] },
+      tornado: [],
+    });
+    expect(result.matrix[0][0].profit_pence).toBeNull();
+    expect(result.matrix[0][0].validation_errors.some(
+      (e) => e.field.startsWith('investment_case.operating_lines.') && /cannot be negative/.test(e.message),
+    )).toBe(true);
+  });
+
+  it('gives a zero-width tornado bar, not an error, on a null investment case', () => {
+    // Exactly as phase_slip is on a null programme (see the test above this
+    // describe block): a lever with nothing to write measures the SAME
+    // document at both endpoints, so the bar it produces has no span.
+    const doc = explicitRefinanceDoc();
+    expect(doc.investment_case).toBeNull();
+    const result = runSensitivity(doc, {
+      rows: { lever: 'gdv', steps: [0] },
+      cols: { lever: 'construction_cost', steps: [0] },
+      tornado: [{ lever: 'exit_yield', low: -1, high: 1 }],
+    });
+    const t = result.tornado[0];
+    expect(t.low.profit_pence).not.toBeNull();
+    expect(t.low.profit_pence).toBe(t.high.profit_pence);
+    expect(t.span_pence).toBe(0);
   });
 });

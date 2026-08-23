@@ -99,6 +99,47 @@ export function applyScenario<T extends AnyCalculatorInputs>(
         )),
       },
     } : {}),
+    // R13 spec §19.8. Three levers stressing the investment case: `exit_yield`
+    // ADDS percentage points to the capitalisation yield; `operating_cost`
+    // SCALES every operating line's `value` on both bases (a percentage line's
+    // percentage and a fixed line's pence alike); `vacancy` SUBTRACTS
+    // percentage points from stabilised occupancy, so a POSITIVE lever value
+    // is an ADVERSE move on every one of the three, matching the sign
+    // convention every other lever already uses in the tornado. Gated on
+    // presence (`'investment_case' in inputs && inputs.investment_case !=
+    // null`), not on `inputs_version >= 10`, exactly as the `phase_slip` arm
+    // above is gated on `'phases' in inputs.programme` — a v2-v9 document is
+    // left untouched rather than crashing on a field its shape does not have,
+    // and a v10 document whose `investment_case` is null is a no-op by
+    // construction (§12.7's cell-validity mechanism is what then reports the
+    // degenerate cells this lever can drive to — cap_yield_pct <= 0,
+    // stabilised_occupancy_pct <= 0, or an operating line's value < 0 — as
+    // invalid rather than silently clamping them).
+    ...('investment_case' in inputs && inputs.investment_case != null ? {
+      investment_case: {
+        ...inputs.investment_case,
+        stabilisation: {
+          ...inputs.investment_case.stabilisation,
+          stabilised_occupancy_pct:
+            inputs.investment_case.stabilisation.stabilised_occupancy_pct
+            - overrides.vacancy_adjustment_pct,
+        },
+        // `fixed_pence_per_month` is money, so it is Math.round'ed exactly like
+        // every other pence figure this function scales (unit values, cost/sqm,
+        // package amounts); `pct_of_gross_rent` is a percentage, not pence, and
+        // stays exact — rounding it would quietly lose a fractional management
+        // fee rate every time this lever fires.
+        operating_lines: inputs.investment_case.operating_lines.map((l) => {
+          const scaled = l.value * (1 + overrides.operating_cost_adjustment_pct / 100);
+          return { ...l, value: l.basis === 'fixed_pence_per_month' ? Math.round(scaled) : scaled };
+        }),
+        valuation: {
+          ...inputs.investment_case.valuation,
+          cap_yield_pct: inputs.investment_case.valuation.cap_yield_pct
+            + overrides.exit_yield_adjustment_pct,
+        },
+      },
+    } : {}),
     // The spread above already carries `inputs_version`/`lender_valuation` (v3) or their
     // absence (v2) through unchanged; TS can't verify a generic spread-and-override
     // reproduces exactly T, so this cast documents what the runtime shape guarantees.

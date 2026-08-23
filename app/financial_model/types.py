@@ -153,6 +153,12 @@ class ScenarioOverrides(Model):
     # (Sec 18.7), which is what the identity gate actually asserts.
     phase_slip_phase_id: str | None = None
     phase_slip_months: int = 0
+    # R13 spec Sec 19.8. Defaulted so every existing construction site and
+    # fixture keeps parsing; the v10 MIGRATION writes them explicitly anyway
+    # (Sec 19.9), which is what the identity gate actually asserts.
+    exit_yield_adjustment_pct: float = 0.0
+    operating_cost_adjustment_pct: float = 0.0
+    vacancy_adjustment_pct: float = 0.0
 
 
 class Scenarios(Model):

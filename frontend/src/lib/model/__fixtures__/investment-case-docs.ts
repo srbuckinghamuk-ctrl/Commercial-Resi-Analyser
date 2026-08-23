@@ -701,6 +701,11 @@ const LEVER_STEPS: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof Scenari
   construction_cost: 'construction_cost_adjustment_pct',
   timeline: 'timeline_adjustment_months',
   interest_rate: 'interest_rate_adjustment_pct',
+  // R13 spec §19.8. Task 13 extended this table with its own three levers —
+  // see the KNOWN LIMITATION note this docstring used to carry, now resolved.
+  exit_yield: 'exit_yield_adjustment_pct',
+  operating_cost: 'operating_cost_adjustment_pct',
+  vacancy: 'vacancy_adjustment_pct',
 };
 
 /**
@@ -710,14 +715,6 @@ const LEVER_STEPS: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof Scenari
  * the same set) is what needs a shared implementation: if every task built
  * its own fold it could silently apply the levers in a different combined
  * shape per call site.
- *
- * KNOWN LIMITATION, stated rather than hidden: this covers the five levers
- * that exist today (`SensitivityLever` as of Task 5b). Task 13 adds three
- * more (`exit_yield`, `operating_cost`, `vacancy`) to `SensitivityLever` and
- * to `ScenarioOverrides` — this table has no entries for them yet, and Task
- * 13's own brief does not list this file among the ones it modifies. Task 13
- * must extend `LEVER_STEPS`/this function's step magnitudes when it lands, or
- * its own "keeps all EIGHT levers order-independent" test cannot compile.
  */
 export function applyLeversInOrder(
   doc: CalculatorInputsV10, leverNames: readonly SensitivityLever[],
@@ -726,6 +723,7 @@ export function applyLeversInOrder(
     label: 'applyLeversInOrder', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0,
     timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
     phase_slip_phase_id: null, phase_slip_months: 0,
+    exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0,
   };
   return leverNames.reduce((acc, lever) => {
     if (lever === 'phase_slip') {

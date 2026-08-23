@@ -18,13 +18,17 @@ import { isProgrammeNetwork } from './programme';
  */
 
 export type SensitivityLever =
-  'gdv' | 'construction_cost' | 'timeline' | 'interest_rate' | 'phase_slip';
+  | 'gdv' | 'construction_cost' | 'timeline' | 'interest_rate' | 'phase_slip'
+  | 'exit_yield' | 'operating_cost' | 'vacancy';
 
 /** Spec §12.4 tie-break order, making the tornado sort total and so deterministic (§1.4).
- *  R12 spec §18.9 appends the fifth lever, `phase_slip`, at the end — it is the newest
- *  and lowest-priority tie-break, not a reordering of the four §12.1 levers. */
+ *  R12 spec §18.9 appended the fifth lever, `phase_slip`, at the end — it is the newest
+ *  and lowest-priority tie-break, not a reordering of the four §12.1 levers. R13 spec
+ *  §19.8 appends the three investment-case levers the same way: newest and
+ *  lowest-priority, not a reordering of what came before. */
 export const LEVER_ORDER: readonly SensitivityLever[] = [
   'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
+  'exit_yield', 'operating_cost', 'vacancy',
 ];
 
 /** Spec §12.6: an axis is capped at nine steps, bounding the suite at 81 cells. */
@@ -181,7 +185,7 @@ export function validateSensitivityConfig(
 
   for (const [name, axis] of axes) {
     const field = `sensitivity.${name}.lever`;
-    // Spec §12.6: an axis lever must be one of the five §12.1/§18.9 levers.
+    // Spec §12.6: an axis lever must be one of the eight §12.1/§18.9/§19.8 levers.
     // `LEVER_ORDER` is the closed set — this is what stops a bad-cased or
     // misspelled lever from silently producing a matrix in which that axis does
     // nothing, or (in the Python mirror) crashing inside LEVER_ORDER.index()
@@ -358,6 +362,9 @@ const ZERO_SCENARIO: ScenarioOverrides = {
   interest_rate_adjustment_pct: 0,
   phase_slip_phase_id: null,
   phase_slip_months: 0,
+  exit_yield_adjustment_pct: 0,
+  operating_cost_adjustment_pct: 0,
+  vacancy_adjustment_pct: 0,
 };
 
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
@@ -373,6 +380,9 @@ function overridesFor(setting: LeverSetting): ScenarioOverrides {
     interest_rate_adjustment_pct: setting.lever === 'interest_rate' ? setting.value : 0,
     phase_slip_phase_id: setting.lever === 'phase_slip' ? setting.phaseId : null,
     phase_slip_months: setting.lever === 'phase_slip' ? setting.value : 0,
+    exit_yield_adjustment_pct: setting.lever === 'exit_yield' ? setting.value : 0,
+    operating_cost_adjustment_pct: setting.lever === 'operating_cost' ? setting.value : 0,
+    vacancy_adjustment_pct: setting.lever === 'vacancy' ? setting.value : 0,
   };
 }
 

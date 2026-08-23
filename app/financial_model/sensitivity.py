@@ -20,13 +20,18 @@ from .apply_scenario import apply_scenario
 from .types import AnyCalculatorInputs, ProgrammeNetwork, ScenarioOverrides
 from .validation import ValidationIssue, validate_inputs
 
-SensitivityLever = Literal["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip"]
+SensitivityLever = Literal[
+    "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+    "exit_yield", "operating_cost", "vacancy",
+]
 
 # Spec Sec 12.4 tie-break order, making the tornado sort total and so deterministic
-# (Sec 1.4). R12 spec Sec 18.9 appends the fifth lever, phase_slip, at the end -- it is
-# the newest and lowest-priority tie-break, not a reordering of the four Sec 12.1 levers.
+# (Sec 1.4). R12 spec Sec 18.9 appended the fifth lever, phase_slip, at the end -- it
+# is the newest and lowest-priority tie-break, not a reordering of the four Sec 12.1
+# levers. R13 spec Sec 19.8 appends the three investment-case levers the same way.
 LEVER_ORDER: tuple[SensitivityLever, ...] = (
     "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+    "exit_yield", "operating_cost", "vacancy",
 )
 
 # Spec Sec 12.6: an axis is capped at nine steps, bounding the suite at 81 cells.
@@ -162,7 +167,7 @@ def validate_sensitivity_config(
     phase_ids = _network_phase_ids(inputs)
 
     for name, axis in (("rows", config.rows), ("cols", config.cols)):
-        # Spec Sec 12.6: an axis lever must be one of the five Sec 12.1/18.9 levers.
+        # Spec Sec 12.6: an axis lever must be one of the eight Sec 12.1/18.9/19.8 levers.
         # LEVER_ORDER is the closed set -- this is what stops a bad-cased or
         # misspelled lever from crashing later inside LEVER_ORDER.index() in
         # run_sensitivity (the TS mirror instead silently no-ops that axis, so this
@@ -310,6 +315,9 @@ def _zero_scenario() -> ScenarioOverrides:
         interest_rate_adjustment_pct=0,
         phase_slip_phase_id=None,
         phase_slip_months=0,
+        exit_yield_adjustment_pct=0,
+        operating_cost_adjustment_pct=0,
+        vacancy_adjustment_pct=0,
     )
 
 
@@ -326,6 +334,9 @@ def _overrides_for(setting: _LeverSetting) -> ScenarioOverrides:
         interest_rate_adjustment_pct=setting.value if setting.lever == "interest_rate" else 0,
         phase_slip_phase_id=setting.phase_id if setting.lever == "phase_slip" else None,
         phase_slip_months=int(setting.value) if setting.lever == "phase_slip" else 0,
+        exit_yield_adjustment_pct=setting.value if setting.lever == "exit_yield" else 0,
+        operating_cost_adjustment_pct=setting.value if setting.lever == "operating_cost" else 0,
+        vacancy_adjustment_pct=setting.value if setting.lever == "vacancy" else 0,
     )
 
 

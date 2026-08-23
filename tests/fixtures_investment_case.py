@@ -56,7 +56,10 @@ from app.financial_model.types import (
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
-SensitivityLever = Literal["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip"]
+SensitivityLever = Literal[
+    "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+    "exit_yield", "operating_cost", "vacancy",
+]
 
 
 def _load_fixture_inputs(stem: str) -> dict[str, Any]:
@@ -501,6 +504,10 @@ _LEVER_FIELD: dict[str, str] = {
     "construction_cost": "construction_cost_adjustment_pct",
     "timeline": "timeline_adjustment_months",
     "interest_rate": "interest_rate_adjustment_pct",
+    # R13 spec Sec 19.8. Task 13 extended this table with its own three levers.
+    "exit_yield": "exit_yield_adjustment_pct",
+    "operating_cost": "operating_cost_adjustment_pct",
+    "vacancy": "vacancy_adjustment_pct",
 }
 
 
@@ -509,9 +516,7 @@ def apply_levers_in_order(
 ) -> CalculatorInputsV10:
     """Applies a named sequence of sensitivity levers to a document, one
     apply_scenario call per lever, folding left to right. Mirrors
-    investment-case-docs.ts's apply_levers_in_order -- see its docstring for
-    the KNOWN LIMITATION (five levers today; Task 13 must extend this when it
-    adds the three investment-case ones)."""
+    investment-case-docs.ts's apply_levers_in_order."""
     acc = doc
     for lever in lever_names:
         if lever == "phase_slip":
