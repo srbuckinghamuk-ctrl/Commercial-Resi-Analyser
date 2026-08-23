@@ -49,6 +49,7 @@ export {
   isV8, migrateV7toV8, migrateInputsToV8,
   migrateV8toV9, migrateInputsToV9, PACKAGE_TO_PHASE, PROGRAMME_FIELD_ALIASES,
   migrateV9toV10, migrateInputsToV10,
+  migrateV10toV11, migrateInputsToV11,
 } from './migrate';
 export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
 export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
