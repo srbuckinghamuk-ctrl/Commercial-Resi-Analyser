@@ -105,7 +105,7 @@ intended answer.
 | 8 | `lender_eligible` mechanism | A **ratio** on the construction line of monthly uses: `lender_eligible_base_pence / base_build_pence` | Per-package draw timing — needs the per-package programme §16.9 says does not exist; excluding ineligible cost from the *facility* altogether — the flag governs the advance cap, not what the facility may fund (§4.2(b) is a cap, not a source) |
 | 9 | Where `monitoring` lives | **Top level**, beside `investment_case` | Under `finance` — the actuals are a scheme fact; under `cost_plan` — the debt and equity actuals are not cost-plan facts |
 | 10 | `monitoring = null` | Today's inception-only path, bit-identical | Migrating stored documents to an empty statement — a statement on documents that never asked for one |
-| 11 | Shortfall under monitoring | A red validation issue and a result field | A hard error — the statement exists precisely to report the shortfall |
+| 11 | Shortfall under monitoring | A red flag (`FlagCode`) and a result field | A hard error — the statement exists precisely to report the shortfall |
 | 12 | DRAFT gate | Unchanged | Gating FINAL on a clean monitoring statement — a document with no monitoring case is not thereby unsafe |
 
 ---
@@ -355,14 +355,19 @@ Hard errors (`report_safe` false):
 - `cash_equity_injected_to_date > cash_equity_total` is **not** an error — the
   audit's "additional equity injected" case; it is a warning (below).
 
-Warnings:
-- `monitoring_shortfall > 0` — red, field `monitoring`, message carrying the figure.
-- Any category's `variance_vs_original` exceeding 5% of a non-zero original — amber.
-- `cash_equity_injected_to_date > cash_equity_total` — amber, "equity injected beyond committed sources".
-- `reporting_month` later than the ledger's redemption month — amber, "statement dated after forecast redemption".
+Input-only warning (a `ValidationIssue`, severity `warning`, field `monitoring`):
+- `cash_equity_injected_to_date > cash_equity_total` — "equity injected beyond committed sources".
 
-Monitoring validation runs only when `monitoring != null`; a null block adds no
-issue, so existing documents' `validation.issues` are unchanged.
+Result-derived warnings are **flags** (`FlagCode`, raised in metrics the way
+`funding_gap` and R13's three flags are — validation runs on inputs only and
+cannot see the statement):
+- `monitoring_shortfall` (red) — `monitoring_shortfall > 0`; message carries the figure.
+- `monitoring_cost_variance` (amber) — any category's `variance_vs_original` exceeding 5% of a non-zero original.
+- `monitoring_dated_after_redemption` (amber) — `reporting_month` later than the ledger's redemption month.
+
+Monitoring validation and flags run only when `monitoring != null`; a null
+block adds no issue and no flag, so existing documents' `validation.issues`
+and `flags` are unchanged.
 
 ---
 
