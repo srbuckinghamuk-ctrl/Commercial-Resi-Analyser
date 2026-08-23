@@ -179,6 +179,11 @@ export type {
 } from './investment-case';
 export { OPEX_CODES } from './investment-case';
 
+// R14 Task 11: `AppraisalResultV2.monitoring_statement` reads `MonitoringStatement`
+// (imported above); the UI needs both it and its line type off the same barrel
+// `../../lib/model` every other result type is read from.
+export type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
+
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {
   phase_id: string;

@@ -64,7 +64,7 @@ export default function CostToCompleteCard({ summary }: Props) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
-                {['Month', 'Remaining cost', 'Remaining funding', 'Surplus'].map((h) => (
+                {['Month', 'Remaining cost', 'Remaining funding', 'Reserve headroom', 'Surplus'].map((h) => (
                   <th key={h} style={th}>{h}</th>
                 ))}
               </tr>
@@ -75,6 +75,7 @@ export default function CostToCompleteCard({ summary }: Props) {
                   <td style={{ ...td, color: '#94a3b8' }}>Month {m.month}</td>
                   <td style={td}>{penceToPounds(m.remaining_cost_pence)}</td>
                   <td style={td}>{penceToPounds(m.remaining_funding_pence)}</td>
+                  <td style={td}>{penceToPounds(m.remaining_interest_reserve_headroom_pence)}</td>
                   <td style={{ ...td, color: m.surplus_pence < 0 ? '#ef4444' : '#22c55e' }}>
                     {penceToPounds(m.surplus_pence)}
                   </td>

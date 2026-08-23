@@ -3,6 +3,7 @@ import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import CostToCompleteCard from './CostToCompleteCard';
+import MonitoringStatementCard from './MonitoringStatementCard';
 
 interface Props {
   inputs: CalculatorInputsV10;
@@ -283,6 +284,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
           tooltip="§5.12: minimum gross sale price covering total development cost (excluding selling costs, which are re-solved at that price) — lender- and debt-independent. Null when there is no disposal to solve for."
         />
         <CostToCompleteCard summary={metrics.cost_to_complete} />
+        <MonitoringStatementCard statement={metrics.monitoring_statement} />
       </Group>
     </div>
   );
