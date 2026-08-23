@@ -289,7 +289,9 @@ Month 0 (acquisition):
 
 Months ≥ 1, for each month's uses:
 1. Remaining committed equity funds costs first, until exhausted.
-2. Senior development advances fund the remainder, capped by (a) `undrawn_net_facility`, (b) `development_cost_advance_pct` × that month's eligible development costs, and (c) gross facility headroom after projected interest.
+2. Senior development advances fund the remainder, capped by (a) `undrawn_net_facility`, (b) `development_cost_advance_pct` × (`lender_eligible_ratio` × construction + professional + statutory) [R14 — calc 2.13.0; before it the construction line was taken whole], and (c) gross facility headroom after projected interest.
+
+   The cap base of (b) is `round(uses.construction_pence × lender_eligible_ratio) + uses.professional_pence + uses.statutory_pence`, and the product with the percentage is rounded once. `lender_eligible_ratio` is the cost plan's own figure (§16.8): `1` in headline mode, `1` in detailed mode when `base_build_pence` is 0, and `lender_eligible_base_pence / base_build_pence` otherwise — an unrounded quotient in `[0, 1]` by construction, because both sums run over the same package set (§16.2). `uses.vat_pence` is not in the base and never has been (§17.6). The ratio is uniform across the whole construction line, so contingency and compliance follow it proportionally; that is a stated limitation (§16.9), not a per-package profile.
 3. Any residual unfunded cost is a **funding gap**: it is *not* funded, it is recorded as `funding_gap` for the month, flagged red, and accumulates. Cost overruns never create facility.
 
 Legacy migrated appraisals may run with `equity_draw_rule = 'fund_as_required'` (equity absorbs any residual with no cap) — permitted only while the appraisal carries `requires_confirmation` status, so sources always balance but the case is visibly unconfirmed. `pari_passu` is defined (pro-rata to remaining commitments) but rejected with a validation error until implemented [R2].
@@ -441,13 +443,24 @@ Ledger column §4. Exhaustion (cumulative capitalised interest > reserve) is an 
 
 `committed_gross_facility − peak gross debt` (and per-month in the ledger). Negative headroom = facility exceeded = red flag; the model does not silently expand the facility.
 
-### 5.10 Cost-to-complete [R2 — implemented in calc 2.1.0]
+### 5.10 Cost-to-complete [R2 — calc 2.1.0; corrected R14 — calc 2.13.0]
 
-For each month `m` in `1..term` (`m` labels the state as of completion of ledger month `m−1`; `m = term` is the terminal "nothing left to spend" checkpoint): **remaining cost** = future development costs from ledger month `m` onward (acquisition/construction/professional/statutory — contingency is already inside the construction cost line, §3.4/§6, never a separate additive term) + future lender ancillary fees + forecast finance to completion (future interest accrued + future capitalised fees, read straight off the already-computed ledger horizon). **Remaining funding** = undrawn committed net facility as of ledger month `m−1` (0 for cash deals, where no facility exists) + committed cash equity not yet contributed (only cash-classified equity sources count as committed funding, per §2 — land/planning-uplift/vendor-finance/deferred-consideration equity is not, and Release 2b models no other committed-funding category). Reports remaining cost, remaining funding, surplus (`funding − cost`), first shortfall month (first `m` with surplus `< 0`, else none), maximum shortfall (largest deficit across the series, floored at 0). The series is derived from the already-computed ledger, which carries the dated programme when `programme` is set and the calc-2.1.0 auto windows otherwise (calc 2.2.0, [R3a]).
+For each month `m` in `1..term` (`m` labels the state as of completion of ledger month `m−1`; `m = term` is the terminal "nothing left to spend" checkpoint): **remaining cost** = future development costs from ledger month `m` onward (acquisition/construction/professional/statutory — contingency is already inside the construction cost line, §3.4/§6, never a separate additive term) + future lender ancillary fees + forecast finance to completion (future interest accrued + future capitalised fees, read straight off the already-computed ledger horizon). **Remaining funding** is the sum of three terms. The second is new in R14 and is reported as its own per-month column, so a reader can see how much of the reported funding is reserve rather than facility or equity:
+
+```
+remaining_funding(m) = undrawn_net_facility(L)
+                     + reserve_headroom(L)
+                     + max(0, cash_equity_total − cum_equity_contributed(L))
+
+reserve_headroom(L)  = rolled_up ? max(0, committed_gross − committed_net
+                                          − cum_interest_capitalised(L)) : 0
+```
+
+where `L` is ledger month `m−1`, the most recent month whose draw and contribution have happened by label `m`. **(a) Undrawn committed net facility** as of `L` — 0 for cash deals, where no facility exists. **(b) The unconsumed interest reserve** [R14 — calc 2.13.0]: for a rolled-up facility, the gross facility less the net facility less cumulative capitalised interest through `L`, floored at 0, and reported as `remaining_interest_reserve_headroom_pence`. `committed_gross` and `committed_net` are the ledger's own figures (§2; gross is `committed_gross_facility_pence` where set, else `net + interest_reserve_pence`). It is 0 for serviced interest (§4.3), 0 for a cash deal, and 0 for a rolled-up facility carrying no reserve — in each of those three cases the series is exactly what calc 2.1.0 computed. **(c) Committed cash equity not yet contributed**, floored at 0 — only cash-classified equity sources count as committed funding, per §2; land/planning-uplift/vendor-finance/deferred-consideration equity is not, and no other committed-funding category is modelled. Reports remaining cost, remaining funding, surplus (`funding − cost`), first shortfall month (first `m` with surplus `< 0`, else none), maximum shortfall (largest deficit across the series, floored at 0). The series is derived from the already-computed ledger, which carries the dated programme when `programme` is set and the calc-2.1.0 auto windows otherwise (calc 2.2.0, [R3a]).
 
 **Known limitation (calc 2.1.0):** this series is a static snapshot of committed sources against forecast cost, not a re-simulation of the ledger's own month-by-month throttling (gross-facility headroom cap, §4.2(c); the development-cost advance-percentage cap, §4.2; uncommitted "additional equity" silently absorbing a serviced-interest shortfall, §4.3). Neither direction of "no cost-to-complete shortfall ⇔ the ledger never flagged `funding_gap`" is a general property of the engine — a headroom-capped fixture proves a real `funding_gap` can exist with no cost-to-complete shortfall, and a constructed high-rate serviced-interest scenario proves the reverse (a cost-to-complete shortfall with zero `funding_gap`, absorbed instead by uncommitted additional equity). Only "the series reports a shortfall ⇒ the ledger recorded a `funding_gap` somewhere" is asserted as a test, and it is verified across the fixtures in the current test corpus, not proved as a universal law — see `docs/financial-model/test-cases.md`'s cost-to-complete section for the counter-examples and the scope of what is and isn't tested.
 
-**Third counter-example, found by fixture P [R9 — calc 2.8.0].** The remaining direction now has a *natural* counter-example in the corpus, not just a constructed one. Remaining funding above counts the undrawn **net** facility, while remaining cost counts future rolled-up interest — but rolled-up interest never consumes the net facility in §4.2; it capitalises against the **gross** facility's headroom. So a facility structured the way a real development facility is structured — a net facility sized to the costs, with the interest reserve carved out of the gross — systematically reports a phantom shortfall. `fixtures/financial-model/p-scotland-levered.json` reports a 392,483p shortfall at `m = 1` against a ledger whose `funding_gap_pence` is 0, because its 3,913,416p of rolled-up interest capitalised into 8,000,000p of gross headroom exactly as intended. Fixture F did not surface this only because its net facility carries ~16,000,000p of slack. The fixture is not tuned to hide it and the corpus test names it explicitly. **Correcting §5.10 to credit gross-facility headroom for a rolled-up facility is deferred**, because it is a behaviour change to a reported metric and belongs in its own release with its own hand-derived fixtures. The deferral is tracked as **C1** in `docs/superpowers/plans/2026-08-17-second-audit-release-plan.md` (owned by R14, which is the cost-to-complete release), and the figures above are **pinned** on fixture P — `cost_to_complete_first_shortfall_month: 1` and `cost_to_complete_max_shortfall_pence: 392483` — so this paragraph cannot drift away from the engine while the correction waits.
+**The third counter-example, closed [found R9 — calc 2.8.0; closed R14 — calc 2.13.0].** **The defect, in one line:** remaining funding counted only the undrawn *net* facility while remaining cost counted future rolled-up interest — but rolled-up interest never consumes the net facility (§4.2); it capitalises against the *gross* facility's headroom — so any facility structured the way a real development facility is structured (net sized to the costs, interest reserve carved out of the gross) reported a phantom shortfall. `fixtures/financial-model/p-scotland-levered.json` reported a 392,483p shortfall at `m = 1` against a ledger whose `funding_gap_pence` is 0, because its 3,913,416p of rolled-up interest capitalised into 8,000,000p of gross headroom exactly as intended. It was **closed in R14 (calc 2.13.0) by crediting the unconsumed interest reserve** — term (b) of the definition above. Fixture P now pins `cost_to_complete_first_shortfall_month: null` and `cost_to_complete_max_shortfall_pence: 0`, and the old figures `1` / `392483` are carried as its **negative controls** in both engines, so the phantom cannot return unnoticed. The correction is not one-sided: `fixtures/financial-model/v-exhausted-reserve.json` is a rolled-up facility whose reserve is deliberately too small for the interest it must carry, and it pins a real, non-zero shortfall together with a real `funding_gap_pence` of 704,021 — the corpus's positive case, hand-derived in `docs/financial-model/test-cases.md` §20.1. **The rejected correction, and why:** dropping rolled-up interest from *remaining cost* was considered and rejected (R14 design decision 2). It is equivalent to the chosen correction only while the reserve covers the forecast interest; once the reserve is exhausted it hides a real shortfall, and the exhausted case is the one a lender cares about. Crediting the funding side keeps both sides carrying interest, so the surplus is unaffected by interest while the reserve covers it and reports the excess as a shortfall — §5.8's exhaustion, as a reconciled number rather than a flag beside a phantom one.
 
 ### 5.11 Senior repayment break-even [R2 — implemented in calc 2.1.0]
 
@@ -856,7 +869,7 @@ joined by the literal `|`, over UTF-8, lower-case hex.
 
 ### 13.3 Document status and draft marking
 
-A document is **FINAL** only when all four hold, tested in this order:
+A document is **FINAL** only when all five hold, tested in this order:
 
 1. `reconciliation.report_safe` — hard validations pass.
 2. `reconciliation.senior_repaid` — the ledger clears the senior facility within
@@ -866,7 +879,9 @@ A document is **FINAL** only when all four hold, tested in this order:
    has been verified: the jurisdiction is evidenced *and* the band set was
    selected by the transaction's own date rather than assumed to be the
    current one (§14.6). [R8 — calc 2.7.0]
-4. An approved lender case: status `credit_approved` or `approved_with_conditions`.
+4. A confirmed VAT basis (§17.10). [R11 — calc 2.10.0; the table row below was
+   missing until R14]
+5. An approved lender case: status `credit_approved` or `approved_with_conditions`.
 
 Otherwise the document is **DRAFT** and carries the banner for the **first**
 failing condition:
@@ -876,15 +891,17 @@ failing condition:
 | not report-safe | `DRAFT - UNRECONCILED - NOT FOR LENDER RELIANCE` |
 | senior not repaid | `DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE` |
 | tax basis unconfirmed | `DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
+| VAT basis unconfirmed | `DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
 | not approved | `DRAFT - NOT APPROVED FOR LENDER RELIANCE` |
 
-- **The four conditions are distinct claims and must not be collapsed.** An
+- **The five conditions are distinct claims and must not be collapsed.** An
   unreconciled run's figures may be wrong. A reconciled run that does not repay
   the senior facility is arithmetically sound and shows a real repayment failure.
   A run whose tax basis is unconfirmed is arithmetically sound *on a basis nobody
-  has verified*. A reconciled, repaying run with no approved case is a correct
-  appraisal that nobody has approved. Printing "UNRECONCILED" over the last three
-  would state something untrue about the model.
+  has verified*, and the same holds, separately, of one whose VAT basis is
+  unconfirmed (§17.10). A reconciled, repaying run with no approved case is a
+  correct appraisal that nobody has approved. Printing "UNRECONCILED" over the
+  last four would state something untrue about the model.
 - **Why the tax gate is third and not a hard validation [R8].** An unconfirmed
   jurisdiction leaves `report_safe` **true**. Making it false would print "one or
   more hard validations fail" — a claim that the *figures* are wrong, when in fact
@@ -1279,7 +1296,7 @@ CostPackage: id, code, label, amount_pence, contingency_class, lender_eligible, 
 
 `code` is one of the audit's own twelve package types — `enabling_strip_out_asbestos`, `structure`, `envelope`, `roof_windows`, `fire_acoustic_thermal`, `mech_elec_public_health`, `drainage_utilities`, `lift`, `partitions`, `finishes`, `common_parts`, `externals` — plus `other`. A fixed enum plus a free `label` makes the schedule groupable and comparable across appraisals while still admitting the line a particular scheme has that the enum does not. Duplicate `code`s are allowed (two externals lines, three finishes lines); duplicate `id`s are not — ids are the identity the three contingency classes reference (§16.3).
 
-`lender_eligible` and the derived `lender_eligible_base_pence` (Σ `amount_pence` of every package where `lender_eligible` is true) are **recorded and displayed only in R10**. The ledger's draw cap does not read it — wiring it to `development_cost_advance_pct` is R14. A recorded-but-inert eligibility flag that looks live is worse than none, so this is stated at the point of definition rather than left to be discovered.
+`lender_eligible` and the derived `lender_eligible_base_pence` (Σ `amount_pence` of every package where `lender_eligible` is true) are **live in the ledger from calc 2.13.0** (R14). They were recorded and displayed only in R10, R11, R12 and R13; §4.2(b)'s development-cost advance cap now scales its construction line by `lender_eligible_ratio` = `lender_eligible_base_pence / base_build_pence`, so flagging a package ineligible reduces what the facility may advance against it. A recorded-but-inert eligibility flag that looks live is worse than none, which is why the inertness was stated at the point of definition for four releases; the flag is no longer inert, and this sentence records that rather than being deleted.
 
 **`fire_safety_pence`, `sound_insulation_pence` and `part_l_compliance_pence` are the same money as the `fire_acoustic_thermal` package code.** A document carrying both would double-count it invisibly, because both figures are legitimate in isolation. The resolution:
 
@@ -1380,19 +1397,22 @@ professional_total_pence
 statutory_total_pence
 conversion_total_pence      = construction_total + professional_total + statutory_total
 lender_eligible_base_pence
+lender_eligible_ratio       lender_eligible_base ÷ base_build; 1 in headline mode and when base_build is 0 [R14]
 implied_rate_pence_per_sqm  base_build ÷ developed_area_sqm; null when the area is 0
 ```
 
 Every contingency and fee line reports **its base as well as its amount** — the audit's "show the base" discharged as data rather than prose. `implied_rate_pence_per_sqm` exists so the rate does not simply vanish from the appraisal when the mode changes: in headline mode it is the entered rate recovered by division (a check on the arithmetic, not an echo of the input); in detailed mode it is the figure a reader compares against a benchmark they hold themselves. It is display-only and enters no calculation. `conversion_total_pence` is the bottom-line figure the cost page and the memo both print — computed once here, purely additive, and moves no other figure.
 
-`Schedule.totals.construction_pence`, `professional_pence` and `statutory_pence` remain the single point the monthly ledger sees, so sources-and-uses (§7) and reconciliation are structurally untouched by this release.
+`Schedule.totals.construction_pence`, `professional_pence` and `statutory_pence` remain the single point the monthly ledger sees for **spend**, so sources-and-uses (§7) and reconciliation are structurally untouched by this release.
+
+**`lender_eligible_ratio` is wired in calc 2.13.0 (R14)** and is carried onto the `Schedule` beside those totals, because §4.2(b)'s advance cap is the one place the ledger needs it. It governs what the facility may *advance* against the construction line, never what the scheme *spends*: cost before finance is unchanged by the wiring. Its consequence is real and is recorded rather than smoothed over — a detailed-mode document carrying an ineligible package and `development_cost_advance_pct: 100` had a cap that could never bind before R14, and now has one that binds in every month whose construction is met from the facility. Both such fixtures in the corpus moved: `q-detailed-cost-plan` now reports `funding_gap_pence` 2,031,318 and `s-dated-programme` 6,300,000, and both are consequently **not report-safe** — a non-zero funding gap makes `reconciliation.funding_complete` false, which `report_safe` requires — where before the wiring both reconciled clean and printed no DRAFT banner on that ground. That is the engine reporting an advance cap the appraisal always implied, not a regression.
 
 ### 16.9 Stated limitations
 
 Recorded so they are not read as oversights.
 
 - **No per-package programme.** Every package spreads with the construction curve (§6); there is no per-package start offset, duration or curve. Deferred to R12, the same release that generalises fee timing (§16.4).
-- **`lender_eligible` is recorded but not wired to the draw cap.** §16.2 states this at the point of definition; R14 is where `lender_eligible_base_pence` starts constraining `development_cost_advance_pct`. Until then it is disclosure, not a live figure.
+- **`lender_eligible` acts as a uniform ratio on the construction line, not a per-package draw profile.** Wired in calc 2.13.0 (R14): `lender_eligible_base_pence / base_build_pence` scales §4.2(b)'s cap base. Because it is one ratio applied to the whole monthly construction line, contingency and compliance follow it proportionally, and an ineligible package's own spend months are not distinguished from any other package's. A true per-package draw profile would have to know which package each pound of a month's construction spend belongs to; §18's per-line `phase_id` buckets spend by phase, not by package, so that information does not exist in the monthly uses the cap reads. Recorded again as §20.5 limitation 3.
 - **No QS provenance.** A package or a percentage fee carries no source, date or status — no "priced by [firm], RIBA Stage 4, dated [x]" distinction in the record, unlike the acquisition jurisdiction's evidence status (§14.6). Deferred to R15, alongside fixed-price coverage, provisional sums and inflation (§7.5 of the second audit).
 - **Compliance's stress behaviour is mode-dependent, by necessity rather than oversight (§16.2).** A fixed unscaled allowance in headline mode; inside a scaled package in detailed mode. The two modes agree at rest and diverge under a cost stress once compliance is non-zero.
 
@@ -2577,3 +2597,293 @@ construction: any assertion that an `OpexCode` is in the enum (the type
 guarantees it); any assertion that `noi = egr − opex` (true by construction
 of the implementation's own subtraction); any assertion that the quantum is
 <= the minimum cap (that is the definition of `min`).
+
+---
+
+## 20. Monitoring cost-to-complete [R14 — calc 2.13.0]
+
+§5.10's series is the **inception** forecast: what the appraisal said, month by
+month, on the day it was written. §20 adds the other position a lender asks for
+once a scheme is on site — a **monitoring statement**: the sponsor's entered
+actuals at a single reporting date, measured against that inception model, with
+the remaining uses reconciled against the remaining funding. It is one statement
+per document, computed only when the document carries a `monitoring` block, and
+it re-runs nothing: every ledger figure it reads is the already-computed
+inception ledger's.
+
+### 20.1 The schema
+
+`monitoring` is top level and nullable, beside `investment_case` (§19.1). It sits
+at the top level rather than under `finance` or `cost_plan` because the entered
+actuals are a scheme fact, and the debt and equity figures among them are not
+cost-plan facts.
+
+```
+monitoring: null | {
+  reporting_month: int,                     // 1..term; a ledger label, §5.10's convention
+  reporting_date: string,                   // ISO yyyy-mm-dd; printed only
+  lines: MonitoringLine[5],                 // exactly one per category, any order
+  debt_drawn_to_date_pence: int,            // >= 0: cumulative senior principal
+                                            //   plus capitalised non-interest fees
+  cash_equity_injected_to_date_pence: int,  // >= 0
+  author: string, date: string, note: string | null
+}
+
+MonitoringLine {
+  category: 'acquisition' | 'construction' | 'professional' | 'statutory' | 'contingency',
+  current_budget_pence: int,       // >= 0: the QS's current approved budget
+  certified_to_date_pence: int,    // >= 0
+  paid_to_date_pence: int,         // >= 0
+  committed_to_date_pence: int,    // >= 0
+  forecast_to_complete_pence: int, // >= 0: cost NOT yet committed
+}
+```
+
+**`reporting_month` drives the arithmetic; `reporting_date` does not.** The month
+is a ledger index because the programme is expressed in month offsets with no
+mandatory calendar start (`acquisition_date` is nullable, §14). The date is
+required — a monitoring statement without a date is not one a lender will accept
+— but it is a printed label, and changing it changes no computed figure. A test
+asserts exactly that.
+
+**The original budget is read from the inception model and is never entered**
+(§15.4's one-fact-one-line rule). The five categories map onto it thus:
+
+| Category | Original budget |
+|---|---|
+| `acquisition` | §3.3 acquisition cost — `Schedule.totals.acquisition_pence`, the same figure as `Σ uses.acquisition_pence` |
+| `construction` | `cost_plan.base_build_pence + compliance_pence` — construction **excluding** contingency |
+| `professional` | `cost_plan.professional_total_pence` |
+| `statutory` | `cost_plan.statutory_total_pence` |
+| `contingency` | `cost_plan.contingency_total_pence` |
+
+**The construction/contingency split is the one place the inception model's lines
+and the statement's lines differ.** §3.4 carries contingency inside the
+construction cost line; the statement pulls it out because a lender's monitoring
+report asks for remaining contingency as its own figure. The two are therefore
+required to reconcile exactly:
+
+```
+original(construction) + original(contingency) == Σ uses.construction_pence
+```
+
+which holds by construction of §16.8's `construction_total_pence =
+base_build + contingency_total + compliance`, and is asserted on every corpus
+fixture rather than left as an argument.
+
+**Migration v10 → v11** stamps `monitoring: null` on every stored document. A
+null block is today's inception-only path, bit-identical in every output; a
+document that never asked for a monitoring statement does not acquire an empty
+one. See `docs/financial-model/migration-notes.md` §14.
+
+### 20.2 The statement
+
+Computed at `m = reporting_month` from the entered block, the schedule, the cost
+plan and the inception ledger. Nothing here re-runs the ledger.
+
+**Per category, and in total.** Eleven columns per line; the totals row is the
+column sum of the five lines.
+
+| Column | Definition |
+|---|---|
+| `original_budget_pence` | §20.1's table |
+| `current_budget_pence` | entered |
+| `certified_to_date_pence` | entered |
+| `paid_to_date_pence` | entered |
+| `committed_to_date_pence` | entered |
+| `committed_not_certified_pence` | `committed − certified` |
+| `forecast_to_complete_pence` | entered |
+| `estimated_final_cost_pence` | `committed + forecast_to_complete` |
+| `variance_vs_original_pence` | `estimated_final − original` (positive = overrun) |
+| `variance_vs_current_pence` | `estimated_final − current_budget` |
+| `remaining_to_spend_pence` | `estimated_final − certified`, identically `committed_not_certified + forecast_to_complete` |
+
+`paid_to_date_pence` is carried and printed — a lender reconciles certificates
+against payments — but it drives no other column. The statement is a **cost**
+position, not a cash position, and that is a deliberate scope statement rather
+than an omission.
+
+`contingency_remaining_pence` = `current_budget(contingency) −
+certified(contingency)`, floored at 0, reported on its own because a monitoring
+report is read for that figure specifically.
+
+**The funding side.** The same three terms §5.10 uses, evaluated at one month and
+against the entered actuals rather than the ledger's own draws:
+
+```
+undrawn_net_facility  = max(0, committed_net − debt_drawn_to_date)      (0 for a cash deal)
+reserve_headroom      = rolled_up ? max(0, committed_gross − committed_net
+                                            − cum_interest_capitalised(m−1)) : 0
+remaining_cash_equity = max(0, cash_equity_total − cash_equity_injected_to_date)
+remaining_funding     = undrawn_net_facility + reserve_headroom + remaining_cash_equity
+```
+
+`cum_interest_capitalised(m−1)` is the **inception** ledger's cumulative
+capitalised interest through ledger month `m−1`: the statement carries no actual
+interest figure, and the interest component is therefore forecast, not monitored
+(§20.5 limitation 1). `cash_equity_total` is §5.10's filter unchanged —
+cash-classified sources whose evidence status is not `rejected`.
+
+**The uses side.**
+
+```
+forecast_finance = Σ_{k=m}^{term−1} ( months[k].interest_accrued + months[k].capitalised_fees )
+remaining_uses   = totals.remaining_to_spend + forecast_finance
+surplus          = remaining_funding − remaining_uses
+shortfall        = max(0, −surplus)
+```
+
+**Variances against the inception plan.** Positive means ahead of — more than —
+plan in all three, and the memo prints that sign convention beside the figures.
+
+- `debt_drawn_variance_pence` = `debt_drawn_to_date − Σ_{k<m} (draw + capitalised_fees)`.
+- `equity_injected_variance_pence` = `cash_equity_injected_to_date − Σ_{k<m} equity_contribution`.
+- `cost_to_date_variance_pence` = `totals.certified − Σ_{k<m} (uses.acquisition + construction + professional + statutory)`.
+
+**Rounding.** None. Every input is integer pence and every column is a sum or a
+difference of integers. The only figure R14 rounds anywhere is §4.2(b)'s cap
+base.
+
+### 20.3 Validation and flags
+
+Monitoring validation and the monitoring flags run **only** when `monitoring` is
+non-null. A null block adds no issue and no flag, so no existing document's
+`validation.issues` or `flags` moves.
+
+**Hard errors** (`report_safe` false). Field strings address the offending line
+by **array position**, not by category, so an issue points at the row the user
+edited:
+
+| Field | Condition |
+|---|---|
+| `monitoring.reporting_month` | not an integer in `1..term` |
+| `monitoring.lines` | not exactly one line per category — five distinct categories, any order |
+| `monitoring.lines[i].paid_to_date_pence` | `paid > certified` |
+| `monitoring.lines[i].certified_to_date_pence` | `certified > committed` |
+| `monitoring.debt_drawn_to_date_pence` | `> committed_net_facility_pence`, and `> 0` for a cash deal |
+
+**One input warning** (`ValidationIssue`, severity `warning`, field
+`monitoring.cash_equity_injected_to_date_pence`): equity injected beyond
+committed sources — `cash_equity_injected_to_date > cash_equity_total`. This is
+**not** an error. A sponsor putting in more equity than the committed sources
+record is the case a monitoring statement exists to surface, not a malformed
+document.
+
+**Three result-derived warnings are flags, not validation issues** (`FlagCode`,
+raised in `deriveMetrics`/`derive_metrics` beside `funding_gap` and §19's flags).
+Validation runs on inputs alone and cannot see the computed statement, so these
+could not be validation issues without recomputing it. All three are dated with
+the statement's own `reporting_month`.
+
+| Flag | Severity | Condition |
+|---|---|---|
+| `monitoring_shortfall` | red | `shortfall > 0`; the message and `amount_pence` carry the figure |
+| `monitoring_cost_variance` | amber | some category's `variance_vs_original` exceeds 5% of a non-zero `original_budget` |
+| `monitoring_dated_after_redemption` | amber | `reporting_month` is later than the ledger's last month carrying a repayment |
+
+`monitoring_cost_variance` is tested in **strict integer arithmetic** —
+`abs(variance_vs_original) × 20 > original_budget`, never a floating ratio — and
+the comparison is strict: a line at exactly 5% does not fire. It is raised **once
+per statement**, naming the category with the largest absolute variance among
+those that qualify. `monitoring_dated_after_redemption` is skipped entirely when
+no ledger month carries a repayment (a retain-only schedule, or a cash deal with
+no facility to redeem) — there is no redemption month to be later than.
+
+A shortfall is a red flag and a reported field, never a hard error: the statement
+exists precisely to report the shortfall, and refusing to produce the document
+that says so would be the wrong answer.
+
+### 20.4 Outputs and reporting
+
+- **§5.10's series** keeps its shape and its two summary keys
+  (`cost_to_complete_first_shortfall_month`, `cost_to_complete_max_shortfall_pence`);
+  each month gains `remaining_interest_reserve_headroom_pence`, so the term the
+  correction added is visible on its own rather than buried in the funding total.
+  The per-month columns are `month`, `remaining_cost_pence`,
+  `remaining_funding_pence`, `remaining_interest_reserve_headroom_pence` and
+  `surplus_pence`; the undrawn-facility and remaining-equity terms are not
+  broken out separately.
+- **`lender_eligible_ratio`** is on `CostPlanResult` (§16.8) and republished on
+  the `Schedule`, which is where the ledger reads it.
+- **`monitoring_statement`** is published on `AppraisalResultV2` (TypeScript) /
+  `AppraisalMetrics` (Python), `null` exactly when the input block is null. It
+  carries the columns of §20.2 plus `reporting_month` and `reporting_date`,
+  echoed. It is computed **once**, in `deriveMetrics`/`derive_metrics`; no
+  component and no report generator recomputes it.
+- **Fixture expected-metrics** gains `monitoring_shortfall_pence`,
+  `monitoring_estimated_final_cost_pence`, `monitoring_surplus_pence` and
+  `lender_eligible_ratio`. `w-monitoring-on-site` (inputs v11, detailed mode, one
+  ineligible package, `monitoring` at reporting month 6) pins all four —
+  `0`, `27,520,000`, `10,101,207` and `0.9166666666666666` — hand-derived in
+  `docs/financial-model/test-cases.md` §20.4. It is the release's cross-engine
+  penny-agreement carrier and the only detailed-mode fixture that still reaches
+  §7's fully-realised profit identity.
+- **Screens.** `CostToCompleteCard` gains the reserve-headroom column. A
+  `MonitoringEditor` on the Finance page enters the five lines, the two
+  cumulative figures and the provenance, and removes the case by setting `null`.
+  A `MonitoringStatementCard` on the summary page prints the per-category table,
+  the funding reconciliation and the three variances, and is rendered only when
+  a statement is present. No arithmetic in components: every figure printed is a
+  result field.
+- **Memo.** A "Monitoring cost-to-complete" section, printed **only** when
+  `monitoring_statement` is non-null, after the existing cost-to-complete
+  material: the per-category table with its totals row, the funding
+  reconciliation term by term, the shortfall sentence when and only when there
+  is a shortfall to report, and a provenance line carrying `reporting_date`,
+  `reporting_month`, author and date. Report QA asserts the section is absent on
+  every document without a monitoring block.
+- **What a report may claim (§13.4).** The statement is a **sponsor-entered**
+  monitoring position. The memo prints, in the section itself: "Interest and
+  capitalised fees from the reporting month onward are the inception forecast;
+  certified and committed figures are as entered by the sponsor and have not
+  been verified by a monitoring surveyor." The §13.3 draft gate is unchanged —
+  a document with no monitoring case is not thereby unsafe, and a monitoring
+  statement does not make a document FINAL.
+
+### 20.5 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **The interest component is forecast, not monitored.** Interest and
+   capitalised fees from `reporting_month` onward are the inception ledger's
+   figures; there is no actual-interest input, and none of the entered actuals
+   revises them.
+2. **Actuals are per category, not per package.** Five lines, and no QS source,
+   date or status against any of them. Per-package actuals and their provenance
+   are R15's, on the same reasoning §14.6, §15.9 and §16.9 already record.
+3. **`lender_eligible` acts as a uniform ratio on the construction line**
+   (§4.2(b), §16.9). Contingency and compliance follow it proportionally, and an
+   ineligible package's own spend months are not distinguished. A per-package
+   draw profile needs per-package spend in the monthly uses, which §18's
+   phase-level bucketing does not provide. The wiring's effect is real and is
+   recorded rather than smoothed over: `q-detailed-cost-plan` and
+   `s-dated-programme`, the two corpus fixtures carrying an ineligible package
+   alongside `development_cost_advance_pct: 100`, now report funding gaps of
+   2,031,318 and 6,300,000 respectively and are no longer report-safe.
+4. **The statement is a snapshot, not a re-simulation.** §5.10's "Known
+   limitation" applies to it unchanged: it measures committed sources against
+   forecast cost at one date; it does not replay the ledger's month-by-month
+   throttling from the actuals.
+5. **No drawdown-request or certificate history.** One statement per document,
+   overwritten when it is updated. A history belongs with the change log
+   scheduled as R14b.
+6. **No lender-case linkage.** A monitoring statement does not make a document
+   FINAL, and an approved lender case does not require one.
+
+### Guards this release must watch fail
+
+Per the standing rule that every guard be planted against and watched failing
+before it is trusted, and named with the change it would miss (§17's rule).
+
+| Guard | Watched by |
+|---|---|
+| Fixture P's pins move | `null` / `0` replace `1` / `392483`, and the old figures become the **negative controls** in both engines. Observed failing before the §5.10 correction landed; a pinned zero cannot be produced by a phantom-shortfall engine |
+| The correction is not one-sided | `v-exhausted-reserve` reports a **positive** shortfall and a non-zero `funding_gap_pence` under the chosen correction; the rejected correction (drop rolled-up interest from remaining cost) reports 0 on the same document, and that comparison was run and recorded rather than argued |
+| Serviced-interest identity | A serviced fixture's whole `cost_to_complete` series is deep-equal before and after the correction. Would miss a constant added to both sides — fixture P's pinned zero catches that |
+| The ineligible-package pair | A detailed-mode pair differing only in one package's `lender_eligible`: strictly smaller cumulative draw, strictly larger cumulative `funding_gap_pence`. Direction-only, so it would miss a ratio that is merely wrong-but-`< 1` — fixture W's pinned `lender_eligible_ratio` catches that |
+| The construction split identity | `original(construction) + original(contingency) == Σ uses.construction_pence` on every corpus fixture, not only the monitored one |
+| v11 numeric identity | Every pre-v11 fixture migrates and produces identical metrics, ledger and schedule; the filter reads `doc["inputs"]["inputs_version"]`, the R13 lesson, and a companion test fails if the migration corpus silently empties |
+| `reporting_date` is inert | Two statements differing only in `reporting_date` are otherwise equal |
+| The 5% variance boundary | Fixture W's construction line sits at exactly 5.0% and must **not** fire; its contingency line, at 16.7%, must. `>` rather than `>=`, in integer arithmetic, is the load-bearing detail |
+| Entry-point cutover | `migrate_inputs_to_v11` / `migrateInputsToV11` at every production call site, with the governance `inputs_version` still **derived** from the document rather than restated as a literal — R13's finding |
+| Spec-versions pin | `CALC_VERSION` 2.13.0 and the §1.6 inputs-version list carrying v11, asserted against this document in both engines |

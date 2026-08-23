@@ -3246,6 +3246,14 @@ assertion behind it drifts silently; whoever picks up C1 needs a figure that fai
 the moment the behaviour changes, which is what makes the deferral
 self-policing rather than something someone has to remember to re-check.
 
+**Closed in R14 (calc 2.13.0).** The paragraphs above are kept as the record of
+how the defect was found and held; they describe the position from R9 to R14 and
+no longer describe the engine. Spec §5.10 now credits a rolled-up facility's
+unconsumed interest reserve to remaining funding, fixture P pins `null` / `0`
+with `1` / `392483` as its negative controls, and the exclusion list this section
+put `p-scotland-levered` on is empty. See §20 below, and §20.5 for what replaced
+the exclusion-list machinery.
+
 ---
 
 ## 16. Cost plan modes [R10 — calc 2.9.0]
@@ -4435,3 +4443,40 @@ the statement into metrics, and the golden harness resolves an unmapped
 error rather than being ignored. Task 9 adds the mappers and these four pins
 together. The ratio is already pinned through the dotted
 `cost_plan.lender_eligible_ratio` path, which needs no mapper.
+
+### 20.5 The corpus implication after C1
+
+Numbered 20.5 rather than the 20.3 the release plan named, because §20.2, §20.3
+and §20.4 above were written first and hold the Q, S and W worksheets. The
+content is the plan's.
+
+Spec §5.10's one asserted direction — *"the series reports a shortfall ⇒ the
+ledger recorded a `funding_gap` somewhere"* — is unchanged by R14. What changed
+is the exclusion list beside it.
+
+**The exclusion list is now empty, and it is empty on purpose.**
+`_SHORTFALL_WITHOUT_GAP_STEMS` (`tests/test_financial_model_cost_to_complete.py`)
+and `SHORTFALL_WITHOUT_GAP_STEMS` (`cost-to-complete.test.ts`) both held
+`p-scotland-levered` from R9 to R14. C1's correction makes fixture P's series
+clear at every month, so the entry came off — but the constant itself stays,
+with a comment saying why. A future fixture that genuinely reproduces
+"shortfall with no funding gap" then has a declared home and must be **listed
+deliberately**, rather than sliding through as an ordinary case nobody looked
+at. Deleting the constant would have made the next such finding invisible.
+
+**The `saw_counter_example` guard is gone; `saw_positive_case` stays.** The
+counter-example guard asserted the exclusion list was non-vacuous — that at
+least one fixture on it really did show the excluded shape. With the list empty
+by design, that guard would fail forever and correctly, which is not a guard but
+a permanent red build. The positive-case guard is the one that still earns its
+place: it asserts the corpus contains at least one fixture where a shortfall and
+a funding gap are both present, so the implication cannot pass vacuously across a
+corpus in which nothing ever reports a shortfall at all.
+
+**Three fixtures now carry the load the exclusion list used to.**
+
+| Fixture | What it holds down |
+|---|---|
+| P (`p-scotland-levered`) | The phantom cannot come back: `null` / `0` pinned, with the old `1` / `392483` as negative controls in both engines |
+| V (`v-exhausted-reserve`) | The correction is not one-sided — a real shortfall, `funding_gap_pence` 704,021, and the positive case for the implication (§20.1 above) |
+| Q, S (`q-detailed-cost-plan`, `s-dated-programme`) | The opposite shape, and the one §5.10's "Known limitation" already covers: a **real** funding gap of 2,031,318 / 6,300,000 that the cost-to-complete series does **not** see, because §5.10 counts the undrawn facility gross of §4.2(b)'s advance cap. Neither is a counter-example to the asserted direction — the implication runs the other way — and neither belongs on the exclusion list |

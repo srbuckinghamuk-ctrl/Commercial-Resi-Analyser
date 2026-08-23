@@ -96,10 +96,16 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
 
 def _metrics_dict(metrics) -> dict:
     """asdict(), minus `calc_version` (constant for the whole engine, not
-    version-dependent) and `monitoring_statement` -- the latter does not exist
-    on `AppraisalMetrics` until Task 9. Excluding a key that does not exist
-    yet is harmless here (`dict.pop(..., None)` is a no-op), and keeps this
-    gate correct without a rewrite once Task 9 lands the key."""
+    version-dependent) and `monitoring_statement`.
+
+    `monitoring_statement` DOES exist on `AppraisalMetrics` (Task 9 landed it,
+    spec Sec 20.4). It is excluded because it is `None` on every document this
+    gate runs over: the migration writes `monitoring: None`, and the one
+    v11-native fixture that carries a real block (W, w-monitoring-on-site) is
+    filtered out of `FIXTURES` above and pinned by the golden suite instead.
+    Comparing a field that is `None` on both arms by construction would add
+    nothing; excluding it keeps the gate's diff readable and states, here, why
+    it is not a hole."""
     d = asdict(metrics)
     d.pop("calc_version", None)
     d.pop("monitoring_statement", None)
