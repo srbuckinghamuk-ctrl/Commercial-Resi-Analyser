@@ -503,14 +503,20 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
             <h4 style={{ color: '#94a3b8', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1, margin: 0 }}>Investment Case</h4>
-            {/* R13 Task 15 fix round 1. Exactly one of these three ever
-                shows at once, each honest about what it does: "Add" only
-                when there is no case yet; "Complete rent roll" only when a
-                case exists AND a row is genuinely missing; "Remove" is the
-                only affordance once the case is present and complete. The
-                previous version showed "Add" unconditionally alongside
-                "Remove" once a case existed, reading as though nothing had
-                been added. */}
+            {/* R13 Task 15 fix rounds 1-2. Each affordance below is shown
+                exactly when what it SAYS is true of the current state --
+                that is the invariant, not a count of how many render
+                together. "Add" only when there is no case yet. "Complete
+                rent roll (N missing)" only when a case exists AND a
+                retain_all row is genuinely missing. "Remove" whenever a
+                case exists, REGARDLESS of whether rows are missing --
+                repair and Remove can and do render side by side, because
+                both are true then, and Remove must stay reachable so a
+                user is never trapped with an incomplete case they cannot
+                delete. The original defect this fixed was a button whose
+                label was false of the state it was shown in ("Add" on a
+                document that already had a case), not the number of
+                buttons on screen at once. */}
             {ic == null && (
               <button
                 onClick={addInvestmentCase}

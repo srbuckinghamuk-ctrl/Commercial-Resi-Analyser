@@ -450,7 +450,7 @@ describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9,
   });
 });
 
-// R13 Task 15 (spec §19.6/§19.7 rule 2), fix round 1. `retainAllDocMissingRents()`
+// R13 Task 15 (spec §19.6/§19.7 rule 2), fix rounds 1-2. `retainAllDocMissingRents()`
 // is a v10 document -- `ExitStrategyPage` is generic over `CalculatorInputsV9 |
 // CalculatorInputsV10` for exactly this reason (see the page's own header
 // comment). Its base fixture (t-investment-case.json) already carries an
@@ -460,8 +460,10 @@ describe('ExitStrategyPage — exit anchor control wiring (§18.10 limitation 9,
 // "Remove investment case" once a case existed, which read as though nothing
 // had been added. The affordance for THIS fixture's exact state (a case that
 // exists but is incomplete) is now "Complete rent roll", not "Add an
-// investment case" -- see the render block's own comment for why exactly one
-// of the three buttons ever shows.
+// investment case" -- see the render block's own comment for the actual
+// invariant (each affordance is shown exactly when it is true of the state;
+// "Complete rent roll" and "Remove" legitimately render together here, since
+// both are true of a case that exists but has a row missing).
 describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', () => {
   it('offers "Complete rent roll", not "Add", for an existing case with a missing row', () => {
     const doc = retainAllDocMissingRents();
