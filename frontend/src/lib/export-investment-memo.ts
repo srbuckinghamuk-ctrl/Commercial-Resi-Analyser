@@ -2382,7 +2382,14 @@ export function generateInvestmentMemo(
     y = lastAutoTableFinalY(doc) + 6;
   }
 
-  if (refinance != null && schedule.refinance != null) {
+  // R13 spec §19.1/§19.7 rule 5: `investment_value_pence`/`ltv_pct` are null
+  // on a v10 document once a non-null `investment_case` supersedes them, so
+  // this explicit-pair sentence is skipped rather than printing a `?? 0`
+  // stand-in — a fabricated "investment value £0.00" would state a figure
+  // the model never computed. R13 Task 16 adds the investment-case section
+  // that reports the sized-quantum figures on that path instead.
+  if (refinance != null && schedule.refinance != null
+    && refinance.investment_value_pence != null && refinance.ltv_pct != null) {
     y = bodyText(
       y,
       `Refinance (${monthLabel(schedule.refinance.month)}): investment value ${fmt(refinance.investment_value_pence)}, LTV ${fmtPct(refinance.ltv_pct)}, net proceeds ${fmt(schedule.refinance.net_proceeds_pence)} — applied to senior redemption; surplus distributes to equity (spec §4.5).`,

@@ -1,6 +1,6 @@
 import type {
   CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
+  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
 } from './finance-types';
 
 /** Sq ft per sq m (spec §3.2 `global_per_sqft` basis). No shared constant existed
@@ -48,9 +48,13 @@ export interface LenderGdvResult {
 // V5 -> V4 -> V3, so it already accepts a v9 document silently; without this
 // widening the two engines would disagree about which documents have lender
 // metrics at all.
+// R13: `CalculatorInputsV10` added for the same reason again -- it subclasses
+// V9, so a v10 document already carries a `lender_valuation` block untouched
+// by this task's changes, and lender-GDV is unrelated to the investment case.
 export function computeLenderGdv(
   inputs: CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5
-    | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8 | CalculatorInputsV9,
+    | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8 | CalculatorInputsV9
+    | CalculatorInputsV10,
 ): LenderGdvResult | null {
   const lv = inputs.lender_valuation;
   if (lv == null) return null;

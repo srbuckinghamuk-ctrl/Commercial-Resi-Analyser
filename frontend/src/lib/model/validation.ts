@@ -947,10 +947,19 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     if (!Number.isInteger(rf.month_offset) || rf.month_offset < 0 || rf.month_offset > term - 1) {
       err('refinance', `Refinance month must be a whole month between 0 and ${term - 1}.`);
     }
-    if (!Number.isFinite(rf.investment_value_pence) || rf.investment_value_pence < 0) {
+    // R13 spec §19.1/§19.7 rule 5: null is the VALID state once a non-null
+    // `investment_case` supersedes this pair -- guarding on non-null here
+    // keeps this single-field check from misfiring on that legitimate v10
+    // shape. R13 Task 6 adds the real cross-field rule (a non-null pair
+    // together with a non-null `investment_case` is the hard error; a null
+    // pair with no `investment_case` is a different one) — this guard is not
+    // that rule, only the minimal narrowing this task's type change requires.
+    if (rf.investment_value_pence != null
+      && (!Number.isFinite(rf.investment_value_pence) || rf.investment_value_pence < 0)) {
       err('refinance', 'Refinance investment value must be zero or more.');
     }
-    if (!Number.isFinite(rf.ltv_pct) || rf.ltv_pct <= 0 || rf.ltv_pct > 100) {
+    if (rf.ltv_pct != null
+      && (!Number.isFinite(rf.ltv_pct) || rf.ltv_pct <= 0 || rf.ltv_pct > 100)) {
       err('refinance', 'Refinance LTV must be greater than 0 and at most 100.');
     }
     if (!Number.isFinite(rf.arrangement_fee_pence) || rf.arrangement_fee_pence < 0) {

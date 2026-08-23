@@ -293,9 +293,17 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       'anchor' in refinanceInput ? (refinanceInput as RefinanceInputsV9).anchor : null,
       refinanceInput.month_offset,
     ))), term - 1),
+    // R13 spec §19.1: `investment_value_pence`/`ltv_pct` narrow to nullable on
+    // a v10 document (null when a non-null `investment_case` supersedes them,
+    // §19.7 rule 5). This task does not compute that case, so `?? 0` is the
+    // inert fallback for the explicit-pair path only — R13 Task 8 replaces
+    // this whole expression with the sized-quantum branch once
+    // `computeInvestmentCase` is wired in here, using this exact expression
+    // (its brief specifies it verbatim) as that branch's non-investment-case arm.
     net_proceeds_pence:
-      Math.round((refinanceInput.investment_value_pence * refinanceInput.ltv_pct) / 100)
-      - refinanceInput.arrangement_fee_pence - refinanceInput.legal_costs_pence,
+      Math.round(
+        ((refinanceInput.investment_value_pence ?? 0) * (refinanceInput.ltv_pct ?? 0)) / 100,
+      ) - refinanceInput.arrangement_fee_pence - refinanceInput.legal_costs_pence,
   };
 
   const sellingCosts = grossSales > 0 ? agentFee + sellingLegal : 0;

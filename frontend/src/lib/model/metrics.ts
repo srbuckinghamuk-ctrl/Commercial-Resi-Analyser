@@ -1,5 +1,6 @@
 import type {
-  AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, ModelFlag, MonthlyModel, Schedule,
+  AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
+  ModelFlag, MonthlyModel, Schedule,
 } from './finance-types';
 import { CALC_VERSION } from './finance-types';
 import { solveIrr } from './irr';
@@ -118,12 +119,15 @@ function vatCarryInterestPence(
 ): number {
   // Structural, exactly as `computeVat` and `chargeableConsiderationPence` read
   // it, and written as a narrowing guard rather than a ternary so the spread
-  // below is typed as the v8-or-v9 member of the union — a pre-v8 document has
+  // below is typed as the v8/v9/v10 member of the union — a pre-v8 document has
   // no `vat` key to force, and `{ ...v7doc, vat: ... }` is a `tsc` error, correctly.
+  // R13: `CalculatorInputsV10` added to the counterfactual's own union alongside
+  // the V10 addition to `AnyCalculatorInputs` -- VAT is untouched by the
+  // investment case, so the widening is mechanical.
   if (!('vat' in inputs)) return 0;
   const vat = inputs.vat;
   if (!vat.registered) return 0;
-  const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 = {
+  const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10 = {
     ...inputs,
     vat: { ...vat, registered: false },
     // R33. `buildSchedule` charges acquisition tax through its own site
