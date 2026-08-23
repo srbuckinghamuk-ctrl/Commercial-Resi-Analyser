@@ -187,11 +187,16 @@ describe('sizeTakeout (§19.4)', () => {
   });
 
   it('floors every cap — a cap rounded up is a cap breached', () => {
-    // 1_000_001 / (1 × 0.06) = 16_666_683.33 -> floors to ...83, never ...84
-    const s = sizeTakeout(1_000_001, 999_999_999_999, {
+    // The numerator is chosen so the fractional part EXCEEDS 0.5, which is the
+    // only way this test can tell flooring from rounding:
+    //   1_000_006 / (1 × 0.06) = 16_666_766.67
+    //   floor -> 16_666_766      round-half-up -> 16_666_767
+    // An earlier draft used 1_000_001, whose .333 fraction rounds DOWN anyway,
+    // so the test named for this property proved nothing about it.
+    const s = sizeTakeout(1_000_006, 999_999_999_999, {
       ...IO, dscr_floor: 1, icr_floor: 1, ltv_cap_pct: 100,
     });
-    expect(s.dscr_cap_pence).toBe(16_666_683);
+    expect(s.dscr_cap_pence).toBe(16_666_766);
   });
 
   it('drops the coverage caps out of the minimum at a zero rate', () => {
