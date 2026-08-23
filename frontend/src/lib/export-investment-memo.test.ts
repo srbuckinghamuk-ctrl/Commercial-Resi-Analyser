@@ -21,6 +21,7 @@ import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
 import { LEVER_LABEL } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
+import { anchoredSlippedDoc } from './model/__fixtures__/investment-case-docs';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -1823,6 +1824,42 @@ describe('R12 memo programme section (spec §18.10, Task 18)', () => {
     const text = documentProse(info);
     expect(text).toContain(
       `Derived finish: ${formatProgrammeMonth(programmeAnchor(inputs), 25)} — 1 month(s) after the facility term of 24 months.`,
+    );
+  });
+});
+
+describe('§18.10 limitation 9 — the resolved exit month (R12 carry)', () => {
+  it('prints the month the LEDGER used, not the raw month_offset', async () => {
+    // An anchored tranche on a slipped programme: `month_offset` says 12,
+    // the anchor resolves to 14, and the receipt lands at 14. Before this fix
+    // the memo printed 12 — a month the ledger never used — on the one document
+    // shape §18.10 limitation 9 flagged as reachable only outside the UI.
+    const doc = anchoredSlippedDoc();
+    const run = runAppraisal(doc);
+    const schedule = run.schedule;
+    expect(schedule.resolved_exit_months.tranches).toEqual([14, 18]);
+    expect(schedule.receipts[14].gross_sale_pence).toBeGreaterThan(0);
+    expect(schedule.receipts[12].gross_sale_pence).toBe(0);
+
+    const blob = generateInvestmentMemo(mockProject, run, null);
+    const text = documentProse(await inspectPdf(blob));
+
+    // Scoped to the Section 3 provenance sentence that actually names the
+    // tranche months, not a bare 'Month 12'/'Month 14' substring search —
+    // this memo prints many months (a programme phase table, sale tranches,
+    // a redemption schedule), so an unscoped 'Month 12' could legitimately
+    // appear elsewhere and pass or fail for the wrong reason. The anchor on
+    // this document ('2026-08') is valid, so monthLabel renders a calendar
+    // label here, not the literal string 'Month N' — this reconstructs
+    // exactly what the memo's own monthLabel helper produces, the same
+    // pattern this file's §18.10 describe block above already uses.
+    const anchor = programmeAnchor(doc);
+    const monthLabel = (m: number) => formatProgrammeMonth(anchor, m);
+    expect(text).toContain(
+      `Sales phasing: 2 tranches (months ${monthLabel(14)}, ${monthLabel(18)}).`,
+    );
+    expect(text).not.toContain(
+      `Sales phasing: 2 tranches (months ${monthLabel(12)}, ${monthLabel(15)}).`,
     );
   });
 });

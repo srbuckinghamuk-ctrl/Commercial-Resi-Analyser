@@ -60,10 +60,17 @@ export default function CashflowPage({ run }: Props) {
     // With a calendar anchor these read as dates, matching the table below;
     // without one formatProgrammeMonth returns the same "Month N" wording as before.
     const label = (m: number) => (anchor != null ? formatProgrammeMonth(anchor, m) : `month ${m}`);
+    // R13 spec §19.6, closing §18.10 limitation 9. `schedule.resolved_exit_months`
+    // is the ledger's own resolved month for each tranche/refinance — an anchored
+    // entry's `month_offset` is only its ENTERED value, which schedule.ts may
+    // override via its anchor. Read here, never recomputed (the single resolver
+    // lives in schedule.ts).
     const disposalClause = salesPhasing != null
-      ? `; sales tranches in ${salesPhasing.tranches.map((t) => label(t.month_offset)).join(', ')}`
+      ? `; sales tranches in ${schedule.resolved_exit_months.tranches.map((m) => label(m)).join(', ')}`
       : `; disposal in ${label(term - 1)}`;
-    const refinanceClause = refinance != null ? `; refinance in ${label(refinance.month_offset)}` : '';
+    const refinanceClause = refinance != null && schedule.resolved_exit_months.refinance != null
+      ? `; refinance in ${label(schedule.resolved_exit_months.refinance)}`
+      : '';
     return `${spendClause}${disposalClause}${refinanceClause}; see calculation specification §4.4–§6.1.`;
   })();
 

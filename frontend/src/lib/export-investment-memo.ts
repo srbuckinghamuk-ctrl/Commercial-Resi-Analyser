@@ -1305,7 +1305,12 @@ export function generateInvestmentMemo(
   y = bodyText(
     y,
     salesPhasing != null
-      ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${salesPhasing.tranches.map((t) => monthLabel(t.month_offset)).join(', ')}).`
+      // R13 spec §19.6, closing §18.10 limitation 9. `schedule.resolved_exit_months`
+      // is the ledger's own resolved month for each tranche (an anchored tranche's
+      // month_offset is only its ENTERED value, which schedule.ts may override via
+      // its anchor) — read, not recomputed, exactly like `schedule.refinance.month`
+      // in the refinance line below, which was never affected by this defect.
+      ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${schedule.resolved_exit_months.tranches.map((m) => monthLabel(m)).join(', ')}).`
       : schedule.totals.gross_sales_pence > 0
         ? 'Sales phasing: single disposal in final month.'
         : 'Sales phasing: not applicable — no units sold.',

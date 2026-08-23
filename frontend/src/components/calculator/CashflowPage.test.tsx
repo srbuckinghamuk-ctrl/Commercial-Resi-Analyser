@@ -6,6 +6,8 @@ import CashflowPage from './CashflowPage';
 import { runAppraisal } from '../../lib/model';
 import type { AppraisalRun, CalculatorInputsV9 } from '../../lib/model';
 import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
+import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
+import { anchoredSlippedDoc } from '../../lib/model/__fixtures__/investment-case-docs';
 
 // Same fixture directory as AppraisalSummaryPage.test.tsx / export-investment-memo.test.ts.
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
@@ -146,5 +148,42 @@ describe('CashflowPage — the cost total is VAT-inclusive, and says so (ruling 
     render(<CashflowPage inputs={fixtureVat.inputs} onChange={vi.fn()} run={rigged} />);
     expect(screen.getByText(/is input VAT/i)).toBeInTheDocument();
     expect(screen.getByText(/£543/)).toBeInTheDocument();
+  });
+});
+
+// §18.10 limitation 9, R12 carry, closed by R13 Task 12. anchoredSlippedDoc()
+// carries an anchored tranche whose month_offset (12) is NOT where the
+// ledger placed the receipt (14, via the sales+3 anchor) -- see
+// export-investment-memo.test.ts's identically-named describe block for the
+// full derivation, and schedule.test.ts's "publishes resolved_exit_months"
+// test for the independent hand-derivation of 14/18/18.
+describe('CashflowPage — anchored tranche/refinance on a slipped programme (§18.10 limitation 9, R12 carry)', () => {
+  it('mentions the RESOLVED exit months in the assumptions note, not the raw month_offset', () => {
+    const doc = anchoredSlippedDoc();
+    const run = runAppraisal(doc);
+    expect(run.schedule.resolved_exit_months.tranches).toEqual([14, 18]);
+    expect(run.schedule.resolved_exit_months.refinance).toBe(18);
+
+    // `inputs` is unused by CashflowPage's body (only `run` is destructured
+    // in the component) -- a placeholder v9 default satisfies the prop's
+    // type without a cast, and carries none of the figures under test.
+    render(<CashflowPage inputs={defaultCalculatorInputsV9()} onChange={vi.fn()} run={run} />);
+
+    const anchor = programmeAnchor(doc);
+    const label = (m: number) => formatProgrammeMonth(anchor, m);
+    // Reconstructs CashflowPage's own assumptionsNote string exactly (this
+    // fixture takes the network + sales-phasing + refinance branch), so this
+    // is a scoped assertion on the one sentence that names these months, not
+    // a bare 'Month 12'/'Month 14' substring search.
+    expect(screen.getByText(
+      `Dated phase network: spend placed per phase, by derived window and curve (spec §18.5); `
+      + `sales tranches in ${label(14)}, ${label(18)}; refinance in ${label(18)}; `
+      + `see calculation specification §4.4–§6.1.`,
+    )).toBeInTheDocument();
+    expect(screen.queryByText(
+      `Dated phase network: spend placed per phase, by derived window and curve (spec §18.5); `
+      + `sales tranches in ${label(12)}, ${label(15)}; refinance in ${label(16)}; `
+      + `see calculation specification §4.4–§6.1.`,
+    )).not.toBeInTheDocument();
   });
 });
