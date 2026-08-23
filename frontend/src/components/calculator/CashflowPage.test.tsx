@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import CashflowPage from './CashflowPage';
 import { runAppraisal } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV9 } from '../../lib/model';
-import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV10 } from '../../lib/model';
+import { defaultCalculatorInputsV10 } from '../../lib/conversion-defaults';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import { anchoredSlippedDoc } from '../../lib/model/__fixtures__/investment-case-docs';
 
@@ -14,22 +14,22 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureH = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'h-programme-scurve.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV9 };
+) as { inputs: CalculatorInputsV10 };
 // v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureJ = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV9 };
+) as { inputs: CalculatorInputsV10 };
 // v8 on disk, registered for VAT -- the R11 §17.4 worked cycle.
 const fixtureVat = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV9 };
+) as { inputs: CalculatorInputsV10 };
 // v9 on disk -- a dated phase NETWORK, not the legacy three-package shape.
 const fixtureNetwork = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV9 };
+) as { inputs: CalculatorInputsV10 };
 
 describe('CashflowPage — no programme, no sales phasing (default v4)', () => {
-  const inputs = defaultCalculatorInputsV9();
+  const inputs = defaultCalculatorInputsV10();
   const run = runAppraisal(inputs);
 
   it('keeps the original assumptions note verbatim', () => {
@@ -120,14 +120,14 @@ describe('CashflowPage — refinance modelled (fixture J)', () => {
 // VAT component, read from run.metrics.vat, never recomputed here.
 describe('CashflowPage — the cost total is VAT-inclusive, and says so (ruling R25)', () => {
   it('labels the Costs column as VAT-inclusive', () => {
-    const inputs = defaultCalculatorInputsV9();
+    const inputs = defaultCalculatorInputsV10();
     const run = runAppraisal(inputs);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.getByRole('columnheader', { name: 'Costs (VAT-incl.)' })).toBeInTheDocument();
   });
 
   it('does not show a VAT disclosure line on a document with no VAT charged', () => {
-    const inputs = defaultCalculatorInputsV9();
+    const inputs = defaultCalculatorInputsV10();
     const run = runAppraisal(inputs);
     expect(run.metrics.vat.total_input_vat_pence).toBe(0);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
@@ -167,7 +167,7 @@ describe('CashflowPage — anchored tranche/refinance on a slipped programme (§
     // `inputs` is unused by CashflowPage's body (only `run` is destructured
     // in the component) -- a placeholder v9 default satisfies the prop's
     // type without a cast, and carries none of the figures under test.
-    render(<CashflowPage inputs={defaultCalculatorInputsV9()} onChange={vi.fn()} run={run} />);
+    render(<CashflowPage inputs={defaultCalculatorInputsV10()} onChange={vi.fn()} run={run} />);
 
     const anchor = programmeAnchor(doc);
     const label = (m: number) => formatProgrammeMonth(anchor, m);

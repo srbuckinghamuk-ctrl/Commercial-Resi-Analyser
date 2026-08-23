@@ -205,10 +205,12 @@ class TestAppraisalV5Normalisation:
     R9 Task 3 moved that boundary on again, from v5 to v6
     (migrate_inputs_to_v6). R10 Task 6 moves it once more, from v6 to v7
     (migrate_inputs_to_v7). R11 Task 10 moves it to v8
-    (migrate_inputs_to_v8, spec Sec 17.11). The class name is left alone
+    (migrate_inputs_to_v8, spec Sec 17.11). R12 Task 18b moves it to v9
+    (migrate_inputs_to_v9, spec Sec 18.7). R13 Task 18 moves it to v10
+    (migrate_inputs_to_v10, spec Sec 19.9). The class name is left alone
     deliberately -- these cases are about the jurisdiction fields v5
-    introduced, which v6, v7 and v8 carry forward untouched, and renaming them
-    would obscure what they pin."""
+    introduced, which v6 through v10 carry forward untouched, and renaming
+    them would obscure what they pin."""
 
     @pytest.mark.asyncio
     async def test_v4_snapshot_normalises_to_v6_with_default_jurisdiction(
@@ -226,14 +228,17 @@ class TestAppraisalV5Normalisation:
         body = resp.json()
         # The governance column (drives audit_hash), not just the snapshot's
         # own inputs_version. R10 Task 6: the boundary is v7. R11 Task 10: v8.
-        # R12 Task 18b (spec Sec 18.7): v9.
-        assert body["inputs_version"] == 9
+        # R12 Task 18b (spec Sec 18.7): v9. R13 Task 18 (spec Sec 19.9): v10.
+        assert body["inputs_version"] == 10
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 9
-        # The v9 step is purely additive on a v4 document with no programme:
-        # a null programme stays null and keeps the Sec 6 auto windows.
+        assert snapshot["inputs_version"] == 10
+        # The v9 and v10 steps are purely additive on a v4 document with no
+        # programme (v10 adds `investment_case: null`, an unchanged
+        # `refinance: null`): a null programme stays null and keeps the Sec 6
+        # auto windows.
         assert snapshot["programme"] is None
+        assert snapshot["investment_case"] is None
         acq = snapshot["acquisition"]
         assert acq["jurisdiction"] == "england_ni"
         assert acq["jurisdiction_source"] == "migrated_default"
@@ -317,16 +322,17 @@ class TestAppraisalV5Normalisation:
         a 422, not a 201 carrying a silently corrupted snapshot.
 
         R9 Task 3 moved the stand-in from 6 to 7; R10 Task 6 moved it from 7 to
-        8; R11 Task 10 moved it from 8 to 9; R12 Task 18b moves it from 9 to 10:
-        9 is now a version this server implements, so it no longer stands in for
-        one it does not. 10 is also the NEIGHBOUR of the recognised set, which
-        is the only value that catches a predicate loosened to the negation of
-        its own tuple (spec Sec 18.7)."""
+        8; R11 Task 10 moved it from 8 to 9; R12 Task 18b moved it from 9 to
+        10; R13 Task 18 moves it from 10 to 11: 10 is now a version this
+        server implements, so it no longer stands in for one it does not. 11
+        is also the NEIGHBOUR of the recognised set, which is the only value
+        that catches a predicate loosened to the negation of its own tuple
+        (spec Sec 19.9)."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         unknown_version_doc = copy.deepcopy(FIXTURE_A_INPUTS)
-        unknown_version_doc["inputs_version"] = 10
+        unknown_version_doc["inputs_version"] = 11
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
@@ -340,8 +346,8 @@ class TestAppraisalV5Normalisation:
     async def test_unknown_future_inputs_version_is_422_not_silent_corruption(
         self, client, monkeypatch,
     ):
-        """R9 Task 3, extended by R10 Task 6, R11 Task 10 and R12 Task 18b. R8's
-        silent-corruption bug,
+        """R9 Task 3, extended by R10 Task 6, R11 Task 10, R12 Task 18b and R13
+        Task 18. R8's silent-corruption bug,
         guarded forward: an inputs_version this server does not implement
         must be refused, never rebuilt from the v1 LTV heuristic and returned
         as 201.
@@ -349,14 +355,20 @@ class TestAppraisalV5Normalisation:
         Distinct from the case above: this one carries nothing but the version
         tag, and pins that the migration's own refusal *message* reaches the
         caller rather than being flattened into a generic 422 -- a reader
-        needs to know it was the version that was rejected."""
+        needs to know it was the version that was rejected.
+
+        R13 Task 18 moves the stand-in from 10 to 11 for the same reason the
+        test above does: 10 is now a version this server implements (it just
+        fails ITS OWN structural check on a bare `{"inputs_version": 10}`
+        document, missing `investment_case`), so it no longer stands in for a
+        version the server does not recognise at all."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
             "name": "Future version appraisal",
-            "inputs_snapshot": {"inputs_version": 10},
+            "inputs_snapshot": {"inputs_version": 11},
         })
         assert resp.status_code == 422, resp.text
         assert "unrecognised inputs_version" in resp.text

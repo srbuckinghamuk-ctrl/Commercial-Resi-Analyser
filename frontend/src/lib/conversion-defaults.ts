@@ -15,7 +15,7 @@ import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
-  EquitySource, FacilityTerms,
+  CalculatorInputsV10, EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
@@ -449,5 +449,32 @@ export function defaultCalculatorInputsV9(project?: {
     programme: null,
     sales_phasing: null,
     refinance: null,
+  };
+}
+
+/**
+ * R13 Task 18 (spec §19.9): the client's persistence boundary. `refinance`
+ * stays `null` on a brand-new document -- the same value v9's default already
+ * carries, and `RefinanceInputsV10` only adds fields when `refinance` is
+ * non-null (spec §19.1) -- so it is inherited through the spread unchanged;
+ * only `inputs_version` and `investment_case` are new.
+ *
+ * Spelled out literally rather than calling `migrateV9toV10` for the same
+ * reason `defaultCalculatorInputsV9` is: `model/migrate.ts` imports this
+ * module, so importing it back would be a cycle. `conversion-defaults.test.ts`
+ * pins the two against each other field for field so they cannot drift.
+ */
+export function defaultCalculatorInputsV10(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV10 {
+  return {
+    ...defaultCalculatorInputsV9(project),
+    inputs_version: 10,
+    // Restated explicitly, not merely inherited through the spread: the
+    // spread's static type is still `RefinanceInputsV9 | null` (v9's own
+    // return type), which is not assignable to `RefinanceInputsV10 | null`
+    // even though the runtime value (`null`) is identical either way.
+    refinance: null,
+    investment_case: null,
   };
 }

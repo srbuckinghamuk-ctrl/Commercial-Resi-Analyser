@@ -2568,6 +2568,7 @@ before it is trusted:
 | Lever inertness on the null path | The three new levers on an `investment_case = null` document produce a zero-width tornado bar, not an error and not a silent value change |
 | Cell validity | Yield and occupancy driven to zero produce **invalid cells**, not clamped ones — via §19.7's existing validation rules, not new sensitivity logic (§19.8) |
 | §1.6 version list | A test reads the specification's inputs-version list and requires v10 — the guard missed twice running |
+| Entry-point cutover (Task 18) | A real POST through the live server boundary with a v10 document (not two v9 runs) comes back `inputs_version: 10`, not `legacy_unreconciled`, with `investment_case` intact. Found a live defect the static entry-point guard cannot see: `app/api/app.py`'s response builder hard-coded the GOVERNANCE `inputs_version` (and `audit_hash`'s own `inputs_version` argument) to `9`, left over from R12, even after the migration call site itself moved to `migrate_inputs_to_v10` — a v10 snapshot would have been stored and returned correctly while its own governance column and audit hash still recorded v9, silently misdating every report's provenance |
 
 **Guards deliberately not written**, because they would be vacuous by
 construction: any assertion that an `OpexCode` is in the enum (the type

@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
-  defaultCalculatorInputsV8, defaultCalculatorInputsV9,
+  defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
+  migrateV9toV10,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -309,6 +310,46 @@ describe('defaultCalculatorInputsV9 (R12 Task 18b, spec §18.7)', () => {
   it('hands every caller its own document, not one shared mutable default', () => {
     const a = defaultCalculatorInputsV9();
     const b = defaultCalculatorInputsV9();
+    a.vat.treatments[0].rate_pct = 20;
+    a.scenarios.base.phase_slip_months = 3;
+    expect(b.vat.treatments[0].rate_pct).toBe(0);
+    expect(b.scenarios.base.phase_slip_months).toBe(0);
+  });
+});
+
+describe('defaultCalculatorInputsV10 (R13 Task 18, spec §19.9)', () => {
+  // Same guard as the V8/V9 blocks above, and the one that matters most here:
+  // this is the document EVERY freshly opened calculator now starts on, and
+  // the one every stored appraisal is compared against after
+  // `migrateInputsToV10` merges onto it. If the two drifted, a new appraisal
+  // and a migrated one would be different documents while both claiming to
+  // be v10.
+  it('is exactly what migrateV9toV10 makes of the v9 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV10>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV10()))
+      .toEqual(stripIds(migrateV9toV10(defaultCalculatorInputsV9())));
+  });
+
+  // Non-vacuity for the equality above: the two fields v10 adds are asserted
+  // by name and value, so the comparison cannot be passing merely because
+  // both sides are the v9 document with a bumped version number.
+  it('starts on the explicit investment case, with no derived case set', () => {
+    const v10 = defaultCalculatorInputsV10();
+    expect(v10.inputs_version).toBe(10);
+    // null investment_case = calc 2.11.0's explicit investment_value_pence x
+    // ltv_pct path, bit-identical -- a brand-new appraisal behaves exactly as
+    // it did before R13 until the user builds a derived case.
+    expect(v10.investment_case).toBeNull();
+    expect(v10.refinance).toBeNull();
+  });
+
+  it('hands every caller its own document, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV10();
+    const b = defaultCalculatorInputsV10();
     a.vat.treatments[0].rate_pct = 20;
     a.scenarios.base.phase_slip_months = 3;
     expect(b.vat.treatments[0].rate_pct).toBe(0);

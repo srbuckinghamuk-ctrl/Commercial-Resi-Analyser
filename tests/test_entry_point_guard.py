@@ -28,10 +28,21 @@ hand-written "not v8" rule goes vacuous the moment v10 exists -- it would pass
 a release that left every entry point on v9 -- and a guard that silently stops
 guarding is the failure mode this file exists to prevent.
 """
+import json
 import re
 from pathlib import Path
 
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
+from app.api.app import app
+from app.persistence.database import Base, get_db
+
 APP_ROOT = Path(__file__).resolve().parents[1] / "app"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: The migration module defines the versions, so it is exempt from its own
 #: rule, as is the package __init__ that re-exports them for the tests and
@@ -92,8 +103,8 @@ def test_migrate_module_exports_the_version_chain_this_guard_is_derived_from():
     """Non-vacuity, part 1: if the regex stopped matching, ``VERSIONS`` would be
     empty and every assertion below would pass over nothing."""
     assert len(VERSIONS) > 1
-    assert NEWEST == 9
-    assert 8 in VERSIONS
+    assert NEWEST == 10
+    assert 9 in VERSIONS
 
 
 def test_guard_enumerates_the_production_module_that_holds_the_entry_point():
@@ -125,3 +136,105 @@ def test_the_guard_proves_itself_on_a_stale_call_site():
     assert _used_versions("from app.financial_model.migrate import migrate_inputs_to_v8") == {8}
     assert _used_versions("    inputs = migrate_inputs_to_v8(raw)") == {8}
     assert _used_versions("# R11 Task 10 moved this to migrate_inputs_to_v8, one version back") == set()
+
+
+# --- R13 Task 18 (spec Sec 19.9), R12 Task 18b's finding one version on ---
+#
+# Every static assertion above proves the SOURCE names the newest migration.
+# None of it proves the server actually RUNS that arm: R12's first attempt at
+# this step compared two v9 runs and called that evidence, and separately
+# found `is_v2_or_later` missing `is_v9` -- a defect that made every appraisal
+# saved after that release come back stamped `legacy_unreconciled` and
+# provenance-hashed as such, on the THIRD consecutive release to lose that
+# same half of the boundary (R9, R10, R11 each recorded a version of it). Only
+# a real POST through the real server boundary, asserted against v10 -- not a
+# document that would pass identically against v9 -- can catch that class of
+# defect again.
+@pytest_asyncio.fixture
+async def _guard_db_sessionmaker():
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    yield maker
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def _guard_client(_guard_db_sessionmaker):
+    async def override_get_db():
+        async with _guard_db_sessionmaker() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_the_server_round_trips_a_v10_document_as_reconciled(_guard_client):
+    """R12 Task 18b, one version on. The cutover is what finds the boundary
+    bug: R12's found `is_v2_or_later` missing `is_v9`, so every appraisal
+    saved after release would have come back stamped `legacy_unreconciled`
+    and provenance-hashed as such. Third consecutive release to lose that
+    same half of the boundary (R13 Task 5 already added `is_v10` to close
+    this specific trap, which is exactly why this test must still exercise
+    the live server rather than trust that addition by inspection).
+
+    This asserts the V10 ARM, not two v9 runs: the posted document must come
+    back at inputs_version 10 AND not be tagged legacy, with its
+    investment_case intact. A v9 document run through the identical
+    assertions would also come back reconciled at whatever version the
+    server currently writes -- it is the combination of "reached inputs_version
+    10" AND "not legacy" AND "investment_case survived" on a document that
+    ONLY EXISTS at v10 that a v9-only regression cannot pass by accident.
+
+    Deviates from the brief's sketch in two ways the brief itself got wrong
+    (spec Sec 19.9's standing instruction: say so rather than silently
+    matching the brief). First, the endpoint is mounted at
+    ``{api_prefix}/appraisals`` (``/api/v1/appraisals`` -- see
+    ``app/api/app.py``'s ``include_router`` calls), not bare ``/appraisals``.
+    Second, the response is a ``FinancialAppraisal`` (``app/models.py``): the
+    migrated document comes back under the top-level ``inputs_snapshot`` key,
+    not nested under an ``inputs`` key, and the reconciliation status is the
+    top-level ``status`` field.
+    """
+    fixture = json.loads(
+        (REPO_ROOT / "fixtures" / "financial-model" / "t-investment-case.json")
+        .read_text(encoding="utf-8"),
+    )
+    posted_inputs = fixture["inputs"]
+    assert posted_inputs["inputs_version"] == 10
+    assert posted_inputs["investment_case"] is not None
+
+    project_resp = await _guard_client.post(
+        "/api/v1/projects",
+        json={
+            "address_raw": "1 Investment Case Way, York, YO1 8AN",
+            "price_pence": 42_500_000,
+            "use_class": "office",
+        },
+    )
+    assert project_resp.status_code == 201, project_resp.text
+    project_id = project_resp.json()["id"]
+
+    resp = await _guard_client.post(
+        "/api/v1/appraisals",
+        json={
+            "project_id": project_id,
+            "name": "T -- investment case",
+            "inputs_snapshot": posted_inputs,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    saved = resp.json()
+
+    assert saved["inputs_snapshot"]["inputs_version"] == 10
+    assert saved["status"] != "legacy_unreconciled"
+    assert saved["inputs_snapshot"]["investment_case"] is not None
