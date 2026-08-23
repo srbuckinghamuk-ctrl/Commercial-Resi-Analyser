@@ -98,7 +98,8 @@ def _metrics_dict(metrics) -> dict:
     """asdict(), minus `calc_version` (constant for the whole engine, not
     version-dependent) and `monitoring_statement`.
 
-    `monitoring_statement` DOES exist on `AppraisalMetrics` (Task 9 landed it,
+    `monitoring_statement` DOES exist on `AppraisalResultV2` -- the dataclass
+    `metrics` is an instance of, defined in metrics.py (Task 9 landed the field,
     spec Sec 20.4). It is excluded because it is `None` on every document this
     gate runs over: the migration writes `monitoring: None`, and the one
     v11-native fixture that carries a real block (W, w-monitoring-on-site) is

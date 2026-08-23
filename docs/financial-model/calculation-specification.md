@@ -2805,11 +2805,11 @@ that says so would be the wrong answer.
   broken out separately.
 - **`lender_eligible_ratio`** is on `CostPlanResult` (§16.8) and republished on
   the `Schedule`, which is where the ledger reads it.
-- **`monitoring_statement`** is published on `AppraisalResultV2` (TypeScript) /
-  `AppraisalMetrics` (Python), `null` exactly when the input block is null. It
-  carries the columns of §20.2 plus `reporting_month` and `reporting_date`,
-  echoed. It is computed **once**, in `deriveMetrics`/`derive_metrics`; no
-  component and no report generator recomputes it.
+- **`monitoring_statement`** is published on `AppraisalResultV2` in both
+  engines, `null` exactly when the input block is null. It carries the columns
+  of §20.2 plus `reporting_month` and `reporting_date`, echoed. It is computed
+  **once**, in `deriveMetrics`/`derive_metrics`; no component and no report
+  generator recomputes it.
 - **Fixture expected-metrics** gains `monitoring_shortfall_pence`,
   `monitoring_estimated_final_cost_pence`, `monitoring_surplus_pence` and
   `lender_eligible_ratio`. `w-monitoring-on-site` (inputs v11, detailed mode, one
