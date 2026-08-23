@@ -898,3 +898,44 @@ def test_charges_the_exit_fee_once_when_noi_achieves_first_full_redemption():
     fee_months = [x for x in m.months if x.exit_fee_pence > 0]
     assert len(fee_months) == 1
     assert fee_months[0].month == 2
+
+
+def test_excludes_the_operating_shortfall_from_sec7_sources_pinned_identity():
+    # Fix round 1 finding: the reconcile() exclusion added alongside the NOI
+    # block shipped with zero coverage. This document (opex_heavy) drives its
+    # ENTIRE additional_equity_pence from the operating shortfall alone
+    # (refinance_shortfall_equity_pence is 0 -- no refinance, and
+    # interest_type: rolled_up means interest service never contributes
+    # additional equity either), so it is the sharpest available document for
+    # pinning that the exclusion is real: if a future change stopped
+    # excluding operating_shortfall_equity_pence from Sec 7's sources total,
+    # sources would overshoot uses by exactly this figure and
+    # sources_equal_uses would flip false.
+    doc = noi_doc({"opex_heavy": True})
+    schedule = build_schedule(doc)
+    model = run_ledger(schedule, doc.finance, doc.equity_sources)
+
+    # Hand-derived (task-9-report.md): opex_heavy gives a constant -107,400
+    # pence/month for 23 months (months 1..23 of this 24-month term):
+    # 107,400 x 23 = 2,470,200.
+    assert model.totals.operating_shortfall_equity_pence == 2_470_200
+    assert model.totals.additional_equity_pence == 2_470_200
+    assert model.totals.refinance_shortfall_equity_pence == 0
+
+    # The uses-side total, independently summed from the ledger's own
+    # exposed per-month/total fields via Sec 7's stated formula (never read
+    # from reconcile()'s private sources_total, which isn't exposed) --
+    # pinning the actual number, not just that some boolean is true.
+    serviced_interest = sum(mo.interest_serviced_pence for mo in model.months)
+    rolled_interest = sum(mo.interest_capitalised_pence for mo in model.months)
+    uses_total = (
+        sum(mo.uses_total_pence for mo in model.months)
+        + serviced_interest + rolled_interest + model.totals.capitalised_fees_pence
+        + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence
+    )
+    assert uses_total == 99_071_679
+
+    inputs = CalculatorInputsV2.model_validate(default_calculator_inputs_v2())
+    rec = reconcile(inputs, schedule, model)
+    assert rec.sources_equal_uses is True
+    assert rec.debt_rollforward_ok is True

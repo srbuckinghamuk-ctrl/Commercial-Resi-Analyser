@@ -815,4 +815,42 @@ describe('§19.5 NOI in the ledger', () => {
     expect(feeMonths).toHaveLength(1);
     expect(feeMonths[0].month).toBe(2);
   });
+
+  it('excludes the operating shortfall from §7 sources — pinned identity, not just the boolean', () => {
+    // Fix round 1 finding: the reconcile() exclusion added alongside the NOI
+    // block shipped with zero coverage. This document (opexHeavy) drives its
+    // ENTIRE additional_equity_pence from the operating shortfall alone
+    // (refinance_shortfall_equity_pence is 0 here — no refinance, and
+    // interest_type: rolled_up means interest service never contributes
+    // additional equity either), so it is the sharpest available document for
+    // pinning that the exclusion is real: if a future change stopped
+    // excluding operating_shortfall_equity_pence from §7's sources total,
+    // sources would overshoot uses by exactly this figure and
+    // sources_equal_uses would flip false.
+    const doc = noiDoc({ opexHeavy: true });
+    const schedule = buildSchedule(doc);
+    const model = runLedger(schedule, doc.finance, doc.equity_sources);
+
+    // Hand-derived (task-9-report.md): opexHeavy gives a constant -107,400
+    // pence/month for 23 months (months 1..23 of this 24-month term):
+    // 107,400 × 23 = 2,470,200.
+    expect(model.totals.operating_shortfall_equity_pence).toBe(2_470_200);
+    expect(model.totals.additional_equity_pence).toBe(2_470_200);
+    expect(model.totals.refinance_shortfall_equity_pence).toBe(0);
+
+    // The uses-side total, independently summed from the ledger's own
+    // exposed per-month/total fields via §7's stated formula (never read
+    // from reconcile()'s private sourcesTotal, which isn't exposed) —
+    // pinning the actual number, not just that some boolean is true.
+    const servicedInterest = model.months.reduce((s, mo) => s + mo.interest_serviced_pence, 0);
+    const rolledInterest = model.months.reduce((s, mo) => s + mo.interest_capitalised_pence, 0);
+    const usesTotal = model.months.reduce((s, mo) => s + mo.uses_total_pence, 0)
+      + servicedInterest + rolledInterest + model.totals.capitalised_fees_pence
+      + schedule.totals.selling_costs_pence + model.totals.exit_fee_pence;
+    expect(usesTotal).toBe(99_071_679);
+
+    const rec = reconcile(defaultCalculatorInputsV2(), schedule, model);
+    expect(rec.sources_equal_uses).toBe(true);
+    expect(rec.debt_rollforward_ok).toBe(true);
+  });
 });
