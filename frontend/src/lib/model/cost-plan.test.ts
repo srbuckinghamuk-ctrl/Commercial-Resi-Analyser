@@ -340,6 +340,61 @@ describe('computeCostPlan — reported extras', () => {
     expect(r.implied_rate_pence_per_sqm).toBe(6_000);
   });
 
+  // R14 spec §5. The ratio the ledger's §4.2(b) cap base reads. Unrounded:
+  // 2,000,000 / 3,000,000 is exactly 2/3, and the ONE rounding happens later,
+  // on `construction_pence × ratio` inside the ledger.
+  it('reports the lender-eligible ratio as the unrounded eligible share of base build', () => {
+    const r = computeCostPlan(
+      doc({
+        mode: 'detailed',
+        packages: [pkg('p1', 2_000_000), pkg('p2', 1_000_000, { lender_eligible: false })],
+        contingency: CLASSES(0, 0, 0),
+      }),
+      500, 1,
+    );
+    expect(r.lender_eligible_ratio).toBe(2 / 3);
+    expect(r.lender_eligible_ratio).not.toBe(Math.round(2 / 3));
+  });
+
+  it('reports a lender-eligible ratio of 1 when every package is eligible', () => {
+    const r = computeCostPlan(
+      doc({
+        mode: 'detailed',
+        packages: [pkg('p1', 2_000_000), pkg('p2', 1_000_000)],
+        contingency: CLASSES(0, 0, 0),
+      }),
+      500, 1,
+    );
+    expect(r.lender_eligible_ratio).toBe(1);
+  });
+
+  // Headline mode has no packages at all, so `lender_eligible_base_pence` is 0
+  // against a NON-zero base build — the one case where the raw quotient (0)
+  // would silently zero the ledger's whole construction cap base.
+  it('reports a lender-eligible ratio of 1 in headline mode, where there are no packages ' +
+    'to flag and the eligible base is therefore 0', () => {
+    const r = computeCostPlan(
+      doc({ mode: 'headline', packages: [], contingency: CLASSES(0, 0, 0) },
+          { construction_cost_per_sqm_pence: 80_730 }),
+      500, 1,
+    );
+    expect(r.packages).toHaveLength(0);
+    expect(r.base_build_pence).toBe(40_365_000);
+    expect(r.lender_eligible_base_pence).toBe(0);
+    expect(r.base_build_pence).toBeGreaterThan(0);
+    expect(r.lender_eligible_ratio).toBe(1);
+  });
+
+  it('reports a lender-eligible ratio of 1 in detailed mode when base build is 0 ' +
+    '(no division by zero)', () => {
+    const r = computeCostPlan(
+      doc({ mode: 'detailed', packages: [], contingency: CLASSES(0, 0, 0) }),
+      500, 1,
+    );
+    expect(r.base_build_pence).toBe(0);
+    expect(r.lender_eligible_ratio).toBe(1);
+  });
+
   it('returns a null implied rate when the area is zero', () => {
     const r = computeCostPlan(
       doc({ mode: 'detailed', packages: [pkg('p1', 2_000_000)], contingency: CLASSES(0, 0, 0) }),

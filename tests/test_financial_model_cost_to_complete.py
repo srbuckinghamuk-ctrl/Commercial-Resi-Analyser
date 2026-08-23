@@ -363,7 +363,7 @@ class TestShortfallDirectionAgainstFundingGap:
         # this test rather than just widening it.
         saw_positive_case = False
         for path in sorted(FIXTURE_DIR.glob("*.json")):
-            doc = json.loads(path.read_text())
+            doc = json.loads(path.read_text(encoding="utf-8"))
             # Release 4a: Fixture K (kind "sensitivity", spec Sec 12) carries no `inputs`
             # of its own -- it names a `base_fixture` instead (model-governance.md
             # Sec 2.1) -- so it has no ledger of its own to check this implication against.

@@ -518,6 +518,54 @@ class TestComputeCostPlanReportedExtras:
         assert r.lender_eligible_base_pence == 2_000_000
         assert r.implied_rate_pence_per_sqm == 6_000
 
+    # R14 spec Sec 5. The ratio the ledger's Sec 4.2(b) cap base reads.
+    # Unrounded: 2,000,000 / 3,000,000 is exactly 2/3, and the ONE rounding
+    # happens later, on `construction_pence * ratio` inside the ledger.
+    def test_reports_the_lender_eligible_ratio_unrounded(self):
+        r = compute_cost_plan(
+            doc({
+                "mode": "detailed",
+                "packages": [pkg("p1", 2_000_000), pkg("p2", 1_000_000, {"lender_eligible": False})],
+                "contingency": CLASSES(0, 0, 0),
+            }),
+            500, 1,
+        )
+        assert r.lender_eligible_ratio == 2 / 3
+        assert isinstance(r.lender_eligible_ratio, float)
+
+    def test_reports_a_lender_eligible_ratio_of_one_when_every_package_is_eligible(self):
+        r = compute_cost_plan(
+            doc({
+                "mode": "detailed",
+                "packages": [pkg("p1", 2_000_000), pkg("p2", 1_000_000)],
+                "contingency": CLASSES(0, 0, 0),
+            }),
+            500, 1,
+        )
+        assert r.lender_eligible_ratio == 1
+
+    # Headline mode has no packages at all, so `lender_eligible_base_pence` is 0
+    # against a NON-zero base build -- the one case where the raw quotient (0)
+    # would silently zero the ledger's whole construction cap base.
+    def test_reports_a_lender_eligible_ratio_of_one_in_headline_mode(self):
+        r = compute_cost_plan(
+            doc({"mode": "headline", "packages": [], "contingency": CLASSES(0, 0, 0)},
+                {"construction_cost_per_sqm_pence": 80_730}),
+            500, 1,
+        )
+        assert r.packages == []
+        assert r.base_build_pence == 40_365_000
+        assert r.lender_eligible_base_pence == 0
+        assert r.lender_eligible_ratio == 1
+
+    def test_reports_a_lender_eligible_ratio_of_one_when_base_build_is_zero(self):
+        r = compute_cost_plan(
+            doc({"mode": "detailed", "packages": [], "contingency": CLASSES(0, 0, 0)}),
+            500, 1,
+        )
+        assert r.base_build_pence == 0
+        assert r.lender_eligible_ratio == 1
+
     def test_returns_a_null_implied_rate_when_the_area_is_zero(self):
         r = compute_cost_plan(
             doc({"mode": "detailed", "packages": [pkg("p1", 2_000_000)],

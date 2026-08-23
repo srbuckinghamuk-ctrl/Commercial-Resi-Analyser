@@ -29,7 +29,10 @@ export interface FacilityTerms {
   /** Senior tranche drawn at acquisition. null = unknown / no separate tranche. */
   day_one_advance_pence: number | null;
   day_one_market_value_pence: number | null;
-  /** Caps monthly development draws at this % of that month's eligible dev costs. */
+  /** Caps monthly development draws at this % of that month's eligible dev costs.
+   *  R14 spec §4.2(b): "eligible" is construction × the cost plan's
+   *  `lender_eligible_ratio`, plus professional and statutory in full — VAT is
+   *  deliberately excluded (§17.6). */
   development_cost_advance_pct: number;
   committed_net_facility_pence: number | null;
   /** null → derived as net + interest_reserve. */
@@ -457,6 +460,9 @@ export interface Schedule {
     tranches: number[];
     refinance: number | null;
   };
+  /** R14 spec §4.2(b). Computed once on the cost plan, republished here so the
+   *  ledger reads one figure and never re-derives it. */
+  lender_eligible_ratio: number;
 }
 
 export interface LedgerMonth {

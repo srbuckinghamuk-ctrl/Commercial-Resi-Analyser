@@ -64,6 +64,9 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     programme: null,
     investment_case: null,
     resolved_exit_months: { tranches: [], refinance: null },
+    // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
+    // hand-built schedules keep the pre-R14 cap base exactly.
+    lender_eligible_ratio: 1,
   };
 }
 
@@ -852,5 +855,78 @@ describe('§19.5 NOI in the ledger', () => {
     const rec = reconcile(defaultCalculatorInputsV2(), schedule, model);
     expect(rec.sources_equal_uses).toBe(true);
     expect(rec.debt_rollforward_ok).toBe(true);
+  });
+});
+
+// R14 spec §5 (§4.2(b) amended). The guard the spec names: a detailed-mode
+// fixture PAIR differing only in one package's `lender_eligible` flag. Fixture
+// Q already carries exactly one ineligible package (pkg-externals, 3,000,000p
+// of a 47,000,000p base build), so Q IS the ineligible twin and its
+// all-eligible copy is the base.
+describe('R14 §4.2(b): lender_eligible scales the development-cost advance cap', () => {
+  it('R14 §4.2(b): an ineligible package shrinks the advance cap and widens the gap', () => {
+    const fixtureDir = resolve(__dirname, '../../../../fixtures/financial-model');
+    const q = JSON.parse(
+      readFileSync(resolve(fixtureDir, 'q-detailed-cost-plan.json'), 'utf-8'),
+    ).inputs;
+    expect(q.cost_plan.mode).toBe('detailed');
+    const ineligible = q.cost_plan.packages.filter(
+      (p: { lender_eligible: boolean }) => !p.lender_eligible,
+    );
+    expect(ineligible).toHaveLength(1);                     // pkg-externals, 3,000,000p
+    const allEligible = structuredClone(q);
+    for (const p of allEligible.cost_plan.packages) p.lender_eligible = true;
+
+    // Starve both twins of equity identically so the CAP is what decides the
+    // draw, and halve `development_cost_advance_pct` on BOTH sides. At the
+    // fixture's own 100% the starved pair does NOT separate: with equity gone,
+    // months 8–10 of both twins are bound by `undrawn_net` (the 80,000,000p net
+    // facility, exhausted either way), so both draw exactly 78,400,000p and
+    // both carry the same 32,853,599p gap — the failure mode the task brief
+    // foresaw. At 50% the scaled cap is the binding term in every one of months
+    // 1–10 for both twins, so the flag alone moves the answer. The pair still
+    // differs ONLY in the flag: `starve` is applied identically to both.
+    const starve = (doc: typeof q) => ({
+      ...doc,
+      finance: { ...doc.finance, development_cost_advance_pct: 50 },
+      equity_sources: [{ ...doc.equity_sources[0], amount_pence: 1 }],
+    });
+    const run = (doc: typeof q) => {
+      const s = buildSchedule(doc);
+      return { s, m: runLedger(s, doc.finance, doc.equity_sources) };
+    };
+    const base = run(starve(allEligible));
+    const less = run(starve(q));
+    expect(base.s.lender_eligible_ratio).toBe(1);
+    expect(less.s.lender_eligible_ratio).toBeCloseTo(44 / 47, 12);
+    expect(less.m.totals.draws_pence).toBeLessThan(base.m.totals.draws_pence);
+    expect(less.m.totals.funding_gap_pence).toBeGreaterThan(base.m.totals.funding_gap_pence);
+
+    // Hand-derived (docs/financial-model/test-cases.md §20.2, "the starved
+    // pair"): at 50% the all-eligible twin draws round(6,387,120 × 50 / 100) =
+    // 3,193,560 in each of months 1–5 and round(5,304,000 × 50 / 100) =
+    // 2,652,000 in each of months 6–10, plus the 35,000,000p day-one advance —
+    // 64,227,800 in total. The ineligible twin's construction line scales by
+    // 44/47 FIRST: round(4,965,447 + 1,003,120 + 80,000 = 6,048,567 × 50/100)
+    // = 3,024,284 (months 1–5) and round(4,965,447 × 50/100) = 2,482,724
+    // (months 6–10) — 62,535,040 in total, 1,692,760 less. Both twins spend the
+    // same 58,455,600p over months 1–10, so every pence the cap withholds falls
+    // to the gap: 48,718,559 − 47,025,799 = the same 1,692,760.
+    expect(base.m.totals.draws_pence).toBe(64_227_800);
+    expect(less.m.totals.draws_pence).toBe(62_535_040);
+    expect(base.m.totals.funding_gap_pence).toBe(47_025_799);
+    expect(less.m.totals.funding_gap_pence).toBe(48_718_559);
+    expect(base.m.totals.draws_pence - less.m.totals.draws_pence).toBe(1_692_760);
+    expect(less.m.totals.funding_gap_pence - base.m.totals.funding_gap_pence).toBe(1_692_760);
+  });
+
+  it('leaves a headline-mode document alone: the ratio is 1 and the cap base is the ' +
+    'whole construction line', () => {
+    const fixtureDir = resolve(__dirname, '../../../../fixtures/financial-model');
+    const f = JSON.parse(
+      readFileSync(resolve(fixtureDir, 'f-dev-finance-12mo.json'), 'utf-8'),
+    ).inputs as CalculatorInputsV3;
+    const schedule = buildSchedule(f);
+    expect(schedule.lender_eligible_ratio).toBe(1);
   });
 });

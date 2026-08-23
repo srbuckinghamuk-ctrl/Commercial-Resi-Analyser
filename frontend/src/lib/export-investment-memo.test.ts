@@ -11,6 +11,7 @@ import {
   runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
   migrateV6toV7, migrateV7toV8, DEFAULT_VAT, defaultVatTreatments,
 } from './model';
+import { validateInputs } from './model/validation';
 import { buildProvenance } from './report-provenance';
 import type { UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
@@ -1798,7 +1799,19 @@ describe('R12 memo programme section (spec §18.10, Task 18)', () => {
     // Guard 1 (spec §13): slipping a phase with float >= 1 leaves the
     // programme finish unchanged.
     expect(prog.finish_month).toBe(22);
-    expect(run.reconciliation.report_safe).toBe(true);
+    // R14 (spec §5, calc 2.13.0): fixture S's `report_safe` is now FALSE, and
+    // that is correct rather than a regression — wiring `lender_eligible` to
+    // the §4.2(b) advance cap opens a real 6,300,000p funding gap on this
+    // document (the ineligible externals package is 1/11 of its base build),
+    // and a funding gap has always made `funding_complete` — and so
+    // `report_safe` — false (validation.ts). Nothing about the SLIP is
+    // implicated: what this test is for is that a slip inside a phase's own
+    // float leaves `finish_month` at 22 and still prints as a base-case slip,
+    // both asserted below. The programme's own state is asserted directly
+    // instead of through `report_safe`, which no longer isolates it.
+    expect(run.reconciliation.report_safe).toBe(false);
+    expect(run.reconciliation.funding_complete).toBe(false);
+    expect(validateInputs(inputs).filter((i) => i.severity === 'error')).toEqual([]);
 
     const blob = generateInvestmentMemo(mockProject, run, null);
     const text = documentProse(await inspectPdf(blob));
@@ -1821,7 +1834,18 @@ describe('R12 memo programme section (spec §18.10, Task 18)', () => {
     expect(prog.finish_month).toBeGreaterThan(inputs.finance.term_months);
     // programme.overrun is a hard validation error (validation.ts), so
     // report_safe is false — no new DraftReason, the existing §13.3 gate.
+    //
+    // R14 (spec §5): `report_safe` alone no longer isolates the overrun —
+    // fixture S's base case is already unsafe on its §4.2(b) funding gap (see
+    // the float test above) — so the OVERRUN itself is asserted directly, as
+    // the input error it is, rather than inferred from the aggregate flag.
     expect(run.reconciliation.report_safe).toBe(false);
+    expect(validateInputs(inputs).filter((i) => i.severity === 'error')).toEqual([{
+      severity: 'error',
+      field: 'programme.phases.maturity_tail',
+      message: "Programme finishes month 25; facility term is 24. Phase 'Maturity' ends 1 "
+        + 'months after maturity.',
+    }]);
 
     const prov = buildProvenance(run, null);
     expect(prov.draftReason).toBe('unreconciled');

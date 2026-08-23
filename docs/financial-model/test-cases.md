@@ -3826,3 +3826,280 @@ it (temporarily edited, then reverted — not committed).
 loop (Step 1), the §5.10 series from §4's own formula (Step 2), and the
 rejected-correction comparison from the same formula with decision 2's credit
 removed (Step 3). The engine was run only to confirm agreement, and did.
+
+### 20.2 Fixtures Q and S under the wired cap
+
+R14 spec §5 amends §4.2(b): the monthly development-cost advance cap's base
+becomes `round(construction_pence × lender_eligible_ratio) + professional +
+statutory`, where the ratio is the cost plan's
+`lender_eligible_base_pence / base_build_pence` (1 in headline mode, and 1 when
+`base_build_pence` is 0). Two fixtures in the corpus are not all-eligible —
+**Q** (`q-detailed-cost-plan.json`, externals 3,000,000p of a 47,000,000p base
+build, ratio `44/47`) and **S** (`s-dated-programme.json`, externals 6,000,000p
+of 66,000,000p, ratio `10/11`) — and the spec requires that whether the smaller
+cap binds be **shown**, not assumed.
+
+**It binds in both.** Both fixtures set `development_cost_advance_pct: 100`,
+which is exactly the condition under which the pre-R14 cap could *never* bite:
+at 100% the cap equalled the month's whole development spend, so `min(remainder,
+advance_cap, …)` was a tie between the first two terms and `remainder` (or, once
+equity ran out and the facility ran low, `undrawn_net`) decided every draw.
+Scaling the construction line by a ratio strictly below 1 drops the cap below
+the spend in every month whose construction is met from the facility, and the
+cap becomes the sole binding term. Ten of Q's pins and twelve of S's therefore
+move; every headline-mode fixture and every all-eligible fixture is
+bit-identical, which is confirmed by the corpus running green with only these
+two fixtures edited.
+
+Both worksheets below were derived from the spec's own arithmetic (§4.2
+waterfall, §4.2(c) gross-headroom cap, §4.4 sweep clamp, §5 finance costs,
+§5.10 cost-to-complete, §7 identity) and re-checked against a replay that
+imports nothing from either engine. The replay's validation gate is that, run
+with `ratio = 1`, it reproduces **every** pre-R14 pin of Q and of S to the
+penny — it does — so its figures under `ratio < 1` are trustworthy for the same
+reason. No figure below was obtained by running the engine and pasting its
+output; the engines were run afterwards and agreed.
+
+#### Fixture Q — the cap base derived by hand for the first time
+
+Q's own note recorded its ledger pins as *invariant-cross-checked, not
+hand-replayed* (R10 ruling). This is the first hand derivation of its cap base,
+so the whole ledger is replayed, not just the changed months.
+
+**Cost stack and spend profile** (unchanged by R14 — the cap governs what the
+facility *advances*, never what the scheme *spends*). Term 12, no programme, so
+spec §6's auto windows apply: `constructionWindow = max(1, 12 − 2) = 10` (ledger
+months 1–10), `professionalWindow = ceil(10 / 2) = 5` (months 1–5).
+`spreadStraightLine(53,040,000, 10)` = 5,304,000 per month exactly;
+`spreadStraightLine(5,015,600, 5)` = 1,003,120 per month exactly; the
+prior-approval fee (48,000) pins to month 0 and the remaining
+`448,000 − 48,000 = 400,000` of statutory spreads at 80,000 per month over
+months 1–5. VAT is inert (`registered: false`), so `uses[m].vat_pence` is 0
+throughout. Month 0 carries acquisition 52,750,000 + statutory 48,000 =
+52,798,000.
+
+**Facility.** Net 80,000,000, gross 89,000,000, 8.0% p.a. rolled up
+(`monthlyRate = 0.08 / 12`), arrangement fee 2% of net = 1,600,000 capitalised
+at month 0, exit fee 1% of gross = 890,000, day-one advance 35,000,000,
+committed cash equity 40,000,000 at month 0, `equity_first`. The §4.2(c)
+gross-headroom cap is `floor(89,000,000 / (1 + 0.08/12)) − opening − capFees
+= 88,410,596 − opening − capFees`; it never binds (the largest opening balance
+is 74,503,882).
+
+**The ratio.** `lender_eligible_base_pence / base_build_pence =
+44,000,000 / 47,000,000 = 44/47 = 0.936170212765957…`, carried unrounded. The
+one rounding is on the product: `round(5,304,000 × 44/47)`. Exactly,
+`5,304,000 × 44 = 233,376,000` and `233,376,000 / 47 = 4,965,446.808…`, so the
+rounded eligible construction line is **4,965,447** and the withheld slice is
+`5,304,000 − 4,965,447 = 338,553` per full construction month.
+
+| ledger month | uses | equity | remainder | advance cap (R14) | draw | binding term | interest | closing balance | funding gap |
+|---:|---:|---:|---:|---:|---:|:--|---:|---:|---:|
+| 0 | 52,798,000 | 17,798,000 | — | — | 35,000,000 | `day_one_advance` | 244,000 | 36,844,000 | 0 |
+| 1 | 6,387,120 | 6,387,120 | 0 | 6,048,567 | 0 | equity covers it | 245,627 | 37,089,627 | 0 |
+| 2 | 6,387,120 | 6,387,120 | 0 | 6,048,567 | 0 | equity covers it | 247,264 | 37,336,891 | 0 |
+| 3 | 6,387,120 | 6,387,120 | 0 | 6,048,567 | 0 | equity covers it | 248,913 | 37,585,804 | 0 |
+| 4 | 6,387,120 | 3,040,640 | 3,346,480 | 6,048,567 | 3,346,480 | **`remainder`** | 272,882 | 41,205,166 | 0 |
+| **5** | 6,387,120 | 0 | 6,387,120 | **6,048,567** | 6,048,567 | **`advance_cap`** | 315,025 | 47,568,758 | **338,553** |
+| **6** | 5,304,000 | 0 | 5,304,000 | **4,965,447** | 4,965,447 | **`advance_cap`** | 350,228 | 52,884,433 | **338,553** |
+| **7** | 5,304,000 | 0 | 5,304,000 | **4,965,447** | 4,965,447 | **`advance_cap`** | 385,666 | 58,235,546 | **338,553** |
+| **8** | 5,304,000 | 0 | 5,304,000 | **4,965,447** | 4,965,447 | **`advance_cap`** | 421,340 | 63,622,333 | **338,553** |
+| **9** | 5,304,000 | 0 | 5,304,000 | **4,965,447** | 4,965,447 | **`advance_cap`** | 457,252 | 69,045,032 | **338,553** |
+| **10** | 5,304,000 | 0 | 5,304,000 | **4,965,447** | 4,965,447 | **`advance_cap`** | 493,403 | 74,503,882 | **338,553** |
+| 11 | 0 | 0 | 0 | 0 | 0 | — | 496,693 | 75,000,575 → 0 | 0 |
+
+The month-5 cap is `round(5,304,000 × 44/47) + 1,003,120 + 80,000 =
+4,965,447 + 1,083,120 = 6,048,567`; months 6–10 carry construction alone, so
+their cap is the 4,965,447 by itself.
+
+Equity of 40,000,000 pays 17,798,000 at month 0 and 6,387,120 in each of months
+1–3, leaving 3,040,640 — which month 4 exhausts. Month 4 is therefore the last
+month `remainder` binds (3,346,480 < 6,048,567); from month 5 the cap binds and
+does so alone: `undrawn_net` never falls below 9,177,718 and the headroom cap
+never below 13,906,714.
+
+**Funding gap** = 6 × 338,553 = **2,031,318**. Cross-check: the six capped
+months spend 6 × 5,304,000 = 31,824,000 of construction, and
+`31,824,000 × 3/47 = 2,031,319.1`; the 1.1p difference is the six roundings,
+each `…808 → …447` giving 338,553 rather than 338,553.19. The gap is the
+ineligible externals share of exactly the construction the facility was asked to
+fund, which is what an ineligible package means.
+
+**Total interest** = 244,000 + 245,627 + 247,264 + 248,913 + 272,882 + 315,025 +
+350,228 + 385,666 + 421,340 + 457,252 + 493,403 + 496,693 = **4,178,293**
+(was 4,240,081). Peak debt is month 11's pre-receipt balance, **75,000,575**
+(was 77,093,681) — 13,999,425 inside the 89,000,000 gross facility. Total draws
+35,000,000 + 3,346,480 + 6,048,567 + 5 × 4,965,447 = **69,222,282**.
+
+**Cost-to-complete is unchanged at `null` / `0`.** §5.10 counts the *undrawn
+facility* as remaining funding, gross of the §4.2(b) cap, so it cannot see a
+cap-driven gap. The tightest month is label 1: remaining cost 62,389,893 against
+remaining funding 74,358,000, a surplus of 11,968,107. Fixture Q is therefore
+the corpus's standing case of "a funding gap the cost-to-complete series does
+not see" — the allowed direction; fixture V's "shortfall ⇒ funding gap" is
+untouched by it, and `TestShortfallDirectionAgainstFundingGap` still holds.
+
+#### Pinned `expected_metrics` moved on fixture Q
+
+| Metric | Was | Now | Derivation |
+|---|---:|---:|:--|
+| `finance_costs_pence` | 6,730,081 | **6,668,293** | 4,178,293 interest + 1,600,000 arrangement + 890,000 exit |
+| `total_development_cost_pence` | 121,083,681 | **121,021,893** | 114,353,600 cost-before-finance (unchanged) + 6,668,293 |
+| `profit_pence` | 58,916,319 | **58,978,107** | 180,000,000 gross receipts − 121,021,893 |
+| `profit_on_cost_pct` | 48.66 | **48.73** | round(58,978,107 / 121,021,893 × 10000)/100 |
+| `profit_on_gdv_pct` | 32.73 | **32.77** | round(58,978,107 / 180,000,000 × 10000)/100 |
+| `peak_debt_pence` | 77,093,681 | **75,000,575** | month 11 closing balance, pre-receipt (month unchanged at 11) |
+| `gross_ltc_pct` | 63.67 | **61.97** | 75,000,575 / 121,021,893 |
+| `net_ltc_pct` | 65.48 | **63.66** | net advances 70,822,282 (69,222,282 draws + 1,600,000 capitalised) / 111,253,600 cost-before-finance-ex-selling |
+| `ltgdv_developer_pct` | 42.83 | **41.67** | 75,000,575 / 180,000,000 |
+| `funding_gap_pence` | 0 | **2,031,318** | 6 × 338,553, above |
+
+`equity_contributed_pence` (40,000,000), `peak_debt_month` (11),
+`day_one_advance_pence` (35,000,000), both `cost_to_complete_*` figures and the
+whole cost stack are **unchanged**.
+
+#### The starved pair — the §5 guard fixture Q also serves
+
+Spec §5's guard is a detailed-mode pair differing only in one package's
+`lender_eligible` flag; Q is the ineligible twin and a flipped copy is the base.
+The pair is run with equity starved to 1p on **both** sides, so the cap — not
+the equity waterfall — decides every draw, and with
+`development_cost_advance_pct: 50` on **both** sides.
+
+The 50% is load-bearing, and this is why: at the fixture's own 100%, starving
+the equity pushes the whole 58,455,600p of months 1–10 onto the facility, whose
+undrawn net after month 0 is only 43,400,000. Both twins then exhaust the net
+facility — the all-eligible twin at month 8, the ineligible twin at month 8 as
+well — so both draw exactly **78,400,000** and both carry exactly
+**32,853,599** of gap. The pair does not separate, and the guard would be
+vacuous. Halving the advance rate keeps `advance_cap` strictly below both
+`remainder` and `undrawn_net` in every one of months 1–10 for both twins.
+
+At 50%, per month: the all-eligible twin's cap is
+`round(6,387,120 × 50/100) = 3,193,560` (months 1–5) and
+`round(5,304,000 × 50/100) = 2,652,000` (months 6–10); the ineligible twin's is
+`round(6,048,567 × 50/100) = 3,024,284` and `round(4,965,447 × 50/100) =
+2,482,724` — note both of the ineligible twin's halvings land on a half-penny
+and round **up**, which is `money_round`/`Math.round`'s half-up rule.
+
+| | all-eligible | ineligible (44/47) | difference |
+|---|---:|---:|---:|
+| draws | 35,000,000 + 5 × 3,193,560 + 5 × 2,652,000 = **64,227,800** | 35,000,000 + 5 × 3,024,284 + 5 × 2,482,724 = **62,535,040** | 1,692,760 |
+| funding gap | 17,797,999 + 5 × 3,193,560 + 5 × 2,652,000 = **47,025,799** | 17,797,999 + 5 × 3,362,836 + 5 × 2,821,276 = **48,718,559** | 1,692,760 |
+
+Both twins spend the same 58,455,600 over months 1–10 and both take the same
+35,000,000 day-one advance against a 52,798,000 month-0 use (leaving
+17,797,999 of month-0 gap once the 1p of equity is spent), so every pence the
+cap withholds falls straight to the gap and the two differences are necessarily
+equal. Pinned in `monthly-engine.test.ts` and `test_financial_model_engine.py`.
+
+### 20.3 Fixture S under the wired cap
+
+S's R12 note already carried a hand-replayed month-by-month ledger, so only the
+changed arm is re-derived here; the unchanged months are quoted from it and the
+replay reproduces them exactly.
+
+**Spend profile** (from S's own §18.5 bucketing, unchanged): month 0 carries
+acquisition 105,750,000 and nothing else; months 1–4 carry professional
+2,000,000 each; months 1–3 carry statutory 200,000 each and months 4–5 carry
+1,400,000 each; construction is 3,000,000 in each of months 6–7 (the
+`strip_out`-tagged enabling package) and 10,550,000 in each of months 8–13.
+VAT is inert.
+
+**Facility.** Net 100,000,000, gross 110,000,000, 12.0% p.a. rolled up
+(`monthlyRate` exactly 0.01), arrangement 2% of net = 2,000,000, exit 1% of
+gross = 1,100,000, `day_one_advance_pence: 0`, committed cash equity
+105,750,000 — exactly month 0's cash use, so equity buys the land and is gone.
+The §4.2(c) cap is `floor(110,000,000 / 1.01) − opening = 108,910,891 −
+opening`, never approached; `undrawn_net` never falls below 23,600,000.
+
+**The ratio** is `60,000,000 / 66,000,000 = 10/11 = 0.90909…`.
+`round(3,000,000 × 10/11) = round(2,727,272.72…) = 2,727,273` (272,727 withheld);
+`round(10,550,000 × 10/11) = round(9,590,909.09…) = 9,590,909` (959,091
+withheld).
+
+Months 1–5 carry no construction, so their cap base — professional + statutory
+in full — is identical before and after R14, and their draws and balances are
+unchanged (2,020,000 → 4,262,200 → 6,526,822 → 8,814,090 → 12,336,231 →
+13,873,593). From month 6 the scaled cap binds, alone, in every month:
+
+| ledger month | construction | remainder | advance cap (R14) | draw | binding term | interest | closing balance | funding gap |
+|---:|---:|---:|---:|---:|:--|---:|---:|---:|
+| **6** | 3,000,000 | 3,000,000 | **2,727,273** | 2,727,273 | **`advance_cap`** | 166,009 | 16,766,875 | **272,727** |
+| **7** | 3,000,000 | 3,000,000 | **2,727,273** | 2,727,273 | **`advance_cap`** | 194,941 | 19,689,089 | **272,727** |
+| **8** | 10,550,000 | 10,550,000 | **9,590,909** | 9,590,909 | **`advance_cap`** | 292,800 | 29,572,798 | **959,091** |
+| **9** | 10,550,000 | 10,550,000 | **9,590,909** | 9,590,909 | **`advance_cap`** | 391,637 | 39,555,344 | **959,091** |
+| **10** | 10,550,000 | 10,550,000 | **9,590,909** | 9,590,909 | **`advance_cap`** | 491,463 | 49,637,716 | **959,091** |
+| **11** | 10,550,000 | 10,550,000 | **9,590,909** | 9,590,909 | **`advance_cap`** | 592,286 | 59,820,911 | **959,091** |
+| **12** | 10,550,000 | 10,550,000 | **9,590,909** | 9,590,909 | **`advance_cap`** | 694,118 | 70,105,938 | **959,091** |
+| **13** | 10,550,000 | 10,550,000 | **9,590,909** | 9,590,909 | **`advance_cap`** | 796,968 | 80,493,815 | **959,091** |
+| 14 | 0 | 0 | 0 | 0 | — | 804,938 | 81,298,753 | 0 |
+| 15 | 0 | 0 | 0 | 0 | — | 812,988 | 82,111,741 | 0 |
+| 16 | 0 | 0 | 0 | 0 | — | 821,117 | **82,932,858** → 9,207,858 | 0 |
+| 17 | 0 | 0 | 0 | 0 | — | 92,079 | 9,299,937 | 0 |
+| 18 | 0 | 0 | 0 | 0 | — | 92,999 | 9,392,936 | 0 |
+| 19 | 0 | 0 | 0 | 0 | — | 93,929 | **9,486,865** → 0 | 0 |
+
+Months 20–23 are empty: no spend, no balance, no interest.
+
+**Funding gap** = 2 × 272,727 + 6 × 959,091 = **6,300,000**, which is exactly
+`69,300,000 / 11` — the ineligible externals share of the *whole* construction
+total, to the penny, because every construction month is capped and the two
+rounding residues (−0.27 per strip-out month, +0.09 per construction month)
+cancel across the eight months.
+
+**Sweep (§4.4/§4.4.1), unchanged in shape.** Tranche 1 (month 16, anchored) nets
+73,725,000 against a balance of 82,932,858 plus a 1,100,000 exit fee =
+84,032,858 — less than required, so §4.4's clamp applies: it repays 73,725,000,
+the facility does **not** redeem, and 9,207,858 carries. Tranche 2 (month 19)
+nets 172,025,000, clears 9,486,865 + 1,100,000 and redeems, distributing
+161,438,135.
+
+**Total interest** = 6,811,865 (was 7,461,714). Peak debt is month 16's
+pre-receipt balance, **82,932,858** (was 89,678,313), month unchanged.
+Total draws 74,400,000 (was 80,700,000) — 80,700,000 less the 6,300,000 gap.
+
+**Cost-to-complete is unchanged at `null` / `0`,** for the same §5.10 reason as
+Q: the tightest month is label 1, remaining cost 87,491,865 against remaining
+funding 107,980,000, a surplus of 20,488,135.
+
+#### Pinned `expected_metrics` moved on fixture S
+
+| Metric | Was | Now | Derivation |
+|---|---:|---:|:--|
+| `finance_costs_pence` | 10,561,714 | **9,911,865** | 6,811,865 interest + 2,000,000 arrangement + 1,100,000 exit |
+| `total_development_cost_pence` | 201,261,714 | **200,611,865** | 190,700,000 cost-before-finance (unchanged) + 9,911,865 |
+| `profit_pence` | 48,738,286 | **49,388,135** | 250,000,000 − 200,611,865 |
+| `profit_on_cost_pct` | 24.22 | **24.62** | 49,388,135 / 200,611,865 |
+| `profit_on_gdv_pct` | 19.5 | **19.76** | 49,388,135 / 250,000,000 |
+| `peak_debt_pence` | 89,678,313 | **82,932,858** | month 16 closing balance, pre-receipt (month unchanged at 16) |
+| `gross_ltc_pct` | 44.56 | **41.34** | 82,932,858 / 200,611,865 |
+| `net_ltc_pct` | 44.36 | **40.98** | net advances 76,400,000 (74,400,000 + 2,000,000) / 186,450,000 |
+| `ltgdv_developer_pct` | 35.87 | **33.17** | 82,932,858 / 250,000,000 |
+| `funding_gap_pence` | 0 | **6,300,000** | 69,300,000 / 11, above |
+| `redemption_balance_at_disposal_pence` | 16,436,714 | **9,486,865** | month 19 pre-sweep balance |
+| `redemption_schedule_balances_pence` | [89,678,313, 16,436,714] | **[82,932,858, 9,486,865]** | the two disposal months' pre-sweep balances |
+
+`uses_construction_pence`, every programme array, `equity_contributed_pence`
+(105,750,000), `peak_debt_month` (16), `redemption_schedule_months` ([16, 19])
+and both `cost_to_complete_*` figures are **unchanged**.
+
+#### Consequences recorded here, not discovered later
+
+1. **`report_safe` is now false on both fixtures.** A funding gap makes
+   `funding_complete` false, and `funding_complete` is a term of `report_safe`
+   (validation.ts / validation.py). Fixture S's memo tests are updated to say
+   so; the one that used `report_safe === true` to prove "a slip inside a
+   phase's own float changes nothing" now asserts the programme state and the
+   absence of input errors directly, and the overrun test that inferred its
+   failure from `report_safe` now asserts the overrun issue itself.
+2. **The corpus's profit-identity check now skips Q and S.**
+   `test_profit_equals_equity_flows_and_sources_equal_uses_when_fully_realised`
+   (and its `invariants.test.ts` twin) gate on `funding_gap_pence == 0`, so both
+   fixtures fall out of that matrix. `sources_equal_uses` itself is unaffected —
+   `funding_gap_pence` appears explicitly on the sources side of §7 — and is
+   still asserted for both fixtures through the corpus's reconciliation checks.
+3. **§5.10 counts undrawn facility gross of the §4.2(b) cap.** Both fixtures now
+   show a real funding gap with no cost-to-complete shortfall. That is a stated
+   limitation of §5.10, not a defect introduced here, and it is what makes Q and
+   S the corpus's standing examples of the allowed direction.

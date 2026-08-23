@@ -46,6 +46,9 @@ class FacilityTerms(Model):
     day_one_advance_pence: int | None = Field(default=None, ge=0)
     day_one_market_value_pence: int | None = Field(default=None, ge=0)
     # Caps monthly development draws at this % of that month's eligible dev costs.
+    # R14 spec Sec 4.2(b): "eligible" is construction * the cost plan's
+    # lender_eligible_ratio, plus professional and statutory in full -- VAT is
+    # deliberately excluded (Sec 17.6).
     development_cost_advance_pct: float = Field(ge=0, le=100)
     committed_net_facility_pence: int | None = Field(default=None, ge=0)
     # None -> derived as net + interest_reserve.
@@ -693,7 +696,12 @@ class CostPackage(Model):
     # mode has no packages, so every class there takes the whole base build
     # regardless of tag -- see compute_cost_plan's contingency resolution.
     contingency_class: ContingencyClassName = "general"
-    # R10 records this; the ledger's draw cap does NOT read it. R14 wires it.
+    # R10 records this; R14 (calc 2.13.0) wires it: the ledger's Sec 4.2(b) cap
+    # base scales the construction line by the cost plan's
+    # `lender_eligible_ratio`. Clearing this flag on a package therefore shrinks
+    # every later month's advance cap and widens the funding gap. Live in
+    # detailed mode only -- headline mode has no packages, and its ratio is
+    # pinned to 1. Mirrors CostPackage.lender_eligible in cost-plan.ts.
     lender_eligible: bool = True
     notes: str = ""
     # R11 spec Sec 17.1. Detailed mode only -- hard-rejected in headline mode

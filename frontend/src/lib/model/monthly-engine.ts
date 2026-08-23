@@ -168,7 +168,12 @@ export function runLedger(
         // Adding u.vat_pence here raises the cap and silently funds the VAT from the
         // facility — monthly-engine.test.ts's "funds the build but never advances
         // against the VAT" is the guard, and it has been watched failing.
-        const eligible = u.construction_pence + u.professional_pence + u.statutory_pence;
+        //
+        // R14 spec §4.2(b): only lender-eligible construction cost is advanceable.
+        // The ratio is the cost plan's eligible share of base build (1 in headline
+        // mode); contingency and compliance follow it proportionally (§16.9).
+        const eligible = Math.round(u.construction_pence * schedule.lender_eligible_ratio)
+          + u.professional_pence + u.statutory_pence;
         const advanceCap = Math.round((eligible * finance.development_cost_advance_pct) / 100);
         const undrawnNet = Math.max(0, netFacility - cumNetUsed);
         const headroomCap = grossHeadroomCap(grossFacility, monthlyRate, rolledUp, opening, capFees);

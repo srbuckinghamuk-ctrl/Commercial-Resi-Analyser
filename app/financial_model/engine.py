@@ -346,7 +346,15 @@ def run_ledger(
                 # visible vat_funding_gap. Adding u.vat_pence here raises the cap and
                 # silently funds the VAT from the facility -- "funds the build but never
                 # advances against the VAT" is the guard, and it has been watched failing.
-                eligible = u.construction_pence + u.professional_pence + u.statutory_pence
+                #
+                # R14 spec Sec 4.2(b): only lender-eligible construction cost is
+                # advanceable. The ratio is the cost plan's eligible share of base
+                # build (1 in headline mode); contingency and compliance follow it
+                # proportionally (Sec 16.9).
+                eligible = (
+                    money_round(u.construction_pence * schedule.lender_eligible_ratio)
+                    + u.professional_pence + u.statutory_pence
+                )
                 advance_cap = money_round((eligible * finance.development_cost_advance_pct) / 100)
                 undrawn_net = max(0, net_facility - cum_net_used)
                 headroom_cap = _gross_headroom_cap(

@@ -66,6 +66,9 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     programme: null,
     investment_case: null,
     resolved_exit_months: { tranches: [], refinance: null },
+    // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
+    // hand-built schedules keep the pre-R14 cap base exactly.
+    lender_eligible_ratio: 1,
   };
 }
 

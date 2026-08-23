@@ -39,9 +39,12 @@ export interface CostPackage {
    *  mode has no packages, so every class there takes the whole base build
    *  regardless of tag -- see computeCostPlan's contingency resolution. */
   contingency_class: ContingencyClassName;
-  /** R10 records this and computes `lender_eligible_base_pence` from it, but the
-   *  ledger's draw cap does NOT read it. Wiring it to
-   *  `development_cost_advance_pct` is R14. Do not assume this figure is live. */
+  /** R10 records this; R14 (calc 2.13.0) WIRES it. The ledger's §4.2(b)
+   *  development-cost advance cap scales its construction line by the cost
+   *  plan's `lender_eligible_ratio` — the eligible share of base build — so
+   *  clearing this flag on a package shrinks every later month's advance cap
+   *  and widens the funding gap. Live in detailed mode only: headline mode has
+   *  no packages, and its ratio is pinned to 1. */
   lender_eligible: boolean;
   notes: string;
   /** R11 spec 17.1. Detailed mode only -- hard-rejected in headline mode
@@ -242,6 +245,15 @@ export interface CostPlanResult {
    *  three already-computed totals itself. Purely additive — moves no other figure. */
   conversion_total_pence: number;
   lender_eligible_base_pence: number;
+  /** R14 spec §5 (§4.2(b) amended). `lender_eligible_base_pence / base_build_pence`
+   *  as an UNROUNDED float, and 1 in headline mode or when `base_build_pence` is 0
+   *  — headline mode has no packages to flag, so its eligible base is 0 against a
+   *  non-zero base build, and the raw quotient would silently zero the ledger's
+   *  whole construction cap base. Reported here so a reader can SEE the cap base
+   *  rather than infer it; republished on `Schedule` so the ledger reads one
+   *  figure and never re-derives it. The one rounding is on the product
+   *  (`construction_pence × ratio`), in the ledger. */
+  lender_eligible_ratio: number;
   /** Display only; enters no calculation. null when the area is 0. */
   implied_rate_pence_per_sqm: number | null;
 }
@@ -288,6 +300,12 @@ export function computeCostPlan(
   const baseBuild = detailed
     ? packages.reduce((s, p) => s + p.amount_pence, 0)
     : Math.round(cc.construction_cost_per_sqm_pence * areaSqm);
+
+  // R14 spec §5. Summed ONCE: both `lender_eligible_base_pence` and the ratio
+  // the ledger's §4.2(b) cap base reads are this figure.
+  const lenderEligibleBase = packages.reduce(
+    (s, p) => s + (p.lender_eligible ? p.amount_pence : 0), 0,
+  );
 
   // §3.2.1: in detailed mode compliance is priced inside the packages
   // (`fire_acoustic_thermal`). Counting the fields too would double count.
@@ -353,9 +371,9 @@ export function computeCostPlan(
     professional_total_pence: professionalTotal,
     statutory_total_pence: statutoryTotal,
     conversion_total_pence: constructionTotal + professionalTotal + statutoryTotal,
-    lender_eligible_base_pence: packages.reduce(
-      (s, p) => s + (p.lender_eligible ? p.amount_pence : 0), 0,
-    ),
+    lender_eligible_base_pence: lenderEligibleBase,
+    // R14 spec §5. Unrounded — the ONE rounding is on the product, in the ledger.
+    lender_eligible_ratio: !detailed || baseBuild === 0 ? 1 : lenderEligibleBase / baseBuild,
     implied_rate_pence_per_sqm: areaSqm > 0 ? Math.round(baseBuild / areaSqm) : null,
   };
 }
