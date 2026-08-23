@@ -1088,9 +1088,22 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             )
         if not isinstance(rf.month_offset, int) or rf.month_offset < 0 or rf.month_offset > term - 1:
             err("refinance", f"Refinance month must be a whole month between 0 and {term - 1}.")
-        if not math.isfinite(rf.investment_value_pence) or rf.investment_value_pence < 0:
+        # R13 spec Sec 19.1/Sec 19.7 rule 5: null is the VALID state once a
+        # non-null `investment_case` supersedes this pair -- guarding on
+        # not-None here keeps this single-field check from crashing on that
+        # legitimate v10 shape (mirrors validation.ts's `!= null` guard,
+        # already shipped there; this Python side was missing it, a gap this
+        # task's v10 fixtures exposed by being the first documents to pair a
+        # non-null investment_case with a null refinance pair). Task 7 adds
+        # the real cross-field rule; this is only the minimal narrowing the
+        # v10 type change requires, exactly as the TS comment states.
+        if rf.investment_value_pence is not None and (
+            not math.isfinite(rf.investment_value_pence) or rf.investment_value_pence < 0
+        ):
             err("refinance", "Refinance investment value must be zero or more.")
-        if not math.isfinite(rf.ltv_pct) or rf.ltv_pct <= 0 or rf.ltv_pct > 100:
+        if rf.ltv_pct is not None and (
+            not math.isfinite(rf.ltv_pct) or rf.ltv_pct <= 0 or rf.ltv_pct > 100
+        ):
             err("refinance", "Refinance LTV must be greater than 0 and at most 100.")
         if not math.isfinite(rf.arrangement_fee_pence) or rf.arrangement_fee_pence < 0:
             err("refinance", "Refinance arrangement fee must be zero or more.")

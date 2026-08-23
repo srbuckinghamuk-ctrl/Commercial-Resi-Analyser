@@ -981,6 +981,25 @@ describe('v10 migration -- spec §19.9', () => {
     // corpus holds 15 files; one (fixture K) is not an inputs document, so 14
     // is the correct bound for this task.
     expect(fixtures.length).toBeGreaterThanOrEqual(14);
+    // Task 5b: the v10-native exclusion is now real -- t-investment-case.json
+    // and u-investment-case-ltv-binds.json are both `inputs_version: 10`, so
+    // the `<= 9` arm of `fixtures`'s filter excludes them.
+    //
+    // Pinned figure does not reconcile, flagged rather than silently matched:
+    // Task 5b's own brief asks for `fixtureDocs.length - fixtures.length ===
+    // 2`. That does not hold -- `fixtureDocs` also contains fixture K, which
+    // is excluded from `fixtures` for an UNRELATED reason (`kind ===
+    // 'sensitivity'`, no `inputs` document at all), so the difference is 3
+    // today (K, plus the two v10-native fixtures), not 2. This isolates the
+    // v10-native exclusion specifically, matching test_migrate_v10.py's
+    // Python twin.
+    const versionExcluded = fixtureDocs.filter(
+      ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
+    );
+    expect(versionExcluded.length).toBe(2);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      't-investment-case.json', 'u-investment-case-ltv-binds.json',
+    ]);
   });
 
   for (const { file, doc } of fixtures) {

@@ -100,8 +100,35 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     at all, and catching Task 5b's two v10-native fixtures once they land).
     The corpus holds 15 files today; one (fixture K) is not an inputs
     document. 14 is the correct bound for this task -- see Task 5's report.
+
+    Task 5b: the v10-native exclusion is now real -- t-investment-case.json
+    and u-investment-case-ltv-binds.json are both `inputs_version: 10`, so
+    the `<= 9` arm of the filter above excludes them and FIXTURES stays at
+    14 rather than growing to 16.
+
+    Pinned figure does not reconcile, flagged rather than silently matched
+    (the standing instruction for this release): Task 5b's own brief asks
+    for `assert len(ALL_FIXTURES) - len(FIXTURES) == 2`. That does not hold
+    -- `ALL_FIXTURES` also contains fixture K, which the filter above
+    excludes for an UNRELATED reason (`kind == "sensitivity"`, no `inputs`
+    document at all), so `len(ALL_FIXTURES) - len(FIXTURES)` is 3 today (K,
+    plus the two v10-native fixtures), not 2. The assertion below isolates
+    the v10-native exclusion specifically -- the thing Task 5b's guard is
+    actually meant to pin -- rather than the brief's literal expression.
     """
     assert len(FIXTURES) >= 14
+    version_excluded = [
+        p for p in ALL_FIXTURES
+        if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
+        and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 9
+    ]
+    assert len(version_excluded) == 2, (
+        "the v10-native fixture count changed -- confirm the new fixture is meant "
+        "to be outside the migration gate, then update this bound deliberately"
+    )
+    assert sorted(p.stem for p in version_excluded) == [
+        "t-investment-case", "u-investment-case-ltv-binds",
+    ]
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)

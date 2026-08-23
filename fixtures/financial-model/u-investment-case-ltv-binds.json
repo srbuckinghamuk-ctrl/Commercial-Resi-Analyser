@@ -1,0 +1,191 @@
+{
+  "name": "U — retain-all with an investment case, LTV binds",
+  "kind": "pipeline",
+  "note": "R13 spec §19. The LTV-binding twin of t-investment-case.json: IDENTICAL scheme (same units, same rent roll, same operating lines, same programme, same take-out floors/rate/term), with only two numbers changed — cap_yield_pct 5.5 → 7.5 and takeout.ltv_cap_pct 65 → 55 — so the LTV cap falls below both coverage caps and the binding constraint flips from 'dscr' to 'ltv'. Task 11 asserts a flag fires on t- and NOT on u- (or vice versa); if both fixtures happened to bind the same way that assertion would pass for the wrong reason, which is the whole reason this fixture exists as a document distinct from its twin rather than as an override inside a single shared fixture.\n\nHAND-DERIVATION. Gross rent, occupancy and operating lines are UNCHANGED from t-investment-case.json, so stabilised NOI is identical:\n  EGR = round(295,000 × 96%) = 283,200\n  opex = round(283,200 × 10%) + round(283,200 × 2%) + 25,000 + 8,000 = 28,320 + 5,664 + 25,000 + 8,000 = 66,984\n  stabilised monthly NOI = 283,200 − 66,984 = 216,216\n  stabilised annual NOI = 12 × 216,216 = 2,594,592 pence (identical to t-investment-case.json — NOI depends on rent, occupancy and opex, none of which changed)\n\n  investment value at the WIDER 7.5% yield = round(2,594,592 × 100 / 7.5 / 1.0675)\n                    = round(259,459,200 / 7.5 / 1.0675) = round(34,594,560 / 1.0675)\n                    = round(32,407,081.97) = 32,407,082 pence (lower than t-'s 44,191,475, as a wider yield must give)\n\n  DSCR cap and ICR cap are UNCHANGED from t-investment-case.json — both are functions of NOI and the takeout's own rate/floor terms alone, and neither the NOI nor those terms moved:\n  DSCR cap = floor(2,594,592 / (1.3 × 0.0773161682)) = 25,814,005\n  ICR cap  = floor(2,594,592 / (1.3 × 0.06))          = 33,264,000\n\n  LTV cap at the NARROWER 55% cap, on the lower value = floor(32,407,082 × 55 / 100)\n                    = floor(17,823,895.10) = 17,823,895\n\n  min(17,823,895 ; 25,814,005 ; 33,264,000) = 17,823,895 = LTV cap → BINDING CONSTRAINT = 'ltv'.\n\nSee t-investment-case.json's own note for the shared programme derivation (twelve-phase network, practical_completion starting month 15, stabilisation anchored to practical_completion + 1 = month 16, ramp_months 3), the cost stack, and the same caveat about Task 3's cross-engine pinned triple using a different (two-line) operating schedule than this fixture's four.\n\nWHAT THIS FIXTURE DOES NOT COVER: as with its twin, the investment_case RESULT block does not exist until Tasks 8/11 land, so expected_metrics pins only gdv_pence and the cost_plan headline figures today; the investment-case pins (annual_noi_pence, investment_value_pence, binding_constraint = 'ltv') are deferred to Task 8 or 11.",
+  "inputs": {
+    "inputs_version": 10,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 60000000,
+      "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000,
+      "broker_fee_pct": 1.0,
+      "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-08-01",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0,
+      "demolished_gia_sqm": 0,
+      "extension_gia_sqm": 0,
+      "retained_commercial_gia_sqm": 0,
+      "untouched_gia_sqm": 0,
+      "circulation_common_sqm": 0,
+      "plant_riser_sqm": 0,
+      "store_bin_cycle_sqm": 0,
+      "amenity_sqm": 0,
+      "external_amenity_sqm": 0
+    },
+    "unit_mix": {
+      "units": [
+        { "id": "u1", "type": "1bed", "floor_area_sqm": 70, "estimated_value_pence": 25000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u2", "type": "1bed", "floor_area_sqm": 70, "estimated_value_pence": 25000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u3", "type": "1bed", "floor_area_sqm": 70, "estimated_value_pence": 25000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u4", "type": "1bed", "floor_area_sqm": 70, "estimated_value_pence": 25000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } },
+        { "id": "u5", "type": "1bed", "floor_area_sqm": 70, "estimated_value_pence": 25000000, "comparable_notes": "",
+          "ancillary": { "balcony_terrace_sqm": 0, "balcony_terrace_value_pence": 0, "parking_spaces": 0, "parking_value_pence": 0 } }
+      ]
+    },
+    "conversion_costs": {
+      "prior_approval_fee_per_dwelling_pence": 0, "cil_s106_pence": 0,
+      "architect_pence": 0, "structural_engineer_pence": 0, "mande_pence": 0,
+      "planning_consultant_pence": 0, "building_control_pence": 0,
+      "other_professional_fees_pence": 0, "construction_cost_per_sqm_pence": 100000,
+      "total_construction_sqm": 350, "contingency_pct": 0,
+      "fire_safety_pence": 0, "sound_insulation_pence": 0, "part_l_compliance_pence": 0
+    },
+    "cost_plan": {
+      "mode": "headline",
+      "packages": [],
+      "contingency": [
+        { "name": "general", "pct": 10 },
+        { "name": "existing_building", "pct": 0 },
+        { "name": "abnormal", "pct": 0 }
+      ],
+      "fee_lines": []
+    },
+    "programme": {
+      "anchor_month": "2026-08",
+      "phases": [
+        { "id": "acquisition", "code": "acquisition", "label": "Acquisition", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [] },
+        { "id": "planning", "code": "planning", "label": "Planning", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "acquisition", "type": "FS", "lag_months": 0 }] },
+        { "id": "conditions", "code": "conditions", "label": "Discharge of conditions", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "planning", "type": "FS", "lag_months": 0 }] },
+        { "id": "design", "code": "design", "label": "Technical design", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "conditions", "type": "FS", "lag_months": 0 }] },
+        { "id": "procurement", "code": "procurement", "label": "Procurement", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "design", "type": "FS", "lag_months": 0 }] },
+        { "id": "strip_out", "code": "strip_out", "label": "Enabling works and strip-out", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "procurement", "type": "FS", "lag_months": 0 }] },
+        { "id": "construction", "code": "construction", "label": "Main construction", "duration_months": 6, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "strip_out", "type": "FS", "lag_months": 0 }] },
+        { "id": "building_control", "code": "building_control", "label": "Building control sign-off", "duration_months": 1, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "construction", "type": "FS", "lag_months": 0 }] },
+        { "id": "practical_completion", "code": "practical_completion", "label": "Practical completion", "duration_months": 0, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "building_control", "type": "FS", "lag_months": 0 }] },
+        { "id": "unit_completions", "code": "unit_completions", "label": "Unit completions", "duration_months": 2, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "practical_completion", "type": "FS", "lag_months": 0 }] },
+        { "id": "sales", "code": "sales", "label": "Letting-up", "duration_months": 3, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "unit_completions", "type": "FS", "lag_months": 0 }] },
+        { "id": "maturity_tail", "code": "maturity_tail", "label": "Maturity", "duration_months": 0, "slip_months": 0, "start_offset": 0, "curve": { "kind": "straight_line" }, "predecessors": [{ "phase_id": "sales", "type": "FS", "lag_months": 0 }] }
+      ],
+      "category_phase_ids": {
+        "construction": "construction",
+        "professional": "design",
+        "statutory": "conditions"
+      }
+    },
+    "vat": {
+      "registered": false,
+      "return_frequency": "quarterly",
+      "first_period_end_month": 2,
+      "repayment_lag_months": 1,
+      "treatments": [
+        { "category": "acquisition", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "construction", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "professional", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "statutory", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "selling", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" },
+        { "category": "lender_ancillary", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": "" }
+      ],
+      "purchase": {
+        "vendor_opted_to_tax": false,
+        "togc_treatment": "unconfirmed",
+        "evidence_status": "unconfirmed",
+        "notes": ""
+      }
+    },
+    "finance": {
+      "funding_source": "cash", "day_one_advance_pence": null,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100, "committed_net_facility_pence": 0,
+      "committed_gross_facility_pence": 0, "annual_interest_rate_pct": 8.0,
+      "interest_type": "rolled_up", "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null, "term_months": 24, "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [{
+      "id": "e1", "classification": "cash", "amount_pence": 130000000, "timing_month": 0,
+      "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""
+    }],
+    "exit_strategy": {
+      "route": "retain_all", "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 500000,
+      "retained_units": [
+        { "unit_id": "u1", "monthly_rent_pence": 59000 },
+        { "unit_id": "u2", "monthly_rent_pence": 59000 },
+        { "unit_id": "u3", "monthly_rent_pence": 59000 },
+        { "unit_id": "u4", "monthly_rent_pence": 59000 },
+        { "unit_id": "u5", "monthly_rent_pence": 59000 }
+      ]
+    },
+    "sales_phasing": null,
+    "refinance": {
+      "month_offset": 20,
+      "investment_value_pence": null,
+      "ltv_pct": null,
+      "arrangement_fee_pence": 0,
+      "legal_costs_pence": 450000,
+      "anchor": null,
+      "arrangement_fee_basis": "pct_of_quantum",
+      "arrangement_fee_pct": 1.5
+    },
+    "investment_case": {
+      "stabilisation": {
+        "anchor": { "phase_id": "practical_completion", "offset_months": 1 },
+        "month_offset": 16,
+        "ramp_months": 3,
+        "stabilised_occupancy_pct": 96
+      },
+      "operating_lines": [
+        { "id": "l1", "code": "management", "label": "Management fee", "basis": "pct_of_gross_rent", "value": 10 },
+        { "id": "l2", "code": "letting_and_re_letting", "label": "Letting and re-letting", "basis": "pct_of_gross_rent", "value": 2 },
+        { "id": "l3", "code": "insurance", "label": "Buildings insurance", "basis": "fixed_pence_per_month", "value": 25000 },
+        { "id": "l4", "code": "compliance_and_safety", "label": "Compliance and safety", "basis": "fixed_pence_per_month", "value": 8000 }
+      ],
+      "valuation": { "cap_yield_pct": 7.5, "purchasers_costs_pct": 6.75 },
+      "takeout": { "ltv_cap_pct": 55, "dscr_floor": 1.3, "icr_floor": 1.3, "annual_rate_pct": 6, "amortisation_years": 25, "term_years": 5 }
+    },
+    "risks": [],
+    "scenarios": {
+      "base": { "label": "Base Case", "gdv_adjustment_pct": 0, "construction_cost_adjustment_pct": 0, "timeline_adjustment_months": 0, "interest_rate_adjustment_pct": 0, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "upside": { "label": "Upside", "gdv_adjustment_pct": 10, "construction_cost_adjustment_pct": -5, "timeline_adjustment_months": -2, "interest_rate_adjustment_pct": 0, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "downside": { "label": "Downside", "gdv_adjustment_pct": -10, "construction_cost_adjustment_pct": 15, "timeline_adjustment_months": 3, "interest_rate_adjustment_pct": 1, "phase_slip_phase_id": null, "phase_slip_months": 0 },
+      "severe": { "label": "Severe", "gdv_adjustment_pct": -15, "construction_cost_adjustment_pct": 20, "timeline_adjustment_months": 6, "interest_rate_adjustment_pct": 2, "phase_slip_phase_id": null, "phase_slip_months": 0 }
+    },
+    "deal_spider": {
+      "storeys": 2, "building_height_m": 8, "bsa_higher_risk": false, "daylight_pass_pct": 100,
+      "absorption_months": 6, "exit_sell": false, "exit_refinance": true, "exit_hold": true,
+      "exit_part_sale": false, "prior_approval_window_months": 2, "programme_contingency_months": 1,
+      "cil_offset_pence": 0, "target_profit_on_cost_pct": 20, "weights": {}
+    },
+    "lender_valuation": null
+  },
+  "expected_metrics": {
+    "gdv_pence": 125000000,
+    "cost_plan.mode": "headline",
+    "cost_plan.base_build_pence": 35000000,
+    "cost_plan.contingency_total_pence": 3500000,
+    "cost_plan.compliance_pence": 0,
+    "cost_plan.construction_total_pence": 38500000,
+    "cost_plan.professional_total_pence": 0,
+    "cost_plan.statutory_total_pence": 0,
+    "cost_plan.conversion_total_pence": 38500000,
+    "cost_plan.lender_eligible_base_pence": 0,
+    "cost_plan.implied_rate_pence_per_sqm": 100000
+  }
+}

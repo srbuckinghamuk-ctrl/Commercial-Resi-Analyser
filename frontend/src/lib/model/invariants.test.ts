@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import { migrateInputsToV8, migrateInputsToV9 } from './migrate';
+import { migrateInputsToV8, migrateInputsToV9, migrateInputsToV10 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
@@ -103,7 +103,33 @@ function variants(
   // than the legacy three-package block.
   const storedVersion = (inputs as unknown as { inputs_version?: number }).inputs_version ?? 2;
   let programmed: AnyCalculatorInputs;
-  if (storedVersion >= 9) {
+  // R13 Task 5b: a v10-born fixture (T, U) cannot go through migrateInputsToV9
+  // either, by the identical design one version further on (migrateInputsToV9
+  // refuses a v10 document -- it would have to drop `refinance`'s v10
+  // narrowing and `investment_case`).
+  if (storedVersion >= 10) {
+    const v10 = migrateInputsToV10(clone() as unknown as Record<string, unknown>);
+    v10.programme = networkForTerm(v10.finance.term_months);
+    if (v10.sales_phasing != null) {
+      v10.sales_phasing.tranches = v10.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v10.refinance != null) v10.refinance = { ...v10.refinance, anchor: null };
+    // R13 Task 5b: the identical orphaning applies to a v10 document's
+    // investment-case stabilisation anchor (spec §19.6) -- it is anchored to
+    // `practical_completion`, a phase `networkForTerm`'s three-phase network
+    // does not carry. `computeInvestmentCase` (Task 8) does not exist yet to
+    // read it, so nothing observably breaks today either way; cleared anyway
+    // to match the sales_phasing/refinance treatment above, rather than
+    // leaving a dangling anchor for Task 6's validation rule 6 to trip over
+    // once it lands.
+    if (v10.investment_case != null) {
+      v10.investment_case = {
+        ...v10.investment_case,
+        stabilisation: { ...v10.investment_case.stabilisation, anchor: null },
+      };
+    }
+    programmed = v10;
+  } else if (storedVersion >= 9) {
     const v9 = migrateInputsToV9(clone() as unknown as Record<string, unknown>);
     v9.programme = networkForTerm(v9.finance.term_months);
     // Replacing the network orphans any §18.6 anchor that named one of the

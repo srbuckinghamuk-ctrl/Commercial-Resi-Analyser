@@ -536,8 +536,21 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             month=min(max(0, math.floor(resolve_anchor_month(
                 getattr(refinance_input, "anchor", None), refinance_input.month_offset,
             ))), term - 1),
+            # R13 spec Sec 19.1: investment_value_pence/ltv_pct narrow to
+            # nullable on a v10 document (null when a non-null
+            # investment_case supersedes them, Sec 19.7 rule 5). This task
+            # does not compute that case, so `or 0` is the inert fallback for
+            # the explicit-pair path only (mirrors schedule.ts's `?? 0`,
+            # already shipped there) -- Task 8 replaces this whole expression
+            # with the sized-quantum branch once compute_investment_case is
+            # wired in here. This Python side was missing the fallback, a gap
+            # this task's v10 fixtures exposed by being the first documents
+            # to pair a non-null investment_case with a null refinance pair.
             net_proceeds_pence=(
-                money_round((refinance_input.investment_value_pence * refinance_input.ltv_pct) / 100)
+                money_round(
+                    ((refinance_input.investment_value_pence or 0)
+                     * (refinance_input.ltv_pct or 0)) / 100,
+                )
                 - refinance_input.arrangement_fee_pence - refinance_input.legal_costs_pence
             ),
         )

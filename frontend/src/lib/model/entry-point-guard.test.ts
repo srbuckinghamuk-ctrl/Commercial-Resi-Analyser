@@ -38,10 +38,25 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
 /** The migration module defines the versions; it is exempt from its own rule,
  *  as is the barrel that re-exports them for the tests and gates that call the
  *  older entry points deliberately (the migration identity gates use the v8
- *  entry point as the "before" side of a before/after comparison). */
+ *  entry point as the "before" side of a before/after comparison).
+ *
+ *  R13 Task 5b: `lib/model/__fixtures__/investment-case-docs.ts` is also
+ *  exempt -- not because it calls an old version (it always calls the
+ *  NEWEST one, `migrateInputsToV10`, correctly), but because it is not a
+ *  PRODUCTION entry point at all. This guard's own stated purpose is "if a
+ *  production entry point keeps calling the old migration, no user ever
+ *  holds a [new] document" -- a `__fixtures__` file is imported only by
+ *  `.test.ts` files (mirroring Jest/Vitest's own `__mocks__`/`__snapshots__`
+ *  convention for test-only code) and reaches no user at all. Without this
+ *  exemption the file would still pass the "calls only the newest version"
+ *  test below (it does) but would fail the file-enumeration test's exact
+ *  pinned list, for a reason that has nothing to do with a stale call site --
+ *  exactly the kind of false positive this guard must not produce, or a real
+ *  offender risks being lost in the noise. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
+  'lib/model/__fixtures__/investment-case-docs.ts',
 ]);
 
 const MIGRATE_SOURCE = readFileSync(resolve(FRONTEND_SRC, 'lib/model/migrate.ts'), 'utf-8');
