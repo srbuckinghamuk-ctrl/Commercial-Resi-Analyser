@@ -18,8 +18,10 @@ import type {
   CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6, CalculatorInputsV7,
   CalculatorInputsV8, AcquisitionInputsV5,
 } from '../model';
-import { migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV10 } from '../model';
-import type { CalculatorInputsV10 } from '../model/finance-types';
+import {
+  migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV10, migrateInputsToV11,
+} from '../model';
+import type { CalculatorInputsV10, CalculatorInputsV11 } from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -520,4 +522,27 @@ export function investmentCaseInputs(): CalculatorInputsV10 {
     readFileSync(resolve(FIXTURE_DIR, 't-investment-case.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
   return migrateInputsToV10(raw.inputs);
+}
+
+/**
+ * R14 (Task 12, spec §9/§20.4). The release's golden monitoring case: a v11
+ * document (the first v11-native fixture — inputs_version 11 already, so
+ * `migrateInputsToV11` takes the merge branch and preserves the `monitoring`
+ * block untouched, per that function's own `saved.monitoring ?? null` line)
+ * with a non-null `monitoring` block set at reporting month 6. Every OTHER
+ * fixture this file exports carries `monitoring: null` (pre-v11 documents
+ * migrate to it, and no other v11 fixture exists here), which is exactly what
+ * lets `memo-release-gate.test.ts`'s ROUTES sweep assert the memo's new
+ * "Monitoring cost-to-complete" section is absent everywhere except the
+ * document built from this function.
+ *
+ * NOT added to `ROUTES`: that array is the negative-control corpus the
+ * absence assertion walks, and this is the one fixture the assertion must
+ * NOT hold for.
+ */
+export function monitoringOnSiteInputs(): CalculatorInputsV11 {
+  const raw = JSON.parse(
+    readFileSync(resolve(FIXTURE_DIR, 'w-monitoring-on-site.json'), 'utf-8'),
+  ) as { inputs: Record<string, unknown> };
+  return migrateInputsToV11(raw.inputs);
 }

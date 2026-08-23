@@ -5,11 +5,11 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV8, CalculatorInputsV9, AreaBridgeInputs,
+  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, AreaBridgeInputs, MonitoringStatement,
 } from './model';
 import {
   runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
-  migrateV6toV7, migrateV7toV8, DEFAULT_VAT, defaultVatTreatments,
+  migrateV6toV7, migrateV7toV8, DEFAULT_VAT, defaultVatTreatments, migrateInputsToV11,
 } from './model';
 import { validateInputs } from './model/validation';
 import { buildProvenance } from './report-provenance';
@@ -471,6 +471,95 @@ describe('generateInvestmentMemo', () => {
       expect(text).toContain('not available');
       expect(text).toContain('no lender valuation recorded');
       expect(text).not.toContain('Release 2)');
+    });
+  });
+
+  // R14 (Task 12, spec §9/§20.4/§13.4). The "Monitoring cost-to-complete"
+  // section, printed only when `metrics.monitoring_statement != null`, reads
+  // `metrics.monitoring_statement` and `inputs.monitoring` only — never
+  // recomputes a column (file header's no-recalculation rule, and the R13
+  // investment-case section's own tamper test, mirrored below).
+  describe('R14 monitoring cost-to-complete section (spec §9/§13.4)', () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureW = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'w-monitoring-on-site.json'), 'utf-8'),
+    ) as { inputs: Record<string, unknown> };
+
+    function monitoringInputs(): CalculatorInputsV11 {
+      return migrateInputsToV11(fixtureW.inputs);
+    }
+
+    function fmt(pence: number): string {
+      return (pence / 100).toLocaleString('en-GB', {
+        style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+      });
+    }
+
+    it('omits the section entirely when no monitoring statement is present', async () => {
+      const fixtureG = JSON.parse(
+        readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
+      ) as { inputs: CalculatorInputsV3 };
+      const run = runAppraisal(fixtureG.inputs);
+      expect(run.metrics.monitoring_statement).toBeNull(); // fixture sanity check
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const info = await inspectPdf(blob);
+      expect(documentText(info)).not.toContain('Monitoring cost-to-complete');
+    });
+
+    it('prints the section, its figures, the provenance line and the §13.4 sentence when a statement is present', async () => {
+      const inputs = monitoringInputs();
+      const run = runAppraisal(inputs);
+      const statement = run.metrics.monitoring_statement;
+      expect(statement).not.toBeNull(); // fixture sanity check
+      expect(statement!.reporting_month).toBe(6);
+      expect(statement!.reporting_date).toBe('2027-03-31');
+      expect(statement!.shortfall_pence).toBe(0); // fixture sanity check — no shortfall sentence expected
+
+      const blob = generateInvestmentMemo(mockProject, run, null);
+      const info = await inspectPdf(blob);
+      const text = documentText(info);
+      const prose = documentProse(info);
+
+      expect(text).toContain('Monitoring cost-to-complete');
+      expect(prose).toContain('month 6');
+      expect(prose).toContain('2027-03-31');
+      expect(prose).toContain(inputs.monitoring!.author); // "Monitoring surveyor"
+      expect(text).toContain(fmt(statement!.totals.estimated_final_cost_pence)); // £275,200
+      expect(prose).not.toContain('Shortfall'); // shortfall_pence is 0 on this fixture
+      // §13.4, exact text.
+      expect(prose).toContain(
+        'Interest and capitalised fees from the reporting month onward are the inception '
+        + 'forecast; certified and committed figures are as entered by the sponsor and have '
+        + 'not been verified by a monitoring surveyor.',
+      );
+    });
+
+    it('prints the shortfall sentence only when shortfall_pence is positive', async () => {
+      const run = runAppraisal(monitoringInputs());
+      const real = run.metrics.monitoring_statement!;
+      const shortfall: MonitoringStatement = { ...real, shortfall_pence: 500_000 };
+      const tamperedRun = { ...run, metrics: { ...run.metrics, monitoring_statement: shortfall } };
+      const blob = generateInvestmentMemo(mockProject, tamperedRun, null);
+      const prose = documentProse(await inspectPdf(blob));
+      expect(prose).toContain(fmt(500_000));
+      expect(prose.toLowerCase()).toContain('shortfall');
+    });
+
+    it('prints every figure verbatim off the statement, never recomputing it', async () => {
+      // The hard constraint (task brief / file header): no calculation in the
+      // report generator. A deliberately inconsistent, hand-tampered statement
+      // proves the printed figures are the ones the (wrong) statement carries.
+      const run = runAppraisal(monitoringInputs());
+      const real = run.metrics.monitoring_statement!;
+      const tampered: MonitoringStatement = {
+        ...real,
+        totals: { ...real.totals, estimated_final_cost_pence: 999_900_00 },
+      };
+      const tamperedRun = { ...run, metrics: { ...run.metrics, monitoring_statement: tampered } };
+      const blob = generateInvestmentMemo(mockProject, tamperedRun, null);
+      const text = documentText(await inspectPdf(blob));
+      expect(text).toContain(fmt(999_900_00));
+      expect(text).not.toContain(fmt(real.totals.estimated_final_cost_pence));
     });
   });
 
