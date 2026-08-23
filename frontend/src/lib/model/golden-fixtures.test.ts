@@ -191,6 +191,17 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   programme_phase_finish_months: (r) => r.schedule.programme?.phases.map((p) => p.finish_month) ?? null,
   programme_phase_total_float_months:
     (r) => r.schedule.programme?.phases.map((p) => p.total_float_months) ?? null,
+  // R14 spec §20.4, fixture W: the four monitoring-statement pins held back at Task 8
+  // (see the fixture's own `note`) because the golden harness resolves an unmapped
+  // key as a direct `metrics` attribute, and `monitoring_statement` was not wired
+  // into `metrics` until this task. `lender_eligible_ratio` is a flat convenience
+  // name for the same figure fixture W already pins through the dotted
+  // `cost_plan.lender_eligible_ratio` path (which needs no mapper).
+  monitoring_shortfall_pence: (r) => r.metrics.monitoring_statement?.shortfall_pence ?? null,
+  monitoring_estimated_final_cost_pence:
+    (r) => r.metrics.monitoring_statement?.totals.estimated_final_cost_pence ?? null,
+  monitoring_surplus_pence: (r) => r.metrics.monitoring_statement?.surplus_pence ?? null,
+  lender_eligible_ratio: (r) => r.metrics.cost_plan.lender_eligible_ratio,
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -781,12 +792,11 @@ describe('golden fixtures (shared with the Python engine)', () => {
       },
     },
     // R14 Task 8 (the same convention this block states): fixture W is the release's
-    // golden case for the §20.2 monitoring statement and the cross-engine
+    // golden case for the §20.4 monitoring statement and the cross-engine
     // penny-agreement carrier, so its pins get pin ± 1 controls too (see
-    // docs/financial-model/test-cases.md §20.2 for the worksheet they come from).
-    // W's four R14-specific pins are held back until Task 9 wires their FLAT_KEYS
-    // mappers -- when they land, they belong here as well. Mirrors
-    // tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS entry for W.
+    // docs/financial-model/test-cases.md §20.4 for the worksheet they come from).
+    // Task 9 wires the four monitoring FLAT_KEYS mappers and their controls below.
+    // Mirrors tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS entry for W.
     {
       namePrefix: 'W — monitoring statement on site',
       wrongValues: {
@@ -799,6 +809,13 @@ describe('golden fixtures (shared with the Python engine)', () => {
         // Task 9 adds. 11/12 is not representable, so the control is a neighbouring
         // double rather than "the pin + 1".
         'cost_plan.lender_eligible_ratio': 0.9166666666666667,
+        // Task 9's four monitoring-statement pins, pin ± 1 for the two pence
+        // figures and the neighbouring double for the ratio, matching the
+        // convention above exactly.
+        monitoring_shortfall_pence: 1,                          // truly 0
+        monitoring_estimated_final_cost_pence: 27520001,        // truly 27520000
+        monitoring_surplus_pence: 10101206,                     // truly 10101207
+        lender_eligible_ratio: 0.9166666666666667,              // truly 0.9166666666666666
       },
     },
   ];

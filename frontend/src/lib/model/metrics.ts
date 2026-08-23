@@ -15,6 +15,8 @@ import { computeCostToComplete } from './cost-to-complete';
 import { pct } from './pct';
 import { areaBridge } from './areas';
 import { computeCostPlan } from './cost-plan';
+import { computeMonitoringStatement } from './monitoring';
+import type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
 import { calculateGdvBreakdown } from '../conversion-calc-engine';
 import { chargeableConsiderationPence } from './vat';
 // §17.12's counterfactual runs the pipeline's first two stages a second time.
@@ -91,6 +93,74 @@ export function investmentCaseFlags(
     message: `the take-out is capped by ${ic.takeout.binding_constraint.toUpperCase()} `
       + 'coverage, not by value',
   });
+  return out;
+}
+
+/** R14 spec §20.3's flag table. Pure, like `investmentCaseFlags` above: takes the
+ *  already-computed `MonitoringStatement` (never recomputes it) plus the
+ *  `MonthlyModel` the redemption-month flag needs (the statement itself carries no
+ *  redemption month). `[]` when `statement` is null: no block, no flags, exactly as
+ *  the null path publishes no statement.
+ *
+ *  All three flags' `month` is the statement's own `reporting_month` — the brief
+ *  states this explicitly for `monitoring_shortfall` and leaves the other two
+ *  unstated, but every one of these observations is dated by the same statement, so
+ *  `reporting_month` is what a reader would want printed against all three. */
+export function monitoringFlags(
+  statement: MonitoringStatement | null, model: MonthlyModel,
+): ModelFlag[] {
+  if (statement == null) return [];
+  const out: ModelFlag[] = [];
+  const m = statement.reporting_month;
+
+  if (statement.shortfall_pence > 0) {
+    out.push({
+      code: 'monitoring_shortfall', severity: 'red', month: m,
+      amount_pence: statement.shortfall_pence,
+      message: `monitoring statement at month ${m}: remaining uses exceed remaining `
+        + `funding by ${statement.shortfall_pence}p`,
+    });
+  }
+
+  // §20.3: "any category's variance_vs_original exceeding 5% of a non-zero
+  // original" — integer arithmetic (`* 20 >`, never a float ratio), raised ONCE,
+  // naming the worst offender by absolute variance. Fixture W's construction line
+  // sits at EXACTLY 5% (300,000 / 6,000,000) and must NOT fire — `>` not `>=` is
+  // load-bearing; its contingency line (−100,000 / 600,000, 16.7%) does fire and is
+  // the one this picks, since construction never qualifies at all.
+  let worst: MonitoringStatementLine | null = null;
+  for (const line of statement.lines) {
+    if (
+      line.original_budget_pence > 0
+      && Math.abs(line.variance_vs_original_pence) * 20 > line.original_budget_pence
+      && (worst == null
+        || Math.abs(line.variance_vs_original_pence) > Math.abs(worst.variance_vs_original_pence))
+    ) {
+      worst = line;
+    }
+  }
+  if (worst != null) {
+    out.push({
+      code: 'monitoring_cost_variance', severity: 'amber', month: m,
+      amount_pence: worst.variance_vs_original_pence,
+      message: `${worst.category} estimated final cost varies from the original budget `
+        + 'by more than 5%',
+    });
+  }
+
+  // The largest ledger month with a repayment — skip when nothing ever repays (a
+  // retain-only schedule, or a cash deal with no facility to redeem).
+  const repayingMonths = model.months.filter((lm) => lm.repayment_pence > 0).map((lm) => lm.month);
+  if (repayingMonths.length > 0) {
+    const lastRepaymentMonth = Math.max(...repayingMonths);
+    if (m > lastRepaymentMonth) {
+      out.push({
+        code: 'monitoring_dated_after_redemption', severity: 'amber', month: m, amount_pence: null,
+        message: 'the monitoring statement is dated after the forecast redemption month',
+      });
+    }
+  }
+
   return out;
 }
 
@@ -420,6 +490,12 @@ export function deriveMetrics(
     ? inputs.investment_case.stabilisation.ramp_months : 0;
   flags.push(...investmentCaseFlags(schedule.investment_case, rampMonths, schedule.term_months));
 
+  // R14 spec §20.4. Computed ONCE, here, from `costPlan` already derived above and
+  // `model` — the UI and the memo never call `computeMonitoringStatement`
+  // themselves. null exactly when the input `monitoring` block is null.
+  const monitoringStatement = computeMonitoringStatement(schedule, model, inputs, costPlan);
+  flags.push(...monitoringFlags(monitoringStatement, model));
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -491,6 +567,7 @@ export function deriveMetrics(
     // §17.12's `vat` treatment, applied here: the SCHEDULE's investment case,
     // republished — not a second derivation.
     investment_case: schedule.investment_case,
+    monitoring_statement: monitoringStatement,
     flags,
   };
 }

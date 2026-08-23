@@ -20,6 +20,7 @@ from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, run_ledger
 from .investment_case import InvestmentCaseResult
 from .lender_valuation import compute_lender_gdv
+from .monitoring import MonitoringStatement, MonitoringStatementLine, compute_monitoring_statement
 # Sec 17.12's counterfactual runs the pipeline's first two stages a second time.
 # Imported HERE rather than reached through run_appraisal, which is what makes the
 # recursion impossible by construction: __init__.py imports this module, so there
@@ -228,6 +229,11 @@ class AppraisalResultV2:
     # the INPUT investment_case is None. The UI and the report read it from
     # here and never call compute_investment_case.
     investment_case: InvestmentCaseResult | None
+    # R14 spec Sec 20.4. Computed ONCE in derive_metrics, from the cost_plan it
+    # already holds and the model -- never recomputed by the UI or the memo.
+    # None exactly when the input monitoring block is None (every document
+    # before construction is under way, and every migrated document).
+    monitoring_statement: MonitoringStatement | None
     # Ledger flags (model.flags, unmutated) followed by metric flags computed by
     # derive_metrics itself (senior/developer breakeven unsolvable, cap-exhausted).
     # Wired in Release 3a Task 6 -- derive_metrics is pure and no longer mutates
@@ -311,6 +317,77 @@ def investment_case_flags(
             amount_pence=ic["takeout"]["quantum_pence"],
             message=f"the take-out is capped by {binding.upper()} coverage, not by value",
         ))
+    return out
+
+
+def monitoring_flags(
+    statement: MonitoringStatement | None, model: MonthlyModel,
+) -> list[ModelFlag]:
+    """R14 spec Sec 20.3's flag table. Mirrors monitoring_flags in metrics.ts. Pure,
+    like investment_case_flags above: takes the already-computed MonitoringStatement
+    (never recomputes it) plus the MonthlyModel the redemption-month flag needs (the
+    statement itself carries no redemption month). [] when statement is None: no
+    block, no flags, exactly as the null path publishes no statement.
+
+    All three flags' `month` is the statement's own reporting_month -- the brief
+    states this explicitly for monitoring_shortfall and leaves the other two
+    unstated, but every one of these observations is dated by the same statement,
+    so reporting_month is what a reader would want printed against all three.
+    """
+    if statement is None:
+        return []
+    out: list[ModelFlag] = []
+    m = statement.reporting_month
+
+    if statement.shortfall_pence > 0:
+        out.append(ModelFlag(
+            code="monitoring_shortfall", severity="red", month=m,
+            amount_pence=statement.shortfall_pence,
+            message=(
+                f"monitoring statement at month {m}: remaining uses exceed remaining "
+                f"funding by {statement.shortfall_pence}p"
+            ),
+        ))
+
+    # Sec 20.3: "any category's variance_vs_original exceeding 5% of a non-zero
+    # original" -- integer arithmetic (`* 20 >`, never a float ratio), raised ONCE,
+    # naming the worst offender by absolute variance. Fixture W's construction line
+    # sits at EXACTLY 5% (300,000 / 6,000,000) and must NOT fire -- `>` not `>=` is
+    # load-bearing; its contingency line (-100,000 / 600,000, 16.7%) does fire and
+    # is the one this picks, since construction never qualifies at all.
+    worst: MonitoringStatementLine | None = None
+    for line in statement.lines:
+        if (
+            line.original_budget_pence > 0
+            and abs(line.variance_vs_original_pence) * 20 > line.original_budget_pence
+            and (
+                worst is None
+                or abs(line.variance_vs_original_pence) > abs(worst.variance_vs_original_pence)
+            )
+        ):
+            worst = line
+    if worst is not None:
+        out.append(ModelFlag(
+            code="monitoring_cost_variance", severity="amber", month=m,
+            amount_pence=worst.variance_vs_original_pence,
+            message=(
+                f"{worst.category} estimated final cost varies from the original "
+                "budget by more than 5%"
+            ),
+        ))
+
+    # The largest ledger month with a repayment -- skip when nothing ever repays (a
+    # retain-only schedule, or a cash deal with no facility to redeem).
+    repaying_months = [lm.month for lm in model.months if lm.repayment_pence > 0]
+    if repaying_months:
+        last_repayment_month = max(repaying_months)
+        if m > last_repayment_month:
+            out.append(ModelFlag(
+                code="monitoring_dated_after_redemption", severity="amber", month=m,
+                amount_pence=None,
+                message="the monitoring statement is dated after the forecast redemption month",
+            ))
+
     return out
 
 
@@ -652,6 +729,13 @@ def derive_metrics(
     ramp_months = 0 if ic_inputs is None else ic_inputs.stabilisation.ramp_months
     flags.extend(investment_case_flags(schedule.investment_case, ramp_months, schedule.term_months))
 
+    # R14 spec Sec 20.4. Computed ONCE, here, from the cost_plan already derived
+    # above and the model -- the UI and the memo never call
+    # compute_monitoring_statement themselves. None exactly when the input
+    # monitoring block is None.
+    monitoring_statement = compute_monitoring_statement(schedule, model, inputs, cost_plan)
+    flags.extend(monitoring_flags(monitoring_statement, model))
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -729,5 +813,6 @@ def derive_metrics(
         # Sec 17.12's vat treatment, applied here: the SCHEDULE's investment
         # case, republished -- not a second derivation.
         investment_case=schedule.investment_case,
+        monitoring_statement=monitoring_statement,
         flags=flags,
     )

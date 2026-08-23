@@ -4,17 +4,21 @@ existing Python home). Helpers duplicated verbatim from
 tests/test_financial_model_engine.py, matching the "tests must be self-contained"
 convention already used across both languages' test suites.
 """
+import json
 from dataclasses import fields
+from pathlib import Path
 
 import pytest
 
 from app.financial_model import run_appraisal
-from app.financial_model.areas import DEFAULT_AREA_BRIDGE
+from app.financial_model.areas import DEFAULT_AREA_BRIDGE, developed_area_sqm
+from app.financial_model.cost_plan import compute_cost_plan
 from app.financial_model.engine import money_round, pct, run_ledger
 from app.financial_model.metrics import (
     VAT_COUNTERFACTUAL_TAX_REASON,
     breakeven_flags,
     derive_metrics,
+    monitoring_flags,
 )
 from app.financial_model.migrate import DEFAULT_FACILITY_TERMS as DEFAULT_FACILITY_TERMS_DICT
 from app.financial_model.migrate import (
@@ -23,7 +27,9 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v5,
     migrate_inputs_to_v6,
     migrate_inputs_to_v7,
+    migrate_inputs_to_v11,
 )
+from app.financial_model.monitoring import original_budgets
 from app.financial_model.schedule import (
     MonthReceipts,
     MonthUses,
@@ -42,10 +48,14 @@ from app.financial_model.types import (
     CalculatorInputsV5,
     CalculatorInputsV6,
     CalculatorInputsV8,
+    CalculatorInputsV11,
     CostPlanInputs,
     EquitySource,
     ExitStrategyInputs,
     FacilityTerms,
+    MonitoringCategory,
+    MonitoringInputs,
+    MonitoringLineInputs,
     ProposedUnit,
     ProposedUnitV6,
     SalesPhasingInputs,
@@ -57,6 +67,8 @@ from app.financial_model.types import (
 from app.financial_model.vat import VatMonthLine, VatResult
 
 from .fixtures_investment_case import explicit_refinance_doc, investment_case_doc
+
+MONITORING_FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
 # --- helpers copied verbatim from test_financial_model_engine.py ---
 
@@ -1208,3 +1220,249 @@ def test_raises_an_amber_flag_when_coverage_not_value_limits_the_takeout():
     ltv_binds = _ic_metrics(investment_case_doc({"ltv_binds": True}))
     assert ltv_binds.investment_case["takeout"]["binding_constraint"] == "ltv"
     assert "takeout_constrained_by_coverage" not in [f.code for f in ltv_binds.flags]
+
+
+# --- Sec 20.4 monitoring_statement and Sec 20.3 monitoring flags ----------
+
+def _load_v11(stem: str) -> CalculatorInputsV11:
+    """The corpus document, normalised to v11 (which stamps monitoring=None).
+    Mirrors tests/test_financial_model_monitoring.py's own _load_v11 (tests must be
+    self-contained)."""
+    doc = json.loads((MONITORING_FIXTURE_DIR / f"{stem}.json").read_text(encoding="utf-8"))
+    return migrate_inputs_to_v11(doc["inputs"])
+
+
+def _mon_metrics(doc):
+    """Mirrors _ic_metrics above: builds the schedule and ledger exactly as
+    run_appraisal does, then calls derive_metrics(inputs, schedule, model) directly --
+    the real signature Task 9's own wiring uses."""
+    schedule = build_schedule(doc)
+    model = run_ledger(schedule, doc.finance, doc.equity_sources)
+    return derive_metrics(doc, schedule, model)
+
+
+def _mon_mk_line(
+    category: MonitoringCategory,
+    current: int, certified: int, paid: int, committed: int, forecast: int,
+) -> MonitoringLineInputs:
+    return MonitoringLineInputs(
+        category=category,
+        current_budget_pence=current,
+        certified_to_date_pence=certified,
+        paid_to_date_pence=paid,
+        committed_to_date_pence=committed,
+        forecast_to_complete_pence=forecast,
+    )
+
+
+# Verbatim from tests/test_financial_model_monitoring.py's BASE_LINES -- the
+# shortfall scenario below is Task 7's own test 7 (task-7-brief.md item 7: "choose
+# forecast_to_complete_pence of 10x the scheme's GDV on the construction line"),
+# reproduced here so this module can run it through derive_metrics rather than
+# compute_monitoring_statement alone.
+_MON_BASE_LINES: list[MonitoringLineInputs] = [
+    _mon_mk_line("acquisition", 40_000_000, 40_000_000, 40_000_000, 40_000_000, 0),
+    _mon_mk_line("construction", 60_000_000, 25_000_000, 22_000_000, 33_000_000, 27_000_000),
+    _mon_mk_line("professional", 8_000_000, 3_000_000, 2_500_000, 4_000_000, 4_500_000),
+    _mon_mk_line("statutory", 2_000_000, 900_000, 900_000, 1_200_000, 700_000),
+    _mon_mk_line("contingency", 5_000_000, 1_000_000, 1_000_000, 1_500_000, 2_000_000),
+]
+
+
+def _mon_mk_monitoring(**overrides) -> MonitoringInputs:
+    base = dict(
+        reporting_month=3,
+        reporting_date="2026-06-30",
+        lines=[line.model_copy(deep=True) for line in _MON_BASE_LINES],
+        debt_drawn_to_date_pence=0,
+        cash_equity_injected_to_date_pence=60_000_000,
+        author="A. Surveyor MRICS",
+        date="2026-07-02",
+        note=None,
+    )
+    base.update(overrides)
+    return MonitoringInputs(**base)
+
+
+def _with_monitoring(inputs: CalculatorInputsV11, monitoring: MonitoringInputs | None):
+    return inputs.model_copy(update={"monitoring": monitoring})
+
+
+def test_publishes_monitoring_statement_none_and_raises_no_monitoring_flags_when_null():
+    doc = _load_v11("a-all-cash")
+    assert doc.monitoring is None
+    r = _mon_metrics(doc)
+    assert r.monitoring_statement is None
+    codes = [f.code for f in r.flags]
+    assert "monitoring_shortfall" not in codes
+    assert "monitoring_cost_variance" not in codes
+    assert "monitoring_dated_after_redemption" not in codes
+
+
+def test_raises_monitoring_shortfall_with_amount_pence_equal_to_shortfall_pence_task_7_test_7():
+    # task-7-brief.md item 7: a forecast-to-complete of ten times the scheme's whole
+    # value cannot be funded by any document, so the sign of surplus_pence is certain
+    # here without pinning the fixture's own figures -- mirrors
+    # tests/test_financial_model_monitoring.py's own version of this document exactly.
+    base = _load_v11("l-retain-all")
+    probe = build_schedule(base)
+    scheme_value = probe.totals.gdv_pence + probe.totals.retained_value_pence
+    assert scheme_value > 0
+    lines = [
+        (
+            line.model_copy(update={"forecast_to_complete_pence": 10 * scheme_value})
+            if line.category == "construction" else line
+        )
+        for line in _MON_BASE_LINES
+    ]
+    doc = _with_monitoring(base, _mon_mk_monitoring(lines=lines))
+    r = _mon_metrics(doc)
+    stmt = r.monitoring_statement
+    assert stmt.surplus_pence < 0
+    assert stmt.shortfall_pence > 0
+
+    f = next((x for x in r.flags if x.code == "monitoring_shortfall"), None)
+    assert f is not None
+    assert f.severity == "red"
+    assert f.month == stmt.reporting_month
+    assert f.amount_pence == stmt.shortfall_pence
+    assert f.message == (
+        f"monitoring statement at month {stmt.reporting_month}: remaining uses exceed "
+        f"remaining funding by {stmt.shortfall_pence}p"
+    )
+
+
+def test_does_not_raise_monitoring_shortfall_when_surplus_is_non_negative():
+    base = _load_v11("l-retain-all")
+    doc = _with_monitoring(base, _mon_mk_monitoring(cash_equity_injected_to_date_pence=0))
+    r = _mon_metrics(doc)
+    assert r.monitoring_statement.shortfall_pence == 0
+    assert "monitoring_shortfall" not in [f.code for f in r.flags]
+
+
+def test_raises_monitoring_cost_variance_naming_construction_when_forecast_doubles_original():
+    # Every other line is entered with no variance at all (current = certified =
+    # committed = its own original budget, forecast 0) so construction is
+    # unambiguously the only -- and therefore the largest -- offender.
+    base = _load_v11("a-all-cash")
+    schedule = build_schedule(base)
+    cost_plan = compute_cost_plan(base, developed_area_sqm(base), len(base.unit_mix.units))
+    originals = original_budgets(schedule, cost_plan)
+    assert originals["construction"] > 0
+
+    def zero_variance_line(category: MonitoringCategory) -> MonitoringLineInputs:
+        o = originals[category]
+        return _mon_mk_line(category, o, o, 0, o, 0)
+
+    doc = _with_monitoring(base, _mon_mk_monitoring(lines=[
+        zero_variance_line("acquisition"),
+        _mon_mk_line(
+            "construction", originals["construction"], 0, 0, 0, 2 * originals["construction"],
+        ),
+        zero_variance_line("professional"),
+        zero_variance_line("statutory"),
+        zero_variance_line("contingency"),
+    ]))
+    r = _mon_metrics(doc)
+    stmt = r.monitoring_statement
+    construction = next(line for line in stmt.lines if line.category == "construction")
+    assert construction.estimated_final_cost_pence == 2 * originals["construction"]
+    assert construction.variance_vs_original_pence == originals["construction"]
+
+    f = next((x for x in r.flags if x.code == "monitoring_cost_variance"), None)
+    assert f is not None
+    assert f.severity == "amber"
+    assert f.amount_pence == originals["construction"]
+    assert f.message == (
+        "construction estimated final cost varies from the original budget by more than 5%"
+    )
+
+
+def test_pins_the_5pct_boundary_on_fixture_w_construction_does_not_fire_contingency_does():
+    # Carried from Task 8's review. Fixture W's construction line sits at EXACTLY 5%
+    # (variance +300,000 on an original of 6,000,000; 300,000 x 20 = 6,000,000, not
+    # greater than it) and must NOT fire; its contingency line (variance -100,000 on
+    # 600,000, 16.7%) does exceed 5% and is the flag's only witness on this document.
+    doc = _load_v11("w-monitoring-on-site")
+    r = _mon_metrics(doc)
+    stmt = r.monitoring_statement
+    construction = next(line for line in stmt.lines if line.category == "construction")
+    assert construction.variance_vs_original_pence == 300_000
+    assert construction.original_budget_pence == 6_000_000
+    assert abs(construction.variance_vs_original_pence) * 20 == construction.original_budget_pence
+
+    variance_flags = [f for f in r.flags if f.code == "monitoring_cost_variance"]
+    assert len(variance_flags) == 1
+    assert variance_flags[0].amount_pence == -100_000
+    assert variance_flags[0].message == (
+        "contingency estimated final cost varies from the original budget by more than 5%"
+    )
+
+
+def test_5pct_plus_1p_bumping_constructions_forecast_fires_and_supersedes_contingency():
+    base = _load_v11("w-monitoring-on-site")
+    bumped_lines = [
+        (
+            line.model_copy(update={"forecast_to_complete_pence": line.forecast_to_complete_pence + 1})
+            if line.category == "construction" else line
+        )
+        for line in base.monitoring.lines
+    ]
+    bumped = _with_monitoring(base, base.monitoring.model_copy(update={"lines": bumped_lines}))
+    r = _mon_metrics(bumped)
+    stmt = r.monitoring_statement
+    construction = next(line for line in stmt.lines if line.category == "construction")
+    assert construction.variance_vs_original_pence == 300_001
+    assert abs(construction.variance_vs_original_pence) * 20 > construction.original_budget_pence
+
+    variance_flags = [f for f in r.flags if f.code == "monitoring_cost_variance"]
+    assert len(variance_flags) == 1
+    assert variance_flags[0].amount_pence == 300_001
+    assert variance_flags[0].message == (
+        "construction estimated final cost varies from the original budget by more than 5%"
+    )
+
+
+def test_raises_monitoring_dated_after_redemption_after_last_repayment_not_at_it():
+    base = _load_v11("w-monitoring-on-site")
+    schedule = build_schedule(base)
+    model = run_ledger(schedule, base.finance, base.equity_sources)
+    repaying_months = [m.month for m in model.months if m.repayment_pence > 0]
+    assert repaying_months == [17]  # the single-tranche sale clears the balance whole (Sec 20.4 Step 5)
+    last_repayment_month = max(repaying_months)
+
+    after = _with_monitoring(
+        base, base.monitoring.model_copy(update={"reporting_month": last_repayment_month + 1}),
+    )
+    r_after = _mon_metrics(after)
+    assert "monitoring_dated_after_redemption" in [f.code for f in r_after.flags]
+    f = next(x for x in r_after.flags if x.code == "monitoring_dated_after_redemption")
+    assert f.severity == "amber"
+    assert f.amount_pence is None
+    assert f.message == "the monitoring statement is dated after the forecast redemption month"
+
+    at = _with_monitoring(
+        base, base.monitoring.model_copy(update={"reporting_month": last_repayment_month}),
+    )
+    r_at = _mon_metrics(at)
+    assert "monitoring_dated_after_redemption" not in [f.code for f in r_at.flags]
+
+
+def test_skips_monitoring_dated_after_redemption_when_nothing_ever_repays():
+    # l-retain-all is a cash, retain-only document: nothing is sold and there is no
+    # facility to redeem, so no month's repayment_pence is ever positive.
+    base = _load_v11("l-retain-all")
+    schedule = build_schedule(base)
+    model = run_ledger(schedule, base.finance, base.equity_sources)
+    assert not any(m.repayment_pence > 0 for m in model.months)
+
+    doc = _with_monitoring(base, _mon_mk_monitoring(reporting_month=12))
+    r = _mon_metrics(doc)
+    assert "monitoring_dated_after_redemption" not in [f.code for f in r.flags]
+
+
+def test_monitoring_flags_returns_empty_list_when_statement_is_none():
+    base = _load_v11("a-all-cash")
+    schedule = build_schedule(base)
+    model = run_ledger(schedule, base.finance, base.equity_sources)
+    assert monitoring_flags(None, model) == []

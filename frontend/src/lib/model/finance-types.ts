@@ -14,6 +14,13 @@ import type { ProgrammeNetwork, DerivedPhase } from './programme';
 // R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
 // return type) and `Schedule.investment_case` reads it below.
 import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
+// R14 Task 9: `MonitoringStatement` now exists (`computeMonitoringStatement`'s
+// return type) and `AppraisalResultV2.monitoring_statement` reads it below.
+// Type-only, so this does not create a runtime import cycle even though
+// `monitoring.ts` imports `MONITORING_CATEGORIES` (a value) from this file —
+// `import type` is fully erased at compile time, exactly as `investment-case.ts`'s
+// own type-only import back into this file already relies on.
+import type { MonitoringStatement } from './monitoring';
 
 export type { SpendCurve };
 
@@ -407,7 +414,17 @@ export type FlagCode =
   | 'stabilisation_incomplete_at_maturity'
   /** R13 spec §19.7. Fires when the take-out's `binding_constraint` is `dscr`
    *  or `icr` — coverage, not value, is what limits the quantum. */
-  | 'takeout_constrained_by_coverage';
+  | 'takeout_constrained_by_coverage'
+  /** R14 spec §20.3. Fires when the monitoring statement's `shortfall_pence`
+   *  is > 0 — remaining uses exceed remaining funding at `reporting_month`. */
+  | 'monitoring_shortfall'
+  /** R14 spec §20.3. Fires once when any monitoring line's
+   *  `variance_vs_original_pence` exceeds 5% of a non-zero original budget,
+   *  naming the category with the largest absolute variance. */
+  | 'monitoring_cost_variance'
+  /** R14 spec §20.3. Fires when the monitoring statement's `reporting_month`
+   *  is later than the inception ledger's last repaying month. */
+  | 'monitoring_dated_after_redemption';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -742,6 +759,11 @@ export interface AppraisalResultV2 {
    *  the INPUT `investment_case` is null. The UI and the report read it from
    *  here and never call `computeInvestmentCase`. */
   investment_case: InvestmentCaseResult | null;
+  /** R14 spec §20.4. Computed ONCE in `deriveMetrics`, from the `costPlan` it
+   *  already holds and the `model` — never recomputed by the UI or the memo.
+   *  null exactly when the input `monitoring` block is null (every document
+   *  before construction is under way, and every migrated document). */
+  monitoring_statement: MonitoringStatement | null;
   /** Ledger flags (model.flags, unmutated) followed by metric flags computed by
    * deriveMetrics itself (senior/developer breakeven unsolvable, cap-exhausted).
    * Wired in Release 3a Task 6 — deriveMetrics is pure and no longer mutates

@@ -221,6 +221,26 @@ _FLAT_KEYS = {
         lambda r: [p.total_float_months for p in r.schedule.programme.phases]
         if r.schedule.programme else None
     ),
+    # R14 spec Sec 20.4, fixture W: the four monitoring-statement pins held back at
+    # Task 8 (see the fixture's own note) because the golden harness resolves an
+    # unmapped key as a direct `metrics` attribute, and `monitoring_statement` was
+    # not wired into `metrics` until this task. `lender_eligible_ratio` is a flat
+    # convenience name for the same figure fixture W already pins through the
+    # dotted `cost_plan.lender_eligible_ratio` path (which needs no mapper).
+    # Mirrors golden-fixtures.test.ts's four monitoring mappers.
+    "monitoring_shortfall_pence": (
+        lambda r: r.metrics.monitoring_statement.shortfall_pence
+        if r.metrics.monitoring_statement else None
+    ),
+    "monitoring_estimated_final_cost_pence": (
+        lambda r: r.metrics.monitoring_statement.totals.estimated_final_cost_pence
+        if r.metrics.monitoring_statement else None
+    ),
+    "monitoring_surplus_pence": (
+        lambda r: r.metrics.monitoring_statement.surplus_pence
+        if r.metrics.monitoring_statement else None
+    ),
+    "lender_eligible_ratio": lambda r: r.metrics.cost_plan.lender_eligible_ratio,
 }
 
 
@@ -1354,12 +1374,12 @@ _NEGATIVE_CONTROLS = [
         "cost_to_complete_max_shortfall_pence": 949_241,   # truly 949240
     }),
     # R14 Task 8 (the same convention stated above): fixture W is the release's
-    # golden case for the Sec 20.2 monitoring statement and the cross-engine
+    # golden case for the Sec 20.4 monitoring statement and the cross-engine
     # penny-agreement carrier, so its pins get pin +/- 1 controls too (see
-    # docs/financial-model/test-cases.md Sec 20.2 for the worksheet they come
-    # from). W's four R14-specific pins are held back until Task 9 wires their
-    # FLAT_KEYS mappers -- when they land, they belong here as well. Mirrors
-    # golden-fixtures.test.ts's negativeControls entry for fixture W.
+    # docs/financial-model/test-cases.md Sec 20.4 for the worksheet they come
+    # from). Task 9 wires the four monitoring FLAT_KEYS mappers and their
+    # controls below. Mirrors golden-fixtures.test.ts's negativeControls entry
+    # for fixture W.
     ("w-monitoring-on-site", {
         "gdv_pence": 45_000_001,                           # truly 45000000
         "peak_debt_pence": 14_188_794,                     # truly 14188793 (direct key)
@@ -1370,6 +1390,13 @@ _NEGATIVE_CONTROLS = [
         # flat key Task 9 adds. 11/12 is not representable, so the control is a
         # neighbouring double rather than "the pin + 1".
         "cost_plan.lender_eligible_ratio": 0.9166666666666667,
+        # Task 9's four monitoring-statement pins, pin +/- 1 for the two pence
+        # figures and the neighbouring double for the ratio, matching the
+        # convention above exactly.
+        "monitoring_shortfall_pence": 1,                          # truly 0
+        "monitoring_estimated_final_cost_pence": 27_520_001,      # truly 27520000
+        "monitoring_surplus_pence": 10_101_206,                   # truly 10101207
+        "lender_eligible_ratio": 0.9166666666666667,              # truly 0.9166666666666666
     }),
 ]
 

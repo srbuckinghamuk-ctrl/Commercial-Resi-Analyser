@@ -1024,6 +1024,16 @@ FlagCode = Literal[
     # R13 spec Sec 19.7. Fires when the take-out's binding_constraint is dscr
     # or icr -- coverage, not value, is what limits the quantum.
     "takeout_constrained_by_coverage",
+    # R14 spec Sec 20.3. Fires when the monitoring statement's shortfall_pence
+    # is > 0 -- remaining uses exceed remaining funding at reporting_month.
+    "monitoring_shortfall",
+    # R14 spec Sec 20.3. Fires once when any monitoring line's
+    # variance_vs_original_pence exceeds 5% of a non-zero original budget,
+    # naming the category with the largest absolute variance.
+    "monitoring_cost_variance",
+    # R14 spec Sec 20.3. Fires when the monitoring statement's reporting_month
+    # is later than the inception ledger's last repaying month.
+    "monitoring_dated_after_redemption",
 ]
 
 CALC_VERSION = "2.13.0"
