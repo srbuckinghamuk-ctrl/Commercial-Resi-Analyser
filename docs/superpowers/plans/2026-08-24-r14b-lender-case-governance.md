@@ -1841,7 +1841,9 @@ git add frontend/src/types.ts frontend/src/lib/api.ts frontend/src/lib/report-pr
 git commit -m "feat(r14b): TS governance core - lender_case_stale, transition table, structural staleness (spec 21.2, 21.3)"
 ```
 
----### Task 7: The memo — banner, provenance rows, stale disclosure, FINAL path
+---
+
+### Task 7: The memo — banner, provenance rows, stale disclosure, FINAL path
 
 **Files:**
 - Modify: `frontend/src/lib/export-investment-memo.ts`
