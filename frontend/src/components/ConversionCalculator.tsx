@@ -23,6 +23,7 @@ import ExitStrategyPage from './calculator/ExitStrategyPage';
 import RiskRegisterPage from './calculator/RiskRegisterPage';
 import DealSpiderPage from './calculator/DealSpiderPage';
 import InvestorSummaryPage from './calculator/InvestorSummaryPage';
+import LenderCasePage from './calculator/LenderCasePage';
 
 type CalcPage =
   | 'acquisition'
@@ -39,7 +40,8 @@ type CalcPage =
   | 'exit_strategy'
   | 'risk_register'
   | 'deal_spider'
-  | 'investor_summary';
+  | 'investor_summary'
+  | 'lender_case';
 
 // R9 Task 10: 'areas' is inserted second — the building's areas are known
 // before its unit schedule is drawn — pushing every following page's number
@@ -48,6 +50,9 @@ type CalcPage =
 // the cost plan (§17.5) so it belongs immediately downstream of it, and ahead
 // of Finance, whose ledger carries the VAT cash cycle (§17.6) — pushing every
 // following page's number up by one again (Finance 5->6, ... Investor 14->15).
+// R14b Task 9 (spec §21): 'lender_case' is appended last, at 16 — it governs
+// an already-saved appraisal rather than feeding its calculation, so it has
+// no upstream position to slot into and no following page to renumber.
 const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'acquisition', label: 'Acquisition', num: 1 },
   { key: 'areas', label: 'Areas', num: 2 },
@@ -64,6 +69,7 @@ const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'risk_register', label: 'Risk', num: 13 },
   { key: 'deal_spider', label: 'Deal Spider', num: 14 },
   { key: 'investor_summary', label: 'Investor', num: 15 },
+  { key: 'lender_case', label: 'Lender Case', num: 16 },
 ];
 
 interface Props {
@@ -406,6 +412,9 @@ export default function ConversionCalculator({ project }: Props) {
         )}
         {activePage === 'investor_summary' && (
           <InvestorSummaryPage inputs={inputs} run={run} project={project} />
+        )}
+        {activePage === 'lender_case' && (
+          <LenderCasePage project={project} appraisalRecord={appraisalRecord} inputs={inputs} />
         )}
         </CalculatorErrorBoundary>
         )}

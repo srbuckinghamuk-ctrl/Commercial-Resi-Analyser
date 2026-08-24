@@ -11,6 +11,12 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     getAppraisal: vi.fn().mockRejectedValue(new actual.ApiError(404, 'not found', null)),
     saveAppraisal: vi.fn(),
+    // R14b Task 9: page 16 (LenderCasePage) fetches all three on mount --
+    // stub them so the mount test below exercises the real component, not a
+    // hung network call.
+    getLenderCase: vi.fn().mockResolvedValue(null),
+    listLenderCaseEvents: vi.fn().mockResolvedValue([]),
+    listLenderCaseHistory: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -107,6 +113,16 @@ describe('ConversionCalculator — Sensitivity is page 11', () => {
     render(<ConversionCalculator project={PROJECT} />);
     fireEvent.click(screen.getByRole('button', { name: '11. Sensitivity' }));
     expect(screen.getByRole('heading', { name: /11\. Sensitivity/ })).toBeInTheDocument();
+  });
+});
+
+// R14b Task 9 (spec §21): a page exists only if a test fails when it is
+// unmounted -- this is that test for page 16.
+describe('ConversionCalculator — Lender Case is page 16 (R14b)', () => {
+  it('mounts the Lender Case page on its tab', async () => {
+    render(<ConversionCalculator project={PROJECT} />);
+    fireEvent.click(screen.getByRole('button', { name: '16. Lender Case' }));
+    expect(await screen.findByText('No lender case')).toBeInTheDocument();
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import type { Project, FinancialAppraisal } from '../types';
+import type { Project, FinancialAppraisal, LenderCase } from '../types';
 
 // R8 Task 10 fix round 1: ExportPage.tsx had no test file at all, so the two
 // snapshot-migration call sites that task introduced (the deal-spider
@@ -15,6 +15,10 @@ vi.mock('../lib/api', async (importOriginal) => {
     ...actual,
     getEligibility: vi.fn().mockRejectedValue(new actual.ApiError(404, 'not found', null)),
     getAppraisal: vi.fn(),
+    // R14b Task 9: default to "no case" so pre-existing tests below (which
+    // predate lender cases) are unaffected; the new describe block overrides
+    // this per-test.
+    getLenderCase: vi.fn().mockRejectedValue(new actual.ApiError(404, 'not found', null)),
   };
 });
 vi.mock('../lib/export-pdf', () => ({
@@ -26,7 +30,7 @@ vi.mock('../lib/export-investment-memo', () => ({
 }));
 
 const { default: ExportPage } = await import('./ExportPage');
-const { getAppraisal } = await import('../lib/api');
+const { getAppraisal, getLenderCase } = await import('../lib/api');
 const { generateAppraisalPdf } = await import('../lib/export-pdf');
 const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
 const { defaultCalculatorInputsV4, defaultCalculatorInputsV11 } = await import('../lib/conversion-defaults');
@@ -170,5 +174,69 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     // two-state monitoring block intact (null here -- no statement entered).
     expect('monitoring' in run.inputs).toBe(true);
     if ('monitoring' in run.inputs) expect(run.inputs.monitoring).toBeNull();
+  });
+});
+
+// R14b Task 9 (spec §21, spec 13.1): the memo's provenance panel and FINAL
+// gate must see the stored lender case, not always print the standing
+// "No lender case" row.
+describe('ExportPage feeds the lender case into the memo provenance (R14b Task 9)', () => {
+  beforeEach(() => {
+    URL.createObjectURL = vi.fn(() => 'blob:mock');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  function approvedLenderCase(): LenderCase {
+    return {
+      id: 'case-1',
+      project_id: 'p1',
+      status: 'credit_approved',
+      locked_inputs_snapshot: {},
+      locked_calc_version: '2.13.0',
+      locked_inputs_version: 11,
+      locked_input_hash: 'input-hash',
+      locked_outputs_hash: 'outputs-hash',
+      locked_audit_hash: 'audit-hash',
+      case_hash: 'case-hash',
+      created_by: 'Alice',
+      submitted_by: 'Alice',
+      reviewer: 'Bob',
+      decided_by: 'Bob',
+      conditions: null,
+      submitted_at: '2026-08-20T00:00:00Z',
+      decided_at: '2026-08-21T00:00:00Z',
+      stale: false,
+      created_at: '2026-08-19T00:00:00Z',
+      updated_at: '2026-08-21T00:00:00Z',
+    };
+  }
+
+  it("passes the stored lender case into the memo's provenance", async () => {
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
+    vi.mocked(getLenderCase).mockResolvedValueOnce(approvedLenderCase());
+
+    render(<ExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
+    selectProject();
+    fireEvent.click(screen.getByRole('button', { name: /download investment memorandum/i }));
+
+    await waitFor(() => expect(generateInvestmentMemo).toHaveBeenCalled());
+    const provenance = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![3]!;
+    expect(provenance.lenderCaseStatus).toBe('credit_approved');
+  });
+
+  it('still exports with no lender case', async () => {
+    vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
+    vi.mocked(getLenderCase).mockRejectedValueOnce(new Error('no case on record'));
+
+    render(<ExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
+    selectProject();
+    fireEvent.click(screen.getByRole('button', { name: /download investment memorandum/i }));
+
+    await waitFor(() => expect(generateInvestmentMemo).toHaveBeenCalled());
+    expect(
+      screen.queryByText(/could not generate investment memorandum/i),
+    ).not.toBeInTheDocument();
+    const provenance = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![3]!;
+    expect(provenance.lenderCase).toBeNull();
   });
 });
