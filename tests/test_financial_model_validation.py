@@ -9,6 +9,7 @@ import pathlib
 
 import pydantic
 import pytest
+from pydantic import ValidationError
 
 from app.financial_model import run_appraisal
 from app.financial_model.areas import DEFAULT_AREA_BRIDGE
@@ -22,6 +23,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v8,
     migrate_inputs_to_v9,
     migrate_inputs_to_v10,
+    migrate_inputs_to_v12,
     migrate_v2_to_v3,
     migrate_v6_to_v7,
     migrate_v8_to_v9,
@@ -72,6 +74,7 @@ from app.financial_model.validation import reconcile, validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_vat_treatments
 
 from .fixtures_investment_case import ic_doc
+from .fixtures_unit_sales import no_programme_doc, unit_sales_doc
 
 FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -2698,3 +2701,106 @@ def test_validation_messages_match_the_typescript_engine():
         prefix = m.split("${")[0].strip()
         if len(prefix) > 20:
             assert any(prefix in s for s in py_strings), f"message missing from the Python engine: {prefix!r}"
+
+
+class TestUnitSalesValidation:
+    """Sec 22.7. Twin of validation.test.ts's '§22.7 unit sales validation'."""
+
+    @staticmethod
+    def _errs(doc):
+        return [i for i in validate_inputs(doc) if i.severity == "error"]
+
+    def _fields(self, doc):
+        return [i.field for i in self._errs(doc)]
+
+    def _row(self, **changes):
+        base = {"unit_id": "u1", "exchange": {"month_offset": 8, "anchor": None},
+                "completion": {"month_offset": 12, "anchor": None},
+                "deposit_pct": 10, "agent_fee_pct": None, "legal_fee_pence": None}
+        return {**base, **changes}
+
+    def _rows_with(self, **changes):
+        rows = [self._row(), self._row(unit_id="u2", exchange={"month_offset": 10, "anchor": None}, completion={"month_offset": 13, "anchor": None}),
+                self._row(unit_id="u3", exchange=None, deposit_pct=0, completion={"month_offset": 13, "anchor": None}),
+                self._row(unit_id="u4", exchange={"month_offset": 11, "anchor": None}, completion={"month_offset": 20, "anchor": None}, deposit_pct=5)]
+        rows[0] = {**rows[0], **changes}
+        return rows
+
+    def test_the_four_valid_builders_are_clean(self):
+        assert self._fields(unit_sales_doc()) == []
+        assert self._fields(no_programme_doc()) == []
+
+    def test_rule_1_both_blocks_set_errors_on_both_fields(self):
+        f = self._fields(unit_sales_doc({"sales_phasing_too": True}))
+        assert "unit_sales" in f and "sales_phasing" in f
+
+    def test_rule_2_retain_all_rejects_the_block(self):
+        assert "unit_sales" in self._fields(unit_sales_doc({"route": "retain_all"}))
+
+    @staticmethod
+    def _reparse(doc, mutate):
+        """Dump, mutate the raw dict in place, re-parse through the migration
+        -- the only way to build a shape the builder does not offer."""
+        raw = doc.model_dump(mode="json")
+        mutate(raw)
+        return migrate_inputs_to_v12(raw, None)
+
+    def test_rule_3_four_distinct_messages(self):
+        e = self._errs(unit_sales_doc({"drop_row": "u3"}))
+        assert any(i.field == "unit_sales" and 'Sold unit "u3" has no sale row.' == i.message for i in e)
+        e = self._errs(unit_sales_doc({"extra_row": "u9"}))
+        assert any(i.field == "unit_sales.units[4]" and 'does not exist in the unit mix' in i.message for i in e)
+        e = self._errs(unit_sales_doc({"extra_row": "u4"}))
+        assert any(i.field == "unit_sales.units[4]" and 'has more than one sale row' in i.message for i in e)
+        # Retained under blended: u2 retained, so its row names a retained unit.
+        def retain_u2(raw):
+            raw["exit_strategy"]["retained_units"] = [{"unit_id": "u2", "monthly_rent_pence": 100_000}]
+        e = self._errs(self._reparse(unit_sales_doc({"route": "blended"}), retain_u2))
+        assert any(i.field == "unit_sales.units[1]" and 'is retained and cannot carry a sale row' in i.message for i in e)
+
+    def test_rule_4_window_anchor_and_resolved_month(self):
+        assert "unit_sales.units[0].completion" in self._fields(
+            unit_sales_doc({"rows": self._rows_with(completion={"month_offset": 24, "anchor": None})}))
+        assert "unit_sales.units[0].exchange" in self._fields(
+            unit_sales_doc({"rows": self._rows_with(exchange={"month_offset": -1, "anchor": None})}))
+        # anchor on a document with no network
+        def anchor_without_network(raw):
+            raw["unit_sales"]["units"][0]["completion"] = {"month_offset": 0, "anchor": {"phase_id": "construction", "offset_months": 0}}
+        assert "unit_sales.units[0].completion" in self._fields(self._reparse(no_programme_doc(), anchor_without_network))
+        # anchor naming an absent phase
+        assert "unit_sales.units[0].completion.anchor" in self._fields(
+            unit_sales_doc({"rows": self._rows_with(completion={"month_offset": 0, "anchor": {"phase_id": "ghost", "offset_months": 0}})}))
+        # resolved past the term: practical_completion (12) + 12 = 24
+        e = self._errs(unit_sales_doc({"rows": self._rows_with(completion={"month_offset": 0, "anchor": {"phase_id": "practical_completion", "offset_months": 12}})}))
+        assert any(i.field == "unit_sales.units[0].completion" and "resolves to month 24" in i.message for i in e)
+        # its twin one month earlier is clean
+        assert self._fields(unit_sales_doc({"rows": self._rows_with(completion={"month_offset": 0, "anchor": {"phase_id": "practical_completion", "offset_months": 11}})})) == []
+
+    def test_rule_5_exchange_after_completion(self):
+        e = self._errs(unit_sales_doc({"rows": self._rows_with(exchange={"month_offset": 13, "anchor": None})}))
+        assert any(i.field == "unit_sales.units[0].exchange" and "(resolved months 13 > 12)" in i.message for i in e)
+        assert self._fields(unit_sales_doc({"rows": self._rows_with(exchange={"month_offset": 12, "anchor": None})})) == []
+
+    def test_rule_6_deposit_range_and_exchange_requirement(self):
+        assert "unit_sales.units[0].deposit_pct" in self._fields(unit_sales_doc({"rows": self._rows_with(deposit_pct=101)}))
+        assert "unit_sales.units[0].deposit_pct" in self._fields(unit_sales_doc({"rows": self._rows_with(exchange=None, deposit_pct=10)}))
+        assert self._fields(unit_sales_doc({"rows": self._rows_with(exchange=None, deposit_pct=0)})) == []
+
+    def test_rule_7_overrides(self):
+        assert "unit_sales.units[0].agent_fee_pct" in self._fields(unit_sales_doc({"rows": self._rows_with(agent_fee_pct=100)}))
+        assert "unit_sales.units[0].legal_fee_pence" in self._fields(unit_sales_doc({"rows": self._rows_with(legal_fee_pence=-1)}))
+
+    def test_rule_9_zero_sold_value(self):
+        def zero_values(raw):
+            for u in raw["unit_mix"]["units"]:
+                u["estimated_value_pence"] = 0
+                u["ancillary"]["parking_value_pence"] = 0
+        assert "unit_sales" in self._fields(self._reparse(unit_sales_doc(), zero_values))
+
+    def test_sales_slip_must_be_whole_months(self):
+        # Pydantic's int field already refuses 1.5 at parse time in Python; the
+        # spec rule is enforced structurally here and by validateInputs in TS.
+        def fractional_slip(raw):
+            raw["scenarios"]["downside"]["sales_slip_months"] = 1.5
+        with pytest.raises(ValidationError):
+            self._reparse(unit_sales_doc(), fractional_slip)

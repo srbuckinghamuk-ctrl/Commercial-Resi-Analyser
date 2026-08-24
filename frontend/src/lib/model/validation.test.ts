@@ -26,6 +26,9 @@ import { MONITORING_CATEGORIES } from './finance-types';
 import type {
   CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
 } from './finance-types';
+import { unitSalesDoc, noProgrammeDoc } from './__fixtures__/unit-sales-docs';
+import type { CalculatorInputsV12 } from './finance-types';
+import { migrateInputsToV12 } from './migrate';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -2499,5 +2502,131 @@ describe('§20.3 monitoring validation', () => {
     const d = v11Doc(validMonitoring({ cash_equity_injected_to_date_pence: cashEquityTotal }));
     expect(validateInputs(d as never).some((i) => i.field === 'monitoring.cash_equity_injected_to_date_pence'))
       .toBe(false);
+  });
+});
+
+describe('§22.7 unit sales validation', () => {
+  const errs = (d: CalculatorInputsV12) => validateInputs(d).filter((i) => i.severity === 'error');
+  const errFields = (d: CalculatorInputsV12) => errs(d).map((i) => i.field);
+
+  const row = (changes: Record<string, unknown> = {}): Record<string, unknown> => ({
+    unit_id: 'u1',
+    exchange: { month_offset: 8, anchor: null },
+    completion: { month_offset: 12, anchor: null },
+    deposit_pct: 10,
+    agent_fee_pct: null,
+    legal_fee_pence: null,
+    ...changes,
+  });
+
+  const rowsWith = (changes: Record<string, unknown>): Array<Record<string, unknown>> => {
+    const rows = [
+      row(),
+      row({ unit_id: 'u2', exchange: { month_offset: 10, anchor: null }, completion: { month_offset: 13, anchor: null } }),
+      row({ unit_id: 'u3', exchange: null, deposit_pct: 0, completion: { month_offset: 13, anchor: null } }),
+      row({
+        unit_id: 'u4', exchange: { month_offset: 11, anchor: null }, completion: { month_offset: 20, anchor: null }, deposit_pct: 5,
+      }),
+    ];
+    rows[0] = { ...rows[0], ...changes };
+    return rows;
+  };
+
+  // Dump, mutate the raw dict in place, re-parse through the migration — the
+  // only way to build a shape the builder does not offer.
+  const reparse = (doc: CalculatorInputsV12, mutate: (raw: Record<string, unknown>) => void): CalculatorInputsV12 => {
+    const raw = JSON.parse(JSON.stringify(doc)) as Record<string, unknown>;
+    mutate(raw);
+    return migrateInputsToV12(raw);
+  };
+
+  it('the four valid builders are clean', () => {
+    expect(errFields(unitSalesDoc())).toEqual([]);
+    expect(errFields(noProgrammeDoc())).toEqual([]);
+  });
+
+  it('rule 1: both blocks set errors on both fields', () => {
+    const f = errFields(unitSalesDoc({ salesPhasingToo: true }));
+    expect(f).toContain('unit_sales');
+    expect(f).toContain('sales_phasing');
+  });
+
+  it('rule 2: retain_all rejects the block', () => {
+    expect(errFields(unitSalesDoc({ route: 'retain_all' }))).toContain('unit_sales');
+  });
+
+  it('rule 3: four distinct messages', () => {
+    let e = errs(unitSalesDoc({ dropRow: 'u3' }));
+    expect(e.some((i) => i.field === 'unit_sales' && i.message === 'Sold unit "u3" has no sale row.')).toBe(true);
+    e = errs(unitSalesDoc({ extraRow: 'u9' }));
+    expect(e.some((i) => i.field === 'unit_sales.units[4]' && i.message.includes('does not exist in the unit mix'))).toBe(true);
+    e = errs(unitSalesDoc({ extraRow: 'u4' }));
+    expect(e.some((i) => i.field === 'unit_sales.units[4]' && i.message.includes('has more than one sale row'))).toBe(true);
+    // Retained under blended: u2 retained, so its row names a retained unit.
+    const retainU2 = (raw: Record<string, unknown>): void => {
+      (raw.exit_strategy as Record<string, unknown>).retained_units = [{ unit_id: 'u2', monthly_rent_pence: 100_000 }];
+    };
+    e = errs(reparse(unitSalesDoc({ route: 'blended' }), retainU2));
+    expect(e.some((i) => i.field === 'unit_sales.units[1]' && i.message.includes('is retained and cannot carry a sale row'))).toBe(true);
+  });
+
+  it('rule 4: window, anchor, and resolved month', () => {
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ completion: { month_offset: 24, anchor: null } }) })))
+      .toContain('unit_sales.units[0].completion');
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ exchange: { month_offset: -1, anchor: null } }) })))
+      .toContain('unit_sales.units[0].exchange');
+    // anchor on a document with no network
+    const anchorWithoutNetwork = (raw: Record<string, unknown>): void => {
+      (raw.unit_sales as { units: Array<Record<string, unknown>> }).units[0].completion =
+        { month_offset: 0, anchor: { phase_id: 'construction', offset_months: 0 } };
+    };
+    expect(errFields(reparse(noProgrammeDoc(), anchorWithoutNetwork))).toContain('unit_sales.units[0].completion');
+    // anchor naming an absent phase
+    expect(errFields(unitSalesDoc({
+      rows: rowsWith({ completion: { month_offset: 0, anchor: { phase_id: 'ghost', offset_months: 0 } } }),
+    }))).toContain('unit_sales.units[0].completion.anchor');
+    // resolved past the term: practical_completion (12) + 12 = 24
+    const e = errs(unitSalesDoc({
+      rows: rowsWith({ completion: { month_offset: 0, anchor: { phase_id: 'practical_completion', offset_months: 12 } } }),
+    }));
+    expect(e.some((i) => i.field === 'unit_sales.units[0].completion' && i.message.includes('resolves to month 24'))).toBe(true);
+    // its twin one month earlier is clean
+    expect(errFields(unitSalesDoc({
+      rows: rowsWith({ completion: { month_offset: 0, anchor: { phase_id: 'practical_completion', offset_months: 11 } } }),
+    }))).toEqual([]);
+  });
+
+  it('rule 5: exchange after completion', () => {
+    const e = errs(unitSalesDoc({ rows: rowsWith({ exchange: { month_offset: 13, anchor: null } }) }));
+    expect(e.some((i) => i.field === 'unit_sales.units[0].exchange' && i.message.includes('(resolved months 13 > 12)'))).toBe(true);
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ exchange: { month_offset: 12, anchor: null } }) }))).toEqual([]);
+  });
+
+  it('rule 6: deposit range and exchange requirement', () => {
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ deposit_pct: 101 }) }))).toContain('unit_sales.units[0].deposit_pct');
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ exchange: null, deposit_pct: 10 }) }))).toContain('unit_sales.units[0].deposit_pct');
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ exchange: null, deposit_pct: 0 }) }))).toEqual([]);
+  });
+
+  it('rule 7: overrides', () => {
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ agent_fee_pct: 100 }) }))).toContain('unit_sales.units[0].agent_fee_pct');
+    expect(errFields(unitSalesDoc({ rows: rowsWith({ legal_fee_pence: -1 }) }))).toContain('unit_sales.units[0].legal_fee_pence');
+  });
+
+  it('rule 9: zero sold value', () => {
+    const zeroValues = (raw: Record<string, unknown>): void => {
+      const units = (raw.unit_mix as { units: Array<Record<string, unknown>> }).units;
+      for (const u of units) {
+        u.estimated_value_pence = 0;
+        (u.ancillary as Record<string, unknown>).parking_value_pence = 0;
+      }
+    };
+    expect(errFields(reparse(unitSalesDoc(), zeroValues))).toContain('unit_sales');
+  });
+
+  it('rejects a fractional sales_slip_months', () => {
+    const d = unitSalesDoc();
+    const doc = { ...d, scenarios: { ...d.scenarios, downside: { ...d.scenarios.downside, sales_slip_months: 1.5 } } };
+    expect(errFields(doc as CalculatorInputsV12)).toContain('scenarios.downside.sales_slip_months');
   });
 });

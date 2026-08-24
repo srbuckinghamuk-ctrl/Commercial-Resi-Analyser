@@ -5,6 +5,7 @@ import type {
 import { MONITORING_CATEGORIES } from './finance-types';
 import { OPEX_CODES, resolveStabilisationMonth } from './investment-case';
 import { computeLenderGdv } from './lender-valuation';
+import { unitAncillaryValuePence } from '../conversion-calc-engine';
 // R9 fix wave: `selectBandSet` is restricted by the single-accessor guard
 // (eslint.config.js) because it returns the raw band array. Validation's use is
 // legitimate and narrow — it asks "can this date be placed in a band set at
@@ -975,6 +976,111 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
   }
 
+  // R13b spec §22.7. The per-unit sales ledger. Structurally read, like every
+  // post-v2 block: a v2-v11 document has no `unit_sales` key and stays inert.
+  const unitSales = 'unit_sales' in inputs ? inputs.unit_sales : null;
+  const salesPhasingBlock = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
+  if (unitSales != null && salesPhasingBlock != null) {
+    // Rule 1 — on BOTH fields (§16.1's exclusion shape).
+    const msg = 'Per-unit sales and phased sales cannot both be set — remove one.';
+    err('unit_sales', msg);
+    err('sales_phasing', msg);
+  }
+  if (unitSales != null) {
+    const term = Math.max(1, Math.floor(inputs.finance.term_months));
+    const route = inputs.exit_strategy.route;
+    if (route === 'retain_all') {
+      err('unit_sales', 'Per-unit sales apply to the sold portion — a retain-all exit has none. Remove the block or change the exit route.');
+    }
+    if (unitSales.deposit_release !== 'held_to_completion' && unitSales.deposit_release !== 'released_on_exchange') {
+      err('unit_sales.deposit_release', 'deposit_release must be held_to_completion or released_on_exchange.');
+    }
+
+    const allIds = inputs.unit_mix.units.map((u) => u.id);
+    const retainedIds = new Set(inputs.exit_strategy.retained_units.map((r) => r.unit_id));
+    const soldIds = route === 'retain_all' ? [] : inputs.unit_mix.units
+      .filter((u) => route === 'sell_all' || !retainedIds.has(u.id))
+      .map((u) => u.id);
+    // Rule 3, both directions, four messages.
+    const seen = new Set<string>();
+    unitSales.units.forEach((row, i) => {
+      const field = `unit_sales.units[${i}]`;
+      if (seen.has(row.unit_id)) err(field, `Unit "${row.unit_id}" has more than one sale row.`);
+      seen.add(row.unit_id);
+      if (!allIds.includes(row.unit_id)) {
+        err(field, `Sale row unit "${row.unit_id}" does not exist in the unit mix.`);
+      } else if (!soldIds.includes(row.unit_id) && route !== 'retain_all') {
+        err(field, `Unit "${row.unit_id}" is retained and cannot carry a sale row.`);
+      }
+    });
+    for (const uid of soldIds) {
+      if (!seen.has(uid)) err('unit_sales', `Sold unit "${uid}" has no sale row.`);
+    }
+
+    // Rule 9.
+    const soldGrossTotal = inputs.unit_mix.units
+      .filter((u) => soldIds.includes(u.id))
+      .reduce((s, u) => s + u.estimated_value_pence + unitAncillaryValuePence(u), 0);
+    if (route !== 'retain_all' && soldGrossTotal <= 0) {
+      err('unit_sales', 'Per-unit sales need a sold portion with value above zero.');
+    }
+
+    const resolvedEventMonth = (ev: { month_offset: number; anchor: { phase_id: string; offset_months: number } | null }): number | null => {
+      const anchor = ev.anchor;
+      if (anchor == null) return ev.month_offset;
+      if (programmeDerivation == null) return null;
+      const dp = programmeDerivation.byId[anchor.phase_id];
+      return dp ? dp.start_month + anchor.offset_months : null;
+    };
+
+    const checkEvent = (
+      ev: { month_offset: number; anchor: { phase_id: string; offset_months: number } | null },
+      field: string,
+      label: string,
+    ): number | null => {
+      // Rule 4: the entered month, the anchor, and the RESOLVED month.
+      if (!Number.isInteger(ev.month_offset) || ev.month_offset < 0 || ev.month_offset > term - 1) {
+        err(field, `${label} month must be a whole month between 0 and ${term - 1}.`);
+      }
+      const anchor = ev.anchor;
+      if (anchor != null) {
+        if (networkPhaseIds.size === 0) {
+          err(field, `${label} anchor needs a programme network.`);
+        } else if (!networkPhaseIds.has(anchor.phase_id)) {
+          err(`${field}.anchor`, `${label} anchor references phase "${anchor.phase_id}", but there is no phase with id "${anchor.phase_id}".`);
+        }
+      }
+      const m = resolvedEventMonth(ev);
+      if (m != null && anchor != null && (m < 0 || m > term - 1)) {
+        err(field, `${label} resolves to month ${m}, outside 0 to ${term - 1}.`);
+      }
+      return m;
+    };
+
+    unitSales.units.forEach((row, i) => {
+      const field = `unit_sales.units[${i}]`;
+      const completionM = checkEvent(row.completion, `${field}.completion`, 'Completion');
+      const exchangeM = row.exchange == null ? null : checkEvent(row.exchange, `${field}.exchange`, 'Exchange');
+      // Rule 5.
+      if (exchangeM != null && completionM != null && exchangeM > completionM) {
+        err(`${field}.exchange`, `Exchange must not fall after completion (resolved months ${exchangeM} > ${completionM}).`);
+      }
+      // Rule 6.
+      if (!Number.isFinite(row.deposit_pct) || row.deposit_pct < 0 || row.deposit_pct > 100) {
+        err(`${field}.deposit_pct`, 'Deposit percentage must be a finite number between 0 and 100.');
+      } else if (row.exchange == null && row.deposit_pct !== 0) {
+        err(`${field}.deposit_pct`, 'A deposit needs an exchange event — set exchange or set deposit_pct to 0.');
+      }
+      // Rule 7.
+      if (row.agent_fee_pct != null && (!Number.isFinite(row.agent_fee_pct) || row.agent_fee_pct < 0 || row.agent_fee_pct >= 100)) {
+        err(`${field}.agent_fee_pct`, 'Agent fee override must be a finite percentage from 0 to below 100.');
+      }
+      if (row.legal_fee_pence != null && (!Number.isInteger(row.legal_fee_pence) || row.legal_fee_pence < 0)) {
+        err(`${field}.legal_fee_pence`, 'Legal fee override must be a whole number of pence, zero or more.');
+      }
+    });
+  }
+
   // R13 spec §19.7. Gated on presence, not on `inputs_version >= 10`, matching
   // every other block here: a v9 document has no `investment_case` key, so the
   // whole block is skipped without a version test.
@@ -1192,6 +1298,20 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   const hasNetwork = 'programme' in inputs && inputs.programme != null && isProgrammeNetwork(inputs.programme);
   (['base', 'upside', 'downside', 'severe'] as const).forEach((name) => {
     const scenario = inputs.scenarios[name];
+    // R13b spec §22.7 (slip rule). Unlike Python's `int` field, a JSON
+    // payload here parses `1.5` as a plain number with no coercion, so this
+    // branch is LIVE in TS even though its Python twin is structurally
+    // unreachable (Pydantic's `int` field refuses the fraction at parse
+    // time) — kept in both so the two engines' rule lists match line for
+    // line. `!= null` matches this file's structural-read idiom for every
+    // other post-v2 field (see the `unit_sales`/`sales_phasing` guards
+    // above): a pre-v12 document read here WITHOUT going through
+    // `migrateInputsToV12` first (several test fixtures below cast raw JSON
+    // straight to `AnyCalculatorInputs`) has no `sales_slip_months` key at
+    // all, and that must stay inert rather than read as a fraction.
+    if (scenario.sales_slip_months != null && !Number.isInteger(scenario.sales_slip_months)) {
+      err(`scenarios.${name}.sales_slip_months`, 'Sales slip must be a whole number of months.');
+    }
     if (scenario.phase_slip_phase_id == null) return;
     const field = `scenarios.${name}.phase_slip_phase_id`;
     if (!hasNetwork) {

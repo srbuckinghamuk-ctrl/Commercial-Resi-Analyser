@@ -120,9 +120,25 @@ ALIAS: dict[str, str] = {}   # no field renames this release; kept so a future
 
 
 # Properties 2 and 3 (v12-only validation rules are silent on a migrated
-# document, and can actually fire) are Task 5's -- they need Sec 22.7's
-# unit-sales validation rules to exist first. `unit_sales` is written `None`
-# by the migration, so there is nothing to be silent about yet.
+# document, and can actually fire) are Task 5's. `unit_sales` is written
+# `None` by the migration, so a migrated document has nothing for Sec 22.7's
+# unit-sales rules to fire on; property 2 checks that stays true, and
+# property 3 (the matched non-vacuity check -- R12's Sec 18.7 lesson) proves
+# the rules can actually fire when a document does carry the block.
+
+
+def test_property_2_v12_only_rules_are_silent_on_a_migrated_document():
+    for p in FIXTURES:
+        issues = validate_inputs(migrate_inputs_to_v12(_FIXTURE_DOCS[p]["inputs"], None))
+        assert not [i for i in issues if i.field.startswith("unit_sales") or i.field.endswith("sales_slip_months")], p.stem
+
+
+def test_property_3_the_v12_only_rules_can_actually_fire():
+    # Control: fixture I carries sales_phasing; giving it a unit_sales block trips rule 1.
+    raw = migrate_inputs_to_v12(_load_fixture(FIXTURE_DIR / "i-phased-sales.json")["inputs"], None).model_dump(mode="json")
+    raw["unit_sales"] = {"deposit_release": "held_to_completion", "units": []}
+    fields = {i.field for i in validate_inputs(migrate_inputs_to_v12(raw, None))}
+    assert "unit_sales" in fields and "sales_phasing" in fields
 
 
 def test_migration_writes_only_null_and_zero():

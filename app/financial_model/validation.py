@@ -14,7 +14,7 @@ from .engine import MonthlyModel, pct
 from .investment_case import OPEX_CODES, resolve_stabilisation_month
 from .lender_valuation import compute_lender_gdv
 from .programme import ProgrammeDerivation, derive_phases, is_legacy_programme, is_programme_network
-from .schedule import Schedule
+from .schedule import Schedule, unit_ancillary_value_pence
 from .types import FEE_CODE_CATEGORY, MONITORING_CATEGORIES, PRE_COMPLETION_CODES, AnyCalculatorInputs
 from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
 
@@ -1110,6 +1110,104 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 f"phase with id \"{rf_anchor.phase_id}\".",
             )
 
+    # R13b spec Sec 22.7. The per-unit sales ledger. Structurally read, like
+    # every post-v2 block: a v2-v11 document has no attribute and stays inert.
+    unit_sales = getattr(inputs, "unit_sales", None)
+    sales_phasing_block = getattr(inputs, "sales_phasing", None)
+    if unit_sales is not None and sales_phasing_block is not None:
+        # Rule 1 -- on BOTH fields (Sec 16.1's exclusion shape).
+        msg = "Per-unit sales and phased sales cannot both be set - remove one."
+        err("unit_sales", msg)
+        err("sales_phasing", msg)
+    if unit_sales is not None:
+        term = max(1, math.floor(inputs.finance.term_months))
+        route = inputs.exit_strategy.route
+        if route == "retain_all":
+            err(
+                "unit_sales",
+                "Per-unit sales apply to the sold portion - a retain-all exit has none. "
+                "Remove the block or change the exit route.",
+            )
+        if unit_sales.deposit_release not in ("held_to_completion", "released_on_exchange"):
+            err("unit_sales.deposit_release", "deposit_release must be held_to_completion or released_on_exchange.")
+
+        all_ids = [u.id for u in inputs.unit_mix.units]
+        retained_ids = {r.unit_id for r in inputs.exit_strategy.retained_units}
+        sold_ids = [] if route == "retain_all" else [
+            u.id for u in inputs.unit_mix.units if route == "sell_all" or u.id not in retained_ids
+        ]
+        # Rule 3, both directions, four messages.
+        seen: set[str] = set()
+        for i, row in enumerate(unit_sales.units):
+            field_ = f"unit_sales.units[{i}]"
+            if row.unit_id in seen:
+                err(field_, f"Unit \"{row.unit_id}\" has more than one sale row.")
+            seen.add(row.unit_id)
+            if row.unit_id not in all_ids:
+                err(field_, f"Sale row unit \"{row.unit_id}\" does not exist in the unit mix.")
+            elif row.unit_id not in sold_ids and route != "retain_all":
+                err(field_, f"Unit \"{row.unit_id}\" is retained and cannot carry a sale row.")
+        for uid in sold_ids:
+            if uid not in seen:
+                err("unit_sales", f"Sold unit \"{uid}\" has no sale row.")
+
+        # Rule 9.
+        sold_gross_total = sum(
+            u.estimated_value_pence + unit_ancillary_value_pence(u)
+            for u in inputs.unit_mix.units if u.id in sold_ids
+        )
+        if route != "retain_all" and sold_gross_total <= 0:
+            err("unit_sales", "Per-unit sales need a sold portion with value above zero.")
+
+        def resolved_event_month(ev: object) -> int | None:
+            anchor = getattr(ev, "anchor", None)
+            if anchor is None:
+                return ev.month_offset  # type: ignore[attr-defined]
+            if programme_derivation is None:
+                return None
+            dp = programme_derivation.by_id.get(anchor.phase_id)
+            return dp.start_month + anchor.offset_months if dp is not None else None
+
+        def check_event(ev: object, field_: str, label: str) -> int | None:
+            # Rule 4: the entered month, the anchor, and the RESOLVED month.
+            if not isinstance(ev.month_offset, int) or ev.month_offset < 0 or ev.month_offset > term - 1:  # type: ignore[attr-defined]
+                err(field_, f"{label} month must be a whole month between 0 and {term - 1}.")
+            anchor = getattr(ev, "anchor", None)
+            if anchor is not None:
+                if not network_phase_ids:
+                    err(field_, f"{label} anchor needs a programme network.")
+                elif anchor.phase_id not in network_phase_ids:
+                    err(
+                        f"{field_}.anchor",
+                        f"{label} anchor references phase \"{anchor.phase_id}\", but there is no "
+                        f"phase with id \"{anchor.phase_id}\".",
+                    )
+            m = resolved_event_month(ev)
+            if m is not None and anchor is not None and (m < 0 or m > term - 1):
+                err(field_, f"{label} resolves to month {m}, outside 0 to {term - 1}.")
+            return m
+
+        for i, row in enumerate(unit_sales.units):
+            field_ = f"unit_sales.units[{i}]"
+            completion_m = check_event(row.completion, f"{field_}.completion", "Completion")
+            exchange_m = None if row.exchange is None else check_event(row.exchange, f"{field_}.exchange", "Exchange")
+            # Rule 5.
+            if exchange_m is not None and completion_m is not None and exchange_m > completion_m:
+                err(f"{field_}.exchange",
+                    f"Exchange must not fall after completion (resolved months {exchange_m} > {completion_m}).")
+            # Rule 6.
+            if not math.isfinite(row.deposit_pct) or row.deposit_pct < 0 or row.deposit_pct > 100:
+                err(f"{field_}.deposit_pct", "Deposit percentage must be a finite number between 0 and 100.")
+            elif row.exchange is None and row.deposit_pct != 0:
+                err(f"{field_}.deposit_pct", "A deposit needs an exchange event - set exchange or set deposit_pct to 0.")
+            # Rule 7.
+            if row.agent_fee_pct is not None and (
+                not math.isfinite(row.agent_fee_pct) or row.agent_fee_pct < 0 or row.agent_fee_pct >= 100
+            ):
+                err(f"{field_}.agent_fee_pct", "Agent fee override must be a finite percentage from 0 to below 100.")
+            if row.legal_fee_pence is not None and (not isinstance(row.legal_fee_pence, int) or row.legal_fee_pence < 0):
+                err(f"{field_}.legal_fee_pence", "Legal fee override must be a whole number of pence, zero or more.")
+
     # R13 spec Sec 19.7. Gated on presence, not on `inputs_version >= 10`,
     # matching every other block here: a v9 document has no `investment_case`
     # attribute, so the whole block is skipped without a version test.
@@ -1360,6 +1458,20 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     has_network = programme is not None and is_programme_network(programme)
     for name in ("base", "upside", "downside", "severe"):
         scenario = getattr(inputs.scenarios, name)
+        # R13b spec Sec 22.7 (slip rule). Structurally unreachable in Python --
+        # `sales_slip_months: int` is a Pydantic field, so a fractional value
+        # never survives parsing to reach this check. Kept anyway (not
+        # deleted as dead code) so the two engines' rule lists match line for
+        # line -- validateInputs's TS twin CAN reach this branch (a JSON
+        # payload with 1.5 parses as a plain object with no int coercion),
+        # and a rule present in one engine but not the other is exactly the
+        # kind of silent asymmetry this release's dual-engine mirror rule
+        # exists to prevent.
+        if not isinstance(scenario.sales_slip_months, int):
+            err(
+                f"scenarios.{name}.sales_slip_months",
+                "Sales slip must be a whole number of months.",
+            )
         if scenario.phase_slip_phase_id is None:
             continue
         field_ = f"scenarios.{name}.phase_slip_phase_id"

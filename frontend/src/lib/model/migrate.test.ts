@@ -1487,6 +1487,32 @@ describe('v12 migration -- spec §22.9', () => {
     });
   }
 
+  // Property 2 and Property 3, the matched pair that stops Property 2 being
+  // vacuous — R12's §18.7 lesson, applied from the start again this release
+  // (see the v10/v11 blocks above's own comments). `unit_sales` is written
+  // `null` by the migration, so a migrated document has nothing for §22.7's
+  // unit-sales rules to fire on; property 2 checks that stays true, and
+  // property 3 proves the rules can actually fire when a document does carry
+  // the block.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v12-only rule stays silent on a migrated document (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV12(inputs));
+      expect(issues.filter((i) => i.field.startsWith('unit_sales') || i.field.endsWith('sales_slip_months'))).toEqual([]);
+    });
+  }
+
+  it('the v12-only rules can actually fire (property 3 of three)', () => {
+    // Control: fixture I carries sales_phasing; giving it a unit_sales block trips rule 1.
+    const raw = migrateInputsToV12(
+      fixtureDocs.find(({ file }) => file === 'i-phased-sales.json')!.doc.inputs as Record<string, unknown>,
+    ) as unknown as Record<string, unknown>;
+    raw.unit_sales = { deposit_release: 'held_to_completion', units: [] };
+    const fields = new Set(validateInputs(migrateInputsToV12(raw)).map((i) => i.field));
+    expect(fields.has('unit_sales')).toBe(true);
+    expect(fields.has('sales_phasing')).toBe(true);
+  });
+
   it('writes unit_sales: null and sales_slip_months: 0 on all four scenarios, nothing else', () => {
     const v11 = migrateInputsToV11(fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>);
     const v12 = migrateV11toV12(v11);
