@@ -1,7 +1,7 @@
 """Repository pattern for all database operations."""
 from uuid import UUID
 
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -10,6 +10,8 @@ from app.models import (
     EligibilityAssessmentUpdate,
     EligibilityCriterion,
     FinancialAppraisal,
+    LenderCase,
+    LenderCaseEvent,
     PipelineStage,
     Project,
     ProjectCreate,
@@ -21,6 +23,8 @@ from app.models import (
 from app.persistence.database import (
     EligibilityAssessmentORM,
     FinancialAppraisalORM,
+    LenderCaseEventORM,
+    LenderCaseORM,
     ProjectORM,
     StageTransitionORM,
 )
@@ -283,6 +287,139 @@ class StageTransitionRepository:
             select(StageTransitionORM)
             .where(StageTransitionORM.project_id == project_id)
             .order_by(StageTransitionORM.transitioned_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+
+class LenderCaseRepository:
+    """R14b (spec Sec 21). Like FinancialAppraisalRepository, `create`/`update`
+    take a plain dict built by the endpoint: the server is the sole author of
+    the locked snapshot and case_hash, so there is no 1:1 request/column
+    mapping to type."""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    def _to_domain(self, row: LenderCaseORM) -> LenderCase:
+        return LenderCase(
+            id=row.id,
+            project_id=row.project_id,
+            status=row.status,
+            locked_inputs_snapshot=row.locked_inputs_snapshot,
+            locked_calc_version=row.locked_calc_version,
+            locked_inputs_version=row.locked_inputs_version,
+            locked_input_hash=row.locked_input_hash,
+            locked_outputs_hash=row.locked_outputs_hash,
+            locked_audit_hash=row.locked_audit_hash,
+            case_hash=row.case_hash,
+            created_by=row.created_by,
+            submitted_by=row.submitted_by,
+            reviewer=row.reviewer,
+            decided_by=row.decided_by,
+            conditions=row.conditions,
+            submitted_at=row.submitted_at,
+            decided_at=row.decided_at,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    async def create(self, data: dict) -> LenderCase:
+        orm = LenderCaseORM(**data)
+        self.db.add(orm)
+        await self.db.flush()
+        await self.db.refresh(orm)
+        return self._to_domain(orm)
+
+    async def get_live_by_project_id(self, project_id: UUID) -> LenderCase | None:
+        stmt = (
+            select(LenderCaseORM)
+            .where(
+                LenderCaseORM.project_id == project_id,
+                LenderCaseORM.status != "superseded",
+            )
+            .order_by(LenderCaseORM.created_at.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        row = result.scalars().first()
+        return self._to_domain(row) if row else None
+
+    async def list_by_project_id(self, project_id: UUID) -> list[LenderCase]:
+        # Newest first, superseded included -- this is the case history.
+        # Secondary sort key: sqlite's CURRENT_TIMESTAMP is 1-second
+        # resolution, so two cases opened within the same second (a
+        # supersede immediately followed by a fresh case) tie on created_at
+        # alone. Each case's most recent event id is the schema's monotonic
+        # record of creation order -- every case writes its creation event
+        # in the same transaction it is created in -- so it breaks the tie
+        # correctly rather than arbitrarily (unlike the case's own id,
+        # which is a random UUID).
+        latest_event_id = (
+            select(func.max(LenderCaseEventORM.id))
+            .where(LenderCaseEventORM.case_id == LenderCaseORM.id)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(LenderCaseORM)
+            .where(LenderCaseORM.project_id == project_id)
+            .order_by(LenderCaseORM.created_at.desc(), latest_event_id.desc())
+        )
+        result = await self.db.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def update(
+        self, case_id: UUID, values: dict, *, expected_status: str | None = None
+    ) -> LenderCase | None:
+        stmt = update(LenderCaseORM).where(LenderCaseORM.id == case_id)
+        if expected_status is not None:
+            # The state machine's compare-and-swap: a transition validated
+            # against a stale read must fail, not apply, when another
+            # transition has moved the case's status since that read.
+            stmt = stmt.where(LenderCaseORM.status == expected_status)
+        stmt = stmt.values(**values).returning(LenderCaseORM)
+        result = await self.db.execute(stmt)
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+        await self.db.flush()
+        return self._to_domain(row)
+
+
+class LenderCaseEventRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    def _to_domain(self, row: LenderCaseEventORM) -> LenderCaseEvent:
+        return LenderCaseEvent(
+            id=row.id,
+            case_id=row.case_id,
+            from_status=row.from_status,
+            to_status=row.to_status,
+            actor=row.actor,
+            note=row.note,
+            occurred_at=row.occurred_at,
+        )
+
+    async def create(self, data: dict) -> LenderCaseEvent:
+        orm = LenderCaseEventORM(**data)
+        self.db.add(orm)
+        await self.db.flush()
+        await self.db.refresh(orm)
+        return self._to_domain(orm)
+
+    async def list_by_project_id(self, project_id: UUID) -> list[LenderCaseEvent]:
+        # Newest first across ALL the project's cases (history included).
+        # id desc, not occurred_at desc: same-second writes are routine and
+        # the integer key is what keeps the order deterministic.
+        stmt = (
+            select(LenderCaseEventORM)
+            .where(
+                LenderCaseEventORM.case_id.in_(
+                    select(LenderCaseORM.id).where(LenderCaseORM.project_id == project_id)
+                )
+            )
+            .order_by(LenderCaseEventORM.id.desc())
         )
         result = await self.db.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]

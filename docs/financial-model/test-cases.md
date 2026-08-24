@@ -4480,3 +4480,147 @@ corpus in which nothing ever reports a shortfall at all.
 | P (`p-scotland-levered`) | The phantom cannot come back: `null` / `0` pinned, with the old `1` / `392483` as negative controls in both engines |
 | V (`v-exhausted-reserve`) | The correction is not one-sided — a real shortfall, `funding_gap_pence` 704,021, and the positive case for the implication (§20.1 above) |
 | Q, S (`q-detailed-cost-plan`, `s-dated-programme`) | The opposite shape, and the one §5.10's "Known limitation" already covers: a **real** funding gap of 2,031,318 / 6,300,000 that the cost-to-complete series does **not** see, because §5.10 counts the undrawn facility gross of §4.2(b)'s advance cap. Neither is a counter-example to the asserted direction — the implication runs the other way — and neither belongs on the exclusion list |
+
+---
+
+## 21. Lender case governance [R14b — no calculation-version change]
+
+Numbered to match spec §21, the convention §20 above follows. **There is no
+worksheet in this section and no hand derivation, because there is no
+arithmetic**: R14b adds a persistence-and-workflow subsystem, and the golden
+corpus is untouched by it. That the whole corpus walk passes *unmodified* is
+itself the release's no-arithmetic guard, and it is listed as such in spec §21's
+guard table. What follows records where the release's contracts are actually
+pinned.
+
+### 21.1 The mirrored governance suites
+
+`tests/test_provenance.py` ↔ `frontend/src/lib/report-provenance.test.ts`, the
+parity pair for the new dual-implemented module (`model-governance.md` §1).
+Written case-for-case, not merely covering the same ground:
+
+- **Ordering diagonals.** Spec §13.3's six conditions in their load-bearing
+  order. The R8/R11 diagonals (an unconfirmed tax or VAT basis must not be
+  displaced by `not_approved`, and must not displace `unreconciled` or
+  `senior_not_repaid`) gain their Python mirror here for the first time — until
+  R14b the whole gate lived in TypeScript, so the diagonal was pinned once.
+- **The R14b diagonal**, both languages: an approved-but-stale case yields
+  `lender_case_stale`; an *unapproved* stale case still yields `not_approved`,
+  which is the assertion that pins the two reasons as mutually exclusive rather
+  than merely ordered; and neither ever displaces conditions 1–4.
+- **Default-argument compatibility.** `draftReason`'s staleness gate is a fifth
+  defaulted parameter, so a four-argument caller must behave exactly as before —
+  the same assertion R8 and R11 each wrote for their own added gate.
+- **`DraftReason` membership.** A test asserts the union has exactly its six
+  R14b members, so a seventh reason cannot be added without a banner, a
+  sentence and an ordering decision.
+
+### 21.2 The state machine, walked and complemented
+
+`tests/test_lender_case_governance.py`, modelled on
+`test_appraisal_governance.py`'s local-fixture pattern.
+
+- **The legal walk**, through the API, with the side effects asserted at every
+  step:
+  `draft → submitted → under_review → information_required → under_review →
+  approved_with_conditions`. It is chosen to exercise the awkward edge
+  deliberately — the second `→ under_review` is a *resubmission*, and the test
+  pins that it **overwrites** `reviewer` rather than preserving the first one
+  (spec §21.2), with the change log keeping both.
+- **The illegal complement.** Every `(from, to)` pair *not* in §21.2's table is
+  driven through the real endpoint and must 409 — a fresh case is walked to each
+  `from` status along its shortest legal path first, so the refusal is the
+  machine's and not a fixture's. The one row excluded is `from = superseded`:
+  a superseded case is not live, so those requests are 404s rather than 409s and
+  are covered by the no-live-case test instead. A test that only walks the legal
+  path proves the machine permits what it should; only the complement proves it
+  refuses what it should, and the complement is what catches a table edited by
+  hand in one language.
+- **The transition table itself** is restated *literally* in both languages'
+  suites rather than derived from the module under test, so a drive-by edit
+  fails a test that names the whole machine. A second test pins the structural
+  property: `superseded` is reachable from every state and is terminal.
+- **The conditions rule**, both halves: absent on `approved_with_conditions` is
+  a 422, and present on any other transition is a 422. One field, one meaning.
+- **Creation preconditions**, one test each: no project (404), no saved
+  appraisal (404), a pre-provenance appraisal stripped of its hashes (422), and
+  a second live case (409).
+- **Supersede-and-recreate**, the only refresh path (spec §21.6 limitation 3):
+  the superseded case keeps the columns it died with, and the history returns
+  both cases.
+- **History ordering.** Two cases created inside the same second must come back
+  in creation order — the case that fails under `created_at` alone, and under
+  the case's own random UUID, and passes on the greatest-event-id tie-break the
+  repository's `ORDER BY` uses.
+- **Cascade.** Deleting the project removes its cases and their events.
+
+### 21.3 The case hash, re-derived independently in both languages' conventions
+
+Spec §13.2.1. Python re-derives the hash **by hand** in the test —
+`hashlib.sha256` over the eight-part joined string — rather than calling the
+helper's own internals, the same discipline
+`test_audit_hash_binds_inputs_outputs_and_status` established for the audit
+hash. A test that computed the expected value the way the code does would pass
+against any formula.
+
+Three properties beyond the value itself:
+
+- **Absent parts encode as empty strings**, with the separator count preserved
+  (`c1|p1|draft|||||<audit hash>`), so two different absences cannot collide
+  with one present value.
+- **A naive and an aware UTC datetime hash identically.** This is the whole
+  point of §13.2.1's canonical form: SQLite returns naive datetimes for values
+  written aware, so without the naive-as-UTC rule a write-time hash and a
+  re-read recomputation would disagree on the same case.
+- **It moves with the status alone**, which is what makes it a record of
+  governance state rather than of the locked snapshot.
+
+The API suite adds the end-to-end half: after a case is walked to
+`credit_approved`, the stored `case_hash` is re-derived by hand from the case's
+*own returned fields* — including `decided_at`, re-canonicalised from the
+response rather than taken from the server's clock — and asserted to have moved
+off the value stored at creation.
+
+### 21.4 The database-level invariant
+
+Spec §21.1's one-live-case rule is asserted **at the database**, not only
+through the endpoint's 409: a second non-superseded row for the same project is
+inserted directly against the ORM and must be refused by the partial unique
+index. Pinned on SQLite, which is why the index declares `sqlite_where`
+alongside `postgresql_where` — an index declared for one dialect only would
+pass every Postgres test and silently permit two live cases on the boot-time
+`create_all` path. `test_orm_tables.py` pins both dialect options are present,
+and `test_alembic_migrations.py`'s hard-coded revision walk gains `"006"`.
+`test_api_endpoints.py` pins all five `/lender-cases` paths.
+
+### 21.5 The release gate's first FINAL document
+
+`frontend/src/lib/report-qa/memo-release-gate.test.ts`. §12's gate has asserted
+DRAFT documents since R7 because no other kind could exist. R14b adds three:
+
+1. **An approved, current case renders FINAL** — no DRAFT watermark on any
+   page, the narrative's "It is a final lender report." sentence printed, and
+   the case id, case hash, reviewer, decider and **locked audit hash** all
+   present in the extracted PDF text (spec §13.1's case rows). The layout gate
+   still applies to it: no overflowing item, no sparse page. This document was
+   **watched failing** — still DRAFT — before the provenance wiring landed,
+   which is what proves the wiring rather than the enum is what flips it.
+
+   The locked-audit-hash assertion needs its fixture read carefully. The
+   approved case's `locked_audit_hash` is `'e'.repeat(64)` and the stored
+   record's `audit_hash` is `'c'.repeat(64)`, deliberately **not** the same
+   value: they were equal in the first draft, which would have let
+   `toContain(locked_audit_hash)` pass off the panel's own live "Audit hash" row
+   whether or not the case row was ever drawn. The test asserts the two differ
+   before asserting the value appears, so the guard cannot go vacuous if a later
+   edit re-aligns the fixtures. Distinct values also make the fixture the very
+   shape the row exists for — a case whose locked audit hash has diverged from
+   the live record's while the case is still current (spec §13.1, second case
+   bullet).
+2. **An approved-but-stale case** renders `DRAFT - LENDER CASE STALE - NOT FOR
+   LENDER RELIANCE` and prints the disclosure naming the moved snapshot.
+3. **Approval conditions are printed** when the case carries them.
+
+The stale and FINAL assertions read the wrapped prose rather than the raw
+extracted text where a sentence crosses a line break, following the same
+convention as the tax-disclosure checks in this file.

@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncSession, async_sessionmaker, create_async_engine
@@ -111,6 +112,9 @@ class ProjectORM(Base):
     stage_transitions: Mapped[list["StageTransitionORM"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+    lender_cases: Mapped[list["LenderCaseORM"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
 
 class EligibilityAssessmentORM(Base):
@@ -201,3 +205,79 @@ class StageTransitionORM(Base):
     )
 
     project: Mapped["ProjectORM"] = relationship(back_populates="stage_transitions")
+
+
+class LenderCaseORM(Base):
+    """R14b (spec Sec 21). A locked lender snapshot with governance state.
+    Keyed by project (the Sec 13.2 record-identity reasoning); superseded
+    rows remain as history, and at most one live case may exist per project
+    -- enforced by the partial unique index below, declared for both dialects
+    so Alembic and the lifespan create_all agree everywhere."""
+
+    __tablename__ = "lender_cases"
+    __table_args__ = (
+        Index("ix_lender_case_project_id", "project_id"),
+        Index(
+            "uq_lender_case_live_project", "project_id", unique=True,
+            postgresql_where=text("status != 'superseded'"),
+            sqlite_where=text("status != 'superseded'"),
+        ),
+    )
+
+    id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[uuid4] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    # -- the lock, copied from the stored appraisal at creation; never rewritten --
+    locked_inputs_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    locked_calc_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    locked_inputs_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    locked_input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    locked_outputs_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Not-null enforces spec Sec 21.1: no case on a pre-provenance appraisal.
+    locked_audit_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Spec Sec 21.4 -- recomputed on every transition.
+    case_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    submitted_by: Mapped[str | None] = mapped_column(String(256))
+    reviewer: Mapped[str | None] = mapped_column(String(256))
+    decided_by: Mapped[str | None] = mapped_column(String(256))
+    conditions: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["ProjectORM"] = relationship(back_populates="lender_cases")
+    events: Mapped[list["LenderCaseEventORM"]] = relationship(
+        back_populates="case", cascade="all, delete-orphan"
+    )
+
+
+class LenderCaseEventORM(Base):
+    """Append-only change log (spec Sec 21.5), the stage_transitions shape --
+    with an integer autoincrement key instead of a UUID, deliberately: events
+    written by fast successive requests share a same-second occurred_at, and
+    the id is what keeps newest-first deterministic."""
+
+    __tablename__ = "lender_case_events"
+    __table_args__ = (
+        Index("ix_lender_case_event_case_id", "case_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[uuid4] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("lender_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    from_status: Mapped[str | None] = mapped_column(String(32))
+    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str] = mapped_column(String(256), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    case: Mapped["LenderCaseORM"] = relationship(back_populates="events")

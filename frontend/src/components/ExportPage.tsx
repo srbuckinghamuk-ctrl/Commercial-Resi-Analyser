@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
-import type { Project, EligibilityAssessment } from '../types';
-import { getEligibility, getAppraisal, isNotFound } from '../lib/api';
+import type { Project, EligibilityAssessment, LenderCase } from '../types';
+import { getEligibility, getAppraisal, getLenderCase, isNotFound } from '../lib/api';
 import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
 import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
@@ -142,12 +142,22 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
         // eligibility is optional for the memo
       }
 
+      // R14b (spec §21): the lender case rides into the provenance panel and
+      // the FINAL gate. Optional like eligibility — a project with no case
+      // prints the standing "No lender case" row and stays not_approved.
+      let lenderCase: LenderCase | null = null;
+      try {
+        lenderCase = await getLenderCase(selectedProject.id);
+      } catch {
+        // optional for the memo
+      }
+
       // Provenance comes from the stored record, not from this run: the hashes
       // are the server's statement about what it computed and persisted (spec
       // §13.2). buildProvenance compares the two calculation versions and marks
       // the report as a recomputation when they differ, rather than letting a
       // stored hash sit beside figures it does not describe.
-      const provenance = buildProvenance(run, appraisal);
+      const provenance = buildProvenance(run, appraisal, { lenderCase });
       const blob = generateInvestmentMemo(selectedProject, run, eligibility, provenance);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);

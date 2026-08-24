@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { draftReason, documentStatus, buildProvenance } from './report-provenance';
+import {
+  draftReason, documentStatus, buildProvenance, ALLOWED_TRANSITIONS, structurallyEqual,
+} from './report-provenance';
 import type { DraftReason } from './report-provenance';
+import type { LenderCase } from '../types';
 import {
   runAppraisal, migrateInputsToV4, DEFAULT_AREA_BRIDGE,
   migrateV6toV7, migrateV7toV8, DEFAULT_VAT, defaultVatTreatments,
@@ -285,27 +288,30 @@ describe('buildProvenance derives the tax basis (R8)', () => {
 describe('R9 — the area bridge does not gate the document', () => {
   const approvedStatus = 'credit_approved';
 
-  it('leaves the DraftReason union at its five R11 members', () => {
+  it('leaves the DraftReason union at its six R14b members', () => {
     // R8's memory records that the ORDER of this union is load-bearing and that
     // inverting it survived all 1070 tests while being production-reachable.
-    // R9 added no member; R11 adds exactly one ('vat_basis_unconfirmed', spec
-    // §17.10) and this test is what makes that a decision rather than an
-    // omission somebody later "fixes".
+    // R9 added no member; R11 added exactly one ('vat_basis_unconfirmed', spec
+    // §17.10); R14b adds exactly one more ('lender_case_stale', spec §21.3)
+    // and this test is what makes that a decision rather than an omission
+    // somebody later "fixes".
     //
     // Review fix round 1 (Important 2): a `DraftReason[]` array only checks
     // that the listed literals are ASSIGNABLE to the union, not that they
-    // EXHAUST it — a sixth member added elsewhere would not fail that version
-    // of this test. A `Record` over the union requires every member as a key:
-    // a missing (or, symmetrically, an extra-but-unlisted) member becomes a
-    // compile error, which is what actually pins the deliberate non-change.
+    // EXHAUST it — a seventh member added elsewhere would not fail that
+    // version of this test. A `Record` over the union requires every member
+    // as a key: a missing (or, symmetrically, an extra-but-unlisted) member
+    // becomes a compile error, which is what actually pins the deliberate
+    // non-change.
     const ALL_DRAFT_REASONS: Record<DraftReason, true> = {
       unreconciled: true,
       senior_not_repaid: true,
       tax_basis_unconfirmed: true,
       vat_basis_unconfirmed: true,
       not_approved: true,
+      lender_case_stale: true,
     };
-    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(5);
+    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(6);
   });
 
   it('keeps a document with a large unallocated balance FINAL when nothing else blocks it', () => {
@@ -336,5 +342,133 @@ describe('R9 — the area bridge does not gate the document', () => {
     const run = runAppraisal(inputs);
     expect(run.validation.some((i) => i.severity === 'error' && i.field === 'areas.existing_gia_sqm')).toBe(true);
     expect(draftReason(run.reconciliation, approvedStatus, { taxBasisConfirmed: true })).toBe('unreconciled');
+  });
+});
+
+describe('R14b — lender case staleness (spec §21.3)', () => {
+  const ok = { report_safe: true, senior_repaid: true };
+
+  it('reports lender_case_stale for an approved case whose document moved', () => {
+    expect(draftReason(ok, 'credit_approved', undefined, undefined, { lenderCaseStale: true }))
+      .toBe('lender_case_stale');
+    expect(draftReason(ok, 'approved_with_conditions', undefined, undefined, { lenderCaseStale: true }))
+      .toBe('lender_case_stale');
+  });
+
+  it('never fires for an unapproved case — not_approved wins', () => {
+    expect(draftReason(ok, 'declined', undefined, undefined, { lenderCaseStale: true }))
+      .toBe('not_approved');
+    expect(draftReason(ok, null, undefined, undefined, { lenderCaseStale: true }))
+      .toBe('not_approved');
+  });
+
+  it('never displaces conditions 1–4', () => {
+    expect(draftReason({ report_safe: false, senior_repaid: true }, 'credit_approved',
+      undefined, undefined, { lenderCaseStale: true })).toBe('unreconciled');
+    expect(draftReason(ok, 'credit_approved', { taxBasisConfirmed: false },
+      undefined, { lenderCaseStale: true })).toBe('tax_basis_unconfirmed');
+  });
+
+  it('keeps four-argument callers behaving exactly as before', () => {
+    expect(draftReason(ok, 'credit_approved')).toBeNull();
+  });
+
+  it('carries through documentStatus', () => {
+    expect(documentStatus(ok, 'credit_approved', undefined, undefined,
+      { lenderCaseStale: true })).toBe('DRAFT');
+  });
+});
+
+describe('R14b — the transition table mirror (spec §21.2)', () => {
+  it('is exactly the Python table', () => {
+    // Mirrors tests/test_provenance.py::test_the_table_is_exactly_the_spec_sec_21_2_table.
+    expect(ALLOWED_TRANSITIONS).toEqual({
+      draft: ['submitted', 'superseded'],
+      submitted: ['under_review', 'superseded'],
+      under_review: ['information_required', 'credit_approved',
+        'approved_with_conditions', 'declined', 'superseded'],
+      information_required: ['under_review', 'superseded'],
+      credit_approved: ['superseded'],
+      approved_with_conditions: ['superseded'],
+      declined: ['superseded'],
+      superseded: [],
+    });
+  });
+});
+
+describe('R14b — structurallyEqual (the unsaved-edit staleness check)', () => {
+  it('ignores key order', () => {
+    expect(structurallyEqual({ a: 1, b: { c: [1, 2] } }, { b: { c: [1, 2] }, a: 1 })).toBe(true);
+  });
+  it('sees a changed nested value', () => {
+    expect(structurallyEqual({ a: 1, b: { c: [1, 2] } }, { a: 1, b: { c: [1, 3] } })).toBe(false);
+  });
+  it('treats array order as meaningful', () => {
+    expect(structurallyEqual([1, 2], [2, 1])).toBe(false);
+  });
+  it('distinguishes null from absent', () => {
+    expect(structurallyEqual({ a: null }, {})).toBe(false);
+  });
+});
+
+// R14b, spec §21.3. buildProvenance's lender-case wiring: the full LenderCase
+// object (when supplied) wins over the bare lenderCaseStatus option, and its
+// `stale` flag drives draftReason's new fifth argument. Reuses the same
+// FINAL-reaching run construction as the "never gates an unregistered
+// document" case above (welshInputs -> v7 -> v8: reconciled, evidenced tax
+// basis, unregistered VAT) so the only thing under test is the lender-case
+// wiring itself, not the run's own reconciliation.
+describe('R14b — buildProvenance derives lender case staleness (spec §21.3)', () => {
+  function finalReachingRun() {
+    return runAppraisal(migrateV7toV8(migrateV6toV7(welshInputs())));
+  }
+
+  function fakeLenderCase(status: LenderCase['status'], stale: boolean): LenderCase {
+    return {
+      id: 'case-1',
+      project_id: 'project-1',
+      status,
+      locked_inputs_snapshot: {},
+      locked_calc_version: '2.13.0',
+      locked_inputs_version: 11,
+      locked_input_hash: 'hash-input',
+      locked_outputs_hash: 'hash-outputs',
+      locked_audit_hash: 'hash-audit',
+      case_hash: 'hash-case',
+      created_by: 'tester',
+      submitted_by: 'tester',
+      reviewer: 'reviewer',
+      decided_by: 'reviewer',
+      conditions: null,
+      submitted_at: '2026-08-01T00:00:00Z',
+      decided_at: '2026-08-02T00:00:00Z',
+      stale,
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-02T00:00:00Z',
+    };
+  }
+
+  it('reports lender_case_stale for an approved case whose document moved on', () => {
+    const run = finalReachingRun();
+    const lenderCase = fakeLenderCase('credit_approved', true);
+    const prov = buildProvenance(run, null, { lenderCase });
+    expect(prov.lenderCaseStatus).toBe('credit_approved');
+    expect(prov.lenderCaseStale).toBe(true);
+    expect(prov.draftReason).toBe('lender_case_stale');
+  });
+
+  it('reaches FINAL for the same run when the case is not stale', () => {
+    const run = finalReachingRun();
+    const lenderCase = fakeLenderCase('credit_approved', false);
+    const prov = buildProvenance(run, null, { lenderCase });
+    expect(prov.documentStatus).toBe('FINAL');
+  });
+
+  it('defaults to no lender case, not stale, not approved', () => {
+    const run = finalReachingRun();
+    const prov = buildProvenance(run, null, {});
+    expect(prov.lenderCase).toBeNull();
+    expect(prov.lenderCaseStale).toBe(false);
+    expect(prov.draftReason).toBe('not_approved');
   });
 });

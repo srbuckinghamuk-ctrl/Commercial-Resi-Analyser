@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UseClass(StrEnum):
@@ -421,6 +421,89 @@ class FinancialAppraisal(BaseModel):
     rlv_pence: int | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# --- Lender Case (R14b, spec Sec 21) ---
+
+
+class LenderCaseCreate(BaseModel):
+    project_id: uuid.UUID
+    # Free-text actor names, the LenderValuation.author idiom -- the product
+    # has no auth (design decision 4), so the record says who claims to have
+    # acted and the change log says when.
+    created_by: str = Field(min_length=1, max_length=256)
+
+    @field_validator("created_by")
+    @classmethod
+    def _no_separator(cls, v: str) -> str:
+        if "|" in v or any(ord(c) < 32 for c in v):
+            raise ValueError(
+                "actor names may not contain '|' or control characters — the name is a "
+                "component of the case hash (spec Sec 13.2.1)"
+            )
+        return v
+
+
+class LenderCaseTransition(BaseModel):
+    to_status: str
+    actor: str = Field(min_length=1, max_length=256)
+    note: str | None = Field(default=None, max_length=10_000)
+    # Required for approved_with_conditions, forbidden otherwise (Sec 21.2).
+    conditions: str | None = Field(default=None, max_length=10_000)
+
+    @field_validator("actor")
+    @classmethod
+    def _no_separator(cls, v: str) -> str:
+        if "|" in v or any(ord(c) < 32 for c in v):
+            raise ValueError(
+                "actor names may not contain '|' or control characters — the name is a "
+                "component of the case hash (spec Sec 13.2.1)"
+            )
+        return v
+
+
+class LenderCase(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    status: str
+    locked_inputs_snapshot: dict
+    locked_calc_version: str
+    locked_inputs_version: int
+    locked_input_hash: str
+    locked_outputs_hash: str
+    locked_audit_hash: str
+    case_hash: str                         # spec Sec 21.4
+    created_by: str
+    submitted_by: str | None = None
+    reviewer: str | None = None
+    decided_by: str | None = None
+    conditions: str | None = None
+    submitted_at: datetime | None = None
+    decided_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class LenderCaseRead(LenderCase):
+    """The API read shape: the stored case plus the derived staleness --
+    computed at read time against the live appraisal row, never stored
+    (spec Sec 21.3)."""
+
+    stale: bool
+
+
+class LenderCaseEvent(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    case_id: uuid.UUID
+    from_status: str | None = None
+    to_status: str
+    actor: str
+    note: str | None = None
+    occurred_at: datetime
 
 
 # --- Stage Transition ---

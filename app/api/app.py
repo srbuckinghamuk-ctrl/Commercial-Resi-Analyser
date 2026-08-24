@@ -5,7 +5,7 @@ from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
@@ -14,14 +14,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
-from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
+from app.financial_model.hashing import audit_hash, canonical_hash, case_hash, input_hash
 from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v11
+from app.financial_model.provenance import ALLOWED_TRANSITIONS, is_stale
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
@@ -35,6 +36,11 @@ from app.models import (
     FinancialAppraisal,
     FinancialAppraisalCreate,
     FinancialAppraisalUpdate,
+    LenderCase,
+    LenderCaseCreate,
+    LenderCaseEvent,
+    LenderCaseRead,
+    LenderCaseTransition,
     PipelineStage,
     Project,
     ProjectCreate,
@@ -48,6 +54,8 @@ from app.persistence.database import Base, engine, get_db
 from app.persistence.repositories import (
     EligibilityAssessmentRepository,
     FinancialAppraisalRepository,
+    LenderCaseEventRepository,
+    LenderCaseRepository,
     ProjectRepository,
     StageTransitionRepository,
 )
@@ -129,6 +137,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router, prefix=settings.api_prefix, tags=["projects"])
     app.include_router(eligibility_router, prefix=settings.api_prefix, tags=["eligibility"])
     app.include_router(appraisals_router, prefix=settings.api_prefix, tags=["appraisals"])
+    app.include_router(lender_cases_router, prefix=settings.api_prefix, tags=["lender-cases"])
     app.include_router(scrape_router, prefix=settings.api_prefix, tags=["scrape"])
     app.include_router(lookup_router, prefix=settings.api_prefix, tags=["lookup"])
     app.include_router(system_router, tags=["system"])
@@ -589,7 +598,7 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     repo = FinancialAppraisalRepository(db)
-    # Upsert: only one appraisal may exist per project (migration 004 adds the
+    # Upsert: only one appraisal may exist per project (migration 003 adds the
     # unique constraint). Both arms persist the server-authored `computed`
     # payload -- the client never supplies outputs or governance columns (Task 12).
     existing = await repo.get_by_project_id(body.project_id)
@@ -678,6 +687,201 @@ async def update_appraisal(project_id: UUID, body: FinancialAppraisalUpdate, db:
         raise HTTPException(status_code=404, detail="Financial appraisal not found")
     await db.commit()
     return appraisal
+
+
+# --- Lender Cases Router (R14b, spec Sec 21) ---
+
+lender_cases_router = APIRouter(prefix="/lender-cases")
+
+
+def _read_shape(case, appraisal) -> LenderCaseRead:
+    """The stored case plus derived staleness (spec Sec 21.3): the live
+    appraisal row's input hash no longer matching the locked one. Derived on
+    every read, stored nowhere."""
+    return LenderCaseRead(
+        **case.model_dump(),
+        stale=is_stale(appraisal.input_hash if appraisal else None, case.locked_input_hash),
+    )
+
+
+@lender_cases_router.post("", response_model=LenderCaseRead, status_code=201)
+async def create_lender_case(body: LenderCaseCreate, db: DbDep):
+    project = await ProjectRepository(db).get_by_id(body.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(body.project_id)
+    if not appraisal:
+        raise HTTPException(
+            status_code=404,
+            detail="Financial appraisal not found — save an appraisal before opening a lender case",
+        )
+    if not (appraisal.audit_hash and appraisal.input_hash and appraisal.outputs_hash):
+        # Spec Sec 21.1: a pre-provenance row cannot be bound by the case-hash
+        # chain. Re-saving recomputes the hashes; locking without them would
+        # assert a binding no run produced.
+        raise HTTPException(status_code=422, detail=[{
+            "severity": "error", "field": "appraisal",
+            "message": "the stored appraisal predates provenance hashing — re-save it before opening a lender case",
+        }])
+    repo = LenderCaseRepository(db)
+    live = await repo.get_live_by_project_id(body.project_id)
+    if live:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A live lender case already exists (status '{live.status}') — supersede it first",
+        )
+    case_id = uuid4()
+    try:
+        case = await repo.create({
+            "id": case_id,
+            "project_id": body.project_id,
+            "status": "draft",
+            "locked_inputs_snapshot": appraisal.inputs_snapshot,
+            "locked_calc_version": appraisal.calc_version,
+            "locked_inputs_version": appraisal.inputs_version,
+            "locked_input_hash": appraisal.input_hash,
+            "locked_outputs_hash": appraisal.outputs_hash,
+            "locked_audit_hash": appraisal.audit_hash,
+            "case_hash": case_hash(
+                case_id=str(case_id), project_id=str(body.project_id), status="draft",
+                submitted_by=None, reviewer=None, decided_by=None, decided_at=None,
+                locked_audit_hash=appraisal.audit_hash,
+            ),
+            "created_by": body.created_by,
+        })
+        await LenderCaseEventRepository(db).create({
+            "case_id": case.id, "from_status": None, "to_status": "draft",
+            "actor": body.created_by, "note": None,
+        })
+        await db.commit()
+    except IntegrityError:
+        # The `if live:` check above and this write are not atomic, so two
+        # concurrent creates can both pass it and race to the flush -- the
+        # partial unique index (uq_lender_case_live_project) is what actually
+        # stops the second one. This is that index's refusal made presentable
+        # as the same 409 the pre-check above gives the common case, rather
+        # than the IntegrityError surfacing as an unhandled 500.
+        await db.rollback()
+        winner = await repo.get_live_by_project_id(body.project_id)
+        raise HTTPException(
+            status_code=409,
+            detail=f"A live lender case already exists (status '{winner.status if winner else 'unknown'}')"
+                   f" — supersede it first",
+        )
+    return _read_shape(case, appraisal)
+
+
+@lender_cases_router.get("/{project_id}", response_model=LenderCaseRead | None)
+async def get_lender_case(project_id: UUID, db: DbDep):
+    """The live case with derived staleness, or JSON null when none exists —
+    'no case yet' is a normal state, not an error (spec Sec 21.5)."""
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    case = await LenderCaseRepository(db).get_live_by_project_id(project_id)
+    if case is None:
+        return None
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+    return _read_shape(case, appraisal)
+
+
+@lender_cases_router.post("/{project_id}/transition", response_model=LenderCaseRead)
+async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, db: DbDep):
+    from datetime import datetime, timezone
+
+    repo = LenderCaseRepository(db)
+    case = await repo.get_live_by_project_id(project_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="No live lender case for this project")
+    if body.to_status not in ALLOWED_TRANSITIONS:
+        raise HTTPException(status_code=422, detail=[{
+            "severity": "error", "field": "to_status",
+            "message": f"unknown lender-case status '{body.to_status}'",
+        }])
+    allowed = ALLOWED_TRANSITIONS[case.status]
+    if body.to_status not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot move a lender case from '{case.status}' to '{body.to_status}'"
+                   f" — allowed: {list(allowed)}",
+        )
+    # One field, one meaning (spec Sec 21.2): conditions belong to
+    # approved_with_conditions and nothing else.
+    if body.to_status == "approved_with_conditions":
+        if not (body.conditions and body.conditions.strip()):
+            raise HTTPException(status_code=422, detail=[{
+                "severity": "error", "field": "conditions",
+                "message": "conditions are required for approved_with_conditions",
+            }])
+    elif body.conditions is not None:
+        raise HTTPException(status_code=422, detail=[{
+            "severity": "error", "field": "conditions",
+            "message": "conditions may only accompany approved_with_conditions",
+        }])
+
+    now = datetime.now(timezone.utc)
+    values: dict = {"status": body.to_status}
+    if body.to_status == "submitted":
+        values |= {"submitted_by": body.actor, "submitted_at": now}
+    elif body.to_status == "under_review":
+        # A resubmission overwrites the reviewer of record; the event log
+        # keeps the history (spec Sec 21.2).
+        values |= {"reviewer": body.actor}
+    elif body.to_status in ("credit_approved", "approved_with_conditions", "declined"):
+        values |= {"decided_by": body.actor, "decided_at": now}
+        if body.to_status == "approved_with_conditions":
+            values |= {"conditions": body.conditions}
+    # A supersede records its actor in the event only: the case columns keep
+    # the state the case died in, so history shows what was approved.
+
+    merged = case.model_dump() | values
+    values["case_hash"] = case_hash(
+        case_id=str(case.id),
+        project_id=str(case.project_id),
+        status=merged["status"],
+        submitted_by=merged["submitted_by"],
+        reviewer=merged["reviewer"],
+        decided_by=merged["decided_by"],
+        decided_at=merged["decided_at"],
+        locked_audit_hash=case.locked_audit_hash,
+    )
+    updated = await repo.update(case.id, values, expected_status=case.status)
+    if updated is None:
+        # Compare-and-swap failed: another transition committed against this
+        # case between our read (`case`, above) and this write. No event may
+        # record a transition that did not happen, so this raises before the
+        # event is written, not after.
+        raise HTTPException(
+            status_code=409,
+            detail="The lender case moved while this transition was validated — re-read and retry",
+        )
+    await LenderCaseEventRepository(db).create({
+        "case_id": case.id, "from_status": case.status,
+        "to_status": body.to_status, "actor": body.actor, "note": body.note,
+    })
+    await db.commit()
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+    return _read_shape(updated, appraisal)
+
+
+@lender_cases_router.get("/{project_id}/history", response_model=list[LenderCaseRead])
+async def lender_case_history(project_id: UUID, db: DbDep):
+    """All the project's cases, newest first, superseded included."""
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+    cases = await LenderCaseRepository(db).list_by_project_id(project_id)
+    return [_read_shape(c, appraisal) for c in cases]
+
+
+@lender_cases_router.get("/{project_id}/events", response_model=list[LenderCaseEvent])
+async def lender_case_events(project_id: UUID, db: DbDep):
+    """The change log across all the project's cases, newest first."""
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return await LenderCaseEventRepository(db).list_by_project_id(project_id)
 
 
 # --- Scrape Router ---

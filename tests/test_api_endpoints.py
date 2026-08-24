@@ -28,3 +28,10 @@ class TestAppCreation:
 
     def test_scrape_url_route_exists(self):
         assert any("scrape-url" in p for p in PATHS)
+
+    def test_lender_case_routes_exist(self):
+        assert "/api/v1/lender-cases" in PATHS
+        assert "/api/v1/lender-cases/{project_id}" in PATHS
+        assert "/api/v1/lender-cases/{project_id}/transition" in PATHS
+        assert "/api/v1/lender-cases/{project_id}/history" in PATHS
+        assert "/api/v1/lender-cases/{project_id}/events" in PATHS
