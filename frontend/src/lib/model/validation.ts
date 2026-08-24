@@ -1303,12 +1303,13 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     // branch is LIVE in TS even though its Python twin is structurally
     // unreachable (Pydantic's `int` field refuses the fraction at parse
     // time) — kept in both so the two engines' rule lists match line for
-    // line. `!= null` matches this file's structural-read idiom for every
-    // other post-v2 field (see the `unit_sales`/`sales_phasing` guards
-    // above): a pre-v12 document read here WITHOUT going through
-    // `migrateInputsToV12` first (several test fixtures below cast raw JSON
-    // straight to `AnyCalculatorInputs`) has no `sales_slip_months` key at
-    // all, and that must stay inert rather than read as a fraction.
+    // line. The `!= null` guard exists for one concrete reason, not a file
+    // precedent: `sensitivity.test.ts:157-171`'s `fixtureFInputs`/
+    // `allCashInputs`/`phasedSalesInputs` cast raw pre-v12 fixture JSON
+    // straight to `AnyCalculatorInputs` with no migration step, so on those
+    // documents `sales_slip_months` is genuinely absent at runtime (not `0`)
+    // and `Number.isInteger(undefined)` would otherwise misfire here.
+    // Absence is not itself a §22.7 rule — only a present fractional value is.
     if (scenario.sales_slip_months != null && !Number.isInteger(scenario.sales_slip_months)) {
       err(`scenarios.${name}.sales_slip_months`, 'Sales slip must be a whole number of months.');
     }

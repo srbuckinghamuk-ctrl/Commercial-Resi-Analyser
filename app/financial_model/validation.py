@@ -1466,8 +1466,11 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         # payload with 1.5 parses as a plain object with no int coercion),
         # and a rule present in one engine but not the other is exactly the
         # kind of silent asymmetry this release's dual-engine mirror rule
-        # exists to prevent.
-        if not isinstance(scenario.sales_slip_months, int):
+        # exists to prevent. The `is not None` guard is likewise dead here
+        # (a Pydantic-parsed scenario always has a value) but is kept so this
+        # check's body is textually identical to validation.ts's -- see that
+        # file's comment on the guard for why TS actually needs it.
+        if scenario.sales_slip_months is not None and not isinstance(scenario.sales_slip_months, int):
             err(
                 f"scenarios.{name}.sales_slip_months",
                 "Sales slip must be a whole number of months.",
