@@ -770,6 +770,108 @@ async def get_lender_case(project_id: UUID, db: DbDep):
     return _read_shape(case, appraisal)
 
 
+@lender_cases_router.post("/{project_id}/transition", response_model=LenderCaseRead)
+async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, db: DbDep):
+    from datetime import datetime, timezone
+
+    repo = LenderCaseRepository(db)
+    case = await repo.get_live_by_project_id(project_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="No live lender case for this project")
+    if body.to_status not in ALLOWED_TRANSITIONS:
+        raise HTTPException(status_code=422, detail=[{
+            "severity": "error", "field": "to_status",
+            "message": f"unknown lender-case status '{body.to_status}'",
+        }])
+    allowed = ALLOWED_TRANSITIONS[case.status]
+    if body.to_status not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot move a lender case from '{case.status}' to '{body.to_status}'"
+                   f" — allowed: {list(allowed)}",
+        )
+    # One field, one meaning (spec Sec 21.2): conditions belong to
+    # approved_with_conditions and nothing else.
+    if body.to_status == "approved_with_conditions":
+        if not (body.conditions and body.conditions.strip()):
+            raise HTTPException(status_code=422, detail=[{
+                "severity": "error", "field": "conditions",
+                "message": "conditions are required for approved_with_conditions",
+            }])
+    elif body.conditions is not None:
+        raise HTTPException(status_code=422, detail=[{
+            "severity": "error", "field": "conditions",
+            "message": "conditions may only accompany approved_with_conditions",
+        }])
+
+    now = datetime.now(timezone.utc)
+    values: dict = {"status": body.to_status}
+    if body.to_status == "submitted":
+        values |= {"submitted_by": body.actor, "submitted_at": now}
+    elif body.to_status == "under_review":
+        # A resubmission overwrites the reviewer of record; the event log
+        # keeps the history (spec Sec 21.2).
+        values |= {"reviewer": body.actor}
+    elif body.to_status in ("credit_approved", "approved_with_conditions", "declined"):
+        values |= {"decided_by": body.actor, "decided_at": now}
+        if body.to_status == "approved_with_conditions":
+            values |= {"conditions": body.conditions}
+    # A supersede records its actor in the event only: the case columns keep
+    # the state the case died in, so history shows what was approved.
+
+    merged = case.model_dump() | values
+    values["case_hash"] = case_hash(
+        case_id=str(case.id),
+        project_id=str(case.project_id),
+        status=merged["status"],
+        submitted_by=merged["submitted_by"],
+        reviewer=merged["reviewer"],
+        decided_by=merged["decided_by"],
+        decided_at=merged["decided_at"],
+        locked_audit_hash=case.locked_audit_hash,
+    )
+    updated = await repo.update(case.id, values)
+    await LenderCaseEventRepository(db).create({
+        "case_id": case.id, "from_status": case.status,
+        "to_status": body.to_status, "actor": body.actor, "note": body.note,
+    })
+    await db.commit()
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+    return _read_shape(updated, appraisal)
+
+
+@lender_cases_router.get("/{project_id}/history", response_model=list[LenderCaseRead])
+async def lender_case_history(project_id: UUID, db: DbDep):
+    """All the project's cases, newest first, superseded included."""
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+    cases = await LenderCaseRepository(db).list_by_project_id(project_id)
+    # Tiebreak same-second `created_at` values: sqlite's CURRENT_TIMESTAMP is
+    # 1-second resolution, so two cases opened within the same second (a
+    # supersede immediately followed by a fresh case, exactly what the
+    # governance test drives) sort nondeterministically on created_at alone.
+    # Each case's most recent event id is a true autoincrement, strictly
+    # increasing in real insertion order -- the same discipline
+    # LenderCaseEventRepository.list_by_project_id already uses.
+    events = await LenderCaseEventRepository(db).list_by_project_id(project_id)
+    latest_event_id: dict = {}
+    for event in events:  # newest first; first hit per case_id is the latest
+        latest_event_id.setdefault(event.case_id, event.id)
+    cases = sorted(cases, key=lambda c: latest_event_id.get(c.id, 0), reverse=True)
+    return [_read_shape(c, appraisal) for c in cases]
+
+
+@lender_cases_router.get("/{project_id}/events", response_model=list[LenderCaseEvent])
+async def lender_case_events(project_id: UUID, db: DbDep):
+    """The change log across all the project's cases, newest first."""
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return await LenderCaseEventRepository(db).list_by_project_id(project_id)
+
+
 # --- Scrape Router ---
 
 scrape_router = APIRouter()
