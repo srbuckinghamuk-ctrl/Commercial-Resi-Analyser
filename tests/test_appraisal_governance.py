@@ -368,8 +368,8 @@ async def test_area_bridge_large_unallocated_balance_stays_reconciled(client, pr
     tax jurisdiction (knowable on day one), an unallocated balance is
     frequently and legitimately unknown at appraisal stage.
 
-    Python has no DraftReason union -- that governance (spec Sec 13/Sec 14)
-    lives entirely in report-provenance.ts on the frontend. The Python-
+    R14b gave Python its own DraftReason twin (app/financial_model/
+    provenance.py), but the area-bridge rule is unchanged: the Python-
     observable mirror of "does not gate the document" is that the persisted
     `status` stays 'reconciled' (report_safe True) with the warning still
     recorded in `validation.issues`, exactly as
