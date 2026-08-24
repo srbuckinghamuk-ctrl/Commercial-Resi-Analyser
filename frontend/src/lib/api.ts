@@ -14,6 +14,9 @@ import type {
   EpcData,
   Article4Data,
   EligibilityRunResponse,
+  LenderCase,
+  LenderCaseEvent,
+  LenderCaseStatus,
 } from '../types';
 
 const HEADERS = { 'Content-Type': 'application/json' };
@@ -266,4 +269,40 @@ export async function runEligibility(
     headers: HEADERS,
     body: JSON.stringify({ manual_overrides: manualOverrides }),
   });
+}
+
+// --- Lender Cases (R14b, spec §21) ---
+
+export async function getLenderCase(projectId: string): Promise<LenderCase | null> {
+  return request<LenderCase | null>(`/api/v1/lender-cases/${projectId}`, { headers: HEADERS });
+}
+
+export async function createLenderCase(
+  projectId: string,
+  createdBy: string,
+): Promise<LenderCase> {
+  return request<LenderCase>('/api/v1/lender-cases', {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify({ project_id: projectId, created_by: createdBy }),
+  });
+}
+
+export async function transitionLenderCase(
+  projectId: string,
+  data: { to_status: LenderCaseStatus; actor: string; note?: string; conditions?: string },
+): Promise<LenderCase> {
+  return request<LenderCase>(`/api/v1/lender-cases/${projectId}/transition`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify(data),
+  });
+}
+
+export async function listLenderCaseHistory(projectId: string): Promise<LenderCase[]> {
+  return request<LenderCase[]>(`/api/v1/lender-cases/${projectId}/history`, { headers: HEADERS });
+}
+
+export async function listLenderCaseEvents(projectId: string): Promise<LenderCaseEvent[]> {
+  return request<LenderCaseEvent[]>(`/api/v1/lender-cases/${projectId}/events`, { headers: HEADERS });
 }

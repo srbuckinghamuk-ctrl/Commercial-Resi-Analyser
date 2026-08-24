@@ -13,18 +13,33 @@
  * printed result is stale against the record it came from) so that neither the
  * report generator nor a React component has to decide them.
  */
-import type { FinancialAppraisal } from '../types';
+import type { FinancialAppraisal, LenderCase, LenderCaseStatus } from '../types';
 import type { AppraisalRun, ReconciliationStatus } from './model';
 import { CALC_VERSION, vatBasisGate } from './model';
 import type { Jurisdiction } from './tax/acquisition-tax';
 
-/** Where a lender case has reached. Populated from R14; null until then. */
-export type LenderCaseStatus =
-  | 'draft' | 'submitted' | 'under_review' | 'information_required'
-  | 'credit_approved' | 'approved_with_conditions' | 'declined' | 'superseded';
+/** Where a lender case has reached. Populated from R14b; was null-only until
+ *  then. Canonical in ../types; re-exported here so existing importers of
+ *  this module are unmoved. */
+export type { LenderCaseStatus };
 
 /** The lender-case statuses that permit a FINAL document (spec §13.3). */
 const APPROVED_STATUSES: readonly LenderCaseStatus[] = ['credit_approved', 'approved_with_conditions'];
+
+/** Spec §21.2, normative — mirrored literally in app/financial_model/
+ *  provenance.py, and pinned against it by mirrored tests. The UI derives its
+ *  transition buttons from this table; it never keeps its own list. */
+export const ALLOWED_TRANSITIONS: Record<LenderCaseStatus, readonly LenderCaseStatus[]> = {
+  draft: ['submitted', 'superseded'],
+  submitted: ['under_review', 'superseded'],
+  under_review: ['information_required', 'credit_approved',
+    'approved_with_conditions', 'declined', 'superseded'],
+  information_required: ['under_review', 'superseded'],
+  credit_approved: ['superseded'],
+  approved_with_conditions: ['superseded'],
+  declined: ['superseded'],
+  superseded: [],
+};
 
 export interface ReportProvenance {
   /** Stored appraisal record id, or null when the report is built from an unsaved run. */
@@ -87,6 +102,12 @@ export interface ReportProvenance {
    * by `vatBasisGate` from the run's own `metrics.vat`, never re-derived here.
    */
   vatBasisConfirmed: boolean;
+  /** R14b, spec §21.3. The lender case backing this document, when one
+   *  exists — the full record, not just its status. */
+  lenderCase: LenderCase | null;
+  /** R14b, spec §21.3. True when an approved lender case's locked snapshot no
+   *  longer matches the document it was approved against. */
+  lenderCaseStale: boolean;
 }
 
 export interface ProvenanceOptions {
@@ -96,11 +117,14 @@ export interface ProvenanceOptions {
   scenarioId?: string;
   scenarioName?: string;
   lenderCaseStatus?: LenderCaseStatus | null;
+  /** R14b, spec §21.3. When supplied, wins over `lenderCaseStatus` for both
+   *  the reported status and the staleness check. */
+  lenderCase?: LenderCase | null;
 }
 
 export type DraftReason =
   | 'unreconciled' | 'senior_not_repaid' | 'tax_basis_unconfirmed'
-  | 'vat_basis_unconfirmed' | 'not_approved';
+  | 'vat_basis_unconfirmed' | 'not_approved' | 'lender_case_stale';
 
 /** What `draftReason` needs to know about the acquisition-tax basis. Defaulted
  *  so that a pre-R8 two-argument caller keeps its exact previous behaviour. */
@@ -122,6 +146,15 @@ export interface VatBasisGate {
 }
 
 const VAT_BASIS_ASSUMED_CONFIRMED: VatBasisGate = { vatBasisConfirmed: true };
+
+/** R14b, spec §21.3. What draftReason needs to know about the approved
+ *  case's currency. Defaulted exactly as TaxBasisGate and VatBasisGate were,
+ *  so no existing four-argument caller changes behaviour. */
+export interface CaseStaleGate {
+  lenderCaseStale: boolean;
+}
+
+const CASE_ASSUMED_CURRENT: CaseStaleGate = { lenderCaseStale: false };
 
 /**
  * Spec §13.3, extended by spec §14. A document is FINAL only when four separate
@@ -149,6 +182,7 @@ export function draftReason(
   lenderCaseStatus: LenderCaseStatus | null,
   taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
   vatBasis: VatBasisGate = VAT_BASIS_ASSUMED_CONFIRMED,
+  caseStale: CaseStaleGate = CASE_ASSUMED_CURRENT,
 ): DraftReason | null {
   if (!reconciliation.report_safe) return 'unreconciled';
   if (!reconciliation.senior_repaid) return 'senior_not_repaid';
@@ -164,6 +198,11 @@ export function draftReason(
   // they read an approval.
   if (!vatBasis.vatBasisConfirmed) return 'vat_basis_unconfirmed';
   if (lenderCaseStatus === null || !APPROVED_STATUSES.includes(lenderCaseStatus)) return 'not_approved';
+  // R14b (spec §21.3). Fires only when an approval exists — an unapproved
+  // stale case reports not_approved — so the two are mutually exclusive by
+  // construction, and a FINAL banner can never print over figures the lender
+  // never saw.
+  if (caseStale.lenderCaseStale) return 'lender_case_stale';
   return null;
 }
 
@@ -172,8 +211,10 @@ export function documentStatus(
   lenderCaseStatus: LenderCaseStatus | null,
   taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
   vatBasis: VatBasisGate = VAT_BASIS_ASSUMED_CONFIRMED,
+  caseStale: CaseStaleGate = CASE_ASSUMED_CURRENT,
 ): 'DRAFT' | 'FINAL' {
-  return draftReason(reconciliation, lenderCaseStatus, taxBasis, vatBasis) === null ? 'FINAL' : 'DRAFT';
+  return draftReason(reconciliation, lenderCaseStatus, taxBasis, vatBasis, caseStale) === null
+    ? 'FINAL' : 'DRAFT';
 }
 
 /**
@@ -262,7 +303,12 @@ export function buildProvenance(
     scenarioId = 'base',
     scenarioName = 'Base Case',
     lenderCaseStatus = null,
+    lenderCase = null,
   } = options;
+  // The full case object wins over the bare status when both are supplied —
+  // the status option survives for the tests and callers that predate R14b.
+  const caseStatus = lenderCase?.status ?? lenderCaseStatus;
+  const lenderCaseStale = lenderCase?.stale ?? false;
 
   const reportSafe = run.reconciliation.report_safe;
   const seniorRepaid = run.reconciliation.senior_repaid;
@@ -271,7 +317,8 @@ export function buildProvenance(
   // draftReason receives the gate, it does not compute one.
   const { vatBasisConfirmed } = vatBasisGate(run.metrics.vat);
   const reason = draftReason(
-    run.reconciliation, lenderCaseStatus, { taxBasisConfirmed }, { vatBasisConfirmed },
+    run.reconciliation, caseStatus, { taxBasisConfirmed }, { vatBasisConfirmed },
+    { lenderCaseStale },
   );
   const storedCalcVersion = record?.calc_version ?? null;
   const runCalcVersion = run.metrics.calc_version || CALC_VERSION;
@@ -293,13 +340,15 @@ export function buildProvenance(
     seniorRepaid,
     documentStatus: reason === null ? 'FINAL' : 'DRAFT',
     draftReason: reason,
-    lenderCaseStatus,
+    lenderCaseStatus: caseStatus,
     recomputedSinceSave: storedCalcVersion !== null && storedCalcVersion !== runCalcVersion,
     taxTableVersion: run.metrics.acquisition_tax.table_version,
     jurisdiction: run.metrics.acquisition_tax.jurisdiction,
     jurisdictionRecorded: jurisdictionRecordedOn(run),
     taxBasisConfirmed,
     vatBasisConfirmed,
+    lenderCase,
+    lenderCaseStale,
   };
 }
 
@@ -325,4 +374,29 @@ export function formatGeneratedAt(at: Date, timeZone: string): string {
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
   const offset = get('timeZoneName');
   return `${get('day')} ${get('month')} ${get('year')} ${get('hour')}:${get('minute')}:${get('second')} ${offset} (${timeZone})`;
+}
+
+/**
+ * R14b (spec §21.3) — the client half of staleness: deep structural equality
+ * of the in-session inputs against a case's locked snapshot. An unsaved edit
+ * moves no stored hash, so this is the only check that can see one. It drives
+ * the Lender Case page's live warning and nothing else — the memo always
+ * prints from the stored record, so it consumes the server-derived `stale`
+ * flag instead. Key order is irrelevant; array order is meaningful.
+ */
+export function structurallyEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => structurallyEqual(v, b[i]));
+  }
+  if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
+    const ra = a as Record<string, unknown>;
+    const rb = b as Record<string, unknown>;
+    const ka = Object.keys(ra).sort();
+    const kb = Object.keys(rb).sort();
+    if (ka.length !== kb.length || ka.some((k, i) => k !== kb[i])) return false;
+    return ka.every((k) => structurallyEqual(ra[k], rb[k]));
+  }
+  return false;
 }

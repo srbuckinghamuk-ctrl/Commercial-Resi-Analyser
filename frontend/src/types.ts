@@ -207,6 +207,50 @@ export interface FinancialAppraisal {
   updated_at: string;
 }
 
+/** Where a lender case has reached (R14b, spec §21). Canonical here;
+ *  report-provenance.ts re-exports it so existing importers are unmoved. */
+export type LenderCaseStatus =
+  | 'draft' | 'submitted' | 'under_review' | 'information_required'
+  | 'credit_approved' | 'approved_with_conditions' | 'declined' | 'superseded';
+
+/** A lender case as the API returns it: the locked snapshot, its hashes, the
+ *  governance fields, and `stale` — derived server-side on every read (spec
+ *  §21.3), never stored. */
+export interface LenderCase {
+  id: string;
+  project_id: string;
+  status: LenderCaseStatus;
+  locked_inputs_snapshot: Record<string, unknown>;
+  locked_calc_version: string;
+  locked_inputs_version: number;
+  locked_input_hash: string;
+  locked_outputs_hash: string;
+  locked_audit_hash: string;
+  case_hash: string;
+  created_by: string;
+  submitted_by: string | null;
+  reviewer: string | null;
+  decided_by: string | null;
+  conditions: string | null;
+  submitted_at: string | null;
+  decided_at: string | null;
+  stale: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One row of the append-only change log (spec §21.5). Integer id — the
+ *  server's deterministic newest-first order key. */
+export interface LenderCaseEvent {
+  id: number;
+  case_id: string;
+  from_status: LenderCaseStatus | null;
+  to_status: LenderCaseStatus;
+  actor: string;
+  note: string | null;
+  occurred_at: string;
+}
+
 export interface FinancialAppraisalCreate {
   project_id: string;
   name: string;

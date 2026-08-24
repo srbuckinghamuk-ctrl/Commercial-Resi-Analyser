@@ -75,6 +75,10 @@ const DRAFT_REASON_SENTENCE: Record<DraftReason, string> = {
   // it must not displace a reason saying the figures themselves may be.
   vat_basis_unconfirmed: 'a VAT treatment that actually bears VAT is not yet evidence-confirmed',
   not_approved: 'no lender case has been credit approved',
+  // R14b (spec §21.3). Controller ruling (Task 6): added here so `tsc -b`
+  // stays green at that task's commit; Task 7 builds the rest of the
+  // staleness surface on top of these two rows.
+  lender_case_stale: 'the lender case was approved against an earlier version of this document, which has since changed',
 };
 
 const WATERMARK_TEXT: Record<DraftReason, string> = {
@@ -83,6 +87,7 @@ const WATERMARK_TEXT: Record<DraftReason, string> = {
   tax_basis_unconfirmed: 'DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
   vat_basis_unconfirmed: 'DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
   not_approved: 'DRAFT - NOT APPROVED FOR LENDER RELIANCE',
+  lender_case_stale: 'DRAFT - LENDER CASE STALE - NOT FOR LENDER RELIANCE',
 };
 
 /** Spec §17.2/§17.10. The reader is told the recovery basis in words, not the
