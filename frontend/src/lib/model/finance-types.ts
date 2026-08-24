@@ -188,8 +188,12 @@ export { OPEX_CODES } from './investment-case';
 export type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
 
 // R13b Task 1: the unit-sales input types live in unit-sales.ts (the
-// investment-case pattern); Task 4 adds `UnitSalesResult` to this list.
-export type { DepositRelease, SaleEvent, UnitSale, UnitSalesInputs } from './unit-sales';
+// investment-case pattern); Task 4 adds `UnitSalesResult` and its row/month/
+// basis types to this list.
+export type {
+  DepositRelease, SaleEvent, UnitSale, UnitSalesInputs,
+  PreSoldBasis, UnitSaleRow, UnitSalesMonth, UnitSalesResult,
+} from './unit-sales';
 export { DEPOSIT_RELEASE_VALUES } from './unit-sales';
 
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
