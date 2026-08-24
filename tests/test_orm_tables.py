@@ -7,6 +7,8 @@ from app.persistence.database import (
     EligibilityAssessmentORM,
     FinancialAppraisalORM,
     StageTransitionORM,
+    LenderCaseORM,
+    LenderCaseEventORM,
     Base,
 )
 
@@ -80,16 +82,56 @@ class TestStageTransitionORM:
         assert required.issubset(col_names)
 
 
+class TestLenderCaseORM:
+    def test_table_name(self):
+        assert LenderCaseORM.__tablename__ == "lender_cases"
+
+    def test_has_required_columns(self):
+        col_names = {c.name for c in LenderCaseORM.__table__.columns}
+        required = {
+            "id", "project_id", "status",
+            "locked_inputs_snapshot", "locked_calc_version", "locked_inputs_version",
+            "locked_input_hash", "locked_outputs_hash", "locked_audit_hash",
+            "case_hash", "created_by", "submitted_by", "reviewer", "decided_by",
+            "conditions", "submitted_at", "decided_at", "created_at", "updated_at",
+        }
+        assert required.issubset(col_names)
+
+    def test_live_case_index_is_partial_and_unique(self):
+        idx = next(i for i in LenderCaseORM.__table__.indexes
+                   if i.name == "uq_lender_case_live_project")
+        assert idx.unique
+        # Declared for BOTH dialects so Alembic and the create_all boot path
+        # agree on every backend the app runs on. (`sqlite_where=`/`
+        # `postgresql_where=` kwargs surface as the "where" dialect option.)
+        assert idx.dialect_options["sqlite"]["where"] is not None
+        assert idx.dialect_options["postgresql"]["where"] is not None
+
+
+class TestLenderCaseEventORM:
+    def test_table_name(self):
+        assert LenderCaseEventORM.__tablename__ == "lender_case_events"
+
+    def test_has_required_columns(self):
+        col_names = {c.name for c in LenderCaseEventORM.__table__.columns}
+        required = {"id", "case_id", "from_status", "to_status", "actor", "note", "occurred_at"}
+        assert required.issubset(col_names)
+
+
 class TestCascadeRelationships:
     def test_project_has_relationships(self):
         rel_names = {r.key for r in ProjectORM.__mapper__.relationships}
         assert "eligibility_assessments" in rel_names
         assert "financial_appraisals" in rel_names
         assert "stage_transitions" in rel_names
+        assert "lender_cases" in rel_names
 
 
 class TestBaseMetadata:
     def test_all_tables_registered(self):
         table_names = set(Base.metadata.tables.keys())
-        expected = {"projects", "eligibility_assessments", "financial_appraisals", "stage_transitions"}
+        expected = {
+            "projects", "eligibility_assessments", "financial_appraisals", "stage_transitions",
+            "lender_cases", "lender_case_events",
+        }
         assert expected.issubset(table_names)
