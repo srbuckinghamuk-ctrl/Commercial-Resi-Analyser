@@ -812,7 +812,7 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 | Lender case id | the live case's `id` (§21.1) | — (this row and the six below are omitted entirely when no case exists) [R14b] |
 | Case submitted by | the case's `submitted_by` | "not yet submitted" [R14b] |
 | Case reviewer | the case's `reviewer` | "not yet assigned" [R14b] |
-| Case decided | the case's `decided_by` and `decided_at`, the timestamp printed **raw** in its canonical UTC ISO-8601 form because it is a hash component (§13.2.1); the reader-friendly date is in the narrative | "not yet decided" [R14b] |
+| Case decided | the case's `decided_by` and `decided_at`, the timestamp printed **as stored** — the record's own serialisation, which must be canonicalised per §13.2.1 before it can be used to recompute the hash; the reader-friendly date is in the narrative | "not yet decided" [R14b] |
 | Approval conditions | the case's `conditions` (§21.2 — set only by `approved_with_conditions`) | — (row omitted unless the case records conditions) [R14b] |
 | Case locked audit hash | the case's `locked_audit_hash` — the audit hash **as at lock time**, which is the eighth component of `case_hash` and is not the "Audit hash" row above | — [R14b] |
 | Case hash | the case's `case_hash` (§13.2.1) | — [R14b] |
@@ -820,19 +820,36 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 - **The case rows are the case hash's components, and that is why they are there
   [R14b].** They are not decoration and are not a subset chosen for readability.
   Together with the lender-case approval status directly above them and the
-  project id near the top, they are **all eight** parts of §13.2.1's formula: the
-  case id, the project id, the status, the three actor names, the decided
-  timestamp — which is why that timestamp is printed **raw**, in its canonical
-  hashing form, rather than in the reader-friendly form the narrative uses — and
-  the locked audit hash. A reviewer holding the panel can therefore recompute
-  `case_hash` from the page, with nothing else in hand, and detect after-the-fact
-  alteration of the reviewer, the decision, the decider or the approval's status
-  — the property §13.2 claims for the audit hash, extended to the governance
-  state that hash deliberately does not carry. Dropping a row because it looks
-  like internal detail would silently withdraw that guarantee. The approval
-  conditions row is the one that is *not* a hash component: it is printed because
-  a conditional approval that does not say what its conditions were is not a
-  usable one.
+  project id near the top, they carry **all eight** parts of §13.2.1's formula:
+  the case id, the project id, the status, the three actor names, the decided
+  timestamp and the locked audit hash. A reviewer holding the panel can therefore
+  recompute `case_hash` from the page and detect after-the-fact alteration of the
+  reviewer, the decision, the decider or the approval's status — the property
+  §13.2 claims for the audit hash, extended to the governance state that hash
+  deliberately does not carry. Dropping a row because it looks like internal
+  detail would silently withdraw that guarantee. The approval conditions row is
+  the one that is *not* a hash component: it is printed because a conditional
+  approval that does not say what its conditions were is not a usable one.
+- **Two of the eight are printed for a reader, not for the hash, and must be
+  normalised before the recomputation [R14b].** The panel is a document a person
+  reads, so it prints two components in a human form rather than in the form that
+  was hashed. Both normalisations are mechanical and lossless, and neither is
+  optional:
+  1. **The status.** The "Lender case" row prints the humanised label — "Credit
+     approved", "Approved with conditions" — while the hash takes the underlying
+     token, `credit_approved`. Lower-case the printed label and replace its
+     spaces with underscores to recover it. The mapping is invertible because no
+     status token contains a space and none differs from another only by case.
+  2. **The decided timestamp.** It is printed as the record serialises it, which
+     is not always §13.2.1's canonical form — a timestamp stored without an
+     offset serialises without the trailing `Z`. Apply §13.2.1's rule before
+     hashing: treat a missing offset as UTC, then render with microseconds and a
+     literal `Z`.
+
+  With those two substitutions the eight components on the page reproduce the
+  printed `case_hash` exactly. The property is real; it is simply not
+  copy-the-page-verbatim, and stating otherwise would send a reviewer looking for
+  a discrepancy that was never there.
 - **The locked audit hash gets a row of its own, and must [R14b].** `case_hash`'s
   eighth part is the audit hash **as at lock time**; the panel's "Audit hash" row
   is the *live stored record's*. Those are usually the same value, and the
@@ -955,12 +972,19 @@ the only thing it exists to do.
   transition, from the case's post-transition values. It moves when the status
   alone moves, which is what makes it a record of the governance state rather
   than of the snapshot.
-- **A reviewer can recompute it, unconditionally.** All eight components are
-  printed on the provenance panel (§13.1) — `case_id`, `project_id`, the status,
-  the three actor names, the raw decided timestamp, and `locked_audit_hash` on a
-  row of its own, distinct from the panel's live "Audit hash" row for the reason
-  §13.1's second case bullet gives. The property §13.2 claims for the audit hash
-  therefore holds here too, on every document rather than on most of them.
+- **A reviewer can recompute it from the panel, after two normalisations.** All
+  eight components are on the provenance panel (§13.1) — `case_id`, `project_id`,
+  the status, the three actor names, the decided timestamp, and
+  `locked_audit_hash` on a row of its own, distinct from the panel's live "Audit
+  hash" row for the reason §13.1's second case bullet gives. Two of them are
+  printed in a reader's form rather than the hashed form, and are recovered
+  mechanically: **lower-case the printed status label and restore its
+  underscores** ("Credit approved" → `credit_approved`), and **canonicalise the
+  printed timestamp by the rule above** — treat a missing offset as UTC, then
+  render with microseconds and a literal `Z`, since a timestamp stored without an
+  offset serialises without one. Both mappings are lossless and invertible, so
+  the property §13.2 claims for the audit hash holds here too, on every document;
+  what it is not is a verbatim copy of the page into a hash function.
 - **Computed in Python only** (`app/financial_model/hashing.py`), stored on the
   case row, never derived client-side: §13.1's "hashes are the server's, never
   the client's" applies unchanged.
@@ -3204,7 +3228,8 @@ formula that will eventually differ.
 What §21 adds is only *when* it is computed — at creation, and again on every
 transition, from the case's post-transition values (§21.2) — and *why its
 components are printed on the provenance panel*, which is §13.1's case rows and
-the two bullets beneath them.
+the three bullets beneath them — including the two normalisations a reader must
+apply to the printed status and timestamp before the recomputation will close.
 
 ### 21.5 API and change log
 
@@ -3292,6 +3317,7 @@ Recorded so they are not read as oversights.
    document's figures are on; a case is created from the stored appraisal row and
    knows nothing of scenarios. Approving one scenario and not another is not
    expressible.
+
 **Not a limitation, recorded because it nearly was one:** the panel carries two
 audit hashes, the live record's and the case's locked one, and they are separate
 rows on purpose. The first draft of this section printed only the live one and
@@ -3299,10 +3325,13 @@ recorded the resulting gap as a limitation — a re-save that leaves the inputs
 byte-identical while moving `calc_version`, `inputs_version`, the appraisal's
 status or `outputs_hash` moves the live hash *without* making the case stale, so
 a reviewer recomputing `case_hash` from such a document's panel would have got a
-mismatch with nothing altered. Printing the locked value closes it, and §13.2.1's
-recompute claim is unconditional as a result. A reader who finds only one audit
-hash on an older exported document should read §13.1's second case bullet before
-concluding anything from a failed recomputation.
+mismatch with nothing altered. Printing the locked value closes it, and the panel
+now carries all eight components on every document. A reader who finds only one
+audit hash on an older exported document should read §13.1's case bullets before
+concluding anything from a failed recomputation — as should one whose
+recomputation fails on a current document, because §13.1 also records the two
+normalisations (the humanised status label, the timestamp's serialised form) the
+page does not apply for them.
 
 ### Guards this release must watch fail
 

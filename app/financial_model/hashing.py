@@ -58,7 +58,7 @@ def audit_hash(
 
 
 def _utc_iso(dt) -> str:
-    """Canonical UTC ISO-8601 for hashing (spec Sec 21.4): naive datetimes are
+    """Canonical UTC ISO-8601 for hashing (spec Sec 13.2.1): naive datetimes are
     treated as UTC (sqlite returns rows naive that were written aware), always
     rendered with microseconds and a literal 'Z', so a write-time hash and a
     re-read recomputation agree byte for byte."""
@@ -82,7 +82,7 @@ def case_hash(
     decided_at,
     locked_audit_hash: str,
 ) -> str:
-    """Spec Sec 21.4 -- the lender case's own hash, chained onto the audit
+    """Spec Sec 13.2.1 -- the lender case's own hash, chained onto the audit
     hash rather than extending it: audit_hash's Sec 13.2 formula "gains no
     new parts", and a case transition happens without an appraisal re-save,
     so folding case state into audit_hash would silently invalidate stored

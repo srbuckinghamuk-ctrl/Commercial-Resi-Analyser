@@ -922,10 +922,15 @@ export function generateInvestmentMemo(
       ['Report-safe status', prov.reportSafe ? 'Report-safe — hard validations pass' : 'NOT report-safe — hard validations fail'],
       ['Document status', prov.documentStatus],
       ['Lender case', lenderCaseLabel(prov.lenderCaseStatus)],
-      // R14b (spec §21.4): every case_hash component is printed so a reviewer
-      // can recompute it, the same property §13.2 gives the audit hash. The
-      // decided timestamp is printed raw (canonical UTC ISO-8601) because it
-      // is a hash component; the reader-friendly date is in the narrative.
+      // R14b (spec §13.2.1, where the formula lives): every case_hash component
+      // is printed so a reviewer can recompute it, the same property §13.2 gives
+      // the audit hash. Two of them are printed for a reader rather than for the
+      // hash, and §13.1 records the normalisations that recover them: the row
+      // above prints the humanised status label ('Credit approved', not
+      // credit_approved), and the decided timestamp below is printed as the
+      // record serialises it, which lacks the trailing Z when the stored value
+      // carried no offset. Both mappings are lossless. The reader-friendly
+      // decision date is in the narrative.
       ...(prov.lenderCase ? ([
         ['Lender case id', prov.lenderCase.id],
         ['Case submitted by', prov.lenderCase.submitted_by ?? 'not yet submitted'],
