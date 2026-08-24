@@ -337,7 +337,10 @@ UnitSalesResult:
   refinance line prints the per-unit table (unit, gross, exchange, completion,
   deposit, agent, legal, net), a totals row, and the coverage sentence with
   its basis. Omitted entirely when null (§13.5).
-- **Excel.** The per-unit table as its own sheet when non-null.
+- **Excel.** *Withdrawn at plan time (plan-time design correction 1):* no
+  appraisal workbook exists to extend — `export-excel.ts` exports only the
+  projects list, and a prior appraisal workbook was deliberately dropped under
+  spec §11.9. Recorded as §22.10 limitation 9 rather than built from scratch.
 - **§13.4** gains one sentence: a deposit shown as released is a **modelling
   assumption about the sale contract** that the model does not evidence; the
   memo prints it beside the coverage figure.
@@ -460,6 +463,8 @@ bug, and a release that leaves the server writing v11 ships inert.
    evidence is R15's model, on §14.6/§15.9/§16.9/§19.10's reasoning.
 8. **The two sales paths remain two.** A document is phased by tranche or by
    unit; there is no conversion between them.
+9. **No appraisal workbook.** The ledger is printed in the memo and on the
+   pages only (plan-time correction 1; spec §11.9).
 
 ---
 
@@ -476,7 +481,7 @@ timing moves the balance; a facility small enough that the sweep matters.
 | u1 | anchored `marketing + 0` | anchored `practical_completion + 0` | 10% | null | null |
 | u2 | fixed month before PC | anchored `practical_completion + 1` | 10% | null | fixed £ |
 | u3 | null (simultaneous) | anchored `unit_completions + 1` | 0 | 2.0% | null |
-| u4 | fixed | fixed, the last month | 5% | null | null |
+| u4 | fixed (11) | fixed (20 — not the last month, so `sales_slip +3` stays valid and `+4` goes invalid) | 5% | null | null |
 
 Pins, hand-derived in the plan against the constructed document (the R10 rule:
 reachable literals, not merely correct ones): per-unit gross, deposit, agent,
@@ -536,7 +541,10 @@ the engine's own accumulation with no hand figure (the fixture pins do it);
   a corrected metric.
 - `migration-notes.md` §15 (v11 → v12, the identity claim, the York appraisal
   after R13b); `test-cases.md` fixture X worksheet; `model-governance.md` §3.1
-  version row; the release plan's R13b row and the R16 UX-debt note.
+  version row; the release plan's R13b row, the R16 UX-debt note, and
+  (plan-time correction 2) R15's row moving from inputs v12 to v13, since
+  R13b takes v12; the missing 2.13.0 changelog bullet (R14 debt) and §12.6's
+  stale "five levers" (plan-time correction 3).
 
 ## 17. Out of scope
 
