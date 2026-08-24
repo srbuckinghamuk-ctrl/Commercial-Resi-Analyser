@@ -934,6 +934,13 @@ export function generateInvestmentMemo(
           ? 'not yet decided'
           : `${prov.lenderCase.decided_by} — ${prov.lenderCase.decided_at ?? 'no timestamp recorded'}`],
         ...(prov.lenderCase.conditions ? [['Approval conditions', prov.lenderCase.conditions]] : []),
+        // The case hash's eighth component is the audit hash AS AT LOCK TIME.
+        // The 'Audit hash' row above is the *live* record's, which can move
+        // without the case going stale (staleness compares input_hash only,
+        // while audit_hash also commits to calc_version, inputs_version, status
+        // and outputs_hash) — so the locked value is printed too, or the
+        // recomputation §13.2.1 promises would not close on a re-saved document.
+        ['Case locked audit hash', prov.lenderCase.locked_audit_hash],
         ['Case hash', prov.lenderCase.case_hash],
       ] as [string, string][]) : []),
       // Spec §14. Two figures the audit hash already commits to transitively

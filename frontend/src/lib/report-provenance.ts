@@ -157,8 +157,9 @@ export interface CaseStaleGate {
 const CASE_ASSUMED_CURRENT: CaseStaleGate = { lenderCaseStale: false };
 
 /**
- * Spec §13.3, extended by spec §14. A document is FINAL only when four separate
- * things hold, and the reason it is not is worth naming rather than collapsing.
+ * Spec §13.3, extended by §14 (R8), §17.10 (R11) and §21 (R14b). A document is
+ * FINAL only when six separate things hold, and the reason it is not is worth
+ * naming rather than collapsing.
  *
  * 1. **Reconciled.** Hard validations pass, so the figures may be right at all.
  * 2. **Senior repaid.** The ledger clears the facility inside the modelled term.
@@ -168,14 +169,22 @@ const CASE_ASSUMED_CURRENT: CaseStaleGate = { lenderCaseStale: false };
  *    maturity and call itself final.
  * 3. **Tax basis confirmed.** The jurisdiction the acquisition tax was charged
  *    under is evidenced, and the band set was chosen by the transaction date.
- * 4. **Approved.** A lender case exists and has been credit approved.
+ * 4. **VAT basis confirmed.** No charge line that actually bears VAT rests on an
+ *    unconfirmed evidence status.
+ * 5. **Approved.** A lender case exists and has been credit approved.
+ * 6. **The approval is current.** That case is not stale — the stored document
+ *    still hashes to the one the case locked.
  *
- * With no lender case in existence (the position until R14 lands) the third
- * condition cannot be met, so every document is a DRAFT. That is the honest
- * answer rather than a gap: an appraisal nobody has approved is not a credit
- * paper, however cleanly it reconciles, and the audit asked specifically that
- * the watermark survive "whenever hard validations fail **or** the lender case
- * is not approved".
+ * Conditions 5 and 6 became reachable at R14b, which shipped the lender case
+ * itself (spec §21): the record, the state machine, the approval. Before it no
+ * case could exist, condition 5 could never be met, and every document was a
+ * DRAFT — the honest answer rather than a gap, since an appraisal nobody has
+ * approved is not a credit paper however cleanly it reconciles. Now an approved,
+ * current case reaches FINAL, and an approved case whose document has since moved
+ * does not: it reports `lender_case_stale`, because a FINAL banner over figures
+ * the lender never saw is worse than no approval at all. The audit asked
+ * specifically that the watermark survive "whenever hard validations fail **or**
+ * the lender case is not approved"; staleness is the third arm of that same ask.
  */
 export function draftReason(
   reconciliation: Pick<ReconciliationStatus, 'report_safe' | 'senior_repaid'>,

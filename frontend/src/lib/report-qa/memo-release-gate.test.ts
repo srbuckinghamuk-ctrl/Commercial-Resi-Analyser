@@ -836,7 +836,13 @@ const approvedCase: LenderCase = {
   locked_inputs_version: 4,
   locked_input_hash: 'a'.repeat(64),
   locked_outputs_hash: 'b'.repeat(64),
-  locked_audit_hash: 'c'.repeat(64),
+  // Deliberately NOT savedRecord.audit_hash ('c'*64), which the panel's own
+  // 'Audit hash' row already prints: a matching value would make the
+  // locked-audit-hash assertion below pass whether or not the row exists.
+  // Distinct here so the assertion can only pass by the row being drawn — and
+  // so the fixture exercises the very case the row was added for, a case whose
+  // locked audit hash has diverged from the live record's.
+  locked_audit_hash: 'e'.repeat(64),
   case_hash: 'd'.repeat(64),
   created_by: 'S. Sponsor',
   submitted_by: 'S. Sponsor',
@@ -866,6 +872,12 @@ describe('R14b — the lender case on the memo (spec §21)', () => {
     expect(documentProse(info)).toContain('It is a final lender report.');
     expect(text).toContain(approvedCase.id);
     expect(text).toContain(approvedCase.case_hash);
+    // Spec §13.2.1's recompute claim needs all eight components on the page.
+    // Seven are the case rows and the project id; the eighth is the audit hash
+    // AT LOCK TIME, which is not the panel's live 'Audit hash' row — this
+    // fixture's two values differ precisely so this assertion is non-vacuous.
+    expect(approvedCase.locked_audit_hash).not.toBe(savedRecord.audit_hash);
+    expect(text).toContain(approvedCase.locked_audit_hash);
     expect(text).toContain('R. Reviewer');
     expect(text).toContain('D. Director');
     // The FINAL page still obeys the layout gate.

@@ -1,7 +1,7 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.12.0`.
-**Date:** 23 August 2026
+**Status:** Authoritative. Calculation version `2.13.0`.
+**Date:** 24 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
@@ -809,21 +809,23 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 | Report-safe status | `reconciliation.report_safe` | — |
 | Document status | §13.3 | — |
 | Lender-case approval status | lender case, when one exists | "No lender case — not submitted for credit approval" |
-| Lender case id | the live case's `id` (§21.1) | — (this row and the five below are omitted entirely when no case exists) [R14b] |
+| Lender case id | the live case's `id` (§21.1) | — (this row and the six below are omitted entirely when no case exists) [R14b] |
 | Case submitted by | the case's `submitted_by` | "not yet submitted" [R14b] |
 | Case reviewer | the case's `reviewer` | "not yet assigned" [R14b] |
 | Case decided | the case's `decided_by` and `decided_at`, the timestamp printed **raw** in its canonical UTC ISO-8601 form because it is a hash component (§13.2.1); the reader-friendly date is in the narrative | "not yet decided" [R14b] |
 | Approval conditions | the case's `conditions` (§21.2 — set only by `approved_with_conditions`) | — (row omitted unless the case records conditions) [R14b] |
+| Case locked audit hash | the case's `locked_audit_hash` — the audit hash **as at lock time**, which is the eighth component of `case_hash` and is not the "Audit hash" row above | — [R14b] |
 | Case hash | the case's `case_hash` (§13.2.1) | — [R14b] |
 
 - **The case rows are the case hash's components, and that is why they are there
   [R14b].** They are not decoration and are not a subset chosen for readability.
   Together with the lender-case approval status directly above them and the
-  project id near the top, they are §13.2.1's formula: the case id, the project
-  id, the status, the three actor names and the decided timestamp — which is why
-  that timestamp is printed **raw**, in its canonical hashing form, rather than
-  in the reader-friendly form the narrative uses. A reviewer holding the panel
-  can therefore recompute `case_hash` from the page and detect after-the-fact
+  project id near the top, they are **all eight** parts of §13.2.1's formula: the
+  case id, the project id, the status, the three actor names, the decided
+  timestamp — which is why that timestamp is printed **raw**, in its canonical
+  hashing form, rather than in the reader-friendly form the narrative uses — and
+  the locked audit hash. A reviewer holding the panel can therefore recompute
+  `case_hash` from the page, with nothing else in hand, and detect after-the-fact
   alteration of the reviewer, the decision, the decider or the approval's status
   — the property §13.2 claims for the audit hash, extended to the governance
   state that hash deliberately does not carry. Dropping a row because it looks
@@ -831,16 +833,20 @@ Every generated appraisal report prints, before any figure, a panel carrying:
   conditions row is the one that is *not* a hash component: it is printed because
   a conditional approval that does not say what its conditions were is not a
   usable one.
-- **The eighth component is the panel's audit hash, and it is the case's
-  `locked_audit_hash` for as long as the stored row has not been re-saved
-  [R14b].** `case_hash`'s last part is the audit hash the case locked; the
-  panel's "Audit hash" row is the *live stored record's*. They are the same value
-  on any document that has not been saved again since the case was opened, which
-  is the state every FINAL document is in, so the recomputation closes with what
-  is on the page. Where they differ the usual cause is that the inputs moved,
-  which the same panel already discloses — §13.3 condition 6 makes the document a
-  DRAFT under the stale banner, and §21.3 prints the disclosure naming the locked
-  hash. §21.6 limitation 6 records the narrow case that this does *not* cover.
+- **The locked audit hash gets a row of its own, and must [R14b].** `case_hash`'s
+  eighth part is the audit hash **as at lock time**; the panel's "Audit hash" row
+  is the *live stored record's*. Those are usually the same value, and the
+  temptation is to print one and let it serve for both. They can differ without
+  the case being stale: staleness compares `input_hash` alone (§21.3), while
+  `audit_hash` also commits to `calc_version`, `inputs_version`, the appraisal's
+  status and `outputs_hash` (§13.2) — so a re-save that leaves the inputs
+  byte-identical while moving any of those, a recomputation under a new
+  calculation version most obviously, moves the live hash on a case that is
+  correctly still current. With one row the recomputation would then fail on a
+  legitimately FINAL document and the reviewer would have no way to tell that
+  from a real alteration. Two rows, and the eight components are always on the
+  page. The release gate pins this with a fixture whose two audit hashes
+  deliberately differ, so the assertion cannot pass by their coinciding.
 - **The audit hash picks up the two R8 fields transitively, and gains no new parts
   [R8 — calc 2.7.0].** §13.2's formula is unchanged. It hashes `input_hash` and
   `outputs_hash`, which already commit to the *whole* input and output documents —
@@ -949,10 +955,12 @@ the only thing it exists to do.
   transition, from the case's post-transition values. It moves when the status
   alone moves, which is what makes it a record of the governance state rather
   than of the snapshot.
-- **A reviewer can recompute it.** Every component is printed on the provenance
-  panel (§13.1) — `case_id`, `project_id`, the status, the three actor names, the
-  raw decided timestamp and the locked audit hash — so the property §13.2 claims
-  for the audit hash holds here too.
+- **A reviewer can recompute it, unconditionally.** All eight components are
+  printed on the provenance panel (§13.1) — `case_id`, `project_id`, the status,
+  the three actor names, the raw decided timestamp, and `locked_audit_hash` on a
+  row of its own, distinct from the panel's live "Audit hash" row for the reason
+  §13.1's second case bullet gives. The property §13.2 claims for the audit hash
+  therefore holds here too, on every document rather than on most of them.
 - **Computed in Python only** (`app/financial_model/hashing.py`), stored on the
   case row, never derived client-side: §13.1's "hashes are the server's, never
   the client's" applies unchanged.
@@ -3284,22 +3292,17 @@ Recorded so they are not read as oversights.
    document's figures are on; a case is created from the stored appraisal row and
    knows nothing of scenarios. Approving one scenario and not another is not
    expressible.
-6. **`locked_audit_hash` has no printed row of its own, so one narrow
-   recomputation is not closable from the panel alone.** §13.1's "Audit hash" row
-   carries the live stored record's value, and `case_hash`'s eighth component is
-   the value the case locked. Staleness is derived from `input_hash`, while
-   `audit_hash` also commits to `calc_version`, `inputs_version`, the appraisal's
-   status and `outputs_hash` (§13.2). A re-save that leaves the inputs
-   byte-identical while moving one of those — a recomputation under a new
-   calculation version, most obviously — therefore moves the stored audit hash
-   **without** making the case stale, and a reviewer recomputing `case_hash` from
-   the panel of the resulting document gets a mismatch although no governance
-   field was altered. The mismatch is conservative rather than dangerous: it
-   reports doubt where there was none, never confidence where there should not
-   be. Closing it means printing the locked audit hash as a seventh case row,
-   which is a candidate for a future release and is deliberately not done here —
-   the panel already carries three hashes, and a fourth needs its own wording so
-   that a reader is not left to work out which of two audit hashes is which.
+**Not a limitation, recorded because it nearly was one:** the panel carries two
+audit hashes, the live record's and the case's locked one, and they are separate
+rows on purpose. The first draft of this section printed only the live one and
+recorded the resulting gap as a limitation — a re-save that leaves the inputs
+byte-identical while moving `calc_version`, `inputs_version`, the appraisal's
+status or `outputs_hash` moves the live hash *without* making the case stale, so
+a reviewer recomputing `case_hash` from such a document's panel would have got a
+mismatch with nothing altered. Printing the locked value closes it, and §13.2.1's
+recompute claim is unconditional as a result. A reader who finds only one audit
+hash on an older exported document should read §13.1's second case bullet before
+concluding anything from a failed recomputation.
 
 ### Guards this release must watch fail
 
@@ -3314,6 +3317,7 @@ before it is trusted, and named with the change it would miss (§17's rule).
 | The transition table mirror | Both languages restate §21.2's table *literally* in a test rather than deriving it from the module under test, so a drive-by edit to either side fails a test that names the whole machine |
 | `case_hash` re-derivation | The tests rebuild the hash by hand — `sha256` over the joined tuple — instead of calling the helper's internals, the discipline the audit-hash test already uses; plus a naive/aware datetime pair that must hash identically, which is the whole point of §13.2.1's canonical form |
 | Staleness is not one-sided | Stale must flip on a changed-inputs re-save and must **not** flip on an identical re-save. A check that always reported stale would satisfy the first assertion on its own |
+| The locked audit hash is really printed | The release-gate fixture's `locked_audit_hash` is deliberately **different** from the stored record's `audit_hash`, and the test asserts that difference before asserting the value appears — with equal values the assertion would pass off the live "Audit hash" row whether or not the case row exists |
 | History ordering is deterministic | Two cases created within the same second must come back in creation order, which fails under `created_at` alone and under the case's own random UUID |
 | Spec-versions pin | `spec-versions.test.ts` must stay green **untouched**: R14b promised to move no version constant, and a red result there means it accidentally did |
 | The corpus is untouched | Every golden-fixture walk passes unmodified. This release contains no arithmetic, and an unmodified corpus is the guard that says so |

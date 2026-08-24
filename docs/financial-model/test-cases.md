@@ -4600,11 +4600,23 @@ DRAFT documents since R7 because no other kind could exist. R14b adds three:
 
 1. **An approved, current case renders FINAL** — no DRAFT watermark on any
    page, the narrative's "It is a final lender report." sentence printed, and
-   the case id, case hash, reviewer and decider all present in the extracted PDF
-   text (spec §13.1's case rows). The layout gate still applies to it: no
-   overflowing item, no sparse page. This document was **watched failing** —
-   still DRAFT — before the provenance wiring landed, which is what proves the
-   wiring rather than the enum is what flips it.
+   the case id, case hash, reviewer, decider and **locked audit hash** all
+   present in the extracted PDF text (spec §13.1's case rows). The layout gate
+   still applies to it: no overflowing item, no sparse page. This document was
+   **watched failing** — still DRAFT — before the provenance wiring landed,
+   which is what proves the wiring rather than the enum is what flips it.
+
+   The locked-audit-hash assertion needs its fixture read carefully. The
+   approved case's `locked_audit_hash` is `'e'.repeat(64)` and the stored
+   record's `audit_hash` is `'c'.repeat(64)`, deliberately **not** the same
+   value: they were equal in the first draft, which would have let
+   `toContain(locked_audit_hash)` pass off the panel's own live "Audit hash" row
+   whether or not the case row was ever drawn. The test asserts the two differ
+   before asserting the value appears, so the guard cannot go vacuous if a later
+   edit re-aligns the fixtures. Distinct values also make the fixture the very
+   shape the row exists for — a case whose locked audit hash has diverged from
+   the live record's while the case is still current (spec §13.1, second case
+   bullet).
 2. **An approved-but-stale case** renders `DRAFT - LENDER CASE STALE - NOT FOR
    LENDER RELIANCE` and prints the disclosure naming the moved snapshot.
 3. **Approval conditions are printed** when the case carries them.
