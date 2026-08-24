@@ -230,3 +230,51 @@ describe('LenderCasePage — event log', () => {
     expect(screen.getByText(/B\. Actor/)).toBeInTheDocument();
   });
 });
+
+// Review round 1 (Important finding): the mount-time reload is keyed on
+// project.id, so the component can stay mounted while the project switches
+// under it. Without a stale-response guard, project A's slower Promise.all
+// could resolve after project B's and silently clobber B's state.
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+describe('LenderCasePage — stale reload guard (review round 1)', () => {
+  it("a late-resolving fetch for the previous project does not overwrite the new project's case", async () => {
+    const caseA = lenderCase({ id: 'ca', created_by: 'A. Owner' });
+    const caseB = lenderCase({ id: 'cb', created_by: 'B. Owner' });
+    const dCaseA = deferred<LenderCase | null>();
+    const dCaseB = deferred<LenderCase | null>();
+    const dEventsA = deferred<LenderCaseEvent[]>();
+    const dEventsB = deferred<LenderCaseEvent[]>();
+    const dHistA = deferred<LenderCase[]>();
+    const dHistB = deferred<LenderCase[]>();
+
+    vi.mocked(getLenderCase).mockImplementation((projectId) => (projectId === 'p1' ? dCaseA.promise : dCaseB.promise));
+    vi.mocked(listLenderCaseEvents).mockImplementation((projectId) => (projectId === 'p1' ? dEventsA.promise : dEventsB.promise));
+    vi.mocked(listLenderCaseHistory).mockImplementation((projectId) => (projectId === 'p1' ? dHistA.promise : dHistB.promise));
+
+    const PROJECT_B: Project = { ...PROJECT, id: 'p2' };
+    const { rerender } = render(<LenderCasePage project={PROJECT} appraisalRecord={record()} inputs={INPUTS} />);
+    // The user switches project while still on this tab -- the component
+    // stays mounted, so this is a re-render, not a fresh mount.
+    rerender(<LenderCasePage project={PROJECT_B} appraisalRecord={record()} inputs={INPUTS} />);
+
+    // Project B's (newer) fetches resolve first.
+    dCaseB.resolve(caseB);
+    dEventsB.resolve([]);
+    dHistB.resolve([]);
+    expect(await screen.findByText(/B\. Owner/)).toBeInTheDocument();
+
+    // Project A's (older, slower) fetches resolve after -- must be discarded.
+    dCaseA.resolve(caseA);
+    dEventsA.resolve([]);
+    dHistA.resolve([]);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.getByText(/B\. Owner/)).toBeInTheDocument();
+    expect(screen.queryByText(/A\. Owner/)).not.toBeInTheDocument();
+  });
+});

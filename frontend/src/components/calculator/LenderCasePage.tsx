@@ -2,14 +2,21 @@
  * Calculator page 16 — the lender case (R14b, spec §21).
  *
  * Owns its own data: pages mount on tab entry (ConversionCalculator renders
- * the active page only), so the mount-time fetch is always current, including
- * after a save flips staleness. Transition buttons are derived from
- * ALLOWED_TRANSITIONS — this component never keeps its own list, so it cannot
- * drift from the server's state machine (same table, both languages).
+ * the active page only), so the mount-time fetch is normally already current,
+ * including after a save flips staleness. But the effect is keyed on
+ * `project.id`, not on mount, so the component can stay mounted while the
+ * project switches under it (the user sits on this tab and changes project);
+ * `reloadSeq` guards that case — and the ordinary case of a transition or
+ * create firing a newer reload before an older one has resolved — by
+ * discarding any fetch whose sequence number is no longer the latest one
+ * issued, so a stale response can never overwrite fresher state. Transition
+ * buttons are derived from ALLOWED_TRANSITIONS — this component never keeps
+ * its own list, so it cannot drift from the server's state machine (same
+ * table, both languages).
  *
  * NO ARITHMETIC — this page reads and mutates governance state only.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FinancialAppraisal, LenderCase, LenderCaseEvent, LenderCaseStatus, Project } from '../../types';
 import type { CalculatorInputsV11 } from '../../lib/model';
 import {
@@ -82,23 +89,28 @@ export default function LenderCasePage({ project, appraisalRecord, inputs }: Pro
   const [note, setNote] = useState('');
   const [conditions, setConditions] = useState('');
   const [pendingTo, setPendingTo] = useState<LenderCaseStatus | null>(null);
+  // Monotonic reload token (fix round 1) -- see the header docstring.
+  const reloadSeq = useRef(0);
 
   const fail = (e: unknown) =>
     setError(e instanceof ApiError ? formatApiErrorDetail(e.detail).join('; ') || e.message : String(e));
 
   const reload = useCallback(async () => {
+    const seq = ++reloadSeq.current;
     try {
       const [c, ev, h] = await Promise.all([
         getLenderCase(project.id), listLenderCaseEvents(project.id), listLenderCaseHistory(project.id),
       ]);
+      if (seq !== reloadSeq.current) return; // a newer reload has already started -- discard this one
       setCaseRecord(c);
       setEvents(ev);
       setHistory(h);
       setError(null);
     } catch (e) {
+      if (seq !== reloadSeq.current) return;
       fail(e);
     } finally {
-      setLoaded(true);
+      if (seq === reloadSeq.current) setLoaded(true);
     }
   }, [project.id]);
 
