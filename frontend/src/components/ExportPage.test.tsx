@@ -192,7 +192,7 @@ describe('ExportPage feeds the lender case into the memo provenance (R14b Task 9
       project_id: 'p1',
       status: 'credit_approved',
       locked_inputs_snapshot: {},
-      locked_calc_version: '2.13.0',
+      locked_calc_version: '2.14.0',
       locked_inputs_version: 11,
       locked_input_hash: 'input-hash',
       locked_outputs_hash: 'outputs-hash',

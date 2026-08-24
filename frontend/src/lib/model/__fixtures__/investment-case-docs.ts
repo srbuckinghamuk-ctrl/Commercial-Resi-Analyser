@@ -726,6 +726,7 @@ export function applyLeversInOrder(
     timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
     phase_slip_phase_id: null, phase_slip_months: 0,
     exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   };
   return leverNames.reduce((acc, lever) => {
     if (lever === 'phase_slip') {

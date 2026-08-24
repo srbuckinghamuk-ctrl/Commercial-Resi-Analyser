@@ -3,6 +3,8 @@ refinance narrowings."""
 import json
 from pathlib import Path
 
+import pytest
+
 from app.financial_model.migrate import migrate_inputs_to_v9
 
 
@@ -134,6 +136,45 @@ def test_v11_reporting_month_zero_rejected():
     raise AssertionError("expected ValidationError for reporting_month=0")
 
 
-def test_calc_version_is_2_13_0():
+def _minimal_v12_doc(unit_sales=None):
+    doc = _minimal_v11_doc()
+    doc["inputs_version"] = 12
+    doc["unit_sales"] = unit_sales
+    return doc
+
+
+def test_parse_dispatch_routes_v12_to_v12_with_unit_sales():
+    from app.financial_model.types import CalculatorInputsV12, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v12_doc({
+        "deposit_release": "released_on_exchange",
+        "units": [{
+            "unit_id": "u1", "exchange": {"month_offset": 3, "anchor": None},
+            "completion": {"month_offset": 6, "anchor": None},
+            "deposit_pct": 10, "agent_fee_pct": None, "legal_fee_pence": None,
+        }],
+    }))
+    assert isinstance(parsed, CalculatorInputsV12)
+    assert parsed.inputs_version == 12
+    assert parsed.unit_sales.units[0].completion.month_offset == 6
+    assert parsed.scenarios.base.sales_slip_months == 0
+
+
+def test_v12_unit_sales_null_parses():
+    from app.financial_model.types import parse_calculator_inputs
+
+    assert parse_calculator_inputs(_minimal_v12_doc(None)).unit_sales is None
+
+
+def test_v12_rejects_an_unknown_deposit_release():
+    from pydantic import ValidationError
+
+    from app.financial_model.types import parse_calculator_inputs
+
+    with pytest.raises(ValidationError):
+        parse_calculator_inputs(_minimal_v12_doc({"deposit_release": "maybe", "units": []}))
+
+
+def test_calc_version_is_2_14_0():
     from app.financial_model.types import CALC_VERSION
-    assert CALC_VERSION == "2.13.0"
+    assert CALC_VERSION == "2.14.0"

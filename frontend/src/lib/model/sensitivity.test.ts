@@ -367,6 +367,7 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
     expect(levered.finance.committed_net_facility_pence).toBe(inputs.finance.committed_net_facility_pence);
     expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);
@@ -702,6 +703,7 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   exit_yield_adjustment_pct: 0,
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
+  sales_slip_months: 0,
 };
 
 /** Applies all five §12.1/§18.9 levers to `doc` via `applyScenario`, once per lever,

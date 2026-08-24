@@ -63,7 +63,7 @@ function lenderCase(overrides: Partial<LenderCase> = {}): LenderCase {
     project_id: 'p1',
     status: 'draft',
     locked_inputs_snapshot: INPUTS as unknown as Record<string, unknown>,
-    locked_calc_version: '2.13.0',
+    locked_calc_version: '2.14.0',
     locked_inputs_version: 11,
     locked_input_hash: 'inputhash123',
     locked_outputs_hash: 'outputshash123',

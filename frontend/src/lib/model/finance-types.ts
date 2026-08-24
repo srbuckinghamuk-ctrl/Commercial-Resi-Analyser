@@ -21,6 +21,9 @@ import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-ca
 // `import type` is fully erased at compile time, exactly as `investment-case.ts`'s
 // own type-only import back into this file already relies on.
 import type { MonitoringStatement } from './monitoring';
+// R13b Task 1: `unit_sales` is the only CalculatorInputsV12 addition, and the
+// input types live in unit-sales.ts (the investment-case pattern above).
+import type { UnitSalesInputs } from './unit-sales';
 
 export type { SpendCurve };
 
@@ -183,6 +186,11 @@ export { OPEX_CODES } from './investment-case';
 // (imported above); the UI needs both it and its line type off the same barrel
 // `../../lib/model` every other result type is read from.
 export type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
+
+// R13b Task 1: the unit-sales input types live in unit-sales.ts (the
+// investment-case pattern); Task 4 adds `UnitSalesResult` to this list.
+export type { DepositRelease, SaleEvent, UnitSale, UnitSalesInputs } from './unit-sales';
+export { DEPOSIT_RELEASE_VALUES } from './unit-sales';
 
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {
@@ -394,10 +402,21 @@ export interface CalculatorInputsV11 extends Omit<CalculatorInputsV10, 'inputs_v
   monitoring: MonitoringInputs | null;
 }
 
+/**
+ * R13b spec §22.1. `unit_sales` is the only addition: a two-state field,
+ * top level beside `investment_case` and `monitoring`, `null` = the document
+ * does not use the per-unit path (every existing document, bit-identical per
+ * the v12 identity gate); non-null = one row per sold unit.
+ */
+export interface CalculatorInputsV12 extends Omit<CalculatorInputsV11, 'inputs_version'> {
+  inputs_version: 12;
+  unit_sales: UnitSalesInputs | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11;
+  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -776,4 +795,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.13.0';
+export const CALC_VERSION = '2.14.0';

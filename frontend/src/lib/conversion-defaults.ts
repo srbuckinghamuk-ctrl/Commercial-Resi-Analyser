@@ -121,6 +121,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
   upside: {
     label: 'Upside',
@@ -133,6 +134,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
   downside: {
     label: 'Downside',
@@ -145,6 +147,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
   severe: {
     label: 'Severe',
@@ -157,6 +160,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
 };
 

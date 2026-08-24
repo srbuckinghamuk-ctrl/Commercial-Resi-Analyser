@@ -624,6 +624,7 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
             exit_yield_adjustment_pct: 0,
             operating_cost_adjustment_pct: 0,
             vacancy_adjustment_pct: 0,
+            sales_slip_months: 0,
           });
           expect(levered.finance.committed_net_facility_pence)
             .toBe(inputs.finance.committed_net_facility_pence);
@@ -690,6 +691,7 @@ describe('sensitivity suite invariants (spec §12, calc 2.4.0)', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
     expect(levered.finance.term_months).toBe(9);
 

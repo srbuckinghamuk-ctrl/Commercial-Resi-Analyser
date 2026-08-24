@@ -30,6 +30,7 @@ const BASE_OVERRIDES: ScenarioOverrides = {
   exit_yield_adjustment_pct: 0,
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
+  sales_slip_months: 0,
 };
 
 function fixtureInputs(): CalculatorInputsV2 {
@@ -54,6 +55,7 @@ describe('applyScenario', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
     expect(adjusted.unit_mix.units[0].estimated_value_pence).toBe(33_000_000);
     expect(adjusted.unit_mix.units[1].estimated_value_pence).toBe(22_000_000);
@@ -72,6 +74,7 @@ describe('applyScenario', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
     expect(adjusted.conversion_costs.construction_cost_per_sqm_pence).toBe(
       Math.round(base.conversion_costs.construction_cost_per_sqm_pence * 1.15),
@@ -113,6 +116,7 @@ describe('applyScenario', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
 
     const staged = applyScenario(
@@ -127,6 +131,7 @@ describe('applyScenario', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       }),
       {
         label: 'Test',
@@ -139,6 +144,7 @@ describe('applyScenario', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       },
     );
 
@@ -166,6 +172,7 @@ describe('applyScenario', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
     expect(out.finance.committed_net_facility_pence).toBe(v2Inputs.finance.committed_net_facility_pence);
     expect(out.finance.committed_gross_facility_pence).toBe(v2Inputs.finance.committed_gross_facility_pence);
@@ -205,6 +212,7 @@ describe('applyScenario', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
 
     // v3-only fields pass through identically — the generic's whole point:
@@ -256,6 +264,7 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       },
     );
 
@@ -278,6 +287,7 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       },
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
@@ -497,6 +507,7 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   exit_yield_adjustment_pct: 0,
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
+  sales_slip_months: 0,
 };
 
 /** Sets a phase's `slip_months` directly (not via `applyScenario`), so a test can

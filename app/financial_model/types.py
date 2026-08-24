@@ -162,6 +162,10 @@ class ScenarioOverrides(Model):
     exit_yield_adjustment_pct: float = 0.0
     operating_cost_adjustment_pct: float = 0.0
     vacancy_adjustment_pct: float = 0.0
+    # R13b spec Sec 22.8. Defaulted so every existing construction site and
+    # fixture keeps parsing; the v12 MIGRATION writes it explicitly anyway
+    # (Sec 22.9), which is what the identity gate actually asserts.
+    sales_slip_months: int = 0
 
 
 class Scenarios(Model):
@@ -432,6 +436,39 @@ class SalesPhasingInputsV9(Model):
 
 class RefinanceInputsV9(RefinanceInputs):
     anchor: PhaseAnchor | None = None
+
+
+DepositRelease = Literal["held_to_completion", "released_on_exchange"]
+
+
+class SaleEvent(Model):
+    """R13b spec Sec 22.1. Sec 18.6's `{month_offset, anchor}` pair, reused
+    verbatim: resolved by schedule.py's single resolver, `anchor=None` means
+    "use month_offset". `month_offset` carries only the resource-exhaustion
+    ceiling, for the reason SalesPhasingTranche gives; the [0, term-1] window
+    is validation.py's (Sec 22.7 rule 4)."""
+
+    month_offset: int = Field(le=1200)
+    anchor: PhaseAnchor | None = None
+
+
+class UnitSale(Model):
+    """R13b spec Sec 22.1. One row per SOLD unit (Sec 22.7 rule 3). Nullable
+    overrides fall back to the scheme figures on exit_strategy; `exchange`
+    None means exchange and completion are simultaneous and requires
+    deposit_pct == 0 (rule 6)."""
+
+    unit_id: str
+    exchange: SaleEvent | None = None
+    completion: SaleEvent
+    deposit_pct: float
+    agent_fee_pct: float | None = None
+    legal_fee_pence: int | None = None
+
+
+class UnitSalesInputs(Model):
+    deposit_release: DepositRelease
+    units: list[UnitSale] = Field(default_factory=list, max_length=1200)
 
 
 class OperatingLine(Model):
@@ -953,10 +990,20 @@ class CalculatorInputsV11(CalculatorInputsV10):
     monitoring: MonitoringInputs | None = None
 
 
+class CalculatorInputsV12(CalculatorInputsV11):
+    """Mirrors CalculatorInputsV11 with the Sec 22 unit-level sales ledger.
+    Subclasses V11 for the same reason V11 subclasses V10: the engine
+    dispatches on it, and a flat re-declaration would make those isinstance
+    checks silently False for v12 documents."""
+
+    inputs_version: Literal[12] = 12  # type: ignore[assignment]
+    unit_sales: UnitSalesInputs | None = None
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-    | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11
+    | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
 )
 
 
@@ -968,6 +1015,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v12 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # unit-sales block and every other post-v2 field.
+    if version == 12:
+        return CalculatorInputsV12.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v11 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # monitoring block and every other post-v2 field.
@@ -1036,4 +1088,4 @@ FlagCode = Literal[
     "monitoring_dated_after_redemption",
 ]
 
-CALC_VERSION = "2.13.0"
+CALC_VERSION = "2.14.0"

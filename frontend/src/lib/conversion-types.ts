@@ -100,6 +100,10 @@ export interface ScenarioOverrides {
    *  added, so a POSITIVE lever value is an ADVERSE move — matching every other
    *  lever's sign convention in the tornado. */
   vacancy_adjustment_pct: number;
+  /** R13b spec §22.8. SIGNED months added to every unit_sales row's
+   *  completion (anchor.offset_months when anchored, else month_offset),
+   *  ADDITIVELY. No-op by construction when unit_sales is null. */
+  sales_slip_months: number;
 }
 
 export interface DealSpiderInputs {

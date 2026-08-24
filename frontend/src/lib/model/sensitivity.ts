@@ -365,6 +365,7 @@ const ZERO_SCENARIO: ScenarioOverrides = {
   exit_yield_adjustment_pct: 0,
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
+  sales_slip_months: 0,
 };
 
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
@@ -383,6 +384,7 @@ function overridesFor(setting: LeverSetting): ScenarioOverrides {
     exit_yield_adjustment_pct: setting.lever === 'exit_yield' ? setting.value : 0,
     operating_cost_adjustment_pct: setting.lever === 'operating_cost' ? setting.value : 0,
     vacancy_adjustment_pct: setting.lever === 'vacancy' ? setting.value : 0,
+    sales_slip_months: 0,
   };
 }
 

@@ -5,7 +5,7 @@ import type {
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
-  CalculatorInputsV10, CalculatorInputsV11,
+  CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -1273,4 +1273,96 @@ export function migrateInputsToV11(
     };
   }
   return migrateV10toV11(migrateInputsToV10(snapshot, project));
+}
+
+/** Mirror of isV11: `inputs_version === 12` AND the (possibly null) `unit_sales` key. */
+function isV12(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV12 {
+  return snapshot.inputs_version === 12 && 'unit_sales' in snapshot;
+}
+
+/**
+ * R13b spec §22.9. Two additions, both inert: `unit_sales: null` and
+ * `scenarios.<each>.sales_slip_months: 0`. Every existing document is
+ * bit-identical in every output — the numeric identity gate proves it.
+ */
+export function migrateV11toV12(v11: CalculatorInputsV11): CalculatorInputsV12 {
+  if (isV12(v11 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV11toV12: input is already a v12 document');
+  }
+  const withSalesSlip = (s: ScenarioOverrides): ScenarioOverrides => ({ ...s, sales_slip_months: 0 });
+  return {
+    ...v11,
+    inputs_version: 12,
+    unit_sales: null,
+    scenarios: {
+      base: withSalesSlip(v11.scenarios.base),
+      upside: withSalesSlip(v11.scenarios.upside),
+      downside: withSalesSlip(v11.scenarios.downside),
+      severe: withSalesSlip(v11.scenarios.severe),
+    },
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V12: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+export function migrateInputsToV12(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV12 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V12.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV12: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V12.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 12 && !isV12(snapshot)) {
+    throw new Error(
+      'migrateInputsToV12: inputs_version is 12 but the document fails the v12 structural check '
+      + '(missing `unit_sales`) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV12(snapshot)) {
+    const defaults = migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(migrateV7toV8(migrateV6toV7(
+      migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project))))),
+    ))))));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV12>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 12,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      monitoring: saved.monitoring ?? null,
+      unit_sales: saved.unit_sales ?? null,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV11toV12(migrateInputsToV11(snapshot, project));
 }

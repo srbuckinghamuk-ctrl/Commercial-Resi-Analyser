@@ -32,6 +32,7 @@ from .types import (
     CalculatorInputsV9,
     CalculatorInputsV10,
     CalculatorInputsV11,
+    CalculatorInputsV12,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -342,6 +343,7 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
         or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot) or is_v11(snapshot)
+        or is_v12(snapshot)
     )
 
 
@@ -1760,3 +1762,112 @@ def migrate_inputs_to_v11(
             "monitoring": snapshot.get("monitoring"),
         })
     return migrate_v10_to_v11(migrate_inputs_to_v10(snapshot, project))
+
+
+def _v12_scenarios(scenarios: dict[str, Any] | None) -> dict[str, Any]:
+    """The scenarios half of the v11 -> v12 write: ``sales_slip_months: 0`` on
+    all four scenarios (spec Sec 22.8). Mirrors ``_v10_scenarios`` two
+    migrations back -- ``ScenarioOverrides`` already defaults the field, so
+    only a WRITTEN value is what the numeric identity gate exercises."""
+    out = dict(scenarios or {})
+    for key in ("base", "upside", "downside", "severe"):
+        s = dict(out.get(key) or {})
+        s["sales_slip_months"] = 0
+        out[key] = s
+    return out
+
+
+def is_v12(snapshot: dict[str, Any]) -> bool:
+    """A v12 document is discriminated by ``inputs_version == 12`` AND the
+    presence of the (possibly null) ``unit_sales`` key. Port of isV12."""
+    return snapshot.get("inputs_version") == 12 and "unit_sales" in snapshot
+
+
+def migrate_v11_to_v12(v11: dict[str, Any] | CalculatorInputsV11) -> CalculatorInputsV12:
+    """Upgrades a v11 document to v12 by stamping ``inputs_version: 12`` and
+    writing two inert additions: ``unit_sales: None`` and
+    ``scenarios.<each>.sales_slip_months: 0`` (spec Sec 22.9). Port of
+    migrateV11toV12. Purely additive by construction: every existing document
+    is bit-identical in every output -- test_migrate_v12.py proves it.
+
+    Precondition: `v11` must not already be a v12 document (idempotence guard),
+    same as migrate_v10_to_v11.
+    """
+    if isinstance(v11, CalculatorInputsV12):
+        raise ValueError("migrate_v11_to_v12: input is already a v12 document")
+    if isinstance(v11, BaseModel):
+        doc = v11.model_dump(mode="json")
+    else:
+        if is_v12(v11):
+            raise ValueError("migrate_v11_to_v12: input is already a v12 document")
+        doc = dict(v11)
+
+    doc["unit_sales"] = None
+    doc["scenarios"] = _v12_scenarios(doc.get("scenarios"))
+    doc["inputs_version"] = 12
+    return CalculatorInputsV12.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V12 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+
+
+def migrate_inputs_to_v12(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV12:
+    """Normalises any stored snapshot (v1-v12) to v12. Port of
+    migrateInputsToV12, structurally identical to migrate_inputs_to_v11."""
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V12:
+        raise ValueError(
+            f"migrate_inputs_to_v12: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V12}, or absent for a v1 document)"
+        )
+    if version == 12 and not is_v12(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v12: inputs_version is 12 but the document fails "
+            "the v12 structural check (missing `unit_sales`) -- refusing to "
+            "silently reinterpret it via the v1 fallback path"
+        )
+    if is_v12(snapshot):
+        defaults = migrate_v11_to_v12(
+            migrate_v10_to_v11(
+                migrate_v9_to_v10(
+                    migrate_v8_to_v9(
+                        migrate_v7_to_v8(
+                            migrate_v6_to_v7(
+                                migrate_v5_to_v6(
+                                    migrate_v4_to_v5(
+                                        migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV12.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 12,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            # Mirrors migrate_inputs_to_v11's own quartet of defensive lines:
+            # the shallow `_merge_saved_onto_defaults` spread above already
+            # carries a PRESENT `programme`/`sales_phasing`/`refinance`/
+            # `investment_case`/`monitoring`/`unit_sales` key through from
+            # `snapshot`, so these six lines are currently redundant for any
+            # snapshot produced by `model_dump`. Kept as a self-documenting
+            # mirror of the cost_plan/vat lines above -- if
+            # `_merge_saved_onto_defaults` is ever narrowed to an explicit key
+            # allowlist that omits these six, THIS is what still carries a
+            # saved value through rather than reverting to the default
+            # document's None.
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+            "monitoring": snapshot.get("monitoring"),
+            "unit_sales": snapshot.get("unit_sales"),
+        })
+    return migrate_v11_to_v12(migrate_inputs_to_v11(snapshot, project))
