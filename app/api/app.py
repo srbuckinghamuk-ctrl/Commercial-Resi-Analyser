@@ -589,7 +589,7 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     repo = FinancialAppraisalRepository(db)
-    # Upsert: only one appraisal may exist per project (migration 004 adds the
+    # Upsert: only one appraisal may exist per project (migration 003 adds the
     # unique constraint). Both arms persist the server-authored `computed`
     # payload -- the client never supplies outputs or governance columns (Task 12).
     existing = await repo.get_by_project_id(body.project_id)

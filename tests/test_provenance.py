@@ -6,6 +6,9 @@ pinned against each other case-for-case, the same discipline the metric
 engines use. The ordering diagonals matter most: each is a case where a
 wrong order would silently produce a *plausible* wrong banner.
 """
+from datetime import datetime, timezone
+import hashlib
+
 from app.financial_model.provenance import (
     ALLOWED_TRANSITIONS,
     APPROVED_STATUSES,
@@ -13,6 +16,7 @@ from app.financial_model.provenance import (
     draft_reason,
     is_stale,
 )
+from app.financial_model.hashing import case_hash, _utc_iso
 
 
 class TestDraftReasonOrdering:
@@ -134,3 +138,51 @@ class TestAllowedTransitions:
                 assert allowed == ()
             else:
                 assert "superseded" in allowed
+
+
+class TestCaseHash:
+    def test_recomputable_from_the_printed_parts(self):
+        # Spec Sec 21.4: derived here independently -- sha256 over the joined
+        # tuple -- rather than by calling the helper's own internals, the
+        # same discipline test_audit_hash_binds_inputs_outputs_and_status
+        # uses for the audit hash.
+        decided = datetime(2026, 8, 24, 12, 30, 45, 123456, tzinfo=timezone.utc)
+        value = case_hash(
+            case_id="c1", project_id="p1", status="credit_approved",
+            submitted_by="S. Sponsor", reviewer="R. Reviewer",
+            decided_by="D. Director", decided_at=decided,
+            locked_audit_hash="e" * 64,
+        )
+        expected = hashlib.sha256("|".join([
+            "c1", "p1", "credit_approved", "S. Sponsor", "R. Reviewer",
+            "D. Director", "2026-08-24T12:30:45.123456Z", "e" * 64,
+        ]).encode()).hexdigest()
+        assert value == expected
+
+    def test_absent_parts_encode_as_empty_strings(self):
+        value = case_hash(
+            case_id="c1", project_id="p1", status="draft",
+            submitted_by=None, reviewer=None, decided_by=None,
+            decided_at=None, locked_audit_hash="e" * 64,
+        )
+        expected = hashlib.sha256(
+            ("c1|p1|draft||||" + "|" + "e" * 64).encode()
+        ).hexdigest()
+        assert value == expected
+
+    def test_moves_with_status_alone(self):
+        common = dict(
+            case_id="c1", project_id="p1", submitted_by=None, reviewer=None,
+            decided_by=None, decided_at=None, locked_audit_hash="e" * 64,
+        )
+        assert case_hash(status="draft", **common) != case_hash(status="submitted", **common)
+
+    def test_naive_and_aware_utc_datetimes_hash_identically(self):
+        # sqlite hands back naive datetimes for DateTime(timezone=True)
+        # columns; the write path hashes the aware value it just built. The
+        # canonicaliser treats naive as UTC so a re-read recomputation agrees
+        # byte for byte with the write-time value.
+        aware = datetime(2026, 8, 24, 12, 30, 45, 123456, tzinfo=timezone.utc)
+        naive = datetime(2026, 8, 24, 12, 30, 45, 123456)
+        assert _utc_iso(aware) == _utc_iso(naive) == "2026-08-24T12:30:45.123456Z"
+        assert _utc_iso(None) == ""
