@@ -1,7 +1,7 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
 import type {
-  CalculatorInputsV9, CalculatorInputsV10, AppraisalRun, SalesPhasingInputsV9,
+  CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11, AppraisalRun, SalesPhasingInputsV9,
   InvestmentCaseInputs,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
@@ -10,20 +10,24 @@ import OperatingScheduleEditor from './OperatingScheduleEditor';
 import InvestmentCaseCard from './InvestmentCaseCard';
 
 /**
- * R13 Task 15 (spec §19.1/§19.6). `investment_case` exists on v10 only --
- * `ExitStrategyPage` is generic over the version carrier exactly as
- * `ProgrammePage` is over `CalculatorInputsV8 | CalculatorInputsV9` for the
- * same reason: the real call site (`ConversionCalculator.tsx`) is still on
- * v9 until Task 18's entry-point cutover, so this page must keep compiling
- * against a v9 document that has no `investment_case` key at all, while also
- * accepting a v10 document (this task's own tests, and Task 18's eventual
- * call site) that does. `hasInvestmentCase` is the sole discriminator; the
- * investment-case section below simply does not render for a v9 caller --
- * there is nothing to author yet, exactly as the release note says.
+ * R13 Task 15 (spec §19.1/§19.6), widened by R14 Task 14 (the entry-point
+ * cutover) to admit v11. `investment_case` exists on v10 and v11 alike (v11
+ * only adds `monitoring` beside it) -- `ExitStrategyPage` is generic over the
+ * version carrier exactly as `ProgrammePage` is over `CalculatorInputsV8 |
+ * CalculatorInputsV9 | CalculatorInputsV10` for the same reason: the real
+ * call site (`ConversionCalculator.tsx`) is now on v11, but this page must
+ * keep compiling against a v9 document that has no `investment_case` key at
+ * all (ExitStrategyPage.test.tsx's own regression coverage), while also
+ * accepting v10 and v11 documents that do. `hasInvestmentCase` is the sole
+ * discriminator; the investment-case section below simply does not render
+ * for a v9 caller -- there is nothing to author yet, exactly as the release
+ * note says.
  */
-type ExitCarrier = CalculatorInputsV9 | CalculatorInputsV10;
+type ExitCarrier = CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11;
 
-function hasInvestmentCase<T extends ExitCarrier>(x: T): x is T & CalculatorInputsV10 {
+function hasInvestmentCase<T extends ExitCarrier>(
+  x: T,
+): x is T & (CalculatorInputsV10 | CalculatorInputsV11) {
   return 'investment_case' in x;
 }
 

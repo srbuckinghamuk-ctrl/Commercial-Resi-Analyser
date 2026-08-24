@@ -1,13 +1,14 @@
 /**
- * R13 spec §19. Task 5b: the shared v10 test-document builders every task
- * from 6 onward consumes. This module exists so that "a valid v10 document
+ * R13 spec §19, Task 5b (moved to v11 by R14 Task 14, the entry-point
+ * cutover): the shared test-document builders every downstream task
+ * consumes. This module exists so that "a valid current-version document
  * with an investment case" means the same thing everywhere — fourteen tasks
  * inventing their own would disagree in ways that surface as mysterious
  * failures three tasks downstream.
  *
  * Every builder is built from a fixture JSON file (or another builder) via
- * `migrateInputsToV10` — never a hand-authored default object — so a fixture
- * and a builder can never disagree about what a valid v10 document looks
+ * `migrateInputsToV11` — never a hand-authored default object — so a fixture
+ * and a builder can never disagree about what a valid v11 document looks
  * like. Mirrors `tests/fixtures_investment_case.py`, using each language's
  * own naming convention for the same functions (camelCase here, snake_case
  * there — the same per-language split every migrate/is-vN pair in this repo
@@ -28,7 +29,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { migrateInputsToV10 } from '../migrate';
+import { migrateInputsToV11 } from '../migrate';
 import { buildSchedule } from '../schedule';
 import { runLedger as engineRunLedger } from '../monthly-engine';
 import { applyScenario } from '../apply-scenario';
@@ -36,7 +37,7 @@ import { runAppraisal } from '../index';
 import { generateInvestmentMemo } from '../../export-investment-memo';
 import { inspectPdf } from '../../report-qa/pdf-inspect';
 import { documentText } from '../../report-qa/report-checks';
-import type { CalculatorInputsV10, OperatingLine, MonthlyModel } from '../finance-types';
+import type { CalculatorInputsV11, OperatingLine, MonthlyModel } from '../finance-types';
 import type { ScenarioOverrides } from '../../conversion-types';
 import type { SensitivityLever } from '../sensitivity';
 import type { Project } from '../../../types';
@@ -132,8 +133,8 @@ export interface IcDocOverrides {
   salesSweepPct?: number;
 }
 
-function applyIcDocOverrides(doc: CalculatorInputsV10, o: IcDocOverrides): CalculatorInputsV10 {
-  const next: CalculatorInputsV10 = { ...doc };
+function applyIcDocOverrides(doc: CalculatorInputsV11, o: IcDocOverrides): CalculatorInputsV11 {
+  const next: CalculatorInputsV11 = { ...doc };
 
   if (o.route !== undefined) {
     next.exit_strategy = { ...next.exit_strategy, route: o.route };
@@ -302,11 +303,11 @@ function applyIcDocOverrides(doc: CalculatorInputsV10, o: IcDocOverrides): Calcu
   return next;
 }
 
-/** A valid retain-all v10 document with an investment case (built from
+/** A valid retain-all v11 document with an investment case (built from
  *  fixtures/financial-model/t-investment-case.json — DSCR binds, hand-derived
  *  there). `overrides` applies zero or more single, named deviations. */
-export function icDoc(overrides: IcDocOverrides = {}): CalculatorInputsV10 {
-  const doc = migrateInputsToV10(loadFixtureInputs('t-investment-case')) as CalculatorInputsV10;
+export function icDoc(overrides: IcDocOverrides = {}): CalculatorInputsV11 {
+  const doc = migrateInputsToV11(loadFixtureInputs('t-investment-case')) as CalculatorInputsV11;
   return applyIcDocOverrides(doc, overrides);
 }
 
@@ -322,7 +323,7 @@ export const investmentCaseDoc = icDoc;
  * `30_000_00`, `legal_costs_pence` `20_000_00`), so that test does not have to
  * be rewritten once this builder exists.
  */
-export function explicitRefinanceDoc(): CalculatorInputsV10 {
+export function explicitRefinanceDoc(): CalculatorInputsV11 {
   const doc = icDoc({ investmentCase: null });
   if (doc.refinance == null) {
     throw new Error('explicitRefinanceDoc: base document unexpectedly has no refinance block');
@@ -366,10 +367,11 @@ export function explicitRefinanceDoc(): CalculatorInputsV10 {
  * Built from fixtures/financial-model/j-blended-refinance.json's acquisition/
  * unit_mix/finance/equity numbers (an already-proven-good v5 corpus fixture),
  * upgraded to v10 shape with this task's own programme/sales_phasing/
- * refinance/investment_case overlay. `investment_case` is null — this
- * document is about anchor resolution, not the investment case.
+ * refinance/investment_case overlay, then run through `migrateInputsToV11`
+ * (R14 Task 14) exactly as a real stored v10 document would be. `investment_case`
+ * is null — this document is about anchor resolution, not the investment case.
  */
-export function anchoredSlippedDoc(): CalculatorInputsV10 {
+export function anchoredSlippedDoc(): CalculatorInputsV11 {
   const raw = loadFixtureInputs('j-blended-refinance') as Record<string, unknown>;
   const acquisition = raw.acquisition as Record<string, unknown>;
   const doc: Record<string, unknown> = {
@@ -437,7 +439,7 @@ export function anchoredSlippedDoc(): CalculatorInputsV10 {
       arrangement_fee_basis: 'fixed_pence', arrangement_fee_pct: 0,
     },
   };
-  return migrateInputsToV10(doc) as CalculatorInputsV10;
+  return migrateInputsToV11(doc) as CalculatorInputsV11;
 }
 
 // --- The NOI / ledger family --------------------------------------------
@@ -452,7 +454,7 @@ export function anchoredSlippedDoc(): CalculatorInputsV10 {
 // fixtures/financial-model/j-blended-refinance.json, the same proven-good
 // acquisition/unit_mix/cost numbers `anchoredSlippedDoc` reuses above.
 
-function _facilityNoiBase(): CalculatorInputsV10 {
+function _facilityNoiBase(): CalculatorInputsV11 {
   const doc = anchoredSlippedDoc();
   return {
     ...doc,
@@ -482,13 +484,13 @@ function _facilityNoiBase(): CalculatorInputsV10 {
 /** A facility-funded document whose investment case is already stabilised by
  *  month 4 (see `_facilityNoiBase`), so mid-term ledger months carry full
  *  NOI. `overrides` reuses `icDoc`'s override contract. */
-export function noiDoc(overrides: IcDocOverrides = {}): CalculatorInputsV10 {
+export function noiDoc(overrides: IcDocOverrides = {}): CalculatorInputsV11 {
   return applyIcDocOverrides(_facilityNoiBase(), overrides);
 }
 
 /** The retain-all variant of the NOI base: every unit retained (rather than
  *  `_facilityNoiBase`'s single retained unit), still facility-funded. */
-export function retainAllNoiDoc(): CalculatorInputsV10 {
+export function retainAllNoiDoc(): CalculatorInputsV11 {
   const doc = _facilityNoiBase();
   return {
     ...doc,
@@ -503,7 +505,7 @@ export function retainAllNoiDoc(): CalculatorInputsV10 {
 /** The blended exit itself: `rents: 'market'` keeps the retained unit's rent
  *  at `_facilityNoiBase`'s figure; `rents: 'zero'` zeroes it, isolating NOI's
  *  contribution from the sold units' contribution to the same metrics. */
-export function blendedDoc({ rents }: { rents: 'market' | 'zero' }): CalculatorInputsV10 {
+export function blendedDoc({ rents }: { rents: 'market' | 'zero' }): CalculatorInputsV11 {
   const doc = _facilityNoiBase();
   return {
     ...doc,
@@ -520,7 +522,7 @@ export function blendedDoc({ rents }: { rents: 'market' | 'zero' }): CalculatorI
 /** Named separately from `blendedDoc` because the reconciliation tests read
  *  it under its own name (Task 5b brief); the document itself is the market-
  *  rent blended case — both a sale and a retained NOI stream present at once. */
-export function mixedNoiDoc(): CalculatorInputsV10 {
+export function mixedNoiDoc(): CalculatorInputsV11 {
   return blendedDoc({ rents: 'market' });
 }
 
@@ -541,7 +543,7 @@ export function mixedNoiDoc(): CalculatorInputsV10 {
  * Task 9's own economics for this month (repayment/exit-fee pence) are NOT
  * reproduced here — see this file's header scope note.
  */
-export function allFourInOneMonthDoc(): CalculatorInputsV10 {
+export function allFourInOneMonthDoc(): CalculatorInputsV11 {
   const raw = loadFixtureInputs('r-vat-quarterly') as Record<string, unknown>;
   const doc: Record<string, unknown> = {
     ...raw,
@@ -571,7 +573,7 @@ export function allFourInOneMonthDoc(): CalculatorInputsV10 {
       takeout: { ltv_cap_pct: 65, dscr_floor: 1.3, icr_floor: 1.3, annual_rate_pct: 6, amortisation_years: 25, term_years: 5 },
     },
   };
-  return migrateInputsToV10(doc) as CalculatorInputsV10;
+  return migrateInputsToV11(doc) as CalculatorInputsV11;
 }
 
 /**
@@ -586,7 +588,7 @@ export function allFourInOneMonthDoc(): CalculatorInputsV10 {
  * without error) — the actual redemption behaviour this name promises does
  * not exist until Task 9 lands, so it cannot be verified further yet.
  */
-export function noiRedeemsDoc(): CalculatorInputsV10 {
+export function noiRedeemsDoc(): CalculatorInputsV11 {
   const doc: Record<string, unknown> = {
     inputs_version: 10, project_id: null,
     acquisition: {
@@ -668,12 +670,12 @@ export function noiRedeemsDoc(): CalculatorInputsV10 {
     },
     lender_valuation: null,
   };
-  return migrateInputsToV10(doc) as CalculatorInputsV10;
+  return migrateInputsToV11(doc) as CalculatorInputsV11;
 }
 
 /** A retain-all document with a rent MISSING for one unit (§19.7 rule 2's
  *  silent-understatement trap) — Task 15's editor test renders this directly. */
-export function retainAllDocMissingRents(): CalculatorInputsV10 {
+export function retainAllDocMissingRents(): CalculatorInputsV11 {
   return icDoc({ dropRetainedUnit: 'u2' });
 }
 
@@ -683,7 +685,7 @@ export function retainAllDocMissingRents(): CalculatorInputsV10 {
  *  without deriving metrics/reconciliation too — a thin wrapper over
  *  `buildSchedule` + monthly-engine's `runLedger`, so no later task
  *  re-derives this two-call plumbing itself. */
-export function runLedger(doc: CalculatorInputsV10): MonthlyModel {
+export function runLedger(doc: CalculatorInputsV11): MonthlyModel {
   const schedule = buildSchedule(doc);
   return engineRunLedger(schedule, doc.finance, doc.equity_sources);
 }
@@ -717,8 +719,8 @@ const LEVER_STEPS: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof Scenari
  * shape per call site.
  */
 export function applyLeversInOrder(
-  doc: CalculatorInputsV10, leverNames: readonly SensitivityLever[],
-): CalculatorInputsV10 {
+  doc: CalculatorInputsV11, leverNames: readonly SensitivityLever[],
+): CalculatorInputsV11 {
   const ZERO: ScenarioOverrides = {
     label: 'applyLeversInOrder', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0,
     timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
@@ -732,7 +734,7 @@ export function applyLeversInOrder(
     }
     const field = LEVER_STEPS[lever];
     return applyScenario(acc, { ...ZERO, [field]: 5 });
-  }, doc) as CalculatorInputsV10;
+  }, doc) as CalculatorInputsV11;
 }
 
 /** Runs a document through the real memo generator and returns its extracted
@@ -740,7 +742,7 @@ export function applyLeversInOrder(
  *  plumbing `export-investment-memo.test.ts` already established (`inspectPdf`
  *  + `documentText`, the canonical extractor — not a second, ad hoc byte
  *  decode). */
-export async function memoText(doc: CalculatorInputsV10): Promise<string> {
+export async function memoText(doc: CalculatorInputsV11): Promise<string> {
   const run = runAppraisal(doc);
   const blob = generateInvestmentMemo(FIXTURE_PROJECT, run);
   const info = await inspectPdf(blob);

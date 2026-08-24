@@ -392,5 +392,8 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       )),
       refinance: refinance == null ? null : refinance.month,
     },
+    // R14 spec §4.2(b). Computed once on the cost plan, republished here so the
+    // ledger reads one figure and never re-derives it.
+    lender_eligible_ratio: costPlan.lender_eligible_ratio,
   };
 }

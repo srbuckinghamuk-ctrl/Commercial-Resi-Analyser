@@ -10,10 +10,12 @@ import {
   migrateV7toV8, migrateInputsToV8, isV8,
   migrateV8toV9, migrateInputsToV9, PACKAGE_TO_PHASE,
   migrateV9toV10, migrateInputsToV10,
+  migrateV10toV11, migrateInputsToV11,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
-  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
+  CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
+  MonitoringCategory, MonitoringLineInputs,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
@@ -993,12 +995,23 @@ describe('v10 migration -- spec §19.9', () => {
     // today (K, plus the two v10-native fixtures), not 2. This isolates the
     // v10-native exclusion specifically, matching test_migrate_v10.py's
     // Python twin.
+    //
+    // R14 Task 2: v-exhausted-reserve.json is also stored at inputs v10 (spec
+    // Sec 4's hand-derived fixture; v11 does not exist until this release's
+    // later migration task), so the `<= 9` arm excludes it too and the
+    // exclusion bound moves from two v10-native fixtures to three.
+    //
+    // R14 Task 8: w-monitoring-on-site.json is stored at inputs v11 (spec
+    // §20.2's hand-derived golden case). This filter is `<= 9`, so it excludes
+    // every version ABOVE 9, v11 included, and the bound moves from three to
+    // four. `fixtures.length` is unchanged -- W was never inside this gate.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(2);
+    expect(versionExcluded.length).toBe(4);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       't-investment-case.json', 'u-investment-case-ltv-binds.json',
+      'v-exhausted-reserve.json', 'w-monitoring-on-site.json',
     ]);
   });
 
@@ -1190,5 +1203,207 @@ describe('migrateInputsToV10 merge-onto-defaults branch', () => {
     expect(merged.refinance).not.toBeNull();
     expect(merged.refinance!.arrangement_fee_basis).toBe('pct_of_quantum');
     expect(merged.refinance!.arrangement_fee_pct).toBe(1.5);
+  });
+});
+
+// --- Release 14 (calc 2.12.0 -> 2.13.0): v10 -> v11, spec §20.1 -----------
+//
+// TS twin of tests/test_migrate_v11.py. Reads the fixture corpus with
+// readdirSync exactly as the v10 describe block above does — see that
+// block's `FIXTURE_DIR`/`fixtureFiles`/`versionOf`.
+describe('v11 migration -- spec §20.1', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+  interface FixtureFile {
+    name: string;
+    kind: string;
+    inputs?: Record<string, unknown>;
+  }
+
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file,
+    doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+
+  // Fixture K (kind 'sensitivity') carries no `inputs` of its own — excluded
+  // the same way golden-fixtures.test.ts's `appraisalFixtures` already
+  // excludes it. `migrateInputsToV10` refuses a v11 document by design, so
+  // any v11-NATIVE fixture would be excluded here too (via the version
+  // filter) — none exists yet; Task 8 authors the first one.
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+
+  const fixtures = fixtureDocs.filter(
+    ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) <= 10,
+  );
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    // The corpus holds 19 files now; one (fixture K) is not an inputs document
+    // and one (fixture W) is v11-native, leaving 17 in `fixtures` (the `<= 10`
+    // filter includes v-exhausted-reserve.json, stored at v10, unlike the
+    // `<= 9` filter one migration back).
+    expect(fixtures.length).toBeGreaterThanOrEqual(17);
+    // R14 Task 8: the v11-native exclusion is now real -- w-monitoring-on-site
+    // .json is `inputs_version: 11`, so the `<= 10` arm of `fixtures`'s filter
+    // excludes it and it is covered by the golden suite instead. Mirrors how
+    // the v10 block above records its own T/U/V/W exclusion bound growing.
+    const versionExcluded = fixtureDocs.filter(
+      ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
+    );
+    expect(versionExcluded.length).toBe(1);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'w-monitoring-on-site.json',
+    ]);
+  });
+
+  // `calc_version` is constant for the whole engine run, not version-
+  // dependent, and `monitoring_statement` does not exist on `AppraisalMetrics`
+  // until Task 9 — excluding a key that is not there yet is a no-op today and
+  // keeps this gate correct without a rewrite once Task 9 lands it. Cast to a
+  // plain record first so destructuring a not-yet-existing key does not fail
+  // the TS build.
+  const metricsSansExcluded = (metrics: object): Record<string, unknown> => {
+    const { calc_version: _cv, monitoring_statement: _ms, ...rest } =
+      metrics as unknown as Record<string, unknown>;
+    return rest;
+  };
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v10 to v11`, () => {
+      const inputs = doc.inputs!;
+      const v10Run = runAppraisal(migrateInputsToV10(inputs));
+      const v11Run = runAppraisal(migrateInputsToV11(inputs));
+      expect(metricsSansExcluded(v11Run.metrics), `${file}: metrics moved`)
+        .toEqual(metricsSansExcluded(v10Run.metrics));
+      expect(v11Run.model, `${file}: a ledger figure moved`).toEqual(v10Run.model);
+      expect(v11Run.schedule, `${file}: a schedule figure moved`).toEqual(v10Run.schedule);
+    });
+  }
+
+  // Property 1 of three. Field strings may be renamed under a stated alias
+  // map; the SET of issues raised must not grow or shrink. No field renames
+  // this release; kept so a future rename has a declared home rather than a
+  // loosened assertion.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v10 validation issue has a v11 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v10Issues = new Set(
+        validateInputs(migrateInputsToV10(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v11Issues = new Set(
+        validateInputs(migrateInputsToV11(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v11Issues).toEqual(v10Issues);
+    });
+  }
+
+  // Property 2 and Property 3, the matched pair that stops Property 2 being
+  // vacuous — R12's Sec 18.7 lesson, applied from the start again this
+  // release (see the v10 block above's own comment).
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v11-only rule stays silent on a migrated document (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV11(inputs));
+      expect(issues.filter((i) => i.field.startsWith('monitoring'))).toEqual([]);
+    });
+  }
+
+  it('the v11-only rules can actually fire (property 3 of three)', () => {
+    const raw = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'l-retain-all.json'), 'utf-8'),
+    ) as FixtureFile;
+    const v11 = migrateInputsToV11(raw.inputs!);
+    const category = (c: MonitoringCategory): MonitoringLineInputs => ({
+      category: c,
+      current_budget_pence: 0,
+      certified_to_date_pence: 0,
+      paid_to_date_pence: 0,
+      committed_to_date_pence: 0,
+      forecast_to_complete_pence: 0,
+    });
+    const poisoned: CalculatorInputsV11 = {
+      ...v11,
+      monitoring: {
+        reporting_month: 999, // <- exceeds l-retain-all's 12-month term
+        reporting_date: '2026-01-01',
+        lines: [
+          category('acquisition'), category('construction'), category('professional'),
+          category('statutory'), category('contingency'),
+        ],
+        debt_drawn_to_date_pence: 0,
+        cash_equity_injected_to_date_pence: 0,
+        author: 'QS',
+        date: '2026-01-01',
+        note: null,
+      },
+    };
+    const issues = validateInputs(poisoned);
+    expect(issues.some((i) => i.field === 'monitoring.reporting_month')).toBe(true);
+  });
+
+  it('migration writes only null (spec §20.1)', () => {
+    const raw = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
+    ) as FixtureFile;
+    const v11 = migrateInputsToV11(raw.inputs!);
+    expect(v11.monitoring).toBeNull();
+  });
+
+  it('actively overwrites a stray monitoring block rather than relying on it already being null', () => {
+    // Non-vacuity for the test above: `migrateV10toV11` is what resets a
+    // poisoned `monitoring` value to null, not a coincidence of the input
+    // already carrying null.
+    const raw = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
+    ) as FixtureFile;
+    const v10 = migrateInputsToV10(raw.inputs!);
+    const poisoned = { ...v10, monitoring: { poison: true } } as unknown as CalculatorInputsV10;
+    const v11 = migrateV10toV11(poisoned);
+    expect(v11.monitoring).toBeNull();
+  });
+
+  // No TS twin of Python's test_is_v2_or_later_recognises_v11: `is_v2_or_later`
+  // is a Python-only server-persistence-boundary concept (app.py's `was_v1`
+  // guard). There is no TypeScript function of that name or shape to mirror.
+});
+
+describe('migrateInputsToV11 refusals', () => {
+  it('refuses an unrecognised version — tested with 12, the neighbour', () => {
+    expect(() => migrateInputsToV11({ inputs_version: 12 } as never))
+      .toThrow(/migrateInputsToV11: unrecognised inputs_version 12/);
+  });
+
+  it('refuses a document tagged v11 that fails the structural check', () => {
+    expect(() => migrateInputsToV11({ inputs_version: 11 } as never))
+      .toThrow(/fails the v11 structural check/);
+  });
+});
+
+describe('migrateInputsToV11 merge-onto-defaults branch', () => {
+  it('carries a saved, non-null monitoring block through the merge branch, not the default null', () => {
+    const v11 = migrateV10toV11(migrateV9toV10(migrateV8toV9(defaultV8Document())));
+    const snapshot = {
+      ...JSON.parse(JSON.stringify(v11)),
+      monitoring: {
+        reporting_month: 3,
+        reporting_date: '2026-01-01',
+        lines: (['acquisition', 'construction', 'professional', 'statutory', 'contingency'] as const).map(
+          (c) => ({
+            category: c, current_budget_pence: 0, certified_to_date_pence: 0,
+            paid_to_date_pence: 0, committed_to_date_pence: 0, forecast_to_complete_pence: 0,
+          }),
+        ),
+        debt_drawn_to_date_pence: 0, cash_equity_injected_to_date_pence: 0,
+        author: 'QS', date: '2026-01-01', note: null,
+      },
+    };
+    const merged = migrateInputsToV11(snapshot);
+    expect(merged.monitoring).not.toBeNull();
+    expect(merged.monitoring!.reporting_month).toBe(3);
   });
 });

@@ -14,9 +14,10 @@ import type {
  * `remaining_cost(1) === total cost − month-0 spend`, both pinned by worksheet tests.
  *
  * `inputs` is typed as the `AnyCalculatorInputs` union (not the narrower
- * `CalculatorInputsV3` the task brief's interface sketch used) because only `equity_sources` is
- * read here — a field common to all input versions — and `deriveMetrics` (the sole caller)
- * itself carries that same union; narrowing to V3 would not type-check at the real call site.
+ * `CalculatorInputsV3` the task brief's interface sketch used) because only `equity_sources`
+ * and (R14, C1) `finance.interest_type` are read here — fields common to all input versions —
+ * and `deriveMetrics` (the sole caller) itself carries that same union; narrowing to V3 would
+ * not type-check at the real call site.
  */
 export function computeCostToComplete(
   schedule: Schedule, model: MonthlyModel, inputs: AnyCalculatorInputs,
@@ -29,7 +30,9 @@ export function computeCostToComplete(
     .filter((s) => s.classification === 'cash' && s.evidence_status !== 'rejected')
     .reduce((sum, s) => sum + s.amount_pence, 0);
 
+  const rolledUp = inputs.finance.interest_type === 'rolled_up';
   let cumEquityContributed = 0;
+  let cumInterestCapitalised = 0;
   const months: CostToCompleteSummary['months'] = [];
   let firstShortfallMonth: number | null = null;
   let maxShortfall = 0;
@@ -49,9 +52,18 @@ export function computeCostToComplete(
     // actually happened by the point this label describes (see the indexing note above).
     const prevLedgerMonth = model.months[m - 1];
     cumEquityContributed += prevLedgerMonth.equity_contribution_pence;
+    cumInterestCapitalised += prevLedgerMonth.interest_capitalised_pence;
     const undrawnFacility = prevLedgerMonth.undrawn_net_facility_pence ?? 0;
+    // R14 spec §5.10 (C1). Rolled-up interest never consumes the net facility; it
+    // capitalises against the gross facility's headroom, i.e. the interest reserve.
+    // Remaining cost counts future interest, so remaining funding must count the
+    // reserve that exists to pay it — the unconsumed part. Serviced interest is an
+    // equity use (§4.3) and gets no reserve credit; cash deals have gross = net = 0.
+    const reserveHeadroom = rolledUp
+      ? Math.max(0, model.committed_gross_facility_pence - model.committed_net_facility_pence - cumInterestCapitalised)
+      : 0;
     const remainingCashEquity = Math.max(0, cashEquityTotal - cumEquityContributed);
-    const remainingFunding = undrawnFacility + remainingCashEquity;
+    const remainingFunding = undrawnFacility + reserveHeadroom + remainingCashEquity;
 
     const surplus = remainingFunding - remainingCost;
     if (surplus < 0) {
@@ -63,6 +75,7 @@ export function computeCostToComplete(
       month: m,
       remaining_cost_pence: remainingCost,
       remaining_funding_pence: remainingFunding,
+      remaining_interest_reserve_headroom_pence: reserveHeadroom,
       surplus_pence: surplus,
     });
   }

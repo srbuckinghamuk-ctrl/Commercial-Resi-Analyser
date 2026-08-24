@@ -962,3 +962,92 @@ block is `null`, so it takes the untouched arm on both counts: it gains only
 arrangement-fee fields to attach to. Its post-R13 behaviour is exactly the R12
 row with that one written default attached. It reports no investment case,
 which is expected — it never asked for one.
+
+---
+
+## 14. v10 → v11 (Release 14, calc `2.13.0`)
+
+**What's added.** `CalculatorInputsV11` is `CalculatorInputsV10` plus one new
+top-level field, `monitoring: MonitoringInputs | null` (spec §20.1).
+`CalculatorInputsV11` subclasses `CalculatorInputsV10`, for the same reason every
+prior version extended rather than replaced: the engine dispatches on the class,
+and a flat re-declaration would make those `isinstance` checks silently false for
+v11 documents.
+
+| v10 field | v11 field | Behaviour |
+|---|---|---|
+| *(absent)* | `monitoring` | Written `null`. A document that never asked for a monitoring statement does not acquire an empty one; `null` is spec §20's inception-only path, which is what every stored appraisal has always computed. |
+
+**One written null, and nothing else.** This is the smallest boundary the corpus
+has crossed: no field is renamed, no field is narrowed, no default is written
+that the engine then reads. `monitoring: null` is read by exactly two sites —
+`compute_monitoring_statement` / `computeMonitoringStatement`, which returns
+`None`/`null` and publishes no statement, and `validate_monitoring` /
+`validateMonitoring`, which returns before raising anything. Both are structural
+reads (`getattr(inputs, "monitoring", None)` on the Python side, `'monitoring' in
+inputs` on the TypeScript side), so a pre-v11 document with no attribute at all
+and a v11 document carrying `null` take the identical path.
+
+**Implementation** (`migrateV10toV11` / `migrate_v10_to_v11`, `migrateInputsToV11`
+/ `migrate_inputs_to_v11`). The entry point mirrors `migrateInputsToV10`'s shape,
+including its version predicate (membership of the declared tuple, not a range
+check) and its two refusals — an unrecognised `inputs_version` throws, and a
+document declaring version 11 that fails the v11 structural check throws rather
+than falling through to a permissive earlier path. `migrate_v10_to_v11` refuses a
+document that is already v11, so double-migration raises instead of silently
+re-stamping.
+
+### 14.1 The identity claim, and where it is tested
+
+**Claim: the v10 → v11 migration moves no computed figure and adds no validation
+issue that is not a genuinely new rule. Every existing appraisal produces
+byte-identical output either side of it.**
+
+The gate lives in `tests/test_migrate_v11.py` and its vitest twin. It runs
+corpus-wide, and it filters on `doc["inputs"]["inputs_version"]` — the *stored*
+version, not the runtime one — which is R13's lesson applied from the start:
+a gate that partitions on the wrong axis silently stops testing the thing it
+names. A companion test asserts the filtered corpus has not shrunk and names the
+one deliberately excluded document (`w-monitoring-on-site`, the first v11-native
+fixture), so the gate cannot pass by running over nothing.
+
+The numeric arm compares the v10 run and the v11 run of the same raw document on
+all three outputs — metrics, ledger and schedule — not metrics alone. The
+validation arm is **three separately-falsifiable properties, not one set
+equality** (spec §19.9's shape, carried forward):
+
+1. **Every v10 issue has a v11 counterpart.** v11 renames nothing, so no alias
+   map is needed for this property to hold.
+2. **The v11-only rules of spec §20.3 raise no issue on a migrated document.**
+   Every one of them is gated on `monitoring` being non-null, and the migration
+   writes `null`.
+3. **A control document that trips a v11-only rule raises it.** Without property
+   3, property 2 would pass identically whether the new rules were wired up or
+   silently inert.
+
+**The C1 correction is the one computed value that moves, and it is not a
+migration effect.** Calc 2.13.0 also corrects spec §5.10's remaining-funding term
+to credit a rolled-up facility's unconsumed interest reserve. That changes
+`cost_to_complete` — and only `cost_to_complete` — on documents with a **rolled-up
+facility carrying an interest reserve**; a serviced-interest document, a cash
+deal, and a rolled-up facility whose gross and net commitments are equal are all
+bit-identical. The distinction matters for reading the gate: the correction
+applies equally to the v10 run and the v11 run of the same document, so it
+cancels out of the identity comparison entirely. What moves under calc 2.13.0 is
+a *version* difference, recorded in spec §1.6 and pinned on fixtures P and V; what
+the migration moves is nothing.
+
+The §4.2(b) `lender_eligible` wiring is the same kind of thing, in the same
+release and equally not a migration effect: it moves ledger figures on
+detailed-mode documents carrying an ineligible package (`q-detailed-cost-plan`,
+`s-dated-programme`), identically on both sides of the boundary.
+
+### 14.2 The York appraisal after R14
+
+The Stonegate record (§10.2, §13.2) gains `monitoring: null` and nothing else.
+It is headline-mode with no cost packages, so `lender_eligible_ratio` is `1` and
+§4.2(b)'s amended cap base is arithmetically the pre-R14 one — every ledger
+figure is unchanged. Its post-R14 behaviour is exactly the R13 row with one
+written null attached, plus whatever §5.10's correction does to its
+cost-to-complete series on its own interest basis. It reports no monitoring
+statement, which is expected — it never asked for one.

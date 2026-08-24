@@ -6,7 +6,7 @@ import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
-import { runAppraisal, migrateInputsToV10 } from '../lib/model';
+import { runAppraisal, migrateInputsToV11 } from '../lib/model';
 import { buildProvenance } from '../lib/report-provenance';
 
 interface ExportPageProps {
@@ -96,11 +96,12 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
         // (closes a pre-existing spider/memo inconsistency). R9 Task 3 moved
         // this to v6; R10 Task 6 moved it again, to v7; R11 Task 10 (spec
         // §17.11) moved it to v8; R12 Task 18b (spec §18.7) moved it to v9; R13
-        // Task 18 (spec §19.9) moves it to v10, in the SAME commit as the
-        // server -- each vN entry point throws on a v(N+1) document (spec
-        // §3.5's guard against the v1-fallback corruption path), so this must
-        // track the server boundary exactly or every export throws.
-        spider = computeSpider(migrateInputsToV10(normaliseUnitAreas(raw), selectedProject), eligibility);
+        // Task 18 (spec §19.9) moved it to v10; R14 Task 14 (spec §20.1) moves
+        // it to v11, in the SAME commit as the server -- each vN entry point
+        // throws on a v(N+1) document (spec §3.5's guard against the
+        // v1-fallback corruption path), so this must track the server
+        // boundary exactly or every export throws.
+        spider = computeSpider(migrateInputsToV11(normaliseUnitAreas(raw), selectedProject), eligibility);
       }
 
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
@@ -127,12 +128,12 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       // Single authoritative run — the memo consumes it directly and performs
       // zero recalculation (spec §11.9). R9 Task 3 normalised to v6; R10 Task 6
       // moved this to v7; R11 Task 10 moved it to v8; R12 Task 18b moved it to
-      // v9; R13 Task 18 moves it to v10, matching the server boundary, which
-      // moves in the same commit. R12 Task 18b was also where a stored v8
-      // explicit programme first reached the memo's programme section (spec
-      // §18.10): the migration turns it into a predecessor-free network on
-      // load, which derives the identical windows.
-      const run = runAppraisal(migrateInputsToV10(normaliseUnitAreas(raw), selectedProject));
+      // v9; R13 Task 18 moved it to v10; R14 Task 14 moves it to v11, matching
+      // the server boundary, which moves in the same commit. R12 Task 18b was
+      // also where a stored v8 explicit programme first reached the memo's
+      // programme section (spec §18.10): the migration turns it into a
+      // predecessor-free network on load, which derives the identical windows.
+      const run = runAppraisal(migrateInputsToV11(normaliseUnitAreas(raw), selectedProject));
 
       let eligibility: EligibilityAssessment | null = null;
       try {

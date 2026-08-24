@@ -46,6 +46,9 @@ class FacilityTerms(Model):
     day_one_advance_pence: int | None = Field(default=None, ge=0)
     day_one_market_value_pence: int | None = Field(default=None, ge=0)
     # Caps monthly development draws at this % of that month's eligible dev costs.
+    # R14 spec Sec 4.2(b): "eligible" is construction * the cost plan's
+    # lender_eligible_ratio, plus professional and statutory in full -- VAT is
+    # deliberately excluded (Sec 17.6).
     development_cost_advance_pct: float = Field(ge=0, le=100)
     committed_net_facility_pence: int | None = Field(default=None, ge=0)
     # None -> derived as net + interest_reserve.
@@ -693,7 +696,12 @@ class CostPackage(Model):
     # mode has no packages, so every class there takes the whole base build
     # regardless of tag -- see compute_cost_plan's contingency resolution.
     contingency_class: ContingencyClassName = "general"
-    # R10 records this; the ledger's draw cap does NOT read it. R14 wires it.
+    # R10 records this; R14 (calc 2.13.0) wires it: the ledger's Sec 4.2(b) cap
+    # base scales the construction line by the cost plan's
+    # `lender_eligible_ratio`. Clearing this flag on a package therefore shrinks
+    # every later month's advance cap and widens the funding gap. Live in
+    # detailed mode only -- headline mode has no packages, and its ratio is
+    # pinned to 1. Mirrors CostPackage.lender_eligible in cost-plan.ts.
     lender_eligible: bool = True
     notes: str = ""
     # R11 spec Sec 17.1. Detailed mode only -- hard-rejected in headline mode
@@ -906,10 +914,49 @@ class CalculatorInputsV10(CalculatorInputsV9):
     investment_case: InvestmentCaseInputs | None = None
 
 
+MonitoringCategory = Literal[
+    "acquisition", "construction", "professional", "statutory", "contingency",
+]
+
+MONITORING_CATEGORIES: tuple[MonitoringCategory, ...] = (
+    "acquisition", "construction", "professional", "statutory", "contingency",
+)
+
+
+class MonitoringLineInputs(Model):
+    category: MonitoringCategory
+    current_budget_pence: int = Field(ge=0)
+    certified_to_date_pence: int = Field(ge=0)
+    paid_to_date_pence: int = Field(ge=0)
+    committed_to_date_pence: int = Field(ge=0)
+    forecast_to_complete_pence: int = Field(ge=0)
+
+
+class MonitoringInputs(Model):
+    reporting_month: int = Field(ge=1)
+    reporting_date: str = Field(min_length=1)  # ISO yyyy-mm-dd; printed only, never read by arithmetic
+    lines: list[MonitoringLineInputs]
+    debt_drawn_to_date_pence: int = Field(ge=0)
+    cash_equity_injected_to_date_pence: int = Field(ge=0)
+    author: str = Field(min_length=1)
+    date: str = Field(min_length=1)
+    note: str | None = None
+
+
+class CalculatorInputsV11(CalculatorInputsV10):
+    """Mirrors CalculatorInputsV10 with the Sec 20 monitoring statement.
+    Subclasses V10 for the same reason V10 subclasses V9: the engine
+    dispatches on it, and a flat re-declaration would make those isinstance
+    checks silently False for v11 documents."""
+
+    inputs_version: Literal[11] = 11  # type: ignore[assignment]
+    monitoring: MonitoringInputs | None = None
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-    | CalculatorInputsV9 | CalculatorInputsV10
+    | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11
 )
 
 
@@ -921,6 +968,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v11 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # monitoring block and every other post-v2 field.
+    if version == 11:
+        return CalculatorInputsV11.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v10 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # investment case and every other post-v2 field.
@@ -972,6 +1024,16 @@ FlagCode = Literal[
     # R13 spec Sec 19.7. Fires when the take-out's binding_constraint is dscr
     # or icr -- coverage, not value, is what limits the quantum.
     "takeout_constrained_by_coverage",
+    # R14 spec Sec 20.3. Fires when the monitoring statement's shortfall_pence
+    # is > 0 -- remaining uses exceed remaining funding at reporting_month.
+    "monitoring_shortfall",
+    # R14 spec Sec 20.3. Fires once when any monitoring line's
+    # variance_vs_original_pence exceeds 5% of a non-zero original budget,
+    # naming the category with the largest absolute variance.
+    "monitoring_cost_variance",
+    # R14 spec Sec 20.3. Fires when the monitoring statement's reporting_month
+    # is later than the inception ledger's last repaying month.
+    "monitoring_dated_after_redemption",
 ]
 
-CALC_VERSION = "2.12.0"
+CALC_VERSION = "2.13.0"

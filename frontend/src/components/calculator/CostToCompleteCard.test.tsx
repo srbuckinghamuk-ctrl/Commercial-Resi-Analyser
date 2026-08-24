@@ -7,8 +7,14 @@ const SUMMARY_NO_SHORTFALL: CostToCompleteSummary = {
   first_shortfall_month: null,
   max_shortfall_pence: 0,
   months: [
-    { month: 0, remaining_cost_pence: 10_000_000, remaining_funding_pence: 12_000_000, surplus_pence: 2_000_000 },
-    { month: 1, remaining_cost_pence: 5_000_000, remaining_funding_pence: 6_000_000, surplus_pence: 1_000_000 },
+    {
+      month: 0, remaining_cost_pence: 10_000_000, remaining_funding_pence: 12_000_000,
+      remaining_interest_reserve_headroom_pence: 0, surplus_pence: 2_000_000,
+    },
+    {
+      month: 1, remaining_cost_pence: 5_000_000, remaining_funding_pence: 6_000_000,
+      remaining_interest_reserve_headroom_pence: 0, surplus_pence: 1_000_000,
+    },
   ],
 };
 
@@ -16,8 +22,14 @@ const SUMMARY_WITH_SHORTFALL: CostToCompleteSummary = {
   first_shortfall_month: 3,
   max_shortfall_pence: 1_500_000,
   months: [
-    { month: 0, remaining_cost_pence: 10_000_000, remaining_funding_pence: 12_000_000, surplus_pence: 2_000_000 },
-    { month: 3, remaining_cost_pence: 8_000_000, remaining_funding_pence: 6_500_000, surplus_pence: -1_500_000 },
+    {
+      month: 0, remaining_cost_pence: 10_000_000, remaining_funding_pence: 12_000_000,
+      remaining_interest_reserve_headroom_pence: 0, surplus_pence: 2_000_000,
+    },
+    {
+      month: 3, remaining_cost_pence: 8_000_000, remaining_funding_pence: 6_500_000,
+      remaining_interest_reserve_headroom_pence: 900_000, surplus_pence: -1_500_000,
+    },
   ],
 };
 
@@ -56,5 +68,13 @@ describe('CostToCompleteCard — populated', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /hide months/i }));
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('shows a "Reserve headroom" column reading remaining_interest_reserve_headroom_pence', () => {
+    render(<CostToCompleteCard summary={SUMMARY_WITH_SHORTFALL} />);
+    fireEvent.click(screen.getByRole('button', { name: /show months/i }));
+    expect(screen.getByRole('columnheader', { name: 'Reserve headroom' })).toBeInTheDocument();
+    // Month 0's headroom is 0 (already asserted implicitly elsewhere); month 3's is 900,000p.
+    expect(screen.getByText('£9,000')).toBeInTheDocument();
   });
 });

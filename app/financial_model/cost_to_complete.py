@@ -21,6 +21,9 @@ class CostToCompleteMonth:
     month: int
     remaining_cost_pence: int
     remaining_funding_pence: int
+    #: Spec Sec 5.10 (R14, C1): the rolled-up facility's unconsumed interest reserve
+    #: credited to remaining funding; 0 for serviced interest and cash deals.
+    remaining_interest_reserve_headroom_pence: int
     surplus_pence: int
 
 
@@ -47,8 +50,9 @@ def compute_cost_to_complete(
 
     ``inputs`` is typed as the ``AnyCalculatorInputs`` union (not the narrower
     ``CalculatorInputsV3`` the task brief's interface sketch used) because only
-    ``equity_sources`` is read here -- a field common to every input version --
-    and ``derive_metrics`` (the sole caller) itself carries that same union.
+    ``equity_sources`` and (R14, C1) ``finance.interest_type`` are read here -- fields
+    common to every input version -- and ``derive_metrics`` (the sole caller) itself
+    carries that same union.
     """
     term = schedule.term_months
     # Spec Sec 2: only cash-classified, non-rejected equity sources are committed
@@ -59,7 +63,9 @@ def compute_cost_to_complete(
         if s.classification == "cash" and s.evidence_status != "rejected"
     )
 
+    rolled_up = inputs.finance.interest_type == "rolled_up"
     cum_equity_contributed = 0
+    cum_interest_capitalised = 0
     months: list[CostToCompleteMonth] = []
     first_shortfall_month: int | None = None
     max_shortfall = 0
@@ -80,9 +86,20 @@ def compute_cost_to_complete(
         # (see the indexing note above).
         prev_ledger_month = model.months[m - 1]
         cum_equity_contributed += prev_ledger_month.equity_contribution_pence
+        cum_interest_capitalised += prev_ledger_month.interest_capitalised_pence
         undrawn_facility = prev_ledger_month.undrawn_net_facility_pence or 0
+        # R14 spec Sec 5.10 (C1). Rolled-up interest never consumes the net facility; it
+        # capitalises against the gross facility's headroom, i.e. the interest reserve.
+        # Remaining cost counts future interest, so remaining funding must count the
+        # reserve that exists to pay it -- the unconsumed part. Serviced interest is an
+        # equity use (Sec 4.3) and gets no reserve credit; cash deals have gross = net = 0.
+        reserve_headroom = (
+            max(0, model.committed_gross_facility_pence - model.committed_net_facility_pence
+                - cum_interest_capitalised)
+            if rolled_up else 0
+        )
         remaining_cash_equity = max(0, cash_equity_total - cum_equity_contributed)
-        remaining_funding = undrawn_facility + remaining_cash_equity
+        remaining_funding = undrawn_facility + reserve_headroom + remaining_cash_equity
 
         surplus = remaining_funding - remaining_cost
         if surplus < 0:
@@ -94,6 +111,7 @@ def compute_cost_to_complete(
             month=m,
             remaining_cost_pence=remaining_cost,
             remaining_funding_pence=remaining_funding,
+            remaining_interest_reserve_headroom_pence=reserve_headroom,
             surplus_pence=surplus,
         ))
 

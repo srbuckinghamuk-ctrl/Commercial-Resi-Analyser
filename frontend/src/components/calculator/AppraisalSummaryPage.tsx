@@ -1,12 +1,13 @@
-import type { AppraisalRun, CalculatorInputsV10 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV11 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import CostToCompleteCard from './CostToCompleteCard';
+import MonitoringStatementCard from './MonitoringStatementCard';
 
 interface Props {
-  inputs: CalculatorInputsV10;
-  onChange: (partial: Partial<CalculatorInputsV10>) => void;
+  inputs: CalculatorInputsV11;
+  onChange: (partial: Partial<CalculatorInputsV11>) => void;
   run: AppraisalRun;
 }
 
@@ -46,7 +47,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * null, whether because no lender valuation was recorded or because a recorded one could not
  * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
  * surfaces the distinction via its own validation messages). */
-function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV10; run: AppraisalRun }) {
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV11; run: AppraisalRun }) {
   const { metrics } = run;
   const lv = inputs.lender_valuation;
 
@@ -283,6 +284,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
           tooltip="§5.12: minimum gross sale price covering total development cost (excluding selling costs, which are re-solved at that price) — lender- and debt-independent. Null when there is no disposal to solve for."
         />
         <CostToCompleteCard summary={metrics.cost_to_complete} />
+        <MonitoringStatementCard statement={metrics.monitoring_statement} />
       </Group>
     </div>
   );

@@ -120,9 +120,14 @@ being told — so this list and the code cannot silently drift apart:
 | M — Wales, jurisdiction | v5 | LTT, a confirmed jurisdiction and acquisition date (spec §14, R8). |
 | N — area bridge, all-cash | v6 | The full entered area bridge, bridge-derived construction area (spec §15, R9). |
 | O — ancillary value, blended exit | v6 | Parking/balcony value split between GDV and gross sale receipts under a blended exit. |
-| P — Scotland, levered | v6 | LBTT; the §5.10 cost-to-complete counter-example (test-cases §14.9), deferred to R14 as C1. |
-| Q — detailed cost plan, levered | v7 | The detailed cost-plan mode, three contingency classes on different bases, two fee bases — added R10 (Task 11); test-cases §16.8. |
-| **R — VAT quarterly, levered** | **v8** | **The pinned VAT return cycle plus chargeable purchase VAT and its acquisition-tax uplift — added R11; test-cases §17.1.** |
+| P — Scotland, levered | v6 | LBTT; the §5.10 cost-to-complete counter-example (test-cases §14.9) — C1, **closed in R14**: now pins `null` / `0` with the old `1` / `392483` as negative controls. |
+| Q — detailed cost plan, levered | v7 | The detailed cost-plan mode, three contingency classes on different bases, two fee bases — added R10 (Task 11); test-cases §16.8. Its ineligible externals package became live in R14; test-cases §20.2. |
+| R — VAT quarterly, levered | v8 | The pinned VAT return cycle plus chargeable purchase VAT and its acquisition-tax uplift — added R11; test-cases §17.1. |
+| S — fourteen-phase dated programme, slack phases, anchored two-tranche sale, tagged package | v9 | R12 §18's flagship: a fourteen-phase precedence network, duration-0 milestones, float and the critical path, an SS edge with a lag, anchored sale tranches and per-line `phase_id` overrides — added R12; test-cases §18, and §20.3 for its R14 re-derivation under the wired advance cap. |
+| T — retain-all with an investment case, DSCR binds | v10 | R13 §19: hold-period NOI, operating lines on both bases, a net-initial-yield valuation and a take-out where **DSCR** is the binding constraint — added R13. |
+| U — retain-all with an investment case, LTV binds | v10 | T's twin, identical but for `cap_yield_pct` and `takeout.ltv_cap_pct`, so the binding constraint flips to **LTV** — added R13. |
+| V — exhausted interest reserve, rolled-up development finance | v10 | R14 §5.10's positive case for the C1 correction: a rolled-up facility whose interest reserve is far smaller than the interest accrued, so a **real** shortfall survives the correction alongside a real `funding_gap_pence` — added R14; test-cases §20.1. |
+| **W — monitoring statement on site, detailed cost plan, one ineligible package** | **v11** | **R14 §20: the first v11-native document and the release's cross-engine penny-agreement carrier — a `monitoring` block at reporting month 6, a lender-ineligible package driving `lender_eligible_ratio`, and the corpus's only detailed-mode fixture still reaching §7's fully-realised profit identity — added R14; test-cases §20.4.** |
 
 (A, F–M carry `inputs_version: 5` in their stored JSON regardless of which release originally
 authored them — every fixture below v6 was brought up to the then-current schema rather than

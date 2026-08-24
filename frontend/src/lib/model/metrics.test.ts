@@ -1,19 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { deriveMetrics, pct, breakevenFlags, VAT_COUNTERFACTUAL_TAX_REASON } from './metrics';
+import { readFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { deriveMetrics, pct, breakevenFlags, monitoringFlags, VAT_COUNTERFACTUAL_TAX_REASON } from './metrics';
 import { runLedger } from './monthly-engine';
 import { runAppraisal, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6 } from './index';
+import { migrateInputsToV11 } from './migrate';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV7, DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
-import { DEFAULT_AREA_BRIDGE } from './areas';
+import { DEFAULT_AREA_BRIDGE, developedAreaSqm } from './areas';
 import { DEFAULT_UNIT_ANCILLARY } from '../conversion-types';
 import type { ProposedUnitV6 } from '../conversion-types';
 import type {
-  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8, CalculatorInputsV10,
-  EquitySource, FacilityTerms, MonthReceipts, MonthUses, Schedule,
+  AcquisitionInputsV5, AnyCalculatorInputs, CalculatorInputsV6, CalculatorInputsV8,
+  CalculatorInputsV11, EquitySource, FacilityTerms, MonitoringCategory, MonitoringInputs,
+  MonitoringLineInputs, MonthReceipts, MonthUses, Schedule,
 } from './finance-types';
 import type { VatResult } from './vat';
 import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 import { buildSchedule } from './schedule';
+import { computeCostPlan } from './cost-plan';
+import { originalBudgets } from './monitoring';
 import { investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
+
+const MONITORING_FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
@@ -66,6 +74,9 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     programme: null,
     investment_case: null,
     resolved_exit_months: { tranches: [], refinance: null },
+    // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
+    // hand-built schedules keep the pre-R14 cap base exactly.
+    lender_eligible_ratio: 1,
   };
 }
 
@@ -1158,7 +1169,7 @@ describe('§19.6 result block and flags', () => {
   // runLedger) so these tests exercise the real deriveMetrics(inputs,
   // schedule, model) signature directly, never through runAppraisal — the
   // republish-not-recompute test below needs to call deriveMetrics itself.
-  function icMetrics(doc: CalculatorInputsV10) {
+  function icMetrics(doc: CalculatorInputsV11) {
     const schedule = buildSchedule(doc);
     const model = runLedger(schedule, doc.finance, doc.equity_sources);
     return deriveMetrics(doc, schedule, model);
@@ -1225,5 +1236,246 @@ describe('§19.6 result block and flags', () => {
     const ltvBinds = icMetrics(investmentCaseDoc({ ltvBinds: true }));
     expect(ltvBinds.investment_case!.takeout.binding_constraint).toBe('ltv');
     expect(ltvBinds.flags.map((f) => f.code)).not.toContain('takeout_constrained_by_coverage');
+  });
+});
+
+describe('§20.4 monitoring_statement and §20.3 monitoring flags', () => {
+  // The corpus document, normalised to v11 (which stamps `monitoring: null`).
+  // Mirrors monitoring.test.ts's own `loadV11` (tests must be self-contained).
+  function loadV11(stem: string): CalculatorInputsV11 {
+    const fx = JSON.parse(readFileSync(join(MONITORING_FIXTURE_DIR, `${stem}.json`), 'utf-8')) as {
+      inputs: Record<string, unknown>;
+    };
+    return migrateInputsToV11(fx.inputs);
+  }
+
+  // Mirrors icMetrics above and runDoc in monitoring.test.ts: builds the schedule and
+  // ledger exactly as runAppraisal does, then calls deriveMetrics(inputs, schedule,
+  // model) directly — the real signature the caller (Task 9's own wiring) uses.
+  function monMetrics(doc: AnyCalculatorInputs) {
+    const schedule = buildSchedule(doc);
+    const model = runLedger(schedule, doc.finance, doc.equity_sources);
+    return deriveMetrics(doc, schedule, model);
+  }
+
+  function mkLine(
+    category: MonitoringCategory,
+    current: number, certified: number, paid: number, committed: number, forecast: number,
+  ): MonitoringLineInputs {
+    return {
+      category,
+      current_budget_pence: current,
+      certified_to_date_pence: certified,
+      paid_to_date_pence: paid,
+      committed_to_date_pence: committed,
+      forecast_to_complete_pence: forecast,
+    };
+  }
+
+  // Verbatim from monitoring.test.ts's `BASE_LINES` — the shortfall scenario below is
+  // Task 7's own test 7 (task-7-brief.md item 7: "choose forecast_to_complete_pence of
+  // 10× the scheme's GDV on the construction line"), reproduced here so this describe
+  // block can run it through deriveMetrics rather than computeMonitoringStatement alone.
+  const BASE_LINES: MonitoringLineInputs[] = [
+    mkLine('acquisition', 40_000_000, 40_000_000, 40_000_000, 40_000_000, 0),
+    mkLine('construction', 60_000_000, 25_000_000, 22_000_000, 33_000_000, 27_000_000),
+    mkLine('professional', 8_000_000, 3_000_000, 2_500_000, 4_000_000, 4_500_000),
+    mkLine('statutory', 2_000_000, 900_000, 900_000, 1_200_000, 700_000),
+    mkLine('contingency', 5_000_000, 1_000_000, 1_000_000, 1_500_000, 2_000_000),
+  ];
+
+  function mkMonitoring(overrides: Partial<MonitoringInputs> = {}): MonitoringInputs {
+    return {
+      reporting_month: 3,
+      reporting_date: '2026-06-30',
+      lines: BASE_LINES,
+      debt_drawn_to_date_pence: 0,
+      cash_equity_injected_to_date_pence: 60_000_000,
+      author: 'A. Surveyor MRICS',
+      date: '2026-07-02',
+      note: null,
+      ...overrides,
+    };
+  }
+
+  function withMonitoring(
+    inputs: CalculatorInputsV11, monitoring: MonitoringInputs | null,
+  ): CalculatorInputsV11 {
+    return { ...inputs, monitoring };
+  }
+
+  it('publishes monitoring_statement === null and raises none of the three flags on a null-monitoring document', () => {
+    const doc = loadV11('a-all-cash');
+    expect(doc.monitoring).toBeNull();
+    const r = monMetrics(doc);
+    expect(r.monitoring_statement).toBeNull();
+    const codes = r.flags.map((f) => f.code);
+    expect(codes).not.toContain('monitoring_shortfall');
+    expect(codes).not.toContain('monitoring_cost_variance');
+    expect(codes).not.toContain('monitoring_dated_after_redemption');
+  });
+
+  it('raises monitoring_shortfall with amount_pence equal to the statement\'s own shortfall_pence '
+    + '(Task 7\'s test 7 document)', () => {
+    // task-7-brief.md item 7: a forecast-to-complete of ten times the scheme's whole
+    // value cannot be funded by any document, so the sign of surplus_pence is certain
+    // here without pinning the fixture's own figures — mirrors monitoring.test.ts's
+    // own version of this document exactly.
+    const base = loadV11('l-retain-all');
+    const probe = buildSchedule(base);
+    const schemeValue = probe.totals.gdv_pence + probe.totals.retained_value_pence;
+    expect(schemeValue).toBeGreaterThan(0);
+    const doc = withMonitoring(base, mkMonitoring({
+      lines: BASE_LINES.map((l) => (
+        l.category === 'construction'
+          ? { ...l, forecast_to_complete_pence: 10 * schemeValue }
+          : l
+      )),
+    }));
+    const r = monMetrics(doc);
+    const stmt = r.monitoring_statement!;
+    expect(stmt.surplus_pence).toBeLessThan(0);
+    expect(stmt.shortfall_pence).toBeGreaterThan(0);
+
+    const f = r.flags.find((x) => x.code === 'monitoring_shortfall');
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe('red');
+    expect(f!.month).toBe(stmt.reporting_month);
+    expect(f!.amount_pence).toBe(stmt.shortfall_pence);
+    expect(f!.message).toBe(
+      `monitoring statement at month ${stmt.reporting_month}: remaining uses exceed `
+      + `remaining funding by ${stmt.shortfall_pence}p`,
+    );
+  });
+
+  it('does not raise monitoring_shortfall when the surplus is non-negative', () => {
+    const base = loadV11('l-retain-all');
+    const doc = withMonitoring(base, mkMonitoring({ cash_equity_injected_to_date_pence: 0 }));
+    const r = monMetrics(doc);
+    expect(r.monitoring_statement!.shortfall_pence).toBe(0);
+    expect(r.flags.map((f) => f.code)).not.toContain('monitoring_shortfall');
+  });
+
+  it('raises monitoring_cost_variance naming construction when its forecast doubles the original budget', () => {
+    // Every other line is entered with no variance at all (current = certified =
+    // committed = its own original budget, forecast 0) so construction is
+    // unambiguously the only — and therefore the largest — offender.
+    const base = loadV11('a-all-cash');
+    const schedule = buildSchedule(base);
+    const costPlan = computeCostPlan(base, developedAreaSqm(base), base.unit_mix.units.length);
+    const originals = originalBudgets(schedule, costPlan);
+    expect(originals.construction).toBeGreaterThan(0);
+
+    const zeroVarianceLine = (category: MonitoringCategory): MonitoringLineInputs => mkLine(
+      category, originals[category], originals[category], 0, originals[category], 0,
+    );
+    const doc = withMonitoring(base, mkMonitoring({
+      lines: [
+        zeroVarianceLine('acquisition'),
+        mkLine('construction', originals.construction, 0, 0, 0, 2 * originals.construction),
+        zeroVarianceLine('professional'),
+        zeroVarianceLine('statutory'),
+        zeroVarianceLine('contingency'),
+      ],
+    }));
+    const r = monMetrics(doc);
+    const stmt = r.monitoring_statement!;
+    const constructionLine = stmt.lines.find((l) => l.category === 'construction')!;
+    expect(constructionLine.estimated_final_cost_pence).toBe(2 * originals.construction);
+    expect(constructionLine.variance_vs_original_pence).toBe(originals.construction);
+
+    const f = r.flags.find((x) => x.code === 'monitoring_cost_variance');
+    expect(f).toBeDefined();
+    expect(f!.severity).toBe('amber');
+    expect(f!.amount_pence).toBe(originals.construction);
+    expect(f!.message).toBe('construction estimated final cost varies from the original budget by more than 5%');
+  });
+
+  // Carried from Task 8's review. Fixture W's construction line sits at EXACTLY 5%
+  // (variance +300,000 on an original of 6,000,000; 300,000 × 20 = 6,000,000, not
+  // greater than it) and must NOT fire; its contingency line (variance −100,000 on
+  // 600,000, 16.7%) does exceed 5% and is the flag's only witness on this document.
+  it('pins the 5% boundary on fixture W: construction does not fire, contingency does', () => {
+    const doc = loadV11('w-monitoring-on-site');
+    const r = monMetrics(doc);
+    const stmt = r.monitoring_statement!;
+    const construction = stmt.lines.find((l) => l.category === 'construction')!;
+    expect(construction.variance_vs_original_pence).toBe(300_000);
+    expect(construction.original_budget_pence).toBe(6_000_000);
+    expect(Math.abs(construction.variance_vs_original_pence) * 20).toBe(construction.original_budget_pence);
+
+    const varianceFlags = r.flags.filter((f) => f.code === 'monitoring_cost_variance');
+    expect(varianceFlags).toHaveLength(1);
+    expect(varianceFlags[0].amount_pence).toBe(-100_000);
+    expect(varianceFlags[0].message).toBe(
+      'contingency estimated final cost varies from the original budget by more than 5%',
+    );
+  });
+
+  it('5% + 1p: bumping construction\'s forecast by a single penny both fires the flag and '
+    + 'makes construction the largest-variance category, superseding contingency', () => {
+    const base = loadV11('w-monitoring-on-site');
+    const bumped = withMonitoring(base, {
+      ...base.monitoring!,
+      lines: base.monitoring!.lines.map((l) => (
+        l.category === 'construction'
+          ? { ...l, forecast_to_complete_pence: l.forecast_to_complete_pence + 1 }
+          : l
+      )),
+    });
+    const r = monMetrics(bumped);
+    const stmt = r.monitoring_statement!;
+    const construction = stmt.lines.find((l) => l.category === 'construction')!;
+    expect(construction.variance_vs_original_pence).toBe(300_001);
+    expect(Math.abs(construction.variance_vs_original_pence) * 20).toBeGreaterThan(construction.original_budget_pence);
+
+    const varianceFlags = r.flags.filter((f) => f.code === 'monitoring_cost_variance');
+    expect(varianceFlags).toHaveLength(1);
+    expect(varianceFlags[0].amount_pence).toBe(300_001);
+    expect(varianceFlags[0].message).toBe(
+      'construction estimated final cost varies from the original budget by more than 5%',
+    );
+  });
+
+  it('raises monitoring_dated_after_redemption when reporting_month exceeds the last repaying '
+    + 'month, and not when it equals it', () => {
+    const base = loadV11('w-monitoring-on-site');
+    const schedule = buildSchedule(base);
+    const model = runLedger(schedule, base.finance, base.equity_sources);
+    const repayingMonths = model.months.filter((m) => m.repayment_pence > 0).map((m) => m.month);
+    expect(repayingMonths).toEqual([17]); // the single-tranche sale clears the balance whole (§20.4 Step 5)
+    const lastRepaymentMonth = Math.max(...repayingMonths);
+
+    const after = withMonitoring(base, { ...base.monitoring!, reporting_month: lastRepaymentMonth + 1 });
+    const rAfter = monMetrics(after);
+    expect(rAfter.flags.map((f) => f.code)).toContain('monitoring_dated_after_redemption');
+    const f = rAfter.flags.find((x) => x.code === 'monitoring_dated_after_redemption')!;
+    expect(f.severity).toBe('amber');
+    expect(f.amount_pence).toBeNull();
+    expect(f.message).toBe('the monitoring statement is dated after the forecast redemption month');
+
+    const at = withMonitoring(base, { ...base.monitoring!, reporting_month: lastRepaymentMonth });
+    const rAt = monMetrics(at);
+    expect(rAt.flags.map((f) => f.code)).not.toContain('monitoring_dated_after_redemption');
+  });
+
+  it('skips monitoring_dated_after_redemption entirely when no ledger month ever repays', () => {
+    // l-retain-all is a cash, retain-only document: nothing is sold and there is no
+    // facility to redeem, so no month's repayment_pence is ever positive.
+    const base = loadV11('l-retain-all');
+    const schedule = buildSchedule(base);
+    const model = runLedger(schedule, base.finance, base.equity_sources);
+    expect(model.months.some((m) => m.repayment_pence > 0)).toBe(false);
+
+    const doc = withMonitoring(base, mkMonitoring({ reporting_month: 12 }));
+    const r = monMetrics(doc);
+    expect(r.flags.map((f) => f.code)).not.toContain('monitoring_dated_after_redemption');
+  });
+
+  it('monitoringFlags returns [] when the statement is null (pure-function contract)', () => {
+    const base = loadV11('a-all-cash');
+    const schedule = buildSchedule(base);
+    const model = runLedger(schedule, base.finance, base.equity_sources);
+    expect(monitoringFlags(null, model)).toEqual([]);
   });
 });

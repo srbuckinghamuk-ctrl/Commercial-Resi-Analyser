@@ -15,7 +15,7 @@ from .investment_case import OPEX_CODES, resolve_stabilisation_month
 from .lender_valuation import compute_lender_gdv
 from .programme import ProgrammeDerivation, derive_phases, is_legacy_programme, is_programme_network
 from .schedule import Schedule
-from .types import FEE_CODE_CATEGORY, PRE_COMPLETION_CODES, AnyCalculatorInputs
+from .types import FEE_CODE_CATEGORY, MONITORING_CATEGORIES, PRE_COMPLETION_CODES, AnyCalculatorInputs
 from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -1377,7 +1377,92 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 f"\"{scenario.phase_slip_phase_id}\".",
             )
 
+    validate_monitoring(inputs, issues)
+
     return issues
+
+
+def validate_monitoring(inputs: AnyCalculatorInputs, issues: list[ValidationIssue]) -> None:
+    """R14 spec Sec 20.3 -- the monitoring statement's INPUT-only rules. The
+    three result-derived flags (``monitoring_shortfall``,
+    ``monitoring_cost_variance``, ``monitoring_dated_after_redemption``) are
+    Task 9's own -- they need the computed statement, which this function
+    (inputs only) cannot see, so they are raised as FlagCodes in metrics, not
+    here. Read structurally, exactly like ``investment_case``/
+    ``lender_valuation`` above: a pre-v11 document has no ``monitoring``
+    attribute at all, and a v11 document with ``monitoring: None`` (every
+    migrated document) adds no issue either. Mirrors validation.ts's
+    ``validateMonitoring``."""
+    monitoring = getattr(inputs, "monitoring", None)
+    if monitoring is None:
+        return
+
+    def err(field_: str, message: str) -> None:
+        issues.append(ValidationIssue(severity="error", field=field_, message=message))
+
+    def warn(field_: str, message: str) -> None:
+        issues.append(ValidationIssue(severity="warning", field=field_, message=message))
+
+    term = max(1, math.floor(inputs.finance.term_months))
+    if (
+        not float(monitoring.reporting_month).is_integer()
+        or monitoring.reporting_month < 1
+        or monitoring.reporting_month > term
+    ):
+        err(
+            "monitoring.reporting_month",
+            f"reporting_month must be between 1 and the term ({term})",
+        )
+
+    # Exactly one line per category, any order, no duplicates (spec Sec 20.1).
+    # A category set of size 5 that contains all five required categories can
+    # only BE those five categories, so this also catches an unrecognised
+    # category value without a separate membership check.
+    categories = [line.category for line in monitoring.lines]
+    category_set = set(categories)
+    valid_shape = (
+        len(categories) == len(MONITORING_CATEGORIES)
+        and len(category_set) == len(MONITORING_CATEGORIES)
+        and all(c in category_set for c in MONITORING_CATEGORIES)
+    )
+    if not valid_shape:
+        err(
+            "monitoring.lines",
+            "monitoring must carry exactly one line per category (acquisition, construction, "
+            "professional, statutory, contingency)",
+        )
+
+    for i, line in enumerate(monitoring.lines):
+        if line.paid_to_date_pence > line.certified_to_date_pence:
+            err(f"monitoring.lines[{i}].paid_to_date_pence", "paid to date cannot exceed certified to date")
+        if line.certified_to_date_pence > line.committed_to_date_pence:
+            err(
+                f"monitoring.lines[{i}].certified_to_date_pence",
+                "certified to date cannot exceed committed to date",
+            )
+
+    committed_net = (
+        0 if inputs.finance.funding_source == "cash"
+        else (inputs.finance.committed_net_facility_pence or 0)
+    )
+    if monitoring.debt_drawn_to_date_pence > committed_net:
+        err(
+            "monitoring.debt_drawn_to_date_pence",
+            "debt drawn to date cannot exceed the committed net facility",
+        )
+
+    # Spec Sec 5.10's cash-classified, non-rejected filter -- the same one
+    # cost_to_complete.py and engine.py already carry under this comment --
+    # restated here because validate_monitoring has no access to either
+    # module's computed total (inputs only).
+    cash_equity_total = sum(
+        s.amount_pence for s in inputs.equity_sources
+        if s.classification == "cash" and s.evidence_status != "rejected"
+    )
+    if monitoring.cash_equity_injected_to_date_pence > cash_equity_total:
+        # Spec Sec 20.3: "not an error -- the audit's 'additional equity
+        # injected' case; it is a warning."
+        warn("monitoring.cash_equity_injected_to_date_pence", "equity injected beyond committed sources")
 
 
 def reconcile(

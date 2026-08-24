@@ -260,7 +260,7 @@ def test_migrate_default_area_bridge_matches_the_areas_module():
 
 def _pipeline_fixtures():
     for path in sorted(FIXTURES.glob("*.json")):
-        doc = json.loads(path.read_text())
+        doc = json.loads(path.read_text(encoding="utf-8"))
         if doc.get("kind") == "sensitivity":
             continue  # names a base_fixture instead of carrying inputs
         if (doc["inputs"].get("inputs_version") or 0) > 6:

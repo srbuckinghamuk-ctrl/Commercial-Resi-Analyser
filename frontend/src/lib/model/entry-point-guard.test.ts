@@ -4,17 +4,17 @@ import { resolve, join, relative } from 'node:path';
 
 /**
  * R12 Task 18b, spec §18.7. THE guard that would have caught R12 shipping
- * inert.
+ * inert. R14 Task 14 (spec §20.1, guard 8) moves the version chain it derives
+ * from to v11.
  *
- * Every arm this release built — validation, the schedule wiring in both
- * engines, the exit anchors, the `phase_slip` lever, the phase editor and Gantt,
- * the memo's programme section — is reachable only from a v9 document. If a
- * production entry point keeps calling the v8 migration, no user ever holds a
- * v9 document, none of that code is reachable, and roughly four thousand tests
- * stay green while proving it all works in a world nobody inhabits. That is not
- * a hypothetical: R10 shipped exactly this split in the other direction (server
- * on v7, client on v6) and made every saved appraisal unloadable, and R9 and
- * R11 each recorded a version of it.
+ * Every arm R14 built — the funding-side correction, the draw cap, and the
+ * monitoring statement and its surfaces — is reachable only from a v11
+ * document. If a production entry point keeps calling the v10 migration, no
+ * user ever holds a v11 document, none of that code is reachable, and roughly
+ * four thousand tests stay green while proving it all works in a world nobody
+ * inhabits. That is not a hypothetical: R10 shipped exactly this split in the
+ * other direction (server on v7, client on v6) and made every saved appraisal
+ * unloadable, and R9, R11, R12 and R13 each recorded a version of it.
  *
  * **If this test failed and you are looking for what to do**: a production file
  * calls `migrateInputsToV{N}` for an N that is not the newest migration this
@@ -40,33 +40,33 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  older entry points deliberately (the migration identity gates use the v8
  *  entry point as the "before" side of a before/after comparison).
  *
- *  R13 Task 5b: `lib/model/__fixtures__/investment-case-docs.ts` is also
- *  exempt -- not because it calls an old version (it always calls the
- *  NEWEST one, `migrateInputsToV10`, correctly), but because it is not a
- *  PRODUCTION entry point at all. This guard's own stated purpose is "if a
- *  production entry point keeps calling the old migration, no user ever
- *  holds a [new] document" -- a `__fixtures__` file is imported only by
- *  `.test.ts` files (mirroring Jest/Vitest's own `__mocks__`/`__snapshots__`
- *  convention for test-only code) and reaches no user at all. Without this
- *  exemption the file would still pass the "calls only the newest version"
- *  test below (it does) but would fail the file-enumeration test's exact
- *  pinned list, for a reason that has nothing to do with a stale call site --
- *  exactly the kind of false positive this guard must not produce, or a real
- *  offender risks being lost in the noise.
+ *  R13 Task 5b (moved to v11 by R14 Task 14): `lib/model/__fixtures__/
+ *  investment-case-docs.ts` is also exempt -- not because it calls an old
+ *  version (it always calls the NEWEST one, `migrateInputsToV11`, correctly),
+ *  but because it is not a PRODUCTION entry point at all. This guard's own
+ *  stated purpose is "if a production entry point keeps calling the old
+ *  migration, no user ever holds a [new] document" -- a `__fixtures__` file
+ *  is imported only by `.test.ts` files (mirroring Jest/Vitest's own
+ *  `__mocks__`/`__snapshots__` convention for test-only code) and reaches no
+ *  user at all. Without this exemption the file would still pass the "calls
+ *  only the newest version" test below (it does) but would fail the
+ *  file-enumeration test's exact pinned list, for a reason that has nothing
+ *  to do with a stale call site -- exactly the kind of false positive this
+ *  guard must not produce, or a real offender risks being lost in the noise.
  *
- *  R13 Task 18: `lib/report-qa/memo-fixtures.ts` is exempt for the identical
- *  reason. Task 16 gave it a migration call (also correctly the NEWEST one,
- *  `migrateInputsToV10`), so it is not a stale-call-site offender either
- *  way -- the question is only whether it belongs in the file-enumeration
- *  list at all. Its own header comment already states "Test-support only;
- *  not imported by the application", and grepping every import of it in this
- *  tree confirms that: every consumer is a `.test.ts`/`.test.tsx` file
- *  (`memo-release-gate.test.ts`, `quick-report-gate.test.ts`,
- *  `report-provenance.test.ts`, `AcquisitionPage.test.tsx`). It fails the
- *  `__fixtures__` naming convention only because it predates that
- *  convention, not because it reaches a user -- it does not. Exempting it
- *  keeps the pinned enumeration list naming only files a real user's browser
- *  can load. */
+ *  R13 Task 18 (moved to v11 by R14 Task 14): `lib/report-qa/memo-fixtures.ts`
+ *  is exempt for the identical reason. Task 16 gave it a migration call (also
+ *  correctly the NEWEST one, `migrateInputsToV11`), so it is not a
+ *  stale-call-site offender either way -- the question is only whether it
+ *  belongs in the file-enumeration list at all. Its own header comment
+ *  already states "Test-support only; not imported by the application", and
+ *  grepping every import of it in this tree confirms that: every consumer is
+ *  a `.test.ts`/`.test.tsx` file (`memo-release-gate.test.ts`,
+ *  `quick-report-gate.test.ts`, `report-provenance.test.ts`,
+ *  `AcquisitionPage.test.tsx`). It fails the `__fixtures__` naming convention
+ *  only because it predates that convention, not because it reaches a user --
+ *  it does not. Exempting it keeps the pinned enumeration list naming only
+ *  files a real user's browser can load. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
@@ -124,8 +124,8 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(10);
-    expect(VERSIONS).toContain(9);
+    expect(NEWEST).toBe(11);
+    expect(VERSIONS).toContain(10);
   });
 
   it('enumerates the production files that actually hold the entry points', () => {

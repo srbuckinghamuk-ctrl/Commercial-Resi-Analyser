@@ -1,5 +1,5 @@
 import type {
-  CalculatorInputsV10, AppraisalRun, AreaBasis,
+  CalculatorInputsV11, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
   VatOverride, RecoveryBasis,
 } from '../../lib/model';
@@ -7,8 +7,8 @@ import { COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES } from '../../lib/model';
 import { penceToPounds, penceToPoundsExact, humanise } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV10;
-  onChange: (partial: Partial<CalculatorInputsV10>) => void;
+  inputs: CalculatorInputsV11;
+  onChange: (partial: Partial<CalculatorInputsV11>) => void;
   run: AppraisalRun;
 }
 

@@ -4,7 +4,9 @@ import { resolve, join } from 'node:path';
 import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
-import { migrateInputsToV8, migrateInputsToV9, migrateInputsToV10 } from './migrate';
+import {
+  migrateInputsToV8, migrateInputsToV9, migrateInputsToV10, migrateInputsToV11,
+} from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
 import { applyScenario } from './apply-scenario';
@@ -109,7 +111,27 @@ function variants(
   // either, by the identical design one version further on (migrateInputsToV9
   // refuses a v10 document -- it would have to drop `refinance`'s v10
   // narrowing and `investment_case`).
-  if (storedVersion >= 10) {
+  //
+  // R14 Task 8: and once more for v11 -- a v11-born fixture (W) cannot go
+  // through migrateInputsToV10 either, by the identical design one version
+  // further on (migrateInputsToV10 refuses a v11 document -- it would have to
+  // drop `monitoring`). The v11 arm needs no anchor clearing beyond what the
+  // v10 arm already does, since `monitoring` carries no phase anchor.
+  if (storedVersion >= 11) {
+    const v11 = migrateInputsToV11(clone() as unknown as Record<string, unknown>);
+    v11.programme = networkForTerm(v11.finance.term_months);
+    if (v11.sales_phasing != null) {
+      v11.sales_phasing.tranches = v11.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v11.refinance != null) v11.refinance = { ...v11.refinance, anchor: null };
+    if (v11.investment_case != null) {
+      v11.investment_case = {
+        ...v11.investment_case,
+        stabilisation: { ...v11.investment_case.stabilisation, anchor: null },
+      };
+    }
+    programmed = v11;
+  } else if (storedVersion >= 10) {
     const v10 = migrateInputsToV10(clone() as unknown as Record<string, unknown>);
     v10.programme = networkForTerm(v10.finance.term_months);
     if (v10.sales_phasing != null) {
@@ -156,6 +178,15 @@ function variants(
     { label: 'term=1', inputs: shortTerm },
     { label: 'programme', inputs: programmed },
   ];
+}
+
+/** Spec §7's fully-realised precondition, in ONE place: the gated profit
+ *  identity below and its §5 witness must apply the same predicate, or the
+ *  witness stops witnessing the thing it names. */
+function isFullyRealised(run: ReturnType<typeof runAppraisal>): boolean {
+  return run.model.senior_outstanding_at_maturity_pence === 0
+    && run.schedule.totals.retained_value_pence === 0
+    && run.model.totals.funding_gap_pence === 0;
 }
 
 describe('model invariants hold for every fixture and variant', () => {
@@ -210,10 +241,7 @@ describe('model invariants hold for every fixture and variant', () => {
         });
 
         it('when debt fully repaid and nothing retained, profit equals Σ equity flows and sources equal uses', () => {
-          const fullyRealised = run.model.senior_outstanding_at_maturity_pence === 0
-            && run.schedule.totals.retained_value_pence === 0
-            && run.model.totals.funding_gap_pence === 0;
-          if (fullyRealised) {
+          if (isFullyRealised(run)) {
             expect(run.metrics.profit_pence)
               .toBe(run.model.equity_cashflows_pence.reduce((a, b) => a + b, 0));
             expect(run.reconciliation.sources_equal_uses).toBe(true);
@@ -245,6 +273,51 @@ describe('model invariants hold for every fixture and variant', () => {
       });
     }
   }
+
+  // R14 (spec §5, fix round 1). The profit identity above is GATED on
+  // `isFullyRealised`, so it can go quiet without ever failing. Wiring
+  // `lender_eligible` to the §4.2(b) advance cap opened a real funding gap on
+  // fixtures Q and S — the corpus's ONLY two detailed-mode documents — and
+  // `funding_gap_pence === 0` is a term of the predicate, so neither reaches
+  // the identity any more. That is correct behaviour on those fixtures, but it
+  // means the gate needs a witness.
+  //
+  // SELF-CONTAINED: this walks the corpus itself rather than reading a counter
+  // the loop above filled in, so it depends on no test ordering and a filtered
+  // run (`-t`) cannot make it fail spuriously. Same shape as `sawPositiveCase`
+  // in cost-to-complete.test.ts. It re-runs the appraisals, which is cheap
+  // beside the seven assertions each already carries.
+  //
+  // R14 Task 8 TIGHTENS it per COST MODE, which is what the Task 3 comment this
+  // replaces asked for. Corpus-wide non-emptiness alone would still go quiet on
+  // the thing the cap actually broke: every document reaching the identity could
+  // be HEADLINE mode, and the detailed-mode arm — the one the §4.2(b) ratio
+  // scales — would prove nothing. Fixture W is the detailed-mode carrier (spec
+  // §20.2, funding gap 0, senior repaid whole in ledger month 17, nothing
+  // retained), so the second assertion names the MODE rather than the fixture:
+  // another detailed-mode document reaching the identity would keep it green,
+  // and W silently drifting out of full realisation would not. Mirrors
+  // `test_the_fully_realised_profit_identity_is_not_vacuous` in
+  // tests/test_financial_model_fixtures.py.
+  it('at least one fixture/variant actually reaches the fullyRealised profit identity', () => {
+    const reached: string[] = [];
+    const detailed: string[] = [];
+    for (const fx of fixtures) {
+      for (const v of variants(fx.inputs)) {
+        const run = runAppraisal(v.inputs);
+        if (!isFullyRealised(run)) continue;
+        reached.push(`${fx.name} [${v.label}]`);
+        if (run.metrics.cost_plan.mode === 'detailed') detailed.push(`${fx.name} [${v.label}]`);
+      }
+    }
+    expect(reached).not.toEqual([]);
+    expect(
+      detailed,
+      'no DETAILED-mode fixture/variant reaches the fully-realised profit identity — '
+      + 'the gated assertion above is vacuous on exactly the cost mode the §4.2(b) '
+      + 'lender_eligible cap applies to',
+    ).not.toEqual([]);
+  });
 });
 
 // Release 3b Task 10 (spec §4.4.1/§4.5, calc 2.3.0): phased-sale / refinance sweep

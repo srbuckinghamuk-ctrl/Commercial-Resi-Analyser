@@ -1,17 +1,19 @@
 import { useCallback } from 'react';
 import type {
-  CalculatorInputsV10, AppraisalRun, FacilityTerms, EquitySource, LenderValuation,
-  FundingSource, InterestType, ArrangementFeeBasis, ExitFeeBasis, EquityDrawRule,
-  EquityClassification, EvidenceStatus,
+  CalculatorInputsV11, AppraisalRun, FacilityTerms, EquitySource,
+  LenderValuation, MonitoringInputs, FundingSource, InterestType, ArrangementFeeBasis,
+  ExitFeeBasis, EquityDrawRule, EquityClassification, EvidenceStatus,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 import LenderValuationCard from './LenderValuationCard';
+import MonitoringEditor from './MonitoringEditor';
+import { PenceRow, NumRow } from './form-rows';
 
 interface Props {
-  inputs: CalculatorInputsV10;
-  onChange: (partial: Partial<CalculatorInputsV10>) => void;
+  inputs: CalculatorInputsV11;
+  onChange: (partial: Partial<CalculatorInputsV11>) => void;
   run: AppraisalRun;
 }
 
@@ -24,57 +26,6 @@ const selectStyle: React.CSSProperties = {
   padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f',
   borderRadius: 4, color: '#e2e8f0', fontSize: 13,
 };
-
-/** Blank ⇔ null, explicit 0 ⇔ 0 — never conflate "unknown" with "known to be zero" (spec §1.5). */
-function PenceRow({ label, penceValue, onChangePence, nullable, placeholder }: {
-  label: string;
-  penceValue: number | null;
-  onChangePence: (v: number | null) => void;
-  nullable?: boolean;
-  placeholder?: string;
-}) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-      <label style={rowLabel}>{label}</label>
-      <div style={{ position: 'relative', width: 200 }}>
-        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 13 }}>£</span>
-        <input
-          type="number"
-          value={penceValue === 0 ? 0 : penceValue != null ? penceValue / 100 : ''}
-          placeholder={placeholder ?? (nullable ? 'unset' : undefined)}
-          onChange={(e) => {
-            const raw = e.target.value;
-            if (raw === '') { onChangePence(nullable ? null : 0); return; }
-            onChangePence(Math.round(Number(raw) * 100));
-          }}
-          style={{ ...numInput, width: '100%', padding: '6px 10px 6px 24px' }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function NumRow({ label, value, onChangeValue, suffix, step }: {
-  label: string;
-  value: number;
-  onChangeValue: (v: number) => void;
-  suffix?: string;
-  step?: string;
-}) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-      <label style={rowLabel}>{label}</label>
-      <input
-        type="number"
-        step={step}
-        value={value}
-        onChange={(e) => onChangeValue(Number(e.target.value))}
-        style={numInput}
-      />
-      {suffix && <span style={{ color: '#64748b', fontSize: 12 }}>{suffix}</span>}
-    </div>
-  );
-}
 
 function MetricCard({ label, value, tooltip, highlight }: {
   label: string; value: string; tooltip: string; highlight?: boolean;
@@ -155,6 +106,15 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
     (lv: LenderValuation | null) => onChange({ lender_valuation: lv }),
     [onChange],
   );
+
+  const updateMonitoring = useCallback(
+    (m: MonitoringInputs | null) => onChange({ monitoring: m }),
+    [onChange],
+  );
+
+  const monitoring: MonitoringInputs | null = inputs.monitoring;
+  const monitoringIssues = run.validation.filter((i) => i.field.startsWith('monitoring'));
+  const termMonths = Math.max(1, Math.floor(fin.term_months));
 
   const isCash = fin.funding_source === 'cash';
 
@@ -369,6 +329,14 @@ export default function FinancePage({ inputs, onChange, run }: Props) {
             units={inputs.unit_mix.units}
             validationIssues={run.validation}
             onChange={updateLenderValuation}
+          />
+
+          <h4 style={{ color: '#94a3b8', fontSize: 13, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Monitoring statement</h4>
+          <MonitoringEditor
+            monitoring={monitoring}
+            termMonths={termMonths}
+            issues={monitoringIssues}
+            onChange={updateMonitoring}
           />
 
           <h4 style={{ color: '#94a3b8', fontSize: 13, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Equity sources</h4>

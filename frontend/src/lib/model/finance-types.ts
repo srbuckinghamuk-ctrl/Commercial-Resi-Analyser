@@ -14,6 +14,13 @@ import type { ProgrammeNetwork, DerivedPhase } from './programme';
 // R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
 // return type) and `Schedule.investment_case` reads it below.
 import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
+// R14 Task 9: `MonitoringStatement` now exists (`computeMonitoringStatement`'s
+// return type) and `AppraisalResultV2.monitoring_statement` reads it below.
+// Type-only, so this does not create a runtime import cycle even though
+// `monitoring.ts` imports `MONITORING_CATEGORIES` (a value) from this file —
+// `import type` is fully erased at compile time, exactly as `investment-case.ts`'s
+// own type-only import back into this file already relies on.
+import type { MonitoringStatement } from './monitoring';
 
 export type { SpendCurve };
 
@@ -29,7 +36,10 @@ export interface FacilityTerms {
   /** Senior tranche drawn at acquisition. null = unknown / no separate tranche. */
   day_one_advance_pence: number | null;
   day_one_market_value_pence: number | null;
-  /** Caps monthly development draws at this % of that month's eligible dev costs. */
+  /** Caps monthly development draws at this % of that month's eligible dev costs.
+   *  R14 spec §4.2(b): "eligible" is construction × the cost plan's
+   *  `lender_eligible_ratio`, plus professional and statutory in full — VAT is
+   *  deliberately excluded (§17.6). */
   development_cost_advance_pct: number;
   committed_net_facility_pence: number | null;
   /** null → derived as net + interest_reserve. */
@@ -168,6 +178,11 @@ export type {
   InvestmentCaseResult,
 } from './investment-case';
 export { OPEX_CODES } from './investment-case';
+
+// R14 Task 11: `AppraisalResultV2.monitoring_statement` reads `MonitoringStatement`
+// (imported above); the UI needs both it and its line type off the same barrel
+// `../../lib/model` every other result type is read from.
+export type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
 
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {
@@ -335,10 +350,54 @@ export interface CalculatorInputsV10 extends Omit<CalculatorInputsV9,
   investment_case: InvestmentCaseInputs | null;
 }
 
+export type MonitoringCategory =
+  'acquisition' | 'construction' | 'professional' | 'statutory' | 'contingency';
+
+export const MONITORING_CATEGORIES: readonly MonitoringCategory[] =
+  ['acquisition', 'construction', 'professional', 'statutory', 'contingency'];
+
+export interface MonitoringLineInputs {
+  category: MonitoringCategory;
+  current_budget_pence: number;
+  certified_to_date_pence: number;
+  paid_to_date_pence: number;
+  committed_to_date_pence: number;
+  forecast_to_complete_pence: number;
+}
+
+/**
+ * R14 spec §20.1. Top-level, nullable, beside `investment_case`: a monitoring
+ * statement is entered only once construction is under way, and most stored
+ * documents never carry one. `reporting_month` is a ledger label (Sec 5.10
+ * convention), not a calendar date; `reporting_date` is provenance only and
+ * the spec states that changing it changes no number.
+ */
+export interface MonitoringInputs {
+  reporting_month: number;
+  reporting_date: string;          // ISO yyyy-mm-dd; printed only, never read by arithmetic
+  lines: MonitoringLineInputs[];
+  debt_drawn_to_date_pence: number;
+  cash_equity_injected_to_date_pence: number;
+  author: string;
+  date: string;
+  note: string | null;
+}
+
+/**
+ * R14 spec §20.1. `monitoring` is the only addition: a two-state field, top
+ * level beside `investment_case`, `null` = no monitoring statement entered
+ * (every existing document, bit-identical per the v11 identity gate);
+ * non-null = a QS monitoring statement at `reporting_month`.
+ */
+export interface CalculatorInputsV11 extends Omit<CalculatorInputsV10, 'inputs_version'> {
+  inputs_version: 11;
+  monitoring: MonitoringInputs | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9 | CalculatorInputsV10;
+  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -360,7 +419,17 @@ export type FlagCode =
   | 'stabilisation_incomplete_at_maturity'
   /** R13 spec §19.7. Fires when the take-out's `binding_constraint` is `dscr`
    *  or `icr` — coverage, not value, is what limits the quantum. */
-  | 'takeout_constrained_by_coverage';
+  | 'takeout_constrained_by_coverage'
+  /** R14 spec §20.3. Fires when the monitoring statement's `shortfall_pence`
+   *  is > 0 — remaining uses exceed remaining funding at `reporting_month`. */
+  | 'monitoring_shortfall'
+  /** R14 spec §20.3. Fires once when any monitoring line's
+   *  `variance_vs_original_pence` exceeds 5% of a non-zero original budget,
+   *  naming the category with the largest absolute variance. */
+  | 'monitoring_cost_variance'
+  /** R14 spec §20.3. Fires when the monitoring statement's `reporting_month`
+   *  is later than the inception ledger's last repaying month. */
+  | 'monitoring_dated_after_redemption';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -457,6 +526,9 @@ export interface Schedule {
     tranches: number[];
     refinance: number | null;
   };
+  /** R14 spec §4.2(b). Computed once on the cost plan, republished here so the
+   *  ledger reads one figure and never re-derives it. */
+  lender_eligible_ratio: number;
 }
 
 export interface LedgerMonth {
@@ -562,7 +634,15 @@ export interface MonthlyModel {
 export interface CostToCompleteSummary {
   first_shortfall_month: number | null;
   max_shortfall_pence: number;
-  months: { month: number; remaining_cost_pence: number; remaining_funding_pence: number; surplus_pence: number }[];
+  months: {
+    month: number;
+    remaining_cost_pence: number;
+    remaining_funding_pence: number;
+    /** Spec §5.10 (R14, C1): the rolled-up facility's unconsumed interest reserve credited
+     *  to remaining funding; 0 for serviced interest and cash deals. */
+    remaining_interest_reserve_headroom_pence: number;
+    surplus_pence: number;
+  }[];
 }
 
 export interface AppraisalResultV2 {
@@ -684,6 +764,11 @@ export interface AppraisalResultV2 {
    *  the INPUT `investment_case` is null. The UI and the report read it from
    *  here and never call `computeInvestmentCase`. */
   investment_case: InvestmentCaseResult | null;
+  /** R14 spec §20.4. Computed ONCE in `deriveMetrics`, from the `costPlan` it
+   *  already holds and the `model` — never recomputed by the UI or the memo.
+   *  null exactly when the input `monitoring` block is null (every document
+   *  before construction is under way, and every migrated document). */
+  monitoring_statement: MonitoringStatement | null;
   /** Ledger flags (model.flags, unmutated) followed by metric flags computed by
    * deriveMetrics itself (senior/developer breakeven unsolvable, cap-exhausted).
    * Wired in Release 3a Task 6 — deriveMetrics is pure and no longer mutates
@@ -691,4 +776,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.12.0';
+export const CALC_VERSION = '2.13.0';

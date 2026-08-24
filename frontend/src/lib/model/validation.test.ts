@@ -7,7 +7,7 @@ import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
 import {
   migrateV2toV3, migrateInputsToV4, migrateInputsToV5, migrateInputsToV6, migrateV6toV7,
-  migrateInputsToV8, migrateInputsToV9, migrateV8toV9, PROGRAMME_FIELD_ALIASES,
+  migrateInputsToV8, migrateInputsToV9, migrateV8toV9, migrateInputsToV10, PROGRAMME_FIELD_ALIASES,
 } from './migrate';
 import { runAppraisal } from './index';
 import { DEFAULT_AREA_BRIDGE } from './areas';
@@ -22,7 +22,10 @@ import type { Phase, ProgrammeNetwork } from './programme';
 import { DEFAULT_VAT, VAT_CHARGE_CATEGORIES, defaultVatTreatments } from './vat';
 import type { VatChargeCategory, VatOverride, VatTreatment } from './vat';
 import { icDoc } from './__fixtures__/investment-case-docs';
-import type { CalculatorInputsV10 } from './finance-types';
+import { MONITORING_CATEGORIES } from './finance-types';
+import type {
+  CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
+} from './finance-types';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -2178,10 +2181,11 @@ describe('anchors and scenario slip — §18.6/§18.8/§18.9', () => {
 });
 
 describe('§19.7 investment case validation', () => {
-  // `icDoc` builds a valid v10 retain-all document with an investment case;
-  // each test breaks exactly ONE thing, so a rule that fires for the wrong
-  // reason is visible.
-  const errFields = (d: CalculatorInputsV10) =>
+  // `icDoc` builds a valid v11 retain-all document with an investment case
+  // (R14 Task 14 moved investment-case-docs.ts's builders on from v10); each
+  // test breaks exactly ONE thing, so a rule that fires for the wrong reason
+  // is visible.
+  const errFields = (d: CalculatorInputsV11) =>
     validateInputs(d).filter((i) => i.severity === 'error').map((i) => i.field);
 
   it('rule 1: rejects an investment case on a sell_all route', () => {
@@ -2348,5 +2352,152 @@ describe('§19.7 investment case validation', () => {
       .toContain('refinance.arrangement_fee_pct');
     expect(errFields(icDoc({ investmentCase: null })))
       .not.toContain('refinance.arrangement_fee_pct');
+  });
+});
+
+describe('§20.3 monitoring validation', () => {
+  // Built from fixtures/financial-model/l-retain-all.json via migrateInputsToV10
+  // (the task brief's instruction), then spread with inputs_version: 11 and a
+  // monitoring block — a spread literal, since the v11 migration itself does
+  // not exist until Task 6. Cash-funded (committed_net_facility_pence: 0), so
+  // it also exercises the debt rule's cash-deal arm (committed net is 0, not
+  // whatever the finance block happens to carry).
+  function retainAllV10(): CalculatorInputsV10 {
+    const raw = JSON.parse(
+      readFileSync(resolve(__dirname, '../../../../fixtures/financial-model/l-retain-all.json'), 'utf-8'),
+    ) as { inputs: Record<string, unknown> };
+    return migrateInputsToV10(raw.inputs) as CalculatorInputsV10;
+  }
+
+  function validLine(category: MonitoringCategory, over: Partial<MonitoringLineInputs> = {}): MonitoringLineInputs {
+    return {
+      category,
+      current_budget_pence: 100_000,
+      certified_to_date_pence: 50_000,
+      paid_to_date_pence: 40_000,
+      committed_to_date_pence: 60_000,
+      forecast_to_complete_pence: 20_000,
+      ...over,
+    };
+  }
+
+  function validMonitoring(over: Partial<MonitoringInputs> = {}): MonitoringInputs {
+    return {
+      reporting_month: 6,
+      reporting_date: '2026-06-01',
+      lines: MONITORING_CATEGORIES.map((c) => validLine(c)),
+      debt_drawn_to_date_pence: 0,
+      cash_equity_injected_to_date_pence: 500_000,
+      author: 'QS', date: '2026-06-01', note: null,
+      ...over,
+    };
+  }
+
+  // `as never` at the `validateInputs`/`errs` call site: this builds a v11
+  // shape by spreading a v10 document via a literal rather than
+  // `migrateV10toV11` (which exists now, but did not when this test was
+  // written ahead of Task 6's migration landing), which `CalculatorInputsV10`
+  // cannot type — exactly the task brief's sanctioned "a spread literal is
+  // fine for a validation test".
+  function v11Doc(monitoring: MonitoringInputs | null) {
+    return { ...retainAllV10(), inputs_version: 11, monitoring };
+  }
+
+  const cashEquityTotal = 90_000_000; // l-retain-all.json's single confirmed cash equity source
+
+  it('a null monitoring block adds no issue with a monitoring prefix', () => {
+    const d = v11Doc(null);
+    expect(validateInputs(d as never).some((i) => i.field.startsWith('monitoring'))).toBe(false);
+  });
+
+  it('a valid monitoring block adds no issue', () => {
+    const d = v11Doc(validMonitoring());
+    expect(validateInputs(d as never).some((i) => i.field.startsWith('monitoring'))).toBe(false);
+  });
+
+  it('rejects a reporting_month outside 1..term', () => {
+    const d = v11Doc(validMonitoring({ reporting_month: 13 })); // l-retain-all's term is 12
+    const issue = validateInputs(d as never).find((i) => i.field === 'monitoring.reporting_month');
+    expect(issue).toEqual({
+      severity: 'error',
+      field: 'monitoring.reporting_month',
+      message: 'reporting_month must be between 1 and the term (12)',
+    });
+  });
+
+  it('rejects a lines block missing a category', () => {
+    const lines = MONITORING_CATEGORIES.filter((c) => c !== 'contingency').map((c) => validLine(c));
+    const d = v11Doc(validMonitoring({ lines }));
+    const issue = validateInputs(d as never).find((i) => i.field === 'monitoring.lines');
+    expect(issue).toEqual({
+      severity: 'error',
+      field: 'monitoring.lines',
+      message: 'monitoring must carry exactly one line per category '
+        + '(acquisition, construction, professional, statutory, contingency)',
+    });
+  });
+
+  it('rejects a lines block with a duplicated category', () => {
+    const lines = [
+      ...MONITORING_CATEGORIES.filter((c) => c !== 'contingency').map((c) => validLine(c)),
+      validLine('acquisition'),
+    ];
+    const d = v11Doc(validMonitoring({ lines }));
+    expect(errs(d).some((i) => i.field === 'monitoring.lines')).toBe(true);
+  });
+
+  it('rejects a line whose paid exceeds certified', () => {
+    const lines = MONITORING_CATEGORIES.map((c, i) => (
+      i === 0 ? validLine(c, { certified_to_date_pence: 100, paid_to_date_pence: 101, committed_to_date_pence: 200 }) : validLine(c)
+    ));
+    const d = v11Doc(validMonitoring({ lines }));
+    const issue = validateInputs(d as never).find((i) => i.field === 'monitoring.lines[0].paid_to_date_pence');
+    expect(issue).toEqual({
+      severity: 'error',
+      field: 'monitoring.lines[0].paid_to_date_pence',
+      message: 'paid to date cannot exceed certified to date',
+    });
+  });
+
+  it('rejects a line whose certified exceeds committed', () => {
+    const lines = MONITORING_CATEGORIES.map((c, i) => (
+      i === 0 ? validLine(c, { certified_to_date_pence: 200, paid_to_date_pence: 100, committed_to_date_pence: 199 }) : validLine(c)
+    ));
+    const d = v11Doc(validMonitoring({ lines }));
+    const issue = validateInputs(d as never).find((i) => i.field === 'monitoring.lines[0].certified_to_date_pence');
+    expect(issue).toEqual({
+      severity: 'error',
+      field: 'monitoring.lines[0].certified_to_date_pence',
+      message: 'certified to date cannot exceed committed to date',
+    });
+  });
+
+  it('rejects debt_drawn_to_date exceeding the committed net facility (0 for a cash deal)', () => {
+    const d = v11Doc(validMonitoring({ debt_drawn_to_date_pence: 1 }));
+    const issue = validateInputs(d as never).find((i) => i.field === 'monitoring.debt_drawn_to_date_pence');
+    expect(issue).toEqual({
+      severity: 'error',
+      field: 'monitoring.debt_drawn_to_date_pence',
+      message: 'debt drawn to date cannot exceed the committed net facility',
+    });
+  });
+
+  it('warns (not errors) when cash equity injected exceeds committed cash sources', () => {
+    const d = v11Doc(validMonitoring({ cash_equity_injected_to_date_pence: cashEquityTotal + 1 }));
+    const issues = validateInputs(d as never);
+    const issue = issues.find((i) => i.field === 'monitoring.cash_equity_injected_to_date_pence');
+    expect(issue).toEqual({
+      severity: 'warning',
+      field: 'monitoring.cash_equity_injected_to_date_pence',
+      message: 'equity injected beyond committed sources',
+    });
+    // Not an error (spec §20.3): report_safe is unaffected by this alone.
+    expect(errs(d).some((i) => i.field === 'monitoring.cash_equity_injected_to_date_pence')).toBe(false);
+  });
+
+  it('accepts cash equity injected exactly at the committed total (boundary)', () => {
+    const d = v11Doc(validMonitoring({ cash_equity_injected_to_date_pence: cashEquityTotal }));
+    expect(validateInputs(d as never).some((i) => i.field === 'monitoring.cash_equity_injected_to_date_pence'))
+      .toBe(false);
   });
 });

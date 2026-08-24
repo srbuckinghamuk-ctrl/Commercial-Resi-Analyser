@@ -1,13 +1,14 @@
-"""R13 spec Sec 19. Task 5b: the shared v10 test-document builders every task
-from 6 onward consumes, in this engine. Mirror of
+"""R13 spec Sec 19, Task 5b (moved to v11 by R14 Task 14, the entry-point
+cutover): the shared test-document builders every downstream task consumes,
+in this engine. Mirror of
 frontend/src/lib/model/__fixtures__/investment-case-docs.ts, using this
 language's own naming convention for the same functions (snake_case here,
 camelCase there -- the same per-language split every migrate_inputs_to_vN /
 migrateInputsToVN pair in this repo already uses).
 
 Every builder is built from a fixture JSON file (or another builder) via
-migrate_inputs_to_v10 -- never a hand-authored default dict -- so a fixture
-and a builder can never disagree about what a valid v10 document looks like.
+migrate_inputs_to_v11 -- never a hand-authored default dict -- so a fixture
+and a builder can never disagree about what a valid v11 document looks like.
 
 SCOPE NOTE (read before hand-deriving pins against these documents):
 ic_doc / investment_case_doc / explicit_refinance_doc / anchored_slipped_doc
@@ -40,10 +41,10 @@ from typing import Any, Literal
 from app.financial_model import engine
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.engine import MonthlyModel
-from app.financial_model.migrate import migrate_inputs_to_v10
+from app.financial_model.migrate import migrate_inputs_to_v11
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
-    CalculatorInputsV10,
+    CalculatorInputsV11,
     InvestmentCaseInputs,
     OperatingLine,
     PhaseAnchor,
@@ -86,8 +87,8 @@ _TAKEOUT = {
 }
 
 
-def ic_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV10:
-    """A valid retain-all v10 document with an investment case (built from
+def ic_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV11:
+    """A valid retain-all v11 document with an investment case (built from
     fixtures/financial-model/t-investment-case.json -- DSCR binds, hand-
     derived there). ``overrides`` applies zero or more single, named
     deviations -- the same key set investment-case-docs.ts's IcDocOverrides
@@ -100,7 +101,7 @@ def ic_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV10:
     invalid_line_code, opex_heavy, opex_exceeds_rent, ltv_binds,
     takeout_shortfall, sales_sweep_pct.
     """
-    doc = migrate_inputs_to_v10(_load_fixture_inputs("t-investment-case"))
+    doc = migrate_inputs_to_v11(_load_fixture_inputs("t-investment-case"))
     return _apply_ic_doc_overrides(doc, overrides or {})
 
 
@@ -108,8 +109,8 @@ investment_case_doc = ic_doc
 
 
 def _apply_ic_doc_overrides(
-    doc: CalculatorInputsV10, o: dict[str, Any],
-) -> CalculatorInputsV10:
+    doc: CalculatorInputsV11, o: dict[str, Any],
+) -> CalculatorInputsV11:
     next_doc = doc.model_copy(deep=True)
 
     if "route" in o:
@@ -217,7 +218,7 @@ def _apply_ic_doc_overrides(
     return next_doc
 
 
-def explicit_refinance_doc() -> CalculatorInputsV10:
+def explicit_refinance_doc() -> CalculatorInputsV11:
     """``investment_case: None``, an explicit ``investment_value_pence`` of
     5,000,000.00 and ``ltv_pct`` 60 -- the calc 2.11.0 path that must stay
     bit-identical."""
@@ -232,7 +233,7 @@ def explicit_refinance_doc() -> CalculatorInputsV10:
     return doc
 
 
-def anchored_slipped_doc() -> CalculatorInputsV10:
+def anchored_slipped_doc() -> CalculatorInputsV11:
     """A programme network with a slipped phase, one sale tranche anchored to
     resolve to month 14, a second tranche and the refinance both anchored to
     resolve to month 18. See investment-case-docs.ts's anchored_slipped_doc
@@ -299,7 +300,7 @@ def anchored_slipped_doc() -> CalculatorInputsV10:
         "anchor": {"phase_id": "maturity_tail", "offset_months": 4},
         "arrangement_fee_basis": "fixed_pence", "arrangement_fee_pct": 0,
     }
-    return migrate_inputs_to_v10(doc)
+    return migrate_inputs_to_v11(doc)
 
 
 # --- The NOI / ledger family -----------------------------------------------
@@ -309,7 +310,7 @@ def anchored_slipped_doc() -> CalculatorInputsV10:
 # header for the full reasoning; _facility_noi_base is the shared building
 # block.
 
-def _facility_noi_base() -> CalculatorInputsV10:
+def _facility_noi_base() -> CalculatorInputsV11:
     doc = anchored_slipped_doc()
     doc.finance.term_months = 24
     doc.programme = None
@@ -326,14 +327,14 @@ def _facility_noi_base() -> CalculatorInputsV10:
     return doc
 
 
-def noi_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV10:
+def noi_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV11:
     """A facility-funded document whose investment case is already stabilised
     by month 4 (see _facility_noi_base), so mid-term ledger months carry full
     NOI. ``overrides`` reuses ic_doc's override contract."""
     return _apply_ic_doc_overrides(_facility_noi_base(), overrides or {})
 
 
-def retain_all_noi_doc() -> CalculatorInputsV10:
+def retain_all_noi_doc() -> CalculatorInputsV11:
     """The retain-all variant of the NOI base: every unit retained, still
     facility-funded."""
     doc = _facility_noi_base()
@@ -344,7 +345,7 @@ def retain_all_noi_doc() -> CalculatorInputsV10:
     return doc
 
 
-def blended_doc(rents: Literal["market", "zero"]) -> CalculatorInputsV10:
+def blended_doc(rents: Literal["market", "zero"]) -> CalculatorInputsV11:
     """The blended exit itself: ``rents='market'`` keeps the retained unit's
     rent at _facility_noi_base's figure; ``rents='zero'`` zeroes it."""
     doc = _facility_noi_base()
@@ -354,14 +355,14 @@ def blended_doc(rents: Literal["market", "zero"]) -> CalculatorInputsV10:
     return doc
 
 
-def mixed_noi_doc() -> CalculatorInputsV10:
+def mixed_noi_doc() -> CalculatorInputsV11:
     """Named separately from blended_doc because the reconciliation tests
     read it under its own name; the document is the market-rent blended
     case."""
     return blended_doc("market")
 
 
-def all_four_in_one_month_doc() -> CalculatorInputsV10:
+def all_four_in_one_month_doc() -> CalculatorInputsV11:
     """VAT reclaim, NOI, a sale and a refinance all converging in month 6 of a
     12-month term. See investment-case-docs.ts's matching docstring for the
     full verification note -- built and checked identically here."""
@@ -386,10 +387,10 @@ def all_four_in_one_month_doc() -> CalculatorInputsV10:
         "valuation": {"cap_yield_pct": 5.5, "purchasers_costs_pct": 6.75},
         "takeout": _TAKEOUT,
     }
-    return migrate_inputs_to_v10(doc)
+    return migrate_inputs_to_v11(doc)
 
 
-def noi_redeems_doc() -> CalculatorInputsV10:
+def noi_redeems_doc() -> CalculatorInputsV11:
     """A compact, dedicated retain-all document with a SMALL facility relative
     to its NOI, so cumulative NOI alone can plausibly clear the balance within
     the term once Task 9 wires NOI into the ledger's repayment path. See
@@ -473,10 +474,10 @@ def noi_redeems_doc() -> CalculatorInputsV10:
         },
         "lender_valuation": None,
     }
-    return migrate_inputs_to_v10(doc)
+    return migrate_inputs_to_v11(doc)
 
 
-def retain_all_doc_missing_rents() -> CalculatorInputsV10:
+def retain_all_doc_missing_rents() -> CalculatorInputsV11:
     """A retain-all document with a rent MISSING for one unit (Sec 19.7 rule
     2's silent-understatement trap) -- Task 15's editor test uses this
     directly."""
@@ -485,7 +486,7 @@ def retain_all_doc_missing_rents() -> CalculatorInputsV10:
 
 # --- Thin plumbing wrappers -------------------------------------------------
 
-def run_ledger(doc: CalculatorInputsV10) -> MonthlyModel:
+def run_ledger(doc: CalculatorInputsV11) -> MonthlyModel:
     """Runs the ledger for a document -- a thin wrapper over build_schedule +
     engine.run_ledger, so no later task re-derives this two-call plumbing
     itself."""
@@ -512,8 +513,8 @@ _LEVER_FIELD: dict[str, str] = {
 
 
 def apply_levers_in_order(
-    doc: CalculatorInputsV10, lever_names: list[SensitivityLever],
-) -> CalculatorInputsV10:
+    doc: CalculatorInputsV11, lever_names: list[SensitivityLever],
+) -> CalculatorInputsV11:
     """Applies a named sequence of sensitivity levers to a document, one
     apply_scenario call per lever, folding left to right. Mirrors
     investment-case-docs.ts's apply_levers_in_order."""

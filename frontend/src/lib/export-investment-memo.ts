@@ -425,6 +425,13 @@ export function generateInvestmentMemo(
   const programme = rawProgramme != null && isLegacyProgramme(rawProgramme) ? rawProgramme : null;
   const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
   const refinance = 'refinance' in inputs ? inputs.refinance : null;
+  // R14 (spec §9/§20.4). `author`/`date`/`note` are provenance-only input
+  // fields (never echoed onto `MonitoringStatement` itself — the statement
+  // carries only `reporting_month`/`reporting_date`, per §20.4's "plus
+  // reporting_month, reporting_date echoed"), so the memo's provenance line
+  // reads them off the raw input block, guarded exactly like `refinance`
+  // above: a pre-v11 document carries no `monitoring` field at all.
+  const monitoringInputs = 'monitoring' in inputs ? inputs.monitoring : null;
   // Finding 2 (Task 4 fix round 1): `anchor_month` exists on BOTH the legacy and
   // v9 shapes and was never shape-dependent — read it from the un-narrowed
   // value via the same centralised helper CashflowPage.tsx uses, not from
@@ -1839,6 +1846,106 @@ export function generateInvestmentMemo(
       },
     });
     y = lastAutoTableFinalY(doc) + 8;
+  }
+
+  // R14 (spec §9/§20.4, §13.4). The monitoring cost-to-complete statement —
+  // printed only when the document carries one (`monitoring` non-null,
+  // reachable only from a v11 document, spec §20.1). Every figure below is
+  // `metrics.monitoring_statement` (`computeMonitoringStatement`'s output,
+  // computed once in `deriveMetrics` — this file's own no-recalculation
+  // rule) or `monitoringInputs`' own `author`/`date` provenance fields;
+  // nothing here sums, differences or otherwise derives a number.
+  const monitoringStatement = metrics.monitoring_statement;
+  if (monitoringStatement != null) {
+    y = subHeading(y, 'Monitoring cost-to-complete');
+
+    const statementRows: string[][] = monitoringStatement.lines.map((line) => [
+      humanise(line.category),
+      fmt(line.original_budget_pence),
+      fmt(line.current_budget_pence),
+      fmt(line.certified_to_date_pence),
+      fmt(line.committed_to_date_pence),
+      fmt(line.forecast_to_complete_pence),
+      fmt(line.estimated_final_cost_pence),
+      fmt(line.variance_vs_original_pence),
+    ]);
+    statementRows.push([
+      'Total',
+      fmt(monitoringStatement.totals.original_budget_pence),
+      fmt(monitoringStatement.totals.current_budget_pence),
+      fmt(monitoringStatement.totals.certified_to_date_pence),
+      fmt(monitoringStatement.totals.committed_to_date_pence),
+      fmt(monitoringStatement.totals.forecast_to_complete_pence),
+      fmt(monitoringStatement.totals.estimated_final_cost_pence),
+      fmt(monitoringStatement.totals.variance_vs_original_pence),
+    ]);
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Category', 'Original', 'Current', 'Certified', 'Committed', 'Forecast', 'Est. final', 'Var. vs original']],
+      body: statementRows,
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255, fontSize: 7 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: {
+        1: { halign: 'right' },
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+        4: { halign: 'right' },
+        5: { halign: 'right' },
+        6: { halign: 'right' },
+        7: { halign: 'right' },
+      },
+      didParseCell(data) {
+        if (data.column.index === 0 && data.cell.raw === 'Total') {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [241, 245, 249];
+        }
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+
+    // The funding reconciliation (spec §7's "uses side"/"funding side") — one
+    // sentence per term, in the order the spec derives them.
+    y = bodyText(
+      y,
+      `Funding reconciliation: undrawn net facility ${fmt(monitoringStatement.undrawn_net_facility_pence)}. `
+      + `Reserve headroom ${fmt(monitoringStatement.reserve_headroom_pence)}. `
+      + `Remaining cash equity ${fmt(monitoringStatement.remaining_cash_equity_pence)}. `
+      + `Remaining funding ${fmt(monitoringStatement.remaining_funding_pence)}. `
+      + `Forecast finance to complete ${fmt(monitoringStatement.forecast_finance_pence)}. `
+      + `Remaining uses ${fmt(monitoringStatement.remaining_uses_pence)}. `
+      + `Surplus ${fmt(monitoringStatement.surplus_pence)}.`,
+    );
+
+    // Printed only when there is one to report — a zero shortfall stated as a
+    // sentence on every monitored document would read as a standing warning.
+    if (monitoringStatement.shortfall_pence > 0) {
+      y = bodyText(
+        y,
+        `Shortfall: remaining funding does not cover remaining uses at this reporting date by ${fmt(monitoringStatement.shortfall_pence)}.`,
+      );
+    }
+
+    // Provenance (spec §9): reporting_date/reporting_month off the statement
+    // itself (the two fields §20.4 says are echoed onto it); author/date off
+    // the raw input block, which is the only place they are carried.
+    y = bodyText(
+      y,
+      `Monitoring statement as at ${monitoringStatement.reporting_date} (month ${monitoringStatement.reporting_month}) — `
+      + `${monitoringInputs?.author ?? 'author not recorded'}, ${monitoringInputs?.date ? fmtDate(monitoringInputs.date) : 'date not recorded'}.`,
+    );
+
+    // §13.4, exact text: the statement is a sponsor-entered monitoring
+    // position — the interest component is the inception forecast and the
+    // certified/committed figures are unverified by a monitoring surveyor.
+    y = bodyText(
+      y,
+      'Interest and capitalised fees from the reporting month onward are the inception forecast; '
+      + 'certified and committed figures are as entered by the sponsor and have not been verified by '
+      + 'a monitoring surveyor.',
+    );
   }
 
   // ── Section 7: Funding Request ──

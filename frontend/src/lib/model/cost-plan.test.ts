@@ -340,6 +340,86 @@ describe('computeCostPlan — reported extras', () => {
     expect(r.implied_rate_pence_per_sqm).toBe(6_000);
   });
 
+  // R14 spec §5. The ratio the ledger's §4.2(b) cap base reads. Unrounded:
+  // 2,000,000 / 3,000,000 is exactly 2/3, and the ONE rounding happens later,
+  // on `construction_pence × ratio` inside the ledger.
+  it('reports the lender-eligible ratio as the unrounded eligible share of base build', () => {
+    const r = computeCostPlan(
+      doc({
+        mode: 'detailed',
+        packages: [pkg('p1', 2_000_000), pkg('p2', 1_000_000, { lender_eligible: false })],
+        contingency: CLASSES(0, 0, 0),
+      }),
+      500, 1,
+    );
+    expect(r.lender_eligible_ratio).toBe(2 / 3);
+    expect(r.lender_eligible_ratio).not.toBe(Math.round(2 / 3));
+  });
+
+  it('reports a lender-eligible ratio of 1 when every package is eligible', () => {
+    const r = computeCostPlan(
+      doc({
+        mode: 'detailed',
+        packages: [pkg('p1', 2_000_000), pkg('p2', 1_000_000)],
+        contingency: CLASSES(0, 0, 0),
+      }),
+      500, 1,
+    );
+    expect(r.lender_eligible_ratio).toBe(1);
+  });
+
+  // Headline mode has no packages at all, so `lender_eligible_base_pence` is 0
+  // against a NON-zero base build — the one case where the raw quotient (0)
+  // would silently zero the ledger's whole construction cap base.
+  it('reports a lender-eligible ratio of 1 in headline mode, where there are no packages ' +
+    'to flag and the eligible base is therefore 0', () => {
+    const r = computeCostPlan(
+      doc({ mode: 'headline', packages: [], contingency: CLASSES(0, 0, 0) },
+          { construction_cost_per_sqm_pence: 80_730 }),
+      500, 1,
+    );
+    expect(r.packages).toHaveLength(0);
+    expect(r.base_build_pence).toBe(40_365_000);
+    expect(r.lender_eligible_base_pence).toBe(0);
+    expect(r.base_build_pence).toBeGreaterThan(0);
+    expect(r.lender_eligible_ratio).toBe(1);
+  });
+
+  // R14 fix round 1. The `!detailed` half of the guard, pinned on its own: a
+  // headline document CAN carry stray packages (apply-scenario.ts scales them
+  // regardless of mode, and `lender_eligible_base_pence` sums them regardless of
+  // mode), so `baseBuild === 0` is NOT what saves headline mode here. Base build
+  // is the rate × area product, the eligible base is 3,000,000 of a 4,000,000
+  // package sum, and the quotient would be neither 1 nor even meaningful — the
+  // packages are not the base. Only `!detailed` gives the right answer.
+  it('reports a lender-eligible ratio of 1 in headline mode even when stray packages ' +
+    'are present and one of them is ineligible', () => {
+    const r = computeCostPlan(
+      doc({
+        mode: 'headline',
+        packages: [pkg('p1', 3_000_000), pkg('p2', 1_000_000, { lender_eligible: false })],
+        contingency: CLASSES(0, 0, 0),
+      }, { construction_cost_per_sqm_pence: 80_730 }),
+      500, 1,
+    );
+    expect(r.packages).toHaveLength(2);
+    expect(r.base_build_pence).toBe(40_365_000);        // rate × area, not the package sum
+    expect(r.lender_eligible_base_pence).toBe(3_000_000);
+    expect(r.lender_eligible_ratio).toBe(1);
+    // Not the raw quotient, which would be a nonsense 0.0743…
+    expect(r.lender_eligible_ratio).not.toBe(3_000_000 / 40_365_000);
+  });
+
+  it('reports a lender-eligible ratio of 1 in detailed mode when base build is 0 ' +
+    '(no division by zero)', () => {
+    const r = computeCostPlan(
+      doc({ mode: 'detailed', packages: [], contingency: CLASSES(0, 0, 0) }),
+      500, 1,
+    );
+    expect(r.base_build_pence).toBe(0);
+    expect(r.lender_eligible_ratio).toBe(1);
+  });
+
   it('returns a null implied rate when the area is zero', () => {
     const r = computeCostPlan(
       doc({ mode: 'detailed', packages: [pkg('p1', 2_000_000)], contingency: CLASSES(0, 0, 0) }),

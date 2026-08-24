@@ -17,7 +17,7 @@ import {
   refinanceInputs, blendedInputs, legacyV1Snapshot,
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
-  detailedCostPlanInputs, investmentCaseInputs,
+  detailedCostPlanInputs, investmentCaseInputs, monitoringOnSiteInputs,
 } from './memo-fixtures';
 import { humanise } from '../format';
 
@@ -185,6 +185,17 @@ describe('investment memorandum release gate', () => {
       const text = documentText(info).toLowerCase();
       expect(text).toContain('headline cost estimate');
       expect(text).not.toContain('full cost plan');
+    });
+
+    // R14 (Task 12, spec §9/§20.4). Every ROUTES fixture carries
+    // `monitoring: null` (either pre-v11 and migrated, or v11 with no
+    // monitoring block entered), so `metrics.monitoring_statement` is null on
+    // every one of them — the negative control for the section's presence
+    // test on fixture W below (`monitoringOnSiteInputs`, not a ROUTES member).
+    it('never prints the monitoring cost-to-complete section', async () => {
+      const { info, run } = await report(makeInputs());
+      expect(run.metrics.monitoring_statement).toBeNull();
+      expect(documentText(info)).not.toContain('Monitoring cost-to-complete');
     });
 
     it('states its own limitations, including the tax and VAT basis', async () => {
@@ -646,6 +657,46 @@ describe('investment memorandum release gate', () => {
     expect(text).toContain('Internal saleable value');
     expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
     expect(sparsePages(info)).toEqual([]);
+  });
+});
+
+/**
+ * R14 (Task 12, spec §9/§20.4/§13.4). The memo's "Monitoring cost-to-complete"
+ * section, printed only when `metrics.monitoring_statement != null`. The
+ * ROUTES sweep above (`describe.each(ROUTES)`) is the negative control — every
+ * one of those fixtures carries a null statement, and the "never prints the
+ * monitoring cost-to-complete section" test inside it asserts absence across
+ * the whole corpus. `monitoringOnSiteInputs()` (fixture W,
+ * fixtures/financial-model/w-monitoring-on-site.json) is the single positive
+ * case: reporting month 6, reporting date 2027-03-31, author "Monitoring
+ * surveyor", dated 2027-04-02.
+ */
+describe('R14 monitoring cost-to-complete section (spec §9/§13.4)', () => {
+  it('prints the section, its figures and the §13.4 sentence only for a document carrying a monitoring statement', async () => {
+    const inputs = monitoringOnSiteInputs();
+    const { info, run } = await report(inputs);
+    const statement = run.metrics.monitoring_statement;
+    expect(statement).not.toBeNull(); // fixture sanity check
+    expect(statement!.reporting_month).toBe(6);
+    expect(statement!.reporting_date).toBe('2027-03-31');
+
+    const text = documentText(info);
+    const prose = documentProse(info);
+
+    expect(text).toContain('Monitoring cost-to-complete');
+    expect(prose).toContain('month 6');
+    expect(prose).toContain('2027-03-31');
+    expect(prose).toContain(inputs.monitoring!.author); // "Monitoring surveyor"
+    expect(text).toContain(fmtGBP(statement!.totals.estimated_final_cost_pence)); // £275,200
+    // §13.4, exact text — the sponsor-entered/not-verified-by-a-surveyor claim.
+    expect(prose).toContain(
+      'Interest and capitalised fees from the reporting month onward are the inception '
+      + 'forecast; certified and committed figures are as entered by the sponsor and have '
+      + 'not been verified by a monitoring surveyor.',
+    );
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
+    expect(orphanHeadings(info).map((o) => o.text)).toEqual([]);
   });
 });
 

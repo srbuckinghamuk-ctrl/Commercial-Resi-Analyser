@@ -65,6 +65,16 @@ export function applyScenario<T extends AnyCalculatorInputs>(
     // `lender_eligible_base_pence` (cost-plan.ts) reads `packages` regardless of
     // mode, so a headline document that happens to carry stray packages should
     // still have them scale consistently with everything else the lever moves.
+    //
+    // R14 (calc 2.13.0): the lever now reaches the ledger's §4.2(b) cap base,
+    // because `computeCostPlan` derives `lender_eligible_ratio` from these same
+    // amounts. Scaling EVERY package by the same multiplier is what keeps that
+    // correct: the eligible share is preserved (to within the per-line
+    // `Math.round`, which can move the quotient by a fraction of a penny's
+    // worth of ratio and never by a package's worth), so a cost stress changes
+    // the SIZE of the build and not which packages a lender will advance
+    // against. Scaling only the eligible lines would move the ratio and quietly
+    // stress the facility's advance RATE as well — two levers under one name.
     ...('cost_plan' in inputs && inputs.cost_plan != null ? {
       cost_plan: {
         ...inputs.cost_plan,

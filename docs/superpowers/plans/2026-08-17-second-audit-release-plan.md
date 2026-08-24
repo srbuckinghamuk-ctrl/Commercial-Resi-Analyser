@@ -17,8 +17,9 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R12** | Dated, dependent programme phases | P1 | inputs v9, calc minor |
 | **R13** | The investment case: hold-period NOI, operating costs/vacancy/stabilisation, a derived take-out sized on LTV/DSCR/ICR with the binding constraint named | P1 | inputs v10, calc minor |
 | **R13b** | Unit-level sales ledger: per-unit completion timing, per-unit selling costs, deposits — the half of audit §7.8 deferred out of R13 (§2 of the R13 design) | P1 | inputs version TBD (next after v10 at scheduling time), calc minor |
-| **R14** | Lender case governance + monitoring cost-to-complete **+ the §5.10 rolled-up-interest defect carried from R9 (see “Carried defects” below)** | P1 | new records, calc **minor** — §5.10's remaining-funding term moves |
-| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v11 |
+| **R14** — **DONE, shipped** | §5.10 corrected (C1), monitoring cost-to-complete statement, `lender_eligible` wired | P1 | inputs v11, calc 2.13.0 |
+| **R14b** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | new table + API, Python governance twin, `audit_hash` input set extended |
+| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v12 (v11 is R14's) |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
 
 **R10 status (calc 2.9.0, inputs v7):** shipped. It gave the appraisal a mutually
@@ -39,6 +40,36 @@ audit §7.8's "bulk/investment-sale yield and NOI", "operating costs, vacancy,
 stabilisation", "refinance interest coverage/DSCR" and "refinance fees" asks,
 and §7.9's "refinance yield expansion, lower refinance LTV and
 operating-cost/vacancy stress" sensitivity asks. See spec §19.
+
+**R14 status (calc 2.13.0, inputs v11):** shipped. It closed **C1**, the §5.10
+defect carried from R9 — remaining funding now credits a rolled-up facility's
+unconsumed interest reserve, so a facility structured the way a real one is no
+longer reports a phantom shortfall, and fixture `v-exhausted-reserve` pins the
+real shortfall that survives once the reserve is genuinely exhausted. It made
+`lender_eligible` live: §4.2(b)'s development-cost advance cap now scales its
+construction line by `lender_eligible_base_pence / base_build_pence`, closing the
+inert-eligibility-flag limitation R10 stated at the point of definition and
+carried for four releases — with the honest consequence that the two corpus
+fixtures carrying an ineligible package at a 100% advance percentage now report
+real funding gaps and are no longer report-safe. And it added the monitoring
+cost-to-complete statement: entered per-category actuals at one reporting date,
+the original budget read from the inception model, the variance bridge, the
+funding reconciliation and three result-derived flags — closing audit §7.7's
+"a monitoring case needs reporting date, original and current budget,
+certified/paid/committed cost to date, QS forecast to complete, remaining
+contingency, debt drawn, cash equity injected, remaining committed equity and
+variances… it must reconcile remaining uses with undrawn facility plus remaining
+cash equity".
+See spec §20, and §13.3 for the VAT banner row R11 left out of the table.
+
+**R14 took the engine axis only; R14b is the governance axis, scheduled rather
+than dropped.** The row above originally paired lender-case governance with the
+monitoring statement. They are two axes with one review surface — roughly
+twenty-five tasks — and taking both would have left the phantom shortfall
+printing for another release while the governance schema was designed. R14b's
+row is that split recorded as scheduled work; see the R14 design document
+(decision 1) and spec §20.5 limitations 5 and 6 for the corresponding stated
+limitations.
 
 **R13 deliberately took half of audit §7.8, and R13b is the other half,
 scheduled rather than left as a spec limitation.** §7.8 also asked for
@@ -75,7 +106,18 @@ Each entry must state the defect in one line, name **where the counter-example i
 asserted** (a deferral with no failing assertion behind it is a note someone has to
 remember to check), and name the release that owns the correction.
 
-### C1 — §5.10 charges rolled-up interest against the net facility [found R9, owned by R14]
+### C1 — §5.10 charges rolled-up interest against the net facility [found R9, owned by R14 — **closed in R14**]
+
+**Closed in R14 (calc 2.13.0).** Spec §5.10 now credits the unconsumed interest
+reserve to remaining funding for a rolled-up facility, and carries the full closed
+record — the defect, the correction, the rejected alternative and the two fixtures
+that pin it. The entry below is kept as it stood when the deferral was taken; read
+spec §5.10 for what the engine does now. Of the two options the last paragraph but
+one asks R14 to decide between, **crediting gross-facility headroom was chosen**:
+the alternative (stop counting rolled-up interest in remaining cost) is equivalent
+only while the reserve holds and hides a real shortfall once it does not. The
+serviced-interest case is untouched, asserted by a deep-equal series either side
+of the change.
 
 **The defect, in one line:** spec §5.10's cost-to-complete series counts future
 rolled-up interest in *remaining cost* while counting only the undrawn **net**

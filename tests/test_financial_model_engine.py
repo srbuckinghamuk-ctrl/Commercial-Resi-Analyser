@@ -939,3 +939,71 @@ def test_excludes_the_operating_shortfall_from_sec7_sources_pinned_identity():
     rec = reconcile(inputs, schedule, model)
     assert rec.sources_equal_uses is True
     assert rec.debt_rollforward_ok is True
+
+
+# R14 spec Sec 5 (Sec 4.2(b) amended). Mirror of monthly-engine.test.ts's
+# "R14 Sec 4.2(b): lender_eligible scales the development-cost advance cap"
+# describe block, assertion for assertion.
+class TestLenderEligibleScalesTheAdvanceCap:
+    def test_an_ineligible_package_shrinks_the_advance_cap_and_widens_the_gap(self) -> None:
+        raw = json.loads((FIXTURE_DIR / "q-detailed-cost-plan.json").read_text(encoding="utf-8"))
+        q = raw["inputs"]
+        assert q["cost_plan"]["mode"] == "detailed"
+        ineligible = [p for p in q["cost_plan"]["packages"] if not p["lender_eligible"]]
+        assert len(ineligible) == 1  # pkg-externals, 3,000,000p
+
+        all_eligible = json.loads(json.dumps(q))
+        for p in all_eligible["cost_plan"]["packages"]:
+            p["lender_eligible"] = True
+
+        # Starve both twins of equity identically so the CAP is what decides the
+        # draw, and halve `development_cost_advance_pct` on BOTH sides. At the
+        # fixture's own 100% the starved pair does NOT separate: with equity
+        # gone, months 8-10 of both twins are bound by `undrawn_net` (the
+        # 80,000,000p net facility, exhausted either way), so both draw exactly
+        # 78,400,000p and both carry the same 32,853,599p gap -- the failure
+        # mode the task brief foresaw. At 50% the scaled cap is the binding term
+        # in every one of months 1-10 for both twins, so the flag alone moves
+        # the answer. The pair still differs ONLY in the flag: `starve` is
+        # applied identically to both.
+        def starve(doc: dict) -> dict:
+            out = json.loads(json.dumps(doc))
+            out["finance"]["development_cost_advance_pct"] = 50
+            out["equity_sources"][0]["amount_pence"] = 1
+            return out
+
+        def run(doc: dict):
+            parsed = parse_calculator_inputs(doc)
+            s = build_schedule(parsed)
+            return s, run_ledger(s, parsed.finance, parsed.equity_sources)
+
+        base_s, base_m = run(starve(all_eligible))
+        less_s, less_m = run(starve(q))
+        assert base_s.lender_eligible_ratio == 1
+        assert abs(less_s.lender_eligible_ratio - 44 / 47) < 1e-12
+        assert less_m.totals.draws_pence < base_m.totals.draws_pence
+        assert less_m.totals.funding_gap_pence > base_m.totals.funding_gap_pence
+
+        # Hand-derived (docs/financial-model/test-cases.md Sec 20.2, "the
+        # starved pair"): at 50% the all-eligible twin draws
+        # round(6,387,120 x 50 / 100) = 3,193,560 in each of months 1-5 and
+        # round(5,304,000 x 50 / 100) = 2,652,000 in each of months 6-10, plus
+        # the 35,000,000p day-one advance -- 64,227,800 in total. The ineligible
+        # twin's construction line scales by 44/47 FIRST:
+        # round((4,965,447 + 1,003,120 + 80,000 = 6,048,567) x 50/100) =
+        # 3,024,284 (months 1-5) and round(4,965,447 x 50/100) = 2,482,724
+        # (months 6-10) -- 62,535,040 in total, 1,692,760 less. Both twins spend
+        # the same 58,455,600p over months 1-10, so every pence the cap
+        # withholds falls to the gap: 48,718,559 - 47,025,799 = the same
+        # 1,692,760.
+        assert base_m.totals.draws_pence == 64_227_800
+        assert less_m.totals.draws_pence == 62_535_040
+        assert base_m.totals.funding_gap_pence == 47_025_799
+        assert less_m.totals.funding_gap_pence == 48_718_559
+        assert base_m.totals.draws_pence - less_m.totals.draws_pence == 1_692_760
+        assert less_m.totals.funding_gap_pence - base_m.totals.funding_gap_pence == 1_692_760
+
+    def test_a_headline_mode_document_keeps_a_ratio_of_one(self) -> None:
+        raw = json.loads((FIXTURE_DIR / "f-dev-finance-12mo.json").read_text(encoding="utf-8"))
+        schedule = build_schedule(parse_calculator_inputs(raw["inputs"]))
+        assert schedule.lender_eligible_ratio == 1

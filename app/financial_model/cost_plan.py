@@ -71,6 +71,15 @@ class CostPlanResult:
     # three already-computed totals itself. Purely additive -- moves no other figure.
     conversion_total_pence: int = 0
     lender_eligible_base_pence: int = 0
+    # R14 spec Sec 5 (Sec 4.2(b) amended). `lender_eligible_base_pence /
+    # base_build_pence` as an UNROUNDED float, and 1.0 in headline mode or when
+    # base_build_pence is 0 -- headline mode has no packages to flag, so its
+    # eligible base is 0 against a non-zero base build, and the raw quotient
+    # would silently zero the ledger's whole construction cap base. Reported
+    # here so a reader can SEE the cap base rather than infer it; republished on
+    # Schedule so the ledger reads one figure and never re-derives it. The one
+    # rounding is on the product (construction_pence * ratio), in the ledger.
+    lender_eligible_ratio: float = 1.0
     implied_rate_pence_per_sqm: int | None = None
 
 
@@ -114,6 +123,10 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
         if detailed
         else money_round(cc.construction_cost_per_sqm_pence * area_sqm)
     )
+
+    # R14 spec Sec 5. Summed ONCE: both lender_eligible_base_pence and the ratio
+    # the ledger's Sec 4.2(b) cap base reads are this figure.
+    lender_eligible_base = sum(p.amount_pence for p in packages if p.lender_eligible)
 
     # Sec 3.2.1: in detailed mode compliance is priced inside the packages
     # (fire_acoustic_thermal). Counting the fields too would double count.
@@ -188,8 +201,10 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
         professional_total_pence=professional_total,
         statutory_total_pence=statutory_total,
         conversion_total_pence=construction_total + professional_total + statutory_total,
-        lender_eligible_base_pence=sum(
-            p.amount_pence for p in packages if p.lender_eligible
+        lender_eligible_base_pence=lender_eligible_base,
+        # R14 spec Sec 5. Unrounded -- the ONE rounding is on the product, in the ledger.
+        lender_eligible_ratio=(
+            1.0 if not detailed or base_build == 0 else lender_eligible_base / base_build
         ),
         implied_rate_pence_per_sqm=(
             money_round(base_build / area_sqm) if area_sqm > 0 else None

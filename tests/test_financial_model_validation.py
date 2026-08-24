@@ -4,6 +4,7 @@ frontend/src/lib/model/validation.test.ts (spec Sec 2, C1 -- round-2 review).
 Both implementations must agree with the spec, not merely with each other. If
 Python disagrees, the Python port is wrong -- never adjust these to make peace.
 """
+import json
 import pathlib
 
 import pydantic
@@ -20,6 +21,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v6,
     migrate_inputs_to_v8,
     migrate_inputs_to_v9,
+    migrate_inputs_to_v10,
     migrate_v2_to_v3,
     migrate_v6_to_v7,
     migrate_v8_to_v9,
@@ -34,6 +36,8 @@ from app.financial_model.types import (
     CalculatorInputsV7,
     CalculatorInputsV8,
     CalculatorInputsV9,
+    CalculatorInputsV10,
+    CalculatorInputsV11,
     CategoryPhaseIds,
     ContingencyClass,
     CostPackage,
@@ -42,6 +46,9 @@ from app.financial_model.types import (
     EquitySource,
     FeeLine,
     LenderValuation,
+    MONITORING_CATEGORIES,
+    MonitoringCategory,
+    MonitoringLineInputs,
     OperatingLine,
     Phase,
     PhaseAnchor,
@@ -65,6 +72,8 @@ from app.financial_model.validation import reconcile, validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_vat_treatments
 
 from .fixtures_investment_case import ic_doc
+
+FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
 
 def base_inputs() -> CalculatorInputsV2:
@@ -2447,6 +2456,132 @@ class TestInvestmentCaseValidation:
             ic_doc({"investment_case": None, "arrangement_fee_pct": 101}),
         )
         assert "refinance.arrangement_fee_pct" not in self._err_fields(ic_doc({"investment_case": None}))
+
+
+def _retain_all_v10() -> CalculatorInputsV10:
+    """Built from fixtures/financial-model/l-retain-all.json via
+    migrate_inputs_to_v10 (the task brief's instruction). Cash-funded
+    (committed_net_facility_pence == 0), so it also exercises the debt rule's
+    cash-deal arm (committed net is 0, not whatever the finance block happens
+    to carry)."""
+    raw = json.loads((FIXTURE_DIR / "l-retain-all.json").read_text(encoding="utf-8"))
+    return migrate_inputs_to_v10(raw["inputs"])
+
+
+def _valid_monitoring_line(category: MonitoringCategory, **over) -> MonitoringLineInputs:
+    base = dict(
+        category=category,
+        current_budget_pence=100_000,
+        certified_to_date_pence=50_000,
+        paid_to_date_pence=40_000,
+        committed_to_date_pence=60_000,
+        forecast_to_complete_pence=20_000,
+    )
+    base.update(over)
+    return MonitoringLineInputs(**base)
+
+
+def _valid_monitoring(**over):
+    base = dict(
+        reporting_month=6,
+        reporting_date="2026-06-01",
+        lines=[_valid_monitoring_line(c) for c in MONITORING_CATEGORIES],
+        debt_drawn_to_date_pence=0,
+        cash_equity_injected_to_date_pence=500_000,
+        author="QS",
+        date="2026-06-01",
+        note=None,
+    )
+    base.update(over)
+    return base
+
+
+def _v11_doc(monitoring) -> CalculatorInputsV11:
+    v10 = _retain_all_v10()
+    return CalculatorInputsV11.model_validate({
+        **v10.model_dump(mode="json"),
+        "inputs_version": 11,
+        "monitoring": monitoring,
+    })
+
+
+class TestMonitoringValidation:
+    """Python twin of validation.test.ts's '§20.3 monitoring validation'
+    describe block (spec Sec 20.3, R14 Task 5)."""
+
+    CASH_EQUITY_TOTAL = 90_000_000  # l-retain-all.json's single confirmed cash equity source
+
+    def test_a_null_monitoring_block_adds_no_issue_with_a_monitoring_prefix(self):
+        issues = validate_inputs(_v11_doc(None))
+        assert not any(i.field.startswith("monitoring") for i in issues)
+
+    def test_a_valid_monitoring_block_adds_no_issue(self):
+        issues = validate_inputs(_v11_doc(_valid_monitoring()))
+        assert not any(i.field.startswith("monitoring") for i in issues)
+
+    def test_rejects_a_reporting_month_outside_1_term(self):
+        doc = _v11_doc(_valid_monitoring(reporting_month=13))  # l-retain-all's term is 12
+        issue = next(i for i in validate_inputs(doc) if i.field == "monitoring.reporting_month")
+        assert issue.severity == "error"
+        assert issue.message == "reporting_month must be between 1 and the term (12)"
+
+    def test_rejects_a_lines_block_missing_a_category(self):
+        lines = [_valid_monitoring_line(c) for c in MONITORING_CATEGORIES if c != "contingency"]
+        doc = _v11_doc(_valid_monitoring(lines=lines))
+        issue = next(i for i in validate_inputs(doc) if i.field == "monitoring.lines")
+        assert issue.severity == "error"
+        assert issue.message == (
+            "monitoring must carry exactly one line per category "
+            "(acquisition, construction, professional, statutory, contingency)"
+        )
+
+    def test_rejects_a_lines_block_with_a_duplicated_category(self):
+        lines = [_valid_monitoring_line(c) for c in MONITORING_CATEGORIES if c != "contingency"]
+        lines.append(_valid_monitoring_line("acquisition"))
+        doc = _v11_doc(_valid_monitoring(lines=lines))
+        assert any(i.field == "monitoring.lines" for i in validate_inputs(doc))
+
+    def test_rejects_a_line_whose_paid_exceeds_certified(self):
+        lines = [_valid_monitoring_line(c) for c in MONITORING_CATEGORIES]
+        lines[0] = _valid_monitoring_line(
+            lines[0].category, certified_to_date_pence=100, paid_to_date_pence=101, committed_to_date_pence=200,
+        )
+        doc = _v11_doc(_valid_monitoring(lines=lines))
+        issue = next(i for i in validate_inputs(doc) if i.field == "monitoring.lines[0].paid_to_date_pence")
+        assert issue.severity == "error"
+        assert issue.message == "paid to date cannot exceed certified to date"
+
+    def test_rejects_a_line_whose_certified_exceeds_committed(self):
+        lines = [_valid_monitoring_line(c) for c in MONITORING_CATEGORIES]
+        lines[0] = _valid_monitoring_line(
+            lines[0].category, certified_to_date_pence=200, paid_to_date_pence=100, committed_to_date_pence=199,
+        )
+        doc = _v11_doc(_valid_monitoring(lines=lines))
+        issue = next(i for i in validate_inputs(doc) if i.field == "monitoring.lines[0].certified_to_date_pence")
+        assert issue.severity == "error"
+        assert issue.message == "certified to date cannot exceed committed to date"
+
+    def test_rejects_debt_drawn_to_date_exceeding_the_committed_net_facility_zero_for_a_cash_deal(self):
+        doc = _v11_doc(_valid_monitoring(debt_drawn_to_date_pence=1))
+        issue = next(i for i in validate_inputs(doc) if i.field == "monitoring.debt_drawn_to_date_pence")
+        assert issue.severity == "error"
+        assert issue.message == "debt drawn to date cannot exceed the committed net facility"
+
+    def test_warns_not_errors_when_cash_equity_injected_exceeds_committed_cash_sources(self):
+        doc = _v11_doc(_valid_monitoring(cash_equity_injected_to_date_pence=self.CASH_EQUITY_TOTAL + 1))
+        issues = validate_inputs(doc)
+        issue = next(i for i in issues if i.field == "monitoring.cash_equity_injected_to_date_pence")
+        assert issue.severity == "warning"
+        assert issue.message == "equity injected beyond committed sources"
+        # Not an error (spec Sec 20.3): report_safe is unaffected by this alone.
+        assert not any(
+            i.severity == "error" and i.field == "monitoring.cash_equity_injected_to_date_pence" for i in issues
+        )
+
+    def test_accepts_cash_equity_injected_exactly_at_the_committed_total_boundary(self):
+        doc = _v11_doc(_valid_monitoring(cash_equity_injected_to_date_pence=self.CASH_EQUITY_TOTAL))
+        issues = validate_inputs(doc)
+        assert not any(i.field == "monitoring.cash_equity_injected_to_date_pence" for i in issues)
 
 
 def _extract_ts_err_message(block: str, i: int) -> tuple[str, int]:

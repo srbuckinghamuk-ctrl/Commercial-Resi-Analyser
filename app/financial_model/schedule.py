@@ -253,6 +253,12 @@ class Schedule:
     resolved_exit_months: ScheduleResolvedExitMonths = field(
         default_factory=lambda: ScheduleResolvedExitMonths(tranches=[], refinance=None),
     )
+    # R14 spec Sec 4.2(b). Computed once on the cost plan, republished here so
+    # the ledger reads one figure and never re-derives it. Defaulted (like
+    # `refinance` above) so pre-existing direct-construction call sites (tests)
+    # do not need to change; 1.0 is the all-eligible/headline value, so a
+    # schedule built without it behaves exactly as calc <= 2.12.0 did.
+    lender_eligible_ratio: float = 1.0
 
 
 @dataclass
@@ -655,6 +661,9 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         # AppraisalResultV2 by Task 11.
         investment_case=investment_case,
         resolved_exit_months=resolved_exit_months,
+        # R14 spec Sec 4.2(b). Computed once on the cost plan, republished here
+        # so the ledger reads one figure and never re-derives it.
+        lender_eligible_ratio=cost_plan.lender_eligible_ratio,
         totals=ScheduleTotals(
             acquisition_pence=acquisition_total,
             construction_pence=construction_total,

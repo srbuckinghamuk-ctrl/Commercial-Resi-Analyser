@@ -52,6 +52,16 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
     # reads packages regardless of mode, so a headline document that happens to
     # carry stray packages should still have them scale consistently with
     # everything else the lever moves.
+    #
+    # R14 (calc 2.13.0): the lever now reaches the ledger's Sec 4.2(b) cap base,
+    # because compute_cost_plan derives `lender_eligible_ratio` from these same
+    # amounts. Scaling EVERY package by the same multiplier is what keeps that
+    # correct: the eligible share is preserved (to within the per-line
+    # money_round, which can move the quotient by a fraction of a penny's worth
+    # of ratio and never by a package's worth), so a cost stress changes the
+    # SIZE of the build and not which packages a lender will advance against.
+    # Scaling only the eligible lines would move the ratio and quietly stress
+    # the facility's advance RATE as well -- two levers under one name.
     cost_plan = getattr(out, "cost_plan", None)
     if cost_plan is not None:
         for package in cost_plan.packages:
