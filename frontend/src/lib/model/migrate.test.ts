@@ -1467,6 +1467,27 @@ describe('v12 migration -- spec §22.9', () => {
     });
   }
 
+  // Property 1 of three. Field strings may be renamed under a stated alias
+  // map; the SET of issues raised must not grow or shrink. No field renames
+  // this release; kept so a future rename has a declared home rather than a
+  // loosened assertion.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v11 validation issue has a v12 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v11Issues = new Set(
+        validateInputs(migrateInputsToV11(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v12Issues = new Set(
+        validateInputs(migrateInputsToV12(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v12Issues).toEqual(v11Issues);
+    });
+  }
+
   it('writes unit_sales: null and sales_slip_months: 0 on all four scenarios, nothing else', () => {
     const v11 = migrateInputsToV11(fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>);
     const v12 = migrateV11toV12(v11);
