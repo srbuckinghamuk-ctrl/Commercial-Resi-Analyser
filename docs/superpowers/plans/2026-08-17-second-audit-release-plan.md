@@ -18,7 +18,7 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R13** | The investment case: hold-period NOI, operating costs/vacancy/stabilisation, a derived take-out sized on LTV/DSCR/ICR with the binding constraint named | P1 | inputs v10, calc minor |
 | **R13b** | Unit-level sales ledger: per-unit completion timing, per-unit selling costs, deposits — the half of audit §7.8 deferred out of R13 (§2 of the R13 design) | P1 | inputs version TBD (next after v10 at scheduling time), calc minor |
 | **R14** — **DONE, shipped** | §5.10 corrected (C1), monitoring cost-to-complete statement, `lender_eligible` wired | P1 | inputs v11, calc 2.13.0 |
-| **R14b** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | new table + API, Python governance twin, `audit_hash` input set extended |
+| **R14b** — **DONE, shipped** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | two new tables + API (migration 006), Python governance twin; no calc bump, no inputs bump — and `audit_hash` is **not** extended, see the status paragraph |
 | **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v12 (v11 is R14's) |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
 
@@ -61,6 +61,44 @@ contingency, debt drawn, cash equity injected, remaining committed equity and
 variances… it must reconcile remaining uses with undrawn facility plus remaining
 cash equity".
 See spec §20, and §13.3 for the VAT banner row R11 left out of the table.
+
+**R14b status (calc 2.13.0 unchanged, inputs v11 unchanged):** shipped. It gave
+the product a **lender case**: a locked whole-document snapshot of a stored
+appraisal — the full `inputs_snapshot`, the calc and inputs versions and all
+three provenance hashes, copied at creation and never rewritten — carried
+through a server-enforced eight-status state machine with a reviewer, a
+decision, approval conditions and an append-only change log, all of it behind
+five `/lender-cases` endpoints and a new calculator page. Closing audit §7.10's
+"lock lender GDV, cost/programme adjustments, approved facility and credit
+conditions; add reviewer, approval state, timestamp and change log", and §7.3's
+"an edit to the developer case should mark the lender case stale and require a
+deliberate refresh or reapproval": staleness is derived at read time — the live
+row's `input_hash` against the case's locked one — stored nowhere, and it
+**defeats FINAL** under a banner of its own rather than being a warning printed
+beside one. The case gets its own `case_hash`, **chained onto** the locked
+`audit_hash` and not folded into it: the release-plan row above originally said
+the `audit_hash` input set would be extended, and the design rejected that —
+extending it would rewrite every stored hash on the next save and break spec
+§13.2's reviewer-recompute claim, and a case transition happens without an
+appraisal re-save, so a governance component inside `audit_hash` would silently
+invalidate hashes on rows nobody had touched. **No calc bump and no inputs
+bump**: nothing inside `inputs_snapshot` moves and no arithmetic changes, and a
+courtesy 2.14.0 would have stamped every stored result "recomputed since save"
+in the memo for no figure change (the R6 precedent — it shipped on calc 2.5.0
+unchanged). The release is versioned by **Alembic migration 006** and by spec
+**§21**. Governance also stopped being a one-language concern:
+`app/financial_model/provenance.py` is now the Python twin of
+`report-provenance.ts`'s governance core, because the API cannot enforce a state
+machine that exists only in the client.
+
+**The "every document is a DRAFT" era ended here.** Spec §13.3 has required an
+approved lender case as its last FINAL condition since R7, and for seven
+releases nothing could supply one — the spec said so itself, in a bullet
+recording that as the intended answer rather than a gap. R14b makes the
+condition meetable and adds a sixth beside it (the approval must not be stale),
+and the memo release gate now asserts a document that renders **FINAL** — the
+first the gate has ever been able to assert. That bullet is rewritten in §13.3
+as the historical note it became.
 
 **R14 took the engine axis only; R14b is the governance axis, scheduled rather
 than dropped.** The row above originally paired lender-case governance with the

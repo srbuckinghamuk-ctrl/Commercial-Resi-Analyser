@@ -5,6 +5,7 @@
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **R14b, 24 August 2026 — no calculation-version bump and no inputs-version bump.** Lender case governance (§21): the release that makes a FINAL document possible at all. A lender case is a **locked whole-document snapshot** of a stored appraisal — its `inputs_snapshot`, `calc_version`, `inputs_version` and all three provenance hashes, copied at creation and never rewritten — carrying governance state through the eight-status machine `report-provenance.ts` has declared since R7 and nothing has ever populated. §13.3's condition 5 (an approved case) therefore becomes reachable, and gains a sixth condition beside it: an approval is only good for the document it was given against, so a case whose locked `input_hash` no longer matches the live stored row is **stale** and defeats FINAL under a banner of its own (§21.3). The case gets its own hash, `case_hash` (§13.2.1), **chained onto** the locked `audit_hash` rather than folded into it — §13.2's twice-stated "the audit hash gains no new parts" ruling is restated, not repealed, because a case transition happens without an appraisal re-save and would otherwise silently invalidate every stored hash. §13.1's provenance panel gains the case rows, which are the case hash's own components rather than a readable selection of them, so the reviewer-recompute property §13.2 gives the audit hash holds for the case hash too. **No engine change, no input-schema change, no fixture pin moves**: the release is versioned by Alembic migration 006 (two new tables, `lender_cases` and `lender_case_events`) and by this specification's §21, and the corpus-walk tests passing unmodified is itself the no-arithmetic guard. Governance also stops being a one-language concern — `app/financial_model/provenance.py` is created as the Python twin of `report-provenance.ts`'s governance core, under the same porting contract as `monitoring.py`, because the API cannot enforce a state machine that exists only in the client.
 - **2.12.0** — the investment case (§19, R13), with inputs v10 adding a top-level `investment_case: InvestmentCase | null` beside `programme`, `vat` and `cost_plan`: a stabilisation schedule (an occupancy ramp reusing §18.6's `PhaseAnchor` resolution), a user-managed schedule of operating lines (a ten-value `OpexCode` enum plus `other`, each fixed pence or a percent of effective gross rent), a net-initial-yield valuation, and a take-out sized as `min(LTV cap, DSCR cap, ICR cap)` with the binding constraint named and all three caps published. `refinance` narrows `investment_value_pence` and `ltv_pct` to nullable — non-null when `investment_case` is null (today's explicit path, unchanged), both null when it is not (§19.1) — and gains an `arrangement_fee_basis`/`arrangement_fee_pct` pair for a percentage arrangement fee on the derived quantum. NOI enters the ledger as its own signed receipt class, applied in full to the senior facility, in the fixed within-month order VAT reclaim → NOI → sales sweep → refinance (§19.5); it is never a sale receipt, so it never enters `gross_sale_pence` or GDV, and it never enters §3 profit — but it legitimately moves every debt-denominated metric (LTGDV, senior break-even, profit-on-GDV) by repaying the facility early, same as any other debt-reducing receipt. `Schedule` gains `investment_case: InvestmentCaseResult | null` (republished, never recomputed) and `resolved_exit_months`, which closes §18.10 limitation 9: the investment memo and `CashflowPage` now read the resolved tranche/refinance month instead of the raw `month_offset` (Task 12; Task 14 shipped the anchor UI control, not this reporting fix — see §18.10 limitation 9's rewrite). §12.1's lever table goes from five levers to eight (`exit_yield`, `operating_cost`, `vacancy`), still disjoint and order-independent; §12.2 gains the take-out carve-out — the take-out is not the committed facility and is re-solved in every cell, deliberately, or the three new levers would be inert. Cell validity for the three degenerate cases (non-positive yield, non-positive occupancy, a negative operating-line value) is existing validation (§19.7 rules 8, 9, 11), not new sensitivity logic — `measure()` already routes every levered document through validation before appraising (§12.7). The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties (§19.9), following §18.7's corrected shape from the start. §4.5 is **superseded for the `investment_case != null` case**; its explicit `investment_value_pence × ltv_pct` path is unchanged and remains live. **No existing computed value changed** — `investment_case = null` is bit-identical to calc 2.11.0, corpus-wide, in both engines.
 - **2.11.0** — the dated, dependent programme (§18, R12), with inputs v9 carrying `programme` as a **precedence network**: phases with an `id`, a fourteen-value `code` enum plus `other`, a signed `slip_months`, an earliest-start floor `start_offset` and `FS`/`SS` predecessors with lags; a derivation that computes every start, a backward pass that reports total float and the critical path; cost lines that resolve to a phase (`line.phase_id ?? category_phase_ids[line.category]`, §18.5) and spend over that phase's derived window; sale tranches and `refinance` that may **anchor** to a phase; a fifth sensitivity lever, `phase_slip` (§12.1, §18.9); and a hard `programme.overrun` error where the derived finish passes maturity — never a clamp (§18.8). **No existing computed value changed** — `programme = null` remains the auto-window path of §6, bit-identical to calc 2.10.0, and the v8 three-package shape migrates to three predecessor-free phases whose derived windows *are* the old windows by construction rather than by arithmetic coincidence (§18.7). §6.1 is **superseded for the explicit-programme case** and §6's auto-window text is unchanged and remains live. The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties rather than one set equality (§18.7), because §18.8's overrun rule has no v8 counterpart at all. §12.1's lever table goes from four levers to five, still writing to disjoint fields and still order-independent; §12.6 gains the `phase_id` target rules; §16 gains the phase-resolution note for packages and fee lines. Spreading is per **(phase, category) bucket**, not per line — the auto and legacy arms spread a category total exactly once, and bucketing is what keeps penny-identity true by construction (§18.5, §18.10 limitation 7).
 - **2.10.0** — VAT and TOGC (§17, R11), with inputs v8 carrying a `vat` block: registration, a return cycle (monthly or quarterly, with a repayment lag), six fixed per-category treatment rows (rate, recoverable proportion, recovery basis, evidence status) resolved through one accessor, and a purchase/TOGC block that decides whether acquisition VAT is chargeable and whether the acquisition tax base is VAT-inclusive. **No existing computed value changed, with one named exception (ruling R46)** — migration writes `registered: false`, six zeroed treatment rows and an inert purchase block, which drives every resolved rate to zero and the chargeable consideration back to the exclusive price, so all twelve-plus golden fixtures (now thirteen, with the VAT worked cycle pinned as fixture R) reproduce every reported metric to the penny, and the gate is numeric **and** structural for the same reason §16.3's was (§17.11). §3.8 gains `irrecoverable_vat_pence` as a cost-before-finance component; §7 gains the VAT reclaim as a third flow excluded from both sides of the sources-and-uses identity, alongside sale-proceeds repayments and refinance-shortfall equity; §16.3's contingency base is now the package tag, mode-dependently, with the input fields `basis`/`package_ids` deleted (the *result* shape is unchanged). **The one figure this release does move**: §17.8 makes the package's `contingency_class` tag live, so a detailed-mode document carrying a non-zero percentage on `existing_building` or `abnormal` while no package carries that tag now resolves that class's base to zero, where before every class resolved against the whole base build regardless of tag — the same reachable shape §17.8's planted-divergence guard exists to catch, here on the validation side rather than the numeric one. §17.9 adds a **warning** naming it (not an error — see ruling R46, and the R38/R39 regression gate this does not touch, since it reads `cost_plan` which is unchanged either side of the v7→v8 boundary), and no fixture in the corpus is in that shape. §16.9 loses the `contingency_class`-not-live limitation (now resolved) and the "No VAT" limitation (now superseded by §17.13's own list, which is where a VAT limitation belongs from this release on).
@@ -808,7 +809,38 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 | Report-safe status | `reconciliation.report_safe` | — |
 | Document status | §13.3 | — |
 | Lender-case approval status | lender case, when one exists | "No lender case — not submitted for credit approval" |
+| Lender case id | the live case's `id` (§21.1) | — (this row and the five below are omitted entirely when no case exists) [R14b] |
+| Case submitted by | the case's `submitted_by` | "not yet submitted" [R14b] |
+| Case reviewer | the case's `reviewer` | "not yet assigned" [R14b] |
+| Case decided | the case's `decided_by` and `decided_at`, the timestamp printed **raw** in its canonical UTC ISO-8601 form because it is a hash component (§13.2.1); the reader-friendly date is in the narrative | "not yet decided" [R14b] |
+| Approval conditions | the case's `conditions` (§21.2 — set only by `approved_with_conditions`) | — (row omitted unless the case records conditions) [R14b] |
+| Case hash | the case's `case_hash` (§13.2.1) | — [R14b] |
 
+- **The case rows are the case hash's components, and that is why they are there
+  [R14b].** They are not decoration and are not a subset chosen for readability.
+  Together with the lender-case approval status directly above them and the
+  project id near the top, they are §13.2.1's formula: the case id, the project
+  id, the status, the three actor names and the decided timestamp — which is why
+  that timestamp is printed **raw**, in its canonical hashing form, rather than
+  in the reader-friendly form the narrative uses. A reviewer holding the panel
+  can therefore recompute `case_hash` from the page and detect after-the-fact
+  alteration of the reviewer, the decision, the decider or the approval's status
+  — the property §13.2 claims for the audit hash, extended to the governance
+  state that hash deliberately does not carry. Dropping a row because it looks
+  like internal detail would silently withdraw that guarantee. The approval
+  conditions row is the one that is *not* a hash component: it is printed because
+  a conditional approval that does not say what its conditions were is not a
+  usable one.
+- **The eighth component is the panel's audit hash, and it is the case's
+  `locked_audit_hash` for as long as the stored row has not been re-saved
+  [R14b].** `case_hash`'s last part is the audit hash the case locked; the
+  panel's "Audit hash" row is the *live stored record's*. They are the same value
+  on any document that has not been saved again since the case was opened, which
+  is the state every FINAL document is in, so the recomputation closes with what
+  is on the page. Where they differ the usual cause is that the inputs moved,
+  which the same panel already discloses — §13.3 condition 6 makes the document a
+  DRAFT under the stale banner, and §21.3 prints the disclosure naming the locked
+  hash. §21.6 limitation 6 records the narrow case that this does *not* cover.
 - **The audit hash picks up the two R8 fields transitively, and gains no new parts
   [R8 — calc 2.7.0].** §13.2's formula is unchanged. It hashes `input_hash` and
   `outputs_hash`, which already commit to the *whole* input and output documents —
@@ -839,9 +871,15 @@ joined by the literal `|`, over UTF-8, lower-case hex.
   recompute the audit hash from the six fields beside it and detect that any one
   of them was altered after the fact.
 - **Record identity is `project_id`**, not the appraisal row's own id: migration
-  004 made the appraisal unique per project, so the project is the stable
+  003 made the appraisal unique per project, so the project is the stable
   identity, and it is known before the row exists — which lets the value be
-  computed in the same place as the other two hashes.
+  computed in the same place as the other two hashes. [Corrected R14b: this read
+  "migration 004" from R7 until R14b, as did two code comments repeating it.
+  `004_pa_deadline_dates` adds planning-application dates; the unique constraint
+  is `003_unique_project_refs_and_ruleset_version`. A wrong pointer is a defect
+  in the same way a wrong number is — it sends the next reader to the wrong
+  file — and §21.1 depends on this reasoning, so it is fixed where it is stated
+  rather than repeated correctly one section later.]
 - **Status is inside the hash.** Two records whose inputs and outputs hash
   identically but whose governance status differs must not share an audit hash;
   the status is what a reader relies on when deciding whether the printed figures
@@ -867,9 +905,61 @@ joined by the literal `|`, over UTF-8, lower-case hex.
   actually computed under (false binding) or re-hashing every stored row on every
   migration release (defeats the point of a hash — see "Absent rows" above).
 
+### 13.2.1 The case hash [R14b]
+
+A lender case (§21) carries governance state that moves without the appraisal
+moving. It gets its own hash:
+
+```
+case_hash = sha256( case_id | project_id | status | submitted_by | reviewer | decided_by | decided_at | locked_audit_hash )
+```
+
+joined by the literal `|`, over UTF-8, lower-case hex — the same encoding rules
+as §13.2. Eight parts, in that order, and therefore seven separators however many
+of the parts are absent. An absent part is the **empty string**, not the word
+"null" and not an omitted separator: a case at `draft`, with no actor and no
+decision yet, hashes exactly
+`case_id|project_id|draft|||||locked_audit_hash`. Fixing the separator count is
+what stops two different patterns of absence colliding with one another, or with
+a present value.
+
+`decided_at` is rendered in exactly one canonical form: **UTC, ISO-8601, always
+with microseconds, terminated by a literal `Z`** (`%Y-%m-%dT%H:%M:%S.%fZ`). A
+naive datetime — which is what SQLite hands back for a value written
+timezone-aware — is treated as UTC rather than as local time. Without both
+rules a hash computed at write time and a hash recomputed after a read would
+disagree byte for byte on the same case, which would make the value useless for
+the only thing it exists to do.
+
+- **Chained onto the audit hash, not folded into it.** `locked_audit_hash` is the
+  last component; §13.2's six-part formula is untouched, and **the audit hash
+  gains no new parts** — the ruling stated twice in §13.1 and §13.2 is restated
+  here, not repealed. Two reasons, either sufficient. Extending `audit_hash`
+  would rewrite every stored hash on the next save and break the
+  reviewer-recompute claim §13.2 makes for existing documents. And a case
+  transition happens *without an appraisal re-save*, so a governance component
+  inside `audit_hash` would silently invalidate hashes stored against rows nobody
+  touched.
+- **What the chain binds.** `case_hash` binds the case's governance state to
+  `locked_audit_hash`; `locked_audit_hash` binds (via §13.2) the project,
+  versions, status, inputs and outputs the lender actually reviewed. The two
+  together say: *this reviewer approved this status against exactly this
+  document*.
+- **Recomputed on every write.** Computed at creation and recomputed on every
+  transition, from the case's post-transition values. It moves when the status
+  alone moves, which is what makes it a record of the governance state rather
+  than of the snapshot.
+- **A reviewer can recompute it.** Every component is printed on the provenance
+  panel (§13.1) — `case_id`, `project_id`, the status, the three actor names, the
+  raw decided timestamp and the locked audit hash — so the property §13.2 claims
+  for the audit hash holds here too.
+- **Computed in Python only** (`app/financial_model/hashing.py`), stored on the
+  case row, never derived client-side: §13.1's "hashes are the server's, never
+  the client's" applies unchanged.
+
 ### 13.3 Document status and draft marking
 
-A document is **FINAL** only when all five hold, tested in this order:
+A document is **FINAL** only when all six hold, tested in this order:
 
 1. `reconciliation.report_safe` — hard validations pass.
 2. `reconciliation.senior_repaid` — the ledger clears the senior facility within
@@ -881,7 +971,10 @@ A document is **FINAL** only when all five hold, tested in this order:
    current one (§14.6). [R8 — calc 2.7.0]
 4. A confirmed VAT basis (§17.10). [R11 — calc 2.10.0; the table row below was
    missing until R14]
-5. An approved lender case: status `credit_approved` or `approved_with_conditions`.
+5. An approved lender case: status `credit_approved` or `approved_with_conditions`
+   (§21.2).
+6. That approval is still current: the case **is not stale** (§21.3) — the live
+   stored appraisal's `input_hash` is still the one the case locked. [R14b]
 
 Otherwise the document is **DRAFT** and carries the banner for the **first**
 failing condition:
@@ -893,15 +986,27 @@ failing condition:
 | tax basis unconfirmed | `DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
 | VAT basis unconfirmed | `DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
 | not approved | `DRAFT - NOT APPROVED FOR LENDER RELIANCE` |
+| approved case is stale | `DRAFT - LENDER CASE STALE - NOT FOR LENDER RELIANCE` |
 
-- **The five conditions are distinct claims and must not be collapsed.** An
+- **The six conditions are distinct claims and must not be collapsed.** An
   unreconciled run's figures may be wrong. A reconciled run that does not repay
   the senior facility is arithmetically sound and shows a real repayment failure.
   A run whose tax basis is unconfirmed is arithmetically sound *on a basis nobody
   has verified*, and the same holds, separately, of one whose VAT basis is
   unconfirmed (§17.10). A reconciled, repaying run with no approved case is a
-  correct appraisal that nobody has approved. Printing "UNRECONCILED" over the
-  last four would state something untrue about the model.
+  correct appraisal that nobody has approved. And a run carrying an approved case
+  that has gone stale is a correct, approved appraisal *whose figures are no
+  longer the ones anybody approved* — the sharpest of the six, because it is the
+  only one where a reader shown the approval alone would draw exactly the wrong
+  conclusion. Printing "UNRECONCILED" over the last five would state something
+  untrue about the model.
+- **Conditions 5 and 6 are mutually exclusive by construction [R14b].** The stale
+  gate is tested *after* the approval gate and therefore fires only when an
+  approval exists: a document with no case, or with a live case that is not
+  approved, reports `not_approved` whether or not its snapshot has moved. So no
+  document ever has both to report, and neither can outrank conditions 1–4. This
+  is an ordering property, not a coincidence of the current statuses, and it is
+  pinned diagonally in both languages.
 - **Why the tax gate is third and not a hard validation [R8].** An unconfirmed
   jurisdiction leaves `report_safe` **true**. Making it false would print "one or
   more hard validations fail" — a claim that the *figures* are wrong, when in fact
@@ -909,13 +1014,28 @@ failing condition:
   to know the basis is unverified before they read an approval status. This
   ordering is load-bearing and is pinned diagonally in both engines: with no lender
   case in existence, `not_approved` would otherwise win every time and the tax gate
-  would be unreachable dead code.
+  would be unreachable dead code. [R14b: an approved case can now exist, so the
+  diagonal is no longer a hypothetical — the pin holds an ordering a real document
+  can reach. "Both engines" also became literally true at this release: until R14b
+  the whole `DraftReason` gate lived only in `report-provenance.ts`, and the
+  diagonal was pinned once, in TypeScript. `app/financial_model/provenance.py`
+  (§21.2) now carries the same gate and `tests/test_provenance.py` mirrors the
+  diagonal case-for-case.]
 - **`report_safe` deliberately excludes senior repayment** (§7): an appraisal
   intending to refinance later is a valid appraisal. The FINAL gate tests it
   separately, so no document showing an unrepaid senior balance at maturity can
   be issued as final.
-- **With no lender case in existence, every document is a DRAFT.** That is the
-  intended answer, not a gap.
+- **Until R14b, with no lender case capable of existing, every document was a
+  DRAFT — the intended answer of R7–R14, not a gap. R14b (§21) is the release
+  that made an approved case, and therefore a FINAL document, possible.** The
+  sentence this bullet replaces was written at R7 and stayed true for seven
+  releases because the schema, the API and the create path did not exist: the
+  status union and its `not_approved` reason were declared, and nothing could
+  populate them. §21 supplies the record, the state machine and the approval, so
+  the condition is now met or unmet on the facts of a particular document rather
+  than unmeetable in principle. The release gate asserts this directly — a
+  fixture document with an approved, current case renders FINAL, which is the
+  first FINAL document the gate has ever been able to assert.
 
 ### 13.4 What a report may claim
 
@@ -2887,3 +3007,313 @@ before it is trusted, and named with the change it would miss (§17's rule).
 | The 5% variance boundary | Fixture W's construction line sits at exactly 5.0% and must **not** fire; its contingency line, at 16.7%, must. `>` rather than `>=`, in integer arithmetic, is the load-bearing detail |
 | Entry-point cutover | `migrate_inputs_to_v11` / `migrateInputsToV11` at every production call site, with the governance `inputs_version` still **derived** from the document rather than restated as a literal — R13's finding |
 | Spec-versions pin | `CALC_VERSION` 2.13.0 and the §1.6 inputs-version list carrying v11, asserted against this document in both engines |
+
+---
+
+## 21. Lender case governance [R14b — no calculation-version change]
+
+§13.3 has required an approved lender case since R7 and nothing has ever been
+able to supply one. §21 supplies it: a **lender case** is a locked snapshot of a
+stored appraisal, carrying governance state through a server-enforced state
+machine, a reviewer and a decision, an append-only change log, and a hash of its
+own. It changes no computed value — there is no engine change, no input-schema
+change and no fixture pin move in this release — and it is versioned by Alembic
+migration 006 and by this section.
+
+The release exists to answer two questions a lender could not previously ask of
+a document: *who approved this, and were the figures they approved the ones I am
+looking at?*
+
+### 21.1 The case record and the lock
+
+**The lock is the whole document.** A case copies, at creation, the stored
+appraisal's entire `inputs_snapshot` together with its `calc_version`,
+`inputs_version`, `input_hash`, `outputs_hash` and `audit_hash`:
+
+| Locked column | Copied from | Why it is locked |
+|---|---|---|
+| `locked_inputs_snapshot` | the stored appraisal's `inputs_snapshot`, in full | so what was approved can still be *read and compared* after the developer case moves on, not merely detected as changed — the comparison is by hand, §21.6 limitation 4 |
+| `locked_calc_version` | stored `calc_version` | outputs are only comparable within one calc version (§1.6) |
+| `locked_inputs_version` | stored `inputs_version` | the schema the approved figures were computed under |
+| `locked_input_hash` | stored `input_hash` | the staleness comparand (§21.3) |
+| `locked_outputs_hash` | stored `outputs_hash` | the figures as approved |
+| `locked_audit_hash` | stored `audit_hash` | the last component of `case_hash` (§13.2.1) — what binds the case to the exact document |
+
+A **lender-fields-only** lock was rejected: it needs a per-field lock list that
+every future release must re-litigate, and a field nobody thought to list is then
+silently outside the approval. A **hashes-only** lock was rejected for the
+opposite reason: it can tell a reader *that* the document moved but can never
+show them *what* was approved.
+
+**Creation preconditions, each with its own status code.** The project must exist
+(404) and must carry a stored appraisal (404 — "save an appraisal before opening
+a lender case"). That appraisal must carry its provenance hashes (422): a
+pre-provenance row, saved before §13.2's hashes existed, cannot be bound by the
+case-hash chain, and locking it would assert a binding no run produced —
+re-saving the appraisal recomputes the hashes and clears the refusal. And no live
+case may already exist for the project (409). The `locked_audit_hash` column is
+itself not-null, so the precondition is also a schema fact rather than only an
+endpoint check.
+
+**Record identity is the project.** The case's foreign key is `project_id`, on
+the §13.2 reasoning unchanged: migration 003 made the appraisal unique per
+project, so the project is the stable identity of the record. A foreign key to
+the appraisal row's own id would survive only for as long as nothing dedupes that
+row, and the appraisal repository deliberately tolerates legacy duplicates.
+
+**One live case per project, enforced twice.** A project may have any number of
+`superseded` cases — they are the history — and at most one that is not. The
+endpoint checks it and returns 409; the database enforces it with a **partial
+unique index** on `project_id` where `status != 'superseded'`, declared once on
+the ORM index with both `postgresql_where` and `sqlite_where` so that Alembic's
+migration and the boot-time `create_all` path agree in every environment. The
+application check is a courtesy that produces a good error message; the index is
+the invariant, and it is tested at the database layer rather than only through
+the endpoint, because a check that lives in one code path is not an invariant.
+
+**Actors are free text** (`created_by`, `submitted_by`, `reviewer`,
+`decided_by`), the `LenderValuation.author` idiom. The product has no
+authentication, so the record says who *claims* to have acted and the change log
+says when; see §21.6 limitation 1.
+
+### 21.2 The state machine
+
+The statuses are the union `report-provenance.ts` has carried since R7:
+`draft | submitted | under_review | information_required | credit_approved |
+approved_with_conditions | declined | superseded`.
+
+This table is **normative**, and lives once per language — `ALLOWED_TRANSITIONS`
+in `app/financial_model/provenance.py` and in
+`frontend/src/lib/report-provenance.ts`, mirrored literally and pinned against
+each other by tests that restate the whole table rather than derive it:
+
+| From | To |
+|---|---|
+| `draft` | `submitted`, `superseded` |
+| `submitted` | `under_review`, `superseded` |
+| `under_review` | `information_required`, `credit_approved`, `approved_with_conditions`, `declined`, `superseded` |
+| `information_required` | `under_review`, `superseded` |
+| `credit_approved` | `superseded` |
+| `approved_with_conditions` | `superseded` |
+| `declined` | `superseded` |
+| `superseded` | — (terminal) |
+
+`superseded` is the universal exit and is itself terminal: every state can reach
+it, and nothing leaves it. That is what makes §21.6 limitation 3's
+supersede-and-recreate refresh always available without any state needing a
+second escape route.
+
+**The UI derives its buttons from this table and never keeps its own list.** A
+hand-kept list of enabled actions is a second copy of the state machine, and the
+copy is what goes stale.
+
+Per-transition side effects, applied server-side in the same transaction as the
+event write:
+
+- `→ submitted`: the actor is recorded as `submitted_by` and `submitted_at` is
+  stamped.
+- `→ under_review`: the actor is recorded as `reviewer`. A resubmission
+  (`information_required → under_review`) **overwrites** it — the reviewer of
+  record is the current one, and the event log keeps the history. Recording only
+  the first reviewer would make the panel name someone who did not decide.
+- `→ credit_approved | approved_with_conditions | declined`: the actor is
+  recorded as `decided_by` and `decided_at` is stamped.
+- `→ superseded`: the actor is recorded **in the event only**. The case's own
+  columns keep the state they had, so the history shows what the case was when it
+  died — a superseded approval still reads as an approval that once held.
+- Every transition, creation included, writes its change-log event and recomputes
+  `case_hash` (§13.2.1).
+
+**The conditions rule: one field, one meaning.** `conditions` is **required** for
+`approved_with_conditions` and **must be absent** on every other transition;
+either violation is a 422. A conditions field that some transitions merely ignore
+would let a note be attached where it has no meaning and then be printed by a
+report that assumes it was an approval condition. The free-text `note` carried on
+every transition is where the other commentary goes; it lands in the change log,
+not on the case.
+
+**Status codes.** An illegal transition is a **409** whose detail names the
+current status and the whole allowed set, so a client can correct itself without
+a second request. A transition against a project with no live case is a **404**.
+A `to_status` that is not a member of the union at all is a **422** — not a 409:
+409 says "not from here", and an unknown status is not a state the document could
+ever be in.
+
+### 21.3 Staleness
+
+Staleness is **derived at read time and stored nowhere**. Two checks exist, and
+they answer different questions:
+
+- **Server-side, authoritative, and what the memo uses.** The live stored
+  appraisal row's `input_hash` no longer equals the case's `locked_input_hash`.
+  It is computed on every case read and returned as `stale` on the read shape. A
+  row carrying no `input_hash` at all is stale too: it cannot demonstrate that it
+  is the approved document. This is the flag the exported memorandum consumes,
+  and it fully covers the memo path, because the memo is generated from the
+  *stored* record — the export page fetches the saved appraisal and runs from its
+  snapshot.
+- **Client-side, in the calculator, and nowhere near the memo.** A deep
+  structural comparison of the in-session inputs against
+  `locked_inputs_snapshot`. An unsaved edit moves no stored hash, so this is the
+  only check that can see one; it drives the Lender Case page's "unsaved edits
+  differ from the locked snapshot" warning and nothing else. Key order is
+  irrelevant to it and array order is meaningful, both pinned by tests. It is a
+  structural comparison rather than a client-side re-hash on purpose: §13.1's
+  rule is that hashes are the server's, never the client's.
+
+**Storing staleness was rejected.** Writing `superseded` onto the case when the
+developer case is saved would destroy the record that the case *was* approved,
+and would entangle the appraisal write path with governance writes. The appraisal
+write path is untouched by this release: a developer save neither reads nor
+writes the case tables, and staleness simply emerges at the next case read.
+
+**Warning-only staleness was also rejected.** It would let a FINAL banner print
+over figures the lender never saw, which is the exact fault the audit names.
+Staleness therefore **defeats FINAL**, through §13.3 condition 6.
+
+Staleness is a property of **any** live case, not only an approved one, and the
+Lender Case page warns on all of them. It reaches the document status only
+through condition 6, which is tested after the approval gate — see §13.3's
+mutual-exclusivity bullet.
+
+**Stated limitation, mirroring §13.2's boundary-bump limitation.** A future
+`inputs_version` boundary migrates a stored snapshot server-side on the next
+save, which moves `input_hash` with no user edit at all — so every live case goes
+stale at that boundary. This is correct behaviour and not a defect: the stored
+document is no longer byte-for-byte the one that was approved, and a case that
+stayed green across a schema migration would be asserting something it cannot
+know. It is recorded here so the next migration release's notes can say so,
+rather than have a lender discover it.
+
+### 21.4 The case hash
+
+Defined in **§13.2.1**, with the other provenance hashes, because that is where a
+reader looking for "what hashes does this product compute, and what do they
+bind?" will look, and because its final component is the audit hash defined
+immediately above it. It is not restated here: a formula written twice is a
+formula that will eventually differ.
+
+What §21 adds is only *when* it is computed — at creation, and again on every
+transition, from the case's post-transition values (§21.2) — and *why its
+components are printed on the provenance panel*, which is §13.1's case rows and
+the two bullets beneath them.
+
+### 21.5 API and change log
+
+A `lender_cases_router` mounted with the others under the API prefix, following
+the house conventions throughout: the shared database dependency,
+`HTTPException` details in the two shapes the client's error formatter reads,
+repositories that flush and endpoints that commit.
+
+| Endpoint | Behaviour |
+|---|---|
+| `POST /lender-cases` `{project_id, created_by}` | Creates the case at `draft`, locking the snapshot from the stored appraisal (§21.1); 201 on success. 404 no project, 404 no appraisal, 422 the appraisal carries no provenance hashes, 409 a live case already exists. Writes the creation event, whose `from_status` is null. |
+| `GET /lender-cases/{project_id}` | The live case with derived `stale`, or JSON `null` when none exists — **200 either way**: "no case yet" is a normal state of a project, not an error. 404 only when the project itself is unknown. |
+| `POST /lender-cases/{project_id}/transition` `{to_status, actor, note?, conditions?}` | Validates against §21.2's table, applies the side effects, writes the event and recomputes `case_hash`. 404 no live case, 409 illegal transition, 422 unknown status or a conditions-rule violation. |
+| `GET /lender-cases/{project_id}/history` | Every case the project has ever had, superseded included, newest first, each with its derived `stale`. |
+| `GET /lender-cases/{project_id}/events` | The change log across all of the project's cases, newest first. |
+
+**The change log is append-only.** Events are rows in their own table
+(`lender_case_events`), never a mutable JSON column on the case — a log that can
+be rewritten by the thing it logs is not a log. Each event records `from_status`,
+`to_status`, the actor, an optional note and the time; `from_status` is null
+exactly once per case, on the creation event. Every case write, creation
+included, writes its event **in the same transaction** as the write it records,
+so the log cannot be missing an entry for a state the case actually reached.
+
+**Newest-first ordering is by the events' integer key, not by timestamp.**
+[Refined at plan time, against the design's first draft.] The event table takes
+an autoincrement integer primary key rather than the UUID of the stage-transition
+table it is otherwise modelled on, because SQLite's `CURRENT_TIMESTAMP` has
+one-second resolution and successive requests routinely share a timestamp: two
+events written in the same second are not distinguishable by `occurred_at`, and a
+random UUID sorts arbitrarily. The event listing therefore orders by `id`
+descending. The case history has the same problem and solves it with the same
+key: it orders by `created_at` descending and then by **each case's greatest
+event id** descending — every case writes its creation event in the transaction
+that creates it, so the greatest event id is the schema's own monotonic record of
+creation order, and it breaks a same-second tie correctly rather than
+arbitrarily. Both orderings live in the repository's `ORDER BY` rather than in a
+re-sort in the endpoint: the query is where an ordering contract belongs, and a
+sort applied after a `LIMIT` would be wrong in any case.
+
+**Governance rules live in one place per language.** They live in
+`app/financial_model/provenance.py`: `ALLOWED_TRANSITIONS` (§21.2),
+`APPROVED_STATUSES`, `is_stale` (§21.3), and the six-member `DraftReason` with
+`draft_reason` and `document_status` (§13.3). The transition endpoint validates
+against the first and the read shape derives its `stale` flag with the third; the
+document-status half has no server consumer yet and is ported anyway, because a
+governance rule that exists in one language is a rule the other language can
+contradict without anything failing. The module is a line-for-line port of
+`report-provenance.ts`'s governance core under the same parity contract as
+`monitoring.py`: a change to either side's rules is made to both in one change,
+and `tests/test_provenance.py` mirrors `report-provenance.test.ts` case-for-case.
+Until R14b this governance was pure presentation and lived in TypeScript alone;
+making it server state with server-enforced transitions is what forced the twin
+into existence, because the API cannot validate a state machine that exists only
+in the client.
+
+### 21.6 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **No authentication, so actor names are claims rather than identities.** The
+   four actor fields are free text, and nothing verifies that whoever typed
+   "R. Reviewer" is one. Real user identity — a users table, sessions, and the
+   attribution of every write path in the product — is its own release, and a
+   single-user product gains very little from it today. The change log's value is
+   unaffected: it is an accurate record of what was asserted and when, which is
+   what a later reviewer needs in order to ask the right question.
+2. **No drawdown-request or certificate history.** §20.5 limitation 5 names the
+   change log as where such a history would live. The *case* change log ships
+   here; a monitoring statement is still one statement per document, overwritten
+   when it is updated, and this release adds no per-drawdown or per-certificate
+   record.
+3. **Supersede-and-recreate is the only refresh.** A locked snapshot is never
+   rewritten, so there is no "re-lock" action: a stale case is superseded and a
+   new case is created against the current appraisal, which then runs the state
+   machine from `draft` again. An in-place re-lock would mutate the very thing
+   whose immutability is the feature, and would leave no record that the earlier
+   approval had been given against different figures.
+4. **The whole-document lock carries no field-level view of what changed.** The
+   case can say that a document has moved, and it holds both snapshots, but it
+   computes no diff — a reader is told the approval no longer covers the figures,
+   not which figures moved. A field-level diff is a reporting feature rather than
+   a governance one, and is unscheduled.
+5. **A case locks an appraisal, not a scenario.** §13.1 prints the scenario a
+   document's figures are on; a case is created from the stored appraisal row and
+   knows nothing of scenarios. Approving one scenario and not another is not
+   expressible.
+6. **`locked_audit_hash` has no printed row of its own, so one narrow
+   recomputation is not closable from the panel alone.** §13.1's "Audit hash" row
+   carries the live stored record's value, and `case_hash`'s eighth component is
+   the value the case locked. Staleness is derived from `input_hash`, while
+   `audit_hash` also commits to `calc_version`, `inputs_version`, the appraisal's
+   status and `outputs_hash` (§13.2). A re-save that leaves the inputs
+   byte-identical while moving one of those — a recomputation under a new
+   calculation version, most obviously — therefore moves the stored audit hash
+   **without** making the case stale, and a reviewer recomputing `case_hash` from
+   the panel of the resulting document gets a mismatch although no governance
+   field was altered. The mismatch is conservative rather than dangerous: it
+   reports doubt where there was none, never confidence where there should not
+   be. Closing it means printing the locked audit hash as a seventh case row,
+   which is a candidate for a future release and is deliberately not done here —
+   the panel already carries three hashes, and a fourth needs its own wording so
+   that a reader is not left to work out which of two audit hashes is which.
+
+### Guards this release must watch fail
+
+Per the standing rule that every guard be planted against and watched failing
+before it is trusted, and named with the change it would miss (§17's rule).
+
+| Guard | Watched by |
+|---|---|
+| The `lender_case_stale` ordering diagonal | Written first against the unmodified `draftReason` and watched red: an approved-but-stale case must yield `lender_case_stale`, an unapproved stale case must still yield `not_approved`, and neither may displace conditions 1–4. Mirrored in Python |
+| The first FINAL document | The release gate's approved-case document, watched failing (still DRAFT) *before* the provenance wiring landed — which is what proves the wiring, rather than the enum, is what flips it |
+| The partial unique index | Two live cases for one project must be refused by the **database**, not only by the endpoint's 409. Asserted at the ORM layer on SQLite, so a schema change that dropped the `sqlite_where` clause would fail rather than pass quietly |
+| The transition table mirror | Both languages restate §21.2's table *literally* in a test rather than deriving it from the module under test, so a drive-by edit to either side fails a test that names the whole machine |
+| `case_hash` re-derivation | The tests rebuild the hash by hand — `sha256` over the joined tuple — instead of calling the helper's internals, the discipline the audit-hash test already uses; plus a naive/aware datetime pair that must hash identically, which is the whole point of §13.2.1's canonical form |
+| Staleness is not one-sided | Stale must flip on a changed-inputs re-save and must **not** flip on an identical re-save. A check that always reported stale would satisfy the first assertion on its own |
+| History ordering is deterministic | Two cases created within the same second must come back in creation order, which fails under `created_at` alone and under the case's own random UUID |
+| Spec-versions pin | `spec-versions.test.ts` must stay green **untouched**: R14b promised to move no version constant, and a red result there means it accidentally did |
+| The corpus is untouched | Every golden-fixture walk passes unmodified. This release contains no arithmetic, and an unmodified corpus is the guard that says so |

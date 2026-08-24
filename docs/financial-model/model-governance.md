@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.10.0`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.13.0`, inputs `v11`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -22,6 +22,19 @@ There are two independent implementations of the same specification:
   module file-for-file (`engine.py` ↔ `monthly-engine.ts`, `schedule.py` ↔ `schedule.ts`,
   `migrate.py` ↔ `migrate.ts`, `metrics.py` ↔ `metrics.ts`, `validation.py` ↔ `validation.ts`,
   `types.py` ↔ `finance-types.ts`) so a reviewer can read one against the other line by line.
+  **[R14b]** The roster gains a pair that is not an engine module:
+  `app/financial_model/provenance.py` ↔ `frontend/src/lib/report-provenance.ts`, the
+  document-governance core (spec §21.2's transition table, `APPROVED_STATUSES`, the
+  six-member `DraftReason` and its ordering, `document_status`, `is_stale`). It is pinned by
+  `tests/test_provenance.py` ↔ `frontend/src/lib/report-provenance.test.ts`, written
+  case-for-case, with both languages restating §21.2's table *literally* rather than deriving
+  it from the module under test. Until R14b this governance existed in TypeScript alone —
+  `test_appraisal_governance.py` said so in as many words — which was tolerable while it was
+  pure presentation. R14b makes it *server state with server-enforced transitions*, so the
+  authority for "what may this document claim" can no longer be client-only: the API cannot
+  validate a state machine that exists only in the browser. Only the governance core is
+  ported; `buildProvenance`, the tax/VAT gate helpers and the memo's presentation stay
+  TypeScript-only, because nothing server-side consumes them.
 
 **Golden fixtures are the contract**, not either language's source code. The fixture JSON files
 in `fixtures/financial-model/` are hand-derived from the specification (see
@@ -147,7 +160,7 @@ rather than through the whole-corpus loops every other fixture runs through.
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.10.0"`
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.13.0"`
   (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
   `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
   Outputs are only comparable within one `calc_version` — a report or comparison spanning two
@@ -165,20 +178,49 @@ Two independent version numbers travel with every appraisal document:
   contingency classes, fee lines, spec §16); `8` = Release 11's `CalculatorInputsV8` shape (adds
   the `vat` block — registration, return cycle, six per-category treatment rows, the
   purchase/TOGC block, and an optional `vat_override` on each cost package and fee line, spec
-  §17). Every new save persists `inputs_version: 8` — the migration chain
-  v1→v2→v3→v4→v5→v6→v7→v8 is applied in-place before persistence, so the stored document is
-  never left in an older shape after a save. An *unrecognised* `inputs_version` (9, 99) is
-  rejected with a 422 by both engines rather than falling through to the v1 fallback path,
-  which would silently rebuild the finance block.
+  §17); `9` = Release 12's `CalculatorInputsV9` shape (turns `programme` into a precedence
+  network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and
+  `refinance`, and the two `phase_slip` scenario fields, spec §18); `10` = Release 13's
+  `CalculatorInputsV10` shape (adds the top-level `investment_case` block, narrows
+  `refinance.investment_value_pence`/`ltv_pct` to nullable and adds the
+  `arrangement_fee_basis`/`arrangement_fee_pct` pair, spec §19); `11` = Release 14's
+  `CalculatorInputsV11` shape (adds the top-level nullable `monitoring` block, spec §20). Every
+  new save persists `inputs_version: 11` — the migration chain
+  v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11 is applied in-place before persistence, so the stored
+  document is never left in an older shape after a save. An *unrecognised* `inputs_version` (12,
+  99) is rejected with a 422 by both engines rather than falling through to the v1 fallback
+  path, which would silently rebuild the finance block.
 
-`calc_version` and `inputs_version` are independent axes. Calc `2.10.0` consumes v2 through v8
+`calc_version` and `inputs_version` are independent axes. Calc `2.13.0` consumes v2 through v11
 input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis metrics
 are null, a document with `programme: null` produces a byte-identical schedule to its v3 source,
 and a document with no `cost_plan` at all is read through `costPlanFromLegacyCosts`/
-`cost_plan_from_legacy_costs`, spec §16.7), but **v8 is canonical server-side** [R11, following
-R10's v7]: `calculate_authoritative` migrates whatever arrives to v8 before validating,
-calculating and persisting it, so no older-shaped input reaches the engines without migration
-and no older-shaped document is ever stored.
+`cost_plan_from_legacy_costs`, spec §16.7), but **v11 is canonical server-side** [R14, following
+the same rule since R10's v7]: `calculate_authoritative` migrates whatever arrives to v11 before
+validating, calculating and persisting it, so no older-shaped input reaches the engines without
+migration and no older-shaped document is ever stored.
+
+### 3.1 Version record, release by release
+
+Kept current at every release, because a governance document stating a version the code left
+behind is the same defect as a spec stating a formula the code left behind. `Migration` is the
+Alembic revision the release shipped, where it moved the persistence schema at all.
+
+| Release | `calc_version` | `inputs_version` | Migration | What moved | Spec |
+|---|---|---|---|---|---|
+| R10 | 2.9.0 | v7 | — | Cost-plan modes: headline/detailed, three contingency classes, fee bases | §16 |
+| R11 | 2.10.0 | v8 | — | VAT and TOGC: the return cycle, per-category treatments, purchase VAT | §17 |
+| R12 | 2.11.0 | v9 | — | The dated, dependent programme: a precedence network, float and the critical path | §18 |
+| R13 | 2.12.0 | v10 | — | The investment case: hold-period NOI, a yield valuation, an LTV/DSCR/ICR-sized take-out | §19 |
+| R14 | 2.13.0 | v11 | — | §5.10's C1 correction, the monitoring statement, `lender_eligible` wired into §4.2(b) | §20 |
+| **R14b** | **2.13.0 — unchanged** | **v11 — unchanged** | **006** | **Lender case governance: `lender_cases` + `lender_case_events`, the state machine, `case_hash`, derived staleness, the Python governance twin. No engine change, no schema change, no fixture pin moved — the release is versioned by the migration and by the spec section alone** | **§21** |
+
+**Why R14b bumps neither number.** Nothing inside `inputs_snapshot` moves and no arithmetic
+changes, so an inputs bump would be a lie and a calc bump would be worse than one: `calc_version`
+drives the memo's "recomputed since save" disclosure (spec §13.1), so a courtesy 2.14.0 would
+stamp every stored result as a re-computation for no figure change at all. R6 set the precedent —
+it shipped on calc 2.5.0 unchanged. What a release with no version bump still owes is a spec
+section and a migration, and R14b has both.
 
 ## 4. Status lifecycle
 
@@ -231,10 +273,36 @@ of key insertion order or whitespace.
   inconsistency worth tidying in Release 2, not a governance risk, since the persisted value is
   what matters and it is the wider, more conservative hash.)
 
+- **`audit_hash`** — spec §13.2, added R7 (migration 005). SHA-256 over the six-part string
+  `project_id | calc_version | inputs_version | status | input_hash | outputs_hash`, joined by a
+  literal `|`. A hash *of the other hashes*, so a reviewer holding a printed provenance panel can
+  recompute it from the six fields beside it. Record identity is `project_id`, not the appraisal
+  row id, because migration 003 made the appraisal unique per project. Pre-R7 rows carry `null`
+  and are deliberately not backfilled.
+- **`case_hash`** — spec §13.2.1, added R14b (migration 006). SHA-256 over the eight-part string
+  `case_id | project_id | status | submitted_by | reviewer | decided_by | decided_at |
+  locked_audit_hash`, same join and encoding; absent parts are empty strings and `decided_at` is
+  rendered in one canonical UTC ISO-8601 form (microseconds, literal `Z`, naive-as-UTC) so a
+  write-time hash and a re-read recomputation agree byte for byte. Stored on `lender_cases`,
+  recomputed on every transition. It is **chained onto** the locked `audit_hash` rather than
+  folded into it: `audit_hash`'s formula gains no new parts, because extending it would rewrite
+  every stored hash on the next save, and because a case transition happens without an appraisal
+  re-save and would otherwise invalidate hashes on rows nobody touched.
+
 **Purpose:** these hashes let a client or auditor detect staleness — "have the inputs I'm looking
 at actually produced the outputs I'm looking at, under this calc version?" — without re-running the
-model. They are not currently used to reject a save (the server always recalculates regardless of
-any client-supplied hash), only to record and expose provenance.
+model. They are not used to reject a save: the server always recalculates regardless of any
+client-supplied hash.
+
+**[R14b] One of them is now compared, and this note used to say none of them were.** Until R14b
+the hashes were recorded and exposed but never read back for a decision, which is worth stating
+plainly because `hashing.py`'s own module docstring promises stale-appraisal detection.
+Spec §21.3 makes good on it for one pair: every read of a lender case compares the live
+appraisal row's `input_hash` against the case's `locked_input_hash` and returns the derived
+`stale` flag, and that flag defeats FINAL through spec §13.3 condition 6. The comparison is
+derived at read time and stored nowhere. The other hashes remain provenance-only:
+`outputs_hash` and `audit_hash` are still never compared by any code path, and no save is
+rejected on a hash mismatch.
 
 ## 6. What blocks `report_safe`
 
@@ -497,14 +565,21 @@ two ways.
 
 ### 12.2 The FINAL gate
 
-Spec §13.3. Three conditions, tested in order, each with its own banner:
-reconciled, senior repaid, lender case approved. `report_safe` deliberately does
-not include senior repayment (§7) — an appraisal that intends to refinance later
-is valid — so the document gate tests it separately. No document showing an
-unrepaid senior balance at maturity can be issued as final.
+Spec §13.3. **Six** conditions, tested in order, each with its own banner:
+reconciled, senior repaid, tax basis confirmed (R8), VAT basis confirmed (R11),
+lender case approved (R14b), and that approval not stale (R14b). `report_safe`
+deliberately does not include senior repayment (§7) — an appraisal that intends
+to refinance later is valid — so the document gate tests it separately. No
+document showing an unrepaid senior balance at maturity can be issued as final.
 
-Until a lender case exists (R14), condition 3 cannot be met and every document is
-a DRAFT. That is the intended answer.
+[R14b. This read "Three conditions" and "Until a lender case exists (R14),
+condition 3 cannot be met and every document is a DRAFT" — true when written at
+R7, and left behind twice as R8 and R11 added their gates. R14b adds the last
+two and, more importantly, makes the approval condition *meetable*: spec §21
+supplies the case record, the state machine and the approval, so a document that
+reconciles, repays, evidences both bases and carries a current approved case now
+renders FINAL. The release gate asserts exactly that document — the first FINAL
+one it has ever been able to assert.]
 
 ### 12.3 The audit hash
 
