@@ -5,7 +5,7 @@ from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
@@ -20,8 +20,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
-from app.financial_model.hashing import audit_hash, canonical_hash, input_hash
+from app.financial_model.hashing import audit_hash, canonical_hash, case_hash, input_hash
 from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v11
+from app.financial_model.provenance import ALLOWED_TRANSITIONS, is_stale
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
@@ -35,6 +36,11 @@ from app.models import (
     FinancialAppraisal,
     FinancialAppraisalCreate,
     FinancialAppraisalUpdate,
+    LenderCase,
+    LenderCaseCreate,
+    LenderCaseEvent,
+    LenderCaseRead,
+    LenderCaseTransition,
     PipelineStage,
     Project,
     ProjectCreate,
@@ -48,6 +54,8 @@ from app.persistence.database import Base, engine, get_db
 from app.persistence.repositories import (
     EligibilityAssessmentRepository,
     FinancialAppraisalRepository,
+    LenderCaseEventRepository,
+    LenderCaseRepository,
     ProjectRepository,
     StageTransitionRepository,
 )
@@ -129,6 +137,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router, prefix=settings.api_prefix, tags=["projects"])
     app.include_router(eligibility_router, prefix=settings.api_prefix, tags=["eligibility"])
     app.include_router(appraisals_router, prefix=settings.api_prefix, tags=["appraisals"])
+    app.include_router(lender_cases_router, prefix=settings.api_prefix, tags=["lender-cases"])
     app.include_router(scrape_router, prefix=settings.api_prefix, tags=["scrape"])
     app.include_router(lookup_router, prefix=settings.api_prefix, tags=["lookup"])
     app.include_router(system_router, tags=["system"])
@@ -678,6 +687,87 @@ async def update_appraisal(project_id: UUID, body: FinancialAppraisalUpdate, db:
         raise HTTPException(status_code=404, detail="Financial appraisal not found")
     await db.commit()
     return appraisal
+
+
+# --- Lender Cases Router (R14b, spec Sec 21) ---
+
+lender_cases_router = APIRouter(prefix="/lender-cases")
+
+
+def _read_shape(case, appraisal) -> LenderCaseRead:
+    """The stored case plus derived staleness (spec Sec 21.3): the live
+    appraisal row's input hash no longer matching the locked one. Derived on
+    every read, stored nowhere."""
+    return LenderCaseRead(
+        **case.model_dump(),
+        stale=is_stale(appraisal.input_hash if appraisal else None, case.locked_input_hash),
+    )
+
+
+@lender_cases_router.post("", response_model=LenderCaseRead, status_code=201)
+async def create_lender_case(body: LenderCaseCreate, db: DbDep):
+    project = await ProjectRepository(db).get_by_id(body.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(body.project_id)
+    if not appraisal:
+        raise HTTPException(
+            status_code=404,
+            detail="Financial appraisal not found — save an appraisal before opening a lender case",
+        )
+    if not (appraisal.audit_hash and appraisal.input_hash and appraisal.outputs_hash):
+        # Spec Sec 21.1: a pre-provenance row cannot be bound by the case-hash
+        # chain. Re-saving recomputes the hashes; locking without them would
+        # assert a binding no run produced.
+        raise HTTPException(status_code=422, detail=[{
+            "severity": "error", "field": "appraisal",
+            "message": "the stored appraisal predates provenance hashing — re-save it before opening a lender case",
+        }])
+    repo = LenderCaseRepository(db)
+    live = await repo.get_live_by_project_id(body.project_id)
+    if live:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A live lender case already exists (status '{live.status}') — supersede it first",
+        )
+    case_id = uuid4()
+    case = await repo.create({
+        "id": case_id,
+        "project_id": body.project_id,
+        "status": "draft",
+        "locked_inputs_snapshot": appraisal.inputs_snapshot,
+        "locked_calc_version": appraisal.calc_version,
+        "locked_inputs_version": appraisal.inputs_version,
+        "locked_input_hash": appraisal.input_hash,
+        "locked_outputs_hash": appraisal.outputs_hash,
+        "locked_audit_hash": appraisal.audit_hash,
+        "case_hash": case_hash(
+            case_id=str(case_id), project_id=str(body.project_id), status="draft",
+            submitted_by=None, reviewer=None, decided_by=None, decided_at=None,
+            locked_audit_hash=appraisal.audit_hash,
+        ),
+        "created_by": body.created_by,
+    })
+    await LenderCaseEventRepository(db).create({
+        "case_id": case.id, "from_status": None, "to_status": "draft",
+        "actor": body.created_by, "note": None,
+    })
+    await db.commit()
+    return _read_shape(case, appraisal)
+
+
+@lender_cases_router.get("/{project_id}", response_model=LenderCaseRead | None)
+async def get_lender_case(project_id: UUID, db: DbDep):
+    """The live case with derived staleness, or JSON null when none exists —
+    'no case yet' is a normal state, not an error (spec Sec 21.5)."""
+    project = await ProjectRepository(db).get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    case = await LenderCaseRepository(db).get_live_by_project_id(project_id)
+    if case is None:
+        return None
+    appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+    return _read_shape(case, appraisal)
 
 
 # --- Scrape Router ---
