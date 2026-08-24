@@ -1,7 +1,7 @@
 """Repository pattern for all database operations."""
 from uuid import UUID
 
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -347,10 +347,23 @@ class LenderCaseRepository:
 
     async def list_by_project_id(self, project_id: UUID) -> list[LenderCase]:
         # Newest first, superseded included -- this is the case history.
+        # Secondary sort key: sqlite's CURRENT_TIMESTAMP is 1-second
+        # resolution, so two cases opened within the same second (a
+        # supersede immediately followed by a fresh case) tie on created_at
+        # alone. Each case's most recent event id is the schema's monotonic
+        # record of creation order -- every case writes its creation event
+        # in the same transaction it is created in -- so it breaks the tie
+        # correctly rather than arbitrarily (unlike the case's own id,
+        # which is a random UUID).
+        latest_event_id = (
+            select(func.max(LenderCaseEventORM.id))
+            .where(LenderCaseEventORM.case_id == LenderCaseORM.id)
+            .scalar_subquery()
+        )
         stmt = (
             select(LenderCaseORM)
             .where(LenderCaseORM.project_id == project_id)
-            .order_by(LenderCaseORM.created_at.desc())
+            .order_by(LenderCaseORM.created_at.desc(), latest_event_id.desc())
         )
         result = await self.db.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]

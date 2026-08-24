@@ -359,6 +359,39 @@ async def test_superseded_case_keeps_its_record_and_history_lists_both(client, p
     assert history[1]["decided_by"] is not None
 
 
+async def test_history_orders_same_second_cases_by_creation_event_not_scan_order(
+    client, project, db_engine
+):
+    """Pins the repository's tiebreak itself (spec Sec 21.5's newest-first
+    ordering) rather than relying on it holding by side effect. sqlite's
+    CURRENT_TIMESTAMP is 1-second resolution, so two cases opened close
+    together routinely tie on created_at; forcing that tie explicitly here
+    proves list_by_project_id resolves it by real creation order (each
+    case's latest event id) rather than arbitrary database scan order."""
+    from datetime import datetime, timezone
+    from uuid import UUID as _UUID
+
+    from sqlalchemy import update as sa_update
+
+    await save_appraisal(client, project)
+    await create_case(client, project)
+    assert (await transition(client, project, "superseded")).status_code == 200
+    await create_case(client, project)
+
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    tied_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    async with session_factory() as session:
+        await session.execute(
+            sa_update(LenderCaseORM)
+            .where(LenderCaseORM.project_id == _UUID(project["id"]))
+            .values(created_at=tied_at)
+        )
+        await session.commit()
+
+    history = (await client.get(f"/api/v1/lender-cases/{project['id']}/history")).json()
+    assert [h["status"] for h in history] == ["draft", "superseded"]
+
+
 async def test_project_delete_cascades_cases_and_events(client, project, db_engine):
     """ProjectRepository.delete is bulk SQL (`delete(ProjectORM).where(...)`),
     which bypasses the ORM's `cascade="all, delete-orphan"` relationships on

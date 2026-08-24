@@ -848,18 +848,6 @@ async def lender_case_history(project_id: UUID, db: DbDep):
         raise HTTPException(status_code=404, detail="Project not found")
     appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
     cases = await LenderCaseRepository(db).list_by_project_id(project_id)
-    # Tiebreak same-second `created_at` values: sqlite's CURRENT_TIMESTAMP is
-    # 1-second resolution, so two cases opened within the same second (a
-    # supersede immediately followed by a fresh case, exactly what the
-    # governance test drives) sort nondeterministically on created_at alone.
-    # Each case's most recent event id is a true autoincrement, strictly
-    # increasing in real insertion order -- the same discipline
-    # LenderCaseEventRepository.list_by_project_id already uses.
-    events = await LenderCaseEventRepository(db).list_by_project_id(project_id)
-    latest_event_id: dict = {}
-    for event in events:  # newest first; first hit per case_id is the latest
-        latest_event_id.setdefault(event.case_id, event.id)
-    cases = sorted(cases, key=lambda c: latest_event_id.get(c.id, 0), reverse=True)
     return [_read_shape(c, appraisal) for c in cases]
 
 
