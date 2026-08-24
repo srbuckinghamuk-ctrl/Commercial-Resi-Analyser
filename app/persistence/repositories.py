@@ -368,13 +368,16 @@ class LenderCaseRepository:
         result = await self.db.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]
 
-    async def update(self, case_id: UUID, values: dict) -> LenderCase | None:
-        stmt = (
-            update(LenderCaseORM)
-            .where(LenderCaseORM.id == case_id)
-            .values(**values)
-            .returning(LenderCaseORM)
-        )
+    async def update(
+        self, case_id: UUID, values: dict, *, expected_status: str | None = None
+    ) -> LenderCase | None:
+        stmt = update(LenderCaseORM).where(LenderCaseORM.id == case_id)
+        if expected_status is not None:
+            # The state machine's compare-and-swap: a transition validated
+            # against a stale read must fail, not apply, when another
+            # transition has moved the case's status since that read.
+            stmt = stmt.where(LenderCaseORM.status == expected_status)
+        stmt = stmt.values(**values).returning(LenderCaseORM)
         result = await self.db.execute(stmt)
         row = result.scalar_one_or_none()
         if not row:

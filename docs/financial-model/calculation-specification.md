@@ -944,7 +944,11 @@ of the parts are absent. An absent part is the **empty string**, not the word
 decision yet, hashes exactly
 `case_id|project_id|draft|||||locked_audit_hash`. Fixing the separator count is
 what stops two different patterns of absence colliding with one another, or with
-a present value.
+a present value. The free-text actor fields (`created_by`, `actor`) are rejected
+at the API boundary if they contain the literal `|` or a control character, and
+capped at 256 characters — what makes the "no present value collides with the
+separator" argument above actually hold, rather than merely hold for names that
+happen not to contain a pipe.
 
 `decided_at` is rendered in exactly one canonical form: **UTC, ISO-8601, always
 with microseconds, terminated by a literal `Z`** (`%Y-%m-%dT%H:%M:%S.%fZ`). A
@@ -3240,9 +3244,9 @@ repositories that flush and endpoints that commit.
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /lender-cases` `{project_id, created_by}` | Creates the case at `draft`, locking the snapshot from the stored appraisal (§21.1); 201 on success. 404 no project, 404 no appraisal, 422 the appraisal carries no provenance hashes, 409 a live case already exists. Writes the creation event, whose `from_status` is null. |
+| `POST /lender-cases` `{project_id, created_by}` | Creates the case at `draft`, locking the snapshot from the stored appraisal (§21.1); 201 on success. 404 no project, 404 no appraisal, 422 the appraisal carries no provenance hashes or `created_by` fails its §13.2.1 field-boundary validation (too long, or containing `|`/a control character), 409 a live case already exists. Writes the creation event, whose `from_status` is null. |
 | `GET /lender-cases/{project_id}` | The live case with derived `stale`, or JSON `null` when none exists — **200 either way**: "no case yet" is a normal state of a project, not an error. 404 only when the project itself is unknown. |
-| `POST /lender-cases/{project_id}/transition` `{to_status, actor, note?, conditions?}` | Validates against §21.2's table, applies the side effects, writes the event and recomputes `case_hash`. 404 no live case, 409 illegal transition, 422 unknown status or a conditions-rule violation. |
+| `POST /lender-cases/{project_id}/transition` `{to_status, actor, note?, conditions?}` | Validates against §21.2's table, applies the side effects, writes the event and recomputes `case_hash`. 404 no live case, 409 illegal transition or a compare-and-swap failure (the case moved between this request's read and its write — re-read and retry), 422 unknown status, a conditions-rule violation, or `actor` failing its §13.2.1 field-boundary validation. |
 | `GET /lender-cases/{project_id}/history` | Every case the project has ever had, superseded included, newest first, each with its derived `stale`. |
 | `GET /lender-cases/{project_id}/events` | The change log across all of the project's cases, newest first. |
 

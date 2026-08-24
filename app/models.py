@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UseClass(StrEnum):
@@ -431,15 +431,35 @@ class LenderCaseCreate(BaseModel):
     # Free-text actor names, the LenderValuation.author idiom -- the product
     # has no auth (design decision 4), so the record says who claims to have
     # acted and the change log says when.
-    created_by: str = Field(min_length=1)
+    created_by: str = Field(min_length=1, max_length=256)
+
+    @field_validator("created_by")
+    @classmethod
+    def _no_separator(cls, v: str) -> str:
+        if "|" in v or any(ord(c) < 32 for c in v):
+            raise ValueError(
+                "actor names may not contain '|' or control characters — the name is a "
+                "component of the case hash (spec Sec 13.2.1)"
+            )
+        return v
 
 
 class LenderCaseTransition(BaseModel):
     to_status: str
-    actor: str = Field(min_length=1)
-    note: str | None = None
+    actor: str = Field(min_length=1, max_length=256)
+    note: str | None = Field(default=None, max_length=10_000)
     # Required for approved_with_conditions, forbidden otherwise (Sec 21.2).
-    conditions: str | None = None
+    conditions: str | None = Field(default=None, max_length=10_000)
+
+    @field_validator("actor")
+    @classmethod
+    def _no_separator(cls, v: str) -> str:
+        if "|" in v or any(ord(c) < 32 for c in v):
+            raise ValueError(
+                "actor names may not contain '|' or control characters — the name is a "
+                "component of the case hash (spec Sec 13.2.1)"
+            )
+        return v
 
 
 class LenderCase(BaseModel):

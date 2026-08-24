@@ -1015,7 +1015,8 @@ export function generateInvestmentMemo(
   y = captionText(
     y,
     'The audit hash is sha256 over project id, calculation version, input schema version, governance status, input hash and authoritative result hash, joined by "|" (spec §13.2). A reviewer holding this page can recompute it from the six fields above and detect any later alteration of them.'
-    + ' Where a lender case is printed, its case hash is sha256 over case id, project id, status, submitted-by, reviewer, decided-by, decided-at (canonical UTC ISO-8601) and the locked audit hash, joined by "|" (spec §21.4).',
+    + ' Where a lender case is printed, its case hash is sha256 over case id, project id, status, submitted-by, reviewer, decided-by, decided-at and the locked audit hash, joined by "|" (spec §13.2.1).'
+    + ' Before recomputing it, lower-case the printed status label and restore its underscores, and canonicalise the printed decided timestamp to UTC ISO-8601 with microseconds and a trailing "Z" (a missing offset is treated as UTC).',
   );
   y += 2;
 

@@ -419,3 +419,60 @@ async def test_project_delete_cascades_cases_and_events(client, project, db_engi
         cases = (await session.execute(sa_select(sa_func.count()).select_from(LenderCaseORM))).scalar_one()
         events = (await session.execute(sa_select(sa_func.count()).select_from(LenderCaseEventORM))).scalar_one()
     assert cases == 0 and events == 0
+
+
+# --- Final review wave: field-boundary integrity and the transition CAS ----
+
+
+async def test_create_rejects_a_separator_in_created_by(client, project):
+    """Spec Sec 13.2.1: `|` in an actor name would let two different
+    governance states hash identically, since case_hash's components are
+    joined by the same literal."""
+    resp = await client.post("/api/v1/lender-cases", json={
+        "project_id": project["id"], "created_by": "A|B",
+    })
+    assert resp.status_code == 422
+
+
+async def test_create_rejects_a_created_by_over_256_characters(client, project):
+    resp = await client.post("/api/v1/lender-cases", json={
+        "project_id": project["id"], "created_by": "A" * 257,
+    })
+    assert resp.status_code == 422
+
+
+async def test_transition_rejects_a_separator_in_actor(client, project):
+    await save_appraisal(client, project)
+    await create_case(client, project)
+    r = await transition(client, project, "submitted", actor="A|B")
+    assert r.status_code == 422
+
+
+async def test_transition_compare_and_swap_refuses_a_stale_expected_status(
+    client, project, db_engine
+):
+    """Item B / spec Sec 21.5: LenderCaseRepository.update's expected_status
+    guard is the state machine's compare-and-swap -- a write validated
+    against a status the case no longer has must not apply. Exercised at the
+    repository level directly, since the endpoint itself always passes the
+    status it just read and so cannot observe its own race."""
+    from uuid import UUID as _UUID
+    from app.persistence.repositories import LenderCaseRepository
+
+    await save_appraisal(client, project)
+    created = await create_case(client, project)
+    assert created["status"] == "draft"
+    r = await transition(client, project, "submitted", actor="S. Sponsor")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "submitted"
+
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        repo = LenderCaseRepository(session)
+        result = await repo.update(
+            _UUID(created["id"]), {"status": "under_review"}, expected_status="draft"
+        )
+        assert result is None
+
+    live = (await client.get(f"/api/v1/lender-cases/{project['id']}")).json()
+    assert live["status"] == "submitted"

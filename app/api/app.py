@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -731,28 +731,43 @@ async def create_lender_case(body: LenderCaseCreate, db: DbDep):
             detail=f"A live lender case already exists (status '{live.status}') — supersede it first",
         )
     case_id = uuid4()
-    case = await repo.create({
-        "id": case_id,
-        "project_id": body.project_id,
-        "status": "draft",
-        "locked_inputs_snapshot": appraisal.inputs_snapshot,
-        "locked_calc_version": appraisal.calc_version,
-        "locked_inputs_version": appraisal.inputs_version,
-        "locked_input_hash": appraisal.input_hash,
-        "locked_outputs_hash": appraisal.outputs_hash,
-        "locked_audit_hash": appraisal.audit_hash,
-        "case_hash": case_hash(
-            case_id=str(case_id), project_id=str(body.project_id), status="draft",
-            submitted_by=None, reviewer=None, decided_by=None, decided_at=None,
-            locked_audit_hash=appraisal.audit_hash,
-        ),
-        "created_by": body.created_by,
-    })
-    await LenderCaseEventRepository(db).create({
-        "case_id": case.id, "from_status": None, "to_status": "draft",
-        "actor": body.created_by, "note": None,
-    })
-    await db.commit()
+    try:
+        case = await repo.create({
+            "id": case_id,
+            "project_id": body.project_id,
+            "status": "draft",
+            "locked_inputs_snapshot": appraisal.inputs_snapshot,
+            "locked_calc_version": appraisal.calc_version,
+            "locked_inputs_version": appraisal.inputs_version,
+            "locked_input_hash": appraisal.input_hash,
+            "locked_outputs_hash": appraisal.outputs_hash,
+            "locked_audit_hash": appraisal.audit_hash,
+            "case_hash": case_hash(
+                case_id=str(case_id), project_id=str(body.project_id), status="draft",
+                submitted_by=None, reviewer=None, decided_by=None, decided_at=None,
+                locked_audit_hash=appraisal.audit_hash,
+            ),
+            "created_by": body.created_by,
+        })
+        await LenderCaseEventRepository(db).create({
+            "case_id": case.id, "from_status": None, "to_status": "draft",
+            "actor": body.created_by, "note": None,
+        })
+        await db.commit()
+    except IntegrityError:
+        # The `if live:` check above and this write are not atomic, so two
+        # concurrent creates can both pass it and race to the flush -- the
+        # partial unique index (uq_lender_case_live_project) is what actually
+        # stops the second one. This is that index's refusal made presentable
+        # as the same 409 the pre-check above gives the common case, rather
+        # than the IntegrityError surfacing as an unhandled 500.
+        await db.rollback()
+        winner = await repo.get_live_by_project_id(body.project_id)
+        raise HTTPException(
+            status_code=409,
+            detail=f"A live lender case already exists (status '{winner.status if winner else 'unknown'}')"
+                   f" — supersede it first",
+        )
     return _read_shape(case, appraisal)
 
 
@@ -830,7 +845,16 @@ async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, d
         decided_at=merged["decided_at"],
         locked_audit_hash=case.locked_audit_hash,
     )
-    updated = await repo.update(case.id, values)
+    updated = await repo.update(case.id, values, expected_status=case.status)
+    if updated is None:
+        # Compare-and-swap failed: another transition committed against this
+        # case between our read (`case`, above) and this write. No event may
+        # record a transition that did not happen, so this raises before the
+        # event is written, not after.
+        raise HTTPException(
+            status_code=409,
+            detail="The lender case moved while this transition was validated — re-read and retry",
+        )
     await LenderCaseEventRepository(db).create({
         "case_id": case.id, "from_status": case.status,
         "to_status": body.to_status, "actor": body.actor, "note": body.note,
