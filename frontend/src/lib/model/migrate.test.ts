@@ -1009,10 +1009,10 @@ describe('v10 migration -- spec §19.9', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(4);
+    expect(versionExcluded.length).toBe(5);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       't-investment-case.json', 'u-investment-case-ltv-binds.json',
-      'v-exhausted-reserve.json', 'w-monitoring-on-site.json',
+      'v-exhausted-reserve.json', 'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
     ]);
   });
 
@@ -1252,9 +1252,9 @@ describe('v11 migration -- spec §20.1', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
     );
-    expect(versionExcluded.length).toBe(1);
+    expect(versionExcluded.length).toBe(2);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
-      'w-monitoring-on-site.json',
+      'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
     ]);
   });
 
@@ -1438,12 +1438,11 @@ describe('v12 migration -- spec §22.9', () => {
 
   it('the migration corpus is not empty and did not silently shrink', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(18);
-    // Task 2 adds the v12-native fixture X and changes this to
-    // ['x-unit-sales-ledger.json']; until then no document is v12-native.
+    // Task 2 adds the v12-native fixture X.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 11,
     );
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([]);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['x-unit-sales-ledger.json']);
   });
 
   // `calc_version` is constant for the whole engine run, not version-

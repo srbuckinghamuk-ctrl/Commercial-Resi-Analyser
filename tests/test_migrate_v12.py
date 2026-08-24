@@ -74,9 +74,8 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 11
     ]
-    # Task 2 adds the v12-native fixture X and changes this to
-    # ["x-unit-sales-ledger"]; until then no document is v12-native.
-    assert sorted(p.stem for p in version_excluded) == []
+    # Task 2 adds the v12-native fixture X.
+    assert sorted(p.stem for p in version_excluded) == ["x-unit-sales-ledger"]
 
 
 def _metrics_dict(metrics) -> dict:

@@ -71,6 +71,7 @@ const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
   'lib/model/__fixtures__/investment-case-docs.ts',
+  'lib/model/__fixtures__/unit-sales-docs.ts',
   'lib/report-qa/memo-fixtures.ts',
 ]);
 

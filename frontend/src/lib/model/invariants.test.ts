@@ -5,7 +5,7 @@ import { runAppraisal } from './index';
 import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
 import {
-  migrateInputsToV8, migrateInputsToV9, migrateInputsToV10, migrateInputsToV11,
+  migrateInputsToV8, migrateInputsToV9, migrateInputsToV10, migrateInputsToV11, migrateInputsToV12,
 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
@@ -117,7 +117,45 @@ function variants(
   // further on (migrateInputsToV10 refuses a v11 document -- it would have to
   // drop `monitoring`). The v11 arm needs no anchor clearing beyond what the
   // v10 arm already does, since `monitoring` carries no phase anchor.
-  if (storedVersion >= 11) {
+  //
+  // R13b Task 2: and once more for v12 -- fixture X (v12-native) cannot go
+  // through migrateInputsToV11 either, by the identical design one version
+  // further on (migrateInputsToV11 refuses a v12 document -- it would have to
+  // drop `unit_sales`).
+  if (storedVersion >= 12) {
+    const v12 = migrateInputsToV12(clone() as unknown as Record<string, unknown>);
+    v12.programme = networkForTerm(v12.finance.term_months);
+    if (v12.sales_phasing != null) {
+      v12.sales_phasing.tranches = v12.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v12.refinance != null) v12.refinance = { ...v12.refinance, anchor: null };
+    if (v12.investment_case != null) {
+      v12.investment_case = {
+        ...v12.investment_case,
+        stabilisation: { ...v12.investment_case.stabilisation, anchor: null },
+      };
+    }
+    // R13b Task 2: the identical orphaning applies to a v12 document's
+    // unit_sales exchange/completion anchors (spec §22.1) -- fixture X's
+    // anchors name `marketing`/`practical_completion`/`unit_completions`,
+    // none of which exist on `networkForTerm`'s three-phase network. No
+    // engine reads `unit_sales` yet (Tasks 3-6), so nothing observably
+    // breaks either way today; cleared anyway to match the
+    // sales_phasing/refinance/investment_case treatment above rather than
+    // leaving a dangling anchor for a later task's validation rule to trip
+    // over once it lands.
+    if (v12.unit_sales != null) {
+      v12.unit_sales = {
+        ...v12.unit_sales,
+        units: v12.unit_sales.units.map((row) => ({
+          ...row,
+          exchange: row.exchange != null ? { ...row.exchange, anchor: null } : null,
+          completion: { ...row.completion, anchor: null },
+        })),
+      };
+    }
+    programmed = v12;
+  } else if (storedVersion >= 11) {
     const v11 = migrateInputsToV11(clone() as unknown as Record<string, unknown>);
     v11.programme = networkForTerm(v11.finance.term_months);
     if (v11.sales_phasing != null) {
