@@ -14,6 +14,9 @@ import type { ProgrammeNetwork, DerivedPhase } from './programme';
 // R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
 // return type) and `Schedule.investment_case` reads it below.
 import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
+// R13b Task 6: `UnitSalesResult` now exists (`computeUnitSales`'s return
+// type) and `Schedule.unit_sales`/`AppraisalResultV2.unit_sales` read it below.
+import type { UnitSalesResult } from './unit-sales';
 // R14 Task 9: `MonitoringStatement` now exists (`computeMonitoringStatement`'s
 // return type) and `AppraisalResultV2.monitoring_statement` reads it below.
 // Type-only, so this does not create a runtime import cycle even though
@@ -538,6 +541,10 @@ export interface Schedule {
    *  `investment_case` is null: no block is synthesised for a document that
    *  never asked for one. */
   investment_case: InvestmentCaseResult | null;
+  /** R13b spec §22.6. `computeUnitSales`'s full result, computed once here
+   *  and republished — never recomputed — onto `AppraisalResultV2`. null
+   *  exactly when the INPUT `unit_sales` is null. */
+  unit_sales: UnitSalesResult | null;
   /** R13 spec §19.6, closing §18.10 limitation 9. The memo and CashflowPage
    *  print a tranche's or the refinance's month; before this field existed
    *  they printed the RAW `month_offset` while the ledger used the resolved
@@ -787,6 +794,10 @@ export interface AppraisalResultV2 {
    *  the INPUT `investment_case` is null. The UI and the report read it from
    *  here and never call `computeInvestmentCase`. */
   investment_case: InvestmentCaseResult | null;
+  /** R13b spec §22.6. The SCHEDULE's `unit_sales`, republished — not a second
+   *  derivation, the treatment §17.12 gave `vat`. null exactly when the INPUT
+   *  `unit_sales` is null. */
+  unit_sales: UnitSalesResult | null;
   /** R14 spec §20.4. Computed ONCE in `deriveMetrics`, from the `costPlan` it
    *  already holds and the `model` — never recomputed by the UI or the memo.
    *  null exactly when the input `monitoring` block is null (every document

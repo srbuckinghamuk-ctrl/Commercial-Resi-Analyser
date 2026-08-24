@@ -66,6 +66,7 @@ from app.financial_model.programme import ProgrammeDerivation, derive_phases
 from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
 from .fixtures_investment_case import anchored_slipped_doc, explicit_refinance_doc, investment_case_doc
+from .fixtures_unit_sales import held_twin_doc, unit_sales_doc
 
 PROGRAMME = {
     "anchor_month": None,
@@ -1198,3 +1199,53 @@ class TestInvestmentCaseInSchedule:
         assert s.investment_case["takeout"]["is_booked"] is False
         assert s.investment_case["takeout"]["quantum_pence"] > 0
         assert s.refinance is None
+
+
+class TestUnitSalesInSchedule:
+    """Sec 22.3. Twin of schedule.test.ts's '§22.3 unit sales in the schedule'."""
+
+    def test_writes_released_deposits_and_completions_into_gross_sale_pence(self):
+        s = build_schedule(unit_sales_doc())
+        by_month = {m: (r.gross_sale_pence, r.agent_fee_pence, r.selling_legal_pence)
+                    for m, r in enumerate(s.receipts) if r.gross_sale_pence > 0}
+        assert by_month == {
+            8: (2_600_000, 0, 0), 10: (3_000_000, 0, 0), 11: (1_050_000, 0, 0),
+            12: (23_400_000, 390_000, 201_550), 13: (44_500_000, 800_000, 285_659),
+            20: (19_950_000, 315_000, 162_791),
+        }
+        assert sum(r.gross_sale_pence for r in s.receipts) == 94_500_000
+        assert s.totals.gross_sales_pence == 94_500_000 and s.totals.gdv_pence == 94_500_000
+        assert s.totals.selling_costs_pence == 2_155_000  # sum of units, not round(G x 1.5%) + 500,000
+        assert s.resolved_exit_months.tranches == []
+        assert s.unit_sales is not None and s.unit_sales["pre_sold"]["pct"] == 81.48
+
+    def test_held_twin_books_everything_at_completion(self):
+        s = build_schedule(held_twin_doc())
+        by_month = {m: r.gross_sale_pence for m, r in enumerate(s.receipts) if r.gross_sale_pence > 0}
+        assert by_month == {12: 26_000_000, 13: 47_500_000, 20: 21_000_000}
+        assert s.totals.selling_costs_pence == 2_155_000
+
+    def test_null_path_is_untouched(self):
+        s = build_schedule(unit_sales_doc({"unit_sales": None}))
+        assert s.unit_sales is None
+        assert s.receipts[23].gross_sale_pence == 94_500_000  # single final-month disposal
+
+    def test_deposit_liveness_on_absolute_ledger_figures(self):
+        released = run_appraisal(unit_sales_doc())
+        held = run_appraisal(held_twin_doc())
+        # Identical on every unit-set and cost total ...
+        for name in ("gdv_pence", "selling_costs_pence"):
+            assert getattr(released.metrics, name) == getattr(held.metrics, name)
+        # gross_sales_pence is a ScheduleTotals field, not an AppraisalResultV2
+        # one -- the brief's `released.metrics.gross_sales_pence` does not exist
+        # (AttributeError); reading it off schedule.totals instead, per source.
+        assert released.schedule.totals.gross_sales_pence == held.schedule.totals.gross_sales_pence
+        # ... and DIFFERENT where cash timing bites: the deposit sweeps early.
+        assert released.model.months[8].repayment_pence == 2_600_000
+        assert held.model.months[8].repayment_pence == 0
+        assert released.metrics.finance_costs_pence < held.metrics.finance_costs_pence
+        assert [e.month for e in released.model.redemption_schedule] == [8, 10, 11, 12, 13, 20]
+        assert [e.month for e in held.model.redemption_schedule] == [12, 13, 20]
+        # The result block is republished, never recomputed.
+        assert released.metrics.unit_sales is released.schedule.unit_sales
+        assert held.metrics.unit_sales["totals"]["deposits_released_pence"] == 0

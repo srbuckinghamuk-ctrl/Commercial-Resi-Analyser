@@ -16,6 +16,7 @@ import { runAppraisal } from './index';
 import { validateInputs } from './validation';
 import { derivePhases } from './programme';
 import { anchoredSlippedDoc, investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
+import { unitSalesDoc, heldTwinDoc } from './__fixtures__/unit-sales-docs';
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -1083,5 +1084,63 @@ describe('§19.5/§19.6 investment case in the schedule', () => {
     expect(s.investment_case!.takeout.is_booked).toBe(false);
     expect(s.investment_case!.takeout.quantum_pence).toBeGreaterThan(0);
     expect(s.refinance).toBeNull();
+  });
+});
+
+describe('§22.3 unit sales in the schedule', () => {
+  it('writes released deposits and completions into gross_sale_pence', () => {
+    const s = buildSchedule(unitSalesDoc());
+    const byMonth: Record<number, [number, number, number]> = {};
+    s.receipts.forEach((r, m) => {
+      if (r.gross_sale_pence > 0) byMonth[m] = [r.gross_sale_pence, r.agent_fee_pence, r.selling_legal_pence];
+    });
+    expect(byMonth).toEqual({
+      8: [2_600_000, 0, 0], 10: [3_000_000, 0, 0], 11: [1_050_000, 0, 0],
+      12: [23_400_000, 390_000, 201_550], 13: [44_500_000, 800_000, 285_659],
+      20: [19_950_000, 315_000, 162_791],
+    });
+    expect(s.receipts.reduce((sum, r) => sum + r.gross_sale_pence, 0)).toBe(94_500_000);
+    expect(s.totals.gross_sales_pence).toBe(94_500_000);
+    expect(s.totals.gdv_pence).toBe(94_500_000);
+    expect(s.totals.selling_costs_pence).toBe(2_155_000); // sum of units, not round(G x 1.5%) + 500,000
+    expect(s.resolved_exit_months.tranches).toEqual([]);
+    expect(s.unit_sales).not.toBeNull();
+    expect(s.unit_sales!.pre_sold.pct).toBe(81.48);
+  });
+
+  it('the held twin books everything at completion', () => {
+    const s = buildSchedule(heldTwinDoc());
+    const byMonth: Record<number, number> = {};
+    s.receipts.forEach((r, m) => {
+      if (r.gross_sale_pence > 0) byMonth[m] = r.gross_sale_pence;
+    });
+    expect(byMonth).toEqual({ 12: 26_000_000, 13: 47_500_000, 20: 21_000_000 });
+    expect(s.totals.selling_costs_pence).toBe(2_155_000);
+  });
+
+  it('leaves the null path untouched', () => {
+    const s = buildSchedule(unitSalesDoc({ unitSales: null }));
+    expect(s.unit_sales).toBeNull();
+    expect(s.receipts[23].gross_sale_pence).toBe(94_500_000); // single final-month disposal
+  });
+
+  it('the deposit is live on the absolute ledger figures', () => {
+    const released = runAppraisal(unitSalesDoc());
+    const held = runAppraisal(heldTwinDoc());
+    // Identical on every unit-set and cost total ...
+    expect(released.metrics.gdv_pence).toBe(held.metrics.gdv_pence);
+    expect(released.metrics.selling_costs_pence).toBe(held.metrics.selling_costs_pence);
+    // gross_sales_pence is a Schedule.totals field, not an AppraisalResultV2
+    // one -- reading it off schedule.totals, per source (mirrors the Python twin).
+    expect(released.schedule.totals.gross_sales_pence).toBe(held.schedule.totals.gross_sales_pence);
+    // ... and DIFFERENT where cash timing bites: the deposit sweeps early.
+    expect(released.model.months[8].repayment_pence).toBe(2_600_000);
+    expect(held.model.months[8].repayment_pence).toBe(0);
+    expect(released.metrics.finance_costs_pence).toBeLessThan(held.metrics.finance_costs_pence);
+    expect(released.model.redemption_schedule.map((e) => e.month)).toEqual([8, 10, 11, 12, 13, 20]);
+    expect(held.model.redemption_schedule.map((e) => e.month)).toEqual([12, 13, 20]);
+    // The result block is republished, never recomputed.
+    expect(released.metrics.unit_sales).toBe(released.schedule.unit_sales);
+    expect(held.metrics.unit_sales!.totals.deposits_released_pence).toBe(0);
   });
 });

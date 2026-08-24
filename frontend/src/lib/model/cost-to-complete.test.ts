@@ -61,6 +61,7 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     vat: emptyVat(u.length),
     programme: null,
     investment_case: null,
+    unit_sales: null,
     resolved_exit_months: { tranches: [], refinance: null },
     // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
     // hand-built schedules keep the pre-R14 cap base exactly.

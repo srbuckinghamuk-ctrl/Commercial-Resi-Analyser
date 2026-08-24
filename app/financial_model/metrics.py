@@ -21,6 +21,7 @@ from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, 
 from .investment_case import InvestmentCaseResult
 from .lender_valuation import compute_lender_gdv
 from .monitoring import MonitoringStatement, MonitoringStatementLine, compute_monitoring_statement
+from .unit_sales import UnitSalesResult
 # Sec 17.12's counterfactual runs the pipeline's first two stages a second time.
 # Imported HERE rather than reached through run_appraisal, which is what makes the
 # recursion impossible by construction: __init__.py imports this module, so there
@@ -229,6 +230,10 @@ class AppraisalResultV2:
     # the INPUT investment_case is None. The UI and the report read it from
     # here and never call compute_investment_case.
     investment_case: InvestmentCaseResult | None
+    # R13b spec Sec 22.6. The SCHEDULE's unit_sales, republished -- not a
+    # second derivation, the treatment Sec 17.12 gave vat. None exactly when
+    # the INPUT unit_sales is None.
+    unit_sales: UnitSalesResult | None
     # R14 spec Sec 20.4. Computed ONCE in derive_metrics, from the cost_plan it
     # already holds and the model -- never recomputed by the UI or the memo.
     # None exactly when the input monitoring block is None (every document
@@ -813,6 +818,9 @@ def derive_metrics(
         # Sec 17.12's vat treatment, applied here: the SCHEDULE's investment
         # case, republished -- not a second derivation.
         investment_case=schedule.investment_case,
+        # R13b spec Sec 22.6. The SCHEDULE's unit_sales, republished -- not a
+        # second derivation.
+        unit_sales=schedule.unit_sales,
         monitoring_statement=monitoring_statement,
         flags=flags,
     )

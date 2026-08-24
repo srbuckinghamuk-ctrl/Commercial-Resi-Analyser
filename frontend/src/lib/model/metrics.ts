@@ -569,6 +569,9 @@ export function deriveMetrics(
     // §17.12's `vat` treatment, applied here: the SCHEDULE's investment case,
     // republished — not a second derivation.
     investment_case: schedule.investment_case,
+    // R13b spec §22.6. The SCHEDULE's `unit_sales`, republished — not a
+    // second derivation.
+    unit_sales: schedule.unit_sales,
     monitoring_statement: monitoringStatement,
     flags,
   };
