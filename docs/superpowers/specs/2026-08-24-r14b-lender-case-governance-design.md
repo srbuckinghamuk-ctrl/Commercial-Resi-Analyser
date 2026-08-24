@@ -222,13 +222,18 @@ in the new subsection, not repealed.
 
 Staleness is **derived at read time in both languages and stored nowhere**:
 
-- **Server** (authoritative for saved state): the live appraisal row's
-  `input_hash != locked_input_hash`. Returned as `stale` on every case read.
-- **Client** (what the memo uses): deep structural equality of the live
-  canonical inputs document against `locked_inputs_snapshot`. The memo prints
-  the *live* run, and an unsaved in-session edit moves no stored hash — the
-  deep-equal is the only check that can see it. Key order is irrelevant;
-  the test reorders keys to pin that.
+- **Server** (authoritative, and what the memo uses): the live appraisal
+  row's `input_hash != locked_input_hash`. Returned as `stale` on every case
+  read. [Corrected at plan time: the memo is generated only from the *stored*
+  record (`ExportPage` fetches the saved appraisal and runs from its
+  snapshot), so the server flag fully covers the memo path — the design's
+  first draft wrongly assigned the memo to the client check.]
+- **Client** (the calculator's live warning): deep structural equality of the
+  in-session inputs against `locked_inputs_snapshot`. An unsaved edit moves
+  no stored hash, so this is the only check that can see one; it drives the
+  Lender Case page's "unsaved edits differ from the locked snapshot" warning,
+  never the memo. Key order is irrelevant; the test reorders keys to pin
+  that.
 
 Staleness is a property of **any** live case and the UI warns on all of them;
 it defeats FINAL only through condition 5 (an approved case that is stale).
@@ -324,9 +329,11 @@ is deleted with the reality it described.
   - No case → an explanation panel of what creating a case locks, with the
     create action; disabled with the reason when the appraisal is unsaved or
     pre-provenance.
-- **`ConversionCalculator`** loads the case beside the appraisal on project
-  change and after every save (a save can flip staleness), holding it in
-  state alongside `appraisalRecord`.
+- **`ConversionCalculator`** adds only the `PAGES` entry and the mount line;
+  the page owns its own data. [Corrected at plan time: pages render
+  conditionally, so entering the tab mounts the component fresh — a
+  mount-time fetch is always current, including after a save flips
+  staleness, and the calculator shell needs no case state of its own.]
 - **Provenance wiring** — the release's point: `ExportPage` and the memo pass
   the real `lenderCaseStatus` and the client-derived staleness into
   `buildProvenance`, ending the production-always-`null` era. `buildProvenance`
