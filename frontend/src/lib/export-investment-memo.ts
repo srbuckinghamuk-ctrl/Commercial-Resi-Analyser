@@ -922,6 +922,20 @@ export function generateInvestmentMemo(
       ['Report-safe status', prov.reportSafe ? 'Report-safe — hard validations pass' : 'NOT report-safe — hard validations fail'],
       ['Document status', prov.documentStatus],
       ['Lender case', lenderCaseLabel(prov.lenderCaseStatus)],
+      // R14b (spec §21.4): every case_hash component is printed so a reviewer
+      // can recompute it, the same property §13.2 gives the audit hash. The
+      // decided timestamp is printed raw (canonical UTC ISO-8601) because it
+      // is a hash component; the reader-friendly date is in the narrative.
+      ...(prov.lenderCase ? ([
+        ['Lender case id', prov.lenderCase.id],
+        ['Case submitted by', prov.lenderCase.submitted_by ?? 'not yet submitted'],
+        ['Case reviewer', prov.lenderCase.reviewer ?? 'not yet assigned'],
+        ['Case decided', prov.lenderCase.decided_by === null
+          ? 'not yet decided'
+          : `${prov.lenderCase.decided_by} — ${prov.lenderCase.decided_at ?? 'no timestamp recorded'}`],
+        ...(prov.lenderCase.conditions ? [['Approval conditions', prov.lenderCase.conditions]] : []),
+        ['Case hash', prov.lenderCase.case_hash],
+      ] as [string, string][]) : []),
       // Spec §14. Two figures the audit hash already commits to transitively
       // (jurisdiction through the inputs, table version through the metrics),
       // printed here so a reader can see the tax basis without re-running.
@@ -940,6 +954,13 @@ export function generateInvestmentMemo(
     y = infoRequired(
       y,
       `Recomputed for this export under calculation version ${prov.calcVersion}; the stored result was produced under ${prov.storedCalcVersion}. The hashes above describe the stored result, not the figures printed here — re-save the appraisal to bring them back into agreement.`,
+    );
+  }
+
+  if (prov.lenderCaseStale) {
+    y = infoRequired(
+      y,
+      `A refreshed lender case. The developer case has changed since this lender case locked its snapshot — the stored input hash no longer matches the locked ${prov.lenderCase?.locked_input_hash ?? 'value'} — so the approval above does not cover the figures printed here. Supersede the case and open a new one against the current appraisal.`,
     );
   }
 
@@ -981,7 +1002,8 @@ export function generateInvestmentMemo(
 
   y = captionText(
     y,
-    'The audit hash is sha256 over project id, calculation version, input schema version, governance status, input hash and authoritative result hash, joined by "|" (spec §13.2). A reviewer holding this page can recompute it from the six fields above and detect any later alteration of them.',
+    'The audit hash is sha256 over project id, calculation version, input schema version, governance status, input hash and authoritative result hash, joined by "|" (spec §13.2). A reviewer holding this page can recompute it from the six fields above and detect any later alteration of them.'
+    + ' Where a lender case is printed, its case hash is sha256 over case id, project id, status, submitted-by, reviewer, decided-by, decided-at (canonical UTC ISO-8601) and the locked audit hash, joined by "|" (spec §21.4).',
   );
   y += 2;
 
@@ -2805,7 +2827,13 @@ export function generateInvestmentMemo(
         : [
             prov.lenderCaseStatus === null
               ? 'No lender case has been submitted for credit approval.'
-              : `The lender case is at "${lenderCaseLabel(prov.lenderCaseStatus)}".`,
+              : `The lender case is at "${lenderCaseLabel(prov.lenderCaseStatus)}"${
+                  prov.lenderCase?.decided_by
+                    ? `, decided by ${prov.lenderCase.decided_by}`
+                    : prov.lenderCase?.reviewer
+                      ? `, with reviewer ${prov.lenderCase.reviewer}`
+                      : ''
+                }.`,
             prov.draftReason === null
               ? 'It is a final lender report.'
               : `It is a draft because ${DRAFT_REASON_SENTENCE[prov.draftReason]}.`,

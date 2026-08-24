@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Project, FinancialAppraisal } from '../../types';
+import type { Project, FinancialAppraisal, LenderCase } from '../../types';
 import type { AnyCalculatorInputs } from '../model';
 import { runAppraisal, migrateInputsToV4 } from '../model';
 import { generateInvestmentMemo } from '../export-investment-memo';
@@ -810,5 +810,91 @@ describe('R10 cost-plan modes (spec §16)', () => {
     expect(detailedProse).not.toContain('not a priced quantity-surveyed package schedule');
     expect(detailedProse).toContain('rests on a priced package schedule');
     expect(detailedProse).toContain('No QS source, date or status is recorded');
+  });
+});
+
+/**
+ * R14b (spec §21). The lender case is the last governance surface: a document
+ * cannot reach FINAL at all until one exists, is approved, and is current —
+ * and the memo must print enough of the approved case for a reviewer to
+ * recompute its hash and confirm who decided it, exactly as the audit hash
+ * (spec §13.2) lets a reviewer check the run itself.
+ *
+ * `watermarkTexts` (report-checks.ts) takes one `PageInfo`, not a whole
+ * `PdfDocumentInfo` — every other watermark assertion in this file flattens
+ * across `info.pages` first (see the "watermarks a reconciled but unapproved
+ * run" test above), and these follow the same shape.
+ */
+/** R14b (spec §21). An approved, current lender case — the shape that makes
+ *  the product's first FINAL document possible. */
+const approvedCase: LenderCase = {
+  id: 'ca5e0001-2222-4333-8444-555566667777',
+  project_id: qaProject.id,
+  status: 'credit_approved',
+  locked_inputs_snapshot: {},
+  locked_calc_version: '2.11.0',
+  locked_inputs_version: 4,
+  locked_input_hash: 'a'.repeat(64),
+  locked_outputs_hash: 'b'.repeat(64),
+  locked_audit_hash: 'c'.repeat(64),
+  case_hash: 'd'.repeat(64),
+  created_by: 'S. Sponsor',
+  submitted_by: 'S. Sponsor',
+  reviewer: 'R. Reviewer',
+  decided_by: 'D. Director',
+  conditions: null,
+  submitted_at: '2026-08-20T09:00:00Z',
+  decided_at: '2026-08-23T17:45:00.000000Z',
+  stale: false,
+  created_at: '2026-08-20T09:00:00Z',
+  updated_at: '2026-08-23T17:45:00Z',
+};
+
+describe('R14b — the lender case on the memo (spec §21)', () => {
+  it('renders the first FINAL document for an approved, current case', async () => {
+    const run = runAppraisal(sellAllInputs());
+    const prov = provenanceFor(run, { lenderCase: approvedCase });
+    expect(prov.documentStatus).toBe('FINAL');
+    const { info } = await report(sellAllInputs(), { provenance: prov });
+    // No DRAFT watermark anywhere on a FINAL document.
+    expect(info.pages.flatMap(watermarkTexts)).toEqual([]);
+    const text = documentText(info);
+    // documentProse for this one sentence: it sits mid-paragraph in the §13
+    // narrative and wraps across drawn lines (see the stale-case test below
+    // for the same reasoning), so a `documentText` substring straddling the
+    // wrap point would not match even though the sentence is printed intact.
+    expect(documentProse(info)).toContain('It is a final lender report.');
+    expect(text).toContain(approvedCase.id);
+    expect(text).toContain(approvedCase.case_hash);
+    expect(text).toContain('R. Reviewer');
+    expect(text).toContain('D. Director');
+    // The FINAL page still obeys the layout gate.
+    expect(overflowingItems(info)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
+  });
+
+  it('watermarks an approved-but-stale case as LENDER CASE STALE', async () => {
+    const run = runAppraisal(sellAllInputs());
+    const prov = provenanceFor(run, { lenderCase: { ...approvedCase, stale: true } });
+    expect(prov.draftReason).toBe('lender_case_stale');
+    const { info } = await report(sellAllInputs(), { provenance: prov });
+    expect(info.pages.flatMap(watermarkTexts)).toContain('DRAFT - LENDER CASE STALE - NOT FOR LENDER RELIANCE');
+    // documentProse, not documentText: the [Information Required: ...] line
+    // wraps across several drawn lines (writeLines/wrap), so this substring
+    // straddles a line break exactly like the wrapped-prose assertions
+    // elsewhere in this file (see checkAcquisitionTaxDisclosure's doc comment
+    // in report-checks.ts).
+    expect(documentProse(info)).toContain('has changed since this lender case locked its snapshot');
+    expect(overflowingItems(info)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
+  });
+
+  it('shows approval conditions when the case carries them', async () => {
+    const run = runAppraisal(sellAllInputs());
+    const prov = provenanceFor(run, {
+      lenderCase: { ...approvedCase, status: 'approved_with_conditions', conditions: 'Max LTC 85%' },
+    });
+    const { info } = await report(sellAllInputs(), { provenance: prov });
+    expect(documentText(info)).toContain('Max LTC 85%');
   });
 });
