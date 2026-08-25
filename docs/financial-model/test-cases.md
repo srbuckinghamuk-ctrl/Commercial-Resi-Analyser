@@ -4650,9 +4650,11 @@ Every figure below was derived before either engine ran on this document.
 `committed_gross_facility_pence: 52,000,000`, `arrangement_fee_pct: 2.0` on
 the committed **net** facility, `exit_fee_pct: 1.0` on the committed **gross**
 facility, `day_one_advance_pence: 0`, `equity_draw_rule: 'equity_first'`,
-`sales_sweep_pct: 100`. One confirmed cash equity source, 20,000,000p at
-month 0. Purchase price 30,000,000p with 300,000p legal and 100,000p survey
-fees. Detailed cost plan: three packages (`structure` 12,000,000p, `envelope`
+`sales_sweep_pct: 100`. One confirmed cash equity source, **30,850,000p** at
+month 0 — sized to cover the month-0 acquisition use exactly (purchase
+30,000,000 + legal 300,000 + survey 100,000 + SDLT 450,000), fixture S's own
+equity-sizing convention. Purchase price 30,000,000p with 300,000p legal and
+100,000p survey fees. Detailed cost plan: three packages (`structure` 12,000,000p, `envelope`
 8,000,000p, `mech_elec_public_health` 6,000,000p = 26,000,000p base build),
 general contingency 5% (the other two classes 0%), one fixed `architect` fee
 1,500,000p (professional) and one fixed `building_control` fee 200,000p
@@ -4816,16 +4818,30 @@ spec §5.11).
 Facility terms: monthly rate `r` = 12 / 100 / 12 = **1%**; rolled-up
 interest, so `interest_capitalised = interest_accrued = round((opening + draw
 + cap_fees) x r)`. Arrangement fee = round(45,000,000 × 2%) = **900,000**,
-capitalised in month 0 ahead of any draw (spec §3.9). Committed cash equity
-is 20,000,000p, `equity_first`: equity funds every month's cash use before
-the facility does — **except month 0**, where `day_one_advance_pence: 0`
-caps the facility's month-0 draw at exactly 0 regardless of headroom, so
-equity alone must meet whatever month 0's cash use leaves unfunded (see Step
-7 below for what that means here). From month 1 on, `equity_used` is already
-20,000,000 = `committed_equity`, so `equity_available()` is 0 for the rest of
-the term and every remaining month's cost draws the facility in full
-(`development_cost_advance_pct: 100`, so the §4.2(b) cap never binds — every
-package is `lender_eligible: true`, so `lender_eligible_ratio` is 1.0 too).
+capitalised in month 0 ahead of any draw (spec §3.9) — and it capitalises
+**regardless of whether the facility draws anything that month**: `cap_fees`
+is its own addend in `balance = opening + draw + cap_fees +
+interest_capitalised` and in `cum_net_used`, independent of `draw`. Month 0
+here draws exactly 0 (below) and still opens a 900,000p balance that itself
+accrues the month's interest (round(900,000 × 1%) = 9,000), closing month 0
+at 909,000p — a fee owed to the lender is drawn onto the balance the moment
+it is charged, not deferred until the facility next lends cash.
+
+Committed cash equity is 30,850,000p, `equity_first`: equity funds every
+month's cash use before the facility does — **except month 0**, where
+`day_one_advance_pence: 0` caps the facility's month-0 draw at exactly 0
+regardless of headroom, so equity alone must meet the whole of month 0's
+cash use (see Step 7 below for why 30,850,000p was chosen). Equity is sized
+to that exact figure, so it is fully consumed by month 0 either way: from
+month 1 on, `equity_used` already equals `committed_equity`, so
+`equity_available()` is 0 for the rest of the term and every remaining
+month's cost draws the facility in full (`development_cost_advance_pct:
+100`, so the §4.2(b) cap never binds — every package is `lender_eligible:
+true`, so `lender_eligible_ratio` is 1.0 too). Because equity was already
+exhausted by month 0 under the *previous* (smaller) equity figure too — see
+Step 7 — months 1 onward are numerically unaffected by the resizing: every
+draw, interest and closing-balance figure below is unchanged from before
+fix round 1.
 
 Sales sweep is 100%; the exit fee is `exit_fee_basis: 'committed_gross_facility'`,
 so it is the **fixed** figure round(52,000,000 × 1%) = **520,000** whenever it
@@ -4834,7 +4850,7 @@ first month the facility redeems in full (spec §4.4.1).
 
 | m | uses | draw | cap fees | interest (=capitalised) | equity | funding gap | gross receipt | repayment | exit fee | closing balance |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 0 | 30,850,000 | 0 | 900,000 | 9,000 | 20,000,000 | **10,850,000** | 0 | 0 | 0 | 909,000 |
+| 0 | 30,850,000 | 0 | 900,000 | 9,000 | 30,850,000 | **0** | 0 | 0 | 0 | 909,000 |
 | 1 | 600,000 | 600,000 | 0 | 15,090 | 0 | 0 | 0 | 0 | 0 | 1,524,090 |
 | 2 | 600,000 | 600,000 | 0 | 21,241 | 0 | 0 | 0 | 0 | 0 | 2,145,331 |
 | 3 | 500,000 | 500,000 | 0 | 26,453 | 0 | 0 | 0 | 0 | 0 | 2,671,784 |
@@ -4868,29 +4884,55 @@ month 13: balance before receipt = 2,130,445 + 21,304 = 2,151,749
 Month 20's 19,950,000 receipt (net 19,472,209) arrives after the facility is
 already redeemed, so none of it repays anything — it distributes whole.
 
-#### Step 7 — the month-0 funding gap (correcting this task's own brief)
+#### Step 7 — the month-0 funding gap, found, then closed (fix round 1)
 
-The brief handed to this task pinned `"funding_gap_pence": 0` verbatim in its
-Step 2 JSON. **That figure is wrong, and this worksheet does not pin it.**
-`day_one_advance_pence: 0` means the facility contributes **nothing** to
-month 0 regardless of headroom (draw is capped to
+This task's original brief pinned `"funding_gap_pence": 0` verbatim. That was
+wrong: `day_one_advance_pence: 0` means the facility contributes **nothing**
+to month 0 regardless of headroom (draw is capped to
 `min(day_one_advance_pence, ...)`, and 0 wins that `min` no matter what else
 is available) — every other month's shortfall is met by the facility, but
-month 0's is not. Month 0's cash use is 30,850,000p (Step 2); committed
-equity is only 20,000,000p; the facility draws 0p by the rule above:
+month 0's is not. Against the plan's original 20,000,000p equity figure,
+month 0's 30,850,000p cash use (Step 2) left:
 
 ```
 funding_gap[0] = 30,850,000 - 20,000,000 - 0 = 10,850,000p
 ```
 
-No other month carries a gap (equity is exhausted after month 0 and every
-subsequent month draws the facility in full within its headroom — Step 6),
-so the ledger total is `funding_gap_pence = 10,850,000`, not 0, and a red
-`funding_gap` flag fires at month 0. **Both engines agree on 10,850,000 to
-the penny** (confirmed by direct inspection of `AppraisalRun` before this
-value was pinned, and by the passing golden suites after), so this is not a
-worksheet/engine disagreement calling for a STOP — it is a stray, uncorrected
-value in the brief text itself, corrected here.
+Both engines agreed on 10,850,000 to the penny, so this was not a
+worksheet/engine disagreement — it was a genuine defect in the fixture's own
+economics (equity undersized against a facility that lends nothing at month
+0), which this task flagged rather than silently pinning either the brief's
+wrong `0` or papering over a real gap. The controller's ruling on that
+finding owns the fix: **the plan author's 20,000,000p equity figure was
+wrong, not the finding.**
+
+**The fix.** One input changed: `equity_sources[0].amount_pence` from
+20,000,000 to **30,850,000** — equal to month 0's cash use exactly (purchase
+30,000,000 + legal 300,000 + survey 100,000 + SDLT 450,000), mirroring
+fixture S's own convention of equity sized to its acquisition cost. Every
+other input is untouched.
+
+```
+funding_gap[0] = 30,850,000 - 30,850,000 - 0 = 0p
+```
+
+No other month ever carried a gap (equity was already exhausted after month
+0 under the old figure too), so the ledger total is now
+`funding_gap_pence = 0`, the red `funding_gap` flag no longer fires, and
+`reconciliation.report_safe` — computed by `reconcile()`/`validate_inputs`,
+not itself an `expected_metrics` key reachable by the golden harness — is
+now **True** (`sources_equal_uses`, `debt_rollforward_ok`,
+`closing_never_negative`, `facility_within_limit`, `senior_repaid` and
+`funding_complete` all hold, with an empty `issues` list). Because the old
+and new equity figures both happen to be fully consumed by month 0 (Step 6),
+**every ledger figure from month 1 onward — every draw, interest accrual and
+closing balance, and therefore peak debt, the redemption schedule, the exit
+fee, finance costs, total development cost and profit — is bit-identical to
+the pre-fix derivation.** Only the month-0 equity contribution
+(20,000,000 → 30,850,000) and `funding_gap_pence` (10,850,000 → 0) move.
+Both engines agree on `funding_gap_pence = 0` to the penny (confirmed by
+direct inspection of `AppraisalRun`/`runAppraisal` before the pin changed,
+and by the passing golden suites after).
 
 #### Step 8 — peak debt, redemption schedule, exit fee
 
@@ -4945,7 +4987,7 @@ it to the penny (`test_financial_model_fixtures.py` and
 
 | Pin | Value | Worksheet |
 |---|---|---|
-| `funding_gap_pence` | 10,850,000 | Step 7 (corrects the brief's stray `0`) |
+| `funding_gap_pence` | 0 | Step 7 (fix round 1: equity re-sized to 30,850,000) |
 | `peak_debt_pence` | 25,741,975 | Step 8 |
 | `peak_debt_month` | 11 | Step 8 |
 | `finance_costs_pence` | 3,130,199 | Step 9 |

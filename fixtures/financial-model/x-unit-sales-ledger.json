@@ -36,7 +36,7 @@
     ], "category_phase_ids": {"construction": "construction", "professional": "design", "statutory": "conditions"}},
     "vat": {"registered": false, "return_frequency": "quarterly", "first_period_end_month": 2, "repayment_lag_months": 1, "treatments": [{"category": "acquisition", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}, {"category": "construction", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}, {"category": "professional", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}, {"category": "statutory", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}, {"category": "selling", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}, {"category": "lender_ancillary", "rate_pct": 0, "recoverable_pct": 0, "recovery_basis": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}], "purchase": {"vendor_opted_to_tax": false, "togc_treatment": "unconfirmed", "evidence_status": "unconfirmed", "notes": ""}},
     "finance": {"funding_source": "development_finance", "day_one_advance_pence": 0, "day_one_market_value_pence": null, "development_cost_advance_pct": 100, "committed_net_facility_pence": 45000000, "committed_gross_facility_pence": 52000000, "annual_interest_rate_pct": 12.0, "interest_type": "rolled_up", "arrangement_fee_pct": 2.0, "arrangement_fee_basis": "committed_net_facility", "exit_fee_pct": 1.0, "exit_fee_basis": "committed_gross_facility", "broker_fee_pence": 0, "lender_legal_fee_pence": 0, "valuation_fee_pence": 0, "monitoring_surveyor_fee_pence": 0, "interest_reserve_pence": null, "term_months": 24, "equity_draw_rule": "equity_first", "sales_sweep_pct": 100, "legacy_leverage_pct": null, "requires_confirmation": false, "enforcement_cost_assumption_pence": 0},
-    "equity_sources": [{"id": "e1", "classification": "cash", "amount_pence": 20000000, "timing_month": 0, "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""}],
+    "equity_sources": [{"id": "e1", "classification": "cash", "amount_pence": 30850000, "timing_month": 0, "repayment_priority": 1, "evidence_status": "confirmed", "notes": ""}],
     "exit_strategy": {"route": "sell_all", "selling_agent_fee_pct": 1.5, "selling_legal_fee_pence": 500000, "retained_units": []},
     "risks": [],
     "scenarios": {
@@ -81,7 +81,7 @@
     "receipts_gross_sale_pence": [0,0,0,0,0,0,0,0,2600000,0,3000000,1050000,23400000,44500000,0,0,0,0,0,0,19950000,0,0,0],
     "redemption_schedule_months": [8, 10, 11, 12, 13, 20],
     "programme_phase_start_months": [0, 1, 1, 4, 8, 12, 12],
-    "funding_gap_pence": 10850000,
+    "funding_gap_pence": 0,
     "peak_debt_pence": 25741975,
     "peak_debt_month": 11,
     "finance_costs_pence": 3130199,
