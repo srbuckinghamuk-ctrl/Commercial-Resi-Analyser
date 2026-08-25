@@ -215,6 +215,7 @@ Alembic revision the release shipped, where it moved the persistence schema at a
 | R14 | 2.13.0 | v11 | — | §5.10's C1 correction, the monitoring statement, `lender_eligible` wired into §4.2(b) | §20 |
 | **R14b** | **2.13.0 — unchanged** | **v11 — unchanged** | **006** | **Lender case governance: `lender_cases` + `lender_case_events`, the state machine, `case_hash`, derived staleness, the Python governance twin. No engine change, no schema change, no fixture pin moved — the release is versioned by the migration and by the spec section alone** | **§21** |
 | R13b | 2.14.0 | v12 | — | The unit-level sales ledger: per-unit timing, deposits, cost overrides, pre-sales coverage, `sales_slip`; §5.11 replays anchored tranches at resolved months | §22 |
+| R15 | 2.15.0 | v13 | — | The due-diligence evidence schedule: 28-item catalogue, RAG/unknown, derived rows, source-conflict flags, QS provenance and price basis, the seventh FINAL condition | §23 |
 
 **Why R14b bumps neither number.** Nothing inside `inputs_snapshot` moves and no arithmetic
 changes, so an inputs bump would be a lie and a calc bump would be worse than one: `calc_version`
@@ -545,6 +546,26 @@ narrower allowlist is a candidate for a future release; it is not done here
 because the exemption list would need to be large enough that the guard's meaning
 would be unclear.
 
+### 9.6 The cross-engine message-drift guard [R15 — calc 2.15.0]
+
+`tests/test_financial_model_validation.py::test_validation_messages_match_the_typescript_engine`
+reads `validation.ts` and requires each in-window `err()` message to appear in
+`validation.py` verbatim. Until R15 its window covered the spec §19.7
+investment-case block alone. It now runs from the §22.7 unit-sales block (so
+§22.7 and §19.7 are both inside it) and reads `validateDueDiligence`'s body as a
+**second window**, because that function — like `validateMonitoring` — sits
+below `validateInputs` and no start anchor inside `validateInputs` can reach it.
+Each window is bounded at both ends and its blocks are asserted to appear in the
+expected order, so a block cannot silently fall out of a widened window.
+
+Widening it did what a widened guard is supposed to do: it found **three §22.7
+messages that had drifted since R13b** — the TypeScript text used an em-dash
+where the Python text used an ASCII hyphen. The **Python** strings were moved to
+the TypeScript text verbatim. That is a wording change with no behaviour change,
+so the identity gate is untouched, and it is recorded here rather than only in a
+commit message because "the two engines said the same thing in two ways" is
+exactly the class of asymmetry this section exists to surface.
+
 ---
 
 ## 12. Report governance [R7 — calc 2.6.0]
@@ -566,9 +587,10 @@ two ways.
 
 ### 12.2 The FINAL gate
 
-Spec §13.3. **Six** conditions, tested in order, each with its own banner:
+Spec §13.3. **Seven** conditions, tested in order, each with its own banner:
 reconciled, senior repaid, tax basis confirmed (R8), VAT basis confirmed (R11),
-lender case approved (R14b), and that approval not stale (R14b). `report_safe`
+due diligence complete (R15), lender case approved (R14b), and that approval not
+stale (R14b). `report_safe`
 deliberately does not include senior repayment (§7) — an appraisal that intends
 to refinance later is valid — so the document gate tests it separately. No
 document showing an unrepaid senior balance at maturity can be issued as final.
@@ -581,6 +603,16 @@ supplies the case record, the state machine and the approval, so a document that
 reconciles, repays, evidences both bases and carries a current approved case now
 renders FINAL. The release gate asserts exactly that document — the first FINAL
 one it has ever been able to assert.]
+
+[R15. A seventh condition sits between the VAT gate and the approval gate: no
+*entered* due-diligence item may be `unknown` (spec §23.7). It is placed there
+for the reason R8 and R11 placed theirs — an unknown does not make a figure
+wrong, so it must not displace a reason that says the figures themselves may be,
+but a reader must know the evidence is missing before they read an approval. The
+release-gate FINAL document consequently carries a fully addressed schedule. A
+document with no `due_diligence` key at all is not re-graded, on R8's rule, and
+every production entry point migrates to v13 before running, so every *stored*
+document is graded.]
 
 ### 12.3 The audit hash
 

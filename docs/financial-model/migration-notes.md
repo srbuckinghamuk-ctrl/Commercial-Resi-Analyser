@@ -1139,3 +1139,145 @@ carried `sales_phasing`, an `anchor`, or a `programme` network with the
 it — its post-R13b behaviour is exactly the R14 row with two written no-ops
 attached. It reports no unit sales ledger, which is expected — it never
 asked for one.
+
+## 16. v12 → v13 (Release 15, calc `2.15.0`)
+
+**What's added.** `CalculatorInputsV13` is `CalculatorInputsV12` plus one new
+**non-nullable** top-level field, `due_diligence: DueDiligenceInputs` (spec
+§23.1), one new nullable `CostPlanInputs` field, `qs: QsProvenance | None`
+(spec §23.6), and one new nullable `CostPackage` field, `price_basis`.
+`CalculatorInputsV13` subclasses `CalculatorInputsV12`, for the same reason
+every prior version extended rather than replaced: the engine dispatches on the
+class, and a flat re-declaration would make those `isinstance` checks silently
+false for v13 documents.
+
+| v12 field | v13 field | Behaviour |
+|---|---|---|
+| *(absent)* | `due_diligence.source_record` | Written `null`. A stored document has no project record in hand at migration time, and inventing one would be inventing evidence. The memo prints the absence — "No listing record captured; source-conflict checks did not run" — rather than hiding it, and spec §23.5's two conflict rules are evaluated only when the record is non-null, so a migrated document raises neither. |
+| *(absent)* | `due_diligence.items` | Written as spec §23.10's **seed**: the 23 entered catalogue items, in catalogue order, each with `id: 'dd-<code>'`, `status: 'unknown'`, `evidence: null`, `expiry_date: null`, `owner: ''`, `due_date: null`, `cost_impact_pence: null`, `programme_impact_months: null`, `action: ''`, `notes: ''`. The five **derived** codes are never written — they exist only on the result block (spec §23.3), so no stored document can carry a status for a fact another field owns. The ids are deterministic, so the migration is reproducible and a re-migration writes the same document. |
+| *(absent)* | `cost_plan.qs` | Written `null`. Spec §23.6's "no QS provenance recorded" state, which is what every stored appraisal has always been. |
+| *(absent)* | `cost_plan.packages[].price_basis` | Written `null` on **every** package. Spec §23.6's "not classified", which counts against fixed-price coverage rather than for it: a migrated detailed plan reports 0% coverage and an `unclassified_pence` equal to its whole base build — the honest statement of what was recorded. |
+
+**Four written additions, all inert to every money figure.** No field is
+renamed, no field is narrowed, and no default is written that the engine then
+reads as a live figure. `price_basis: null` and `qs: null` are read only by
+spec §23.6's summary block, which sums by basis and divides through the shared
+`pct()`; neither enters `base_build_pence`, a contingency base, a fee base or
+the uses schedule. The seeded `items` enter no ledger at all: spec §23.4's
+derivation is computed once in `derive_metrics`/`deriveMetrics` beside
+`monitoring_statement`, publishes a result block nothing downstream reads
+except the provenance gate and the flags, and takes no ledger balance as input.
+
+**The seed is also what a *pre*-v13 document computes.** Spec §23.4 reads a
+document with no `due_diligence` attribute as this exact seed rather than as an
+empty schedule, so the schedule an unmigrated v12 document reports and the one
+its migrated v13 twin reports are the same object, field for field. That is why
+§16.1's identity gate needs no exclusion for the new block — it is not excluded
+from the comparison, it is compared and found equal.
+
+**Implementation** (`migrateV12toV13` / `migrate_v12_to_v13`,
+`migrateInputsToV13` / `migrate_inputs_to_v13`). The entry point mirrors
+`migrateInputsToV12`'s shape, including its version predicate (membership of
+the declared tuple, not a range check) and its two refusals — an unrecognised
+`inputs_version` throws, and a document declaring version 13 that fails the
+v13 structural check (`inputs_version == 13` **and** a `due_diligence` key)
+throws rather than falling through to a permissive earlier path.
+`migrate_v12_to_v13` refuses a document that is already v13, so double
+migration raises instead of silently re-stamping.
+
+### 16.1 The identity claim, and where it is tested
+
+**Claim: the v12 → v13 migration moves no computed figure and adds no
+validation issue that is not a genuinely new rule. Every existing appraisal
+produces byte-identical output either side of it — including the new
+`due_diligence` result block, which is compared rather than excluded.**
+
+The gate lives in `tests/test_migrate_v13.py` and its vitest twin. It runs
+corpus-wide and filters on `doc["inputs"]["inputs_version"]` — the *stored*
+version, not the runtime one — the same discipline §14.1 and §15.1 name. A
+companion test asserts the filtered corpus has not shrunk and names the
+deliberately excluded document (the v13-native fixture), so the gate cannot
+pass by running over nothing.
+
+The numeric arm compares the v12 run and the v13 run of the same raw document
+on all three outputs — metrics, ledger and schedule — **with no carve-out for
+`due_diligence`**. The flag arm is the sharper one: every pre-existing flag
+must be equal, and `due_diligence_unknown` is asserted **by name** as the gate's
+sole expected addition. The other three §23.9 flags cannot fire on a migrated
+document, and that is a property of the migration rather than a coincidence of
+the corpus — `source_conflict` needs a source record (written `null`),
+`consent_expires_before_start` needs an `expiry_date` on the `planning_route`
+item (seeded `null`), and `provisional_sums_present` needs a package classified
+`provisional_sum` (every `price_basis` written `null`).
+
+The validation arm is **three separately-falsifiable properties, not one set
+equality** (spec §19.9's shape, carried forward again):
+
+1. **Every v12 issue has a v13 counterpart.** v13 renames nothing, so no alias
+   map is needed for this property to hold.
+2. **The v13-only rules of spec §23.9 raise no issue on a migrated document.**
+   The seed satisfies every one of them: `unknown` owes no evidence, no action
+   and no reason; every catalogue code is present exactly once; no date is
+   present to be malformed; both impacts are null; there is no source record
+   and no QS block to check.
+3. **A control document that trips a v13-only rule raises it.** Without
+   property 3, property 2 would pass identically whether the new rules were
+   wired up or silently inert. The control removes one catalogue item from a
+   migrated document, which trips §23.9 rule 1's missing-code message.
+
+**No computed value moves under calc 2.15.0 either.** Unlike the v11 → v12
+boundary, where §5.11's phased break-even correction moved fixture S's
+`senior_breakeven_pence` as a *version* difference beside a migration that moved
+nothing, R15 changes no formula at all. Every pre-existing golden pin stands
+unaltered, and the separate claim — calc 2.15.0 reproduces 2.14.0 on every
+document — carries no named exception.
+
+### 16.2 The consequence a reader must not mistake for a defect
+
+**Every stored appraisal's `input_hash` moves on its next save**, as it does at
+every inputs-version boundary (spec §13.2's disclosure). The document being
+hashed genuinely gained four fields, so the hash genuinely differs.
+
+The consequence that follows is the one worth stating plainly: **an approved
+lender case goes stale on that save** (spec §21.3), because staleness is derived
+by comparing the live row's `input_hash` against the one the case locked. That
+is the correct answer, not a fault in the case or in the migration. The snapshot
+the case was approved against carried no evidence position at all; the re-saved
+one carries 23 unknown due-diligence items. A reviewer looking at the approval
+alone would otherwise read it as though the evidence question had been asked and
+answered, which is exactly what spec §21.3 exists to prevent. The remedy is a
+deliberate refresh or reapproval, as it is for any other input change.
+
+The second consequence is spec §23.7's, and it was accepted rather than worked
+around, on §14.6's precedent: **a migrated document shows
+`DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE` as soon as its tax
+and VAT bases are confirmed**, and keeps showing it until every entered item is
+evidenced or marked not applicable with a reason. There is no grandfathering,
+because a migrated document genuinely is unevidenced.
+
+### 16.3 The York appraisal after R15
+
+The Stonegate record (§10.2, §13.2, §14.2, §15.2) gains the seeded
+`due_diligence` block, `cost_plan.qs: null` and `price_basis: null` on its
+packages, and nothing else. No money figure moves, so its R14 and R13b rows
+stand exactly as recorded.
+
+What changes is what it *says about itself*. It reports **23 unknown entered
+due-diligence items** and an `addressed_pct` of 0, `due_diligence_unknown` fires
+naming that count, and the memo's Appendix B lists the first six unknown items
+by name and counts the rest. Its `source_record` is `null` — the migration
+captures none — so neither §23.5 conflict rule runs, and the memo prints the
+not-captured sentence in their place. That is the honest position for this
+document: the listing describes upper parts sold off on a long lease and
+operated as short-term lets, the appraisal converts a vacant office to five
+flats, and until R15 nothing in the record asked whether vacant possession was
+obtainable. It is now asked, seeded `unknown`, and the document cannot reach
+FINAL while it stays that way.
+
+Its derived rows read from the fields it already carried: `facility_terms` is
+`unknown` while `finance.requires_confirmation` remains true, `lender_valuation`
+is `unknown` while none is provided, and `tax_basis` is `unknown` while the
+jurisdiction is `migrated_default`/`unconfirmed` with a null acquisition date.
+Once its tax and VAT bases are confirmed the banner it shows becomes the
+due-diligence one rather than the tax-basis one — the same document, one
+condition further down spec §13.3's list.

@@ -1211,4 +1211,4 @@ FlagCode = Literal[
     "provisional_sums_present",
 ]
 
-CALC_VERSION = "2.14.0"
+CALC_VERSION = "2.15.0"

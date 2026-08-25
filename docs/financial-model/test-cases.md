@@ -5152,3 +5152,299 @@ claim. See `tests/test_financial_model_metrics.py`'s
 `TestUnitSalesBreakevenBasis.test_unit_sales_path_solves_the_phased_breakeven_and_agrees_with_the_engine_verified_relationship_to_held`
 and `metrics.test.ts`'s matching `describe('unit-sales break-even basis
 (spec §22.5/§5.12)')` for the full trace and the fee-free assertion.
+
+---
+
+## 23. Due-diligence evidence schedule [R15 — calc 2.15.0]
+
+### 23.1 Fixture Y — due diligence (`fixtures/financial-model/y-due-diligence.json`)
+
+**Purpose:** the release's golden case for spec §23. It exercises every status
+in the set, both source-conflict rules, the consent-expiry flag, all three
+price bases plus an unclassified package, a QS provenance record, a `custom`
+row and two derived rows that read `unknown` — while proving that **none of it
+touches a money figure**.
+
+Y is **fixture X (`x-unit-sales-ledger.json`) with the evidence layer added and
+no money field changed.** X supplies everything the schedule grades against:
+`acquisition.acquisition_date` `2026-09-01`, jurisdiction `england_ni` / `user`
+/ `confirmed`; a detailed cost plan whose three packages are `pkg-structure`
+(`structure`, 12,000,000p), `pkg-envelope` (`envelope`, 8,000,000p) and
+`pkg-mande` (`mech_elec_public_health`, 6,000,000p), so base build is
+**26,000,000p**; a seven-phase programme network whose resolved
+`programme_phase_start_months` are **[0, 1, 1, 4, 8, 12, 12]**, i.e. the
+`construction` phase starts at month **4** (§22.1 Step 1 derives that);
+`vat.registered: false`; `lender_valuation: null`;
+`finance.requires_confirmation: false`; `areas.basis: 'manual'`; and one cash
+equity source.
+
+**Y's five changes to X**, each chosen so that no arithmetic can move:
+
+| Change | Why it moves no money |
+|---|---|
+| `inputs_version: 13` | the migration's four additions are inert (migration notes §16) |
+| `areas.existing_gia_sqm: 600` | the area basis is `manual`, so the construction-cost area is the entered field, not the bridge (spec §15.3). Σ unit NIA (305 m²) < 600 m² raises §15.6 **warnings** only |
+| `equity_sources[0].evidence_status: 'unconfirmed'` | the source is still committed under spec §2, so it funds exactly as before; only the derived `equity_sources` row reads the status |
+| `cost_plan.qs` recorded, three `price_basis` values set | §23.6's summary is a **projection** of `amount_pence` by basis; no amount changes |
+| the `due_diligence` block | spec §23.4's derivation enters no ledger and no lever |
+
+Every figure below is derived from the document, before either engine runs on
+it. The money pins are **X's, copied** — see Step 10.
+
+#### Step 1 — the rows, and their order
+
+Spec §23.4 builds rows in **catalogue order** — the derived row wherever
+§23.2's catalogue marks one, otherwise the matching `items[]` entry — and then
+appends the `custom` items in `items[]` order. Y carries the 23 entered
+catalogue items and one custom item, so `rows` is **28 catalogue positions + 1
+custom = 29**:
+
+| # | Row | Kind | Status | Set by |
+|---|---|---|---|---|
+| 1 | `planning_route` | entered | `green` | City of York Council / 26/01234/FUL / 2026-07-15; `expiry_date` 2026-11-01 |
+| 2 | `planning_conditions` | entered | `amber` | action recorded; cost impact 250,000p, programme 1 month |
+| 3 | `article_4_direction` | entered | `green` | City of York Council / Article 4 register / 2026-07-10 |
+| 4 | `conservation_listed` | entered | `green` | Historic England list search / not listed / 2026-07-10 |
+| 5 | `cil_s106` | entered | `unknown` | nothing recorded |
+| 6 | `title_report` | entered | `red` | Lupton Fawcett / Report on title v1 / 2026-08-05; cost impact 1,500,000p, programme 3 months |
+| 7 | `vacant_possession` | entered | `green` | Vendor's solicitor / VP undertaking / 2026-08-10 |
+| 8 | `leases_tenancies` | entered | `unknown` | nothing recorded |
+| 9 | `rights_of_light` | entered | `not_applicable` | reason in `notes` |
+| 10 | `party_wall` | entered | `not_applicable` | reason in `notes` |
+| 11 | `structural_survey` | entered | `amber` | action recorded, **both impacts null** |
+| 12 | `asbestos_survey` | entered | `green` | Envirocheck Ltd / R&D survey 4471 / 2026-06-20 |
+| 13 | `measured_survey` | entered | `green` | Plowman Craven / MS-2026-118 / 2026-06-01 |
+| 14 | `higher_risk_building` | entered | `green` | Fire engineer / HRB screening memo / 2026-07-01 |
+| 15 | `fire_strategy` | entered | `unknown` | nothing recorded |
+| 16 | `acoustic_thermal` | entered | `green` | Hoare Lea / Part L route note / 2026-07-20 |
+| 17 | `services_mande` | entered | `green` | Hoare Lea / Stage 3 M&E report / 2026-07-20 |
+| 18 | `cost_plan_qs` | **derived** | `green` | Step 2 |
+| 19 | `procurement_contractor` | entered | `amber` | action recorded; cost impact **0** (assessed as none), programme 2 months |
+| 20 | `warranties_building_control` | entered | `green` | Premier Guarantee / Quote PG-88213 / 2026-08-01 |
+| 21 | `insurance` | entered | `green` | Broker / CAR and PI indication / 2026-08-12 |
+| 22 | `facility_terms` | **derived** | `green` | Step 2 |
+| 23 | `equity_sources` | **derived** | `unknown` | Step 2 |
+| 24 | `sponsor_entity` | entered | `green` | Companies House / Stonegate Developments Ltd 12345678 / 2026-05-01 |
+| 25 | `tax_basis` | **derived** | `green` | Step 2 |
+| 26 | `sales_evidence` | entered | `green` | Savills / Agent's letter / 2026-08-14 |
+| 27 | `lender_valuation` | **derived** | `unknown` | Step 2 |
+| 28 | `exit_route_evidence` | entered | `green` | Savills / Reservation schedule / 2026-08-14 |
+| 29 | `custom` (`dd-custom-basement`, category `existing_building`, label "Basement water ingress") | custom | `amber` | action recorded; cost impact 800,000p, programme 1 month |
+
+`due_diligence_row_codes` and `due_diligence_row_statuses` pin both columns in
+this order, so a reordered catalogue or a mis-placed custom row fails before any
+count does.
+
+#### Step 2 — the five derived rows, each from its own field
+
+Spec §23.3's mapping applied to Y's inputs:
+
+| Row | Field read | Y's value | Status |
+|---|---|---|---|
+| `cost_plan_qs` | `cost_plan.mode`, `cost_plan.qs` | detailed; `riba_3`, status `issued` | `green` (status is not `draft`) |
+| `facility_terms` | `finance.requires_confirmation` | `false` | `green` |
+| `equity_sources` | `equity_sources[].evidence_status` | one source, `unconfirmed`; none `rejected` | **`unknown`** |
+| `tax_basis` | jurisdiction evidence + `date_basis` + §17.10's VAT gate | `confirmed`; an acquisition date is set so `date_basis` is `transaction_date`; nothing bears VAT so the gate passes | `green` |
+| `lender_valuation` | `lender_valuation` | `null` | **`unknown`** |
+
+Two derived rows are therefore `unknown`, and neither of them may reach the
+FINAL gate — spec §23.7 reads `entered_unknown_count`, which excludes them
+(Step 4).
+
+#### Step 3 — the category counts
+
+Counting Step 1's 29 rows into §23.2's six categories, in the order
+`(red, amber, green, unknown, not_applicable, total)`:
+
+| Category | Rows counted | red | amber | green | unknown | n/a | total |
+|---|---|---|---|---|---|---|---|
+| `planning` | rows 1–5 | 0 | 1 | 3 | 1 | 0 | **5** |
+| `title_occupation` | rows 6–10 | 1 | 0 | 1 | 1 | 2 | **5** |
+| `existing_building` | rows 11–17 **+ the custom row** | 0 | 2 | 5 | 1 | 0 | **8** |
+| `construction` | rows 18–21 (`cost_plan_qs` derived) | 0 | 1 | 3 | 0 | 0 | **4** |
+| `finance` | rows 22–25 (three derived) | 0 | 0 | 3 | 1 | 0 | **4** |
+| `exit` | rows 26–28 (`lender_valuation` derived) | 0 | 0 | 2 | 1 | 0 | **3** |
+| **Totals** | | **1** | **4** | **17** | **5** | **2** | **29** |
+
+`existing_building` is the category that proves custom rows are counted: seven
+catalogue rows plus the custom one, and its `amber` count of 2 is
+`structural_survey` plus the custom row. `finance` is the category that proves
+derived rows are counted: three of its four rows are derived, and one of them
+(`equity_sources`) supplies its single `unknown`.
+
+The column totals are the totals block's first six fields, and
+`1 + 4 + 17 + 5 + 2 = 29` — the identity is true by construction and is
+deliberately **not** asserted (spec §23's guard table).
+
+#### Step 4 — the entered and derived projections
+
+Entered rows are `rows` less the five derived ones: `29 − 5 = 24`, so
+`entered_total = 24`. Their unknowns are rows 5, 8 and 15 — `cil_s106`,
+`leases_tenancies`, `fire_strategy`:
+
+```
+entered_unknown_count   = 3        (the two derived unknowns are excluded)
+entered_addressed_count = 24 - 3   = 21
+derived_unknown_count   = 2        (equity_sources, lender_valuation)
+addressed_pct           = pct(21, 24) = 87.5
+```
+
+`addressed_pct` goes through the shared `pct()` (§1.2), not a local division.
+Note what counts as addressed: the two `not_applicable` rows do, because
+someone evidenced that they do not arise; the `red` row does, because it is a
+known and actioned risk. Only `unknown` is unaddressed.
+
+#### Step 5 — the impacts
+
+`assessed` is every row — derived rows included — whose status is `red` or
+`amber`: rows 2, 6, 11, 19 and the custom row. So `assessed_count = 5`. Of
+those five, four carry a non-null `cost_impact_pence`:
+
+```
+cost_impact_total_pence     = 250,000 + 1,500,000 + 0 + 800,000 = 2,550,000
+stated_impact_count         = 4                       (structural_survey states none)
+programme_impact_max_months = max(1, 3, 2, 1) = 3     (a MAX, never a sum)
+unassessed_impact_count     = 1                       (structural_survey: both impacts null)
+```
+
+Three things this step is built to catch. `procurement_contractor` carries
+`cost_impact_pence: 0` — an **assessed** nil impact, so it is inside
+`stated_impact_count` and adds nothing to the total, which is the §1.5
+distinction between `0` and `null` made visible. `title_report`'s three months
+is the largest single stated delay, and summing instead of maxing would print
+seven. And `structural_survey` sits in `assessed_count` but outside
+`stated_impact_count`, so a reader is never left to infer that 2,550,000p is a
+total over five items.
+
+#### Step 6 — the source conflicts
+
+`source_record` is non-null (captured `2026-08-25T09:00:00Z` from `rightmove`),
+so both of spec §23.5's rules run:
+
+```
+rule 1 (occupation):     is_vacant is false, and vacant_possession (row 7) is green   -> FIRES
+rule 2 (existing_area):  listing 360 m2, entered existing GIA 600 m2
+                         |600 - 360| x 4 = 960  >  360                                -> FIRES
+```
+
+Rule 2 is written multiplied out rather than as `240 / 360 = 66.7% > 25%`, so
+the comparison never rests on a float quotient's last bit, and it is **strict**:
+a twin at exactly 25% (`|existing - listing| x 4 == listing`) does not fire.
+`due_diligence_source_conflict_rules` pins `['occupation', 'existing_area']` —
+both rules, in evaluation order.
+
+#### Step 7 — the consent expiry
+
+`planning_route` carries `expiry_date: 2026-11-01` and the acquisition date is
+`2026-09-01`, so §23.9's helper runs:
+
+```
+months_between('2026-09-01', '2026-11-01')
+  = (2026 - 2026) x 12 + (11 - 9) - (1 if 01 < 01 else 0)
+  = 0 + 2 - 0
+  = 2
+```
+
+The construction start month is the resolved start of the phase named by
+`programme.category_phase_ids.construction`, which Y inherits from X's network:
+month **4**. So:
+
+```
+expiry_month             = 2
+construction_start_month = 4
+expires_before_start     = 2 < 4 = true
+```
+
+The consent lapses two months after acquisition and the construction spend does
+not start for four. A twin whose expiry is four months out does not fire
+(`4 < 4` is false), and a document with `acquisition_date: null` produces no
+`consent_expiry` block at all rather than a false one.
+
+#### Step 8 — the price-basis block
+
+Spec §23.6 sums `amount_pence` by each package's `price_basis` and divides
+through `pct()` against **base build**, the same base §16.3's `general`
+contingency class takes:
+
+| Package | `price_basis` | Amount |
+|---|---|---|
+| `pkg-structure` | `fixed_price` | 12,000,000 |
+| `pkg-envelope` | `provisional_sum` | 8,000,000 |
+| `pkg-mande` | `null` | 6,000,000 |
+
+```
+fixed_price_pence        = 12,000,000
+provisional_sums_pence   =  8,000,000
+estimate_pence           =          0        (no package on this basis)
+unclassified_pence       =  6,000,000        (the null-basis package)
+base_build_pence         = 26,000,000        (X's, unchanged)
+
+fixed_price_coverage_pct = pct(12,000,000, 26,000,000) = 46.153846... -> 46.15
+provisional_sums_pct     = pct( 8,000,000, 26,000,000) = 30.769230... -> 30.77
+```
+
+The three classified sums plus the unclassified one recover base build
+exactly — `12 + 8 + 0 + 6 = 26` million — so an unclassified package counts
+**against** coverage rather than being quietly dropped from the denominator.
+The `estimate` basis is zero here and is exercised in the unit tests instead:
+this fixture's job is the mixed-with-unclassified case, which is the shape a
+migrated detailed plan actually arrives in.
+
+#### Step 9 — the flags
+
+Spec §23.9's four flags, on Y:
+
+| Flag | Severity | Why |
+|---|---|---|
+| `due_diligence_unknown` | amber | `entered_unknown_count` 3 > 0; the message reads "3 of 24 entered items unknown", the 24 being `entered_total` |
+| `source_conflict` | red | Step 6's rule 1 |
+| `source_conflict` | red | Step 6's rule 2 — **one flag per rule**, each carrying its own statement |
+| `consent_expires_before_start` | red | Step 7; the flag's `month` is the lapse month, 2 |
+| `provisional_sums_present` | amber | Step 8's 8,000,000p, carried on the flag's `amount_pence` |
+
+`flag_codes_r15` pins all five entries in order, `source_conflict` twice —
+collapsing the two rules into one flag would pass a set comparison and fails
+this one.
+
+#### Step 10 — the money pins are X's, copied
+
+Nothing in Steps 1–9 is arithmetic, so **every money figure is X's**, pinned
+here as absolute figures rather than as a claim about a twin:
+
+```
+gdv_pence                     = 94,500,000        gross_sales_pence         = 94,500,000
+selling_costs_pence           =  2,155,000        funding_gap_pence         =          0
+peak_debt_pence               = 25,741,975        peak_debt_month           =         11
+finance_costs_pence           =  3,130,199        total_development_cost    = 65,135,199
+profit_pence                  = 29,364,801        report_safe               =       true
+senior_breakeven_pence        = 36,624,486        developer_breakeven_pence = 64,659,969
+```
+
+The inertness guard asserts the equality **directly** rather than trusting the
+copy: Y is run against a twin of itself with `due_diligence` reset to the
+migration seed and every `price_basis` set to `null`, and `gdv_pence`, the total
+development cost, `profit_pence` and the peak debt must be identical. A pin
+copied from X proves the figures agree today; the twin proves the evidence block
+cannot move them.
+
+`report_safe` is **true** notwithstanding three unknown items, both source
+conflicts and the lapsing consent: none of §23.9's four flags is a validation
+error, and spec §23.7 gates the *document status*, not the arithmetic. That
+separation is the whole point of the seventh FINAL condition sitting where it
+does — Y is a correct appraisal whose evidence is incomplete, and it says so
+under its own banner rather than under "UNRECONCILED".
+
+#### Step 11 — the FINAL twin, and registration
+
+Y's FINAL counterpart lives in `memo-fixtures.ts` rather than as a second golden
+fixture: every entered item `green` with evidence or `not_applicable` with a
+reason, no source-record conflict, and an approved current lender case. It is
+the release-gate document — the first FINAL one with an evidenced due-diligence
+position — and it prints §13.4's third limitation arm together with
+"1 derived row remains unknown", because its own lender valuation is null.
+
+Y is registered in every fixture roster: `EXPECTED_FIXTURE_STEMS` on both sides,
+this document, `migration-notes.md` §16, and `memo-fixtures.ts`. It is the one
+document the v12 → v13 identity gate excludes by the stored-version filter
+(§16.1) — it is v13-native, so it has no v12 arm to compare against, and the
+companion test names it explicitly so the exclusion cannot grow in silence.
