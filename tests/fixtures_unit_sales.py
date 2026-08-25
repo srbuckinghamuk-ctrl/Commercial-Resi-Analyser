@@ -37,6 +37,9 @@ def unit_sales_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV
     unit_sales: None -- drop the block (the null path)
     sales_phasing_too: True -- ALSO set a single final-month tranche (rule 1 control)
     route: str       -- exit route
+    exit_fee_pct: float -- finance.exit_fee_pct override (fee-free twins isolate
+                        the phased replay's timing effect from its fee-reservation
+                        conservatism, spec Sec 5.11)
     drop_row: str    -- remove the row for that unit id
     extra_row: str   -- add a second row copying u4's for that unit id
     rows: list[dict] -- replace unit_sales.units wholesale (raw dicts)
@@ -70,6 +73,8 @@ def unit_sales_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV
         rows[2]["completion"] = _fixed(13)
     if "route" in o:
         raw["exit_strategy"]["route"] = o["route"]
+    if "exit_fee_pct" in o:
+        raw["finance"]["exit_fee_pct"] = o["exit_fee_pct"]
     if "rows" in o:
         raw["unit_sales"]["units"] = copy.deepcopy(o["rows"])
     if "drop_row" in o:

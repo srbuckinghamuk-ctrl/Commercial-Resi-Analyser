@@ -5061,22 +5061,38 @@ fixture's `committed_gross_facility` basis) out of **every** partial sweep
 event with balance > 0, not only the final redeeming one (its own doc
 comment: "principal repayment is delayed by at most `fee` per tranche"). The
 released document creates three extra small early sweep events — months 8,
-10 and 11, u1/u2/u4's exchange deposits, each well under the 520,000p fee —
-that the held twin does not have (it pays every unit's full price in one
-lump at completion): released sweeps at 6 distinct months (8, 10, 11, 12,
-13, 20), held at 3 (12, 13, 20). Released therefore incurs 5 non-final
-520,000p fee reservations against held's 2 — a real, reproducible cost that
-outweighs the benefit of receiving cash sooner. Verified by isolating the
-mechanism: with `exit_fee_pct` temporarily zeroed on both documents, the
-ordering flips to the intuitive released (33,522,952) < held (33,664,679),
-confirming the reversal on the real fixture is this fee-reservation
-conservatism, not a bug in `receipt_lines_from_unit_sales`/
-`receiptLinesFromUnitSales` or the generalised guards. Per this task's
-instruction, the arithmetic producing this is unchanged (the receipt-lines
-arm is verbatim from the brief, and the tranche arm is byte-identical) —
-only the corpus test's asserted direction was corrected, with this trail
-recorded in place of the brief's unreconciled claim. See
-`tests/test_financial_model_metrics.py`'s
+10 and 11, u1/u2/u4's exchange deposits — that the held twin does not have
+(it pays every unit's full price in one lump at completion): released
+sweeps at 6 distinct months (8, 10, 11, 12, 13, 20), held at 3 (12, 13, 20).
+At the solved G (36,624,486), the non-final sweeps are m8 1,007,658, m10
+1,162,682, m11 406,939, m12 8,731,336, m13 16,668,184 (direct replay trace):
+m8, m10, m12 and m13 each divert **exactly** 520,000p from principal (sweep
+> fee, so the fee is fully reserved); m11's sweep (406,939) is **below**
+the fee, so its entire amount is lost — repaying nothing at all, not even
+"sweep minus fee". That totals 4×520,000 + 406,939 = 2,486,939p
+diverted/lost for released, against 2×520,000 = 1,040,000p for held (m12,
+m13 only) — a 1,446,939p sweep-level gap that reconciles with the observed
+1,385,606p break-even gap (36,624,486 − 35,238,880), a real, reproducible
+cost that outweighs the benefit of receiving cash sooner.
+
+This is the timing benefit fighting the fee-reservation cost, not a broken
+implementation masquerading as one: isolating the fee reservation by
+zeroing `exit_fee_pct` on both documents (the builders' test-only
+`exit_fee_pct`/`exitFeePct` override, added for this reconciliation) flips
+the ordering back to the intuitive released (33,522,952) < held
+(33,664,679), confirming both that the reversal on the real (fee-bearing)
+fixture is this fee-reservation conservatism and not a bug in
+`receipt_lines_from_unit_sales`/`receiptLinesFromUnitSales` or the
+generalised guards, and that deposit timing genuinely helps once the
+reservation artefact is removed — a broken deposit-timing arm (e.g.
+dropping the deposit lines entirely) would only push released further above
+held on the fee-bearing fixture, never reverse the fee-free ordering. Per
+this task's instruction, the arithmetic producing the fee-bearing reversal
+is unchanged (the receipt-lines arm is verbatim from the brief, and the
+tranche arm is byte-identical) — only the corpus test's asserted direction
+on the fee-bearing fixture was corrected, with both this trail and a
+fee-free liveness assertion recorded in place of the brief's unreconciled
+claim. See `tests/test_financial_model_metrics.py`'s
 `TestUnitSalesBreakevenBasis.test_unit_sales_path_solves_the_phased_breakeven_and_agrees_with_the_engine_verified_relationship_to_held`
 and `metrics.test.ts`'s matching `describe('unit-sales break-even basis
-(spec §22.5/§5.12)')` for the full trace.
+(spec §22.5/§5.12)')` for the full trace and the fee-free assertion.

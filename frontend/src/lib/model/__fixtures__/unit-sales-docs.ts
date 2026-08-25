@@ -53,6 +53,10 @@ export interface UnitSalesDocOverrides {
   /** ALSO sets a single final-month tranche (rule 1 control). */
   salesPhasingToo?: boolean;
   route?: 'sell_all' | 'blended' | 'retain_all';
+  /** finance.exit_fee_pct override (fee-free twins isolate the phased
+   *  replay's timing effect from its fee-reservation conservatism, spec
+   *  §5.11). */
+  exitFeePct?: number;
   /** Removes the row for this unit id. */
   dropRow?: string;
   /** Adds a second row copying u4's for this unit id. */
@@ -101,6 +105,9 @@ export function unitSalesDoc(overrides: UnitSalesDocOverrides = {}): CalculatorI
   }
   if (o.route !== undefined) {
     (raw.exit_strategy as Record<string, unknown>).route = o.route;
+  }
+  if (o.exitFeePct !== undefined) {
+    (raw.finance as Record<string, unknown>).exit_fee_pct = o.exitFeePct;
   }
   if (o.rows !== undefined) {
     (raw.unit_sales as Record<string, unknown>).units = JSON.parse(JSON.stringify(o.rows));

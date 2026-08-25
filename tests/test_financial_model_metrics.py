@@ -354,7 +354,7 @@ class TestUnitSalesBreakevenBasis:
         # instructions' Step 11 "hand check") assert released < held -- the
         # intuitive claim that releasing deposits early should LOWER the
         # break-even, since cash reaches the facility sooner. It does not
-        # reconcile against either engine on fixture X.
+        # reconcile against either engine on fixture X's fee-BEARING facility.
         #
         # Root cause, confirmed by direct replay trace (not a bug in this
         # task's code): phased_replay_redeems (pre-existing, unmodified here)
@@ -364,28 +364,53 @@ class TestUnitSalesBreakevenBasis:
         # (see breakeven.py's phased_replay_redeems docstring: "principal
         # repayment is delayed by at most `fee` per tranche"). The
         # released-deposit document creates THREE extra small early sweep
-        # events (months 8, 10, 11 -- u1/u2/u4's exchange deposits, each well
-        # under the 520,000p fee) that the held twin does not have (it pays
-        # everything in one lump at each unit's completion): released sweeps
-        # at 6 distinct months, held at 3. Each of the released document's 5
-        # non-final events reserves 520,000p that is never actually applied to
-        # principal, versus 2 for held -- a real, reproducible cost that
-        # outweighs the benefit of receiving cash sooner. Verified two ways:
-        # (a) a replay trace at each document's own solved G shows exactly 5
-        # vs 2 non-final reservations; (b) with exit_fee_pct temporarily
-        # zeroed (isolating the reservation mechanism), the ordering flips to
-        # the intuitive released (33,522,952) < held (33,664,679) -- proving
-        # the reversal on the real fixture is the fee-reservation
-        # conservatism, not a defect in receipt_lines_from_unit_sales or the
-        # guards. Per this task's instruction, the arithmetic that produces
-        # this is unchanged (verbatim from the brief) -- only the test's
-        # asserted direction is corrected, with this trail in place of the
-        # brief's unreconciled claim.
+        # events (months 8, 10, 11 -- u1/u2/u4's exchange deposits) that the
+        # held twin does not have (it pays everything in one lump at each
+        # unit's completion): released sweeps at 6 distinct months, held at 3.
+        # At the solved G (36,624,486), the non-final sweeps are m8
+        # 1,007,658, m10 1,162,682, m11 406,939, m12 8,731,336, m13
+        # 16,668,184 (direct replay trace): m8, m10, m12 and m13 each divert
+        # EXACTLY 520,000p from principal (sweep > fee, so the fee is fully
+        # reserved); m11's sweep (406,939) is BELOW the fee, so its entire
+        # amount is lost -- repaying nothing at all, not even "sweep minus
+        # fee". That totals 4x520,000 + 406,939 = 2,486,939p diverted/lost
+        # for released, against 2x520,000 = 1,040,000p for held (m12, m13
+        # only) -- a 1,446,939p sweep-level gap that reconciles with the
+        # observed 1,385,606p break-even gap (36,624,486 - 35,238,880), a
+        # real, reproducible cost that outweighs the benefit of receiving
+        # cash sooner.
+        #
+        # This IS the timing benefit fighting the fee-reservation cost, not a
+        # broken implementation masquerading as one: isolate the fee
+        # reservation by zeroing exit_fee_pct on both documents (§22.5's
+        # test-only `exit_fee_pct` override) and the ordering flips back to
+        # the intuitive released < held, proving deposit timing genuinely
+        # helps once the reservation artefact is removed, and that a broken
+        # arm (e.g. dropping the deposit lines entirely) would only push
+        # released further above held, not reverse it. Per this task's
+        # instruction, the arithmetic that produces the fee-bearing reversal
+        # is unchanged (verbatim from the brief) -- only the test's asserted
+        # direction on the fee-bearing fixture is corrected, with this trail
+        # in place of the brief's unreconciled claim, and the fee-free
+        # liveness guard below is the assertion that actually falsifies a
+        # broken deposit-timing implementation.
         released = run_appraisal(unit_sales_doc()).metrics
         held = run_appraisal(held_twin_doc()).metrics
         assert released.senior_breakeven_pence is not None and held.senior_breakeven_pence is not None
         assert released.senior_breakeven_pence > held.senior_breakeven_pence
         assert not any(f.code == "senior_breakeven_unsolvable" for f in released.flags)
+
+        # Fee-free twins: with the fee-reservation conservatism isolated out
+        # (exit_fee_pct=0 on both), released is genuinely lower than held --
+        # 33,522,952 vs 33,664,679 -- the timing-liveness guard the fixture-fee
+        # assertion above cannot provide on its own.
+        fee_free_released = run_appraisal(unit_sales_doc({"exit_fee_pct": 0})).metrics
+        fee_free_held = run_appraisal(
+            unit_sales_doc({"deposit_release": "held_to_completion", "exit_fee_pct": 0}),
+        ).metrics
+        assert fee_free_released.senior_breakeven_pence is not None
+        assert fee_free_held.senior_breakeven_pence is not None
+        assert fee_free_released.senior_breakeven_pence < fee_free_held.senior_breakeven_pence
 
     def test_developer_breakeven_uses_the_per_unit_cost_basis(self):
         # Same document with u3's 2.0% override removed: the blended rate falls

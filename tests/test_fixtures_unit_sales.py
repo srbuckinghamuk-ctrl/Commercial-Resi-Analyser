@@ -42,6 +42,7 @@ def test_variants_differ_from_x_by_exactly_their_one_change():
     rd = residue_doc()
     assert [u.estimated_value_pence for u in rd.unit_mix.units] == [10_000_000] * 3
     assert rd.exit_strategy.selling_legal_fee_pence == 100
+    assert unit_sales_doc({"exit_fee_pct": 0}).finance.exit_fee_pct == 0
 
 
 def test_every_builder_validates_clean_before_task_5_adds_rules():

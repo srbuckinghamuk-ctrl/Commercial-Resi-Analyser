@@ -46,6 +46,7 @@ describe('unit-sales-docs fixture builders', () => {
     const rd = residueDoc();
     expect(rd.unit_mix.units.map((u) => u.estimated_value_pence)).toEqual([10_000_000, 10_000_000, 10_000_000]);
     expect(rd.exit_strategy.selling_legal_fee_pence).toBe(100);
+    expect(unitSalesDoc({ exitFeePct: 0 }).finance.exit_fee_pct).toBe(0);
   });
 
   it('every builder validates clean before Task 5 adds rules', () => {
