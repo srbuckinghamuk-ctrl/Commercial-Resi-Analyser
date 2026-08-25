@@ -19,7 +19,8 @@ import {
 } from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
 import type { Jurisdiction } from './tax/acquisition-tax';
-import type { RecoveryBasis, VatChargeCategory } from './model';
+import type { RecoveryBasis, VatChargeCategory, QsStage } from './model';
+import type { DdCategory, DdRow, DdStatus } from './model/due-diligence';
 import type { ProposedUnit, ProposedUnitV6, UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { calculateGdv } from './conversion-calc-engine';
@@ -119,6 +120,50 @@ const VAT_CATEGORY_LABEL: Record<VatChargeCategory, string> = {
   lender_ancillary: 'Lender ancillary fees',
 };
 
+/** R15 spec §23.8. The six due-diligence categories, in DD_CATEGORIES order
+ *  (model/due-diligence.ts) — never reordered here. `humanise` would print
+ *  "Title Occupation" and "Existing Building"; these are the names a lender
+ *  reads, kept beside the memo's other label tables for the same reason. */
+const DD_CATEGORY_LABEL: Record<DdCategory, string> = {
+  planning: 'Planning',
+  title_occupation: 'Title and occupation',
+  existing_building: 'Existing building',
+  construction: 'Construction',
+  finance: 'Finance',
+  exit: 'Exit',
+};
+
+/** R15 spec §23.8. Status words as the schedule prints them. `not_applicable`
+ *  is two words on the page and one key in the model. */
+const DD_STATUS_LABEL: Record<DdStatus, string> = {
+  red: 'Red',
+  amber: 'Amber',
+  green: 'Green',
+  unknown: 'Unknown',
+  not_applicable: 'Not applicable',
+};
+
+/** R15 spec §23.8. Status inside a sentence (§3's two lines), lower case. */
+const DD_STATUS_WORD: Record<DdStatus, string> = {
+  red: 'red',
+  amber: 'amber',
+  green: 'green',
+  unknown: 'unknown',
+  not_applicable: 'not applicable',
+};
+
+/** R15 spec §23.6. The cost plan's QS stage, named rather than keyed — this is
+ *  the first surface to print one at all, so the table lives here with the
+ *  memo's other label tables until a UI needs its own. */
+const QS_STAGE_LABEL: Record<QsStage, string> = {
+  order_of_cost: 'Order of cost',
+  riba_2: 'RIBA Stage 2',
+  riba_3: 'RIBA Stage 3',
+  riba_4: 'RIBA Stage 4',
+  tender: 'Tender',
+  contract_sum: 'Contract sum',
+};
+
 /** Spec §14. The reader is told which country's regime was applied, not the
  *  internal key. Kept beside the memo's other label tables so a new
  *  jurisdiction cannot be added without a printed name for it. */
@@ -142,6 +187,22 @@ function formatBandDate(iso: string): string {
   if (m === null) return iso;
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${Number(m[3])} ${months[Number(m[2]) - 1]} ${m[1]}`;
+}
+
+/**
+ * R15 spec §23.8. A due-diligence or QS calendar date, or `-` when the field is
+ * unknown (spec §1.5 — never a defaulted date).
+ *
+ * `formatBandDate`, not `fmtDate`: every date this prints (`evidence.date`,
+ * `expiry_date`, `due_date`, `qs.date`, `qs.base_date`) is a plain ISO calendar
+ * date with no time or zone, exactly like `band_set_effective_from`, and
+ * `fmtDate`'s `new Date(...)` would re-read it as UTC midnight and print the
+ * previous day for any reader west of Greenwich — see `formatBandDate`'s own
+ * comment. `captured_at` IS a timestamp, and is sliced to its date part by the
+ * caller rather than shifted by a zone the engine does not carry (spec §1.4).
+ */
+function fmtPlainDate(iso: string | null): string {
+  return iso ? formatBandDate(iso) : '-';
 }
 
 /**
@@ -201,6 +262,13 @@ function fmtPctSafe(pct: number | null, naLabel = 'n/a'): string {
  */
 function fmtPctExact(pct: number): string {
   return `${Number(pct.toFixed(2))}%`;
+}
+
+/** `fmtPctExact` for a percentage that may be `null` — `pct()` returns null on
+ *  a zero denominator (spec §1.5), which is a fact about the document, not a
+ *  zero. Used by R13b's pre-sold coverage and R15's price-basis coverage. */
+function fmtPctExactSafe(pct: number | null, naLabel = 'n/a'): string {
+  return pct === null ? naLabel : fmtPctExact(pct);
 }
 
 /** A coverage ratio (DSCR/ICR), or `null` when the cap could not be computed
@@ -452,13 +520,29 @@ export function generateInvestmentMemo(
   // result the same way it carries no `unit_sales` input field at all. The
   // exit paragraph and the "Unit Sales Ledger" section below read only this.
   const unitSales = metrics.unit_sales;
+  // R15 (spec §23.8). `metrics.due_diligence` — computed once in
+  // `deriveMetrics` and, unlike `unit_sales`/`monitoring_statement`, NEVER
+  // null: a document from before v13 reads as §23.10's all-unknown seed, so
+  // the section below prints on every route at every version. Four surfaces
+  // read it (§3's two sentences, §9's schedule, Appendix B's information
+  // schedule and §13's limitation 5) and none of them recomputes a count: the
+  // category counts, the totals, `addressed_pct`, the impact total, the
+  // programme maximum and the unassessed count are all fields on this block.
+  const dd = metrics.due_diligence;
+  const ddTotals = dd.totals;
+  // The one partition the block does not carry as a number. Identical to the
+  // filter `dueDiligenceFlags` (model/due-diligence.ts) applies for its own
+  // "N of M entered items unknown" message, so the flag banner and §13's
+  // limitation cannot print two different denominators for the same document.
+  const ddEnteredRows = dd.rows.filter((r) => r.kind !== 'derived');
+  const ddRow = (code: string): DdRow | null => dd.rows.find((r) => r.code === code) ?? null;
   // `fmtPctSafe` (module-level, one decimal) would silently round
   // `pre_sold.pct` (computed to two decimals by `pct()`, model/pct.ts —
   // e.g. fixture X's 81.48) to "81.5%", disagreeing with the result block
   // by a printed digit. Null-safe pairing of `fmtPctExact` above, for the
   // same reason §19.6's yield/purchaser's-costs figures use it instead of
   // `fmtPctSafe`.
-  const fmtPreSoldPct = (p: number | null) => (p === null ? 'n/a' : fmtPctExact(p));
+  const fmtPreSoldPct = (p: number | null) => fmtPctExactSafe(p);
   // Finding 2 (Task 4 fix round 1): `anchor_month` exists on BOTH the legacy and
   // v9 shapes and was never shape-dependent — read it from the un-narrowed
   // value via the same centralised helper CashflowPage.tsx uses, not from
@@ -1131,6 +1215,46 @@ export function generateInvestmentMemo(
     `Conversion of existing ${project.use_class.replace(/_/g, ' ')} premises to ${unitCount} residential unit${unitCount !== 1 ? 's' : ''} comprising a total of ${totalSqm.toLocaleString()} m² (${totalSqft.toLocaleString()} sq ft) net internal area.`,
   );
 
+  // R15 (spec §23.8). The two facts a reader of a conversion scheme checks
+  // first, read from §9's evidence schedule rather than asserted here: the
+  // consent the scheme relies on (with its reference, decision and lapse
+  // date) and whether the site will be empty. Both print their status word
+  // whatever it is — an unexamined document says "unknown" in the same place
+  // an evidenced one says "green", which is the whole point of §23.4's rule
+  // that unknown is never treated as green.
+  const ddPlanningSentences: string[] = [];
+  const ddPlanningRow = ddRow('planning_route');
+  if (ddPlanningRow !== null) {
+    const status = DD_STATUS_WORD[ddPlanningRow.status];
+    // Assembled from whichever of the four fields the row actually carries.
+    // Every one of them is optional on an amber or unknown row, so a fixed
+    // sentence shape would print "- , decided -" on a document that has
+    // recorded nothing — which is what the "no consent evidenced" arm is for.
+    const detail: string[] = [];
+    const evidence = ddPlanningRow.evidence;
+    if (evidence !== null) {
+      const reference = [evidence.source, evidence.reference].filter((p) => p !== '').join(' ');
+      if (reference !== '') detail.push(reference);
+      if (evidence.date) detail.push(`decided ${fmtPlainDate(evidence.date)}`);
+    }
+    if (ddPlanningRow.expiry_date) detail.push(`lapses ${fmtPlainDate(ddPlanningRow.expiry_date)}`);
+    ddPlanningSentences.push(
+      detail.length === 0
+        ? `Planning: ${status} - no consent evidenced.`
+        : `Planning: ${status} - ${detail.join(', ')}.`,
+    );
+  }
+  const ddVacantRow = ddRow('vacant_possession');
+  if (ddVacantRow !== null) {
+    ddPlanningSentences.push(`Vacant possession: ${DD_STATUS_WORD[ddVacantRow.status]}.`);
+  }
+  // §23.9 validation rule 1 reports a missing catalogue item; the memo cannot
+  // invent the row, so with neither present there is no paragraph at all
+  // rather than a sentence about nothing.
+  if (ddPlanningSentences.length > 0) {
+    y = bodyText(y, ddPlanningSentences.join(' '));
+  }
+
   y = subHeading(y, 'Proposed Unit Mix');
   table({
     startY: y,
@@ -1426,16 +1550,41 @@ export function generateInvestmentMemo(
   //
   // R10 Task 13 (CARRIED-1 / spec §16): the section is now mode-dependent.
   // Headline mode keeps the R7 phrase verbatim. Detailed mode is a priced QS
-  // package schedule in shape, but this release records no QS provenance
-  // (source, date, status — R15), so the heading says exactly that rather than
-  // implying an evidence status the model does not carry.
+  // package schedule in shape; before R15 the model recorded no QS provenance
+  // at all, so the heading had to say so. R15 (spec §23.6) records it, and the
+  // heading now carries the "not recorded" qualifier only while the document
+  // genuinely has none — the same rule the §13 limitation below follows, for
+  // the same reason: a disclosure that outlives the gap it described is as
+  // misleading as no disclosure at all.
   const cp = metrics.cost_plan;
   y = subHeading(
     y,
     cp.mode === 'detailed'
-      ? 'Detailed Cost Plan — QS Evidence Not Recorded'
+      ? (cp.qs === null ? 'Detailed Cost Plan — QS Evidence Not Recorded' : 'Detailed Cost Plan')
       : 'Headline Cost Estimate',
   );
+  // R15 (spec §23.6/§23.8). The QS provenance line and the price-basis
+  // coverage, both read off `metrics.cost_plan` — the two percentages are
+  // `pct()`'s own output on the result block, not a division taken here.
+  if (cp.mode === 'detailed') {
+    if (cp.qs === null) {
+      y = bodyText(y, 'No QS source, date or status is recorded for this cost plan.');
+    } else {
+      const basis = cp.price_basis;
+      y = bodyText(
+        y,
+        `Priced by ${cp.qs.source}, ${QS_STAGE_LABEL[cp.qs.stage]}, dated ${fmtPlainDate(cp.qs.date)}, `
+        + `status ${cp.qs.status}.`
+        + (basis === null
+          ? ''
+          : ` Fixed-price coverage ${fmtPctExactSafe(basis.fixed_price_coverage_pct)} of base build; `
+            + `provisional sums ${fmt(basis.provisional_sums_pence)} `
+            + `(${fmtPctExactSafe(basis.provisional_sums_pct)}); `
+            + `unclassified ${fmt(basis.unclassified_pence)}.`)
+        + ` Cost base date ${fmtPlainDate(cp.qs.base_date)}.`,
+      );
+    }
+  }
   // Every row below is either a raw stored input (rate, area) or an
   // engine-computed figure from run.metrics.cost_plan / run.model.totals — no
   // cost or fee amount is derived here (spec §11.9). CARRIED-1: the eight fee
@@ -1453,6 +1602,30 @@ export function generateInvestmentMemo(
     pct_of_construction_total: '% of construction total',
   } as const;
   type MemoRow = [string, string, string];
+  /**
+   * R15 (spec §23.6/§23.8). A package priced as a provisional sum or an
+   * estimate is not a price, and what it leaves out is the reader's first
+   * question — so that package's own `notes` print beside its amount, labelled
+   * with the basis that makes them material. A fixed-price or untagged package
+   * prints nothing here: its notes are not exclusions from a price.
+   *
+   * Read from the INPUT line, not from `cp.packages`: `CostPackageLine` (the
+   * result type) carries neither `notes` nor `price_basis` — both are input
+   * fields the engine consumes into `price_basis` totals rather than
+   * republishes per line. Guarded with `in`, exactly like `vatInputs` and
+   * `refinance` above, because a pre-v7 document has no `cost_plan` block at
+   * all and reaches this function through `costPlanOf`'s legacy fallback.
+   */
+  const rawCostPackages = 'cost_plan' in inputs ? inputs.cost_plan.packages : [];
+  const PRICE_BASIS_LABEL = { provisional_sum: 'Provisional sum', estimate: 'Estimate' } as const;
+  function packageExclusion(packageId: string): string {
+    const raw = rawCostPackages.find((p) => p.id === packageId);
+    if (raw == null) return '';
+    const basis = raw.price_basis ?? null;
+    if (basis !== 'provisional_sum' && basis !== 'estimate') return '';
+    const notes = raw.notes.trim();
+    return notes === '' ? PRICE_BASIS_LABEL[basis] : `${PRICE_BASIS_LABEL[basis]} — ${notes}`;
+  }
   const constructionRows: MemoRow[] =
     cp.mode === 'detailed'
       ? [
@@ -1460,7 +1633,7 @@ export function generateInvestmentMemo(
           ...cp.packages.map((p): MemoRow => [
             `    ${p.label || humanise(p.code)} (${humanise(p.code)})`,
             fmt(p.amount_pence),
-            '',
+            packageExclusion(p.id),
           ]),
         ]
       : [
@@ -2215,9 +2388,185 @@ export function generateInvestmentMemo(
     'Day-one LTV = the actual month-0 senior advance (not the committed facility) ÷ purchase price, or ÷ day-one market value where provided (spec §5.1). Dividing the total committed facility by purchase price is not a valid day-one LTV and is never reported.',
   );
 
-  // ── Section 9: Risk Register ──
-  y = sectionTitle(y, 9, 'Risk Register');
+  // ── Section 9: Due Diligence and Risk ──
+  //
+  // R15 (spec §23.8). The section this replaces was a free-form risk register
+  // plus a nine-phrase substring match over the entered risk descriptions — a
+  // document that mentioned the word "planning" anywhere in a risk line was
+  // reported as having covered planning risk, and one that did not was told
+  // to add it. That is not an evidence position, and §13's own limitation said
+  // so. What prints here now is the schedule itself: every catalogue item with
+  // its status, its evidence, its expiry, its owner and its stated impact, the
+  // derived rows marked as derived, the source-record conflicts as information
+  // required, and the risk register kept below as the project log it always
+  // was.
+  //
+  // Every figure is read off `metrics.due_diligence` (see the `dd` local at the
+  // top of this function). The only local arithmetic is the count of assessed
+  // rows whose impacts are stated — red plus amber less the block's own
+  // `unassessed_impact_count` — which is a presentational count of two
+  // already-computed counts, in the same family as this file's £/sq ft
+  // conversions, not a re-derivation of any figure.
+  y = sectionTitle(y, 9, 'Due Diligence and Risk');
 
+  y = bodyText(
+    y,
+    `The evidence schedule carries ${ddTotals.total} items: ${ddTotals.red} red, `
+    + `${ddTotals.amber} amber, ${ddTotals.green} green, ${ddTotals.unknown} unknown, `
+    + `${ddTotals.not_applicable} not applicable. `
+    + `${fmtPctExactSafe(ddTotals.addressed_pct)} of the ${ddEnteredRows.length} entered items are `
+    + `addressed — evidenced, or marked not applicable with a reason — and `
+    + `${ddTotals.entered_unknown_count} remain unknown. An unknown item is never treated as green `
+    // Not "the five derived rows": the count belongs to the catalogue
+    // (DD_CATALOGUE, model/due-diligence.ts), and a number restated here is a
+    // number that can drift from it.
+    + '(spec §23.4). The rows marked derived are graded from the document\'s own cost, funding and '
+    + 'tax inputs and are not entered on the schedule.',
+  );
+
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [['Category', 'Red', 'Amber', 'Green', 'Unknown', 'N/A', 'Total']],
+    body: dd.categories.map((c) => [
+      DD_CATEGORY_LABEL[c.category],
+      `${c.red}`, `${c.amber}`, `${c.green}`, `${c.unknown}`, `${c.not_applicable}`, `${c.total}`,
+    ]),
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    alternateRowStyles: { fillColor: [241, 245, 249] },
+    columnStyles: {
+      1: { halign: 'center', cellWidth: 18 },
+      2: { halign: 'center', cellWidth: 18 },
+      3: { halign: 'center', cellWidth: 18 },
+      4: { halign: 'center', cellWidth: 20 },
+      5: { halign: 'center', cellWidth: 18 },
+      6: { halign: 'center', cellWidth: 18 },
+    },
+  });
+  y = lastAutoTableFinalY(doc) + 6;
+
+  const ddAssessedCount = ddTotals.red + ddTotals.amber;
+  if (ddAssessedCount > 0) {
+    const statedCount = ddAssessedCount - ddTotals.unassessed_impact_count;
+    y = bodyText(
+      y,
+      `The ${ddAssessedCount} red and amber items carry a stated cost impact `
+      + `${fmt(ddTotals.cost_impact_total_pence)} across ${statedCount} `
+      + `item${statedCount === 1 ? '' : 's'}, `
+      + `${ddTotals.programme_impact_max_months === null
+          ? 'no stated programme impact'
+          : `at least ${ddTotals.programme_impact_max_months} `
+            + `month${ddTotals.programme_impact_max_months === 1 ? '' : 's'}`}, `
+      + `${ddTotals.unassessed_impact_count} `
+      + `item${ddTotals.unassessed_impact_count === 1 ? '' : 's'} not yet assessed. `
+      + 'None of these figures is in the appraisal: they are what the schedule states is still to '
+      + 'be priced or programmed.',
+    );
+  }
+
+  table({
+    startY: y,
+    margin: { left: MARGIN_L, right: MARGIN_R },
+    head: [[
+      'Category', 'Item', 'Status', 'Evidence', 'Expiry', 'Owner', 'Due',
+      'Cost impact', 'Prog. mths', 'Action',
+    ]],
+    body: dd.rows.map((r) => [
+      DD_CATEGORY_LABEL[r.category],
+      // §23.2: a derived row is graded from another block and is not evidence
+      // anyone can go and gather, so it says so on its own line rather than in
+      // a legend the reader has to hold in their head.
+      r.kind === 'derived' ? `${r.label} (derived)` : r.label,
+      DD_STATUS_LABEL[r.status],
+      r.evidence === null
+        ? (r.source === null ? '-' : `derived from ${r.source}`)
+        : [r.evidence.source, r.evidence.reference, fmtPlainDate(r.evidence.date || null)]
+            .filter((part) => part !== '' && part !== '-')
+            .join(' · '),
+      fmtPlainDate(r.expiry_date),
+      r.owner || '-',
+      fmtPlainDate(r.due_date),
+      r.cost_impact_pence === null ? '-' : fmt(r.cost_impact_pence),
+      r.programme_impact_months === null ? '-' : `${r.programme_impact_months}`,
+      r.action || '-',
+    ]),
+    // Ten columns: 7 pt, as every table wider than the risk register uses.
+    styles: { fontSize: 7, cellPadding: 1.2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+    bodyStyles: { textColor: [51, 65, 85] },
+    alternateRowStyles: { fillColor: [241, 245, 249] },
+    // Fixed and summing to CONTENT_W (170 mm). Set by measuring, not by
+    // eye: autoTable breaks INSIDE a word when a cell is narrower than the
+    // longest word it holds, and the first pass printed "Unknow n", "Not
+    // appli cable" and "pre-com mencement". Each width here clears its
+    // column's longest single word at 7 pt — "applicable" (status),
+    // "26/01234/FUL" (evidence), "pre-commencement" (action).
+    columnStyles: {
+      0: { cellWidth: 16 },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 15 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 14 },
+      5: { cellWidth: 15 },
+      6: { cellWidth: 11 },
+      7: { cellWidth: 12, halign: 'right' },
+      8: { cellWidth: 9, halign: 'right' },
+      9: { cellWidth: 26 },
+    },
+    didParseCell(data) {
+      // The status column, coloured exactly as the risk register's likelihood
+      // and impact columns are — plus the two states a risk register has no
+      // word for: grey for unknown, lighter grey for not applicable.
+      if (data.section === 'body' && data.column.index === 2) {
+        const status = String(data.cell.raw);
+        if (status === DD_STATUS_LABEL.red) data.cell.styles.textColor = [220, 38, 38];
+        else if (status === DD_STATUS_LABEL.amber) data.cell.styles.textColor = [217, 119, 6];
+        else if (status === DD_STATUS_LABEL.green) data.cell.styles.textColor = [22, 163, 74];
+        else if (status === DD_STATUS_LABEL.unknown) data.cell.styles.textColor = [100, 116, 139];
+        else data.cell.styles.textColor = [148, 163, 184];
+      }
+    },
+  });
+  y = lastAutoTableFinalY(doc) + 6;
+
+  // §23.4's source-record checks. The statement is the engine's own string —
+  // the memo reports a conflict, it does not decide or reword one.
+  for (const conflict of dd.source_conflicts) {
+    y = infoRequired(y, conflict.statement);
+  }
+
+  const ddRecord = dd.source_record;
+  if (ddRecord === null) {
+    y = bodyText(y, 'No listing record captured; source-conflict checks did not run.');
+  } else {
+    const recordParts: string[] = [];
+    if (ddRecord.tenure) recordParts.push(`tenure ${ddRecord.tenure}`);
+    if (ddRecord.lease_years_remaining !== null) {
+      recordParts.push(`${ddRecord.lease_years_remaining} years unexpired`);
+    }
+    if (ddRecord.floor_area_sqm !== null) {
+      recordParts.push(`floor area ${ddRecord.floor_area_sqm.toLocaleString()} m²`);
+    }
+    if (ddRecord.use_class) recordParts.push(`use class ${ddRecord.use_class}`);
+    if (ddRecord.epc_rating) recordParts.push(`EPC ${ddRecord.epc_rating}`);
+    if (ddRecord.is_vacant !== null) {
+      recordParts.push(ddRecord.is_vacant ? 'recorded as vacant' : 'recorded as occupied');
+    }
+    y = bodyText(
+      y,
+      `Listing record captured from ${ddRecord.source_name ?? 'an unnamed source'} on `
+      // The date part of a timestamp, sliced rather than put through a zone
+      // conversion the engine does not carry (spec §1.4).
+      + `${fmtPlainDate(ddRecord.captured_at.slice(0, 10))}`
+      + `${recordParts.length > 0 ? `: ${recordParts.join(', ')}` : ''}. `
+      + 'It is a listing, not a title document: it is here so that a statement in this appraisal '
+      + 'which contradicts it is visible rather than silent.',
+    );
+  }
+
+  y = subHeading(y, 'Risk register (project log)');
   if (inputs.risks.length > 0) {
     table({
       startY: y,
@@ -2254,23 +2603,6 @@ export function generateInvestmentMemo(
     y = lastAutoTableFinalY(doc) + 6;
   } else {
     y = infoRequired(y, 'Risk register — no risks have been entered in the calculator');
-  }
-
-  y = bodyText(
-    y,
-    'The risk register should cover: planning risk, cost inflation, contractor insolvency, ground conditions / existing structure, MEES/EPC compliance, building safety (Gateway 2/3 where applicable), sales rate, interest rate, and exit liquidity.',
-  );
-
-  const missingRiskCategories = [
-    'planning', 'cost inflation', 'contractor insolvency', 'ground conditions',
-    'MEES/EPC', 'building safety', 'sales rate', 'interest rate', 'exit liquidity',
-  ];
-  const enteredDescriptions = inputs.risks.map((r) => r.description.toLowerCase());
-  const missing = missingRiskCategories.filter(
-    (cat) => !enteredDescriptions.some((d) => d.includes(cat.toLowerCase())),
-  );
-  if (missing.length > 0) {
-    y = infoRequired(y, `Risks not yet addressed: ${missing.join(', ')}`);
   }
 
   // ── Section 10: Sensitivity & Downside ──
@@ -2862,8 +3194,29 @@ export function generateInvestmentMemo(
   // in the list above under slightly different wording (items 8, 9 and 10), so
   // folding that block in here printed each of them twice. The block is gone;
   // the items it duplicated stay where they were.
-  if (missing.length > 0) {
-    infoItems.push(`Risk register gaps: ${missing.join(', ')}`);
+  // R15 (spec §23.8). The line this replaces was "Risk register gaps: …", the
+  // nine-phrase substring match's output — a list of words the risk
+  // descriptions did not happen to contain. What a lender is owed instead is
+  // the document's own list of items it records as unevidenced, named by their
+  // catalogue labels (the same labels §9's schedule prints, so a reader can
+  // find each one in the table above).
+  if (ddTotals.entered_unknown_count > 0) {
+    const unknownLabels = ddEnteredRows.filter((r) => r.status === 'unknown').map((r) => r.label);
+    // Named individually up to a bound, then counted. An unexamined document
+    // has every entered item unknown, and spelling all 23 labels out turns one
+    // line of a numbered checklist into five — which is how this line pushed
+    // the Limitations table's last row onto a page of its own (the release
+    // gate's sparse-page check, legacy route). Appendix B is the list of what
+    // is outstanding; §9's schedule is where each one is named, and the
+    // overflow says so rather than pretending there are only six.
+    const LISTED_UNKNOWN_MAX = 6;
+    const listed = unknownLabels.slice(0, LISTED_UNKNOWN_MAX).join(', ');
+    const beyond = unknownLabels.length - LISTED_UNKNOWN_MAX;
+    infoItems.push(
+      `Due diligence: ${ddTotals.entered_unknown_count} `
+      + `item${ddTotals.entered_unknown_count === 1 ? '' : 's'} unknown - ${listed}`
+      + `${beyond > 0 ? `, and ${beyond} more (see Section 9)` : ''}`,
+    );
   }
   table({
     startY: y,
@@ -2932,8 +3285,19 @@ export function generateInvestmentMemo(
     // (the acquisition-tax and area-bridge limitations above/below). The
     // honest residual limitation in detailed mode is not "no package
     // schedule" but "no QS evidence behind the schedule" (R15).
+    // R15 (spec §23.6/§13.4). Detailed mode now has two arms for the same
+    // reason R10 gave it two modes: the sentence must describe THIS document.
+    // With a QS record the residual limitation is no longer "no QS evidence" —
+    // it is what the priced schedule actually covers, so the sentence names
+    // the QS, the stage, the date, the status and the fixed-price coverage.
+    // Without one the pre-R15 sentence is unchanged and still true.
     cp.mode === 'detailed'
-      ? 'Construction cost rests on a priced package schedule (a detailed cost plan), not a rate x area estimate. No QS source, date or status is recorded for any package or fee line, and no provisional sums, fixed-price coverage or package-level exclusions are modelled.'
+      ? (cp.qs === null
+          ? 'Construction cost rests on a priced package schedule (a detailed cost plan), not a rate x area estimate. No QS source, date or status is recorded for any package or fee line, and no provisional sums, fixed-price coverage or package-level exclusions are modelled.'
+          : 'Construction cost rests on a priced package schedule (a detailed cost plan) priced by '
+            + `${cp.qs.source} (${QS_STAGE_LABEL[cp.qs.stage]}, ${fmtPlainDate(cp.qs.date)}, `
+            + `${cp.qs.status}); fixed-price coverage `
+            + `${cp.price_basis === null ? 'not classified' : fmtPctExactSafe(cp.price_basis.fixed_price_coverage_pct)}.`)
       : 'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
     // R11 (spec §17.13). This sentence used to say VAT was not modelled as a
     // cash flow at all — false the moment the VAT engine shipped (Section 5,
@@ -2980,7 +3344,30 @@ export function generateInvestmentMemo(
     bridge.developed_gia_sqm > 0
       ? 'Areas rest on the entered area schedule (Section 3), reconciled from existing GIA through to net internal area; see that schedule for every entered and derived line and the stated basis of the construction cost area.'
       : 'No area schedule has been entered for this appraisal. Areas are taken from the unit schedule and the entered construction area only, with no existing-to-developed reconciliation to check them against.',
-    'Technical, title, occupation and planning due diligence is recorded as narrative and as a free-form risk register, not as an evidenced schedule with status, owner and date.',
+    // R15 (spec §23.8/§13.4). The sentence this replaces said due diligence
+    // was narrative and a free-form risk register with no evidenced schedule —
+    // false the moment §9's schedule shipped, which is the same
+    // stale-disclosure fault R8, R9 and R10 each fixed in this very list. What
+    // replaces it is conditioned on the document, and has three arms because
+    // there are three states and they are not interchangeable: items still
+    // unknown, items assessed but open, and a schedule with nothing left to
+    // do. Collapsing the middle arm into either neighbour would put a false
+    // statement in a lender document — "every item is evidenced" over an amber
+    // row with no evidence, or "N remain unknown" where none do.
+    ddTotals.entered_unknown_count > 0
+      ? `Due diligence is recorded as an evidenced schedule with status, owner and date (Section 9), `
+        + `but ${ddTotals.entered_unknown_count} of ${ddEnteredRows.length} due-diligence items `
+        + 'remain unknown; an unknown item is never treated as green, and each one must be '
+        + 'evidenced before the position stated here is relied on.'
+      : ddAssessedCount > 0
+        ? 'Due diligence is recorded as an evidenced schedule with status, owner and date '
+          + `(Section 9): no due-diligence item is unknown, but ${ddAssessedCount} remain red or `
+          + 'amber with an action outstanding, and the cost and programme impacts stated against '
+          + 'them are not in the appraisal.'
+        : 'Due diligence is recorded as an evidenced schedule with status, owner and date '
+          + '(Section 9): every due-diligence item is evidenced or marked not applicable. The '
+          + 'schedule records what the sponsor holds; it is not a legal, technical or valuation '
+          + 'opinion on what those documents say.',
   ];
   if (metrics.lender_gdv_pence === null) {
     limitations.push('No lender-underwritten valuation has been provided. Every loan-to-value figure on a lender basis is therefore unavailable rather than assumed from the developer GDV.');

@@ -5,7 +5,8 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, AreaBridgeInputs, MonitoringStatement,
+  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV13,
+  AreaBridgeInputs, MonitoringStatement,
 } from './model';
 import {
   runAppraisal, migrateInputs, DEFAULT_AREA_BRIDGE,
@@ -32,6 +33,9 @@ import {
 import {
   unitSalesDoc, heldTwinDoc, memoText as unitSalesMemoText,
 } from './model/__fixtures__/unit-sales-docs';
+// R15 (spec §23.8). Aliased for the same reason as `unitSalesMemoText` above:
+// a third independent `memoText`, over fixture Y's v13 documents.
+import { ddDoc, memoText as ddMemoText } from './model/__fixtures__/due-diligence-docs';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -2211,5 +2215,198 @@ describe('§22.6 unit sales ledger', () => {
     const text = documentText(await inspectPdf(blob));
     expect(text).toContain('£123,456');
     expect(text).toContain('Pre-sold 55.55%');
+  });
+});
+
+/**
+ * R15 (spec §23.8). The due-diligence schedule, the source-record line, the
+ * QS provenance line and the conditioned §13 limitation.
+ *
+ * Every document here is fixture Y (`ddDoc()`, fixtures/financial-model/
+ * y-due-diligence.json) or ONE named deviation from it. That matters for what
+ * these assertions prove: the migration seed prints the same section with
+ * every row unknown, so an assertion that would also pass on `ddDoc({ seed:
+ * true })` is not a test of the schedule. Where the two arms differ (§3's
+ * sentences, the QS line, the §13 limitation) both are asserted.
+ */
+describe('§23.8 due diligence on the memo', () => {
+  // `ddMemoText` returns `documentText` — one DRAWN item per line, so a table
+  // row's cells and a wrapped sentence are separated by newlines. This is
+  // `documentProse`'s normalisation applied to that same string (rather than
+  // re-rendering the PDF a second time to get it), and it is what any
+  // assertion spanning a wrap point or a row's cells has to read.
+  const prose = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+  /** Fixture Y with every entered item green-with-evidence or n/a-with-notes —
+   *  the twin the §13 "fully evidenced" arm is written for. Built by mapping
+   *  the loaded document's items, not by restating 24 override entries. */
+  function fullyEvidencedDoc(): CalculatorInputsV13 {
+    const doc = ddDoc();
+    return {
+      ...doc,
+      due_diligence: {
+        ...doc.due_diligence,
+        items: doc.due_diligence.items.map((item) => (
+          item.status === 'not_applicable'
+            ? item
+            : {
+                ...item,
+                status: 'green' as const,
+                evidence: item.evidence ?? {
+                  source: 'Sponsor evidence pack', reference: `${item.code} evidence`, date: '2026-08-20',
+                },
+              }
+        )),
+      },
+    };
+  }
+
+  it('retitles §9, prints the six category counts and the totals sentence', async () => {
+    const t = await ddMemoText(ddDoc());
+    expect(t).toContain('Due Diligence and Risk');
+    expect(t).not.toContain('9. Risk Register');
+    const p = prose(t);
+    for (const category of [
+      'Planning', 'Title and occupation', 'Existing building', 'Construction', 'Finance', 'Exit',
+    ]) {
+      expect(p, `category "${category}"`).toContain(category);
+    }
+    // The planning row's own counts, in column order (red, amber, green,
+    // unknown, n/a, total) — the y-derivation's table, printed.
+    expect(p).toContain('Planning 0 1 3 1 0 5');
+    expect(p).toContain('1 red, 4 amber, 17 green, 5 unknown, 2 not applicable');
+  });
+
+  it('states the cost and programme impact of the open items', async () => {
+    const p = prose(await ddMemoText(ddDoc()));
+    expect(p).toContain(
+      'stated cost impact £25,500 across 4 items, at least 3 months, 1 item not yet assessed',
+    );
+  });
+
+  it('prints both source conflicts as information-required lines', async () => {
+    const p = prose(await ddMemoText(ddDoc()));
+    expect(p).toContain('source conflict: the listing records the property as occupied');
+    expect(p).toContain('differ by more than 25%');
+  });
+
+  it('prints the captured listing record, or says the checks did not run', async () => {
+    // The literal prefix plus the date's SHAPE: the memo's date formatter is
+    // module-private, so pinning "25 Aug 2026" here would be pinning this
+    // test's own copy of it rather than the memo's.
+    expect(prose(await ddMemoText(ddDoc())))
+      .toMatch(/Listing record captured from rightmove on \d{1,2} \w{3} \d{4}/);
+    const noRecord = prose(await ddMemoText(ddDoc({ sourceRecord: null })));
+    expect(noRecord).toContain('No listing record captured; source-conflict checks did not run.');
+    expect(noRecord).not.toContain('Listing record captured from');
+  });
+
+  it('marks a derived row as derived', async () => {
+    const t = await ddMemoText(ddDoc());
+    expect(t).toContain('Equity sources');
+    expect(t).toContain('(derived)');
+  });
+
+  it('drops the nine-phrase risk text-match and keeps the register as the project log', async () => {
+    const doc = ddDoc();
+    const t = await ddMemoText({
+      ...doc,
+      risks: [{
+        id: 'r1', description: 'planning is fine', likelihood: 'low', impact: 'low',
+        mitigation: 'None needed',
+      }],
+    });
+    expect(t).not.toContain('Risks not yet addressed');
+    expect(t).not.toContain('Risk register gaps');
+    expect(t).not.toContain('The risk register should cover');
+    expect(t).toContain('Risk register (project log)');
+    expect(t).toContain('planning is fine');
+  });
+
+  it('states the evidenced planning and vacant-possession position in §3', async () => {
+    const p = prose(await ddMemoText(ddDoc()));
+    expect(p).toContain('Planning: green - City of York Council 26/01234/FUL, decided ');
+    expect(p).toMatch(/decided \d{1,2} \w{3} \d{4}, lapses \d{1,2} \w{3} \d{4}\./);
+    expect(p).toContain('Vacant possession: green.');
+
+    const seed = prose(await ddMemoText(ddDoc({ seed: true })));
+    expect(seed).toContain('Planning: unknown - no consent evidenced.');
+    expect(seed).toContain('Vacant possession: unknown.');
+  });
+
+  it('prints the QS provenance line and the price-basis coverage in §5', async () => {
+    const p = prose(await ddMemoText(ddDoc()));
+    expect(p).toContain('Detailed Cost Plan');
+    expect(p).not.toContain('QS Evidence Not Recorded');
+    expect(p).toContain('Priced by Gardiner & Theobald, RIBA Stage 3, dated ');
+    expect(p).toMatch(/dated \d{1,2} \w{3} \d{4}, status issued\./);
+    expect(p).toContain(
+      'Fixed-price coverage 46.15% of base build; provisional sums £80,000 (30.77%); '
+      + 'unclassified £60,000.',
+    );
+    // The provisional-sum package's exclusions, printed on its own row.
+    expect(p).toContain('Excludes scaffolding');
+  });
+
+  it('keeps the not-recorded heading and sentence when no QS record exists', async () => {
+    const p = prose(await ddMemoText(ddDoc({ qs: null })));
+    expect(p).toContain('Detailed Cost Plan — QS Evidence Not Recorded');
+    expect(p).toContain('No QS source, date or status is recorded for this cost plan.');
+    expect(p).not.toContain('Priced by Gardiner & Theobald');
+    // The exclusions line hangs off the package's own `price_basis`, not off
+    // the QS record, so dropping the QS record does not silence it.
+    expect(p).toContain('Provisional sum — Excludes scaffolding');
+
+    // Nothing classified at all (the seed twin clears every `price_basis`):
+    // an untagged package's notes are not exclusions from a price.
+    const seed = prose(await ddMemoText(ddDoc({ seed: true })));
+    expect(seed).not.toContain('Excludes scaffolding');
+  });
+
+  it('lists the unknown items in Appendix B', async () => {
+    const p = prose(await ddMemoText(ddDoc()));
+    expect(p).toContain(
+      'Due diligence: 3 items unknown - CIL and S106 liability, '
+      + 'Occupational leases and tenancies, Fire strategy',
+    );
+  });
+
+  it('conditions §13 limitation 5 on the schedule, and the cost basis on the QS record', async () => {
+    const p = prose(await ddMemoText(ddDoc()));
+    expect(p).toContain('3 of 24 due-diligence items remain unknown');
+    // The pre-R15 narrative sentence is gone, not merely appended to.
+    expect(p).not.toContain('recorded as narrative and as a free-form risk register');
+    expect(p).toContain(
+      'Construction cost rests on a priced package schedule (a detailed cost plan) priced by '
+      + 'Gardiner & Theobald (RIBA Stage 3, ',
+    );
+    expect(p).toMatch(/\(RIBA Stage 3, \d{1,2} \w{3} \d{4}, issued\); fixed-price coverage 46\.15%\./);
+
+    const evidenced = prose(await ddMemoText(fullyEvidencedDoc()));
+    expect(evidenced).toContain('every due-diligence item is evidenced or marked not applicable');
+    expect(evidenced).not.toContain('due-diligence items remain unknown');
+
+    // qs null: the pre-R15 detailed-mode sentence, unchanged.
+    const noQs = prose(await ddMemoText(ddDoc({ qs: null })));
+    expect(noQs).toContain('No QS source, date or status is recorded for any package or fee line');
+    expect(noQs).not.toContain('priced by Gardiner & Theobald');
+  });
+
+  it('says every item is assessed but open when nothing is unknown and something is amber', async () => {
+    // The third arm, and the reason there are three: with the unknowns
+    // evidenced but `title_report` still red and three items amber, "every
+    // due-diligence item is evidenced" would be a false statement in a lender
+    // document, and "3 remain unknown" would be a different false statement.
+    const p = prose(await ddMemoText(ddDoc({
+      status: { cil_s106: 'green', leases_tenancies: 'green', fire_strategy: 'green' },
+      evidence: {
+        cil_s106: { source: 'York CC', reference: 'CIL liability notice', date: '2026-08-18' },
+        leases_tenancies: { source: 'Lupton Fawcett', reference: 'Tenancy schedule', date: '2026-08-18' },
+        fire_strategy: { source: 'Hoare Lea', reference: 'Fire strategy v2', date: '2026-08-18' },
+      },
+    })));
+    expect(p).not.toContain('due-diligence items remain unknown');
+    expect(p).not.toContain('every due-diligence item is evidenced or marked not applicable');
+    expect(p).toContain('no due-diligence item is unknown, but 5 remain red or amber');
   });
 });
