@@ -1371,6 +1371,9 @@ function isUnrealDate(value: string | null): boolean {
  */
 export function validateDueDiligence(inputs: AnyCalculatorInputs, issues: ValidationIssue[]): void {
   const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
+  // R15b spec §24.7. `warn` joins `err` here for the tender-price inflation
+  // rules below — this function raised only errors until this release.
+  const warn = (field: string, message: string) => issues.push({ severity: 'warning', field, message });
 
   const dd = 'due_diligence' in inputs ? inputs.due_diligence : null;
   if (dd != null) {
@@ -1507,6 +1510,37 @@ export function validateDueDiligence(inputs: AnyCalculatorInputs, issues: Valida
       if (isUnrealDate(qs.base_date)) {
         err('cost_plan.qs.base_date', 'QS base date must be a real calendar date in yyyy-mm-dd form.');
       }
+
+      // --- R15b §24.7 begin ---
+      // Spec §24.7. Tender-price inflation's own validation, layered onto the
+      // QS provenance block above. Runs only when this record actually
+      // carries an allowance (`qs.inflation ?? null` non-null, matching
+      // computeCostPlan's own read) — an absent allowance has nothing here to
+      // validate, and firing anyway would just repeat rule 8's base_date
+      // checks under a different field. Detailed mode only, the same gate the
+      // rest of this block uses.
+      const inflation = qs.inflation ?? null;
+      if (plan.mode === 'detailed' && inflation != null) {
+        if (!Number.isFinite(inflation.annual_pct) || inflation.annual_pct < 0) {
+          err('cost_plan.qs.inflation.annual_pct',
+            'Tender-price inflation rate must be a finite number of at least 0.');
+        }
+        // `'acquisition_date' in inputs.acquisition`: structural, exactly like
+        // computeCostPlan's own read — a pre-v5 document has no such field.
+        const acqDate = ('acquisition_date' in inputs.acquisition ? inputs.acquisition.acquisition_date : null) ?? null;
+        if (acqDate == null) {
+          err('cost_plan.qs.inflation',
+            'Tender-price inflation needs a calendar: set the acquisition date, or record no allowance.');
+        }
+        if (qs.base_date.trim() === '') {
+          err('cost_plan.qs.inflation', 'Tender-price inflation needs the QS base date.');
+        }
+        if (inflation.annual_pct > 15) {
+          warn('cost_plan.qs.inflation.annual_pct',
+            'Tender-price inflation above 15% p.a. is unusual - check the rate.');
+        }
+      }
+      // --- R15b §24.7 end ---
     }
 
     plan.packages.forEach((p, i) => {

@@ -486,7 +486,12 @@ export type FlagCode =
   | 'consent_expires_before_start'
   /** R15 spec §23.9. Fires when any cost-plan package carries a
    *  `provisional_sum` or `estimate` `price_basis`. */
-  | 'provisional_sums_present';
+  | 'provisional_sums_present'
+  /** R15b spec §24.7. Fires when the QS record has no tender-price inflation
+   *  allowance (`qs.inflation` null) but the calendar is known (a resolved
+   *  acquisition date) and at least one package spend midpoint falls after
+   *  the QS base date (`latest_midpoint_months_from_base > 0`). */
+  | 'no_inflation_allowance';
 
 export interface ModelFlag {
   code: FlagCode;

@@ -1221,6 +1221,11 @@ FlagCode = Literal[
     # R15 spec Sec 23.9. Fires when any cost-plan package carries a
     # provisional_sum or estimate price_basis.
     "provisional_sums_present",
+    # R15b spec Sec 24.7. Fires when the QS record has no tender-price
+    # inflation allowance (qs["inflation"] None) but the calendar is known (a
+    # resolved acquisition date) and at least one package spend midpoint
+    # falls after the QS base date (latest_midpoint_months_from_base > 0).
+    "no_inflation_allowance",
 ]
 
 CALC_VERSION = "2.15.0"

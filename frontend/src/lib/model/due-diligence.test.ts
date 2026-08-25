@@ -10,6 +10,7 @@ import { applyScenario } from './apply-scenario';
 import { buildSchedule } from './schedule';
 import { runAppraisal } from './index';
 import { QS, computeFor, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
+import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
 import type { DdItemCode, DdRow } from './due-diligence';
 import type { AnyCalculatorInputs, CalculatorInputsV13, LenderValuation } from './finance-types';
 
@@ -270,7 +271,10 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
     })).status).toBe('green');
   });
 
-  it('the flag table on fixture Y is exactly five flags', () => {
+  it('the flag table on fixture Y is exactly six flags', () => {
+    // R15b spec §24.7 adds a sixth: fixture Y's QS record has no inflation
+    // key at all (fixtures/financial-model/y-due-diligence.json), so
+    // no_inflation_allowance fires alongside R15's original five.
     const doc = ddDoc();
     const run = runAppraisal(doc);
     const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
@@ -287,6 +291,9 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
         'planning consent lapses at month 2, before construction starts at month 4'],
       ['provisional_sums_present', 'amber', null, 8_000_000,
         'provisional sums are present in the cost plan: 8000000p'],
+      ['no_inflation_allowance', 'amber', 7, null,
+        'no tender-price inflation allowance recorded: priced at 2026-07-01; package spend '
+        + 'midpoints fall up to 9 whole months later'],
     ]);
   });
 
@@ -315,6 +322,79 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
     ]);
     expect(r15.find((f) => f.code === 'provisional_sums_present')!.amount_pence).toBe(8_000_000);
     expect(r15.find((f) => f.code === 'consent_expires_before_start')!.month).toBe(2);
+  });
+
+  // R15b spec §24.7. `no_inflation_allowance` — a QS record with no allowance,
+  // a known calendar and at least one package spend midpoint falling after
+  // the base date. Twin of test_financial_model_due_diligence.py's
+  // 'TestNoInflationAllowanceFlag'.
+  describe('§24.7 no_inflation_allowance flag', () => {
+    it('Z with the allowance cleared fires, month 12, "up to 18 whole months later"', () => {
+      const doc = docZNoAllowance();
+      const run = runAppraisal(doc);
+      const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+      const flag = flags.find((f) => f.code === 'no_inflation_allowance');
+      expect(flag).toMatchObject({
+        code: 'no_inflation_allowance', severity: 'amber', month: 12, amount_pence: null,
+        message: 'no tender-price inflation allowance recorded: priced at 2026-02-01; package '
+          + 'spend midpoints fall up to 18 whole months later',
+      });
+    });
+
+    it('Z with the allowance in place fires nothing', () => {
+      const doc = docZ();
+      const run = runAppraisal(doc);
+      const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+      expect(flags.some((f) => f.code === 'no_inflation_allowance')).toBe(false);
+    });
+
+    it('fixture Y (no inflation key at all) fires', () => {
+      const doc = ddDoc();
+      const run = runAppraisal(doc);
+      const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+      expect(flags.find((f) => f.code === 'no_inflation_allowance')).toMatchObject({
+        severity: 'amber', month: 7, amount_pence: null,
+        message: 'no tender-price inflation allowance recorded: priced at 2026-07-01; package '
+          + 'spend midpoints fall up to 9 whole months later',
+      });
+    });
+
+    it('a Y twin with the base date moved after every midpoint does not fire', () => {
+      const doc = ddDoc({ qs: { ...QS, base_date: '2028-01-01' } });
+      const run = runAppraisal(doc);
+      const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+      expect(flags.some((f) => f.code === 'no_inflation_allowance')).toBe(false);
+    });
+
+    it('an acquisition_date: null twin does not fire — there is no calendar to place a midpoint on', () => {
+      const doc = ddDoc({ acquisitionDate: null });
+      const run = runAppraisal(doc);
+      const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+      expect(flags.some((f) => f.code === 'no_inflation_allowance')).toBe(false);
+    });
+
+    it('boundary: exactly 0 months from base does not fire; just over fires with "0 whole months"', () => {
+      // Z-no-allowance's latest midpoint is 12.333… months from acquisition.
+      // base_date = acquisition + 13 months clamps months_from_base to
+      // exactly 0 (computeCostPlan floors at 0) — no fire. base_date =
+      // acquisition + 12 months leaves 0.333… months, whole-floored to 0 —
+      // fires, printing "0 whole months".
+      const exactlyZero = docZNoAllowance();
+      exactlyZero.cost_plan.qs!.base_date = '2027-09-01';   // acquisition (2026-08-01) + 13 months
+      const runZero = runAppraisal(exactlyZero);
+      const flagsZero = dueDiligenceFlags(computeFor(exactlyZero), runZero.metrics.cost_plan);
+      expect(flagsZero.some((f) => f.code === 'no_inflation_allowance')).toBe(false);
+
+      const justOver = docZNoAllowance();
+      justOver.cost_plan.qs!.base_date = '2027-08-01';   // acquisition + 12 months
+      const runOver = runAppraisal(justOver);
+      const flagsOver = dueDiligenceFlags(computeFor(justOver), runOver.metrics.cost_plan);
+      expect(flagsOver.find((f) => f.code === 'no_inflation_allowance')).toMatchObject({
+        month: 12,
+        message: 'no tender-price inflation allowance recorded: priced at 2027-08-01; package '
+          + 'spend midpoints fall up to 0 whole months later',
+      });
+    });
   });
 
   it('money is inert', () => {

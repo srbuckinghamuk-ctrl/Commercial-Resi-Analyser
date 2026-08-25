@@ -522,5 +522,25 @@ export function dueDiligenceFlags(result: DueDiligenceResult, costPlan: CostPlan
       message: `provisional sums are present in the cost plan: ${pb.provisional_sums_pence}p`,
     });
   }
+  // R15b spec §24.7. A QS record with no tender-price inflation allowance,
+  // where the calendar IS known (a resolved acquisition date, so
+  // `latest_midpoint_months_from_base` is not null) and at least one package
+  // spend midpoint falls after the base date. `latest_midpoint_months_from_base`
+  // is null whenever `acquisition_date` is null (Task 2) — that is this flag's
+  // own "skipped" arm, not a separate guard. `> 0` (not `>= 0`): a base date at
+  // or after every midpoint clamps the figure to exactly 0 (computeCostPlan's
+  // own floor), which reads as "nothing to inflate", not "record an allowance".
+  if (costPlan.mode === 'detailed' && costPlan.qs != null && (costPlan.qs.inflation ?? null) == null
+      && costPlan.latest_midpoint_months_from_base != null && costPlan.latest_midpoint_months_from_base > 0) {
+    // Published in Task 2; no arithmetic here — the flag prints the same
+    // whole-month figure the memo does, never a re-floored copy of the float.
+    const months = costPlan.latest_midpoint_whole_months_from_base!;
+    out.push({
+      code: 'no_inflation_allowance', severity: 'amber', month: Math.floor(costPlan.latest_midpoint_month!),
+      amount_pence: null,
+      message: `no tender-price inflation allowance recorded: priced at ${costPlan.qs.base_date}; `
+        + `package spend midpoints fall up to ${months} whole months later`,
+    });
+  }
   return out;
 }

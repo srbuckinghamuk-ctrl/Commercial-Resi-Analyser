@@ -1561,6 +1561,12 @@ def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationI
     def err(field_: str, message: str) -> None:
         issues.append(ValidationIssue(severity="error", field=field_, message=message))
 
+    # R15b spec Sec 24.7. `warn` joins `err` here for the tender-price
+    # inflation rules below -- this function raised only errors until this
+    # release. Mirrors validation.ts's `warn` closure.
+    def warn(field_: str, message: str) -> None:
+        issues.append(ValidationIssue(severity="warning", field=field_, message=message))
+
     dd = getattr(inputs, "due_diligence", None)
     if dd is not None:
         # Rule 1a -- the catalogue is complete. `custom` is not a catalogue
@@ -1713,6 +1719,39 @@ def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationI
                 err("cost_plan.qs.base_date", "QS base date must be recorded.")
             if _is_unreal_date(qs.base_date):
                 err("cost_plan.qs.base_date", "QS base date must be a real calendar date in yyyy-mm-dd form.")
+
+            # --- R15b Sec 24.7 begin ---
+            # Spec Sec 24.7. Tender-price inflation's own validation, layered
+            # onto the QS provenance block above. Runs only when this record
+            # actually carries an allowance (`getattr(qs, "inflation", None)`
+            # non-None, matching compute_cost_plan's own read) -- an absent
+            # allowance has nothing here to validate, and firing anyway would
+            # just repeat rule 8's base_date checks under a different field.
+            # Detailed mode only, the same gate the rest of this block uses.
+            inflation = getattr(qs, "inflation", None)
+            if plan.mode == "detailed" and inflation is not None:
+                if not math.isfinite(inflation.annual_pct) or inflation.annual_pct < 0:
+                    err(
+                        "cost_plan.qs.inflation.annual_pct",
+                        "Tender-price inflation rate must be a finite number of at least 0.",
+                    )
+                # getattr, exactly like compute_cost_plan's own read -- a
+                # pre-v5 document has no such attribute.
+                acq_date = getattr(inputs.acquisition, "acquisition_date", None)
+                if acq_date is None:
+                    err(
+                        "cost_plan.qs.inflation",
+                        "Tender-price inflation needs a calendar: set the acquisition date, "
+                        "or record no allowance.",
+                    )
+                if qs.base_date.strip() == "":
+                    err("cost_plan.qs.inflation", "Tender-price inflation needs the QS base date.")
+                if inflation.annual_pct > 15:
+                    warn(
+                        "cost_plan.qs.inflation.annual_pct",
+                        "Tender-price inflation above 15% p.a. is unusual - check the rate.",
+                    )
+            # --- R15b Sec 24.7 end ---
 
         for i, package in enumerate(plan.packages):
             basis = getattr(package, "price_basis", None)
