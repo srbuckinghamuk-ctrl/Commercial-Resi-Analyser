@@ -5,20 +5,40 @@ import datetime
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, get_args
 
 from .acquisition_tax import regime_for, select_band_set
 from .areas import area_bridge
 from .cost_plan import compute_cost_plan
+from .due_diligence import DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES
 from .engine import MonthlyModel, pct
 from .investment_case import OPEX_CODES, resolve_stabilisation_month
 from .lender_valuation import compute_lender_gdv
 from .programme import ProgrammeDerivation, derive_phases, is_legacy_programme, is_programme_network
 from .schedule import Schedule, unit_ancillary_value_pence
-from .types import FEE_CODE_CATEGORY, MONITORING_CATEGORIES, PRE_COMPLETION_CODES, AnyCalculatorInputs
+from .types import (
+    FEE_CODE_CATEGORY,
+    MONITORING_CATEGORIES,
+    PRE_COMPLETION_CODES,
+    AnyCalculatorInputs,
+    PriceBasis,
+    QsStage,
+    QsStatus,
+)
 from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
 
 _ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+# R15 spec Sec 23.9. The enum tuples rules 7-9 test against, read off the
+# schema's own Literal types so a value added there cannot leave the rule
+# behind. Mirrors validation.ts, which imports QS_STAGES / QS_STATUSES /
+# PRICE_BASIS_VALUES from cost-plan.ts for the same reason. SourceRecord's
+# `tenure` Literal is declared inline on the field, so its three values are
+# restated here (and in validation.ts) rather than derived.
+QS_STAGES: tuple[str, ...] = get_args(QsStage)
+QS_STATUSES: tuple[str, ...] = get_args(QsStatus)
+PRICE_BASIS_VALUES: tuple[str, ...] = get_args(PriceBasis)
+SOURCE_TENURES: tuple[str, ...] = ("freehold", "leasehold", "unknown")
 
 
 def is_calendar_date(value: str) -> bool:
@@ -1116,7 +1136,12 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     sales_phasing_block = getattr(inputs, "sales_phasing", None)
     if unit_sales is not None and sales_phasing_block is not None:
         # Rule 1 -- on BOTH fields (Sec 16.1's exclusion shape).
-        msg = "Per-unit sales and phased sales cannot both be set - remove one."
+        # R15 Task 6: the three Sec 22.7 messages below carry validation.ts's
+        # em-dash verbatim. They were written here with an ASCII " - " in R13b,
+        # which the drift guard could not see until its window was widened onto
+        # this block; the TS text is the one the reader has been served, so
+        # Python is the side that moves. Message TEXT only -- no rule changed.
+        msg = "Per-unit sales and phased sales cannot both be set — remove one."
         err("unit_sales", msg)
         err("sales_phasing", msg)
     if unit_sales is not None:
@@ -1125,7 +1150,7 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
         if route == "retain_all":
             err(
                 "unit_sales",
-                "Per-unit sales apply to the sold portion - a retain-all exit has none. "
+                "Per-unit sales apply to the sold portion — a retain-all exit has none. "
                 "Remove the block or change the exit route.",
             )
         if unit_sales.deposit_release not in ("held_to_completion", "released_on_exchange"):
@@ -1199,7 +1224,7 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
             if not math.isfinite(row.deposit_pct) or row.deposit_pct < 0 or row.deposit_pct > 100:
                 err(f"{field_}.deposit_pct", "Deposit percentage must be a finite number between 0 and 100.")
             elif row.exchange is None and row.deposit_pct != 0:
-                err(f"{field_}.deposit_pct", "A deposit needs an exchange event - set exchange or set deposit_pct to 0.")
+                err(f"{field_}.deposit_pct", "A deposit needs an exchange event — set exchange or set deposit_pct to 0.")
             # Rule 7.
             if row.agent_fee_pct is not None and (
                 not math.isfinite(row.agent_fee_pct) or row.agent_fee_pct < 0 or row.agent_fee_pct >= 100
@@ -1408,6 +1433,8 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                     "A percentage operating line cannot exceed 100% of gross rent.",
                 )
 
+    validate_due_diligence(inputs, issues)
+
     # R8 (spec Sec 14). Mirrors validation.ts's `'jurisdiction' in inputs.acquisition`
     # guard: v2-v4 documents carry none of these fields via getattr(..., None) and
     # must not be reported as failing rules that did not exist when they were saved.
@@ -1495,6 +1522,205 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     validate_monitoring(inputs, issues)
 
     return issues
+
+
+def _is_unreal_date(value: str | None) -> bool:
+    """R15 spec Sec 23.9 rule 5. True when a date is PRESENT and is not a real
+    calendar date. Absent (None) and blank-after-trim are both absence, not a
+    malformed date -- rule 2 owns the missing-evidence case, and no other rule
+    requires an expiry or a due date to be there at all. Mirrors the
+    `isUnrealDate` helper in validation.ts."""
+    return value is not None and value.strip() != "" and not is_calendar_date(value)
+
+
+def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationIssue]) -> None:
+    """R15 spec Sec 23.9 -- the due-diligence schedule's INPUT-only rules, plus
+    the two cost-plan provenance rules (Sec 23.6) that arrived with it. The
+    four result-derived flags (``due_diligence_unknown``, ``source_conflict``,
+    ``consent_expires_before_start``, ``provisional_sums_present``) are the
+    derivation's own -- they need the computed schedule, which this function
+    (inputs only) cannot see, so they are raised as FlagCodes in metrics, not
+    here.
+
+    Read structurally, exactly like ``validate_monitoring`` above: a pre-v13
+    document has no ``due_diligence`` attribute at all, no ``cost_plan.qs``
+    and no ``price_basis``, so it raises nothing. Mirrors validation.ts's
+    ``validateDueDiligence``.
+
+    Several rules below guard a field Pydantic ALREADY constrains, so in this
+    engine they are structurally unreachable: rule 0's ``status`` and rule
+    1f's ``category`` are ``Literal``s, rule 6's two impacts are ``int`` with
+    ``ge=0``, and rule 7's/8's/9's numeric and enum arms are likewise
+    constrained -- a stray value is a 422 at parse time and never reaches
+    here. They are kept, not deleted as dead code, for the reason the Sec 22.7
+    sales-slip rule is kept (see its comment in validate_inputs): validation.ts
+    CAN reach every one of these branches (a JSON payload arrives uncoerced),
+    and a rule present in one engine but not the other is exactly the silent
+    asymmetry this release's dual-engine mirror exists to prevent."""
+
+    def err(field_: str, message: str) -> None:
+        issues.append(ValidationIssue(severity="error", field=field_, message=message))
+
+    dd = getattr(inputs, "due_diligence", None)
+    if dd is not None:
+        # Rule 1a -- the catalogue is complete. `custom` is not a catalogue
+        # code and is never required.
+        present = {item.code for item in dd.items}
+        for code in ENTERED_CODES:
+            if code not in present:
+                err(
+                    "due_diligence",
+                    f"Due diligence item \"{code}\" is missing - every catalogue item "
+                    "must be present.",
+                )
+
+        seen_codes: set[str] = set()
+        seen_ids: set[str] = set()
+        for i, item in enumerate(dd.items):
+            field_ = f"due_diligence.items[{i}]"
+
+            # Rule 1g.
+            if item.id in seen_ids:
+                err(f"{field_}.id", f"Due diligence item id \"{item.id}\" is not unique.")
+            seen_ids.add(item.id)
+
+            # Rules 1b-1e, one chain because the arms are mutually exclusive.
+            # `custom` is the ONE repeatable code: it names no catalogue entry,
+            # so a document carrying two user-added items is normal and must
+            # not read as a duplicate -- which is why the 1b check sits on the
+            # catalogue-code arm rather than above the chain.
+            if item.code in DERIVED_CODES:
+                err(
+                    f"{field_}.code",
+                    f"Due diligence item \"{item.code}\" is derived from the model and "
+                    "cannot be entered.",
+                )
+            elif item.code == "custom":
+                if item.label.strip() == "":
+                    err(f"{field_}.label", "A custom due diligence item needs a label.")
+            elif item.code not in ENTERED_CODES:
+                err(f"{field_}.code", f"Due diligence item code \"{item.code}\" is not in the catalogue.")
+            elif item.code in seen_codes:
+                err(f"{field_}.code", f"Due diligence item \"{item.code}\" appears more than once.")
+            seen_codes.add(item.code)
+
+            # Rule 1f, then rule 0 (both Literal-guarded here -- see docstring).
+            if item.category not in DD_CATEGORIES:
+                err(
+                    f"{field_}.category",
+                    "Due diligence category must be one of planning, title_occupation, "
+                    "existing_building, construction, finance, exit.",
+                )
+            if item.status not in DD_STATUSES:
+                err(
+                    f"{field_}.status",
+                    "Due diligence status must be one of red, amber, green, unknown, "
+                    "not_applicable.",
+                )
+
+            # Rules 2-4: what a status owes. Sec 23.1's `unknown` owes nothing.
+            evidence = item.evidence
+            if item.status == "green" and (
+                evidence is None or evidence.source.strip() == "" or evidence.date.strip() == ""
+            ):
+                err(f"{field_}.evidence", "A green status needs evidence: record the source and the date.")
+            if item.status in ("red", "amber") and item.action.strip() == "":
+                err(f"{field_}.action", "A red or amber status needs an action.")
+            if item.status == "not_applicable" and item.notes.strip() == "":
+                err(f"{field_}.notes", "A not-applicable status needs a reason in notes.")
+
+            # Rule 5 -- see _is_unreal_date above for what "present" means.
+            if _is_unreal_date(None if evidence is None else evidence.date):
+                err(
+                    f"{field_}.evidence.date",
+                    "Evidence date must be a real calendar date in yyyy-mm-dd form.",
+                )
+            if _is_unreal_date(item.expiry_date):
+                err(f"{field_}.expiry_date", "Expiry date must be a real calendar date in yyyy-mm-dd form.")
+            if _is_unreal_date(item.due_date):
+                err(f"{field_}.due_date", "Due date must be a real calendar date in yyyy-mm-dd form.")
+
+            # Rule 6 (Pydantic-guarded here -- see docstring).
+            if item.cost_impact_pence is not None and (
+                not isinstance(item.cost_impact_pence, int) or item.cost_impact_pence < 0
+            ):
+                err(f"{field_}.cost_impact_pence", "Cost impact must be a whole number of pence, zero or more.")
+            if item.programme_impact_months is not None and (
+                not isinstance(item.programme_impact_months, int) or item.programme_impact_months < 0
+            ):
+                err(
+                    f"{field_}.programme_impact_months",
+                    "Programme impact must be a whole number of months, zero or more.",
+                )
+
+        # Rule 7 -- the captured listing record (Sec 23.5). Only `captured_at`
+        # is reachable in this engine; the other three arms are Pydantic-guarded.
+        record = dd.source_record
+        if record is not None:
+            if record.captured_at.strip() == "":
+                err(
+                    "due_diligence.source_record.captured_at",
+                    "The captured listing record needs a captured_at timestamp.",
+                )
+            if record.floor_area_sqm is not None and (
+                not math.isfinite(record.floor_area_sqm) or record.floor_area_sqm < 0
+            ):
+                err("due_diligence.source_record.floor_area_sqm", "Listing floor area must be zero or more.")
+            if record.lease_years_remaining is not None and (
+                not isinstance(record.lease_years_remaining, int) or record.lease_years_remaining < 0
+            ):
+                err(
+                    "due_diligence.source_record.lease_years_remaining",
+                    "Listing lease years remaining must be a whole number, zero or more.",
+                )
+            if record.tenure is not None and record.tenure not in SOURCE_TENURES:
+                err("due_diligence.source_record.tenure", "Listing tenure must be freehold, leasehold or unknown.")
+
+    # Rules 8 and 9 -- Sec 23.6's cost-plan provenance. Read structurally: a
+    # pre-v13 document has neither attribute, and a migrated v13 document
+    # carries `qs: None` and `price_basis: None` on every package.
+    plan = getattr(inputs, "cost_plan", None)
+    if plan is not None:
+        qs = getattr(plan, "qs", None)
+        if qs is not None:
+            if plan.mode != "detailed":
+                err(
+                    "cost_plan.qs",
+                    "QS provenance applies to a detailed cost plan only - switch to detailed "
+                    "mode or remove it.",
+                )
+            if qs.source.strip() == "":
+                err("cost_plan.qs.source", "QS provenance needs a source.")
+            if qs.stage not in QS_STAGES:
+                err(
+                    "cost_plan.qs.stage",
+                    "QS stage must be one of order_of_cost, riba_2, riba_3, riba_4, tender, "
+                    "contract_sum.",
+                )
+            if qs.status not in QS_STATUSES:
+                err("cost_plan.qs.status", "QS status must be one of draft, issued, reviewed.")
+            # R15 fix wave. Rule 5 reads blank-after-trim as ABSENCE, which is
+            # right for `expiry_date` and `due_date` (nothing requires them at
+            # all) and wrong here: a QS record with no date is a cost plan whose
+            # provenance cannot be dated, and the derived `cost_plan_qs` row
+            # prints that empty date as its evidence. So rule 8 requires both,
+            # the way rule 2 requires an evidence date on a green item.
+            if qs.date.strip() == "":
+                err("cost_plan.qs.date", "QS date must be recorded.")
+            if _is_unreal_date(qs.date):
+                err("cost_plan.qs.date", "QS date must be a real calendar date in yyyy-mm-dd form.")
+            if qs.base_date.strip() == "":
+                err("cost_plan.qs.base_date", "QS base date must be recorded.")
+            if _is_unreal_date(qs.base_date):
+                err("cost_plan.qs.base_date", "QS base date must be a real calendar date in yyyy-mm-dd form.")
+
+        for i, package in enumerate(plan.packages):
+            basis = getattr(package, "price_basis", None)
+            if basis is not None and basis not in PRICE_BASIS_VALUES:
+                err(
+                    f"cost_plan.packages[{i}].price_basis",
+                    "Package price basis must be fixed_price, provisional_sum, estimate or unset.",
+                )
 
 
 def validate_monitoring(inputs: AnyCalculatorInputs, issues: list[ValidationIssue]) -> None:

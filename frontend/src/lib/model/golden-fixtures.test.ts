@@ -11,6 +11,7 @@ import {
 import { costPlanFromLegacyCosts, computeCostPlan } from './cost-plan';
 import { areaBridge } from './areas';
 import { VAT_CHARGE_CATEGORIES } from './vat';
+import { DD_CATALOGUE } from './due-diligence';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -94,6 +95,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'v-exhausted-reserve',
   'w-monitoring-on-site',
   'x-unit-sales-ledger',
+  'y-due-diligence',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -109,6 +111,14 @@ const appraisalFixtures = fixtures.filter((f) => f.kind !== 'sensitivity');
 // The mapper takes the whole AppraisalRun (widened in Release 3a from the previous
 // cost_to_complete-only signature) so a pinnable quantity living outside `metrics` —
 // like the ledger's funding gap — can be pinned without restructuring the harness.
+//
+// R15 spec §23.9's four flag codes, named once for the `flag_codes_r15` mapper
+// below. Mirrors tests/test_financial_model_fixtures.py's _R15_FLAG_CODES.
+const R15_FLAG_CODES = new Set([
+  'due_diligence_unknown', 'source_conflict', 'consent_expires_before_start',
+  'provisional_sums_present',
+]);
+
 const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // spec §5.10, Release 2b Task 6
   cost_to_complete_first_shortfall_month: (r) => r.metrics.cost_to_complete?.first_shortfall_month ?? null,
@@ -224,6 +234,28 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // funding_gap_pence above, which is the standing precedent for a quantity
   // outside `metrics` reached through this whole-run mapper table.
   report_safe: (r) => r.reconciliation.report_safe,
+  // R15 spec §23.8, fixture Y: due_diligence.rows/categories/source_conflicts are
+  // ARRAYS of objects, so a dotted expected_metrics path cannot reach them — the
+  // same reasoning as the contingency/fee mappers above. The scalar totals and
+  // the consent-expiry fields need no mapper: they go through the dotted path.
+  //
+  // The category counts are pinned as one row of six per category, in
+  // DD_CATEGORIES order, rather than as an array of objects, so the fixture JSON
+  // stays language-neutral (the Python mirror holds a list of dataclasses here).
+  // `due_diligence_row_codes` is not decoration — without it
+  // `due_diligence_row_statuses` is positional against a shape nothing pins, so a
+  // reordering of the catalogue would silently re-key every status.
+  due_diligence_category_counts: (r) => r.metrics.due_diligence.categories.map(
+    (c) => [c.red, c.amber, c.green, c.unknown, c.not_applicable, c.total],
+  ),
+  due_diligence_row_codes: (r) => r.metrics.due_diligence.rows.map((row) => row.code),
+  due_diligence_row_statuses: (r) => r.metrics.due_diligence.rows.map((row) => row.status),
+  due_diligence_source_conflict_rules: (r) => r.metrics.due_diligence.source_conflicts.map((c) => c.rule),
+  // §23.9's four flag codes as they reach `metrics.flags`, in flag order — the
+  // only pin that proves deriveMetrics EXTENDS the flag list rather than merely
+  // computing the schedule. Filtered rather than pinned whole, so an unrelated
+  // flag from another release cannot break fixture Y.
+  flag_codes_r15: (r) => r.metrics.flags.filter((f) => R15_FLAG_CODES.has(f.code)).map((f) => f.code),
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -317,12 +349,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // document (spec §22) -- so every migrate-to-vN loop below excludes it by
   // the same design that excluded T/U/V/W from the v9 loops.
   const v12Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 12);
+  // R15 Task 3: fixture Y is BORN at v13 -- the corpus's first v13-native
+  // document (spec §23) -- so every migrate-to-vN loop below excludes it by
+  // the same design that excluded T/U/V/W/X from the earlier loops.
+  const v13Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 13);
 
-  it('every fixture is v5 through v12, and each group is non-empty', () => {
+  it('every fixture is v5 through v13, and each group is non-empty', () => {
     expect(
       v5Fixtures.length + v6Fixtures.length + v7Fixtures.length
       + v8Fixtures.length + v9Fixtures.length + v10Fixtures.length
-      + v11Fixtures.length + v12Fixtures.length,
+      + v11Fixtures.length + v12Fixtures.length + v13Fixtures.length,
     ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
@@ -349,6 +385,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
     ]);
     expect(v12Fixtures.map((f) => f.name)).toEqual([
       'X — unit sales ledger, released deposits, per-unit costs, anchored completions',
+    ]);
+    expect(v13Fixtures.map((f) => f.name)).toEqual([
+      'Y — due-diligence evidence schedule, source record, price basis and QS provenance',
     ]);
   });
 
@@ -422,7 +461,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV6
   // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
   // for the identical reason one version further on (`monitoring`).
-  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -442,7 +481,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV7
   // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
   // for the identical reason one version further on (`monitoring`).
-  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13].includes(versionOf(f)))) {
     // R10: the same identity guarantee one version further on, and the one that now
     // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
@@ -500,7 +539,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12, v13 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -518,6 +557,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'V — exhausted interest reserve, rolled-up development finance',
       'W — monitoring statement on site, detailed cost plan, one ineligible package',
       'X — unit sales ledger, released deposits, per-unit costs, anchored completions',
+      'Y — due-diligence evidence schedule, source record, price basis and QS provenance',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
     // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
@@ -547,19 +587,24 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // would additionally strip the R13b `unit_sales` block the fixture is
     // entirely about.
     //
+    // R15 Task 3 widens it once more to include 13: fixture Y is BORN at v13
+    // for the same reason — it did not exist before R8, and stamping it v3/v4
+    // would additionally strip the R15 `due_diligence` block the fixture is
+    // entirely about.
+    //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
     // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
     // so it is vacuously true for every member and can never fail. Enumerating
-    // 6/7/8/9/10/11/12 keeps the check able to fail: it catches a fixture excluded
-    // for an EIGHTH, unstated reason (e.g. a future non-v5..v12 fixture, or a change
+    // 6/7/8/9/10/11/12/13 keeps the check able to fail: it catches a fixture excluded
+    // for a NINTH, unstated reason (e.g. a future non-v5..v13 fixture, or a change
     // to preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
         jurisdictionOf(fx) !== 'england_ni'
           || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8
           || versionOf(fx) === 9 || versionOf(fx) === 10 || versionOf(fx) === 11
-          || versionOf(fx) === 12,
+          || versionOf(fx) === 12 || versionOf(fx) === 13,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -890,6 +935,46 @@ describe('golden fixtures (shared with the Python engine)', () => {
         report_safe: false,
       },
     },
+    // R15 Task 5 (the same convention this block states): fixture Y adds five new
+    // FLAT_KEYS mappers (spec §23.8) — the category counts, the two row arrays,
+    // the conflict rules and the §23.9 flag codes. Each wrong value is a
+    // plausible REAL mistake rather than an arbitrary one: the counts read in
+    // (red, amber, green, unknown, n/a) order with amber and green transposed —
+    // the transposition that would report a scheme as better evidenced than it
+    // is; the row arrays with the custom row placed FIRST rather than last (the
+    // ordering rule §23.3 states), which shifts every status by one; the conflict
+    // rules in the opposite order; and the flag list with one `source_conflict`
+    // lost, which is what a set-valued filter (rather than an ordered one) would
+    // return. Mirrors tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS
+    // entry for Y.
+    {
+      namePrefix: 'Y — due-diligence evidence schedule',
+      wrongValues: {
+        // truly [[0,1,3,1,0,5], ...] — planning's amber and green transposed
+        due_diligence_category_counts: [
+          [0, 3, 1, 1, 0, 5], [1, 0, 1, 1, 2, 5], [0, 2, 5, 1, 0, 8],
+          [0, 1, 3, 0, 0, 4], [0, 0, 3, 1, 0, 4], [0, 0, 2, 1, 0, 3],
+        ],
+        // truly the 28 catalogue codes then 'custom' — the custom row first
+        due_diligence_row_codes: ['custom', ...DD_CATALOGUE.map((e) => e.code)],
+        // truly [..., 'unknown', 'green', 'amber'] at 26/27/28 — the custom row's
+        // amber moved to the front, shifting every status by one
+        due_diligence_row_statuses: [
+          'amber', 'green', 'amber', 'green', 'green', 'unknown', 'red', 'green', 'unknown',
+          'not_applicable', 'not_applicable', 'amber', 'green', 'green', 'green', 'unknown',
+          'green', 'green', 'green', 'amber', 'green', 'green', 'green', 'unknown', 'green',
+          'green', 'green', 'unknown', 'green',
+        ],
+        // truly ['occupation', 'existing_area'] — the two rules transposed
+        due_diligence_source_conflict_rules: ['existing_area', 'occupation'],
+        // truly five codes with `source_conflict` twice — deduplicated, which is
+        // what a set-valued filter would return
+        flag_codes_r15: [
+          'due_diligence_unknown', 'source_conflict', 'consent_expires_before_start',
+          'provisional_sums_present',
+        ],
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -928,7 +1013,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `vat`,
   // `programme`'s v9 shape, `refinance`'s v10 narrowing AND `investment_case`
   // to produce a v6 one). R14 Task 8 widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -995,7 +1080,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `refinance`'s
   // v10 narrowing and `investment_case` to produce a v7 one). R14 Task 8
   // widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -1016,7 +1101,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
       // function the engine's pre-v7 fallback uses, per cost-plan.ts's own docstring
       // on why a second, divergent copy would be unsafe.
       if (versionOf(fx) === 7) {
-        expect(migrated.cost_plan).toEqual((fx.inputs as unknown as { cost_plan: unknown }).cost_plan);
+        // R15 spec §23.6 added `qs` as a new TOP-LEVEL CostPlanInputs default
+        // (unlike `phase_id`/`vat_override`/`price_basis`, which live on the
+        // wholesale-replaced `packages`/`fee_lines` arrays and so never diverge
+        // here). This pre-R15 fixture predates the field, so the migration's
+        // `{ ...defaults.cost_plan, ...saved.cost_plan }` merge fills it in —
+        // "survives untouched" now means untouched plus that one new default.
+        expect(migrated.cost_plan).toEqual({
+          ...(fx.inputs as unknown as { cost_plan: Record<string, unknown> }).cost_plan,
+          qs: null,
+        });
       } else {
         expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs));
       }
@@ -1052,7 +1146,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // v10 narrowing and `investment_case` to produce a v8 one). R14 Task 8
   // widens it once more to v11 (`monitoring`); `preV8Fixtures` therefore stays
   // at 12, since fixture W was never inside this gate.
-  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12].includes(versionOf(f)));
+  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13].includes(versionOf(f)));
 
   it.each(preV8Fixtures.map((f) => f.name))(
     'migrating %s to v8 moves no computed figure, and writes the specified block',

@@ -1,13 +1,13 @@
 import type {
-  CalculatorInputsV12, AppraisalRun, VatChargeCategory, VatTreatment,
+  CalculatorInputsV13, AppraisalRun, VatChargeCategory, VatTreatment,
   RecoveryBasis, TogcTreatment, EvidenceStatus,
 } from '../../lib/model';
 import { VAT_CHARGE_CATEGORIES } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV12;
-  onChange: (partial: Partial<CalculatorInputsV12>) => void;
+  inputs: CalculatorInputsV13;
+  onChange: (partial: Partial<CalculatorInputsV13>) => void;
   run: AppraisalRun;
 }
 

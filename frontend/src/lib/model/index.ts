@@ -51,16 +51,19 @@ export {
   migrateV9toV10, migrateInputsToV10,
   migrateV10toV11, migrateInputsToV11,
   migrateV11toV12, migrateInputsToV12,
+  isV13, migrateV12toV13, migrateInputsToV13, defaultDueDiligence,
 } from './migrate';
 export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
 export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
 export {
   DEFAULT_COST_PLAN, COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES,
   FEE_CODE_CATEGORY, defaultContingencyClasses, costPlanFromLegacyCosts,
+  PRICE_BASIS_VALUES, QS_STAGES, QS_STATUSES,
 } from './cost-plan';
 export type {
   CostPlanMode, CostPackageCode, CostPackage, ContingencyClassName, ContingencyClass,
   FeeBasis, FeeCode, FeeCategory, FeeLine, CostPlanInputs,
+  PriceBasis, QsStage, QsStatus, QsProvenance,
 } from './cost-plan';
 export { computeCostPlan } from './cost-plan';
 export type {
@@ -80,3 +83,4 @@ export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';
 export type { PhasedSeniorBreakevenTerms } from './breakeven';
 export * from './finance-types';
+export * from './due-diligence';

@@ -19,7 +19,8 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R13b** — **DONE, shipped** | Unit-level sales ledger: per-unit completion timing, per-unit selling costs, deposits — the half of audit §7.8 deferred out of R13 (§2 of the R13 design) | P1 | inputs v12, calc 2.14.0 |
 | **R14** — **DONE, shipped** | §5.10 corrected (C1), monitoring cost-to-complete statement, `lender_eligible` wired | P1 | inputs v11, calc 2.13.0 |
 | **R14b** — **DONE, shipped** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | two new tables + API (migration 006), Python governance twin; no calc bump, no inputs bump — and `audit_hash` is **not** extended, see the status paragraph |
-| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v13 (v12 is R13b's) |
+| **R15** — **DONE, shipped** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v13, calc 2.15.0 |
+| **R15b** | The cost plan in time: per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint (§7.5's inflation ask), per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3) | P1 | inputs v14, calc minor |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
 
 **R16 UX debt recorded by R13b:** the R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) have no ScenariosPage input; `sales_slip_months` got one in R13b.
@@ -93,6 +94,86 @@ unchanged). The release is versioned by **Alembic migration 006** and by spec
 `report-provenance.ts`'s governance core, because the API cannot enforce a state
 machine that exists only in the client.
 
+**R15 status (calc 2.15.0, inputs v13):** shipped. It gave the appraisal an
+**evidence position**. Until this release planning, title, occupation, building
+condition and professional evidence were recorded nowhere: `risks[]` was five
+free-text rows with no category, no evidence, no owner, no date and no way to
+say *unknown*, and the memo text-matched those descriptions against nine
+hard-coded phrases, so a row reading "planning is fine" satisfied the planning
+check. R15 replaces that with a **fixed 28-code catalogue** across the audit's
+six categories — 23 items the appraiser enters plus five **derived** rows read
+from the evidence the model already carried (QS provenance, facility terms,
+equity sources, the tax and VAT basis, the lender valuation) — each entered row
+carrying red/amber/green/**unknown**/not-applicable, evidence source, reference
+and date, an expiry, an owner, a due date, a stated cost and programme impact
+and an action, with `unknown` as every item's seed and a `green` without
+evidence a hard validation error. That closes audit §7.10 in full and §7.1 as
+catalogue items rather than a typed facts block, `higher_risk_building`
+included — the deal spider's building-safety axis is now marked *provisional*
+until that item is competently confirmed.
+
+The audit's sharpest rule — *unknown must never default to green* — is given a
+consequence rather than a colour: spec §13.3 gains a **seventh FINAL
+condition**, `entered_unknown_count == 0`, ordered after the VAT gate and
+before the approval gate, under its own banner
+`DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE`. Derived rows do
+not gate. The consequence for every existing document was accepted rather than
+worked around, on R8's precedent: a migrated document carries 23 unknowns and
+shows that banner as soon as its tax and VAT bases are confirmed.
+
+R15 also closes the **R7 §6a** finding, which asked that the source-data
+contradiction raise a hard information-required flag rather than sit in
+narrative text. The document now carries a **captured `source_record`** — the
+listing's *structured* fields, copied at document creation or on demand, never
+its prose — and two stated rules compare it to the appraisal: an occupied
+listing against a green vacant-possession item, and a listing floor area more
+than 25% from the entered existing GIA. Each raises `source_conflict` (red) and
+prints as an Information Required line. What the York case actually needed was
+the gate, not the rule: its occupation fact lives in prose that no rule can
+see, and the design says so rather than pretending a regex is evidence — but
+`vacant_possession` is seeded `unknown`, so the model now refuses to assume
+vacancy.
+
+And it closes **the §7.5 items R10 deliberately left unaddressed**, the note
+below this table's subject: `cost_plan.qs` (source, RIBA stage, issue date,
+status, pricing base date) and a per-package `price_basis`, with fixed-price
+coverage, provisional sums, estimates and the unclassified balance published
+against base build. §13.4's "QS evidence is not recorded" sentence became
+conditional at the same moment — a disclosure that outlives the gap it
+described is as misleading as no disclosure at all. Package exclusions needed
+no new field: a provisional or estimated package's `notes` is its exclusions,
+and the memo prints it under the QS line.
+
+**No arithmetic changed.** Calc 2.15.0 adds a result block, four flags and a
+FINAL condition; the v12 → v13 identity gate compares metrics, ledger and
+schedule — the new `due_diligence` block included, **with no exclusion** —
+because the engine reads a pre-v13 document as the migration seed, and
+`due_diligence_unknown` is asserted by name as the gate's sole expected
+addition. Two housekeeping items rode along: the cross-engine message-drift
+guard's window now covers §22.7 and §23.9 as well as §19.7 (finding three
+§22.7 Python messages that had drifted to an ASCII hyphen against the
+TypeScript em-dash), and `unit_sales.totals.gross_pence == totals.gross_sales_pence`
+is asserted corpus-wide. See spec §23, `migration-notes.md` §16 and
+`test-cases.md` §23.
+
+**Inflation is R15b, scheduled rather than dropped or bolted on.** §7.5's
+inflation ask is not an evidence question, it is a **timing** question: you
+cannot inflate a package from `qs.base_date` without knowing when that package
+spends, and a package still has no programme of its own — §16.9 limitation 1,
+open since R10 and unowned since R12 shipped phase-level rather than
+package-level scheduling. A flat `inflation_pct` on base build now would have
+been indistinguishable from the general contingency class until packages have
+their own timing, and a second flat percentage on the same base reopens R10's
+double-count seam. So the three questions that share that missing mechanism are
+scheduled together as **R15b — the cost plan in time**: the per-package
+programme, tender-price inflation from `qs.base_date` to each package's spend
+midpoint, and per-package draw eligibility (§16.9 limitation 2, restated as
+§20.5 limitation 3, which has waited on the same thing). R15 records
+`qs.base_date` so R15b has its origin, and spec §23.11 limitation 6 and §16.9's
+new inflation line carry the deferral. This is the same discipline R13/R13b and
+R14/R14b arrived at: one new arithmetic axis per release, and an evidence
+release does not open one.
+
 **The "every document is a DRAFT" era ended here.** Spec §13.3 has required an
 approved lender case as its last FINAL condition since R7, and for seven
 releases nothing could supply one — the spec said so itself, in a bullet
@@ -126,10 +207,14 @@ stated limitation.
 
 **§7.5 items R10 deliberately did not address, now R15's responsibility.** §7.5
 also asked for "QS source/date/status, fixed-price coverage, provisional sums,
-inflation and package exclusions" on the detailed schedule. None of that is
-modelled: a package or a fee line carries no source, date, status, price-coverage
-flag, provisional-sum marker or inflation index (spec §16.9's stated limitation).
-It was deliberately left for R15 rather than folded into R10, on the same
+inflation and package exclusions" on the detailed schedule. When this note was
+written none of it was modelled: a package or a fee line carried no source, date,
+status, price-coverage flag, provisional-sum marker or inflation index (spec
+§16.9's stated limitation). **R15 shipped all of it except inflation** — see the
+R15 status paragraph — and inflation is scheduled as **R15b** because it needs
+the per-package programme §16.9 limitation 1 still lacks. Fee lines deliberately
+gain no provenance: a fee is an appointment, not priced works (spec §23.11
+limitation 9). The ask was deliberately left for R15 rather than folded into R10, on the same
 reasoning R9 applied to the acquisition jurisdiction's evidence status (spec
 §14.6) and the area bridge's (spec §15.9, "areas carry no evidence status") — an
 evidence/provenance model is its own piece of work, not a field bolted onto a

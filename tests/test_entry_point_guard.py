@@ -17,6 +17,11 @@ so the same failure mode -- a production entry point left calling v11 while
 the rest of the boundary moves on -- applies here exactly as it did to
 v10/v11.
 
+R15 Task 13 (spec Sec 23.10) moves the version chain it derives from again, to
+v13: the due-diligence evidence schedule's every arm is reachable only from a
+v13 document, so the same failure mode applies here exactly as it did to
+v11/v12.
+
 **If this test failed and you are looking for what to do**: a production module
 calls ``migrate_inputs_to_v{N}`` for an N that is not the newest migration
 ``app/financial_model/migrate.py`` offers. Either move that call site to the
@@ -109,8 +114,8 @@ def test_migrate_module_exports_the_version_chain_this_guard_is_derived_from():
     """Non-vacuity, part 1: if the regex stopped matching, ``VERSIONS`` would be
     empty and every assertion below would pass over nothing."""
     assert len(VERSIONS) > 1
-    assert NEWEST == 12
-    assert 11 in VERSIONS
+    assert NEWEST == 13
+    assert 12 in VERSIONS
 
 
 def test_guard_enumerates_the_production_module_that_holds_the_entry_point():
@@ -185,29 +190,31 @@ async def _guard_client(_guard_db_sessionmaker):
 
 
 @pytest.mark.asyncio
-async def test_the_server_migrates_a_stored_v10_document_to_v12_as_reconciled(_guard_client):
-    """R13 Task 18, two versions on (R14 Task 14, R13b Task 15). The cutover is
-    what finds the boundary bug: R12's own cutover found `is_v2_or_later`
-    missing `is_v9`, so every appraisal saved after release would have come
-    back stamped `legacy_unreconciled` and provenance-hashed as such. R13
-    Task 5 pre-empted the identical trap for v10 ahead of THIS release's
-    cutover (`is_v11` was already added to `is_v2_or_later` before that task
-    landed), which is exactly why this test must still exercise the live
-    server rather than trust that addition by inspection.
+async def test_the_server_migrates_a_stored_v10_document_to_v13_as_reconciled(_guard_client):
+    """R13 Task 18, three versions on (R14 Task 14, R13b Task 15, R15 Task 13).
+    The cutover is what finds the boundary bug: R12's own cutover found
+    `is_v2_or_later` missing `is_v9`, so every appraisal saved after release
+    would have come back stamped `legacy_unreconciled` and provenance-hashed
+    as such. R13 Task 5 pre-empted the identical trap for v10 ahead of THIS
+    release's cutover (`is_v11` was already added to `is_v2_or_later` before
+    that task landed), which is exactly why this test must still exercise the
+    live server rather than trust that addition by inspection.
 
-    Kept as the v10-arm case (R14 Task 14 / R13b Task 15's standing
-    instruction: extend the R13 proof rather than replace it) -- the fixture
-    genuinely is a v10 document, and posting it proves a document saved two
-    releases ago still loads and re-saves cleanly once the server migrates
-    every payload two versions further. The posted document must come back at
-    inputs_version 12 AND not be tagged legacy, with its investment_case
-    intact, monitoring still absent (this fixture never entered a QS
-    statement) and unit_sales null (this fixture never entered a per-unit
-    ledger). A v9 document run through the identical assertions would also
-    come back reconciled at whatever version the server currently writes --
-    it is the combination of "reached inputs_version 12" AND "not legacy" AND
-    "investment_case survived" on a document that STARTED at v10 that a
-    v9-only regression cannot pass by accident.
+    Kept as the v10-arm case (R14 Task 14 / R13b Task 15 / R15 Task 13's
+    standing instruction: extend the R13 proof rather than replace it) -- the
+    fixture genuinely is a v10 document, and posting it proves a document
+    saved three releases ago still loads and re-saves cleanly once the server
+    migrates every payload three versions further. The posted document must
+    come back at inputs_version 13 AND not be tagged legacy, with its
+    investment_case intact, monitoring still absent (this fixture never
+    entered a QS statement), unit_sales null (this fixture never entered a
+    per-unit ledger) and due_diligence seeded (every catalogue item unknown --
+    this fixture never entered an evidence schedule). A v9 document run
+    through the identical assertions would also come back reconciled at
+    whatever version the server currently writes -- it is the combination of
+    "reached inputs_version 13" AND "not legacy" AND "investment_case
+    survived" on a document that STARTED at v10 that a v9-only regression
+    cannot pass by accident.
 
     Deviates from the brief's sketch in two ways the brief itself got wrong
     (spec Sec 19.9's standing instruction, carried forward: say so rather than
@@ -249,11 +256,12 @@ async def test_the_server_migrates_a_stored_v10_document_to_v12_as_reconciled(_g
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 12
+    assert saved["inputs_snapshot"]["inputs_version"] == 13
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["investment_case"] is not None
     assert saved["inputs_snapshot"]["monitoring"] is None
     assert saved["inputs_snapshot"]["unit_sales"] is None
+    assert saved["inputs_snapshot"]["due_diligence"] is not None
     # Fix round 1 (spec Sec 19.9 review, carried forward). The GOVERNANCE
     # `inputs_version` column -- distinct from `inputs_snapshot`'s own field,
     # written by a separate line in app.py's response builder and the value
@@ -261,25 +269,32 @@ async def test_the_server_migrates_a_stored_v10_document_to_v12_as_reconciled(_g
     # hand at each cutover and left stale at 9 on R13's first pass despite the
     # migration call site itself already reading v10. It is now derived
     # (`inputs.inputs_version`) rather than restated, so this assertion is the
-    # one that caught it then, and the one that stops it recurring at v12: it
-    # does not hardcode "12" precisely so it keeps holding without edits after
+    # one that caught it then, and the one that stops it recurring at v13: it
+    # does not hardcode "13" precisely so it keeps holding without edits after
     # the next cutover, the same way this file's own NEWEST constant does.
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 12
+    assert saved["inputs_version"] == 13
 
 
 @pytest.mark.asyncio
 async def test_the_server_round_trips_a_native_v12_document_as_reconciled(_guard_client):
-    """R13b Task 15 (spec Sec 22.9), the v12-native arm the previous test does
-    not cover: the fixture above STARTS at v10 and is migrated up, which
+    """R13b Task 15 (spec Sec 22.9), the v12-native arm the v10 test above
+    does not cover: that fixture STARTS at v10 and is migrated up, which
     proves the migration chain but never posts a document whose own
     `inputs_version` already reads 12 with a non-null `unit_sales` block --
-    exactly what the v12 calculator itself now saves once a per-unit sales
-    ledger is entered (spec Sec 22). ``x-unit-sales-ledger.json`` (this
-    release's golden unit-sales fixture) is that document: `is_v12` must
-    accept it as NOT legacy, and the stored `unit_sales` block must survive
-    the round trip intact -- both requirements a v11-only regression could
-    still pass.
+    exactly what the v12 calculator itself once saved once a per-unit sales
+    ledger is entered (spec Sec 22). ``x-unit-sales-ledger.json`` (R13b's
+    golden unit-sales fixture) is that document: `is_v12` must accept it as
+    NOT legacy, and the stored `unit_sales` block must survive the round trip
+    intact -- both requirements a v11-only regression could still pass.
+
+    R15 Task 13 moves the server boundary one version further, to v13, so
+    this now-v12-native document is migrated one step past its own version on
+    save -- exactly the same migrate-up behaviour the v10 test above
+    exercises for two steps. Kept rather than replaced (the same standing
+    instruction as the v10 test) because it is still the only arm posting a
+    document whose OWN `inputs_version` already reads 12 with `unit_sales`
+    populated; the due-diligence-native arm below covers the v13 case.
     """
     fixture = json.loads(
         (REPO_ROOT / "fixtures" / "financial-model" / "x-unit-sales-ledger.json")
@@ -311,8 +326,58 @@ async def test_the_server_round_trips_a_native_v12_document_as_reconciled(_guard
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 12
+    assert saved["inputs_snapshot"]["inputs_version"] == 13
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["unit_sales"] is not None
+    assert saved["inputs_snapshot"]["due_diligence"] is not None
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 12
+    assert saved["inputs_version"] == 13
+
+
+@pytest.mark.asyncio
+async def test_the_server_round_trips_a_native_v13_document_as_reconciled(_guard_client):
+    """R15 Task 13 (spec Sec 23.10), the v13-native arm the tests above do not
+    cover: neither posts a document whose own `inputs_version` already reads
+    13 with a non-null `due_diligence` block populated -- exactly what the
+    v13 calculator itself now saves once the evidence schedule is entered
+    (spec Sec 23). ``y-due-diligence.json`` (this release's golden
+    due-diligence fixture) is that document: `is_v13` must accept it as NOT
+    legacy, and the stored `due_diligence` block -- source_record and items
+    alike -- must survive the round trip intact.
+    """
+    fixture = json.loads(
+        (REPO_ROOT / "fixtures" / "financial-model" / "y-due-diligence.json")
+        .read_text(encoding="utf-8"),
+    )
+    posted_inputs = fixture["inputs"]
+    assert posted_inputs["inputs_version"] == 13
+    assert posted_inputs["due_diligence"] is not None
+
+    project_resp = await _guard_client.post(
+        "/api/v1/projects",
+        json={
+            "address_raw": "4 Due Diligence Way, York, YO1 8AN",
+            "price_pence": 42_500_000,
+            "use_class": "office",
+        },
+    )
+    assert project_resp.status_code == 201, project_resp.text
+    project_id = project_resp.json()["id"]
+
+    resp = await _guard_client.post(
+        "/api/v1/appraisals",
+        json={
+            "project_id": project_id,
+            "name": "Y -- due diligence",
+            "inputs_snapshot": posted_inputs,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    saved = resp.json()
+
+    assert saved["inputs_snapshot"]["inputs_version"] == 13
+    assert saved["status"] != "legacy_unreconciled"
+    assert saved["inputs_snapshot"]["due_diligence"]["source_record"] == posted_inputs["due_diligence"]["source_record"]
+    assert saved["inputs_snapshot"]["due_diligence"]["items"] == posted_inputs["due_diligence"]["items"]
+    assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
+    assert saved["inputs_version"] == 13

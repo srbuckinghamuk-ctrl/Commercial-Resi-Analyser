@@ -841,12 +841,31 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
     const after = runAppraisal(v5).metrics;
 
     const {
-      acquisition_tax: _atAfter, acquisition_tax_pence: _atpAfter, ...restAfter
+      acquisition_tax: _atAfter, acquisition_tax_pence: _atpAfter,
+      due_diligence: ddAfter, ...restAfter
     } = after;
     const {
-      acquisition_tax: _atBefore, acquisition_tax_pence: _atpBefore, ...restBefore
+      acquisition_tax: _atBefore, acquisition_tax_pence: _atpBefore,
+      due_diligence: ddBefore, ...restBefore
     } = before;
     expect(restAfter).toEqual(restBefore);
+
+    // R15 spec §23.4. The evidence schedule carries ONE string across this
+    // migration: the `tax_basis` row's evidence `source` is the jurisdiction's
+    // provenance, which a v2–v4 document does not have at all and which
+    // `migrateInputsToV5` writes as `migrated_default`. That is disclosure
+    // telling the truth about itself, not a figure moving — the row's STATUS is
+    // `unknown` either side. Patching that one string onto the v4 schedule and
+    // comparing the whole result keeps every other row, count and total under
+    // the same identity claim the assertion above makes. Destructured out rather
+    // than excluded, so the schedule is still compared in full. Mirrors
+    // tests/test_financial_model_metrics.py's test of the same name.
+    expect(ddBefore.rows.find((r) => r.code === 'tax_basis')!.evidence!.source).toBe('');
+    expect({
+      ...ddBefore,
+      rows: ddBefore.rows.map((r) => (r.code === 'tax_basis'
+        ? { ...r, evidence: { ...r.evidence!, source: 'migrated_default' } } : r)),
+    }).toEqual(ddAfter);
 
     // Negative control: the comparison above is only meaningful if the metrics
     // object it strips down is actually populated with the figures at risk.
@@ -980,9 +999,10 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         packages: [
           { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
             amount_pence: 1_000_000, contingency_class: 'existing_building',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
           { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
-            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
+            price_basis: null },
         ],
         contingency: [
           { name: 'general', pct: 5 },
@@ -997,6 +1017,7 @@ describe('R9 — the appraisal result carries the area bridge', () => {
             basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null,
             phase_id: null },
         ],
+        qs: null,
       },
     });
     expect(run.metrics.cost_plan.construction_total_pence).toBe(run.schedule.totals.construction_pence);

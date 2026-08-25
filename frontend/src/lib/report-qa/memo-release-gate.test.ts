@@ -18,7 +18,7 @@ import {
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
   detailedCostPlanInputs, investmentCaseInputs, monitoringOnSiteInputs,
-  unitSalesLedgerInputs,
+  unitSalesLedgerInputs, dueDiligenceInputs, dueDiligenceFinalInputs,
 } from './memo-fixtures';
 import { humanise } from '../format';
 
@@ -110,6 +110,16 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   // constraint sentence, under the same page-bounds/sparse-page/orphan-
   // heading/footer/provenance checks every other route already passes.
   ['investment case (DSCR binds)', investmentCaseInputs],
+  // R15 (Task 8, spec §23.8). The first v13 routes, and the first detailed-mode
+  // routes in this sweep: §9's populated schedule is a 29-row, ten-column table
+  // with a category summary above it, two conflict lines and a source-record
+  // line — the tallest single block the memo draws, and the one most likely to
+  // break the page-bounds and orphan-heading gates. Both arms are here because
+  // they render differently: fixture Y carries three unknown items (the amber
+  // flag, the §13 "3 of 24" limitation, the DRAFT banner), its fully evidenced
+  // twin none (the FINAL arm).
+  ['due diligence (Y)', dueDiligenceInputs],
+  ['due diligence, fully evidenced', dueDiligenceFinalInputs],
 ];
 
 describe('investment memorandum release gate', () => {
@@ -182,10 +192,28 @@ describe('investment memorandum release gate', () => {
     });
 
     it('never claims a full cost plan', async () => {
-      const { info } = await report(makeInputs());
-      const text = documentText(info).toLowerCase();
-      expect(text).toContain('headline cost estimate');
-      expect(text).not.toContain('full cost plan');
+      const { info, run } = await report(makeInputs());
+      // R15 (Task 8): the corpus is no longer headline-mode throughout — the
+      // two v13 routes carry a priced package schedule — so the heading is
+      // asserted against the run's OWN mode rather than against the
+      // assumption that every route is a rate x area estimate. What the check
+      // is really about is unchanged: neither mode may call itself a full
+      // cost plan.
+      //
+      // Fix round 1 (M1): asserted as the §5 SUB-HEADING, drawn at 11 pt bold,
+      // not as a case-folded substring of the whole document — §13's
+      // limitation sentence contains the words "a detailed cost plan" on every
+      // detailed route, so the lower-cased document text was satisfied whether
+      // or not the heading was ever drawn.
+      const expectedHeading = run.metrics.cost_plan.mode === 'detailed'
+        ? 'Detailed Cost Plan'
+        : 'Headline Cost Estimate';
+      const headings = info.pages.flatMap(
+        (page) => bodyItems(page).filter((i) => i.sizePt >= 11).map((i) => i.text),
+      );
+      expect(headings.some((h) => h.startsWith(expectedHeading)), `§5 heading "${expectedHeading}"`)
+        .toBe(true);
+      expect(documentText(info).toLowerCase()).not.toContain('full cost plan');
     });
 
     // R14 (Task 12, spec §9/§20.4). Every ROUTES fixture carries
@@ -199,16 +227,18 @@ describe('investment memorandum release gate', () => {
       expect(documentText(info)).not.toContain('Monitoring cost-to-complete');
     });
 
-    // R13b (Task 13, spec §22.6). Every ROUTES fixture carries `unit_sales:
-    // null` (nothing before v12 has the field, and no other v12 fixture is a
-    // ROUTES member), so `metrics.unit_sales` is null on every one of them —
-    // the negative control for the section's presence test on fixture X below
+    // R13b (Task 13, spec §22.6). Every ROUTES fixture up to R15 carried
+    // `unit_sales: null`, so this was a flat absence assertion — the negative
+    // control for the section's presence test on fixture X below
     // (`unitSalesLedgerInputs`, not a ROUTES member), the same pattern the
-    // monitoring test immediately above uses for fixture W.
-    it('never prints the unit sales ledger section', async () => {
+    // monitoring test immediately above uses for fixture W. R15's two v13
+    // routes are fixture X's money with an evidence layer added, so they DO
+    // carry a ledger: the gate now pins the section's presence to the result
+    // block that decides it, which is a stronger statement than absence and
+    // still fails if the section leaks onto a document with no ledger.
+    it('prints the unit sales ledger section only for a document that carries one', async () => {
       const { info, run } = await report(makeInputs());
-      expect(run.metrics.unit_sales).toBeNull();
-      expect(documentText(info)).not.toContain('Unit Sales Ledger');
+      expect(documentText(info).includes('Unit Sales Ledger')).toBe(run.metrics.unit_sales != null);
     });
 
     it('states its own limitations, including the tax and VAT basis', async () => {
@@ -956,5 +986,87 @@ describe('R14b — the lender case on the memo (spec §21)', () => {
     });
     const { info } = await report(sellAllInputs(), { provenance: prov });
     expect(documentText(info)).toContain('Max LTC 85%');
+  });
+});
+
+/**
+ * R15 (Task 8, spec §23.7/§23.8). The due-diligence draft gate on the memo.
+ *
+ * `due_diligence_incomplete` is the seventh reason a document is held in
+ * draft, and the first one a lender case cannot buy its way past: the two
+ * documents below differ ONLY in their evidence layer (same money, same
+ * facility, same approved case), so an approval read over three unknown items
+ * and an approval read over a complete schedule are separated here by nothing
+ * except the schedule itself.
+ */
+describe('R15 — the due-diligence gate on the memo (spec §23.7/§23.8)', () => {
+  it('reaches FINAL on a fully evidenced v13 document', async () => {
+    const inputs = dueDiligenceFinalInputs();
+    const run = runAppraisal(inputs);
+    // Fixture sanity checks: nothing entered is unknown, and the reason this
+    // document can be FINAL at all is that fact, not an empty schedule.
+    expect(run.metrics.due_diligence.totals.entered_unknown_count).toBe(0);
+    expect(run.metrics.due_diligence.totals.total).toBeGreaterThan(20);
+
+    const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.documentStatus).toBe('FINAL');
+    expect(prov.draftReason).toBeNull();
+
+    const { info } = await report(inputs, { provenance: prov });
+    expect(info.pages.flatMap(watermarkTexts)).toEqual([]);
+    expect(documentText(info)).toContain('FINAL');
+    // Fix round 1 (I2): worded over ENTERED items, with the derived row this
+    // document still leaves unknown stated rather than covered by silence.
+    // ONE, not two: this fixture confirms `equity_sources[0]`, so the only
+    // derived row left unknown is `lender_valuation` — a document can have
+    // nothing entered outstanding and still carry no lender valuation, which
+    // is exactly the case the old wording contradicted §9 about.
+    expect(run.metrics.due_diligence.totals.derived_unknown_count).toBe(1);
+    expect(documentProse(info)).toContain(
+      'every entered due-diligence item is evidenced or marked not applicable; '
+      + '1 derived row remains unknown (see Section 9)',
+    );
+  });
+
+  it('holds a v13 document with unknown items in DRAFT, however it is approved', async () => {
+    const inputs = dueDiligenceInputs();
+    const run = runAppraisal(inputs);
+    expect(run.metrics.due_diligence.totals.entered_unknown_count).toBe(3); // fixture sanity check
+
+    const prov = provenanceFor(run, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.documentStatus).toBe('DRAFT');
+    expect(prov.draftReason).toBe('due_diligence_incomplete');
+
+    const { info } = await report(inputs, { provenance: prov });
+    expect(info.pages.flatMap(watermarkTexts)).toContain(
+      'DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE',
+    );
+    expect(documentProse(info)).toContain('one or more due-diligence items are still unknown');
+  });
+
+  it('prints the populated schedule, both source conflicts and the QS line', async () => {
+    // The ROUTES sweep above proves the two v13 routes lay out; this proves
+    // they SAY something — the figures the y-derivation hand-computed, read
+    // off the run's own result block rather than restated here.
+    const inputs = dueDiligenceInputs();
+    const { info, run } = await report(inputs);
+    const dd = run.metrics.due_diligence;
+    const prose = documentProse(info);
+
+    expect(prose).toContain('Due Diligence and Risk');
+    expect(prose).toContain(
+      `${dd.totals.red} red, ${dd.totals.amber} amber, ${dd.totals.green} green, `
+      + `${dd.totals.unknown} unknown, ${dd.totals.not_applicable} not applicable`,
+    );
+    expect(dd.source_conflicts.length).toBe(2); // fixture sanity check
+    for (const conflict of dd.source_conflicts) {
+      // The statement is the ENGINE's own string (due-diligence.ts's
+      // OCCUPATION_CONFLICT / EXISTING_AREA_CONFLICT), so a memo that
+      // paraphrased a conflict would fail here rather than quietly soften it.
+      expect(prose, conflict.rule).toContain(conflict.statement);
+    }
+    expect(prose).toContain('Listing record captured from rightmove on');
+    expect(prose).toContain('Priced by Gardiner & Theobald, RIBA Stage 3');
+    expect(prose).toContain('Risk register (project log)');
   });
 });

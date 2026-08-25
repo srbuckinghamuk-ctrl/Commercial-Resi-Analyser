@@ -20,8 +20,11 @@ import type {
 } from '../model';
 import {
   migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV11, migrateInputsToV12,
+  migrateInputsToV13,
 } from '../model';
-import type { CalculatorInputsV11, CalculatorInputsV12 } from '../model/finance-types';
+import type {
+  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
+} from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -477,17 +480,17 @@ export function detailedCostPlanInputs(): CalculatorInputsV8 {
         {
           id: 'pkg-structure', code: 'structure', label: 'Structural repairs',
           amount_pence: 20_000_000, contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope — windows, cladding, roof',
           amount_pence: 10_000_000, contingency_class: 'existing_building', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
         {
           id: 'pkg-externals', code: 'externals', label: 'Externals and landscaping',
           amount_pence: 5_000_000, contingency_class: 'abnormal', lender_eligible: false, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
       ],
       contingency: [
@@ -500,6 +503,7 @@ export function detailedCostPlanInputs(): CalculatorInputsV8 {
         if (f.code === 'planning_consultant') return { ...f, basis: 'pct_of_construction_total' as const, amount_pence: 0, pct: 1.5 };
         return f;
       }),
+      qs: null,
     },
   });
 }
@@ -570,4 +574,82 @@ export function unitSalesLedgerInputs(): CalculatorInputsV12 {
     readFileSync(resolve(FIXTURE_DIR, 'x-unit-sales-ledger.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
   return migrateInputsToV12(raw.inputs);
+}
+
+/**
+ * R15 (Task 8, spec §23.8/§13.4). The release's golden due-diligence case: a
+ * v13 document (fixture Y, fixtures/financial-model/y-due-diligence.json —
+ * fixture X's money with the evidence layer added: 23 entered catalogue items
+ * plus one custom row, three of them still unknown, a captured listing record
+ * that conflicts with the schedule on two rules, a QS provenance record and
+ * price-basis tags on two of the three packages).
+ *
+ * Unlike `monitoringOnSiteInputs`/`unitSalesLedgerInputs` above, this one IS a
+ * `ROUTES` member: §9's schedule is not an optional section that a corpus can
+ * be the negative control for -- every document, at every version, prints it
+ * (a pre-v13 document reads as §23.10's all-unknown seed), so the corpus has
+ * been printing the seed arm on every route since this release. What the two
+ * routes add is the POPULATED arm -- a 29-row schedule table, a category
+ * summary, two conflict lines and a source-record line -- under the same
+ * page-bounds, sparse-page and orphan-heading gates.
+ */
+export function dueDiligenceInputs(): CalculatorInputsV13 {
+  const raw = JSON.parse(
+    readFileSync(resolve(FIXTURE_DIR, 'y-due-diligence.json'), 'utf-8'),
+  ) as { inputs: Record<string, unknown> };
+  return migrateInputsToV13(raw.inputs);
+}
+
+/**
+ * Fixture Y with nothing left unknown: every entered item green with evidence
+ * or not applicable with a reason, the listing record agreeing with the
+ * document on occupation and floor area, the consent lapsing after the
+ * construction start, and the one equity source confirmed.
+ *
+ * This is the first FINAL document with an evidenced due-diligence position
+ * (spec §23.7's seventh draft reason): fixture Y itself can no longer reach
+ * FINAL however it is approved, because three of its entered items are still
+ * unknown. Built by MAPPING the loaded document's items rather than as a
+ * second JSON fixture, so the two twins cannot drift apart on any field
+ * except the ones named here.
+ */
+export function dueDiligenceFinalInputs(): CalculatorInputsV13 {
+  const doc = dueDiligenceInputs();
+  const record = doc.due_diligence.source_record;
+  return {
+    ...doc,
+    // §23.4's `equity_sources` derived row reads this: unconfirmed grades the
+    // row unknown, which is a derived unknown and does not itself hold the
+    // document in draft -- but a FINAL twin that leaves it says the schedule
+    // is complete while its own funding evidence is not.
+    equity_sources: doc.equity_sources.map(
+      (source, i) => (i === 0 ? { ...source, evidence_status: 'confirmed' as const } : source),
+    ),
+    due_diligence: {
+      // is_vacant: the occupation conflict fires on a listing that records the
+      // property as occupied against a green vacant-possession row.
+      // floor_area_sqm: 600 is the document's own existing GIA, so the
+      // existing-area conflict (>25% apart) cannot fire either.
+      source_record: record == null ? null : { ...record, is_vacant: true, floor_area_sqm: 600 },
+      items: doc.due_diligence.items.map((item) => (
+        // The two not_applicable rows keep their reasons: "addressed" is
+        // evidenced OR reasoned, never everything forced green (§23.9 rule 4
+        // would reject a not_applicable row with no notes anyway).
+        item.status === 'not_applicable'
+          ? item
+          : {
+              ...item,
+              status: 'green' as const,
+              evidence: item.evidence ?? {
+                source: 'Sponsor evidence pack',
+                reference: `${item.code} evidence`,
+                date: '2026-08-20',
+              },
+              // The consent lapses AFTER the month-4 construction start, so
+              // §23.9's `consent_expires_before_start` flag is clear too.
+              expiry_date: item.code === 'planning_route' ? '2027-06-01' : item.expiry_date,
+            }
+      )),
+    },
+  };
 }

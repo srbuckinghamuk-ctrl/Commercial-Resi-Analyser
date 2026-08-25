@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.14.0`.
-**Date:** 24 August 2026
+**Status:** Authoritative. Calculation version `2.15.0`.
+**Date:** 25 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.15.0** — the due-diligence evidence schedule (§23, R15), with inputs v13 carrying a non-nullable top-level `due_diligence` block (a captured listing `source_record` and a fixed catalogue of evidenced items whose seed status is `unknown`), `cost_plan.qs` and `CostPackage.price_basis`. Five read-only **derived rows** grade the evidence the model already carried — QS provenance, facility terms, equity sources, the tax and VAT basis, the lender valuation — beside the entered ones. Two **source-conflict** rules compare the captured listing to the appraisal (§23.5), the cost plan publishes fixed-price coverage, provisional sums and the unclassified balance (§23.6), and four flags are added: `due_diligence_unknown`, `source_conflict`, `consent_expires_before_start`, `provisional_sums_present`. §13.3 gains a **seventh FINAL condition** — no entered item may be `unknown` — with its own banner. **It changes no existing computed value:** the v12 → v13 identity gate compares metrics, ledger and schedule, the new result block included, on both arms **with no exclusion**, because a pre-v13 document is computed as §23.10's migration seed. §16.9's QS-provenance limitation and §15.9's measured-survey limitation become historical notes; §22.10 limitation 7 narrows to its per-row residue; inflation and the per-package programme are scheduled as **R15b**.
 - **2.14.0** — the unit-level sales ledger (§22, R13b): per-unit exchange/completion timing, deposits held or released, per-unit selling-cost overrides, pre-sales coverage, the `sales_slip` lever (§12.1's ninth). **One pre-existing computed value moves: §5.11's phased break-even now replays anchored tranches at their resolved months** (fixture S: 90,971,520 → 88,720,089); every unanchored document is unchanged. §5.12 gains the per-unit cost basis. Inputs v12.
 - **2.13.0** — cost-to-complete corrected (§5.10, C1), `lender_eligible` wired into §4.2(b), the monitoring statement (§20, R14). Inputs v11. [Bullet added by R13b; R14 recorded this release in §1.6 and §20 but omitted the changelog line.]
 - **R14b, 24 August 2026 — no calculation-version bump and no inputs-version bump.** Lender case governance (§21): the release that makes a FINAL document possible at all. A lender case is a **locked whole-document snapshot** of a stored appraisal — its `inputs_snapshot`, `calc_version`, `inputs_version` and all three provenance hashes, copied at creation and never rewritten — carrying governance state through the eight-status machine `report-provenance.ts` has declared since R7 and nothing has ever populated. §13.3's condition 5 (an approved case) therefore becomes reachable, and gains a sixth condition beside it: an approval is only good for the document it was given against, so a case whose locked `input_hash` no longer matches the live stored row is **stale** and defeats FINAL under a banner of its own (§21.3). The case gets its own hash, `case_hash` (§13.2.1), **chained onto** the locked `audit_hash` rather than folded into it — §13.2's twice-stated "the audit hash gains no new parts" ruling is restated, not repealed, because a case transition happens without an appraisal re-save and would otherwise silently invalidate every stored hash. §13.1's provenance panel gains the case rows, which are the case hash's own components rather than a readable selection of them, so the reviewer-recompute property §13.2 gives the audit hash holds for the case hash too. **No engine change, no input-schema change, no fixture pin moves**: the release is versioned by Alembic migration 006 (two new tables, `lender_cases` and `lender_case_events`) and by this specification's §21, and the corpus-walk tests passing unmodified is itself the no-arithmetic guard. Governance also stops being a one-language concern — `app/financial_model/provenance.py` is created as the Python twin of `report-provenance.ts`'s governance core, under the same porting contract as `monitoring.py`, because the API cannot enforce a state machine that exists only in the client.
@@ -54,11 +55,13 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.5 Unknown vs zero
 
-`null`/absent means **unknown**; `0` means **known to be zero**. Unknown lender-critical inputs (e.g. lender GDV, day-one advance) must never be defaulted silently: dependent metrics return `null` ("not available") and the reconciliation panel lists the missing input. Unknown is never treated as safe/green.
+`null`/absent means **unknown**; `0` means **known to be zero**. Unknown lender-critical inputs (e.g. lender GDV, day-one advance) must never be defaulted silently: dependent metrics return `null` ("not available") and the reconciliation panel lists the missing input. Unknown is never treated as safe/green. **[R15 — calc 2.15.0]** The due-diligence schedule is that rule's second application: every catalogue item seeds `unknown` and the migration writes it explicitly rather than by absence, so an unexamined item says so instead of being silent, and a `green` recorded without evidence is a hard validation error rather than a status quietly downgraded (§23.9).
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22); `13` (**inputs v13**) = calc 2.15.0+ (adds the non-nullable top-level `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, §23). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+
+Calc 2.15.0 (R15) adds §23's evidence schedule, four flags and §13.3's seventh condition. **It changes no existing computed value** (the v13 identity gate, `tests/test_migrate_v13.py`, compares the new result block on both arms with no exclusion).
 
 Calc 2.13.0 (R14) corrects §5.10's remaining-funding term for rolled-up facilities (C1), wires `lender_eligible` into §4.2(b), and adds §20's monitoring statement. **It changes `cost_to_complete` on every rolled-up facility with an interest reserve** — the corrected figure; every other computed value on every existing document is identical (the v11 identity gate, `tests/test_migrate_v11.py`).
 
@@ -1010,7 +1013,7 @@ the only thing it exists to do.
 
 ### 13.3 Document status and draft marking
 
-A document is **FINAL** only when all six hold, tested in this order:
+A document is **FINAL** only when all seven hold, tested in this order:
 
 1. `reconciliation.report_safe` — hard validations pass.
 2. `reconciliation.senior_repaid` — the ledger clears the senior facility within
@@ -1022,9 +1025,15 @@ A document is **FINAL** only when all six hold, tested in this order:
    current one (§14.6). [R8 — calc 2.7.0]
 4. A confirmed VAT basis (§17.10). [R11 — calc 2.10.0; the table row below was
    missing until R14]
-5. An approved lender case: status `credit_approved` or `approved_with_conditions`
+5. `metrics.due_diligence.totals.entered_unknown_count == 0` — no **entered**
+   due-diligence item is `unknown` (§23.7). Derived rows (§23.3) do not feed
+   this condition. A document carrying no `due_diligence` key at all is **not
+   re-graded** against a condition that post-dates it (§14.6's rule for a
+   pre-R8 document); every production entry point migrates to v13 before
+   running, so every *stored* document is graded. [R15 — calc 2.15.0]
+6. An approved lender case: status `credit_approved` or `approved_with_conditions`
    (§21.2).
-6. That approval is still current: the case **is not stale** (§21.3) — the live
+7. That approval is still current: the case **is not stale** (§21.3) — the live
    stored appraisal's `input_hash` is still the one the case locked. [R14b]
 
 Otherwise the document is **DRAFT** and carries the banner for the **first**
@@ -1036,26 +1045,30 @@ failing condition:
 | senior not repaid | `DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE` |
 | tax basis unconfirmed | `DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
 | VAT basis unconfirmed | `DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE` |
+| due diligence incomplete | `DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE` |
 | not approved | `DRAFT - NOT APPROVED FOR LENDER RELIANCE` |
 | approved case is stale | `DRAFT - LENDER CASE STALE - NOT FOR LENDER RELIANCE` |
 
-- **The six conditions are distinct claims and must not be collapsed.** An
+- **The seven conditions are distinct claims and must not be collapsed.** An
   unreconciled run's figures may be wrong. A reconciled run that does not repay
   the senior facility is arithmetically sound and shows a real repayment failure.
   A run whose tax basis is unconfirmed is arithmetically sound *on a basis nobody
   has verified*, and the same holds, separately, of one whose VAT basis is
-  unconfirmed (§17.10). A reconciled, repaying run with no approved case is a
+  unconfirmed (§17.10). A run whose due diligence is incomplete is arithmetically
+  sound *with facts nobody has evidenced* — the figures are not alleged to be
+  wrong; the evidence behind them is missing (§23.7). A reconciled, repaying run
+  with no approved case is a
   correct appraisal that nobody has approved. And a run carrying an approved case
   that has gone stale is a correct, approved appraisal *whose figures are no
-  longer the ones anybody approved* — the sharpest of the six, because it is the
+  longer the ones anybody approved* — the sharpest of the seven, because it is the
   only one where a reader shown the approval alone would draw exactly the wrong
-  conclusion. Printing "UNRECONCILED" over the last five would state something
+  conclusion. Printing "UNRECONCILED" over the last six would state something
   untrue about the model.
-- **Conditions 5 and 6 are mutually exclusive by construction [R14b].** The stale
+- **Conditions 6 and 7 are mutually exclusive by construction [R14b].** The stale
   gate is tested *after* the approval gate and therefore fires only when an
   approval exists: a document with no case, or with a live case that is not
   approved, reports `not_approved` whether or not its snapshot has moved. So no
-  document ever has both to report, and neither can outrank conditions 1–4. This
+  document ever has both to report, and neither can outrank conditions 1–5. This
   is an ordering property, not a coincidence of the current statuses, and it is
   pinned diagonally in both languages.
 - **Why the tax gate is third and not a hard validation [R8].** An unconfirmed
@@ -1096,7 +1109,16 @@ failing condition:
   **detailed cost plan**, because it is one in shape — a priced package
   schedule, not a rate × area estimate — but it must say, in the same breath,
   that QS evidence (source, date, status) is not recorded, so as not to claim
-  an evidence status the model does not carry (§16.6, §16.9). [R10 — calc
+  an evidence status the model does not carry (§16.6, §16.9). **[R15 — calc
+  2.15.0] That last requirement is now conditional on the document.** In
+  `detailed` mode with `cost_plan.qs` recorded, the report prints the QS
+  source, the stage, the issue date and the status, together with the
+  fixed-price coverage, and **may drop the "QS evidence is not recorded"
+  sentence** — the disclosure has been earned away, and a disclosure that
+  outlives the gap it described is as misleading as no disclosure at all. With
+  `qs` null the sentence stands unchanged, and the construction sub-heading
+  itself carries the "QS Evidence Not Recorded" qualifier. Headline mode is
+  unchanged (§23.6). [R10 — calc
   2.9.0. Before it this line read "The construction model is a rate × area
   headline cost estimate with named allowances. A report may not describe it
   as a cost plan until a detailed package mode is the active basis." — true
@@ -1113,8 +1135,21 @@ failing condition:
 - **Limitations are printed, not implied.** Every disclosed limitation is stated
   in the document, conditioned on the run: unavailable lender valuation,
   unconfirmed migrated facility terms, jurisdiction/tax basis, VAT treatment,
-  absent area bridge, narrative-only due diligence, and any failing governance
-  condition from §13.3.
+  absent area bridge, the count of unknown due-diligence items (§23.8), and any
+  failing governance condition from §13.3.
+- **The due-diligence limitation has three arms, and they are not
+  interchangeable [R15 — calc 2.15.0].** Every arm is worded over **entered**
+  items, because a derived row (§23.3) is not evidence anyone can go and
+  gather. With entered items still unknown the report states *"N of M
+  due-diligence items remain unknown"*, `M` being `entered_total`; with none
+  unknown but assessments outstanding it states *"no entered due-diligence item
+  is unknown, but K remain red or amber"*, `K` being `assessed_count`; with
+  neither it states *"every entered due-diligence item is evidenced or marked
+  not applicable"*. The second and third arms append *"; D derived row(s)
+  remain unknown (see Section 9)"* whenever `derived_unknown_count > 0`, so a
+  document with nothing entered outstanding but no lender valuation is not told
+  that everything is evidenced. Collapsing the middle arm into either neighbour
+  would put a false statement in a lender document.
 - **Released deposits [R13b — calc 2.14.0].** A deposit the ledger shows as released at exchange is a modelling assumption about the sale contract that the model does not evidence; the memo prints that sentence beside the coverage figure whenever `deposit_release` is `released_on_exchange` (§22.6).
 
 ### 13.5 Layout invariants
@@ -1282,6 +1317,11 @@ mechanism rather than two.
   entered, and §13.3's third condition needs both halves — confirming the
   jurisdiction alone is not enough. There is no grandfathering and no
   England-first exemption, because a migrated document genuinely is unverified.
+- **[R15 — calc 2.15.0]** The due-diligence dashboard's derived `tax_basis` row
+  (§23.3) reads **this gate's own predicate** — the jurisdiction evidence status
+  and `date_basis`, together with §17.10's VAT half — rather than a second one
+  of its own, so the row and the banner can never disagree about the same
+  document.
 
 ### 14.7 The deal spider
 
@@ -1438,6 +1478,8 @@ Recorded so they are not read as oversights.
 - **No measurement standard is enforced.** The model does not check that entered areas follow RICS IPMS, the RICS Code of Measuring Practice, or any other convention, and it cannot tell GIA entered as GEA from GIA entered correctly. It reconciles whatever is entered. The standard used is the appraiser's responsibility and travels with the appraisal as an assumption, not as a validated field.
 - **Areas carry no evidence status.** Unlike the acquisition jurisdiction (§14.6), an area line records no source and no confidence. There is no "measured survey" versus "scaled off a floor plan" distinction in the record.
 
+  **[R15 — calc 2.15.0] Resolved; kept as a historical note.** §23.2's `measured_survey` catalogue item is the bridge's evidence — the measured survey underlying `areas`, with its source, reference and date, its owner and its status — and an unevidenced one sits `unknown` and makes the document DRAFT (§23.7). What remains true is narrower than the sentence above and belongs to §23.11 rather than here: the evidence attaches to the schedule as a whole, not to an individual area line.
+
 ---
 
 ## 16. Cost plan modes [R10 — calc 2.9.0]
@@ -1583,9 +1625,12 @@ Every contingency and fee line reports **its base as well as its amount** — th
 
 Recorded so they are not read as oversights.
 
-- **No per-package programme.** Every package spreads with the construction curve (§6); there is no per-package start offset, duration or curve. R12 (§18) shipped dated, dependent programme *phases* instead — phase-level, not package-level — so this remains open and is not currently owned by any scheduled release; §20.5 limitation 3 depends on it.
+- **No per-package programme.** Every package spreads with the construction curve (§6); there is no per-package start offset, duration or curve. R12 (§18) shipped dated, dependent programme *phases* instead — phase-level, not package-level — so this remains open. **[R15 — calc 2.15.0]** It is no longer unowned: it is the first component of **R15b**, *the cost plan in time*, named in the limitation below and in §23.11 limitation 6. §20.5 limitation 3 depends on it.
 - **`lender_eligible` acts as a uniform ratio on the construction line, not a per-package draw profile.** Wired in calc 2.13.0 (R14): `lender_eligible_base_pence / base_build_pence` scales §4.2(b)'s cap base. Because it is one ratio applied to the whole monthly construction line, contingency and compliance follow it proportionally, and an ineligible package's own spend months are not distinguished from any other package's. A true per-package draw profile would have to know which package each pound of a month's construction spend belongs to; §18's per-line `phase_id` buckets spend by phase, not by package, so that information does not exist in the monthly uses the cap reads. Recorded again as §20.5 limitation 3.
 - **No QS provenance.** A package or a percentage fee carries no source, date or status — no "priced by [firm], RIBA Stage 4, dated [x]" distinction in the record, unlike the acquisition jurisdiction's evidence status (§14.6). Deferred to R15, alongside fixed-price coverage, provisional sums and inflation (§7.5 of the second audit).
+
+  **[R15 — calc 2.15.0] Resolved; kept as a historical note.** §23.6 gives the detailed plan a `cost_plan.qs` block (source, stage, issue date, status, pricing base date) and every package a `price_basis`, and the result publishes fixed-price coverage, provisional sums, estimates and the unclassified balance against base build. §13.4's "QS evidence is not recorded" sentence became conditional at the same release. What survives is narrower and is stated as §23.11 limitations 7 and 9: the provenance is one block for the whole plan rather than per package, and fee lines carry none.
+- **No inflation — R15b.** The cost plan is priced at one instant and spent over a programme, and nothing bridges the two: there is no tender-price inflation from `qs.base_date` to a package's spend midpoint, because a package has no spend midpoint until it has its own programme. **R15b, *the cost plan in time*, owns all three together** — the per-package programme (limitation 1 above), the inflation index from `qs.base_date`, and per-package draw eligibility (limitation 2 above, restated as §20.5 limitation 3). R15 records `qs.base_date` so R15b has its origin. Taking a flat percentage on base build here was rejected: it is indistinguishable from the general contingency class until packages have their own timing, and a second flat percentage on the same base reopens R10's double-count seam.
 - **Compliance's stress behaviour is mode-dependent, by necessity rather than oversight (§16.2).** A fixed unscaled allowance in headline mode; inside a scaled package in detailed mode. The two modes agree at rest and diverge under a cost stress once compliance is non-zero.
 
 Two limitations recorded in earlier printings of this section are resolved and have been removed rather than left standing, per this project's own rule that a disclosure outliving its feature is a defect (shipped and caught in R8, R9 and R10 alike):
@@ -1760,6 +1805,8 @@ R11 discharges the decision R10 assigned it (§16.9, pre-R11): `CostPackage.cont
 ### 17.10 Evidence, the draft gate and reporting
 
 `DraftReason` gains `'vat_basis_unconfirmed'`, ordered immediately after `'tax_basis_unconfirmed'` in `draftReason()` — an unconfirmed VAT basis does not make the arithmetic wrong, so it must not displace a reason saying the figures themselves may be, but a reader must know the basis is unverified before reading an approval.
+
+**[R15 — calc 2.15.0]** The due-diligence dashboard's derived `tax_basis` row (§23.3) reads **this section's own gate** for its VAT half — the material-unconfirmed predicate below, not a second one — so the row can never show green where this banner would fire, or unknown where it would not.
 
 **Material means the category actually bears VAT** — a treatment row whose `evidence_status` is `'unconfirmed'` while its resolved charge is non-zero, or `purchase.evidence_status` unconfirmed while purchase VAT is chargeable. No threshold constant is invented; an unconfirmed row charging nothing gates nothing, and `registered: false` can never gate. `DRAFT_REASON_SENTENCE` and `WATERMARK_TEXT` are both `Record<DraftReason, string>`, so adding the union member makes `tsc` require both — a compile-time guard, not a test that could be forgotten (§14.6's precedent, R9's finding that a length-assertion array does not pin exhaustiveness).
 
@@ -3495,7 +3542,7 @@ Both inert by construction. The numeric identity gate runs the same code over ea
 4. Coverage is a figure, not a test.
 5. The coverage reference month is the earliest PC; a phased block release is measured at its first PC.
 6. Exchange dates are stressed by no lever.
-7. Rows carry no evidence status (R15, on §14.6/§15.9/§16.9/§19.10's reasoning).
+7. Rows carry no **per-row** evidence status; the scheme-level evidence is §23.2's `exit_route_evidence` item [R15 — calc 2.15.0]. Reservation and exchange evidence is recorded once for the exit as a whole — with its source, reference and date, and `unknown` until someone records it — not against an individual `unit_sales` row. Restated as §23.11 limitation 8.
 8. The two sales paths remain two; there is no conversion between them.
 9. No appraisal workbook exists (spec §11.9); the ledger is printed in the memo and on the pages only.
 10. The phased break-even's fee reservation is paid once per sweep event — one per distinct receipt month, so lines completing in the same month reserve it once — and a deposit-heavy document has more sweep months than its held twin, so its break-even is overstated relative to it; the timing benefit of a released deposit is visible only with the exit fee removed.
@@ -3514,3 +3561,364 @@ Both inert by construction. The numeric identity gate runs the same code over ea
 | Lever | nine levers order-independent on a ledger document; zero-width bar on null; −5 and +4 invalid cells |
 | Memo | present with the pinned rows, absent when null; figures follow a tampered result block |
 | Entry points | both guards require v12 |
+
+---
+
+## 23. The due-diligence evidence schedule [R15 — calc 2.15.0]
+
+Audit §7.10 asked for evidence-led categories covering Planning, Title/Occupation, Existing Building, Construction, Finance and Exit, every issue carrying red/amber/green/**unknown**, evidence, owner, due date, cost and programme impact and an action, with the rule that *unknown must never default to green*; §7.1 asked for the structured planning, title, occupation and technical facts with an evidence source and date, and for competent confirmation of higher-risk-building status; §7.5's leftovers asked for QS source/date/status, fixed-price coverage, provisional sums and package exclusions. Until this release the appraisal recorded none of it. `risks[]` was a free-text project log with no category, no evidence, no owner, no date and no way to say unknown, and the memo text-matched its descriptions against nine hard-coded phrases, so a row reading "planning is fine" satisfied the planning check.
+
+§23 adds a fixed catalogue of evidenced items with `unknown` as every item's seed, five read-only rows derived from the evidence the model already carried, QS provenance and a per-package price basis on the cost plan, two source-conflict rules over a captured listing record, four flags and a seventh FINAL condition. `risks[]` is kept, untouched, as the project log the audit called it.
+
+**No arithmetic changes.** Every money figure on every existing document is identical under calc 2.15.0. The v12 → v13 identity gate compares the whole result — metrics, ledger and schedule, the new `due_diligence` block included — on both arms **with no exclusion** (§23.10).
+
+### 23.1 The schema
+
+`inputs_version: 13`. `due_diligence` is a **non-nullable** top-level block, unlike `unit_sales` (§22.1) or `monitoring` (§20.1): there is no document for which "no due diligence" is a meaningful state. An unexamined document is one whose every item is `unknown`, and the migration writes that explicitly rather than by absence.
+
+```
+due_diligence: {
+  source_record: SourceRecord | null       -- null = never captured
+  items:         DdItem[]                  -- every ENTERED catalogue code once, plus custom items
+}
+
+DdItem:
+  id:                      string          -- 'dd-<code>' for a catalogue item (migration-deterministic)
+  code:                    DdItemCode      -- one of §23.2's 23 entered codes, or 'custom'
+  category:                DdCategory      -- planning | title_occupation | existing_building |
+                                           --   construction | finance | exit
+  label:                   string          -- '' for a catalogue item (the catalogue supplies it);
+                                           --   required for 'custom'
+  status:                  'red' | 'amber' | 'green' | 'unknown' | 'not_applicable'
+  evidence:                DdEvidence | null
+  expiry_date:             string | null   -- ISO yyyy-mm-dd; the consent's lapse, a lease's end
+  owner:                   string
+  due_date:                string | null   -- ISO yyyy-mm-dd
+  cost_impact_pence:       integer | null  -- null = not assessed (§1.5)
+  programme_impact_months: integer | null  -- null = not assessed (§1.5)
+  action:                  string
+  notes:                   string
+
+DdEvidence:
+  source:    string        -- who produced it: firm, LPA, Land Registry, valuer
+  reference: string        -- the document: planning reference, title number, report reference
+  date:      string        -- ISO; the document's date, never today's
+
+SourceRecord:                              -- the listing's STRUCTURED fields, copied
+  captured_at:           string            -- ISO datetime; an INPUT (when the copy was taken),
+                                           --   never computed
+  source_name:           string | null
+  source_url:            string | null
+  is_vacant:             boolean | null
+  tenure:                'freehold' | 'leasehold' | 'unknown' | null
+  lease_years_remaining: integer | null
+  floor_area_sqm:        number | null
+  use_class:             string | null
+  epc_rating:            string | null
+```
+
+- `SourceRecord`'s eight copied fields are exactly the structured `Project` fields the scrapers populate — `source_name`, `source_url`, `is_vacant`, `tenure`, `lease_years_remaining`, `floor_area_sqm`, `use_class`, `epc_rating` — plus `captured_at`, which is an input recording when the copy was taken. `description` and `current_use_description` are **not** copied: prose is not a fact the engine can compare (§23.5). The Due Diligence page shows them beside the Title/Occupation category as read-only context, which is where a contradiction becomes visible to the appraiser evidencing `vacant_possession`.
+- Bounds: `cost_impact_pence`, `programme_impact_months`, `lease_years_remaining` and `floor_area_sqm` are `>= 0` at the model boundary; `category`, `status` and `tenure` are enums there. `code` is deliberately **not** an enum at the model boundary — a stray code must surface as §23.9 rule 1's worded validation error in both engines, not as a 422 in one of them.
+
+The cost plan gains (§23.6):
+
+```
+cost_plan.qs: null | {
+  source:    string    -- the firm or person who priced it
+  stage:     'order_of_cost' | 'riba_2' | 'riba_3' | 'riba_4' | 'tender' | 'contract_sum'
+  date:      string    -- ISO; the cost plan's issue date
+  status:    'draft' | 'issued' | 'reviewed'
+  base_date: string    -- ISO; the pricing base date (R15b's inflation origin)
+}
+
+CostPackage.price_basis: 'fixed_price' | 'provisional_sum' | 'estimate' | null   -- null = not classified
+```
+
+`qs` is detailed-mode only and is hard-rejected in headline mode exactly as `vat_override` is (§17.1): a rate × area estimate has no QS. `price_basis` is carried on every package and read only in detailed mode.
+
+### 23.2 The catalogue
+
+Twenty-eight codes in six categories, **in this order**. The catalogue — code, category, label — is a literal in both engines (`due-diligence.ts` / `due_diligence.py`) and is pinned byte-identical by mirrored tests exactly as `ALLOWED_TRANSITIONS` is (§21.2). The editor's per-item prompt text is UI-only and is not part of that identity.
+
+| Category | Code | What `green` means |
+|---|---|---|
+| `planning` | `planning_route` | The consent or prior approval the scheme relies on is granted; `evidence.reference` is its reference, `evidence.date` its decision date, `expiry_date` its lapse |
+| | `planning_conditions` | Pre-commencement conditions identified and their discharge programmed |
+| | `article_4_direction` | The Article 4 position is confirmed with the LPA |
+| | `conservation_listed` | Conservation-area and listed status confirmed |
+| | `cil_s106` | CIL/S106 liability confirmed and carried in the cost plan's `cil_s106` fee line |
+| `title_occupation` | `title_report` | Report on title: tenure, rights, restrictive covenants, easements |
+| | `vacant_possession` | Vacant possession obtainable on the modelled date; `red` = not obtainable, `amber` = subject to surrender or notice |
+| | `leases_tenancies` | Every occupational lease and tenancy scheduled, with its surrender or expiry terms |
+| | `rights_of_light` | Rights-of-light position surveyed, or confirmed not to arise |
+| | `party_wall` | Party-wall matters identified and awards programmed, or confirmed not to arise |
+| `existing_building` | `structural_survey` | Structural survey of the existing frame and envelope |
+| | `asbestos_survey` | Refurbishment-and-demolition asbestos survey |
+| | `measured_survey` | Measured survey underlying `areas` — the evidence §15.9 said the bridge did not carry |
+| | `higher_risk_building` | Competent confirmation of higher-risk-building status against the statutory criteria (audit §7.1) |
+| | `fire_strategy` | Fire strategy for the converted building |
+| | `acoustic_thermal` | Acoustic and Part L / EPC route confirmed for the conversion |
+| | `services_mande` | M&E, drainage and utilities capacity confirmed |
+| `construction` | `cost_plan_qs` | **Derived** (§23.3) — never entered; listed here so the category is complete |
+| | `procurement_contractor` | Procurement route and contractor identified; contract form and price basis agreed |
+| | `warranties_building_control` | Building control body and warranty provider appointed |
+| | `insurance` | Contract works and PI cover evidenced |
+| `finance` | `facility_terms` | **Derived** (§23.3) |
+| | `equity_sources` | **Derived** (§23.3) |
+| | `sponsor_entity` | Developer / SPV, KYC and track record evidenced |
+| | `tax_basis` | **Derived** (§23.3) — jurisdiction and VAT together |
+| `exit` | `sales_evidence` | Comparable evidence or an agent's letter supporting the unit values |
+| | `lender_valuation` | **Derived** (§23.3) |
+| | `exit_route_evidence` | Evidence for the modelled exit: pre-sales, a take-out term sheet, absorption evidence |
+
+- **Entered items: 23. Derived rows: 5.** `items[]` carries the 23 entered codes, each exactly once, plus any `custom` items. The five derived codes are **never** in `items[]` — they exist only on the result block, so no document can carry a stored status for a fact another field owns.
+- The catalogue is **route-agnostic**. A `sell_all` scheme marks nothing `not_applicable` under `exit` — `exit_route_evidence` is its pre-sales evidence; a `retain_all` scheme's is its take-out evidence. Applicability is a fact the appraiser evidences (`not_applicable` with a reason), never one the engine infers from the route.
+- The catalogue is fixed by release. A user-added row is a `custom` item with its own `label` and an entered `category`; `custom` is the one code that may repeat (§23.9 rule 1).
+
+### 23.3 Derived rows
+
+Five read-only rows on the result block, each computed from a field that already carries evidence, each naming the field it read in its `source`. The mapping is normative:
+
+| Row | Reads | `green` | `amber` | `red` | `unknown` | `source` | Evidence printed |
+|---|---|---|---|---|---|---|---|
+| `cost_plan_qs` | `cost_plan.mode`, `cost_plan.qs` | detailed, `qs` present, status `issued` or `reviewed` | detailed, `qs` present, status `draft` | — | headline mode, or detailed with `qs` null | `cost_plan.qs` | `qs.source`; reference `"<stage> / <status>"`; `qs.date` |
+| `facility_terms` | `finance.requires_confirmation` | `false` | — | — | `true` (a migrated, unconfirmed facility) | `finance.requires_confirmation` | none |
+| `equity_sources` | `equity_sources[].evidence_status` | every source `confirmed` | — | any `rejected` | any `unconfirmed` and none `rejected` | `equity_sources[].evidence_status` | the count by status, `"confirmed: n, unconfirmed: n, rejected: n"` |
+| `tax_basis` | §14.6 + §17.10 | jurisdiction `confirmed` **and** `acquisition_tax.date_basis == 'transaction_date'` **and** §17.10's VAT gate passes | — | — | otherwise | `acquisition.jurisdiction_evidence_status + vat` | `jurisdiction_source`; the applied jurisdiction; the band set's effective-from date |
+| `lender_valuation` | `lender_valuation` | present | — | — | `null` | `lender_valuation` | `author`, `reason`, `date` |
+
+- `tax_basis` reads **§17.10's own predicate** for the VAT half (material unconfirmed VAT), not a new one — the dashboard must never disagree with the banner. When it shows `unknown`, §13.3's condition 3 or 4 has already fired; the row is the same fact in the same colour. A pre-v5 document, which records no jurisdiction evidence status at all, reads `unknown`.
+- **Derived rows do not feed the seventh FINAL condition** (§23.7). `tax_basis` is gated by §13.3 conditions 3 and 4 as before; `facility_terms`, `equity_sources` and `lender_valuation` gate nothing today and continue not to (§23.11 limitation 3). The memo prints their `unknown` beside the entered items in the same table, and states the derived unknown count separately, so the reader sees it rather than inferring it.
+
+### 23.4 The derivation
+
+A pure module — `due-diligence.ts` / `due_diligence.py` — shaped like `monitoring`: it takes the inputs, the cost-plan result, the VAT result, the acquisition-tax result and the schedule (for the construction start month), and returns §23.8's result block. It is computed **once, in `derive_metrics` / `deriveMetrics`**, exactly where `monitoring_statement` is, and published on `AppraisalResultV2` — not on `Schedule`, because nothing in the ledger reads it. No ledger balance enters it, and nothing downstream reads it except the provenance layer (§23.7) and the flags (§23.9).
+
+**A pre-v13 document is computed through the same engine** (§16's `cost_plan_from_legacy_costs` rule): a document with no `due_diligence` block is read as §23.10's **migration seed** — the 23 entered catalogue items `unknown`, no source record — not as an empty schedule, which would read as "there is nothing to evidence". That is why the v12 → v13 identity gate can compare the result block on both arms with no exclusion.
+
+Rows are built in **catalogue order** — a derived row wherever the catalogue marks one, otherwise the matching `items[]` entry — followed by the `custom` items in `items[]` order. A catalogue code absent from `items[]` produces **no row**: §23.9 rule 1 reports it, and the dashboard does not invent a row for an item the document does not carry.
+
+```
+rows        = entered catalogue rows ∪ custom rows ∪ the 5 derived rows
+entered     = rows whose kind is not 'derived'
+assessed    = rows (derived included) whose status is 'red' or 'amber'
+
+per category c, and again over every row:  red, amber, green, unknown, not_applicable, total
+```
+
+The totals block carries sixteen fields. The first six are the status counts and their total over **every** row; the rest are projections of the same three partitions, each computed once here rather than by any surface:
+
+| Field | Definition |
+|---|---|
+| `red`, `amber`, `green`, `unknown`, `not_applicable`, `total` | counts over `rows` |
+| `entered_unknown_count` | `unknown` over `entered` — **the gate reads this** |
+| `addressed_pct` | `pct(|entered| − entered_unknown_count, |entered|)`, the shared `pct()` (§1.2) |
+| `cost_impact_total_pence` | Σ `cost_impact_pence` over `assessed` rows with a non-null impact |
+| `programme_impact_max_months` | max `programme_impact_months` over `assessed` rows with a non-null impact, else `null` |
+| `unassessed_impact_count` | `assessed` rows with **either** impact null |
+| `entered_total` | `|entered|` — the denominator of §23.9's flag message and of §13.4's limitation |
+| `assessed_count` | `|assessed|` |
+| `stated_impact_count` | `assessed` rows with a non-null `cost_impact_pence` — exactly the set `cost_impact_total_pence` sums |
+| `derived_unknown_count` | `unknown` over derived rows |
+| `entered_addressed_count` | `entered` rows whose status is not `unknown` |
+
+- **Programme impact is a max, not a sum.** Two three-month delays on the critical path may be sequential or concurrent; the schedule does not know, so it reports the largest single stated impact and every surface prints "at least".
+- **Cost impact is a sum**, over the assessed items whose owner has stated one. `stated_impact_count` and `unassessed_impact_count` are printed beside it so a total over four items is never read as a total over twenty-nine.
+- **Only an assessed row carries an impact into the totals.** A `green` row with a stale figure on it contributes nothing.
+- `not_applicable` is its own column and is neither red, amber nor unknown — but it **is** addressed for `addressed_pct`, for `entered_addressed_count` and for the gate: someone evidenced that it does not arise.
+- Every count the report prints is a field here. A report generator that re-partitions `rows` to count something is a second implementation of a count (§11.9), and the two engines' reports would then be free to disagree about the same document.
+
+### 23.5 The source record and the source-conflict rules
+
+`source_record` is the listing's structured fields, copied into the document and stamped with the moment the copy was taken. It is written by the client's default builder `defaultCalculatorInputsV13(project)` and by the Due Diligence page's **Re-capture from listing** action, both through one helper (`captureSourceRecord`) that copies §23.1's eight fields and stamps `captured_at` client-side. The default builder captures only where the project it is given actually carries a listing — a bare `{ id, price_pence, floor_area_sqm }` project is a new calculator, not a listing, and gets `null`. The migration also writes `null`: a stored document has no project record in hand, and inventing one would be inventing evidence.
+
+Reading the project record at run time is prohibited. The engine is a pure function of the inputs document, and a locked lender case (§21.1) must be recomputable from its own snapshot.
+
+Two conflict rules, evaluated **only when `source_record` is non-null**, each raising the flag `source_conflict` (red) carrying its own statement:
+
+1. **Occupation** — `source_record.is_vacant` is `false` **and** the `vacant_possession` item's status is `green`:
+   `source conflict: the listing records the property as occupied; vacant possession is marked green - evidence the surrender or correct the status`
+2. **Existing area** — `source_record.floor_area_sqm` is non-null and `> 0`, `areas.existing_gia_sqm > 0`, and `|existing_gia_sqm − floor_area_sqm| × 4 > floor_area_sqm`:
+   `source conflict: the listing floor area and the entered existing GIA differ by more than 25%`
+
+Rule 2's test is the **strict, integer-safe** form of "more than 25%": multiplied out rather than divided, so the comparison never rests on a float quotient's last bit, and a disagreement of exactly 25% does **not** fire. The 25% threshold is the one §15.6 retired from the unit-NIA check, reused so the product keeps one materiality figure for area disagreement.
+
+**What this does and does not catch.** Rule 1 fires only where the scraper structured the occupation fact. Where the contradiction lives in the listing's prose it is invisible to both rules, and this specification says so rather than pretending a keyword match is evidence (§23.11 limitation 1). What catches that case is §23.7: `vacant_possession` is seeded `unknown`, the document is DRAFT under *DUE DILIGENCE INCOMPLETE* until someone evidences it, and the page shows the listing's description beside the item being evidenced. The contradiction stops being silent the moment the model refuses to assume vacancy.
+
+A `null` `source_record` is disclosed, not hidden: the memo prints *"No listing record captured; source-conflict checks did not run."*
+
+### 23.6 QS provenance and the price basis
+
+Detailed mode only. The cost-plan result gains two fields, both `null` in headline mode:
+
+```
+price_basis: null | {
+  fixed_price_pence, provisional_sums_pence, estimate_pence, unclassified_pence
+      -- Σ amount_pence by each package's price_basis; unclassified = the null-basis packages
+  fixed_price_coverage_pct = pct(fixed_price_pence, base_build_pence)
+  provisional_sums_pct     = pct(provisional_sums_pence, base_build_pence)
+}
+qs: the input block republished, or null
+```
+
+- **Coverage is a share of base build** — the same base §16.3's `general` contingency class takes — so the two percentages a QS reviewer reads sit on the figure the contingency sits on. Both go through the shared `pct()`.
+- **Unclassified packages count against coverage.** A migrated detailed plan has every package at `price_basis: null`, so its coverage is 0% and its `unclassified_pence` is the whole base build: the honest statement of what was recorded, and the figure that moves as packages are classified.
+- **No threshold on provisional sums.** `provisional_sums_present` (amber) fires on any non-zero total and carries the figure; the audit names no materiality and this release invents none.
+- **Package exclusions need no new field.** A provisional or estimated package's `notes` is its exclusions, and the memo prints it under the QS line.
+- Fee lines carry no provenance (§23.11 limitation 9). A fee line is an appointment, not priced works, and its fixed/percentage `basis` is already recorded (§16.4).
+
+### 23.7 The draft gate
+
+`DraftReason` gains `'due_diligence_incomplete'`, ordered immediately after `'vat_basis_unconfirmed'` and before `'not_approved'`. §13.3's list becomes seven conditions, its former conditions 5 and 6 renumbered 6 and 7. Banner:
+
+```
+DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE
+```
+
+**Predicate:** `metrics.due_diligence.totals.entered_unknown_count == 0`. `buildProvenance` takes it as a fourth gate input beside the tax and VAT bases and the staleness flag, computed by `dueDiligenceGateFor(run)`. `provenance.py`'s `draft_reason` mirrors the **ordering** and takes `due_diligence_complete` as a keyword argument — it does not mirror the predicate: `dueDiligenceGateFor` and the no-key exemption live in `report-provenance.ts` alone, and there is no Python helper (provenance.py is test-only, and its callers pass the boolean). `DRAFT_REASON_SENTENCE` and `WATERMARK_TEXT` are `Record<DraftReason, string>`, so the compiler requires both texts (§17.10's precedent).
+
+**A document with no `due_diligence` key at all is not re-graded.** This is `taxBasisConfirmedFor`'s R8 rule, kept for R8's reason: a raw pre-v13 document handed straight to the engine offered its author no field to fill, so its silence cannot be graded. Every production entry point migrates to v13 before running, so **every stored document is graded**; the exemption reaches only a raw document constructed in a test or held outside the persistence boundary, and the pre-existing release-gate FINAL routes stay FINAL on exactly that basis. The engine still seeds and reports the 23 unknowns for such a document (§23.4), and `due_diligence_unknown` still fires; only the FINAL condition exempts it.
+
+**Why this position in the order.** An `unknown` does not make a figure wrong, so it must not outrank the two basis reasons that say figures may be. It must outrank `not_approved`, because an approval read over an unevidenced title, lease or consent is the stale case's cousin (§21.3): the reader would draw exactly the wrong conclusion from the approval alone.
+
+**The consequence for every existing document is accepted, not worked around** (§14.6's precedent). A migrated document carries 23 `unknown` items and shows this banner as soon as its tax and VAT bases are confirmed, until every entered item is evidenced or marked not applicable with a reason. The release-gate FINAL fixture therefore carries a fully addressed schedule — the first FINAL document with an evidenced due-diligence position.
+
+### 23.8 Outputs and reporting
+
+`AppraisalResultV2` gains `due_diligence`, computed once in `derive_metrics` / `deriveMetrics` exactly as `monitoring_statement` is. It is **never null** (§23.4's pre-v13 seed).
+
+```
+DueDiligenceResult:
+  rows: Array<{ id, code, category, label,
+                kind: 'entered' | 'custom' | 'derived',
+                status, evidence: DdEvidence | null, expiry_date, owner, due_date,
+                cost_impact_pence, programme_impact_months, action, notes,
+                source: string | null }>          -- derived rows: the field read; null otherwise
+  categories: Array<{ category, red, amber, green, unknown, not_applicable, total }>   -- six, in order
+  totals: { red, amber, green, unknown, not_applicable, total,
+            entered_unknown_count, addressed_pct,
+            cost_impact_total_pence, programme_impact_max_months, unassessed_impact_count,
+            entered_total, assessed_count, stated_impact_count,
+            derived_unknown_count, entered_addressed_count }                           -- §23.4
+  source_record: SourceRecord | null              -- republished
+  source_conflicts: Array<{ rule: 'occupation' | 'existing_area', statement: string }>
+  consent_expiry: { expiry_month, construction_start_month, expires_before_start } | null
+                                                  -- null unless the planning_route item carries an
+                                                  --   expiry_date AND acquisition_date is set
+```
+
+**Surfaces.**
+
+- **Page 13 is *Due Diligence*.** The schedule editor sits above the existing risk register: six category groups, each row carrying the status select (seeded `unknown`, coloured, `not_applicable` grey), evidence source / reference / date, expiry date, owner, due date, cost impact, programme impact, action and notes; an **Add custom item** control per category; derived rows rendered read-only and labelled with the field they are derived from; the category counts and the addressed count and percentage read from the run, never recomputed on the page; the source-record card with **Re-capture from listing**; and, under Title/Occupation, the project's `description` and `current_use_description` as read-only context. Validation messages surface per row through the existing field-keyed issue map.
+- **Page 4 (Costs)**, detailed mode: a QS provenance card (source, stage, date, status, base date) and a `price_basis` select on every package row, with the coverage and provisional-sum figures read from the run.
+- **The reconciliation strip** carries the new banner text and the four flags.
+- **The deal spider.** `buildingSafetyBand` is unchanged, but the building-safety axis is marked **provisional** with the note `screening only - higher-risk-building status not competently confirmed` unless the `higher_risk_building` item is `green` or `not_applicable` — audit §7.1's "retain the prompt, require confirmation".
+- **Memo §9 is *Due Diligence and Risk*:** the category summary table (six rows × five counts and a total), the schedule table (category, item, status, evidence source · reference · date, expiry, owner, due, cost impact, programme months, action) with each derived row marked *(derived)*, the impacts sentence — stated cost impact across `stated_impact_count` items, "at least" `programme_impact_max_months` months, `unassessed_impact_count` not yet assessed — each `source_conflict` printed as an *Information Required* line in the engine's own words, then the source-record line or the not-captured sentence, and finally the risk register under **Risk register (project log)**. The nine-phrase text-match and its "Risks not yet addressed" line are **deleted**.
+- **Memo §3** gains two sentences read from the schedule: the planning position (status, reference, decision date, lapse date, or "no consent evidenced") and the vacant-possession status. Each prints its status word whatever it is, so an unexamined document says "unknown" where an evidenced one says "green".
+- **Memo §5's construction sub-section** is headed *Detailed Cost Plan* when `cost_plan.qs` is recorded and *Detailed Cost Plan — QS Evidence Not Recorded* when it is not, and prints the QS line, the coverage, the provisional sums, the unclassified total and the cost base date (§13.4).
+- **Appendix B** replaces the risk-register gap line with the document's own unknown items, named by their catalogue labels up to six and counted beyond that, pointing back to §9.
+- Every due-diligence and QS calendar date prints through the memo's plain-date formatter — a calendar date, never a zone-shifted one (§1.4).
+- **No workbook** (§22.10 limitation 9 stands).
+
+### 23.9 Validation and flags
+
+Input errors, keyed `due_diligence.items[i].<field>`, `due_diligence.source_record.<field>` and `cost_plan.<field>` — and `due_diligence` itself for the missing-code message, which belongs to no single row. They apply structurally: a pre-v13 document has no `due_diligence` attribute, no `cost_plan.qs` and no `price_basis`, so it raises nothing.
+
+1. **The catalogue is complete and unambiguous.** Every entered catalogue code appears **exactly once**. Four distinct messages: a missing code, a derived code found in `items[]`, a code that is not in the catalogue, and a duplicate. A `custom` item requires a non-empty `label`. Every item's `category` is in the enum. Ids are unique. **`custom` is the one repeatable code** — it names no catalogue entry, so a document carrying two user-added items is normal and must not read as a duplicate.
+2. `status = green` requires `evidence` non-null with a non-empty `source` **and** a non-empty `date`.
+3. `status = red` or `amber` requires a non-empty `action`.
+4. `status = not_applicable` requires a non-empty `notes` — the reason it does not arise.
+5. Every date present — `evidence.date`, `expiry_date`, `due_date`, `qs.date`, `qs.base_date` — is ISO `yyyy-mm-dd` and a real calendar date, the same rule `acquisition_date` is held to (§14), reused rather than restated. A field left absent or empty is not a date error; rule 2 owns the missing-evidence case.
+6. `cost_impact_pence` is null or an integer `>= 0`; `programme_impact_months` is null or an integer `>= 0`.
+7. `source_record`, when present: `captured_at` non-empty; `floor_area_sqm` null or `>= 0`; `lease_years_remaining` null or an integer `>= 0`; `tenure` in the enum or null.
+8. `cost_plan.qs` non-null in headline mode is an error (§17.1's shape). When present: `source` non-empty, `stage` and `status` in their enums, and **both `date` and `base_date` non-empty after trim** as well as real (rule 5). The two dates are the one place rule 5's "absent is not an error" reading is overridden: a QS record whose provenance cannot be dated is worse than no record, and the derived `cost_plan_qs` row prints that date as its evidence.
+9. `price_basis` is in the enum or null.
+
+Several of these guard a field the Python model already constrains — rule 1's `category`, the status enum, rule 6's two impacts, and the numeric and enum arms of rules 7–9 — so in that engine those branches are unreachable and a stray value is a 422 at parse time. They are **kept, not deleted as dead code**: the TypeScript validator can reach every one of them (a JSON payload arrives uncoerced), and a rule present in one engine and absent from the other is exactly the silent asymmetry the dual-engine mirror exists to prevent.
+
+**Flags** (result-derived; none is an error):
+
+| Code | Severity | Fires when | Message carries |
+|---|---|---|---|
+| `due_diligence_unknown` | amber | `entered_unknown_count > 0` | `"N of M entered items unknown"` — `M` is `entered_total`, the same field §13.4's limitation reads |
+| `source_conflict` | red | either §23.5 rule; **one flag per rule** | the rule's own statement, verbatim |
+| `consent_expires_before_start` | red | `consent_expiry.expires_before_start` | the lapse month and the construction start month; the flag's `month` is the lapse month |
+| `provisional_sums_present` | amber | detailed mode and `price_basis.provisional_sums_pence > 0` | the amount, on the flag's `amount_pence` |
+
+**`months_between(a, b)`** is whole months, floored:
+
+```
+(y_b − y_a) × 12 + (m_b − m_a) − (1 if d_b < d_a else 0)
+```
+
+A negative result is a lapse before acquisition and always fires. The two helpers are mirrored and pinned on a leap-day pair: `2024-01-31 → 2024-02-29` is **0** months (29 < 31, so the part-month is dropped) and `2024-01-29 → 2024-02-29` is **1**.
+
+**`construction_start_month`** has three arms, in this order: the resolved start of the phase named by `programme.category_phase_ids.construction` when `programme` is a network (§18.2); otherwise `programme.packages.construction.start_offset` when a curve programme is present (§6.1); otherwise `0`, because §6's default profile starts the construction spend at month 0. The middle arm is reachable **only from a raw pre-v9 document**: `migrate_v8_to_v9` turns a package programme into a network, so no migrated document takes it.
+
+**The schedule is §12.2-invariant; two of its flags are not.** No lever writes to `due_diligence`, so every sensitivity cell carries the identical schedule and the identical derived rows as the base cell, and with them the identical `due_diligence_unknown` and `source_conflict` flags — both read the document alone. Two flags **can** move between cells, and neither is a defect: `consent_expires_before_start` compares the lapse month against `construction_start_month`, which the **`phase_slip` lever moves** (any lever that moves the construction start moves this comparison with it), so a consent that clears the base start can lapse before a slipped one; and `provisional_sums_present`'s **amount** moves under the cost lever, which scales the packages it is summed from. There is no due-diligence lever: a "risks crystallise" stress (Σ cost impact onto construction, Σ programme impact onto the timeline) is recorded for R16's presets, not built here.
+
+### 23.10 Migration and the persistence boundary
+
+```
+v12 due_diligence: (absent)             →  v13 { source_record: null,
+                                                 items: [the 23 entered catalogue items,
+                                                         id 'dd-<code>', status 'unknown',
+                                                         evidence null, expiry_date null, owner '',
+                                                         due_date null, cost_impact_pence null,
+                                                         programme_impact_months null,
+                                                         action '', notes ''] }
+v12 cost_plan.qs: (absent)              →  v13 null
+v12 cost_plan.packages[].price_basis    →  v13 null   (every package)
+```
+
+Every addition is inert to every money figure. `is_v13` discriminates on `inputs_version == 13` **and** the presence of the `due_diligence` key; `migrate_v12_to_v13` refuses a document that is already v13; `migrate_inputs_to_v13` is the structural copy of v12's, with the same two refusals (an unrecognised version, and a document declaring 13 that fails the structural check); `parse_calculator_inputs` gains the v13 branch first.
+
+**The migration moves no computed value.** The numeric identity gate runs the same code over a v12 document and its migrated v13 twin, corpus-wide in both engines, and requires equality of every money figure and every pre-existing flag — **with no exclusion for the new block**, because §23.4 reads a pre-v13 document as the seed and therefore computes the identical schedule on both arms. `due_diligence_unknown` is the one flag every migrated document raises, and the gate asserts it **by name** — `"due_diligence_unknown" in {f.code for f in v13_run.metrics.flags}`, per fixture, in both engines — so an emptied or silently narrowed seed fails the gate rather than passing it vacuously. The validation side is §19.9's three properties: every v12 issue has a v13 counterpart; §23.9's rules raise nothing on a migrated document; and a control document (one catalogue code removed) trips a v13-only rule.
+
+**What moves for a stored document** is its `input_hash` on the next save — every inputs bump does this (§13.2's disclosure) — and therefore any approved lender case goes **stale** on that save (§21.3). That is the correct answer, not a defect: the snapshot the case locked carried no evidence position, and the re-saved one carries 23 unknowns. `migration-notes.md` §16 records it so nobody reads a stale case after this release as a fault.
+
+### 23.11 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **Prose is not compared.** The source-conflict rules read the listing's structured fields only. A contradiction that lives in `description` is caught by the `unknown` gate and by the appraiser, never by the engine.
+2. **Two conflict rules.** Occupation and existing area. Tenure, lease term, use class and EPC rating are captured and printed but compared to nothing, because the appraisal carries no typed counterpart to compare them with.
+3. **Derived rows do not gate.** `facility_terms`, `equity_sources` and `lender_valuation` can show `unknown` without making the document DRAFT; each keeps the semantics its own release gave it (§10, R1, R2). `derived_unknown_count` is published and printed so the position is disclosed rather than implied.
+4. **No due-date or overdue logic.** `due_date` is recorded and printed; nothing compares it to a date, because the engine has no clock (§1.4).
+5. **Impacts are stated, not modelled.** `cost_impact_pence` and `programme_impact_months` enter no ledger and no lever. The memo says so in the same breath as it prints them.
+6. **No inflation — deferred to R15b**, *the cost plan in time*: a per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint, and per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3). R15 records `qs.base_date` so R15b has its origin.
+7. **No per-package QS provenance.** One `qs` block covers the whole detailed plan; a plan priced by two firms records one.
+8. **Per-row sales evidence remains unmodelled.** §22.10 limitation 7 narrows to this: reservation and exchange evidence is scheme-level (`exit_route_evidence`), not per `unit_sales` row.
+9. **Fee lines carry no provenance.** A fee line is an appointment, and its evidence is the appointment letter — the `procurement_contractor` or `sponsor_entity` item, not QS evidence.
+10. **The catalogue is fixed by release.** Adding a code is a schema change with a migration seeding it `unknown`. There is no user-defined catalogue, only `custom` rows.
+11. **The seventh FINAL condition exempts a raw pre-v13 document** (§23.7). Every production entry point migrates before running, so every *stored* document is graded; a document constructed outside the persistence boundary is not. The exemption is R8's rule, carried deliberately, and it is the reason the pre-existing release-gate FINAL routes did not become DRAFT at this release.
+
+### Guards this release must watch fail
+
+| Guard | What must fail first |
+|---|---|
+| Catalogue identity | the 28 (code, category, label, derived) entries byte-identical across engines; a reordered or relabelled entry fails |
+| Both-directions coverage | a missing code, a duplicate, a derived code in `items[]`, an unknown code — four distinct messages |
+| Green needs evidence | `green` with `evidence: null`, and with an empty `source` — rejected; with source and date — accepted |
+| Red/amber need an action; `not_applicable` needs a reason | one negative and one positive each |
+| Unknown gates, red does not | the diagonal row: one `unknown` → `due_diligence_incomplete`; the same document with that item `red` plus an action → FINAL |
+| Gate ordering | tax unconfirmed + one unknown → `tax_basis_unconfirmed`; VAT unconfirmed + one unknown → `vat_basis_unconfirmed`; both confirmed + one unknown + no case → `due_diligence_incomplete`, **not** `not_approved` |
+| Derived rows do not gate | fixture Y's `unconfirmed` equity source: row `unknown`, `entered_unknown_count` excludes it; the twin with the three entered unknowns evidenced reaches FINAL with that row still `unknown` |
+| Derived-row mapping | each of the five rows through each of its statuses, by a one-field change |
+| Rollups by hand | fixture Y's six category rows, the totals block and `addressed_pct`; `not_applicable` counted as addressed |
+| Impact totals | assessed red/amber only; a `green` carrying an impact contributes nothing; max not sum for months; `stated_impact_count` and `unassessed_impact_count` |
+| Conflict rule 1 | Y fires; the twin with `is_vacant: null` does not; the twin with `vacant_possession: amber` does not |
+| Conflict rule 2 | Y fires; a twin at exactly 25% does not (strict) |
+| No source record, no conflicts | Y with `source_record: null` raises neither and prints the not-captured sentence |
+| Consent expiry | Y fires at 2 < 4; a twin with the expiry four months out does not; `acquisition_date: null` never fires; the leap-day pair pins `months_between` |
+| Price basis | Y's coverage block by hand; the twin that classifies the `null` package `fixed_price` moves coverage by that package's share; headline mode → `price_basis: null` |
+| QS in headline mode | rejected; detailed accepted |
+| Money inertness | Y against its schedule-reset twin: `gdv_pence`, total development cost, profit and peak debt identical on absolute figures |
+| Migration identity | the same code over a v12 document and its migrated v13 twin: every money figure and every pre-existing flag equal corpus-wide, `due_diligence_unknown` the named sole addition |
+| Null-path identity to 2.14.0 | every pre-existing golden pin unchanged |
+| §1.6 version list | requires v13 |
+| Memo | §9 carries Y's counts and both conflict lines; the nine-phrase text-match is gone (a `risks[]` row reading "planning is fine" satisfies nothing); §3 prints the planning reference and expiry; §13's limitation is the conditioned sentence; the FINAL twin renders FINAL |
+| Spider caveat | provisional with the HRB note unless the item is `green` or `not_applicable` |
+| Message drift | the cross-engine window covers §19.7, §22.7 and §23.9, each bounded and order-asserted; the three §22.7 Python messages the widened window showed to differ were aligned to the TS text verbatim |
+| Unit-sales identity | `unit_sales.totals.gross_pence == totals.gross_sales_pence` on fixture X and corpus-wide where non-null |
+| Entry points | both engines' entry-point guards pass only once every production call site names v13; the client default builder captures the source record from a project |

@@ -1,9 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV12 } from '../lib/model';
+import { migrateInputsToV13 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV12 } from '../lib/model';
-import { defaultCalculatorInputsV12 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV13 } from '../lib/model';
+import { defaultCalculatorInputsV13 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
@@ -20,7 +20,7 @@ import AppraisalSummaryPage from './calculator/AppraisalSummaryPage';
 import ScenariosPage from './calculator/ScenariosPage';
 import SensitivityPage from './calculator/SensitivityPage';
 import ExitStrategyPage from './calculator/ExitStrategyPage';
-import RiskRegisterPage from './calculator/RiskRegisterPage';
+import DueDiligencePage from './calculator/DueDiligencePage';
 import DealSpiderPage from './calculator/DealSpiderPage';
 import InvestorSummaryPage from './calculator/InvestorSummaryPage';
 import LenderCasePage from './calculator/LenderCasePage';
@@ -66,7 +66,7 @@ const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'scenarios', label: 'Scenarios', num: 10 },
   { key: 'sensitivity', label: 'Sensitivity', num: 11 },
   { key: 'exit_strategy', label: 'Exit', num: 12 },
-  { key: 'risk_register', label: 'Risk', num: 13 },
+  { key: 'risk_register', label: 'Due Diligence', num: 13 },
   { key: 'deal_spider', label: 'Deal Spider', num: 14 },
   { key: 'investor_summary', label: 'Investor', num: 15 },
   { key: 'lender_case', label: 'Lender Case', num: 16 },
@@ -101,8 +101,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV12>(() =>
-    defaultCalculatorInputsV12(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV13>(() =>
+    defaultCalculatorInputsV13(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -112,7 +112,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV12(project));
+      setInputs(defaultCalculatorInputsV13(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -129,6 +129,12 @@ export default function ConversionCalculator({ project }: Props) {
             // its surfaces) is only ever exercised by a v12 document, and
             // until this line named the v12 entry point no user could hold
             // one.
+            // R15 Task 13 (spec 23.10): the server boundary moved to v13
+            // (app/api/app.py) and this moved WITH IT, in the same commit --
+            // this is the move that makes R15's due-diligence evidence
+            // schedule reachable at all. Every arm the release built is only
+            // ever exercised by a v13 document, and until this line named
+            // the v13 entry point no user could hold one.
             // R14 Task 14 (spec 20.1): the server boundary moved to v11
             // (app/api/app.py) and this moved WITH IT, in the same commit --
             // this is the move that makes R14's monitoring statement
@@ -172,15 +178,15 @@ export default function ConversionCalculator({ project }: Props) {
             // `legacyOnChange`) that used to sit below: every calculator
             // sub-page is now typed on the current document version directly,
             // so this component's state and every sub-page's props are the
-            // same shape (R13b Task 15 moved that shared type to
-            // CalculatorInputsV12, one version on from R14 Task 14).
+            // same shape (R15 Task 13 moved that shared type to
+            // CalculatorInputsV13, one version on from R13b Task 15).
             //
             // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
             // that used to sit here: the migration's return type is the
             // state's type, so no cast is needed to bridge them at this call
             // site.
             setInputs(
-              migrateInputsToV12(appraisal.inputs_snapshot as Record<string, unknown>, project),
+              migrateInputsToV13(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -209,12 +215,20 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV12 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV13 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV12>) => {
+  // R15 Task 13. The state is now a v13 document natively, so the widened
+  // `Omit<CalculatorInputsV13, 'inputs_version'>` R15 Task 9 introduced is no
+  // longer needed -- `Partial<CalculatorInputsV13>` says the same thing the
+  // simple way. `inputs_version` still cannot be restamped by a caller of
+  // this callback in practice (every page only ever writes its own section),
+  // but nothing here specially protects it any more; the cutover -- this
+  // function -- was the one thing allowed to change the document's version,
+  // and it already has.
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV13>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -248,9 +262,9 @@ export default function ConversionCalculator({ project }: Props) {
 
       // R8 Task 11 (defect B). The server is authoritative over the document,
       // not just over the metrics: `calculate_authoritative` normalises the
-      // snapshot to v12 (R13b Task 15; v11 through R14, v10 through R13) and,
-      // on a project's first appraisal, derives the tax jurisdiction from the
-      // postcode (app/api/app.py). Before this, the
+      // snapshot to v13 (R15 Task 13; v12 through R13b, v11 through R14, v10
+      // through R13) and, on a project's first appraisal, derives the tax
+      // jurisdiction from the postcode (app/api/app.py). Before this, the
       // screen kept the england_ni document it posted while the store held the
       // derived one -- measured on a Welsh fixture as
       // total_development_cost_pence 91,388,400 on screen against 91,213,400
@@ -258,7 +272,7 @@ export default function ConversionCalculator({ project }: Props) {
       // and the divergence surviving until the component remounted. Adopting
       // what came back makes the save the point at which the two agree.
       //
-      // Routed through the v12 migration rather than cast, for the same reason
+      // Routed through the v13 migration rather than cast, for the same reason
       // the load path is: the response is JSON of unknown provenance to this
       // component, and the migration is the one place that knows how to put a
       // stored snapshot onto the current shape.
@@ -275,9 +289,9 @@ export default function ConversionCalculator({ project }: Props) {
       // reconciles it. The migration runs outside the updater so the updater
       // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
-        let adopted: CalculatorInputsV12 | null = null;
+        let adopted: CalculatorInputsV13 | null = null;
         try {
-          adopted = migrateInputsToV12(result.inputs_snapshot, project);
+          adopted = migrateInputsToV13(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was
@@ -412,7 +426,7 @@ export default function ConversionCalculator({ project }: Props) {
           <ExitStrategyPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'risk_register' && (
-          <RiskRegisterPage inputs={inputs} onChange={updateInputs} />
+          <DueDiligencePage inputs={inputs} onChange={updateInputs} run={run} project={project} />
         )}
         {activePage === 'deal_spider' && (
           <DealSpiderPage inputs={inputs} onChange={updateInputs} project={project} />

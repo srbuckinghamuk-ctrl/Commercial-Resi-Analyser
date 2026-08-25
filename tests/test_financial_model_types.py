@@ -175,6 +175,6 @@ def test_v12_rejects_an_unknown_deposit_release():
         parse_calculator_inputs(_minimal_v12_doc({"deposit_release": "maybe", "units": []}))
 
 
-def test_calc_version_is_2_14_0():
+def test_calc_version_is_2_15_0():
     from app.financial_model.types import CALC_VERSION
-    assert CALC_VERSION == "2.14.0"
+    assert CALC_VERSION == "2.15.0"

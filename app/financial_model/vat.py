@@ -621,3 +621,12 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
         purchase_vat_chargeable=purchase_vat_chargeable,
         purchase_evidence_status=vat.purchase.evidence_status,
     )
+
+
+def vat_basis_confirmed(vat: VatResult) -> bool:
+    """Spec Sec 17.10's gate predicate -- the Python twin of vatBasisGate (vat.ts):
+    no charge line that actually bears VAT rests on an unconfirmed status, and the
+    purchase leg is confirmed when purchase VAT is chargeable."""
+    row_unconfirmed = any(c.evidence_status == "unconfirmed" and c.vat_pence != 0 for c in vat.charges)
+    purchase_unconfirmed = vat.purchase_vat_chargeable and vat.purchase_evidence_status == "unconfirmed"
+    return not row_unconfirmed and not purchase_unconfirmed

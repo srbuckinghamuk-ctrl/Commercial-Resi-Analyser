@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { render, screen, within } from '@testing-library/react';
 import CashflowPage from './CashflowPage';
 import { runAppraisal } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV12 } from '../../lib/model';
-import { defaultCalculatorInputsV12 } from '../../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV13 } from '../../lib/model';
+import { defaultCalculatorInputsV13 } from '../../lib/conversion-defaults';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import { anchoredSlippedDoc } from '../../lib/model/__fixtures__/investment-case-docs';
 import { unitSalesDoc, heldTwinDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
@@ -15,29 +15,29 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureH = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'h-programme-scurve.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 // v5 on disk (R8) -- see the same note in AppraisalSummaryPage.test.tsx.
 const fixtureJ = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'j-blended-refinance.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 // v8 on disk, registered for VAT -- the R11 §17.4 worked cycle.
 const fixtureVat = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 // v9 on disk -- a dated phase NETWORK, not the legacy three-package shape.
 const fixtureNetwork = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 // v10 on disk -- R13 spec §19.6: "CashflowPage gains the NOI row". Retain-all
 // investment case, DSCR binds; gross_sales_pence is 0 on this document, so
 // without the NOI row the ledger's Repayment/Distribution columns move with
 // no visible source.
 const fixtureInvestmentCase = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 't-investment-case.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 
 describe('CashflowPage — no programme, no sales phasing (default v4)', () => {
-  const inputs = defaultCalculatorInputsV12();
+  const inputs = defaultCalculatorInputsV13();
   const run = runAppraisal(inputs);
 
   it('keeps the original assumptions note verbatim', () => {
@@ -128,14 +128,14 @@ describe('CashflowPage — refinance modelled (fixture J)', () => {
 // VAT component, read from run.metrics.vat, never recomputed here.
 describe('CashflowPage — the cost total is VAT-inclusive, and says so (ruling R25)', () => {
   it('labels the Costs column as VAT-inclusive', () => {
-    const inputs = defaultCalculatorInputsV12();
+    const inputs = defaultCalculatorInputsV13();
     const run = runAppraisal(inputs);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.getByRole('columnheader', { name: 'Costs (VAT-incl.)' })).toBeInTheDocument();
   });
 
   it('does not show a VAT disclosure line on a document with no VAT charged', () => {
-    const inputs = defaultCalculatorInputsV12();
+    const inputs = defaultCalculatorInputsV13();
     const run = runAppraisal(inputs);
     expect(run.metrics.vat.total_input_vat_pence).toBe(0);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
@@ -175,7 +175,7 @@ describe('CashflowPage — anchored tranche/refinance on a slipped programme (§
     // `inputs` is unused by CashflowPage's body (only `run` is destructured
     // in the component) -- a placeholder v9 default satisfies the prop's
     // type without a cast, and carries none of the figures under test.
-    render(<CashflowPage inputs={defaultCalculatorInputsV12()} onChange={vi.fn()} run={run} />);
+    render(<CashflowPage inputs={defaultCalculatorInputsV13()} onChange={vi.fn()} run={run} />);
 
     const anchor = programmeAnchor(doc);
     const label = (m: number) => formatProgrammeMonth(anchor, m);
@@ -247,7 +247,7 @@ describe('CashflowPage — NOI row (fixture T, retain-all investment case, spec 
   });
 
   it('does not render an NOI column for a document with no investment case', () => {
-    const inputs = defaultCalculatorInputsV12();
+    const inputs = defaultCalculatorInputsV13();
     const run = runAppraisal(inputs);
     expect(run.model.months.every((m) => m.net_operating_income_pence === 0)).toBe(true);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
@@ -262,14 +262,14 @@ describe('CashflowPage — NOI row (fixture T, retain-all investment case, spec 
 // block directly, never sum or recompute a deposits figure from the row
 // data. `inputs` is unused by CashflowPage's body (only `run` is
 // destructured -- see the anchoredSlippedDoc test above), and the fixture
-// builders return a `CalculatorInputsV12` document, not the `V11` the prop
+// builders return a `CalculatorInputsV13` document, not the `V11` the prop
 // is typed for, so a placeholder V11 default satisfies the prop's type
 // without a cast, matching the existing pattern in this file.
 describe('CashflowPage — deposits released column (R13b spec §22.6)', () => {
   it('shows a deposits-released column only when a released deposit lands, read off metrics.unit_sales', () => {
     const doc = unitSalesDoc();
     const run = runAppraisal(doc);
-    render(<CashflowPage inputs={defaultCalculatorInputsV12()} onChange={vi.fn()} run={run} />);
+    render(<CashflowPage inputs={defaultCalculatorInputsV13()} onChange={vi.fn()} run={run} />);
     expect(screen.getByRole('columnheader', { name: 'Deposits released' })).toBeInTheDocument();
     // month 8's 2,600,000p -- penceToPounds rounds to whole pounds (maximumFractionDigits: 0),
     // so this is '£26,000', not '£26,000.00' (see the ruling R25 VAT-disclosure
@@ -280,7 +280,7 @@ describe('CashflowPage — deposits released column (R13b spec §22.6)', () => {
   it('hides the column on the held twin and on the null path', () => {
     for (const doc of [heldTwinDoc(), unitSalesDoc({ unitSales: null })]) {
       const run = runAppraisal(doc);
-      const { unmount } = render(<CashflowPage inputs={defaultCalculatorInputsV12()} onChange={vi.fn()} run={run} />);
+      const { unmount } = render(<CashflowPage inputs={defaultCalculatorInputsV13()} onChange={vi.fn()} run={run} />);
       expect(screen.queryByRole('columnheader', { name: 'Deposits released' })).toBeNull();
       unmount();
     }

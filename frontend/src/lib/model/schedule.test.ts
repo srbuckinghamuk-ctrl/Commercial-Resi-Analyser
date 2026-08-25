@@ -353,7 +353,7 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
         packages: [{
           id: 'p1', code: 'structure', label: 'Structure', amount_pence: 10_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         }],
         contingency: [
           { name: 'general', pct: 10 },
@@ -371,6 +371,7 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
             basis: 'fixed', amount_pence: 300_000, pct: 0, per_dwelling: false, vat_override: null,
             phase_id: null },
         ],
+        qs: null,
       },
     };
     const s = buildSchedule(inputs);
@@ -416,6 +417,7 @@ function workedVatDocument(opts: { registered?: boolean } = {}): CalculatorInput
       packages: [],
       contingency: defaultContingencyClasses(0),
       fee_lines: [],
+      qs: null,
     },
     finance: {
       ...v7.finance,
@@ -576,10 +578,11 @@ describe('phase-driven spend — §18.5', () => {
       packages: [{
         id: 'p1', code: 'structure', label: 'Structure', amount_pence: 6_000_000,
         contingency_class: 'general', lender_eligible: true, notes: '',
-        vat_override: null, phase_id: 'strip_out',
+        vat_override: null, phase_id: 'strip_out', price_basis: null,
       }],
       contingency: defaultContingencyClasses(0),
       fee_lines: [],
+      qs: null,
     };
     const s = buildSchedule(doc);
     // strip_out window is months 0-1; the package's whole amount must land there.
@@ -743,7 +746,7 @@ describe('phase-driven spend — §18.5', () => {
       construction_cost_per_sqm_pence: 750_000, total_construction_sqm: 400,
     };
     v9.cost_plan = {
-      mode: 'headline', packages: [], contingency: defaultContingencyClasses(0), fee_lines: [],
+      mode: 'headline', packages: [], contingency: defaultContingencyClasses(0), fee_lines: [], qs: null,
     };
     v9.programme = {
       anchor_month: null,
@@ -813,12 +816,15 @@ describe('phase-driven spend — §18.5', () => {
       mode: 'detailed',
       packages: [
         { id: 'p1', code: 'structure', label: 'Structure A', amount_pence: 1_000_000,
-          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
+          price_basis: null },
         { id: 'p2', code: 'envelope', label: 'Structure B', amount_pence: 1_000_000,
-          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+          contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
+          price_basis: null },
       ],
       contingency: defaultContingencyClasses(0),
       fee_lines: [],
+      qs: null,
     };
     const s = buildSchedule(doc);
     expect(s.uses[4].construction_pence).toBe(666_667);

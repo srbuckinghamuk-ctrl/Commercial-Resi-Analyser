@@ -6,6 +6,7 @@ import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
 import {
   migrateInputsToV8, migrateInputsToV9, migrateInputsToV10, migrateInputsToV11, migrateInputsToV12,
+  migrateInputsToV13,
 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
@@ -122,7 +123,37 @@ function variants(
   // through migrateInputsToV11 either, by the identical design one version
   // further on (migrateInputsToV11 refuses a v12 document -- it would have to
   // drop `unit_sales`).
-  if (storedVersion >= 12) {
+  //
+  // R15 Task 3: and once more for v13 -- fixture Y (v13-native) cannot go
+  // through migrateInputsToV12 either, by the identical design one version
+  // further on (migrateInputsToV12 refuses a v13 document -- it would have to
+  // drop `due_diligence`). The v13 arm needs the same anchor clearing as the
+  // v12 one, since a v13 document carries every v12 block unchanged.
+  if (storedVersion >= 13) {
+    const v13 = migrateInputsToV13(clone() as unknown as Record<string, unknown>);
+    v13.programme = networkForTerm(v13.finance.term_months);
+    if (v13.sales_phasing != null) {
+      v13.sales_phasing.tranches = v13.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v13.refinance != null) v13.refinance = { ...v13.refinance, anchor: null };
+    if (v13.investment_case != null) {
+      v13.investment_case = {
+        ...v13.investment_case,
+        stabilisation: { ...v13.investment_case.stabilisation, anchor: null },
+      };
+    }
+    if (v13.unit_sales != null) {
+      v13.unit_sales = {
+        ...v13.unit_sales,
+        units: v13.unit_sales.units.map((row) => ({
+          ...row,
+          exchange: row.exchange != null ? { ...row.exchange, anchor: null } : null,
+          completion: { ...row.completion, anchor: null },
+        })),
+      };
+    }
+    programmed = v13;
+  } else if (storedVersion >= 12) {
     const v12 = migrateInputsToV12(clone() as unknown as Record<string, unknown>);
     v12.programme = networkForTerm(v12.finance.term_months);
     if (v12.sales_phasing != null) {

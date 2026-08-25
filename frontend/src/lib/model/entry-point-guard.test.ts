@@ -80,12 +80,19 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  the same reason again -- it calls the migration matching the fixture
  *  version it loads, `migrateInputsToV12`, to build fixture X (the
  *  unit-sales-ledger document) as test support, and is imported only by
- *  `.test.ts` files, so it reaches no user either. */
+ *  `.test.ts` files, so it reaches no user either.
+ *
+ *  R15 Task 3: `lib/model/__fixtures__/due-diligence-docs.ts` is exempt for
+ *  the same reason once more -- it calls the migration matching the fixture
+ *  version it loads, `migrateInputsToV13`, to build fixture Y (the
+ *  due-diligence document) as test support, and is imported only by
+ *  `.test.ts` files. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
   'lib/model/__fixtures__/investment-case-docs.ts',
   'lib/model/__fixtures__/unit-sales-docs.ts',
+  'lib/model/__fixtures__/due-diligence-docs.ts',
   'lib/report-qa/memo-fixtures.ts',
 ]);
 
@@ -139,8 +146,8 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(12);
-    expect(VERSIONS).toContain(11);
+    expect(NEWEST).toBe(13);
+    expect(VERSIONS).toContain(12);
   });
 
   it('enumerates the production files that actually hold the entry points', () => {

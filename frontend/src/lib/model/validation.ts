@@ -16,7 +16,12 @@ import { unitAncillaryValuePence } from '../conversion-calc-engine';
 // eslint-disable-next-line no-restricted-syntax -- see above; validation reports the date, it does not compute tax
 import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
 import { areaBridge } from './areas';
-import { computeCostPlan, FEE_CODE_CATEGORY } from './cost-plan';
+import {
+  computeCostPlan, FEE_CODE_CATEGORY, PRICE_BASIS_VALUES, QS_STAGES, QS_STATUSES,
+} from './cost-plan';
+import {
+  DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES,
+} from './due-diligence';
 import { VAT_CHARGE_CATEGORIES, isPurchaseVatChargeable, vatReturnPeriods } from './vat';
 import { pct } from './pct';
 import {
@@ -1246,6 +1251,8 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     }
   }
 
+  validateDueDiligence(inputs, issues);
+
   // R8 (spec §14). Read through an `in` guard: v2–v4 documents carry none of
   // these fields and must not be reported as failing rules that did not exist
   // when they were saved.
@@ -1325,6 +1332,191 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   validateMonitoring(inputs, issues);
 
   return issues;
+}
+
+/** R15 spec §23.5. `SourceRecord.tenure`'s union is declared inline on the
+ *  field rather than as a named type, so its three values are restated here
+ *  (and as `SOURCE_TENURES` in validation.py) rather than derived. */
+const SOURCE_TENURES: readonly string[] = ['freehold', 'leasehold', 'unknown'];
+
+/** R15 spec §23.9 rule 5. True when a date is PRESENT and is not a real
+ *  calendar date. Absent (null) and blank-after-trim are both absence, not a
+ *  malformed date — rule 2 owns the missing-evidence case, and no other rule
+ *  requires an expiry or a due date to be there at all. Mirrors
+ *  `_is_unreal_date` in validation.py. */
+function isUnrealDate(value: string | null): boolean {
+  return value != null && value.trim() !== '' && !isCalendarDate(value);
+}
+
+/**
+ * R15 spec §23.9 — the due-diligence schedule's INPUT-only rules, plus the two
+ * cost-plan provenance rules (§23.6) that arrived with it. The four
+ * result-derived flags (`due_diligence_unknown`, `source_conflict`,
+ * `consent_expires_before_start`, `provisional_sums_present`) are the
+ * derivation's own — they need the computed schedule, which this function
+ * (inputs only) cannot see, so they are raised as `FlagCode`s in metrics, not
+ * here.
+ *
+ * Read structurally, exactly like `validateMonitoring` below: a pre-v13
+ * document has no `due_diligence` key at all, no `cost_plan.qs` and no
+ * `price_basis`, so it raises nothing. Mirrors validation.py's
+ * `validate_due_diligence`.
+ *
+ * Several rules here are LIVE in this engine and structurally unreachable in
+ * the Python one, where Pydantic rejects the value at parse time: rule 0's
+ * `status`, rule 1f's `category`, rule 6's two impacts, and rule 7's/8's/9's
+ * numeric and enum arms. They are implemented in both regardless — see
+ * `validate_due_diligence`'s docstring, and the §22.7 sales-slip rule above
+ * for the precedent.
+ */
+export function validateDueDiligence(inputs: AnyCalculatorInputs, issues: ValidationIssue[]): void {
+  const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
+
+  const dd = 'due_diligence' in inputs ? inputs.due_diligence : null;
+  if (dd != null) {
+    // Rule 1a — the catalogue is complete. `custom` is not a catalogue code
+    // and is never required.
+    const present = new Set<string>(dd.items.map((item) => item.code));
+    for (const code of ENTERED_CODES) {
+      if (!present.has(code)) {
+        err('due_diligence', `Due diligence item "${code}" is missing - every catalogue item must be present.`);
+      }
+    }
+
+    const seenCodes = new Set<string>();
+    const seenIds = new Set<string>();
+    dd.items.forEach((item, i) => {
+      const field = `due_diligence.items[${i}]`;
+
+      // Rule 1g.
+      if (seenIds.has(item.id)) err(`${field}.id`, `Due diligence item id "${item.id}" is not unique.`);
+      seenIds.add(item.id);
+
+      // Rules 1b–1e, one chain because the arms are mutually exclusive.
+      // `custom` is the ONE repeatable code: it names no catalogue entry, so a
+      // document carrying two user-added items is normal and must not read as
+      // a duplicate — which is why the 1b check sits on the catalogue-code arm
+      // rather than above the chain.
+      if ((DERIVED_CODES as readonly string[]).includes(item.code)) {
+        err(`${field}.code`, `Due diligence item "${item.code}" is derived from the model and cannot be entered.`);
+      } else if (item.code === 'custom') {
+        if (item.label.trim() === '') err(`${field}.label`, 'A custom due diligence item needs a label.');
+      } else if (!(ENTERED_CODES as readonly string[]).includes(item.code)) {
+        err(`${field}.code`, `Due diligence item code "${item.code}" is not in the catalogue.`);
+      } else if (seenCodes.has(item.code)) {
+        err(`${field}.code`, `Due diligence item "${item.code}" appears more than once.`);
+      }
+      seenCodes.add(item.code);
+
+      // Rule 1f, then rule 0.
+      if (!(DD_CATEGORIES as readonly string[]).includes(item.category)) {
+        err(`${field}.category`,
+          'Due diligence category must be one of planning, title_occupation, existing_building, construction, finance, exit.');
+      }
+      if (!(DD_STATUSES as readonly string[]).includes(item.status)) {
+        err(`${field}.status`,
+          'Due diligence status must be one of red, amber, green, unknown, not_applicable.');
+      }
+
+      // Rules 2–4: what a status owes. §23.1's `unknown` owes nothing.
+      const evidence = item.evidence;
+      if (item.status === 'green'
+        && (evidence == null || evidence.source.trim() === '' || evidence.date.trim() === '')) {
+        err(`${field}.evidence`, 'A green status needs evidence: record the source and the date.');
+      }
+      if ((item.status === 'red' || item.status === 'amber') && item.action.trim() === '') {
+        err(`${field}.action`, 'A red or amber status needs an action.');
+      }
+      if (item.status === 'not_applicable' && item.notes.trim() === '') {
+        err(`${field}.notes`, 'A not-applicable status needs a reason in notes.');
+      }
+
+      // Rule 5 — see isUnrealDate above for what "present" means.
+      if (isUnrealDate(evidence == null ? null : evidence.date)) {
+        err(`${field}.evidence.date`, 'Evidence date must be a real calendar date in yyyy-mm-dd form.');
+      }
+      if (isUnrealDate(item.expiry_date)) {
+        err(`${field}.expiry_date`, 'Expiry date must be a real calendar date in yyyy-mm-dd form.');
+      }
+      if (isUnrealDate(item.due_date)) {
+        err(`${field}.due_date`, 'Due date must be a real calendar date in yyyy-mm-dd form.');
+      }
+
+      // Rule 6.
+      if (item.cost_impact_pence != null
+        && (!Number.isInteger(item.cost_impact_pence) || item.cost_impact_pence < 0)) {
+        err(`${field}.cost_impact_pence`, 'Cost impact must be a whole number of pence, zero or more.');
+      }
+      if (item.programme_impact_months != null
+        && (!Number.isInteger(item.programme_impact_months) || item.programme_impact_months < 0)) {
+        err(`${field}.programme_impact_months`, 'Programme impact must be a whole number of months, zero or more.');
+      }
+    });
+
+    // Rule 7 — the captured listing record (§23.5).
+    const record = dd.source_record;
+    if (record != null) {
+      if (record.captured_at.trim() === '') {
+        err('due_diligence.source_record.captured_at', 'The captured listing record needs a captured_at timestamp.');
+      }
+      if (record.floor_area_sqm != null
+        && (!Number.isFinite(record.floor_area_sqm) || record.floor_area_sqm < 0)) {
+        err('due_diligence.source_record.floor_area_sqm', 'Listing floor area must be zero or more.');
+      }
+      if (record.lease_years_remaining != null
+        && (!Number.isInteger(record.lease_years_remaining) || record.lease_years_remaining < 0)) {
+        err('due_diligence.source_record.lease_years_remaining',
+          'Listing lease years remaining must be a whole number, zero or more.');
+      }
+      if (record.tenure != null && !SOURCE_TENURES.includes(record.tenure)) {
+        err('due_diligence.source_record.tenure', 'Listing tenure must be freehold, leasehold or unknown.');
+      }
+    }
+  }
+
+  // Rules 8 and 9 — §23.6's cost-plan provenance. Read structurally: a pre-v13
+  // document has neither key, and a migrated v13 document carries `qs: null`
+  // and `price_basis: null` on every package.
+  const plan = 'cost_plan' in inputs ? inputs.cost_plan : null;
+  if (plan != null) {
+    const qs = plan.qs ?? null;
+    if (qs != null) {
+      if (plan.mode !== 'detailed') {
+        err('cost_plan.qs',
+          'QS provenance applies to a detailed cost plan only - switch to detailed mode or remove it.');
+      }
+      if (qs.source.trim() === '') err('cost_plan.qs.source', 'QS provenance needs a source.');
+      if (!(QS_STAGES as readonly string[]).includes(qs.stage)) {
+        err('cost_plan.qs.stage',
+          'QS stage must be one of order_of_cost, riba_2, riba_3, riba_4, tender, contract_sum.');
+      }
+      if (!(QS_STATUSES as readonly string[]).includes(qs.status)) {
+        err('cost_plan.qs.status', 'QS status must be one of draft, issued, reviewed.');
+      }
+      // R15 fix wave. Rule 5 reads blank-after-trim as ABSENCE, which is right
+      // for `expiry_date` and `due_date` (nothing requires them at all) and
+      // wrong here: a QS record with no date is a cost plan whose provenance
+      // cannot be dated, and the derived `cost_plan_qs` row prints that empty
+      // date as its evidence. So rule 8 requires both, the way rule 2 requires
+      // an evidence date on a green item.
+      if (qs.date.trim() === '') err('cost_plan.qs.date', 'QS date must be recorded.');
+      if (isUnrealDate(qs.date)) {
+        err('cost_plan.qs.date', 'QS date must be a real calendar date in yyyy-mm-dd form.');
+      }
+      if (qs.base_date.trim() === '') err('cost_plan.qs.base_date', 'QS base date must be recorded.');
+      if (isUnrealDate(qs.base_date)) {
+        err('cost_plan.qs.base_date', 'QS base date must be a real calendar date in yyyy-mm-dd form.');
+      }
+    }
+
+    plan.packages.forEach((p, i) => {
+      const basis = p.price_basis ?? null;
+      if (basis != null && !(PRICE_BASIS_VALUES as readonly string[]).includes(basis)) {
+        err(`cost_plan.packages[${i}].price_basis`,
+          'Package price basis must be fixed_price, provisional_sum, estimate or unset.');
+      }
+    });
+  }
 }
 
 /**

@@ -4,6 +4,7 @@
  *  AcquisitionInputsV5 (R8) and UnitMixInputsV6 (R9). */
 
 import type { VatOverride } from './vat';
+import { pct } from './pct';
 
 export type CostPlanMode = 'headline' | 'detailed';
 
@@ -26,6 +27,10 @@ export type ContingencyClassName = 'general' | 'existing_building' | 'abnormal';
 export const CONTINGENCY_CLASS_NAMES: readonly ContingencyClassName[] = [
   'general', 'existing_building', 'abnormal',
 ];
+
+/** R15 spec §23.6. null = not classified (the migration default). */
+export type PriceBasis = 'fixed_price' | 'provisional_sum' | 'estimate';
+export const PRICE_BASIS_VALUES: readonly PriceBasis[] = ['fixed_price', 'provisional_sum', 'estimate'];
 
 export interface CostPackage {
   id: string;
@@ -55,6 +60,9 @@ export interface CostPackage {
    *  window. null on every migrated row and on every line the user has not
    *  re-tagged; resolved ONLY through `resolvedPhaseId()` (Task 11). */
   phase_id: string | null;
+  /** R15 spec §23.6. null = not classified (the migration default). Read only
+   *  by computeCostPlan's price-basis summary. */
+  price_basis: PriceBasis | null;
 }
 
 /** R11 spec §17.8. One mechanism: the package's own `contingency_class` tag.
@@ -116,6 +124,19 @@ export interface FeeLine {
   phase_id: string | null;
 }
 
+export type QsStage = 'order_of_cost' | 'riba_2' | 'riba_3' | 'riba_4' | 'tender' | 'contract_sum';
+export const QS_STAGES: readonly QsStage[] = ['order_of_cost', 'riba_2', 'riba_3', 'riba_4', 'tender', 'contract_sum'];
+export type QsStatus = 'draft' | 'issued' | 'reviewed';
+export const QS_STATUSES: readonly QsStatus[] = ['draft', 'issued', 'reviewed'];
+/** R15 spec §23.6. Detailed mode only (validation rule 8). */
+export interface QsProvenance {
+  source: string;
+  stage: QsStage;
+  date: string;       // ISO yyyy-mm-dd
+  status: QsStatus;
+  base_date: string;  // ISO; R15b's inflation origin
+}
+
 export interface CostPlanInputs {
   mode: CostPlanMode;
   packages: CostPackage[];
@@ -123,6 +144,9 @@ export interface CostPlanInputs {
    *  order. This is schema, not a user-managed list. */
   contingency: ContingencyClass[];
   fee_lines: FeeLine[];
+  /** R15 spec §23.6. null on every migrated document and on every plan the
+   *  user has not entered a QS provenance record for. */
+  qs: QsProvenance | null;
 }
 
 export function defaultContingencyClasses(generalPct: number): ContingencyClass[] {
@@ -142,6 +166,7 @@ export const DEFAULT_COST_PLAN: CostPlanInputs = {
   packages: [],
   contingency: defaultContingencyClasses(10),
   fee_lines: [],
+  qs: null,
 };
 
 import type { ConversionCostInputs } from '../conversion-types';
@@ -184,6 +209,7 @@ export function costPlanFromLegacyCosts(cc: ConversionCostInputs): CostPlanInput
       fee('cil_s106', 'CIL / S106', cc.cil_s106_pence),
       fee('building_control', 'Building control', cc.building_control_pence),
     ],
+    qs: null,
   };
 }
 
@@ -226,6 +252,21 @@ export interface FeeLineResult {
   phase_id: string | null;
 }
 
+/** R15 spec §23.6. Mirrors PriceBasisSummary in cost_plan.py, field for field
+ *  and in order. `amount_pence` of every package summed by its `price_basis`
+ *  tag; a package with no tag (null — the migration default) falls into
+ *  `unclassified_pence`. The two coverage percentages are against
+ *  `base_build_pence`, via the shared `pct` helper (2 dp, null when the
+ *  denominator is 0). */
+export interface PriceBasisSummary {
+  fixed_price_pence: number;
+  provisional_sums_pence: number;
+  estimate_pence: number;
+  unclassified_pence: number;
+  fixed_price_coverage_pct: number | null;
+  provisional_sums_pct: number | null;
+}
+
 /** Spec §16. The ONLY shape the UI and the memo may read cost from. Every
  *  contingency and fee line reports its BASE as well as its amount — that is the
  *  audit's "show the base" discharged as data rather than prose. */
@@ -256,6 +297,12 @@ export interface CostPlanResult {
   lender_eligible_ratio: number;
   /** Display only; enters no calculation. null when the area is 0. */
   implied_rate_pence_per_sqm: number | null;
+  /** R15 spec §23.6. LAST two fields, both null in headline mode. `qs` is the
+   *  input block republished verbatim — the cost plan is the one place the
+   *  memo reads it from, so it never re-derives provenance from the raw
+   *  input document. */
+  price_basis: PriceBasisSummary | null;
+  qs: QsProvenance | null;
 }
 
 /** A pre-v7 document has no `cost_plan`, read structurally exactly like the
@@ -359,6 +406,33 @@ export function computeCostPlan(
   const professionalTotal = totalFor('professional');
   const statutoryTotal = totalFor('statutory');
 
+  // R15 spec §23.6. `p.price_basis ?? null`, not a bare read: a raw
+  // pre-R15 stored document (run through the golden-fixture corpus's OWN
+  // inputs_version, unmigrated) has no `price_basis` key on the line at all,
+  // so it reads `undefined` there -- treated the same as an untagged v13
+  // package (unclassified), not a fifth bucket.
+  let priceBasis: PriceBasisSummary | null = null;
+  let qs: QsProvenance | null = null;
+  if (detailed) {
+    const sumFor = (basis: PriceBasis) =>
+      plan.packages.reduce((s, p) => s + ((p.price_basis ?? null) === basis ? p.amount_pence : 0), 0);
+    const fixed = sumFor('fixed_price');
+    const provisional = sumFor('provisional_sum');
+    const estimate = sumFor('estimate');
+    const unclassified = plan.packages.reduce(
+      (s, p) => s + ((p.price_basis ?? null) === null ? p.amount_pence : 0), 0,
+    );
+    priceBasis = {
+      fixed_price_pence: fixed,
+      provisional_sums_pence: provisional,
+      estimate_pence: estimate,
+      unclassified_pence: unclassified,
+      fixed_price_coverage_pct: pct(fixed, baseBuild),
+      provisional_sums_pct: pct(provisional, baseBuild),
+    };
+    qs = plan.qs ?? null;
+  }
+
   return {
     mode: plan.mode,
     packages,
@@ -375,5 +449,7 @@ export function computeCostPlan(
     // R14 spec §5. Unrounded — the ONE rounding is on the product, in the ledger.
     lender_eligible_ratio: !detailed || baseBuild === 0 ? 1 : lenderEligibleBase / baseBuild,
     implied_rate_pence_per_sqm: areaSqm > 0 ? Math.round(baseBuild / areaSqm) : null,
+    price_basis: priceBasis,
+    qs,
   };
 }

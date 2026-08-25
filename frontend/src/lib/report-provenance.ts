@@ -108,6 +108,10 @@ export interface ReportProvenance {
   /** R14b, spec §21.3. True when an approved lender case's locked snapshot no
    *  longer matches the document it was approved against. */
   lenderCaseStale: boolean;
+  /** R15, spec §23.7. True when no entered due-diligence item is `unknown` —
+   *  or when the document predates due diligence altogether (the R8
+   *  exemption: it is not re-graded against a condition that post-dates it). */
+  dueDiligenceComplete: boolean;
 }
 
 export interface ProvenanceOptions {
@@ -124,7 +128,8 @@ export interface ProvenanceOptions {
 
 export type DraftReason =
   | 'unreconciled' | 'senior_not_repaid' | 'tax_basis_unconfirmed'
-  | 'vat_basis_unconfirmed' | 'not_approved' | 'lender_case_stale';
+  | 'vat_basis_unconfirmed' | 'due_diligence_incomplete' | 'not_approved'
+  | 'lender_case_stale';
 
 /** What `draftReason` needs to know about the acquisition-tax basis. Defaulted
  *  so that a pre-R8 two-argument caller keeps its exact previous behaviour. */
@@ -156,10 +161,19 @@ export interface CaseStaleGate {
 
 const CASE_ASSUMED_CURRENT: CaseStaleGate = { lenderCaseStale: false };
 
+/** R15, spec §23.7. What `draftReason` needs to know about due diligence.
+ *  Defaulted exactly as TaxBasisGate, VatBasisGate and CaseStaleGate were, so
+ *  no existing five-argument caller changes behaviour. */
+export interface DueDiligenceGate {
+  dueDiligenceComplete: boolean;
+}
+
+const DD_ASSUMED_COMPLETE: DueDiligenceGate = { dueDiligenceComplete: true };
+
 /**
- * Spec §13.3, extended by §14 (R8), §17.10 (R11) and §21 (R14b). A document is
- * FINAL only when six separate things hold, and the reason it is not is worth
- * naming rather than collapsing.
+ * Spec §13.3, extended by §14 (R8), §17.10 (R11), §21 (R14b) and §23.7 (R15).
+ * A document is FINAL only when seven separate things hold, and the reason it
+ * is not is worth naming rather than collapsing.
  *
  * 1. **Reconciled.** Hard validations pass, so the figures may be right at all.
  * 2. **Senior repaid.** The ledger clears the facility inside the modelled term.
@@ -171,13 +185,15 @@ const CASE_ASSUMED_CURRENT: CaseStaleGate = { lenderCaseStale: false };
  *    under is evidenced, and the band set was chosen by the transaction date.
  * 4. **VAT basis confirmed.** No charge line that actually bears VAT rests on an
  *    unconfirmed evidence status.
- * 5. **Approved.** A lender case exists and has been credit approved.
- * 6. **The approval is current.** That case is not stale — the stored document
+ * 5. **Due diligence complete.** No entered due-diligence item is still
+ *    `unknown` — unknown is never treated as green.
+ * 6. **Approved.** A lender case exists and has been credit approved.
+ * 7. **The approval is current.** That case is not stale — the stored document
  *    still hashes to the one the case locked.
  *
- * Conditions 5 and 6 became reachable at R14b, which shipped the lender case
+ * Conditions 6 and 7 became reachable at R14b, which shipped the lender case
  * itself (spec §21): the record, the state machine, the approval. Before it no
- * case could exist, condition 5 could never be met, and every document was a
+ * case could exist, condition 6 could never be met, and every document was a
  * DRAFT — the honest answer rather than a gap, since an appraisal nobody has
  * approved is not a credit paper however cleanly it reconciles. Now an approved,
  * current case reaches FINAL, and an approved case whose document has since moved
@@ -192,6 +208,7 @@ export function draftReason(
   taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
   vatBasis: VatBasisGate = VAT_BASIS_ASSUMED_CONFIRMED,
   caseStale: CaseStaleGate = CASE_ASSUMED_CURRENT,
+  dueDiligence: DueDiligenceGate = DD_ASSUMED_COMPLETE,
 ): DraftReason | null {
   if (!reconciliation.report_safe) return 'unreconciled';
   if (!reconciliation.senior_repaid) return 'senior_not_repaid';
@@ -206,6 +223,13 @@ export function draftReason(
   // themselves may be, but a reader must know the basis is unverified before
   // they read an approval.
   if (!vatBasis.vatBasisConfirmed) return 'vat_basis_unconfirmed';
+  // R15 (spec §23.7). Sits below both basis gates for the same reason they sit
+  // above `not_approved`: an unknown due-diligence item does not make a figure
+  // wrong, so it must not outrank a reason that says the figures themselves
+  // may be. It must outrank `not_approved`, though, because an approval read
+  // over unevidenced title, leases or consents is the stale case's cousin — a
+  // FINAL banner over something the lender never actually saw confirmed.
+  if (!dueDiligence.dueDiligenceComplete) return 'due_diligence_incomplete';
   if (lenderCaseStatus === null || !APPROVED_STATUSES.includes(lenderCaseStatus)) return 'not_approved';
   // R14b (spec §21.3). Fires only when an approval exists — an unapproved
   // stale case reports not_approved — so the two are mutually exclusive by
@@ -221,9 +245,11 @@ export function documentStatus(
   taxBasis: TaxBasisGate = TAX_BASIS_ASSUMED_CONFIRMED,
   vatBasis: VatBasisGate = VAT_BASIS_ASSUMED_CONFIRMED,
   caseStale: CaseStaleGate = CASE_ASSUMED_CURRENT,
+  dueDiligence: DueDiligenceGate = DD_ASSUMED_COMPLETE,
 ): 'DRAFT' | 'FINAL' {
-  return draftReason(reconciliation, lenderCaseStatus, taxBasis, vatBasis, caseStale) === null
-    ? 'FINAL' : 'DRAFT';
+  return draftReason(
+    reconciliation, lenderCaseStatus, taxBasis, vatBasis, caseStale, dueDiligence,
+  ) === null ? 'FINAL' : 'DRAFT';
 }
 
 /**
@@ -290,6 +316,24 @@ export function jurisdictionRecordedOn(run: AppraisalRun): boolean {
 }
 
 /**
+ * Whether the run's due-diligence catalogue is fully evidenced (spec §23.7).
+ *
+ * A pre-v13 document carries no `due_diligence` key at all, and — exactly as
+ * `taxBasisConfirmedFor` treats a pre-R8 document as confirmed rather than
+ * newly deficient — this treats it as complete: it is not re-graded against a
+ * condition that post-dates it. Where the key is present, only entered rows
+ * count (`totals.entered_unknown_count`); a derived row's `unknown` is a fact
+ * about another block's inputs, not evidence anyone can go and gather on the
+ * due-diligence page, so it must not gate the document a second time here.
+ */
+export function dueDiligenceGateFor(run: AppraisalRun): DueDiligenceGate {
+  return {
+    dueDiligenceComplete: !('due_diligence' in run.inputs)
+      || run.metrics.due_diligence.totals.entered_unknown_count === 0,
+  };
+}
+
+/**
  * Build the provenance block for a run, taking the stored hashes from the saved
  * record where one exists.
  *
@@ -325,9 +369,12 @@ export function buildProvenance(
   // R11 (spec §17.10, ruling R5). Computed from the run's own metrics.vat —
   // draftReason receives the gate, it does not compute one.
   const { vatBasisConfirmed } = vatBasisGate(run.metrics.vat);
+  // R15 (spec §23.7). Same discipline: draftReason receives the gate, it does
+  // not compute one.
+  const { dueDiligenceComplete } = dueDiligenceGateFor(run);
   const reason = draftReason(
     run.reconciliation, caseStatus, { taxBasisConfirmed }, { vatBasisConfirmed },
-    { lenderCaseStale },
+    { lenderCaseStale }, { dueDiligenceComplete },
   );
   const storedCalcVersion = record?.calc_version ?? null;
   const runCalcVersion = run.metrics.calc_version || CALC_VERSION;
@@ -358,6 +405,7 @@ export function buildProvenance(
     vatBasisConfirmed,
     lenderCase,
     lenderCaseStale,
+    dueDiligenceComplete,
   };
 }
 

@@ -719,6 +719,12 @@ class VatOverride(Model):
     recovery_basis: RecoveryBasis = "unconfirmed"
 
 
+# R15 spec Sec 23.6. Defined here, ahead of the DueDiligenceInputs block below,
+# because CostPackage needs `price_basis: PriceBasis | None` at class-definition
+# time -- see the R11 VatOverride comment above for why forward refs don't help.
+PriceBasis = Literal["fixed_price", "provisional_sum", "estimate"]
+
+
 class CostPackage(Model):
     """Mirrors CostPackage in cost-plan.ts, field for field and in order."""
 
@@ -748,6 +754,9 @@ class CostPackage(Model):
     # R12 spec Sec 18.5. Overrides the category default; None on every migrated
     # row. Read ONLY through resolved_phase_id() (Task 12).
     phase_id: str | None = None
+    # R15 spec Sec 23.6. None = not classified (the migration default). Read
+    # only by compute_cost_plan's price-basis summary.
+    price_basis: PriceBasis | None = None
 
 
 class ContingencyClass(Model):
@@ -779,11 +788,31 @@ class FeeLine(Model):
     phase_id: str | None = None
 
 
+# R15 spec Sec 23.6. Defined here, ahead of the DueDiligenceInputs block below,
+# for the same reason PriceBasis sits above CostPackage: CostPlanInputs needs
+# `qs: QsProvenance | None` at class-definition time.
+QsStage = Literal["order_of_cost", "riba_2", "riba_3", "riba_4", "tender", "contract_sum"]
+QsStatus = Literal["draft", "issued", "reviewed"]
+
+
+class QsProvenance(Model):
+    """Spec Sec 23.6. Detailed mode only (validation rule 8)."""
+
+    source: str = ""
+    stage: QsStage = "order_of_cost"
+    date: str = ""
+    status: QsStatus = "draft"
+    base_date: str = ""
+
+
 class CostPlanInputs(Model):
     mode: CostPlanMode = "headline"
     packages: list[CostPackage] = Field(default_factory=list)
     contingency: list[ContingencyClass] = Field(default_factory=list)
     fee_lines: list[FeeLine] = Field(default_factory=list)
+    # R15 spec Sec 23.6. None on every migrated document and on every plan the
+    # user has not entered a QS provenance record for.
+    qs: QsProvenance | None = None
 
 
 def default_contingency_classes(general_pct: float) -> list[ContingencyClass]:
@@ -1000,10 +1029,87 @@ class CalculatorInputsV12(CalculatorInputsV11):
     unit_sales: UnitSalesInputs | None = None
 
 
+# --- Release 15 (calc 2.15.0): the due-diligence evidence schedule (spec Sec 23) ---
+
+DdCategory = Literal[
+    "planning", "title_occupation", "existing_building", "construction", "finance", "exit",
+]
+DdStatus = Literal["red", "amber", "green", "unknown", "not_applicable"]
+# The 23 ENTERED catalogue codes plus 'custom'. The five derived codes
+# (cost_plan_qs, facility_terms, equity_sources, tax_basis, lender_valuation)
+# are deliberately NOT here: a stored status for a fact another field owns is
+# spec Sec 23.2's forbidden state, and validation rejects one (Sec 23.9 rule 1).
+DdItemCode = Literal[
+    "planning_route", "planning_conditions", "article_4_direction", "conservation_listed",
+    "cil_s106", "title_report", "vacant_possession", "leases_tenancies", "rights_of_light",
+    "party_wall", "structural_survey", "asbestos_survey", "measured_survey",
+    "higher_risk_building", "fire_strategy", "acoustic_thermal", "services_mande",
+    "procurement_contractor", "warranties_building_control", "insurance", "sponsor_entity",
+    "sales_evidence", "exit_route_evidence", "custom",
+]
+DdDerivedCode = Literal[
+    "cost_plan_qs", "facility_terms", "equity_sources", "tax_basis", "lender_valuation",
+]
+
+
+class DdEvidence(Model):
+    source: str = ""
+    reference: str = ""
+    date: str = ""  # ISO yyyy-mm-dd; the document's date, never today's
+
+
+class DdItem(Model):
+    """Spec Sec 23.1. Mirrors DdItem in due-diligence.ts field for field."""
+
+    id: str
+    code: str  # DdItemCode; validated by validation.py so a stray code is a spec-worded error, not a 422
+    category: DdCategory
+    label: str = ""
+    status: DdStatus = "unknown"
+    evidence: DdEvidence | None = None
+    expiry_date: str | None = None
+    owner: str = ""
+    due_date: str | None = None
+    cost_impact_pence: int | None = Field(default=None, ge=0)
+    programme_impact_months: int | None = Field(default=None, ge=0)
+    action: str = ""
+    notes: str = ""
+
+
+class SourceRecord(Model):
+    """Spec Sec 23.5. The listing's STRUCTURED fields, copied; prose is never copied."""
+
+    captured_at: str
+    source_name: str | None = None
+    source_url: str | None = None
+    is_vacant: bool | None = None
+    tenure: Literal["freehold", "leasehold", "unknown"] | None = None
+    lease_years_remaining: int | None = Field(default=None, ge=0)
+    floor_area_sqm: float | None = Field(default=None, ge=0)
+    use_class: str | None = None
+    epc_rating: str | None = None
+
+
+class DueDiligenceInputs(Model):
+    source_record: SourceRecord | None = None
+    items: list[DdItem] = Field(default_factory=list, max_length=1200)
+
+
+class CalculatorInputsV13(CalculatorInputsV12):
+    """Mirrors CalculatorInputsV12 with the Sec 23 due-diligence schedule.
+    Subclasses V12 for the reason V12 subclasses V11: the engine dispatches on
+    it, and a flat re-declaration would make those isinstance checks silently
+    False for v13 documents."""
+
+    inputs_version: Literal[13] = 13  # type: ignore[assignment]
+    due_diligence: DueDiligenceInputs = Field(default_factory=DueDiligenceInputs)
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
     | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
+    | CalculatorInputsV13
 )
 
 
@@ -1015,6 +1121,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R11 ruling R10, applied one version on: without this branch a v13 document
+    # falls through to the CalculatorInputsV2 default, silently dropping the
+    # due-diligence block and every other post-v2 field.
+    if version == 13:
+        return CalculatorInputsV13.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v12 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # unit-sales block and every other post-v2 field.
@@ -1086,6 +1197,18 @@ FlagCode = Literal[
     # R14 spec Sec 20.3. Fires when the monitoring statement's reporting_month
     # is later than the inception ledger's last repaying month.
     "monitoring_dated_after_redemption",
+    # R15 spec Sec 23.9. Fires when a required catalogue item's status is
+    # "unknown" at export or lender-pack time.
+    "due_diligence_unknown",
+    # R15 spec Sec 23.9. Fires when the source record's structured fields
+    # disagree with a due-diligence item's evidence for the same fact.
+    "source_conflict",
+    # R15 spec Sec 23.9. Fires when a consent's expiry_date falls before the
+    # programme's start month.
+    "consent_expires_before_start",
+    # R15 spec Sec 23.9. Fires when any cost-plan package carries a
+    # provisional_sum or estimate price_basis.
+    "provisional_sums_present",
 ]
 
-CALC_VERSION = "2.14.0"
+CALC_VERSION = "2.15.0"

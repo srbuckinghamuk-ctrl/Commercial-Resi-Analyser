@@ -332,19 +332,20 @@ describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
       { name: 'abnormal' as const, pct: 0 },
     ];
     return {
-      headline: { ...common, cost_plan: { mode: 'headline', packages: [], contingency, fee_lines: [] } },
+      headline: { ...common, cost_plan: { mode: 'headline', packages: [], contingency, fee_lines: [], qs: null } },
       detailed: { ...common, cost_plan: {
         mode: 'detailed',
         packages: [
           { id: 'p1', code: 'structure', label: 'Structure',
             amount_pence: 3_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
           { id: 'p2', code: 'envelope', label: 'Envelope',
             amount_pence: 1_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
         ],
         contingency,
         fee_lines: [],
+        qs: null,
       } },
     };
   }
@@ -413,6 +414,7 @@ describe('the cost lever does not double-apply to compliance or fees (headline m
             phase_id: null,
           },
         ],
+        qs: null,
       },
     };
   }

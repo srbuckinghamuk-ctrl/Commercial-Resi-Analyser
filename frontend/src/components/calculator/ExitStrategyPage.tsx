@@ -2,7 +2,7 @@ import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
 import type {
   CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12,
-  AppraisalRun, SalesPhasingInputsV9, InvestmentCaseInputs,
+  CalculatorInputsV13, AppraisalRun, SalesPhasingInputsV9, InvestmentCaseInputs,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import ExitAnchorControl from './ExitAnchorControl';
@@ -11,20 +11,24 @@ import InvestmentCaseCard from './InvestmentCaseCard';
 import UnitSalesEditor, { seedUnitSales, reconcileUnitSalesRows } from './UnitSalesEditor';
 
 /**
- * R13 Task 15 (spec §19.1/§19.6), widened by R14 Task 14 (the entry-point
- * cutover) to admit v11. `investment_case` exists on v10 and v11 alike (v11
- * only adds `monitoring` beside it) -- `ExitStrategyPage` is generic over the
- * version carrier exactly as `ProgrammePage` is over `CalculatorInputsV8 |
- * CalculatorInputsV9 | CalculatorInputsV10` for the same reason: the real
- * call site (`ConversionCalculator.tsx`) is now on v11, but this page must
- * keep compiling against a v9 document that has no `investment_case` key at
- * all (ExitStrategyPage.test.tsx's own regression coverage), while also
- * accepting v10 and v11 documents that do. `hasInvestmentCase` is the sole
- * discriminator; the investment-case section below simply does not render
- * for a v9 caller -- there is nothing to author yet, exactly as the release
- * note says.
+ * R13 Task 15 (spec §19.1/§19.6), widened by R14 Task 14, R13b Task 15 and
+ * now R15 Task 13 (the entry-point cutover) to admit v13. `investment_case`
+ * exists on v10 through v13 alike (v11 only adds `monitoring` beside it, v12
+ * adds `unit_sales`, v13 adds `due_diligence` and two inert cost_plan
+ * additions -- none of which this page touches) -- `ExitStrategyPage` is
+ * generic over the version carrier exactly as `ProgrammePage` is over
+ * `CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10` for the
+ * same reason: the real call site (`ConversionCalculator.tsx`) is now on
+ * v13, but this page must keep compiling against a v9 document that has no
+ * `investment_case` key at all (ExitStrategyPage.test.tsx's own regression
+ * coverage), while also accepting v10 through v13 documents that do.
+ * `hasInvestmentCase` is the sole discriminator; the investment-case section
+ * below simply does not render for a v9 caller -- there is nothing to author
+ * yet, exactly as the release note says.
  */
-export type ExitCarrier = CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12;
+export type ExitCarrier =
+  CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
+  | CalculatorInputsV13;
 
 function hasInvestmentCase<T extends ExitCarrier>(
   x: T,

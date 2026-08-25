@@ -103,7 +103,9 @@ describe('ConversionCalculator — Sensitivity is page 11', () => {
   it('offers fifteen numbered pages with Sensitivity eleventh', () => {
     render(<ConversionCalculator project={PROJECT} />);
     for (const label of [
-      '11. Sensitivity', '12. Exit', '13. Risk', '14. Deal Spider', '15. Investor',
+      // R15 Task 9 (spec §23.8): page 13 is now the due-diligence schedule,
+      // with the free-form risk register below it as the project log.
+      '11. Sensitivity', '12. Exit', '13. Due Diligence', '14. Deal Spider', '15. Investor',
     ]) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
@@ -200,7 +202,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
         };
       };
 
-    expect(sentSnapshot.inputs_version).toBe(12);
+    expect(sentSnapshot.inputs_version).toBe(13);
     expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
     expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
@@ -273,8 +275,9 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     ).toBeInTheDocument();
     expect(screen.queryByText(/failed to load the saved appraisal/i)).not.toBeInTheDocument();
 
-    // And the document held in state is still v12 with its R9/R10/R11/R12/R13/R14/R13b
-    // blocks intact -- proof the load merged rather than silently downgrading.
+    // And the document held in state is now migrated on to v13, with its
+    // R9/R10/R11/R12/R13/R14/R13b/R15 blocks intact -- proof the load merged
+    // rather than silently downgrading.
     fireEvent.click(screen.getByRole('button', { name: /update appraisal/i }));
     await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
     const sent = vi.mocked(saveAppraisal).mock.calls.at(-1)![1]
@@ -287,9 +290,10 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
         investment_case: unknown;
         monitoring: unknown;
         unit_sales: unknown;
+        due_diligence: unknown;
         scenarios: { base: { phase_slip_phase_id: string | null; phase_slip_months: number } };
       };
-    expect(sent.inputs_version).toBe(12);
+    expect(sent.inputs_version).toBe(13);
     expect(sent.areas.basis).toBe('manual');
     expect(sent.areas.existing_gia_sqm).toBe(0);
     expect(sent.cost_plan.mode).toBe('headline');
@@ -316,6 +320,50 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     // block intact (null here -- no per-unit ledger entered). A client still
     // on v11 would have thrown on this document instead.
     expect(sent.unit_sales).toBeNull();
+    // R15 spec 23.10: the v12->v13 migration on load seeds a due_diligence
+    // block (never absent on a v13 document) even though this fixture never
+    // entered an evidence schedule.
+    expect(sent.due_diligence).not.toBeNull();
+  });
+});
+
+// R15 Task 13 (spec 23.5). Source-record capture is a CLIENT act:
+// `defaultCalculatorInputsV13(project)` receives the full `Project`, so a
+// brand-new appraisal for a project that already has a listing captures it
+// into `due_diligence.source_record` on construction -- there is no separate
+// Python-side capture, and none is expected.
+describe('ConversionCalculator captures the listing on a fresh document (R15 Task 13, spec 23.5)', () => {
+  function savedAppraisal(inputsSnapshot: Record<string, unknown>): FinancialAppraisal {
+    return {
+      id: 'a3',
+      project_id: 'p1',
+      name: 'Saved appraisal',
+      inputs_snapshot: inputsSnapshot,
+      gdv_pence: null,
+      total_cost_pence: null,
+      profit_on_cost_pct: null,
+      profit_on_gdv_pct: null,
+      return_on_equity_pct: null,
+      irr: null,
+      rlv_pence: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    } as unknown as FinancialAppraisal;
+  }
+
+  it('a fresh document for a project with is_vacant: false carries due_diligence.source_record.is_vacant === false', async () => {
+    const vacantlyOccupiedProject = { ...PROJECT, is_vacant: false };
+    vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal({}));
+
+    render(<ConversionCalculator project={vacantlyOccupiedProject} />);
+    fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
+    await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
+
+    const sent = vi.mocked(saveAppraisal).mock.calls.at(-1)![1].inputs_snapshot as unknown as {
+      due_diligence: { source_record: { is_vacant: boolean | null } | null };
+    };
+    expect(sent.due_diligence.source_record).not.toBeNull();
+    expect(sent.due_diligence.source_record!.is_vacant).toBe(false);
   });
 });
 
@@ -349,17 +397,19 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     } as unknown as FinancialAppraisal;
   }
 
-  /** What app/api/app.py stores for a Welsh postcode on a first save. R13b
-   *  Task 15: the server boundary is v12, so this is a v12 document. */
+  /** What app/api/app.py stores for a Welsh postcode on a first save. This
+   *  helper builds it from a v12 document deliberately -- `migrateInputsToV13`
+   *  (the adoption path below) must accept it and migrate it on, exactly as
+   *  the real server's `migrate_inputs_to_v13` would for a stored v12 result. */
   function serverDerivedWelshSnapshot(): Record<string, unknown> {
-    const v11 = defaultCalculatorInputsV12(PROJECT);
+    const v12 = defaultCalculatorInputsV12(PROJECT);
     return {
-      ...v11,
-      acquisition: { ...v11.acquisition, jurisdiction: 'wales', jurisdiction_source: 'derived' },
+      ...v12,
+      acquisition: { ...v12.acquisition, jurisdiction: 'wales', jurisdiction_source: 'derived' },
     } as unknown as Record<string, unknown>;
   }
 
-  it('posts a v12 document whose jurisdiction the server is still free to derive', async () => {
+  it('posts a v13 document whose jurisdiction the server is still free to derive', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
     render(<ConversionCalculator project={PROJECT} />);
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
@@ -369,7 +419,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
       inputs_version: number;
       acquisition: { jurisdiction_source: string; acquisition_date: string | null };
     };
-    expect(sent.inputs_version).toBe(12);
+    expect(sent.inputs_version).toBe(13);
     expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sent.acquisition.acquisition_date).toBeNull();
   });

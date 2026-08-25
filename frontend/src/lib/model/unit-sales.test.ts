@@ -2,11 +2,17 @@
  *  literal is from the plan's hand-derivation table; if one does not
  *  reconcile, report it. */
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { computeUnitSales } from './unit-sales';
+import { migrateInputsToV13 } from './migrate';
+import { runAppraisal } from './index';
 import {
   anchorResolver, heldTwinDoc, noProgrammeDoc, pcEarlyDoc, residueDoc, soldGross, unitSalesDoc,
 } from './__fixtures__/unit-sales-docs';
 import type { CalculatorInputsV12 } from './finance-types';
+
+const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
 const run = (doc: CalculatorInputsV12) => computeUnitSales(doc, 24, anchorResolver(doc), soldGross(doc))!;
 
@@ -116,5 +122,44 @@ describe('computeUnitSales (§22.2-22.4)', () => {
     const doc = unitSalesDoc({ rows });
     const r = computeUnitSales(doc, 24, anchorResolver(doc), [['u1', 26_000_000]])!;
     expect(r.units[0].completion_month).toBe(23); // validation owns the real rule
+  });
+});
+
+/**
+ * R13b's carried backlog item, closed here (R15 Task 6). Twin of
+ * tests/test_financial_model_unit_sales.py's
+ * `test_unit_sales_gross_equals_schedule_gross_sales_corpus_wide`.
+ *
+ * §22.4's unit ledger and the §4.4 schedule reach the sold-portion gross by
+ * two different routes — the ledger sums the per-unit rows it built, the
+ * schedule sums the unit mix under the exit route — and nothing tied the two
+ * together. A change to either route could move one and leave the other, and
+ * every figure derived from `gross_sales_pence` (the scheme agent fee, the
+ * receipts ledger, the pre-sold percentage) would then disagree with the unit
+ * table printed beside it in the same report.
+ */
+describe('the unit-sales gross identity (corpus-wide)', () => {
+  it('the unit ledger gross equals the schedule gross on every fixture that carries one', () => {
+    let checked = 0;
+    // Fixture K names a `base_fixture` rather than carrying inputs of its own
+    // (spec §12, governance §2.1), so it is excluded here exactly as
+    // golden-fixtures.test.ts's `appraisalFixtures` excludes it.
+    const files = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+    for (const file of files) {
+      const doc = JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as {
+        kind?: string; inputs: Record<string, unknown>;
+      };
+      if (doc.kind === 'sensitivity') continue;
+      // Migrated to v13 so the identity is asserted on the document shape the
+      // engine actually receives today.
+      const appraisal = runAppraisal(migrateInputsToV13(doc.inputs));
+      const unitSales = appraisal.metrics.unit_sales;
+      if (unitSales == null) continue;
+      checked += 1;
+      expect(unitSales.totals.gross_pence, file).toBe(appraisal.schedule.totals.gross_sales_pence);
+    }
+    // Fixtures X and Y both carry a unit_sales block. An identity that is
+    // never actually asserted is the failure mode this guard exists against.
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 });

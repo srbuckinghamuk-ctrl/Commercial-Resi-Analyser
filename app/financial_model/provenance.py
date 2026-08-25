@@ -41,7 +41,8 @@ ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
 
 DraftReason = Literal[
     "unreconciled", "senior_not_repaid", "tax_basis_unconfirmed",
-    "vat_basis_unconfirmed", "not_approved", "lender_case_stale",
+    "vat_basis_unconfirmed", "due_diligence_incomplete", "not_approved",
+    "lender_case_stale",
 ]
 
 
@@ -61,13 +62,23 @@ def draft_reason(
     tax_basis_confirmed: bool = True,
     vat_basis_confirmed: bool = True,
     lender_case_stale: bool = False,
+    due_diligence_complete: bool = True,
 ) -> str | None:
-    """Spec Sec 13.3's six conditions, in their load-bearing order -- the port
-    of report-provenance.ts's draftReason. See that function's comments for
-    why each gate sits where it does; the R14b addition is the last: an
+    """Spec Sec 13.3's seven conditions, in their load-bearing order -- the
+    port of report-provenance.ts's draftReason. See that function's comments
+    for why each gate sits where it does; the R14b addition is the last: an
     approved case whose document has moved must not print FINAL over figures
     the lender never saw, and it fires only when an approval exists, so it is
-    mutually exclusive with not_approved by construction."""
+    mutually exclusive with not_approved by construction.
+
+    The R15 addition (spec Sec 23.7) sits after the VAT gate and before the
+    approval check: an entered-and-unknown due-diligence item does not make a
+    figure wrong, so it must not outrank the two reasons that say figures may
+    be (tax_basis_unconfirmed, vat_basis_unconfirmed) -- but it must outrank
+    not_approved, because a credit committee reading an approval over an
+    unevidenced title, lease or consent is the same failure the stale-case
+    gate exists to catch: a FINAL banner over something the lender never
+    actually saw confirmed."""
     if not report_safe:
         return "unreconciled"
     if not senior_repaid:
@@ -76,6 +87,8 @@ def draft_reason(
         return "tax_basis_unconfirmed"
     if not vat_basis_confirmed:
         return "vat_basis_unconfirmed"
+    if not due_diligence_complete:
+        return "due_diligence_incomplete"
     if lender_case_status is None or lender_case_status not in APPROVED_STATUSES:
         return "not_approved"
     if lender_case_stale:
@@ -91,6 +104,7 @@ def document_status(
     tax_basis_confirmed: bool = True,
     vat_basis_confirmed: bool = True,
     lender_case_stale: bool = False,
+    due_diligence_complete: bool = True,
 ) -> str:
     """'FINAL' only when every Sec 13.3 condition holds; 'DRAFT' otherwise."""
     reason = draft_reason(
@@ -100,5 +114,6 @@ def document_status(
         tax_basis_confirmed=tax_basis_confirmed,
         vat_basis_confirmed=vat_basis_confirmed,
         lender_case_stale=lender_case_stale,
+        due_diligence_complete=due_diligence_complete,
     )
     return "FINAL" if reason is None else "DRAFT"

@@ -27,8 +27,10 @@ import type {
   CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
 } from './finance-types';
 import { unitSalesDoc, noProgrammeDoc } from './__fixtures__/unit-sales-docs';
-import type { CalculatorInputsV12 } from './finance-types';
-import { migrateInputsToV12 } from './migrate';
+import type { CalculatorInputsV12, CalculatorInputsV13 } from './finance-types';
+import { migrateInputsToV12, migrateInputsToV13 } from './migrate';
+import { QS, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
+import type { PriceBasis, QsStage, QsStatus } from './cost-plan';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
   & Partial<ProposedUnitV6>;
@@ -938,6 +940,7 @@ describe('R10 — cost plan validation', () => {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
       vat_override: null, ...overrides, phase_id: overrides.phase_id ?? null,
+      price_basis: overrides.price_basis ?? null,
     };
   }
 
@@ -1299,7 +1302,7 @@ describe('R11 — VAT validation (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override, phase_id: null,
+      vat_override: override, phase_id: null, price_basis: null,
     };
   }
 
@@ -1625,7 +1628,7 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override, phase_id: null,
+      vat_override: override, phase_id: null, price_basis: null,
     };
   }
 
@@ -1836,12 +1839,13 @@ function detailedCostPlan(): CostPlanInputs {
     packages: [{
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: null, phase_id: null,
+      vat_override: null, phase_id: null, price_basis: null,
     }],
     contingency: [
       { name: 'general', pct: 5 }, { name: 'existing_building', pct: 0 }, { name: 'abnormal', pct: 0 },
     ],
     fee_lines: [],
+    qs: null,
   };
 }
 
@@ -2628,5 +2632,288 @@ describe('§22.7 unit sales validation', () => {
     const d = unitSalesDoc();
     const doc = { ...d, scenarios: { ...d.scenarios, downside: { ...d.scenarios.downside, sales_slip_months: 1.5 } } };
     expect(errFields(doc as CalculatorInputsV12)).toContain('scenarios.downside.sales_slip_months');
+  });
+});
+
+
+/**
+ * R15 spec §23.9. Twin of tests/test_financial_model_validation.py's
+ * `TestDueDiligenceValidation`.
+ *
+ * Every rule gets a negative and an accepting twin. Several of them are LIVE
+ * here and structurally unreachable in the Python engine, where Pydantic
+ * rejects the value at parse time and the Python test asserts a
+ * `ValidationError` instead: rule 0 (`status`), rule 1f (`category`), rule 6's
+ * two impacts, and rule 7's/8's/9's numeric and enum arms. A raw JSON payload
+ * reaches `validateInputs` uncoerced in this engine, so the ISSUE arm of each
+ * of those is asserted here.
+ */
+describe('§23.9 due diligence validation', () => {
+  const errs = (d: CalculatorInputsV13) => validateInputs(d).filter((i) => i.severity === 'error');
+  const errFields = (d: CalculatorInputsV13) => errs(d).map((i) => i.field);
+  const has = (d: CalculatorInputsV13, field: string, message: string) =>
+    errs(d).some((i) => i.field === field && i.message === message);
+
+  /** A complete raw due-diligence item — every field written, never left to a
+   *  default, because the engine reads the object as-is and a missing key here
+   *  is `undefined`, not the schema default. */
+  const item = (changes: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'dd-extra',
+    code: 'custom',
+    category: 'existing_building',
+    label: 'Basement drainage',
+    status: 'unknown',
+    evidence: null,
+    expiry_date: null,
+    owner: '',
+    due_date: null,
+    cost_impact_pence: null,
+    programme_impact_months: null,
+    action: '',
+    notes: '',
+    ...changes,
+  });
+
+  /** Fixture Y's captured listing record, optionally altered. */
+  const record = (changes: Record<string, unknown> = {}): Record<string, unknown> => ({
+    captured_at: '2026-08-25T09:00:00Z',
+    source_name: 'rightmove',
+    source_url: 'https://example.test/listing/y',
+    is_vacant: false,
+    tenure: 'freehold',
+    lease_years_remaining: null,
+    floor_area_sqm: 360,
+    use_class: 'office',
+    epc_rating: 'D',
+    ...changes,
+  });
+
+  it('fixture Y raises no error', () => {
+    expect(errFields(ddDoc())).toEqual([]);
+  });
+
+  it('a migrated document raises no due-diligence issue', () => {
+    // The seed writes every entered item `unknown` with no evidence, no action
+    // and no notes, `source_record` null, `qs` null and every `price_basis`
+    // null — nothing for §23.9 to fire on.
+    expect(errFields(migrateInputsToV13(rawYAsV12()))).toEqual([]);
+    expect(errFields(ddDoc({ seed: true }))).toEqual([]);
+    // A pre-v13 document has no `due_diligence` key at all.
+    const v12 = migrateInputsToV12(rawYAsV12());
+    expect(validateInputs(v12).filter(
+      (i) => i.field.startsWith('due_diligence') || i.field.startsWith('cost_plan.qs'),
+    )).toEqual([]);
+  });
+
+  // --- rule 1: the catalogue ---------------------------------------------
+
+  it('rule 1a: a missing catalogue item', () => {
+    expect(has(ddDoc({ dropItem: 'party_wall' }), 'due_diligence',
+      'Due diligence item "party_wall" is missing - every catalogue item must be present.')).toBe(true);
+    expect(errFields(ddDoc())).toEqual([]);
+  });
+
+  it('rule 1b: a repeated code', () => {
+    expect(has(ddDoc({ dupItem: 'insurance' }), 'due_diligence.items[24].code',
+      'Due diligence item "insurance" appears more than once.')).toBe(true);
+    // Accepting twin: `custom` is the ONE repeatable code — it names no
+    // catalogue entry, so a second user-added item is a normal document, not
+    // a duplicate.
+    expect(errFields(ddDoc({ addItem: item({ id: 'dd-custom-drainage' }) }))).toEqual([]);
+  });
+
+  it('rule 1c: a derived code cannot be entered', () => {
+    expect(has(
+      ddDoc({ addItem: item({ code: 'lender_valuation', category: 'exit' }) }),
+      'due_diligence.items[24].code',
+      'Due diligence item "lender_valuation" is derived from the model and cannot be entered.',
+    )).toBe(true);
+    expect(errFields(ddDoc({ addItem: item({ category: 'exit' }) }))).toEqual([]);
+  });
+
+  it('rule 1d: a code outside the catalogue', () => {
+    expect(has(ddDoc({ addItem: item({ code: 'drainage_survey' }) }), 'due_diligence.items[24].code',
+      'Due diligence item code "drainage_survey" is not in the catalogue.')).toBe(true);
+    expect(errFields(ddDoc({ addItem: item() }))).toEqual([]);
+  });
+
+  it('rule 1e: a custom item needs a label', () => {
+    expect(has(ddDoc({ addItem: item({ label: '   ' }) }), 'due_diligence.items[24].label',
+      'A custom due diligence item needs a label.')).toBe(true);
+    expect(errFields(ddDoc({ addItem: item({ label: 'Drainage survey' }) }))).toEqual([]);
+  });
+
+  it('rule 1f: a category outside the enum', () => {
+    expect(has(ddDoc({ addItem: item({ category: 'drainage' }) }), 'due_diligence.items[24].category',
+      'Due diligence category must be one of planning, title_occupation, existing_building, construction, finance, exit.')).toBe(true);
+    expect(errFields(ddDoc({ addItem: item({ category: 'construction' }) }))).toEqual([]);
+  });
+
+  it('rule 1g: a duplicate id', () => {
+    expect(has(ddDoc({ addItem: item({ id: 'dd-insurance' }) }), 'due_diligence.items[24].id',
+      'Due diligence item id "dd-insurance" is not unique.')).toBe(true);
+    expect(errFields(ddDoc({ addItem: item({ id: 'dd-extra' }) }))).toEqual([]);
+  });
+
+  it('rule 0: a status outside the enum', () => {
+    expect(has(ddDoc({ status: { cil_s106: 'purple' } }), 'due_diligence.items[4].status',
+      'Due diligence status must be one of red, amber, green, unknown, not_applicable.')).toBe(true);
+    expect(errFields(ddDoc({ status: { cil_s106: 'unknown' } }))).toEqual([]);
+  });
+
+  // --- rules 2-4: a status and the evidence it owes -----------------------
+
+  it('rule 2: a green status needs evidence', () => {
+    const message = 'A green status needs evidence: record the source and the date.';
+    const field = 'due_diligence.items[4].evidence';   // cil_s106
+    expect(has(ddDoc({ status: { cil_s106: 'green' } }), field, message)).toBe(true);
+    expect(has(ddDoc({
+      status: { cil_s106: 'green' },
+      evidence: { cil_s106: { source: '  ', reference: 'CIL notice', date: '2026-07-01' } },
+    }), field, message)).toBe(true);
+    expect(has(ddDoc({
+      status: { cil_s106: 'green' },
+      evidence: { cil_s106: { source: 'City of York Council', reference: 'CIL notice', date: '  ' } },
+    }), field, message)).toBe(true);
+    expect(errFields(ddDoc({
+      status: { cil_s106: 'green' },
+      evidence: { cil_s106: { source: 'City of York Council', reference: 'CIL notice', date: '2026-07-01' } },
+    }))).toEqual([]);
+  });
+
+  it('rule 3: a red or amber status needs an action', () => {
+    const message = 'A red or amber status needs an action.';
+    const field = 'due_diligence.items[4].action';
+    expect(has(ddDoc({ status: { cil_s106: 'amber' } }), field, message)).toBe(true);
+    expect(has(ddDoc({ status: { cil_s106: 'red' } }), field, message)).toBe(true);
+    expect(has(ddDoc({ status: { cil_s106: 'amber' }, action: { cil_s106: ' ' } }), field, message)).toBe(true);
+    expect(errFields(ddDoc({
+      status: { cil_s106: 'amber' }, action: { cil_s106: 'Request the CIL liability notice' },
+    }))).toEqual([]);
+  });
+
+  it('rule 4: a not-applicable status needs a reason', () => {
+    const message = 'A not-applicable status needs a reason in notes.';
+    const field = 'due_diligence.items[4].notes';
+    expect(has(ddDoc({ status: { cil_s106: 'not_applicable' } }), field, message)).toBe(true);
+    expect(errFields(ddDoc({
+      status: { cil_s106: 'not_applicable' }, notes: { cil_s106: 'Outside the CIL charging area' },
+    }))).toEqual([]);
+  });
+
+  // --- rule 5: every present date is a real calendar date -----------------
+
+  it('rule 5: the evidence date', () => {
+    const bad = { source: 'City of York Council', reference: '26/01234/FUL', date: '2026-02-31' };
+    expect(has(ddDoc({ evidence: { planning_route: bad } }), 'due_diligence.items[0].evidence.date',
+      'Evidence date must be a real calendar date in yyyy-mm-dd form.')).toBe(true);
+    expect(errFields(ddDoc({ evidence: { planning_route: { ...bad, date: '2026-02-28' } } }))).toEqual([]);
+  });
+
+  it('rule 5: the expiry date', () => {
+    expect(has(ddDoc({ expiry: { planning_route: '2026-13-01' } }), 'due_diligence.items[0].expiry_date',
+      'Expiry date must be a real calendar date in yyyy-mm-dd form.')).toBe(true);
+    expect(errFields(ddDoc({ expiry: { planning_route: '2026-12-01' } }))).toEqual([]);
+    expect(errFields(ddDoc({ expiry: { planning_route: null } }))).toEqual([]);
+  });
+
+  it('rule 5: the due date', () => {
+    expect(has(ddDoc({ addItem: item({ due_date: '2026-02-30' }) }), 'due_diligence.items[24].due_date',
+      'Due date must be a real calendar date in yyyy-mm-dd form.')).toBe(true);
+    expect(errFields(ddDoc({ addItem: item({ due_date: '2026-02-28' }) }))).toEqual([]);
+  });
+
+  it('rule 5: the QS dates', () => {
+    expect(has(ddDoc({ qs: { ...QS, date: '2026-02-31' } }), 'cost_plan.qs.date',
+      'QS date must be a real calendar date in yyyy-mm-dd form.')).toBe(true);
+    expect(has(ddDoc({ qs: { ...QS, base_date: '01-07-2026' } }), 'cost_plan.qs.base_date',
+      'QS base date must be a real calendar date in yyyy-mm-dd form.')).toBe(true);
+    expect(errFields(ddDoc({ qs: { ...QS } }))).toEqual([]);
+  });
+
+  // --- rule 6: the impacts ------------------------------------------------
+
+  it('rule 6: impacts are whole and non-negative', () => {
+    expect(has(ddDoc({ impacts: { cil_s106: [-1, null] } }), 'due_diligence.items[4].cost_impact_pence',
+      'Cost impact must be a whole number of pence, zero or more.')).toBe(true);
+    expect(has(ddDoc({ impacts: { cil_s106: [1.5, null] } }), 'due_diligence.items[4].cost_impact_pence',
+      'Cost impact must be a whole number of pence, zero or more.')).toBe(true);
+    expect(has(ddDoc({ impacts: { cil_s106: [null, -1] } }), 'due_diligence.items[4].programme_impact_months',
+      'Programme impact must be a whole number of months, zero or more.')).toBe(true);
+    expect(has(ddDoc({ impacts: { cil_s106: [null, 0.5] } }), 'due_diligence.items[4].programme_impact_months',
+      'Programme impact must be a whole number of months, zero or more.')).toBe(true);
+    expect(errFields(ddDoc({ impacts: { cil_s106: [0, 0] } }))).toEqual([]);
+  });
+
+  // --- rule 7: the captured listing record --------------------------------
+
+  it('rule 7: captured_at is required', () => {
+    expect(has(ddDoc({ sourceRecord: record({ captured_at: '   ' }) }),
+      'due_diligence.source_record.captured_at',
+      'The captured listing record needs a captured_at timestamp.')).toBe(true);
+    expect(errFields(ddDoc({ sourceRecord: record() }))).toEqual([]);
+    expect(errFields(ddDoc({ sourceRecord: null }))).toEqual([]);
+  });
+
+  it('rule 7: the numeric and enum arms', () => {
+    expect(has(ddDoc({ sourceRecord: record({ floor_area_sqm: -1 }) }),
+      'due_diligence.source_record.floor_area_sqm',
+      'Listing floor area must be zero or more.')).toBe(true);
+    expect(has(ddDoc({ sourceRecord: record({ lease_years_remaining: -1 }) }),
+      'due_diligence.source_record.lease_years_remaining',
+      'Listing lease years remaining must be a whole number, zero or more.')).toBe(true);
+    expect(has(ddDoc({ sourceRecord: record({ lease_years_remaining: 12.5 }) }),
+      'due_diligence.source_record.lease_years_remaining',
+      'Listing lease years remaining must be a whole number, zero or more.')).toBe(true);
+    expect(has(ddDoc({ sourceRecord: record({ tenure: 'commonhold' }) }),
+      'due_diligence.source_record.tenure',
+      'Listing tenure must be freehold, leasehold or unknown.')).toBe(true);
+    expect(errFields(ddDoc({
+      sourceRecord: record({ floor_area_sqm: 0, lease_years_remaining: 0, tenure: 'leasehold' }),
+    }))).toEqual([]);
+  });
+
+  // --- rule 8: QS provenance ----------------------------------------------
+
+  it('rule 8: QS provenance is detailed-mode only', () => {
+    expect(has(ddDoc({ mode: 'headline' }), 'cost_plan.qs',
+      'QS provenance applies to a detailed cost plan only - switch to detailed mode or remove it.')).toBe(true);
+    expect(errFields(ddDoc({ mode: 'headline', qs: null }))).toEqual([]);
+  });
+
+  it('rule 8: QS provenance needs a source', () => {
+    expect(has(ddDoc({ qs: { ...QS, source: '  ' } }), 'cost_plan.qs.source',
+      'QS provenance needs a source.')).toBe(true);
+    expect(errFields(ddDoc({ qs: { ...QS, source: 'Gleeds' } }))).toEqual([]);
+  });
+
+  it('rule 8: the stage and status enums', () => {
+    expect(has(ddDoc({ qs: { ...QS, stage: 'riba_9' as QsStage } }), 'cost_plan.qs.stage',
+      'QS stage must be one of order_of_cost, riba_2, riba_3, riba_4, tender, contract_sum.')).toBe(true);
+    expect(has(ddDoc({ qs: { ...QS, status: 'superseded' as QsStatus } }), 'cost_plan.qs.status',
+      'QS status must be one of draft, issued, reviewed.')).toBe(true);
+    expect(errFields(ddDoc({ qs: { ...QS, stage: 'tender', status: 'reviewed' } }))).toEqual([]);
+  });
+
+  // R15 fix wave. Rule 5 reads blank-after-trim as absence, so a QS record
+  // could print with no date at all. Rule 8 overrides that for its own two
+  // dates. Twin of test_financial_model_validation.py's
+  // `test_rule_8_both_qs_dates_must_be_recorded`.
+  it('rule 8: both QS dates must be recorded', () => {
+    expect(has(ddDoc({ qs: { ...QS, date: '  ' } }), 'cost_plan.qs.date',
+      'QS date must be recorded.')).toBe(true);
+    expect(has(ddDoc({ qs: { ...QS, base_date: '' } }), 'cost_plan.qs.base_date',
+      'QS base date must be recorded.')).toBe(true);
+    expect(errFields(ddDoc({ qs: { ...QS, date: '2026-08-02', base_date: '2026-07-02' } }))).toEqual([]);
+  });
+
+  // --- rule 9: the package price basis --------------------------------------
+
+  it('rule 9: the price basis enum', () => {
+    expect(has(ddDoc({ priceBasis: { 'pkg-mande': 'guess' as PriceBasis } }),
+      'cost_plan.packages[2].price_basis',
+      'Package price basis must be fixed_price, provisional_sum, estimate or unset.')).toBe(true);
+    expect(errFields(ddDoc({ priceBasis: { 'pkg-mande': 'estimate' } }))).toEqual([]);
+    expect(errFields(ddDoc({ priceBasis: { 'pkg-mande': null } }))).toEqual([]);
   });
 });

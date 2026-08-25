@@ -33,9 +33,11 @@ from .types import (
     CalculatorInputsV10,
     CalculatorInputsV11,
     CalculatorInputsV12,
+    CalculatorInputsV13,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
+from .due_diligence import default_due_diligence
 
 # Mirrors DEFAULT_AREA_BRIDGE in areas.py / DEFAULT_UNIT_ANCILLARY in
 # conversion-types.ts. Re-declared here rather than imported from areas.py for
@@ -339,11 +341,14 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     # R14 Task 6: is_v11 belongs here for the same reason is_v10 did one
     # release earlier -- this is the FIFTH consecutive release to need this
     # exact fix: R13 for v10, R12 for v9, R11 for v8, R10 for v7.
+    # R15 Task 2: is_v13 belongs here for the same reason is_v12 did one
+    # release earlier -- this is the SIXTH consecutive release to need this
+    # exact fix: R13b for v12, R13 for v10, R12 for v9, R11 for v8, R10 for v7.
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
         or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot) or is_v11(snapshot)
-        or is_v12(snapshot)
+        or is_v12(snapshot) or is_v13(snapshot)
     )
 
 
@@ -1871,3 +1876,117 @@ def migrate_inputs_to_v12(
             "unit_sales": snapshot.get("unit_sales"),
         })
     return migrate_v11_to_v12(migrate_inputs_to_v11(snapshot, project))
+
+
+# --- Release 15 (calc 2.14.0 -> 2.15.0): the due-diligence evidence schedule
+# (spec Sec 23.10) -----------------------------------------------------------
+
+
+def _v13_cost_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Writes `qs: None` and `price_basis: None` on every package (spec Sec
+    23.10) -- written, not defaulted, so the identity gate exercises the
+    written value. Port of the `cost_plan` block inside migrateV12toV13."""
+    out = dict(plan or {})
+    out["qs"] = None
+    out["packages"] = [{**dict(p), "price_basis": None} for p in (out.get("packages") or [])]
+    return out
+
+
+def is_v13(snapshot: dict[str, Any]) -> bool:
+    """A v13 document is discriminated by ``inputs_version == 13`` AND the
+    presence of the ``due_diligence`` key. Port of isV13."""
+    return snapshot.get("inputs_version") == 13 and "due_diligence" in snapshot
+
+
+def migrate_v12_to_v13(v12: dict[str, Any] | CalculatorInputsV12) -> CalculatorInputsV13:
+    """Upgrades a v12 document to v13 by stamping ``inputs_version: 13`` and
+    writing the due-diligence seed plus two inert cost-plan additions:
+    ``cost_plan.qs: None`` and ``price_basis: None`` on every package (spec
+    Sec 23.10). Port of migrateV12toV13. Purely additive by construction:
+    every existing document is bit-identical in every output --
+    test_migrate_v13.py proves it.
+
+    Precondition: `v12` must not already be a v13 document (idempotence
+    guard), same as migrate_v11_to_v12.
+    """
+    if isinstance(v12, CalculatorInputsV13):
+        raise ValueError("migrate_v12_to_v13: input is already a v13 document")
+    if isinstance(v12, BaseModel):
+        doc = v12.model_dump(mode="json")
+    else:
+        if is_v13(v12):
+            raise ValueError("migrate_v12_to_v13: input is already a v13 document")
+        doc = dict(v12)
+
+    doc["due_diligence"] = default_due_diligence()
+    doc["cost_plan"] = _v13_cost_plan(doc.get("cost_plan"))
+    doc["inputs_version"] = 13
+    return CalculatorInputsV13.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V13 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+
+
+def migrate_inputs_to_v13(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV13:
+    """Normalises any stored snapshot (v1-v13) to v13. Port of
+    migrateInputsToV13, structurally identical to migrate_inputs_to_v12."""
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V13:
+        raise ValueError(
+            f"migrate_inputs_to_v13: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V13}, or absent for a v1 document)"
+        )
+    if version == 13 and not is_v13(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v13: inputs_version is 13 but the document fails "
+            "the v13 structural check (missing `due_diligence`) -- refusing to "
+            "silently reinterpret it via the v1 fallback path"
+        )
+    if is_v13(snapshot):
+        defaults = migrate_v12_to_v13(
+            migrate_v11_to_v12(
+                migrate_v10_to_v11(
+                    migrate_v9_to_v10(
+                        migrate_v8_to_v9(
+                            migrate_v7_to_v8(
+                                migrate_v6_to_v7(
+                                    migrate_v5_to_v6(
+                                        migrate_v4_to_v5(
+                                            migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV13.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 13,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            # Mirrors migrate_inputs_to_v12's own sextet of defensive lines:
+            # the shallow `_merge_saved_onto_defaults` spread above already
+            # carries a PRESENT `programme`/`sales_phasing`/`refinance`/
+            # `investment_case`/`monitoring`/`unit_sales`/`due_diligence` key
+            # through from `snapshot`, so these seven lines are currently
+            # redundant for any snapshot produced by `model_dump`. Kept as a
+            # self-documenting mirror of the cost_plan/vat lines above -- if
+            # `_merge_saved_onto_defaults` is ever narrowed to an explicit key
+            # allowlist that omits these seven, THIS is what still carries a
+            # saved value through rather than reverting to the default
+            # document's None.
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+            "monitoring": snapshot.get("monitoring"),
+            "unit_sales": snapshot.get("unit_sales"),
+            "due_diligence": snapshot.get("due_diligence"),
+        })
+    return migrate_v12_to_v13(migrate_inputs_to_v12(snapshot, project))

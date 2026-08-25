@@ -209,9 +209,10 @@ class TestAppraisalV5Normalisation:
     (migrate_inputs_to_v9, spec Sec 18.7). R13 Task 18 moves it to v10
     (migrate_inputs_to_v10, spec Sec 19.9). R14 Task 14 moves it to v11
     (migrate_inputs_to_v11, spec Sec 20.1). R13b Task 15 moves it to v12
-    (migrate_inputs_to_v12, spec Sec 22.9). The class name is left alone
+    (migrate_inputs_to_v12, spec Sec 22.9). R15 Task 13 moves it to v13
+    (migrate_inputs_to_v13, spec Sec 23.10). The class name is left alone
     deliberately -- these cases are about the jurisdiction fields v5
-    introduced, which v6 through v12 carry forward untouched, and renaming
+    introduced, which v6 through v13 carry forward untouched, and renaming
     them would obscure what they pin."""
 
     @pytest.mark.asyncio
@@ -232,19 +233,22 @@ class TestAppraisalV5Normalisation:
         # own inputs_version. R10 Task 6: the boundary is v7. R11 Task 10: v8.
         # R12 Task 18b (spec Sec 18.7): v9. R13 Task 18 (spec Sec 19.9): v10.
         # R14 Task 14 (spec Sec 20.1): v11. R13b Task 15 (spec Sec 22.9): v12.
-        assert body["inputs_version"] == 12
+        # R15 Task 13 (spec Sec 23.10): v13.
+        assert body["inputs_version"] == 13
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 12
-        # The v9, v10, v11 and v12 steps are purely additive on a v4 document
-        # with no programme (v10 adds `investment_case: null`, an unchanged
-        # `refinance: null`; v11 adds `monitoring: null`; v12 adds
-        # `unit_sales: null`): a null programme stays null and keeps the Sec 6
-        # auto windows.
+        assert snapshot["inputs_version"] == 13
+        # The v9, v10, v11, v12 and v13 steps are purely additive on a v4
+        # document with no programme (v10 adds `investment_case: null`, an
+        # unchanged `refinance: null`; v11 adds `monitoring: null`; v12 adds
+        # `unit_sales: null`; v13 adds `due_diligence` seeded and two inert
+        # cost_plan additions): a null programme stays null and keeps the
+        # Sec 6 auto windows.
         assert snapshot["programme"] is None
         assert snapshot["investment_case"] is None
         assert snapshot["monitoring"] is None
         assert snapshot["unit_sales"] is None
+        assert snapshot["due_diligence"] is not None
         acq = snapshot["acquisition"]
         assert acq["jurisdiction"] == "england_ni"
         assert acq["jurisdiction_source"] == "migrated_default"
@@ -353,29 +357,29 @@ class TestAppraisalV5Normalisation:
         self, client, monkeypatch,
     ):
         """R9 Task 3, extended by R10 Task 6, R11 Task 10, R12 Task 18b, R13
-        Task 18, R14 Task 14 and R13b Task 15. R8's silent-corruption bug,
-        guarded forward: an inputs_version this server does not implement
-        must be refused, never rebuilt from the v1 LTV heuristic and returned
-        as 201.
+        Task 18, R14 Task 14, R13b Task 15 and R15 Task 13. R8's
+        silent-corruption bug, guarded forward: an inputs_version this server
+        does not implement must be refused, never rebuilt from the v1 LTV
+        heuristic and returned as 201.
 
         Distinct from the case above: this one carries nothing but the version
         tag, and pins that the migration's own refusal *message* reaches the
         caller rather than being flattened into a generic 422 -- a reader
         needs to know it was the version that was rejected.
 
-        R14 Task 14 moved the stand-in from 11 to 12 for the same reason the
-        test above does; R13b Task 15 moves it from 12 to 13: 12 is now a
-        version this server implements (it just fails ITS OWN structural
-        check on a bare `{"inputs_version": 12}` document, missing
-        `unit_sales`), so it no longer stands in for a version the server
-        does not recognise at all."""
+        R14 Task 14 moved the stand-in from 11 to 12; R13b Task 15 moved it
+        from 12 to 13; R15 Task 13 moves it from 13 to 14, for the same
+        reason each time: the previous stand-in became a version this server
+        implements (it just fails ITS OWN structural check on a bare
+        `{"inputs_version": N}` document, missing the newest block), so it no
+        longer stands in for a version the server does not recognise at all."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
             "name": "Future version appraisal",
-            "inputs_snapshot": {"inputs_version": 13},
+            "inputs_snapshot": {"inputs_version": 14},
         })
         assert resp.status_code == 422, resp.text
         assert "unrecognised inputs_version" in resp.text
@@ -404,6 +408,67 @@ class TestAppraisalV5Normalisation:
         })
         assert resp.status_code == 422, resp.text
         assert "inputs_snapshot" in resp.json()["detail"]
+
+
+FIXTURE_Y_PATH = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "y-due-diligence.json"
+)
+FIXTURE_Y_INPUTS = json.loads(FIXTURE_Y_PATH.read_text())["inputs"]
+
+
+class TestAppraisalV13DueDiligence:
+    """R15 Task 13 (spec Sec 23.10). The entry-point cutover's own proof that
+    a v13 document -- carrying the due-diligence evidence schedule this
+    release adds -- survives the real save/load boundary, and that a
+    structurally invalid `due_diligence` block is refused as a 422 rather
+    than crashing the endpoint as a 500."""
+
+    @pytest.mark.asyncio
+    async def test_saved_v13_document_round_trips_with_due_diligence_intact(
+        self, client, monkeypatch,
+    ):
+        monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
+        project_id = await _create_project(client)
+
+        resp = await client.post("/api/v1/appraisals", json={
+            "project_id": project_id,
+            "name": "Y -- due diligence",
+            "inputs_snapshot": FIXTURE_Y_INPUTS,
+        })
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+
+        assert body["inputs_version"] == 13
+        assert body["inputs_snapshot"]["inputs_version"] == 13
+        assert body["inputs_snapshot"]["due_diligence"]["source_record"] \
+            == FIXTURE_Y_INPUTS["due_diligence"]["source_record"]
+        assert body["inputs_snapshot"]["due_diligence"]["items"] \
+            == FIXTURE_Y_INPUTS["due_diligence"]["items"]
+
+        fetched = (await client.get(f"/api/v1/appraisals/{project_id}")).json()
+        assert fetched["inputs_snapshot"]["due_diligence"]["items"] \
+            == FIXTURE_Y_INPUTS["due_diligence"]["items"]
+
+    @pytest.mark.asyncio
+    async def test_v13_document_with_an_invalid_due_diligence_status_is_422_not_500(
+        self, client, monkeypatch,
+    ):
+        """A `due_diligence.items[].status` outside the `DdStatus` literal
+        (`red`/`amber`/`green`/`unknown`/`not_applicable`) must fail Pydantic
+        validation at the persistence boundary and come back as a 422 --
+        never as an unhandled 500."""
+        monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
+        project_id = await _create_project(client)
+
+        invalid_doc = copy.deepcopy(FIXTURE_Y_INPUTS)
+        invalid_doc["due_diligence"]["items"][0]["status"] = "purple"
+
+        resp = await client.post("/api/v1/appraisals", json={
+            "project_id": project_id,
+            "name": "Y -- invalid due diligence status",
+            "inputs_snapshot": invalid_doc,
+        })
+        assert resp.status_code == 422, resp.text
 
 
 class TestPostcodeJurisdictionDerivation:
