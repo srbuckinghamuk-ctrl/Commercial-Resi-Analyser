@@ -1,12 +1,12 @@
-import type { AppraisalRun, CalculatorInputsV11 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV12 } from '../../lib/model';
 import { isLegacyProgramme, isProgrammeNetwork } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 
 interface Props {
-  inputs: CalculatorInputsV11;
-  onChange: (partial: Partial<CalculatorInputsV11>) => void;
+  inputs: CalculatorInputsV12;
+  onChange: (partial: Partial<CalculatorInputsV12>) => void;
   run: AppraisalRun;
 }
 

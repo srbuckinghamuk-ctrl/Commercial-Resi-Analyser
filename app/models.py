@@ -351,8 +351,8 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v11, not by this schema) -- may be any of v1 through
-    # v11. A v5+ document's `acquisition` block carries the R8 fields
+    # migrate_inputs_to_v12, not by this schema) -- may be any of v1 through
+    # v12. A v5+ document's `acquisition` block carries the R8 fields
     # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
     # `acquisition_date`, `acquisition_tax_override_pence`,
     # `acquisition_tax_override_reason`) defined on
@@ -376,8 +376,11 @@ class FinancialAppraisalCreate(BaseModel):
     # defined on `InvestmentCaseInputs` / `RefinanceInputsV10` /
     # `CalculatorInputsV10` in the same module; a v11 document (R14, spec Sec
     # 20) adds the top-level nullable `monitoring` block, defined on
-    # `MonitoringInputs` / `CalculatorInputsV11`. Those are the typed schemas
-    # the fields are actually enforced against.
+    # `MonitoringInputs` / `CalculatorInputsV11`; a v12 document (R13b, spec
+    # Sec 22) adds the top-level nullable `unit_sales` block -- a per-unit
+    # sales ledger recording each unit's disposal month and price, defined on
+    # `UnitSalesInputs` / `CalculatorInputsV12` in the same module. Those are
+    # the typed schemas the fields are actually enforced against.
     inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the
     # server always recalculates and never trusts these for persistence:

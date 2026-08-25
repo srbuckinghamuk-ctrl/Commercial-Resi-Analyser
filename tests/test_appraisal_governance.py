@@ -174,8 +174,11 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     # ltv_pct path still drives the takeout, exactly as it did before R13.
     # R14 Task 14 extends it to v11 (spec Sec 20.1): a v1 document has no
     # monitoring statement either, so that field stays null too and nothing
-    # about the takeout or cost-to-complete path changes from R13.
-    assert body["inputs_snapshot"]["inputs_version"] == 11
+    # about the takeout or cost-to-complete path changes from R13. R13b Task
+    # 15 extends it to v12 (spec Sec 22.9): a v1 document has no unit sales
+    # ledger either, so that field stays null too and nothing about the
+    # takeout or cost-to-complete path changes from R14.
+    assert body["inputs_snapshot"]["inputs_version"] == 12
     assert body["inputs_snapshot"]["vat"]["registered"] is False
     assert len(body["inputs_snapshot"]["vat"]["treatments"]) == 6
     assert body["inputs_snapshot"]["lender_valuation"] is None
@@ -184,6 +187,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert body["inputs_snapshot"]["refinance"] is None
     assert body["inputs_snapshot"]["investment_case"] is None
     assert body["inputs_snapshot"]["monitoring"] is None
+    assert body["inputs_snapshot"]["unit_sales"] is None
     assert body["inputs_snapshot"]["finance"]["requires_confirmation"] is True
     # A v1 snapshot never recorded a jurisdiction -- migrateV4toV5 stamps the
     # unconfirmed default rather than inventing evidence the record never had
@@ -222,7 +226,7 @@ async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, 
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 11
+    assert snapshot["inputs_version"] == 12
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
     # A v5 row is not a legacy v1 migration -- it must not be stamped as one.
@@ -591,11 +595,11 @@ async def test_nan_user_defined_weights_are_a_422_not_a_500(client, project):
 
 # ---------------------------------------------------------------------------
 # R12 Task 18b (spec Sec 18.7) moved the persistence boundary to v9; R13 Task
-# 18 (spec Sec 19.9) moved it to v10; R14 Task 14 (spec Sec 20.1) moves it to
-# v11.
+# 18 (spec Sec 19.9) moved it to v10; R14 Task 14 (spec Sec 20.1) moved it to
+# v11; R13b Task 15 (spec Sec 22.9) moves it to v12.
 #
 # Every unit test in this repo can pass with the server still normalising to
-# v10 -- migrate_inputs_to_v11 is tested directly, the monitoring block is
+# v11 -- migrate_inputs_to_v12 is tested directly, the unit_sales block is
 # tested directly. None of them touches the one line in app/api/app.py that
 # decides which version a user's saved document actually is. These do, end to
 # end, through the real endpoints: they are the proof the boundary moved
@@ -605,7 +609,7 @@ async def test_nan_user_defined_weights_are_a_422_not_a_500(client, project):
 
 async def test_saved_appraisal_round_trips_as_v9(client, project):
     """POST then GET: the stored document, the returned document and the
-    governance column are all v11.
+    governance column are all v12.
 
     (Function name kept as `..._as_v9` from R12: it is the case that matters,
     not its name, and test_upsert_endpoints.py's `TestAppraisalV5Normalisation`
@@ -620,28 +624,30 @@ async def test_saved_appraisal_round_trips_as_v9(client, project):
     same response does not return."""
     resp = await client.post("/api/v1/appraisals", json={
         "project_id": project["id"],
-        "name": "v11 round trip",
+        "name": "v12 round trip",
         "inputs_snapshot": fixture_a_inputs(),
     })
     assert resp.status_code == 201, resp.text
     created = resp.json()
-    assert created["inputs_version"] == 11
-    assert created["inputs_snapshot"]["inputs_version"] == 11
+    assert created["inputs_version"] == 12
+    assert created["inputs_snapshot"]["inputs_version"] == 12
 
     fetched = (await client.get(f"/api/v1/appraisals/{project['id']}")).json()
-    assert fetched["inputs_version"] == 11
-    assert fetched["inputs_snapshot"]["inputs_version"] == 11
+    assert fetched["inputs_version"] == 12
+    assert fetched["inputs_snapshot"]["inputs_version"] == 12
     # Fixture A carries no programme, so v9's two-state field stays null and
     # the Sec 6 auto windows still drive the schedule. Its investment_case is
     # also null, so it stays on the explicit investment_value_pence x ltv_pct
     # path (spec Sec 19.1). Its monitoring block is null too -- no QS
-    # statement entered (spec Sec 20.1).
+    # statement entered (spec Sec 20.1). Its unit_sales block is null too --
+    # no per-unit ledger entered (spec Sec 22).
     assert fetched["inputs_snapshot"]["programme"] is None
     assert fetched["inputs_snapshot"]["investment_case"] is None
     assert fetched["inputs_snapshot"]["monitoring"] is None
-    # A v11 document is not a legacy migration. `is_v2_or_later` had to learn
-    # is_v11 in R14 Task 6 (ahead of this cutover, spec Sec 20.1): without it
-    # every appraisal saved from the v11 calculator would come back stamped
+    assert fetched["inputs_snapshot"]["unit_sales"] is None
+    # A v12 document is not a legacy migration. `is_v2_or_later` had to learn
+    # is_v12 in R13b (ahead of this cutover, spec Sec 22.9): without it every
+    # appraisal saved from the v12 calculator would come back stamped
     # "legacy_unreconciled" on its FIRST save, because the client now posts
     # exactly what this test posts back.
     assert fetched["status"] != "legacy_unreconciled"
@@ -649,7 +655,7 @@ async def test_saved_appraisal_round_trips_as_v9(client, project):
 
 async def test_resaving_the_v9_document_the_server_returned_is_not_legacy(client, project):
     """The round trip the calculator actually performs: post, adopt what came
-    back, post that. The second POST carries a v11 snapshot, which is the
+    back, post that. The second POST carries a v12 snapshot, which is the
     shape `was_v1` classifies.
 
     (Test name kept from R12; see the note on the test above.)"""
@@ -665,7 +671,7 @@ async def test_resaving_the_v9_document_the_server_returned_is_not_legacy(client
         "inputs_snapshot": first["inputs_snapshot"],
     })
     assert second.status_code == 201, second.text
-    assert second.json()["inputs_version"] == 11
+    assert second.json()["inputs_version"] == 12
     assert second.json()["status"] != "legacy_unreconciled"
 
 
@@ -702,7 +708,7 @@ async def test_stored_explicit_programme_becomes_a_network_without_moving_a_figu
     body = resp.json()
 
     programme = body["inputs_snapshot"]["programme"]
-    assert body["inputs_snapshot"]["inputs_version"] == 11
+    assert body["inputs_snapshot"]["inputs_version"] == 12
     # The v8 shape did not survive; the v9 one is what got stored.
     assert "packages" not in programme
     assert [p["id"] for p in programme["phases"]] == [
@@ -808,7 +814,7 @@ async def test_stored_explicit_programme_keeps_a_timing_sensitive_figure_across_
     })
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["inputs_snapshot"]["inputs_version"] == 11
+    assert body["inputs_snapshot"]["inputs_version"] == 12
     assert "packages" not in body["inputs_snapshot"]["programme"]
 
     metrics = body["outputs"]["metrics"]

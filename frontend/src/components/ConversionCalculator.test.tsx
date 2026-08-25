@@ -22,7 +22,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 const { default: ConversionCalculator } = await import('./ConversionCalculator');
 const { getAppraisal, saveAppraisal } = await import('../lib/api');
-const { defaultCalculatorInputsV4, defaultCalculatorInputsV11 } =
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV12 } =
   await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
@@ -133,7 +133,7 @@ describe('ConversionCalculator — Lender Case is page 16 (R14b)', () => {
 // this block's stale "v6" text to match). It had zero coverage: the
 // module-level mock above always rejects getAppraisal with 404, so this
 // branch never ran in any prior test.
-describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, R9 Task 3, R10 Task 6, R11 Task 10, R12 Task 18b, R13 Task 18, R14 Task 14)', () => {
+describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, R9 Task 3, R10 Task 6, R11 Task 10, R12 Task 18b, R13 Task 18, R14 Task 14, R13b Task 15)', () => {
   function storedV4Appraisal(): FinancialAppraisal {
     const v4Snapshot = defaultCalculatorInputsV4(PROJECT);
     return {
@@ -153,17 +153,17 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
     };
   }
 
-  it('migrates the snapshot to v11 and renders it without an error, not a load failure', async () => {
+  it('migrates the snapshot to v12 and renders it without an error, not a load failure', async () => {
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
 
     render(<ConversionCalculator project={PROJECT} />);
 
-    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV11(...))
+    // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV12(...))
     // succeeds -- if that call threw (as it would on a snapshot with an
-    // unrecognised inputs_version -- migrateInputsToV11 accepts 1 through 11
+    // unrecognised inputs_version -- migrateInputsToV12 accepts 1 through 12
     // and throws otherwise), the promise chain's .catch() would run instead
     // and the button would stay "Save Appraisal". Finding "Update Appraisal"
-    // is proof the v4->v11 migration executed cleanly on load.
+    // is proof the v4->v12 migration executed cleanly on load.
     expect(
       await screen.findByRole('button', { name: /update appraisal/i }),
     ).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
         };
       };
 
-    expect(sentSnapshot.inputs_version).toBe(11);
+    expect(sentSnapshot.inputs_version).toBe(12);
     expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
     expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
@@ -224,14 +224,15 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
     // fresh, computable document on screen regardless of how the load goes.
     // R9 Task 3 moved the stand-in from 6 to 7; R10 Task 6 moved it again,
     // from 7 to 8; R11 Task 10 moved it from 8 to 9; R12 Task 18b moved it
-    // from 9 to 10; R13 Task 18 moved it from 10 to 11; R14 Task 14 moves it
-    // from 11 to 12. Each time for the same reason: the old stand-in became a
-    // version the client implements, so it stopped standing in for one it
-    // does not -- and, being structurally valid, it stopped throwing at all
-    // and this test went quietly green against nothing. Bumping it with the
-    // boundary is what keeps it honest.
+    // from 9 to 10; R13 Task 18 moved it from 10 to 11; R14 Task 14 moved it
+    // from 11 to 12; R13b Task 15 moves it from 12 to 13. Each time for the
+    // same reason: the old stand-in became a version the client implements,
+    // so it stopped standing in for one it does not -- and, being
+    // structurally valid, it stopped throwing at all and this test went
+    // quietly green against nothing. Bumping it with the boundary is what
+    // keeps it honest.
     const badAppraisal = storedV4Appraisal();
-    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 12 };
+    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 13 };
     vi.mocked(getAppraisal).mockResolvedValueOnce(badAppraisal);
 
     render(<ConversionCalculator project={PROJECT} />);
@@ -258,10 +259,10 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
   // migrateInputsToV7 against a genuine v7 snapshot rather than v6. R11 Task
   // 10 moved both to v8 in ONE commit, which is what this test guards. R12
   // Task 18b moved both to v9; R13 Task 18 moved both to v10; R14 Task 14
-  // moves both to v11.
-  it('loads the v11 snapshot the server now stores, rather than failing on it', async () => {
+  // moved both to v11; R13b Task 15 moves both to v12.
+  it('loads the v12 snapshot the server now stores, rather than failing on it', async () => {
     const storedV11 = storedV4Appraisal();
-    storedV11.inputs_snapshot = defaultCalculatorInputsV11(PROJECT) as unknown as Record<string, unknown>;
+    storedV11.inputs_snapshot = defaultCalculatorInputsV12(PROJECT) as unknown as Record<string, unknown>;
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV11);
     vi.mocked(saveAppraisal).mockResolvedValueOnce(storedV11);
 
@@ -272,7 +273,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
     ).toBeInTheDocument();
     expect(screen.queryByText(/failed to load the saved appraisal/i)).not.toBeInTheDocument();
 
-    // And the document held in state is still v11 with its R9/R10/R11/R12/R13/R14
+    // And the document held in state is still v12 with its R9/R10/R11/R12/R13/R14/R13b
     // blocks intact -- proof the load merged rather than silently downgrading.
     fireEvent.click(screen.getByRole('button', { name: /update appraisal/i }));
     await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
@@ -285,9 +286,10 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
         programme: unknown;
         investment_case: unknown;
         monitoring: unknown;
+        unit_sales: unknown;
         scenarios: { base: { phase_slip_phase_id: string | null; phase_slip_months: number } };
       };
-    expect(sent.inputs_version).toBe(11);
+    expect(sent.inputs_version).toBe(12);
     expect(sent.areas.basis).toBe('manual');
     expect(sent.areas.existing_gia_sqm).toBe(0);
     expect(sent.cost_plan.mode).toBe('headline');
@@ -310,13 +312,18 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v11 (R8 Task 10, 
     // block intact (null here -- no statement entered). A client still on v10
     // would have thrown on this document instead.
     expect(sent.monitoring).toBeNull();
+    // R13b spec 22: a v12 document round-trips with its nullable unit_sales
+    // block intact (null here -- no per-unit ledger entered). A client still
+    // on v11 would have thrown on this document instead.
+    expect(sent.unit_sales).toBeNull();
   });
 });
 
 // R8 Task 11 (defect B). The calculator posts the document it is holding, but
 // the server is authoritative over that document: it normalises the snapshot to
-// v11 (R14 Task 14; v10 through R13, v9 through R12, v8 through R11) and, on a
-// project's first appraisal, derives the tax jurisdiction from the postcode. Before
+// v12 (R13b Task 15; v11 through R14, v10 through R13, v9 through R12, v8
+// through R11) and, on a project's first appraisal, derives the tax
+// jurisdiction from the postcode. Before
 // this, `handleSave` set
 // `appraisalRecord` and dropped the returned snapshot on the floor, so the
 // screen kept charging England/NI SDLT on a Welsh deal while the store held
@@ -342,17 +349,17 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     } as unknown as FinancialAppraisal;
   }
 
-  /** What app/api/app.py stores for a Welsh postcode on a first save. R14
-   *  Task 14: the server boundary is v11, so this is a v11 document. */
+  /** What app/api/app.py stores for a Welsh postcode on a first save. R13b
+   *  Task 15: the server boundary is v12, so this is a v12 document. */
   function serverDerivedWelshSnapshot(): Record<string, unknown> {
-    const v11 = defaultCalculatorInputsV11(PROJECT);
+    const v11 = defaultCalculatorInputsV12(PROJECT);
     return {
       ...v11,
       acquisition: { ...v11.acquisition, jurisdiction: 'wales', jurisdiction_source: 'derived' },
     } as unknown as Record<string, unknown>;
   }
 
-  it('posts a v11 document whose jurisdiction the server is still free to derive', async () => {
+  it('posts a v12 document whose jurisdiction the server is still free to derive', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
     render(<ConversionCalculator project={PROJECT} />);
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
@@ -362,7 +369,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
       inputs_version: number;
       acquisition: { jurisdiction_source: string; acquisition_date: string | null };
     };
-    expect(sent.inputs_version).toBe(11);
+    expect(sent.inputs_version).toBe(12);
     expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sent.acquisition.acquisition_date).toBeNull();
   });

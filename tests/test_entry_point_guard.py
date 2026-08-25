@@ -103,8 +103,8 @@ def test_migrate_module_exports_the_version_chain_this_guard_is_derived_from():
     """Non-vacuity, part 1: if the regex stopped matching, ``VERSIONS`` would be
     empty and every assertion below would pass over nothing."""
     assert len(VERSIONS) > 1
-    assert NEWEST == 11
-    assert 10 in VERSIONS
+    assert NEWEST == 12
+    assert 11 in VERSIONS
 
 
 def test_guard_enumerates_the_production_module_that_holds_the_entry_point():
@@ -179,28 +179,29 @@ async def _guard_client(_guard_db_sessionmaker):
 
 
 @pytest.mark.asyncio
-async def test_the_server_migrates_a_stored_v10_document_to_v11_as_reconciled(_guard_client):
-    """R13 Task 18, one version on (R14 Task 14). The cutover is what finds the
-    boundary bug: R12's own cutover found `is_v2_or_later` missing `is_v9`, so
-    every appraisal saved after release would have come back stamped
-    `legacy_unreconciled` and provenance-hashed as such. R13 Task 5 pre-empted
-    the identical trap for v10 ahead of THIS release's cutover (`is_v11` was
-    already added to `is_v2_or_later` before this task landed), which is
-    exactly why this test must still exercise the live server rather than
-    trust that addition by inspection.
+async def test_the_server_migrates_a_stored_v10_document_to_v12_as_reconciled(_guard_client):
+    """R13 Task 18, two versions on (R14 Task 14, R13b Task 15). The cutover is
+    what finds the boundary bug: R12's own cutover found `is_v2_or_later`
+    missing `is_v9`, so every appraisal saved after release would have come
+    back stamped `legacy_unreconciled` and provenance-hashed as such. R13
+    Task 5 pre-empted the identical trap for v10 ahead of THIS release's
+    cutover (`is_v11` was already added to `is_v2_or_later` before that task
+    landed), which is exactly why this test must still exercise the live
+    server rather than trust that addition by inspection.
 
-    Kept as the v10-arm case (R14 Task 14, spec Sec 20.1's standing
+    Kept as the v10-arm case (R14 Task 14 / R13b Task 15's standing
     instruction: extend the R13 proof rather than replace it) -- the fixture
-    genuinely is a v10 document, and posting it proves a document saved by
-    last release's calculator still loads and re-saves cleanly once the server
-    migrates every payload one version further. The posted document must come
-    back at inputs_version 11 AND not be tagged legacy, with its
-    investment_case intact and monitoring newly present. A v9 document run
-    through the identical assertions would also come back reconciled at
-    whatever version the server currently writes -- it is the combination of
-    "reached inputs_version 11" AND "not legacy" AND "investment_case
-    survived" on a document that STARTED at v10 that a v9-only regression
-    cannot pass by accident.
+    genuinely is a v10 document, and posting it proves a document saved two
+    releases ago still loads and re-saves cleanly once the server migrates
+    every payload two versions further. The posted document must come back at
+    inputs_version 12 AND not be tagged legacy, with its investment_case
+    intact, monitoring still absent (this fixture never entered a QS
+    statement) and unit_sales null (this fixture never entered a per-unit
+    ledger). A v9 document run through the identical assertions would also
+    come back reconciled at whatever version the server currently writes --
+    it is the combination of "reached inputs_version 12" AND "not legacy" AND
+    "investment_case survived" on a document that STARTED at v10 that a
+    v9-only regression cannot pass by accident.
 
     Deviates from the brief's sketch in two ways the brief itself got wrong
     (spec Sec 19.9's standing instruction, carried forward: say so rather than
@@ -242,10 +243,11 @@ async def test_the_server_migrates_a_stored_v10_document_to_v11_as_reconciled(_g
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 11
+    assert saved["inputs_snapshot"]["inputs_version"] == 12
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["investment_case"] is not None
     assert saved["inputs_snapshot"]["monitoring"] is None
+    assert saved["inputs_snapshot"]["unit_sales"] is None
     # Fix round 1 (spec Sec 19.9 review, carried forward). The GOVERNANCE
     # `inputs_version` column -- distinct from `inputs_snapshot`'s own field,
     # written by a separate line in app.py's response builder and the value
@@ -253,37 +255,38 @@ async def test_the_server_migrates_a_stored_v10_document_to_v11_as_reconciled(_g
     # hand at each cutover and left stale at 9 on R13's first pass despite the
     # migration call site itself already reading v10. It is now derived
     # (`inputs.inputs_version`) rather than restated, so this assertion is the
-    # one that caught it then, and the one that stops it recurring at v11: it
-    # does not hardcode "11" precisely so it keeps holding without edits after
+    # one that caught it then, and the one that stops it recurring at v12: it
+    # does not hardcode "12" precisely so it keeps holding without edits after
     # the next cutover, the same way this file's own NEWEST constant does.
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 11
+    assert saved["inputs_version"] == 12
 
 
 @pytest.mark.asyncio
-async def test_the_server_round_trips_a_native_v11_document_as_reconciled(_guard_client):
-    """R14 Task 14 (spec Sec 20.1), the v11-native arm the previous test does
+async def test_the_server_round_trips_a_native_v12_document_as_reconciled(_guard_client):
+    """R13b Task 15 (spec Sec 22.9), the v12-native arm the previous test does
     not cover: the fixture above STARTS at v10 and is migrated up, which
     proves the migration chain but never posts a document whose own
-    `inputs_version` already reads 11 with a non-null `monitoring` block --
-    exactly what the v11 calculator itself now saves once a QS statement is
-    entered (spec Sec 20.1/20.4). ``w-monitoring-on-site.json`` (Task 9's
-    golden monitoring fixture) is that document: `is_v11` must accept it as
-    NOT legacy, and the stored `monitoring` block must survive the round trip
-    intact -- both requirements a v10-only regression could still pass.
+    `inputs_version` already reads 12 with a non-null `unit_sales` block --
+    exactly what the v12 calculator itself now saves once a per-unit sales
+    ledger is entered (spec Sec 22). ``x-unit-sales-ledger.json`` (this
+    release's golden unit-sales fixture) is that document: `is_v12` must
+    accept it as NOT legacy, and the stored `unit_sales` block must survive
+    the round trip intact -- both requirements a v11-only regression could
+    still pass.
     """
     fixture = json.loads(
-        (REPO_ROOT / "fixtures" / "financial-model" / "w-monitoring-on-site.json")
+        (REPO_ROOT / "fixtures" / "financial-model" / "x-unit-sales-ledger.json")
         .read_text(encoding="utf-8"),
     )
     posted_inputs = fixture["inputs"]
-    assert posted_inputs["inputs_version"] == 11
-    assert posted_inputs["monitoring"] is not None
+    assert posted_inputs["inputs_version"] == 12
+    assert posted_inputs["unit_sales"] is not None
 
     project_resp = await _guard_client.post(
         "/api/v1/projects",
         json={
-            "address_raw": "2 Monitoring Statement Way, York, YO1 8AN",
+            "address_raw": "3 Unit Sales Ledger Way, York, YO1 8AN",
             "price_pence": 42_500_000,
             "use_class": "office",
         },
@@ -295,15 +298,15 @@ async def test_the_server_round_trips_a_native_v11_document_as_reconciled(_guard
         "/api/v1/appraisals",
         json={
             "project_id": project_id,
-            "name": "W -- monitoring on site",
+            "name": "X -- unit sales ledger",
             "inputs_snapshot": posted_inputs,
         },
     )
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 11
+    assert saved["inputs_snapshot"]["inputs_version"] == 12
     assert saved["status"] != "legacy_unreconciled"
-    assert saved["inputs_snapshot"]["monitoring"] is not None
+    assert saved["inputs_snapshot"]["unit_sales"] is not None
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 11
+    assert saved["inputs_version"] == 12
