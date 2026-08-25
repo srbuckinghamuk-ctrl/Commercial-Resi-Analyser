@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12 / pydantic / pytest (repo root, `pytest`); TypeScript / React / vitest (`cd frontend && npx vitest run`), `npx tsc -b`, `npx eslint . --max-warnings 0`, `npm run build`.
 
-**Spec:** `docs/superpowers/specs/2026-08-25-r15b-cost-plan-in-time-design.md` (cited below as "design §N"). The calculation-specification section it produces is §24 (Task 11). **Two deliberate refinements to the design, both recorded in Task 11's spec text:** (a) `CostPackageLine.phase_id` keeps its existing meaning (the raw input tag) and the resolved phase is a new field `resolved_phase_id`, so no existing reader changes meaning; (b) `months_from_base` is published whenever a base date and a calendar exist, not only when an allowance is recorded, because the `no_inflation_allowance` flag and the memo print it in exactly the no-allowance case.
+**Spec:** `docs/superpowers/specs/2026-08-25-r15b-cost-plan-in-time-design.md` (cited below as "design §N"). The calculation-specification section it produces is §24 (Task 11). **Three deliberate refinements to the design, all recorded in Task 11's spec text:** (a) `CostPackageLine.phase_id` keeps its existing meaning (the raw input tag) and the resolved phase is a new field `resolved_phase_id`, so no existing reader changes meaning; (b) `months_from_base` is published whenever a base date and a calendar exist, not only when an allowance is recorded, because the `no_inflation_allowance` flag and the memo print it in exactly the no-allowance case; (c) the per-month share is computed from **unrounded** per-package spend `(amount + inflation) × w_k`, not from `spreadByCurve`, so R14's ratio is recovered on any single-window plan regardless of whether amounts divide evenly — design §24.9 limitation 3 narrows to "the share is a ratio over per-package weights, not a per-package ledger".
 
 ## Global Constraints
 
@@ -95,17 +95,17 @@ S's facts the derivation relies on: `acquisition.acquisition_date` `2026-08-01`;
 
 **Step 5 — buckets and the per-month share.** Construction uses: strip_out bucket = 6,000,000 + 375,460 = 6,375,460 over 2 months → **3,187,730** in months 6 and 7. Construction bucket = (24,000,000 + 2,002,003) + (18,000,000 + 1,501,502) + (6,000,000 + 500,501) + 3,300,000 (contingency remainder) = 55,304,006 over 6 months → 9,217,334 in months 8–12 and the residue 9,217,336 in month 13. mande_fitout bucket = 13,117,256 back-loaded over 3 → money_round(13,117,256 × 1/6) = 2,186,209, money_round(× 2/6) = 4,372,419, residue 6,558,628 in months 11, 12, 13.
 
-Per-package spreads for the share (`amount + inflation`, own curve): enabling 3,187,730 × 2; structure 26,002,003/6 → 4,333,667 × 5, residue 4,333,668; envelope 19,501,502/6 → 3,250,250 × 5, residue 3,250,252; externals 6,500,501/6 → 1,083,417 × 5, residue 1,083,416; mande as the bucket above.
+**The share is computed from UNROUNDED per-package spend** — `(amount + inflation) × w_k` as a float, never `spreadByCurve` — so that on a single-window plan `share(m)` is the eligible fraction of the packages themselves, independent of whether any amount divides evenly (pre-flight ruling 1; design §24.4's "per-package spread" is refined to this in Task 11). Per-package spend per month: enabling 3,187,730; structure 26,002,003/6 = 4,333,667.1666…; envelope 19,501,502/6 = 3,250,250.333…; externals 6,500,501/6 = 1,083,416.8333…; mande 13,117,256 × (1/6, 2/6, 3/6) = 2,186,209.333…, 4,372,418.666…, 6,558,628.
 
 | m | `uses.construction` | eligible Σ | all Σ | `share(m)` | `lender_eligible_construction_pence` | R14 uniform (60/66) for contrast |
 |---|---|---|---|---|---|---|
 | 6, 7 | 3,187,730 | 3,187,730 | 3,187,730 | **1** | **3,187,730** | 2,897,936 |
-| 8, 9, 10 | 9,217,334 | 7,583,917 | 8,667,334 | 0.8749999712… | **8,065,167** | 8,379,395 |
-| 11 | 11,403,543 | 9,770,126 | 10,853,543 | 0.9001784947… | **10,265,224** | 10,366,857 |
-| 12 | 13,589,753 | 11,956,336 | 13,039,753 | 0.9169143004… | **12,460,639** | 12,354,321 |
-| 13 | 15,775,964 | 14,142,548 | 15,225,964 | 0.9288441770… | **14,653,412** | 14,341,785 |
+| 8, 9, 10 | 9,217,334 | 7,583,917.5 | 8,667,334.333… | 0.874999995193… | **8,065,167** | 8,379,395 |
+| 11 | 11,403,543 | 9,770,126.833… | 10,853,543.666… | 0.900178516196… | **10,265,224** | 10,366,857 |
+| 12 | 13,589,753 | 11,956,336.166… | 13,039,753 | 0.916914313229… | **12,460,639** | 12,354,321 |
+| 13 | 15,775,964 | 14,142,545.5 | 15,225,962.333… | 0.928844114440… | **14,653,411** | 14,341,785 |
 
-(Month 13 sums use the residue months: 4,333,668 + 3,250,252 + 6,558,628 eligible; + 1,083,416 externals.) Every other month has 0 construction and 0 eligible. The share at months 8–10 is not exactly 7/8 because the three per-line spreads each round — design §24.9 limitation 3, and the reason the tests pin the *pence*, not the ratio.
+Every other month has 0 construction and 0 eligible. The share at months 8–10 is not exactly 7/8 because the per-package *inflation* pence are rounded (45,503,505 / 52,004,006), which is why the tests pin the pence, not the ratio.
 
 **Step 6 — VAT.** `pkg-externals` line: net base 6,000,000 + 500,501 = 6,500,501; VAT = money_round(6,500,501 × 20 / 100) = **1,300,100**, recoverable 0; the construction category base = 74,796,722 − 6,500,501 = **68,296,221** at rate 0. `total_irrecoverable_pence` = 1,300,100 (S's is 0).
 
@@ -460,7 +460,7 @@ Guard: inflation and the months apply **only in detailed mode** (headline has no
 - Test: `frontend/src/lib/model/schedule.test.ts`, `monthly-engine.test.ts`, `golden-fixtures.test.ts`; `tests/test_financial_model_schedule.py`, `test_financial_model_engine.py`, `test_financial_model_fixtures.py`
 
 **Interfaces:**
-- Consumes: `computePackageTiming`; `costPlan.packages[].inflation_pence` (Task 2); `spreadByCurve`.
+- Consumes: `computePackageTiming` (its `weights` and `start_month`); `costPlan.packages[].inflation_pence` (Task 2).
 - Produces: `uses[m].lender_eligible_construction_pence` (both engines); `schedule.package_timing`.
 
 - [ ] **Step 1: Failing tests** — `schedule.test.ts`:
@@ -475,7 +475,7 @@ describe('R15b spec §24.4 per-month eligible share', () => {
     expect(e[10]).toBe(8_065_167);
     expect([s.uses[11].construction_pence, e[11]]).toEqual([11_403_543, 10_265_224]);
     expect([s.uses[12].construction_pence, e[12]]).toEqual([13_589_753, 12_460_639]);
-    expect([s.uses[13].construction_pence, e[13]]).toEqual([15_775_964, 14_653_412]);
+    expect([s.uses[13].construction_pence, e[13]]).toEqual([15_775_964, 14_653_411]);
     expect(e[5]).toBe(0); expect(e[14]).toBe(0);
   });
   it('S: share exactly 0.9 in the main window and 1 in strip-out', () => {
@@ -505,11 +505,14 @@ describe('R15b spec §24.4 per-month eligible share', () => {
 
 ```ts
 // R15b spec §24.4. The uses above are bucket-spread and byte-identical to
-// calc 2.15.0. Beside them, a per-package spread with the same weights gives
-// each month's lender-eligible SHARE; the share is applied to the bucketed
-// figure, never added to it. Denominator 0 (a remainder-only month) → the
-// uniform ratio, so contingency in a phase no package resolves to is neither
-// un-advanceable (0) nor advanced in full (1).
+// calc 2.15.0. Beside them, each package's UNROUNDED spend per month —
+// (amount + inflation) × w_k, a float, never spreadByCurve — gives each
+// month's lender-eligible SHARE; the share is applied to the bucketed
+// figure, never added to it. Unrounded, so that on a single-window plan the
+// share is the packages' own eligible fraction whatever the amounts, and
+// R14's uniform ratio is recovered exactly. Denominator 0 (a remainder-only
+// month) → the uniform ratio, so contingency in a phase no package resolves
+// to is neither un-advanceable (0) nor advanced in full (1).
 const packageTiming = computePackageTiming(inputs);
 const eligibleByMonth = new Array<number>(term).fill(0);
 const allByMonth = new Array<number>(term).fill(0);
@@ -517,8 +520,9 @@ if (costPlan.mode === 'detailed') {
   const timingById = new Map(packageTiming.map((t) => [t.id, t]));
   for (const p of costPlan.packages) {
     const t = timingById.get(p.id); if (t == null) continue;
-    spreadByCurve(p.amount_pence + p.inflation_pence, t.duration_months, t.curve).forEach((v, i) => {
+    t.weights.forEach((w, i) => {
       const m = Math.min(Math.max(0, Math.floor(t.start_month + i)), term - 1);
+      const v = (p.amount_pence + p.inflation_pence) * w;
       allByMonth[m] += v; if (p.lender_eligible) eligibleByMonth[m] += v;
     });
   }
