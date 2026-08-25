@@ -1537,8 +1537,8 @@ _NEGATIVE_CONTROLS = [
     # (red, amber, green, unknown, n/a) order with amber and green transposed --
     # the transposition that would report a scheme as better evidenced than it
     # is; the row arrays with the custom row placed FIRST rather than last (the
-    # ordering rule Sec 23.3 states) and with the derived rows' statuses dropped
-    # to their entered neighbours'; the conflict rules in the opposite order; and
+    # ordering rule Sec 23.3 states), which shifts every status by one; the
+    # conflict rules in the opposite order; and
     # the flag list with one `source_conflict` lost, which is what a set-valued
     # filter (rather than an ordered one) would return. Mirrors
     # golden-fixtures.test.ts's negativeControls entry for fixture Y.

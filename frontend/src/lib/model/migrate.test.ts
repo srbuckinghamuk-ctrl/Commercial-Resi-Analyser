@@ -1617,6 +1617,16 @@ describe('v13 migration -- spec §23.10', () => {
         .toEqual(metricsSansExcluded(v12Run.metrics));
       expect(v13Run.model, `${file}: a ledger figure moved`).toEqual(v12Run.model);
       expect(v13Run.schedule, `${file}: a schedule figure moved`).toEqual(v12Run.schedule);
+      // R15 fix wave (I3). The gate's expected ADDITION, asserted by name
+      // rather than described in prose: every migrated document reads §23.10's
+      // seed, so all 23 entered items are `unknown` and §23.9's amber flag
+      // fires. An emptied or silently narrowed seed would leave the equality
+      // assertions above green (both arms would agree on nothing) and fail
+      // here. Mirrors test_migrate_v13.py's assertion in the same test.
+      expect(
+        v13Run.metrics.flags.map((f) => f.code),
+        `${file}: the migration seed no longer raises due_diligence_unknown`,
+      ).toContain('due_diligence_unknown');
     });
   }
 

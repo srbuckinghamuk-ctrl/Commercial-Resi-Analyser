@@ -1699,8 +1699,18 @@ def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationI
                 )
             if qs.status not in QS_STATUSES:
                 err("cost_plan.qs.status", "QS status must be one of draft, issued, reviewed.")
+            # R15 fix wave. Rule 5 reads blank-after-trim as ABSENCE, which is
+            # right for `expiry_date` and `due_date` (nothing requires them at
+            # all) and wrong here: a QS record with no date is a cost plan whose
+            # provenance cannot be dated, and the derived `cost_plan_qs` row
+            # prints that empty date as its evidence. So rule 8 requires both,
+            # the way rule 2 requires an evidence date on a green item.
+            if qs.date.strip() == "":
+                err("cost_plan.qs.date", "QS date must be recorded.")
             if _is_unreal_date(qs.date):
                 err("cost_plan.qs.date", "QS date must be a real calendar date in yyyy-mm-dd form.")
+            if qs.base_date.strip() == "":
+                err("cost_plan.qs.base_date", "QS base date must be recorded.")
             if _is_unreal_date(qs.base_date):
                 err("cost_plan.qs.base_date", "QS base date must be a real calendar date in yyyy-mm-dd form.")
 

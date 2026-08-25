@@ -101,6 +101,15 @@ def test_numeric_identity_corpus_wide(path):
     assert _metrics_dict(v12_run.metrics) == _metrics_dict(v13_run.metrics), f"{path.stem}: metrics moved"
     assert asdict(v12_run.model) == asdict(v13_run.model), f"{path.stem}: a ledger figure moved"
     assert asdict(v12_run.schedule) == asdict(v13_run.schedule), f"{path.stem}: a schedule figure moved"
+    # R15 fix wave (I3). The gate's expected ADDITION, asserted by name rather
+    # than described in prose: every migrated document reads Sec 23.10's seed,
+    # so all 23 entered items are `unknown` and Sec 23.9's amber flag fires. An
+    # emptied or silently narrowed seed would leave the equality assertions
+    # above green (both arms would agree on nothing) and fail here. Mirrors
+    # migrate.test.ts's assertion in the v13 numeric-identity block.
+    assert "due_diligence_unknown" in {f.code for f in v13_run.metrics.flags}, (
+        f"{path.stem}: the migration seed no longer raises due_diligence_unknown"
+    )
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)

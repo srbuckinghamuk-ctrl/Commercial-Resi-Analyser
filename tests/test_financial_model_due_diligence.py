@@ -289,3 +289,41 @@ def test_construction_start_reads_the_legacy_packages_arm():
     )
     assert not hasattr(doc.programme, "phases")
     assert construction_start_month(doc, build_schedule(doc)) == 1
+
+
+def test_a_blank_expiry_is_absence_not_a_date():
+    """R15 fix wave (I1). Validation reads a blank-after-trim date as ABSENCE
+    (`_is_unreal_date`, Sec 23.9 rule 5), so a whitespace-only `expiry_date`
+    raises no error and must not reach months_between -- which would split
+    "  " and raise ValueError on the appraisal's HTTP path. Twin of
+    due-diligence.test.ts's "a blank expiry is absence, not a date"."""
+    doc = dd_doc({"expiry": {"planning_route": "  "}})
+    assert compute(doc).consent_expiry is None
+    run = run_appraisal(doc)                       # raises nothing
+    assert "consent_expires_before_start" not in {f.code for f in run.metrics.flags}
+
+
+def test_consent_flag_moves_under_the_phase_slip_lever():
+    """R15 fix wave (I2). Sec 23.9: the schedule is Sec 12.2-invariant, but
+    `consent_expires_before_start` is NOT invariant across sensitivity cells --
+    it compares the lapse month against `construction_start_month`, which the
+    `phase_slip` lever moves. Fixture Y's construction phase is `construction`
+    and resolves to month 4; an expiry of 2027-02-01 is month 5, so the base
+    clears it and a three-month slip does not. Twin of due-diligence.test.ts's
+    "the consent flag moves under the phase_slip lever"."""
+    from app.financial_model.apply_scenario import apply_scenario
+    from app.financial_model.types import ScenarioOverrides
+
+    base = dd_doc({"expiry": {"planning_route": "2027-02-01"}})
+    assert compute(base).consent_expiry.expiry_month == 5
+    assert compute(base).consent_expiry.construction_start_month == 4
+    assert "consent_expires_before_start" not in {f.code for f in run_appraisal(base).metrics.flags}
+
+    slipped = apply_scenario(base, ScenarioOverrides(
+        label="", gdv_adjustment_pct=0.0, construction_cost_adjustment_pct=0.0,
+        timeline_adjustment_months=0, interest_rate_adjustment_pct=0.0,
+        phase_slip_phase_id="construction", phase_slip_months=3,
+    ))
+    slipped_consent = compute(slipped).consent_expiry
+    assert (slipped_consent.construction_start_month, slipped_consent.expires_before_start) == (7, True)
+    assert "consent_expires_before_start" in {f.code for f in run_appraisal(slipped).metrics.flags}

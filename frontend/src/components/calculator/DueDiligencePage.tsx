@@ -18,10 +18,10 @@ import RiskRegisterPage from './RiskRegisterPage';
  *
  * NO ARITHMETIC. Every count, percentage and conflict statement on this page
  * is read verbatim from `run.metrics.due_diligence`; every rule message is
- * read verbatim from `run.validation`. The only expression resembling a sum
- * is the coverage label's `entered_total - entered_unknown_count`, and that
- * composes two ALREADY-PUBLISHED counts into a sentence rather than deriving
- * anything (see `coverageLine` below).
+ * read verbatim from `run.validation`. The coverage label composes two
+ * ALREADY-PUBLISHED counts — `entered_addressed_count` and `entered_total` —
+ * into a sentence; it does not subtract one from the other, which is why
+ * `entered_addressed_count` exists at all (see `coverageLine` below).
  *
  * Every write goes through `onChange({ due_diligence: … })`.
  */

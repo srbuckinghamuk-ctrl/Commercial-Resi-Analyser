@@ -493,6 +493,19 @@ describe('defaultCalculatorInputsV13 (R15 Task 2, spec §23.10)', () => {
     expect(v13.due_diligence.source_record!.captured_at).toBe('2026-08-25T09:00:00.000Z');
   });
 
+  // R15 fix wave (minor 6). A partial project states neither tenure nor use
+  // class, and the record says so with `null` rather than synthesising
+  // 'unknown'/'other' — a captured listing field must be the listing's, and
+  // 'unknown' tenure is a REAL value the enum carries, so writing it here
+  // would be indistinguishable from a listing that stated it.
+  it('records a partial listing tenure and use class as null, not a synthesised value', () => {
+    const record = defaultCalculatorInputsV13({
+      id: 'p', price_pence: 1, floor_area_sqm: 360, is_vacant: null,
+    }).due_diligence.source_record!;
+    expect(record.tenure).toBeNull();
+    expect(record.use_class).toBeNull();
+  });
+
   it('does not capture a source record when no project is given', () => {
     expect(defaultCalculatorInputsV13().due_diligence.source_record).toBeNull();
   });

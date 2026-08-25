@@ -3178,6 +3178,21 @@ class TestDueDiligenceValidation:
             QsProvenance.model_validate({**QS, "status": "superseded"})
         assert self._fields(dd_doc({"qs": {**QS, "stage": "tender", "status": "reviewed"}})) == []
 
+    def test_rule_8_both_qs_dates_must_be_recorded(self):
+        """R15 fix wave. Rule 5 reads blank-after-trim as absence, so a QS
+        record could print with no date at all. Rule 8 overrides that for its
+        own two dates. Twin of validation.test.ts's "rule 8: both QS dates must
+        be recorded"."""
+        assert self._has(
+            dd_doc({"qs": {**QS, "date": "  "}}), "cost_plan.qs.date",
+            "QS date must be recorded.",
+        )
+        assert self._has(
+            dd_doc({"qs": {**QS, "base_date": ""}}), "cost_plan.qs.base_date",
+            "QS base date must be recorded.",
+        )
+        assert self._fields(dd_doc({"qs": {**QS, "date": "2026-08-02", "base_date": "2026-07-02"}})) == []
+
     # --- rule 9: the package price basis ------------------------------------
 
     def test_rule_9_price_basis_enum_is_a_pydantic_422(self):

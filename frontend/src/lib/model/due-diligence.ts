@@ -455,8 +455,15 @@ export function computeDueDiligence(
   let consent: DdConsentExpiry | null = null;
   const planning = byCode.get('planning_route');
   const acqDate = (inputs.acquisition as { acquisition_date?: string | null }).acquisition_date ?? null;
-  if (planning != null && planning.expiry_date && acqDate) {
-    const expiryMonth = monthsBetween(acqDate, planning.expiry_date);
+  // R15 fix wave (I1). BLANK-AFTER-TRIM is absence, exactly as validation's
+  // `isUnrealDate` reads it (spec §23.9 rule 5): a whitespace-only expiry
+  // raises no validation error, so it must not reach `monthsBetween`, which
+  // would yield NaN here (and a ValueError in the Python twin). `acqDate` is
+  // trimmed the same way defensively — one absence rule for both dates the
+  // consent block reads.
+  const expiry = planning?.expiry_date ?? null;
+  if (expiry != null && expiry.trim() !== '' && acqDate != null && acqDate.trim() !== '') {
+    const expiryMonth = monthsBetween(acqDate, expiry);
     const start = constructionStartMonth(inputs, schedule);
     consent = {
       expiry_month: expiryMonth,

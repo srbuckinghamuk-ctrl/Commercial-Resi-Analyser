@@ -26,7 +26,7 @@ import type { SourceRecord } from './model/due-diligence';
 // module (defaultCalculatorInputsV2), so importing migrate.ts back here
 // would be circular. due-diligence.ts imports neither.
 import { defaultDueDiligence } from './model/due-diligence';
-import type { Project } from '../types';
+import type { Project, Tenure, UseClass } from '../types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -528,7 +528,12 @@ export function defaultCalculatorInputsV12(project?: {
 
 /** R15 spec §23.5. The listing's STRUCTURED fields, copied at capture time. */
 export function captureSourceRecord(
-  project: Pick<Project, 'source_name' | 'source_url' | 'is_vacant' | 'tenure' | 'lease_years_remaining' | 'floor_area_sqm' | 'use_class' | 'epc_rating'>,
+  project: Pick<Project, 'source_name' | 'source_url' | 'is_vacant' | 'lease_years_remaining' | 'floor_area_sqm' | 'epc_rating'>
+    // R15 fix wave (minor 6). `tenure` and `use_class` are NULLABLE here even
+    // though `Project` types them non-null: a partial project carries neither,
+    // and `SourceRecord` says null so the record can record "the listing did
+    // not state it" rather than a synthesised 'unknown'/'other'.
+    & { tenure: Tenure | null; use_class: UseClass | null },
   capturedAt: string,
 ): SourceRecord {
   return {
@@ -565,9 +570,9 @@ export function defaultCalculatorInputsV13(project?: DefaultDocumentProject, now
     due_diligence: hasListing
       ? { ...dd, source_record: captureSourceRecord({
           source_name: project!.source_name ?? null, source_url: project!.source_url ?? null,
-          is_vacant: project!.is_vacant ?? null, tenure: project!.tenure ?? 'unknown',
+          is_vacant: project!.is_vacant ?? null, tenure: project!.tenure ?? null,
           lease_years_remaining: project!.lease_years_remaining ?? null,
-          floor_area_sqm: project!.floor_area_sqm, use_class: project!.use_class ?? 'other',
+          floor_area_sqm: project!.floor_area_sqm, use_class: project!.use_class ?? null,
           epc_rating: project!.epc_rating ?? null,
         }, (now ?? new Date()).toISOString()) }
       : dd,

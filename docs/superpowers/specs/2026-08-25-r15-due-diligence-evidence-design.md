@@ -411,7 +411,10 @@ graded. The engine still seeds and reports the 23 unknowns for such a
 document (§23.4) and the amber flag still fires; only the FINAL condition
 exempts it, and the existing release-gate FINAL routes (v4 `sellAllInputs`)
 stay FINAL on exactly that basis;
-`provenance.py`'s `draft_reason` mirrors it; `DRAFT_REASON_SENTENCE` and
+`provenance.py`'s `draft_reason` mirrors the ORDERING and takes
+`due_diligence_complete` as a keyword — the predicate and the no-key exemption
+live in `report-provenance.ts` alone, with no Python helper;
+`DRAFT_REASON_SENTENCE` and
 `WATERMARK_TEXT` are `Record<DraftReason, string>`, so the compiler requires
 both texts (§17.10's precedent).
 
@@ -567,8 +570,9 @@ same code over a v12 document and its migrated v13 twin, corpus-wide in both
 engines, and requires equality of every money figure and every pre-existing
 flag; the v13 flags cannot fire on a migrated document (no source record, no
 expiry, no provisional sums, and `due_diligence_unknown` is the one flag every
-migrated document *does* raise — asserted by name, as the identity gate's sole
-expected addition). The validation side is §19.9's three properties: every v12
+migrated document *does* raise — the gate asserts that code is **present by
+name** on every migrated document, per fixture, in both engines, so an emptied
+or narrowed seed fails it rather than passing vacuously). The validation side is §19.9's three properties: every v12
 issue has a v13 counterpart; §23.9's rules raise nothing on a migrated
 document; a control document (a catalogue code missing) trips a v13-only rule.
 

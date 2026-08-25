@@ -2895,6 +2895,18 @@ describe('§23.9 due diligence validation', () => {
     expect(errFields(ddDoc({ qs: { ...QS, stage: 'tender', status: 'reviewed' } }))).toEqual([]);
   });
 
+  // R15 fix wave. Rule 5 reads blank-after-trim as absence, so a QS record
+  // could print with no date at all. Rule 8 overrides that for its own two
+  // dates. Twin of test_financial_model_validation.py's
+  // `test_rule_8_both_qs_dates_must_be_recorded`.
+  it('rule 8: both QS dates must be recorded', () => {
+    expect(has(ddDoc({ qs: { ...QS, date: '  ' } }), 'cost_plan.qs.date',
+      'QS date must be recorded.')).toBe(true);
+    expect(has(ddDoc({ qs: { ...QS, base_date: '' } }), 'cost_plan.qs.base_date',
+      'QS base date must be recorded.')).toBe(true);
+    expect(errFields(ddDoc({ qs: { ...QS, date: '2026-08-02', base_date: '2026-07-02' } }))).toEqual([]);
+  });
+
   // --- rule 9: the package price basis --------------------------------------
 
   it('rule 9: the price basis enum', () => {

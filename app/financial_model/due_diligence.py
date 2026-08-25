@@ -377,8 +377,15 @@ def compute_due_diligence(
     consent: DdConsentExpiry | None = None
     planning = by_code.get("planning_route")
     acq_date = getattr(inputs.acquisition, "acquisition_date", None)
-    if planning is not None and planning.expiry_date and acq_date:
-        expiry_month = months_between(acq_date, planning.expiry_date)
+    # R15 fix wave (I1). BLANK-AFTER-TRIM is absence, exactly as validation's
+    # `_is_unreal_date` reads it (spec Sec 23.9 rule 5): a whitespace-only
+    # expiry raises no validation error, so it must not reach months_between,
+    # which would split "  " and raise ValueError on an HTTP request path (the
+    # TS twin would yield NaN). `acq_date` is trimmed the same way defensively
+    # -- one absence rule for both dates the consent block reads.
+    expiry = planning.expiry_date if planning is not None else None
+    if expiry is not None and expiry.strip() != "" and acq_date is not None and acq_date.strip() != "":
+        expiry_month = months_between(acq_date, expiry)
         start = construction_start_month(inputs, schedule)
         consent = DdConsentExpiry(expiry_month, start, expiry_month < start)
 

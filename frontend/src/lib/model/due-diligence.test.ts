@@ -6,6 +6,7 @@ import {
   monthsBetween,
 } from './due-diligence';
 import { migrateInputsToV12 } from './migrate';
+import { applyScenario } from './apply-scenario';
 import { buildSchedule } from './schedule';
 import { runAppraisal } from './index';
 import { QS, computeFor, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
@@ -353,5 +354,47 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
     const programme = (doc.inputs as unknown as { programme: Record<string, unknown> }).programme;
     expect('phases' in programme).toBe(false);
     expect(constructionStartMonth(doc.inputs, buildSchedule(doc.inputs))).toBe(1);
+  });
+
+  it('a blank expiry is absence, not a date', () => {
+    // R15 fix wave (I1). Validation reads a blank-after-trim date as ABSENCE
+    // (`isUnrealDate`, §23.9 rule 5), so a whitespace-only `expiry_date` raises
+    // no error and must not reach `monthsBetween` — which would yield NaN here
+    // and raise ValueError in the Python twin. Twin of
+    // test_financial_model_due_diligence.py's
+    // `test_a_blank_expiry_is_absence_not_a_date`.
+    const doc = ddDoc({ expiry: { planning_route: '  ' } });
+    expect(computeFor(doc).consent_expiry).toBeNull();
+    const run = runAppraisal(doc);                 // throws nothing
+    expect(run.metrics.flags.map((f) => f.code)).not.toContain('consent_expires_before_start');
+  });
+
+  it('the consent flag moves under the phase_slip lever', () => {
+    // R15 fix wave (I2). §23.9: the schedule is §12.2-invariant, but
+    // `consent_expires_before_start` is NOT invariant across sensitivity cells
+    // — it compares the lapse month against `constructionStartMonth`, which the
+    // `phase_slip` lever moves. Fixture Y's construction phase is
+    // `construction` and resolves to month 4; an expiry of 2027-02-01 is month
+    // 5, so the base clears it and a three-month slip does not. Twin of
+    // test_financial_model_due_diligence.py's
+    // `test_consent_flag_moves_under_the_phase_slip_lever`.
+    const base = ddDoc({ expiry: { planning_route: '2027-02-01' } });
+    expect(computeFor(base).consent_expiry!.expiry_month).toBe(5);
+    expect(computeFor(base).consent_expiry!.construction_start_month).toBe(4);
+    expect(runAppraisal(base).metrics.flags.map((f) => f.code))
+      .not.toContain('consent_expires_before_start');
+
+    const slipped = applyScenario(base, {
+      label: '', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0,
+      timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: 'construction', phase_slip_months: 3,
+      exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0,
+      vacancy_adjustment_pct: 0, sales_slip_months: 0,
+    });
+    const slippedConsent = computeFor(slipped).consent_expiry!;
+    expect([slippedConsent.construction_start_month, slippedConsent.expires_before_start])
+      .toEqual([7, true]);
+    expect(runAppraisal(slipped).metrics.flags.map((f) => f.code))
+      .toContain('consent_expires_before_start');
   });
 });
