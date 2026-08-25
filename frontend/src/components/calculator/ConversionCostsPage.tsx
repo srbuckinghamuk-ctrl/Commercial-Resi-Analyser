@@ -29,7 +29,7 @@ const PRICE_BASIS_LABEL: Record<PriceBasis, string> = {
  *  already name, spelled out so the seed cannot silently drift from the enum
  *  order (spec's own worked example asserts this literal shape). */
 const DEFAULT_QS: QsProvenance = {
-  source: '', stage: 'order_of_cost', date: '', status: 'draft', base_date: '',
+  source: '', stage: 'order_of_cost', date: '', status: 'draft', base_date: '', inflation: null,
 };
 
 const PACKAGE_CODE_LABEL: Record<CostPackageCode, string> = Object.fromEntries(

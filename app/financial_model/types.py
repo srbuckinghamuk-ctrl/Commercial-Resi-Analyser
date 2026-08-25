@@ -795,6 +795,14 @@ QsStage = Literal["order_of_cost", "riba_2", "riba_3", "riba_4", "tender", "cont
 QsStatus = Literal["draft", "issued", "reviewed"]
 
 
+# R15b spec Sec 24.3. Defined here, ahead of QsProvenance, which needs
+# `inflation: InflationAllowance | None` at class-definition time -- same
+# forward-ref reasoning as PriceBasis/VatOverride above. Mirrors
+# InflationAllowance in cost-plan.ts.
+class InflationAllowance(Model):
+    annual_pct: float = Field(default=0.0, ge=0)
+
+
 class QsProvenance(Model):
     """Spec Sec 23.6. Detailed mode only (validation rule 8)."""
 
@@ -803,6 +811,10 @@ class QsProvenance(Model):
     date: str = ""
     status: QsStatus = "draft"
     base_date: str = ""
+    # R15b spec Sec 24.3. None on every document with no allowance recorded
+    # (including every pre-v14 stored document, which has no key at all --
+    # pydantic's own default reads that the same as an explicit None).
+    inflation: InflationAllowance | None = None
 
 
 class CostPlanInputs(Model):

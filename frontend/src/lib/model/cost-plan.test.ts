@@ -5,6 +5,8 @@ import { computeCostPlan } from './cost-plan';
 import { defaultCalculatorInputsV6, defaultCalculatorInputsV7 } from '../conversion-defaults';
 import { migrateInputsToV13 } from './migrate';
 import { runAppraisal } from './index';
+import { monthsBetween } from './due-diligence';
+import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
 import type { CalculatorInputsV7, CalculatorInputsV13 } from './finance-types';
 import type { PriceBasis, QsProvenance } from './cost-plan';
 
@@ -453,7 +455,7 @@ function rawXForY(): Record<string, unknown> {
 
 const Y_QS: QsProvenance = {
   source: 'Gardiner & Theobald', stage: 'riba_3', date: '2026-08-01',
-  status: 'issued', base_date: '2026-07-01',
+  status: 'issued', base_date: '2026-07-01', inflation: null,
 };
 const Y_PRICE_BASIS: Record<string, PriceBasis | null> = {
   'pkg-structure': 'fixed_price', 'pkg-envelope': 'provisional_sum', 'pkg-mande': null,
@@ -493,7 +495,7 @@ describe('computeCostPlan — price-basis summary and QS provenance (R15 spec §
     expect([pb.fixed_price_coverage_pct, pb.provisional_sums_pct]).toEqual([46.15, 30.77]);
     expect(r.qs).toEqual({
       source: 'Gardiner & Theobald', stage: 'riba_3', date: '2026-08-01',
-      status: 'issued', base_date: '2026-07-01',
+      status: 'issued', base_date: '2026-07-01', inflation: null,
     });
   });
 
@@ -511,5 +513,138 @@ describe('computeCostPlan — price-basis summary and QS provenance (R15 spec §
     const r = runAppraisal(yCostPlanDoc({ mode: 'headline', qs: null })).metrics.cost_plan;
     expect(r.price_basis).toBeNull();
     expect(r.qs).toBeNull();
+  });
+});
+
+// R15b spec §24.3. Fixture Z (docs/superpowers/plans/2026-08-25-r15b-cost-plan-in-time.md,
+// "Hand-derived figures for fixture Z") is fixture S (fixtures/financial-model/
+// s-dated-programme.json) plus a QS provenance record carrying a tender-price
+// inflation allowance, a new `mande_fitout` phase carrying pkg-mande's spend,
+// per-package price basis tags, a VAT override on pkg-externals and an extra
+// pct-of-construction-total fee line — see `docZ()` in
+// `__fixtures__/cost-plan-in-time-docs.ts`. Every figure below is copied
+// verbatim from the task brief's hand-derived worksheet, not recomputed.
+// Twin of `TestInflation` in tests/test_cost_plan.py.
+describe('R15b spec §24.3 inflation', () => {
+  it('Z: every package\'s months, factor and pence by hand; the total is the sum of rounded lines', () => {
+    const cp = computeCostPlan(docZ(), 600, 4);   // developedAreaSqm(docZ()) is 600 (S's manual area); unit count 4
+    const by = Object.fromEntries(cp.packages.map((p) => [p.id, p]));
+    expect(by['pkg-enabling']).toMatchObject({
+      resolved_phase_id: 'strip_out', start_month: 6, finish_month: 8, midpoint_month: 6.5,
+      months_from_base: 12.5, inflation_pence: 375_460,
+    });
+    expect(by['pkg-structure']).toMatchObject({ months_from_base: 16.5, inflation_pence: 2_002_003 });
+    expect(by['pkg-envelope'].inflation_pence).toBe(1_501_502);
+    expect(by['pkg-externals'].inflation_pence).toBe(500_501);
+    expect(by['pkg-mande'].months_from_base).toBeCloseTo(18 + 1 / 3, 10);
+    expect(by['pkg-mande'].inflation_pence).toBe(1_117_256);
+    expect(by['pkg-structure'].inflation_factor).toBeCloseTo(1.0834167976, 9);
+    expect(cp.inflation_total_pence).toBe(5_496_722);
+    expect(cp.latest_midpoint_month).toBeCloseTo(74 / 6, 10);
+    expect(cp.latest_midpoint_months_from_base).toBeCloseTo(18 + 1 / 3, 10);
+    // The two whole-figure pins a generator may print alone (R15's lesson —
+    // spec §24.3's own Interfaces note).
+    expect(cp.inflation_pct_of_base_build).toBe(8.33);
+    expect(cp.latest_midpoint_whole_months_from_base).toBe(18);
+  });
+
+  it('Z: the stack — base build uninflated, contingency on the uninflated base, ' +
+    'construction total carries the line, the pct fee follows it', () => {
+    const cp = computeCostPlan(docZ(), 600, 4);
+    expect(cp.base_build_pence).toBe(66_000_000);
+    expect(cp.contingency.find((c) => c.name === 'general'))
+      .toMatchObject({ base_pence: 66_000_000, amount_pence: 3_300_000 });
+    expect(cp.construction_total_pence).toBe(74_796_722);
+    expect(cp.fees.find((f) => f.id === 'fee-pm'))
+      .toMatchObject({ base_pence: 74_796_722, amount_pence: 747_967 });
+    expect(cp.professional_total_pence).toBe(8_747_967);
+    expect(cp.lender_eligible_base_pence).toBe(60_000_000);
+    expect(cp.price_basis!.fixed_price_coverage_pct).toBe(72.73);
+  });
+
+  it('no allowance: pence 0, factor null, but months_from_base and the latest-midpoint ' +
+    'fields are still published', () => {
+    const cp = computeCostPlan(docZNoAllowance(), 600, 4);
+    expect(cp.inflation_total_pence).toBe(0);
+    expect(cp.construction_total_pence).toBe(69_300_000);
+    expect(cp.packages.every((p) => p.inflation_pence === 0 && p.inflation_factor === null)).toBe(true);
+    expect(cp.packages.find((p) => p.id === 'pkg-enabling')!.months_from_base).toBe(12.5);
+    expect(cp.latest_midpoint_months_from_base).toBeCloseTo(18 + 1 / 3, 10);
+    // The same two whole-figure fields the allowance twin pins above — the
+    // months are unaffected by the allowance, only the pence and the pct are.
+    expect(cp.inflation_pct_of_base_build).toBe(0);
+    expect(cp.latest_midpoint_whole_months_from_base).toBe(18);
+  });
+
+  it('the midpoint is amount-independent: doubling a package moves its inflation, never its midpoint', () => {
+    const d = docZ();
+    d.cost_plan.packages[1].amount_pence *= 2;
+    const a = computeCostPlan(docZ(), 600, 4).packages[1];
+    const b = computeCostPlan(d, 600, 4).packages[1];
+    expect(b.midpoint_month).toBe(a.midpoint_month);
+    expect(b.inflation_factor).toBe(a.inflation_factor);
+    expect(b.inflation_pence).not.toBe(a.inflation_pence);
+  });
+
+  it('floor at zero: a base date after every midpoint gives months 0, factor 1, pence 0 ' +
+    '— and the unfloored value is negative', () => {
+    const d = docZ();
+    d.cost_plan.qs!.base_date = '2028-06-01';   // 22 months after acquisition; every midpoint < 13
+    const cp = computeCostPlan(d, 600, 4);
+    expect(cp.packages.every((p) => p.months_from_base === 0 && p.inflation_factor === 1 && p.inflation_pence === 0))
+      .toBe(true);
+    expect(monthsBetween('2028-06-01', '2026-08-01') + 12.5).toBeLessThan(0);
+  });
+
+  it('blank base_date (after trim): no months, no inflation, even with acquisition_date ' +
+    'and an allowance both present', () => {
+    const d = docZ();
+    d.cost_plan.qs!.base_date = '   ';
+    const cp = computeCostPlan(d, 600, 4);
+    expect(cp.inflation_total_pence).toBe(0);
+    expect(cp.packages.every((p) => p.months_from_base === null && p.inflation_factor === null)).toBe(true);
+    expect(cp.latest_midpoint_months_from_base).toBeNull();
+    // The midpoint itself is unaffected -- only the distance FROM the base is unknown.
+    expect(cp.latest_midpoint_month).toBeCloseTo(74 / 6, 10);
+  });
+
+  // Z's own 6% allowance rounds its sum-of-lines to the SAME figure as
+  // rounding the raw sum (5,496,722 both ways — the previous "by hand" test),
+  // so it cannot discriminate the two roundings. Verified with Math.pow
+  // before writing this test: 7% does discriminate on Z's five windows (8%
+  // was not needed) — the five ROUNDED lines sum to 6,424,687p, one penny
+  // above money-rounding the raw (unrounded) sum, 6,424,686p.
+  it('rounded lines, not a rounded sum', () => {
+    const d = docZ();
+    d.cost_plan.qs!.inflation = { annual_pct: 7 };
+    const cp = computeCostPlan(d, 600, 4);
+    const sumOfRoundedLines = cp.packages.reduce((s, p) => s + p.inflation_pence, 0);
+    const roundedSumOfRawProducts = Math.round(
+      cp.packages.reduce((s, p) => s + p.amount_pence * (p.inflation_factor! - 1), 0),
+    );
+    expect(cp.inflation_total_pence).toBe(sumOfRoundedLines);
+    expect(cp.inflation_total_pence).toBe(6_424_687);
+    expect(roundedSumOfRawProducts).toBe(6_424_686);
+    expect(cp.inflation_total_pence).not.toBe(roundedSumOfRawProducts);
+  });
+
+  it('acquisition_date null: no months, no inflation — computeCostPlan does not throw ' +
+    '(validation owns the error)', () => {
+    const d = docZ();
+    d.acquisition.acquisition_date = null;
+    const cp = computeCostPlan(d, 600, 4);
+    expect(cp.inflation_total_pence).toBe(0);
+    expect(cp.packages[0].months_from_base).toBeNull();
+    expect(cp.latest_midpoint_months_from_base).toBeNull();
+  });
+
+  it('headline mode: no timing, no inflation fields beyond their zero/null seeds', () => {
+    const cp = computeCostPlan(headlineCostPlanDocument({ constructionPerSqm: 80_730 }), 500, 1);
+    expect(cp.packages).toHaveLength(0);
+    expect(cp.inflation_total_pence).toBe(0);
+    expect(cp.inflation_pct_of_base_build).toBe(0);
+    expect(cp.latest_midpoint_month).toBeNull();
+    expect(cp.latest_midpoint_months_from_base).toBeNull();
+    expect(cp.latest_midpoint_whole_months_from_base).toBeNull();
   });
 });

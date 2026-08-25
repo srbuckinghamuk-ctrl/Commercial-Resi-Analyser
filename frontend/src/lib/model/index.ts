@@ -63,7 +63,7 @@ export {
 export type {
   CostPlanMode, CostPackageCode, CostPackage, ContingencyClassName, ContingencyClass,
   FeeBasis, FeeCode, FeeCategory, FeeLine, CostPlanInputs,
-  PriceBasis, QsStage, QsStatus, QsProvenance,
+  PriceBasis, QsStage, QsStatus, QsProvenance, InflationAllowance,
 } from './cost-plan';
 export { computeCostPlan } from './cost-plan';
 export type {

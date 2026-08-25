@@ -29,7 +29,7 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../../fixtures/financial-model'
  *  fields (`{ ...QS, status: 'draft' }`) rather than restate the block. */
 export const QS: QsProvenance = {
   source: 'Gardiner & Theobald', stage: 'riba_3', date: '2026-08-01',
-  status: 'issued', base_date: '2026-07-01',
+  status: 'issued', base_date: '2026-07-01', inflation: null,
 };
 
 function rawY(): Record<string, unknown> {

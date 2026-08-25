@@ -15,8 +15,12 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+
 from app.financial_model import run_appraisal
 from app.financial_model.cost_plan import compute_cost_plan
+from app.financial_model.due_diligence import months_between
+from app.financial_model.engine import money_round
 from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7, migrate_inputs_to_v13
 from app.financial_model.types import (
     CONTINGENCY_CLASS_NAMES,
@@ -28,6 +32,7 @@ from app.financial_model.types import (
     CostPlanInputs,
     default_contingency_classes,
 )
+from tests.fixtures_cost_plan_in_time import doc_z, doc_z_no_allowance, parse
 
 
 def test_package_codes_match_the_audit_list():
@@ -650,7 +655,7 @@ class TestPriceBasisSummaryAndQsProvenance:
         assert (pb.fixed_price_coverage_pct, pb.provisional_sums_pct) == (46.15, 30.77)
         assert r.qs == {
             "source": "Gardiner & Theobald", "stage": "riba_3", "date": "2026-08-01",
-            "status": "issued", "base_date": "2026-07-01",
+            "status": "issued", "base_date": "2026-07-01", "inflation": None,
         }
 
     def test_classifying_the_null_package_moves_coverage_by_its_share(self):
@@ -668,3 +673,143 @@ class TestPriceBasisSummaryAndQsProvenance:
     def test_headline_mode_publishes_no_price_basis_and_no_qs(self):
         r = run_appraisal(_y_cost_plan_doc({"mode": "headline", "qs": None})).metrics.cost_plan
         assert r.price_basis is None and r.qs is None
+
+
+# R15b spec Sec 24.3. Fixture Z (docs/superpowers/plans/2026-08-25-r15b-cost-
+# plan-in-time.md, "Hand-derived figures for fixture Z") is fixture S
+# (fixtures/financial-model/s-dated-programme.json) plus a QS provenance
+# record carrying a tender-price inflation allowance, a new `mande_fitout`
+# phase carrying pkg-mande's spend, per-package price basis tags, a VAT
+# override on pkg-externals and an extra pct-of-construction-total fee line --
+# see doc_z() in tests/fixtures_cost_plan_in_time.py. Every figure below is
+# copied verbatim from the task brief's hand-derived worksheet, not
+# recomputed. Twin of the 'R15b spec §24.3 inflation' describe block in
+# frontend/src/lib/model/cost-plan.test.ts.
+class TestInflation:
+    def test_z_every_packages_months_factor_and_pence_by_hand(self):
+        # The total is the sum of rounded lines.
+        cp = compute_cost_plan(parse(doc_z()), 600.0, 4)   # developed_area_sqm is 600; unit count 4
+        by = {p.id: p for p in cp.packages}
+        enabling = by["pkg-enabling"]
+        assert (
+            enabling.resolved_phase_id, enabling.start_month,
+            enabling.finish_month, enabling.midpoint_month,
+        ) == ("strip_out", 6, 8, 6.5)
+        assert (enabling.months_from_base, enabling.inflation_pence) == (12.5, 375_460)
+        structure = by["pkg-structure"]
+        assert (structure.months_from_base, structure.inflation_pence) == (16.5, 2_002_003)
+        assert by["pkg-envelope"].inflation_pence == 1_501_502
+        assert by["pkg-externals"].inflation_pence == 500_501
+        mande = by["pkg-mande"]
+        assert mande.months_from_base == pytest.approx(18 + 1 / 3, abs=1e-10)
+        assert mande.inflation_pence == 1_117_256
+        assert structure.inflation_factor == pytest.approx(1.0834167976, abs=1e-9)
+        assert cp.inflation_total_pence == 5_496_722
+        assert cp.latest_midpoint_month == pytest.approx(74 / 6, abs=1e-10)
+        assert cp.latest_midpoint_months_from_base == pytest.approx(18 + 1 / 3, abs=1e-10)
+        # The two whole-figure pins a generator may print alone (R15's lesson
+        # -- spec Sec 24.3's own Interfaces note).
+        assert cp.inflation_pct_of_base_build == 8.33
+        assert cp.latest_midpoint_whole_months_from_base == 18
+
+    def test_z_the_stack(self):
+        # Base build uninflated, contingency on the uninflated base,
+        # construction total carries the line, the pct fee follows it.
+        cp = compute_cost_plan(parse(doc_z()), 600.0, 4)
+        assert cp.base_build_pence == 66_000_000
+        general = next(c for c in cp.contingency if c.name == "general")
+        assert (general.base_pence, general.amount_pence) == (66_000_000, 3_300_000)
+        assert cp.construction_total_pence == 74_796_722
+        fee_pm = next(f for f in cp.fees if f.id == "fee-pm")
+        assert (fee_pm.base_pence, fee_pm.amount_pence) == (74_796_722, 747_967)
+        assert cp.professional_total_pence == 8_747_967
+        assert cp.lender_eligible_base_pence == 60_000_000
+        assert cp.price_basis.fixed_price_coverage_pct == 72.73
+
+    def test_no_allowance(self):
+        # Pence 0, factor None, but months_from_base and the latest-midpoint
+        # fields are still published.
+        cp = compute_cost_plan(parse(doc_z_no_allowance()), 600.0, 4)
+        assert cp.inflation_total_pence == 0
+        assert cp.construction_total_pence == 69_300_000
+        assert all(p.inflation_pence == 0 and p.inflation_factor is None for p in cp.packages)
+        assert next(p for p in cp.packages if p.id == "pkg-enabling").months_from_base == 12.5
+        assert cp.latest_midpoint_months_from_base == pytest.approx(18 + 1 / 3, abs=1e-10)
+        # The same two whole-figure fields the allowance twin pins above --
+        # the months are unaffected by the allowance, only the pence and the
+        # pct are.
+        assert cp.inflation_pct_of_base_build == 0
+        assert cp.latest_midpoint_whole_months_from_base == 18
+
+    def test_the_midpoint_is_amount_independent(self):
+        # Doubling a package moves its inflation, never its midpoint.
+        d = doc_z()
+        d["cost_plan"]["packages"][1]["amount_pence"] *= 2
+        a = compute_cost_plan(parse(doc_z()), 600.0, 4).packages[1]
+        b = compute_cost_plan(parse(d), 600.0, 4).packages[1]
+        assert b.midpoint_month == a.midpoint_month
+        assert b.inflation_factor == a.inflation_factor
+        assert b.inflation_pence != a.inflation_pence
+
+    def test_floor_at_zero(self):
+        # A base date after every midpoint gives months 0, factor 1, pence 0
+        # -- and the unfloored value is negative.
+        d = doc_z()
+        d["cost_plan"]["qs"]["base_date"] = "2028-06-01"   # 22 months after acquisition
+        cp = compute_cost_plan(parse(d), 600.0, 4)
+        assert all(
+            p.months_from_base == 0 and p.inflation_factor == 1 and p.inflation_pence == 0
+            for p in cp.packages
+        )
+        assert months_between("2028-06-01", "2026-08-01") + 12.5 < 0
+
+    def test_blank_base_date(self):
+        # No months, no inflation, even with acquisition_date and an
+        # allowance both present.
+        d = doc_z()
+        d["cost_plan"]["qs"]["base_date"] = "   "
+        cp = compute_cost_plan(parse(d), 600.0, 4)
+        assert cp.inflation_total_pence == 0
+        assert all(p.months_from_base is None and p.inflation_factor is None for p in cp.packages)
+        assert cp.latest_midpoint_months_from_base is None
+        # The midpoint itself is unaffected -- only the distance FROM the base is unknown.
+        assert cp.latest_midpoint_month == pytest.approx(74 / 6, abs=1e-10)
+
+    # Z's own 6% allowance rounds its sum-of-lines to the SAME figure as
+    # rounding the raw sum (5,496,722 both ways -- the "by hand" test above),
+    # so it cannot discriminate the two roundings. Verified with math.pow
+    # before writing this test (matching the TS twin's Math.pow check): 7%
+    # does discriminate on Z's five windows (8% was not needed) -- the five
+    # ROUNDED lines sum to 6,424,687p, one penny above money-rounding the raw
+    # (unrounded) sum, 6,424,686p.
+    def test_rounded_lines_not_a_rounded_sum(self):
+        d = doc_z()
+        d["cost_plan"]["qs"]["inflation"] = {"annual_pct": 7}
+        cp = compute_cost_plan(parse(d), 600.0, 4)
+        sum_of_rounded_lines = sum(p.inflation_pence for p in cp.packages)
+        rounded_sum_of_raw_products = money_round(
+            sum(p.amount_pence * (p.inflation_factor - 1) for p in cp.packages)
+        )
+        assert cp.inflation_total_pence == sum_of_rounded_lines
+        assert cp.inflation_total_pence == 6_424_687
+        assert rounded_sum_of_raw_products == 6_424_686
+        assert cp.inflation_total_pence != rounded_sum_of_raw_products
+
+    def test_acquisition_date_none_no_months_no_inflation_compute_cost_plan_does_not_throw(self):
+        d = doc_z()
+        d["acquisition"]["acquisition_date"] = None
+        cp = compute_cost_plan(parse(d), 600.0, 4)
+        assert cp.inflation_total_pence == 0
+        assert cp.packages[0].months_from_base is None
+        assert cp.latest_midpoint_months_from_base is None
+
+    def test_headline_mode_no_timing_no_inflation_fields_beyond_their_zero_none_seeds(self):
+        cp = compute_cost_plan(
+            headline_cost_plan_document(construction_per_sqm=80_730), 500, 1,
+        )
+        assert cp.packages == []
+        assert cp.inflation_total_pence == 0
+        assert cp.inflation_pct_of_base_build == 0
+        assert cp.latest_midpoint_month is None
+        assert cp.latest_midpoint_months_from_base is None
+        assert cp.latest_midpoint_whole_months_from_base is None

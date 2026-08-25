@@ -86,13 +86,19 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  the same reason once more -- it calls the migration matching the fixture
  *  version it loads, `migrateInputsToV13`, to build fixture Y (the
  *  due-diligence document) as test support, and is imported only by
- *  `.test.ts` files. */
+ *  `.test.ts` files.
+ *
+ *  R15b Task 2: `lib/model/__fixtures__/cost-plan-in-time-docs.ts` is exempt
+ *  for the same reason again -- it calls `migrateInputsToV13` to build
+ *  fixture Z (the cost-plan-in-time document, S plus the §24.3 additions) as
+ *  test support, and is imported only by `.test.ts` files. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
   'lib/model/__fixtures__/investment-case-docs.ts',
   'lib/model/__fixtures__/unit-sales-docs.ts',
   'lib/model/__fixtures__/due-diligence-docs.ts',
+  'lib/model/__fixtures__/cost-plan-in-time-docs.ts',
   'lib/report-qa/memo-fixtures.ts',
 ]);
 

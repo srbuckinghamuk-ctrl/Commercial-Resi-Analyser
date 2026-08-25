@@ -628,7 +628,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
     expect(onChange).toHaveBeenCalledWith({
       cost_plan: {
         ...inputs.cost_plan,
-        qs: { source: '', stage: 'order_of_cost', date: '', status: 'draft', base_date: '' },
+        qs: { source: '', stage: 'order_of_cost', date: '', status: 'draft', base_date: '', inflation: null },
       },
     });
   });
