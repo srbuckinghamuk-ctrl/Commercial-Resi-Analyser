@@ -6,12 +6,13 @@ import { migrateInputsToV6, migrateInputsToV9 } from './migrate';
 import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
 import { icDoc, explicitRefinanceDoc, applyLeversInOrder } from './__fixtures__/investment-case-docs';
 import { unitSalesDoc } from './__fixtures__/unit-sales-docs';
+import { docZ } from './__fixtures__/cost-plan-in-time-docs';
 import {
   defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
 } from '../conversion-defaults';
 import type {
   AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6,
-  CalculatorInputsV7, CalculatorInputsV9, LenderValuation,
+  CalculatorInputsV7, CalculatorInputsV9, CalculatorInputsV14, LenderValuation,
 } from './';
 import type { Phase } from './programme';
 import type { ScenarioOverrides } from '../conversion-types';
@@ -737,5 +738,83 @@ describe('sales_slip lever — spec §22.8', () => {
     expect(results[2]).toEqual(results[0]);
     const withSlip = applyIn(orders[0]);
     expect(withSlip.unit_sales!.units[3].completion_month).toBe(22); // 20 + 2, inside term 26
+  });
+});
+
+// R15b Task 8 (spec §24): the sensitivity levers reach the cost plan in time.
+// docZ() (fixtures/financial-model/z-cost-plan-in-time.json via migrateInputsToV14,
+// see __fixtures__/cost-plan-in-time-docs.ts) carries no investment_case and no
+// unit_sales — exit_yield/operating_cost/vacancy/sales_slip are no-ops on it, exactly
+// as sales_slip is inert on icDoc() in the "keeps all NINE levers order-independent"
+// test above. Its packages: pkg-enabling on strip_out (midpoint 6.5, months_from_base
+// 12.5), pkg-structure/pkg-envelope/pkg-externals on construction (midpoint 10.5,
+// months_from_base 16.5), pkg-mande on mande_fitout (SS off construction + 3 lag;
+// midpoint 12.333..., months_from_base 18.333...) — the exact figures cost-plan.test.ts
+// already pins.
+describe('R15b spec §24 — the levers reach the cost plan in time (Task 8)', () => {
+  const NON_PHASE_SLIP_FIELD: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof ScenarioOverrides> = {
+    gdv: 'gdv_adjustment_pct', construction_cost: 'construction_cost_adjustment_pct',
+    timeline: 'timeline_adjustment_months', interest_rate: 'interest_rate_adjustment_pct',
+    exit_yield: 'exit_yield_adjustment_pct', operating_cost: 'operating_cost_adjustment_pct',
+    vacancy: 'vacancy_adjustment_pct', sales_slip: 'sales_slip_months',
+  };
+  const LEVER_MAGNITUDE: Record<Exclude<SensitivityLever, 'phase_slip'>, number> = {
+    gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
+    exit_yield: 3, operating_cost: 4, vacancy: 2, sales_slip: 2,
+  };
+
+  function applyLever(doc: CalculatorInputsV14, lever: SensitivityLever): CalculatorInputsV14 {
+    if (lever === 'phase_slip') {
+      return applyScenario(doc, { ...BASE_OVERRIDES, phase_slip_phase_id: 'construction', phase_slip_months: 1 });
+    }
+    return applyScenario(doc, { ...BASE_OVERRIDES, [NON_PHASE_SLIP_FIELD[lever]]: LEVER_MAGNITUDE[lever] });
+  }
+
+  function applyInOrder(order: SensitivityLever[]): CalculatorInputsV14 {
+    return order.reduce((d, lever) => applyLever(d, lever), docZ());
+  }
+
+  const ORDERS: SensitivityLever[][] = [
+    ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip', 'exit_yield', 'operating_cost', 'vacancy', 'sales_slip'],
+    ['vacancy', 'exit_yield', 'phase_slip', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost', 'sales_slip'],
+    ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip', 'sales_slip'],
+  ];
+
+  it('keeps all nine levers order-independent on Z — full appraisal metrics AND the cost plan\'s inflation fields', () => {
+    const metrics = ORDERS.map((o) => runAppraisal(applyInOrder(o)).metrics);
+    expect(metrics[1]).toEqual(metrics[0]);
+    expect(metrics[2]).toEqual(metrics[0]);
+
+    // Resolution (a): computeCostPlan on Z under this non-trivial nine-lever
+    // combination must yield identical inflation_pence per package and
+    // inflation_total_pence regardless of the order the levers were applied in.
+    const plans = ORDERS.map((o) => {
+      const d = applyInOrder(o);
+      return computeCostPlan(d, developedAreaSqm(d), d.unit_mix.units.length);
+    });
+    const pence = (cp: ReturnType<typeof computeCostPlan>) =>
+      Object.fromEntries(cp.packages.map((p) => [p.id, p.inflation_pence]));
+    expect(pence(plans[1])).toEqual(pence(plans[0]));
+    expect(pence(plans[2])).toEqual(pence(plans[0]));
+    expect(plans[1].inflation_total_pence).toBe(plans[0].inflation_total_pence);
+    expect(plans[2].inflation_total_pence).toBe(plans[0].inflation_total_pence);
+  });
+
+  it('construction_cost +10 scales every inflation_pence through the amounts; midpoint/months_from_base/factor are bit-identical', () => {
+    const base = computeCostPlan(docZ(), 600, 4);   // developedAreaSqm(docZ()) is 600; unit count 4 (cost-plan.test.ts)
+    const stressed = applyScenario(docZ(), { ...BASE_OVERRIDES, construction_cost_adjustment_pct: 10 });
+    const cp = computeCostPlan(stressed, 600, 4);
+    const baseById = Object.fromEntries(base.packages.map((p) => [p.id, p]));
+    expect(cp.packages.length).toBe(base.packages.length);
+    for (const p of cp.packages) {
+      const b = baseById[p.id];
+      // The inflation FACTOR depends only on months, which the cost lever never
+      // touches — bit-identical, not merely close.
+      expect(p.midpoint_month).toBe(b.midpoint_month);
+      expect(p.months_from_base).toBe(b.months_from_base);
+      expect(p.inflation_factor).toBe(b.inflation_factor);
+      const expected = Math.round(1.1 * b.inflation_pence);
+      expect(Math.abs(p.inflation_pence - expected)).toBeLessThanOrEqual(1);
+    }
   });
 });

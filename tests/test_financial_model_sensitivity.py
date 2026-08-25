@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.financial_model import run_appraisal
+from app.financial_model import compute_cost_plan, developed_area_sqm, run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.programme import derive_phases
 from app.financial_model.sensitivity import (
@@ -23,7 +23,7 @@ from app.financial_model.sensitivity import (
     run_sensitivity,
     validate_sensitivity_config,
 )
-from app.financial_model.migrate import migrate_inputs_to_v8, migrate_inputs_to_v9
+from app.financial_model.migrate import migrate_inputs_to_v8, migrate_inputs_to_v9, migrate_inputs_to_v14
 from app.financial_model.types import (
     CategoryPhaseIds,
     Dependency,
@@ -35,6 +35,9 @@ from app.financial_model.types import (
 )
 from .fixtures_investment_case import explicit_refinance_doc, ic_doc
 from .fixtures_unit_sales import unit_sales_doc
+from .fixtures_cost_plan_in_time import doc_z, parse
+
+FIXTURE_Q = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "q-detailed-cost-plan.json"
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 FIXTURE_I = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "i-phased-sales.json"
@@ -996,6 +999,80 @@ def test_phase_slip_leaves_finance_and_equity_sources_untouched():
     out = apply_scenario(doc, ScenarioOverrides(**overrides))
     assert out.finance == doc.finance
     assert out.equity_sources == doc.equity_sources
+
+
+# R15b Task 8 (spec Sec 24): phase_slip and timeline reach the cost plan in time.
+# doc_z() (fixtures/financial-model/z-cost-plan-in-time.json via migrate_inputs_to_v14,
+# tests/fixtures_cost_plan_in_time.py): pkg-enabling is on strip_out (a predecessor
+# of construction, window 6-8, midpoint 6.5, months_from_base 12.5); pkg-structure/
+# pkg-envelope/pkg-externals are on construction (window 8-14, midpoint 10.5,
+# months_from_base 16.5); pkg-mande is on mande_fitout (SS off construction + 3 lag;
+# window 11-14, back_loaded, midpoint 12.333...). Fixture Q (q-detailed-cost-plan.json)
+# is the auto path: every package shares the construction window, months 1..term-2,
+# so a straight-line midpoint of (1 + (term - 1)) / 2 = (term - 1) / 2. Mirror of
+# the identically named describe block in sensitivity.test.ts.
+
+def _doc_q():
+    raw = json.loads(FIXTURE_Q.read_text(encoding="utf-8"))["inputs"]
+    return migrate_inputs_to_v14(raw, None)
+
+
+def test_phase_slip_plus_2_on_construction_moves_pkg_structure_and_pkg_mande_pkg_enabling_unchanged():
+    doc = parse(doc_z())
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["phase_slip_phase_id"] = "construction"
+    overrides["phase_slip_months"] = 2
+    stressed = apply_scenario(doc, ScenarioOverrides(**overrides))
+    cp = compute_cost_plan(stressed, developed_area_sqm(stressed), len(stressed.unit_mix.units))
+    by_id = {p.id: p for p in cp.packages}
+
+    # construction's own window shifts by the full +2 slip: 8-14 -> 10-16.
+    assert by_id["pkg-structure"].midpoint_month == 12.5
+    assert by_id["pkg-structure"].months_from_base == 18.5
+    assert by_id["pkg-structure"].finish_month == 16
+
+    # pkg-mande is SS off construction with a 3-month lag: its start tracks
+    # construction's new start (10 + 3 = 13), carrying the same back_loaded
+    # fractional offset (4/3) the unslipped case already has (test_cost_plan.py's
+    # own 74/6 = 11 + 4/3 pin).
+    assert by_id["pkg-mande"].start_month == 13
+    assert by_id["pkg-mande"].midpoint_month == pytest.approx(13 + 4 / 3, abs=1e-10)
+
+    # strip_out is a PREDECESSOR of construction, not a successor -- a slip on
+    # construction does not reach backwards.
+    assert by_id["pkg-enabling"].midpoint_month == 6.5
+    assert by_id["pkg-enabling"].months_from_base == 12.5
+
+
+def test_timeline_lever_on_the_auto_path_document_q_moves_every_midpoint_by_half_the_term_change():
+    q = _doc_q()
+    term = q.finance.term_months
+    before = compute_cost_plan(q, developed_area_sqm(q), len(q.unit_mix.units))
+    before_midpoints = {p.midpoint_month for p in before.packages}
+    assert len(before_midpoints) == 1
+    before_midpoint = next(iter(before_midpoints))
+    assert before_midpoint == (term - 1) / 2
+
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["timeline_adjustment_months"] = 2
+    stressed = apply_scenario(q, ScenarioOverrides(**overrides))
+    after = compute_cost_plan(stressed, developed_area_sqm(stressed), len(stressed.unit_mix.units))
+    after_midpoints = {p.midpoint_month for p in after.packages}
+    assert len(after_midpoints) == 1
+    after_midpoint = next(iter(after_midpoints))
+    assert after_midpoint == (term + 1) / 2
+    # +2 months of term -> +1 midpoint, pinned as an absolute value, not merely a direction.
+    assert after_midpoint - before_midpoint == 1
+
+
+def test_timeline_lever_is_inert_on_z_a_phase_network_is_unmoved_by_the_term():
+    z = parse(doc_z())
+    before = compute_cost_plan(z, developed_area_sqm(z), len(z.unit_mix.units))
+    overrides = dict(_ZERO_OVERRIDES)
+    overrides["timeline_adjustment_months"] = 5
+    stressed = apply_scenario(z, ScenarioOverrides(**overrides))
+    after = compute_cost_plan(stressed, developed_area_sqm(stressed), len(stressed.unit_mix.units))
+    assert [p.midpoint_month for p in after.packages] == [p.midpoint_month for p in before.packages]
 
 
 # R13 spec Sec 19.8 cell validity (Sec 12.7): the mechanism is the pre-existing
