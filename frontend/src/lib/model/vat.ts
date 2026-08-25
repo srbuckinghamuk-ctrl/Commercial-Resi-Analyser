@@ -596,10 +596,15 @@ export function computeVat(
   for (const p of detailed ? costPlan.packages : []) {
     const override = packageOverrides.get(p.id);
     if (override === undefined) continue;
-    overriddenPackages += p.amount_pence;
+    // R15b spec §24.5: the tender-price inflation allowance follows its
+    // package's own VAT treatment — an overridden line is charged on
+    // amount + inflation, not on the bare amount, and the category base
+    // below is net of the SAME figure so nothing double counts.
+    const net = p.amount_pence + p.inflation_pence;
+    overriddenPackages += net;
     packageLines.push(chargeLine(
       `package:${p.id}`, 'construction', p.label !== '' ? p.label : p.code,
-      resolveVatTreatment(vat, { category: 'construction', override }), p.amount_pence,
+      resolveVatTreatment(vat, { category: 'construction', override }), net,
     ));
   }
 

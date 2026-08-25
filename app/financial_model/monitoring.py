@@ -129,10 +129,18 @@ def original_budgets(
     ``build_schedule``'s totals block) -- the spec's ``sum(uses.*)`` phrasing and the
     brief's ``cost_plan.*_total_pence`` phrasing name one number, and a fixture-wide
     test pins that they agree.
+
+    R15b spec Sec 24.5: ``construction`` also carries ``inflation_total_pence`` -- the
+    QS tender-price allowance is part of ``construction_total_pence`` exactly as
+    ``base_build_pence`` and ``compliance_pence`` are (cost_plan.py), so leaving it out
+    here would break the split identity on any document that carries one (fixture Z).
     """
     return {
         "acquisition": schedule.totals.acquisition_pence,
-        "construction": cost_plan.base_build_pence + cost_plan.compliance_pence,
+        "construction": (
+            cost_plan.base_build_pence + cost_plan.inflation_total_pence
+            + cost_plan.compliance_pence
+        ),
         "professional": cost_plan.professional_total_pence,
         "statutory": cost_plan.statutory_total_pence,
         "contingency": cost_plan.contingency_total_pence,
