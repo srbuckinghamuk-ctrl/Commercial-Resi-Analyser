@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES } from './due-diligence';
-import type { DdItemCode } from './due-diligence';
+import { DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES, monthsBetween } from './due-diligence';
+import { migrateInputsToV12 } from './migrate';
+import { QS, computeFor, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
+import type { DdItemCode, DdRow } from './due-diligence';
+import type { LenderValuation } from './finance-types';
 
 /** R15 spec §23. Twin of test_financial_model_due_diligence.py. */
 
@@ -84,5 +87,127 @@ describe('ENTERED_CODES and DERIVED_CODES partition the catalogue', () => {
 
   it('ALL_ENTERED names exactly the ENTERED_CODES set', () => {
     expect(Object.keys(ALL_ENTERED).sort()).toEqual([...ENTERED_CODES].sort());
+  });
+});
+
+// --- §23.3/§23.4: the derivation --------------------------------------------
+
+describe('the due-diligence derivation (§23.3-§23.4)', () => {
+  it('monthsBetween is whole months, floored', () => {
+    expect(monthsBetween('2026-09-01', '2026-11-01')).toBe(2);
+    // leap-day pair: day-of-month not reached
+    expect(monthsBetween('2024-01-31', '2024-02-29')).toBe(0);
+    expect(monthsBetween('2024-01-29', '2024-02-29')).toBe(1);
+    // a lapse before acquisition is negative
+    expect(monthsBetween('2026-09-01', '2026-08-15')).toBe(-1);
+  });
+
+  it('category counts match the hand table', () => {
+    const r = computeFor(ddDoc());
+    expect(r.categories.map((c) => [c.category, c.red, c.amber, c.green, c.unknown, c.not_applicable, c.total])).toEqual([
+      ['planning', 0, 1, 3, 1, 0, 5],
+      ['title_occupation', 1, 0, 1, 1, 2, 5],
+      ['existing_building', 0, 2, 5, 1, 0, 8],
+      ['construction', 0, 1, 3, 0, 0, 4],
+      ['finance', 0, 0, 3, 1, 0, 4],
+      ['exit', 0, 0, 2, 1, 0, 3],
+    ]);
+    const t = r.totals;
+    expect([t.red, t.amber, t.green, t.unknown, t.not_applicable, t.total]).toEqual([1, 4, 17, 5, 2, 29]);
+    expect(t.entered_unknown_count).toBe(3);
+    expect(t.addressed_pct).toBe(87.5);
+    expect(t.cost_impact_total_pence).toBe(2_550_000);
+    expect(t.programme_impact_max_months).toBe(3);
+    expect(t.unassessed_impact_count).toBe(1);
+  });
+
+  it('row order is catalogue then custom, and derived rows name their source', () => {
+    const r = computeFor(ddDoc());
+    expect(r.rows.slice(0, 28).map((row) => row.code)).toEqual(DD_CATALOGUE.map((e) => e.code));
+    expect(r.rows[28].code).toBe('custom');
+    expect(r.rows[28].kind).toBe('custom');
+    expect(r.rows[28].label).toBe('Basement water ingress');
+    const derived = new Map(r.rows.filter((row) => row.kind === 'derived').map((row) => [row.code, row]));
+    expect(derived.get('equity_sources')!.status).toBe('unknown');
+    expect(derived.get('equity_sources')!.source).toBe('equity_sources[].evidence_status');
+    expect(derived.get('lender_valuation')!.status).toBe('unknown');
+    expect(derived.get('lender_valuation')!.source).toBe('lender_valuation');
+    expect(derived.get('tax_basis')!.status).toBe('green');
+    expect(derived.get('tax_basis')!.source).toBe('acquisition.jurisdiction_evidence_status + vat');
+    expect(derived.get('facility_terms')!.status).toBe('green');
+    expect(derived.get('facility_terms')!.source).toBe('finance.requires_confirmation');
+    expect(derived.get('cost_plan_qs')!.status).toBe('green');
+    expect(derived.get('cost_plan_qs')!.source).toBe('cost_plan.qs');
+  });
+
+  it('not_applicable counts as addressed but is its own column', () => {
+    const r = computeFor(ddDoc({ status: { rights_of_light: 'unknown' }, notes: { rights_of_light: '' } }));
+    expect(r.totals.entered_unknown_count).toBe(4);
+    expect(r.totals.addressed_pct).toBe(83.33);   // pct(20, 24)
+  });
+
+  it('impact totals sum assessed red/amber rows only, and take the max months', () => {
+    // A green with an impact contributes nothing.
+    const r = computeFor(ddDoc({ impacts: { asbestos_survey: [9_999_999, 9] } }));
+    expect(r.totals.cost_impact_total_pence).toBe(2_550_000);
+    expect(r.totals.programme_impact_max_months).toBe(3);
+    // Assessing structural_survey moves the total and clears the unassessed count.
+    const r2 = computeFor(ddDoc({ impacts: { structural_survey: [100_000, 0] } }));
+    expect(r2.totals.cost_impact_total_pence).toBe(2_650_000);
+    expect(r2.totals.unassessed_impact_count).toBe(0);
+  });
+
+  const rowOf = (doc: Parameters<typeof computeFor>[0], code: string): DdRow =>
+    computeFor(doc).rows.find((x) => x.code === code)!;
+
+  it('each derived row maps its status from one field', () => {
+    expect(rowOf(ddDoc({ equityStatus: 'confirmed' }), 'equity_sources').status).toBe('green');
+    expect(rowOf(ddDoc({ equityStatus: 'rejected' }), 'equity_sources').status).toBe('red');
+    expect(rowOf(ddDoc({ requiresConfirmation: true }), 'facility_terms').status).toBe('unknown');
+    const lv: LenderValuation = {
+      basis: 'global_pct', global_value: -5, per_key_values: null,
+      reason: 'Valuer haircut', author: 'Knight Frank', date: '2026-08-20',
+    };
+    expect(rowOf(ddDoc({ lenderValuation: lv }), 'lender_valuation').status).toBe('green');
+    expect(rowOf(ddDoc({ qs: { ...QS, status: 'draft' } }), 'cost_plan_qs').status).toBe('amber');
+    expect(rowOf(ddDoc({ qs: null }), 'cost_plan_qs').status).toBe('unknown');
+    expect(rowOf(ddDoc({ mode: 'headline' }), 'cost_plan_qs').status).toBe('unknown');
+    expect(rowOf(ddDoc({ acquisitionDate: null }), 'tax_basis').status).toBe('unknown');
+  });
+
+  it('source conflicts are two rules, and their negatives hold', () => {
+    const r = computeFor(ddDoc());
+    expect(r.source_conflicts.map((c) => c.rule)).toEqual(['occupation', 'existing_area']);
+    expect(computeFor(ddDoc({ isVacant: null })).source_conflicts[0].rule).toBe('existing_area');
+    expect(computeFor(ddDoc({
+      status: { vacant_possession: 'amber' }, action: { vacant_possession: 'Agree surrender' },
+    })).source_conflicts.map((c) => c.rule)).toEqual(['existing_area']);
+    // exactly 25% does not fire (strict): listing 400 vs existing 500
+    expect(computeFor(ddDoc({ listingArea: 400, existingGia: 500 })).source_conflicts.map((c) => c.rule))
+      .toEqual(['occupation']);
+    expect(computeFor(ddDoc({ sourceRecord: null })).source_conflicts).toEqual([]);
+  });
+
+  it('consent expiry is measured against the construction start', () => {
+    const r = computeFor(ddDoc());
+    expect([
+      r.consent_expiry!.expiry_month,
+      r.consent_expiry!.construction_start_month,
+      r.consent_expiry!.expires_before_start,
+    ]).toEqual([2, 4, true]);
+    // monthsBetween('2026-09-01', '2027-01-01') = 4, and 4 < 4 is false
+    expect(computeFor(ddDoc({ expiry: { planning_route: '2027-01-01' } })).consent_expiry!.expires_before_start)
+      .toBe(false);
+    expect(computeFor(ddDoc({ acquisitionDate: null })).consent_expiry).toBeNull();
+    expect(computeFor(ddDoc({ expiry: { planning_route: null } })).consent_expiry).toBeNull();
+    expect(computeFor(ddDoc({ programme: null })).consent_expiry!.construction_start_month).toBe(0);
+  });
+
+  it('a pre-v13 document is read as the seed', () => {
+    const v12 = migrateInputsToV12(rawYAsV12());
+    const r = computeFor(v12);
+    expect(r.totals.entered_unknown_count).toBe(23);
+    expect(r.source_record).toBeNull();
+    expect(r.source_conflicts).toEqual([]);
   });
 });

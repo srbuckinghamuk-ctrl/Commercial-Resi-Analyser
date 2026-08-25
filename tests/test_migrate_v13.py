@@ -76,8 +76,7 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 12
     ]
-    # Task 3 adds the v13-native fixture Y. Red until then -- see the module
-    # docstring and the commit body.
+    # R15 Task 3 adds the v13-native fixture Y.
     assert sorted(p.stem for p in version_excluded) == ["y-due-diligence"]
 
 

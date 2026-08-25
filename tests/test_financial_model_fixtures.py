@@ -23,6 +23,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v10,
     migrate_inputs_to_v11,
     migrate_inputs_to_v12,
+    migrate_inputs_to_v13,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.validation import ValidationIssue, validate_inputs
@@ -80,6 +81,7 @@ EXPECTED_FIXTURE_STEMS = [
     "v-exhausted-reserve",
     "w-monitoring-on-site",
     "x-unit-sales-ledger",
+    "y-due-diligence",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -350,14 +352,19 @@ _V11_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) 
 # document (spec Sec 22), so every migrate-to-vN parametrisation below excludes
 # it by the same design that excluded T/U/V/W from the v9 ones.
 _V12_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 12]
+# R15 Task 3: fixture Y is BORN at v13 -- the corpus's first v13-native document
+# (spec Sec 23), so every migrate-to-vN parametrisation below excludes it by the
+# same design that excluded T/U/V/W/X from the earlier ones.
+_V13_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 13]
 
 
-def test_every_fixture_is_v5_to_v12_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_to_v13_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
         + len(_V9_FIXTURES) + len(_V10_FIXTURES) + len(_V11_FIXTURES) + len(_V12_FIXTURES)
+        + len(_V13_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -372,6 +379,7 @@ def test_every_fixture_is_v5_to_v12_and_each_group_is_non_empty() -> None:
     ]
     assert [p.stem for p in _V11_FIXTURES] == ["w-monitoring-on-site"]
     assert [p.stem for p in _V12_FIXTURES] == ["x-unit-sales-ledger"]
+    assert [p.stem for p in _V13_FIXTURES] == ["y-due-diligence"]
 
 
 def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
@@ -449,7 +457,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # once more to v11 -- fixture W is v11-native and migrate_inputs_to_v6 refuses
 # it for the same reason, one version further on (`monitoring` too).
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11, 12)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11, 12, 13)
 ]
 
 
@@ -475,7 +483,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # drop `refinance`'s v10 narrowing and `investment_case` to produce a v7 one).
 # R14 Task 8 widens it once more to v11, for the identical reason (`monitoring`).
 _PRE_V8_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11, 12)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11, 12, 13)
 ]
 
 
@@ -1129,7 +1137,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
         "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
-        "w-monitoring-on-site", "x-unit-sales-ledger",
+        "w-monitoring-on-site", "x-unit-sales-ledger", "y-due-diligence",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -1159,12 +1167,17 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # would additionally strip the R13b `unit_sales` block the fixture is
     # entirely about.
     #
+    # R15 Task 3 widens it once more to include 13: fixture Y is BORN at v13
+    # for the same reason -- it did not exist before R8, and stamping it v3/v4
+    # would additionally strip the R15 `due_diligence` block the fixture is
+    # entirely about.
+    #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
     # so it is vacuously true for every member and can never fail. Enumerating
-    # 6/7/8/9/10/11/12 keeps the check able to fail: it catches a fixture excluded for
-    # an EIGHTH, unstated reason (e.g. a future non-v5..v12 fixture, or a change to
+    # 6/7/8/9/10/11/12/13 keeps the check able to fail: it catches a fixture excluded
+    # for a NINTH, unstated reason (e.g. a future non-v5..v13 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -1177,6 +1190,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 10
             or version == 11
             or version == 12
+            or version == 13
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -1628,7 +1642,16 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # holds for a v12 result unchanged: CalculatorInputsV12 subclasses
     # CalculatorInputsV11 subclasses CalculatorInputsV10 subclasses
     # CalculatorInputsV9.
-    if inputs.inputs_version >= 12:
+    #
+    # R15 Task 3: and once more for v13 -- fixture Y (v13-native) cannot go
+    # through migrate_inputs_to_v12 either, by the identical design one version
+    # further on (migrate_inputs_to_v12 refuses a v13 document -- it would have
+    # to drop `due_diligence`). `isinstance(programmed, CalculatorInputsV9)`
+    # still holds for a v13 result unchanged: CalculatorInputsV13 subclasses
+    # CalculatorInputsV12.
+    if inputs.inputs_version >= 13:
+        programmed = migrate_inputs_to_v13(inputs.model_dump(mode="json"))
+    elif inputs.inputs_version >= 12:
         programmed = migrate_inputs_to_v12(inputs.model_dump(mode="json"))
     elif inputs.inputs_version >= 11:
         programmed = migrate_inputs_to_v11(inputs.model_dump(mode="json"))

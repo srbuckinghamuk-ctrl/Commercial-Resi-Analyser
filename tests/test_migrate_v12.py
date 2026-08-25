@@ -74,8 +74,10 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 11
     ]
-    # Task 2 adds the v12-native fixture X.
-    assert sorted(p.stem for p in version_excluded) == ["x-unit-sales-ledger"]
+    # R13b Task 2 adds the v12-native fixture X; R15 Task 3 adds the
+    # v13-native fixture Y, above this gate's `<= 11` filter for the same
+    # reason X is.
+    assert sorted(p.stem for p in version_excluded) == ["x-unit-sales-ledger", "y-due-diligence"]
 
 
 def _metrics_dict(metrics) -> dict:

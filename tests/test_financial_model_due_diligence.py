@@ -1,5 +1,12 @@
 """R15 spec Sec 23. Twin of due-diligence.test.ts."""
-from app.financial_model.due_diligence import DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES
+from app.financial_model.due_diligence import (
+    DD_CATALOGUE,
+    DERIVED_CODES,
+    ENTERED_CODES,
+    months_between,
+)
+
+from .fixtures_due_diligence import QS, compute, dd_doc, raw_y_as_v12
 
 # The literal table BOTH test files carry (spec Sec 23.2). A relabelled or
 # reordered entry fails here and in due-diligence.test.ts alike.
@@ -44,3 +51,96 @@ def test_entered_and_derived_partition_the_catalogue():
     assert len(ENTERED_CODES) == 23
     assert set(DERIVED_CODES) == {"cost_plan_qs", "facility_terms", "equity_sources", "tax_basis", "lender_valuation"}
     assert set(ENTERED_CODES).isdisjoint(DERIVED_CODES)
+
+
+# --- Sec 23.3/23.4: the derivation ------------------------------------------
+
+def test_months_between_is_whole_months_floored():
+    assert months_between("2026-09-01", "2026-11-01") == 2
+    assert months_between("2024-01-31", "2024-02-29") == 0   # leap-day pair: day-of-month not reached
+    assert months_between("2024-01-29", "2024-02-29") == 1
+    assert months_between("2026-09-01", "2026-08-15") == -1  # a lapse before acquisition is negative
+
+
+def test_category_counts_match_the_hand_table():
+    r = compute(dd_doc())
+    assert [(c.category, c.red, c.amber, c.green, c.unknown, c.not_applicable, c.total) for c in r.categories] == [
+        ("planning", 0, 1, 3, 1, 0, 5),
+        ("title_occupation", 1, 0, 1, 1, 2, 5),
+        ("existing_building", 0, 2, 5, 1, 0, 8),
+        ("construction", 0, 1, 3, 0, 0, 4),
+        ("finance", 0, 0, 3, 1, 0, 4),
+        ("exit", 0, 0, 2, 1, 0, 3),
+    ]
+    t = r.totals
+    assert (t.red, t.amber, t.green, t.unknown, t.not_applicable, t.total) == (1, 4, 17, 5, 2, 29)
+    assert t.entered_unknown_count == 3
+    assert t.addressed_pct == 87.5
+    assert t.cost_impact_total_pence == 2_550_000
+    assert t.programme_impact_max_months == 3
+    assert t.unassessed_impact_count == 1
+
+
+def test_row_order_is_catalogue_then_custom_and_derived_rows_name_their_source():
+    r = compute(dd_doc())
+    assert [row.code for row in r.rows][:28] == [e.code for e in DD_CATALOGUE]
+    assert r.rows[28].code == "custom" and r.rows[28].kind == "custom" and r.rows[28].label == "Basement water ingress"
+    derived = {row.code: row for row in r.rows if row.kind == "derived"}
+    assert derived["equity_sources"].status == "unknown" and derived["equity_sources"].source == "equity_sources[].evidence_status"
+    assert derived["lender_valuation"].status == "unknown" and derived["lender_valuation"].source == "lender_valuation"
+    assert derived["tax_basis"].status == "green" and derived["tax_basis"].source == "acquisition.jurisdiction_evidence_status + vat"
+    assert derived["facility_terms"].status == "green" and derived["facility_terms"].source == "finance.requires_confirmation"
+    assert derived["cost_plan_qs"].status == "green" and derived["cost_plan_qs"].source == "cost_plan.qs"
+
+
+def test_not_applicable_counts_as_addressed_but_is_its_own_column():
+    r = compute(dd_doc({"status": {"rights_of_light": "unknown"}, "notes": {"rights_of_light": ""}}))
+    assert r.totals.entered_unknown_count == 4
+    assert r.totals.addressed_pct == 83.33   # pct(20, 24)
+
+
+def test_impact_totals_sum_assessed_red_amber_only_and_max_months():
+    # A green with an impact contributes nothing.
+    r = compute(dd_doc({"impacts": {"asbestos_survey": (9_999_999, 9)}}))
+    assert r.totals.cost_impact_total_pence == 2_550_000 and r.totals.programme_impact_max_months == 3
+    # Assessing structural_survey moves the total and clears the unassessed count.
+    r2 = compute(dd_doc({"impacts": {"structural_survey": (100_000, 0)}}))
+    assert r2.totals.cost_impact_total_pence == 2_650_000 and r2.totals.unassessed_impact_count == 0
+
+
+def test_derived_row_mapping_each_status_by_one_field():
+    assert next(x for x in compute(dd_doc({"equity_status": "confirmed"})).rows if x.code == "equity_sources").status == "green"
+    assert next(x for x in compute(dd_doc({"equity_status": "rejected"})).rows if x.code == "equity_sources").status == "red"
+    assert next(x for x in compute(dd_doc({"requires_confirmation": True})).rows if x.code == "facility_terms").status == "unknown"
+    lv = {"basis": "global_pct", "global_value": -5, "per_key_values": None, "reason": "Valuer haircut", "author": "Knight Frank", "date": "2026-08-20"}
+    assert next(x for x in compute(dd_doc({"lender_valuation": lv})).rows if x.code == "lender_valuation").status == "green"
+    assert next(x for x in compute(dd_doc({"qs": {**QS, "status": "draft"}})).rows if x.code == "cost_plan_qs").status == "amber"
+    assert next(x for x in compute(dd_doc({"qs": None})).rows if x.code == "cost_plan_qs").status == "unknown"
+    assert next(x for x in compute(dd_doc({"mode": "headline"})).rows if x.code == "cost_plan_qs").status == "unknown"
+    assert next(x for x in compute(dd_doc({"acquisition_date": None})).rows if x.code == "tax_basis").status == "unknown"
+
+
+def test_source_conflicts_two_rules_and_their_negatives():
+    r = compute(dd_doc())
+    assert [c.rule for c in r.source_conflicts] == ["occupation", "existing_area"]
+    assert compute(dd_doc({"is_vacant": None})).source_conflicts[0].rule == "existing_area"
+    assert [c.rule for c in compute(dd_doc({"status": {"vacant_possession": "amber"}, "action": {"vacant_possession": "Agree surrender"}})).source_conflicts] == ["existing_area"]
+    # exactly 25% does not fire (strict): listing 400 vs existing 500
+    assert [c.rule for c in compute(dd_doc({"listing_area": 400, "existing_gia": 500})).source_conflicts] == ["occupation"]
+    assert compute(dd_doc({"source_record": None})).source_conflicts == []
+
+
+def test_consent_expiry_against_the_construction_start():
+    r = compute(dd_doc())
+    assert (r.consent_expiry.expiry_month, r.consent_expiry.construction_start_month, r.consent_expiry.expires_before_start) == (2, 4, True)
+    assert compute(dd_doc({"expiry": {"planning_route": "2027-01-01"}})).consent_expiry.expires_before_start is False   # 4 < 4 is false
+    assert compute(dd_doc({"acquisition_date": None})).consent_expiry is None
+    assert compute(dd_doc({"expiry": {"planning_route": None}})).consent_expiry is None
+    assert compute(dd_doc({"programme": None})).consent_expiry.construction_start_month == 0
+
+
+def test_pre_v13_document_is_read_as_the_seed():
+    from app.financial_model.migrate import migrate_inputs_to_v12
+    v12 = migrate_inputs_to_v12(raw_y_as_v12(), None)
+    r = compute(v12)
+    assert r.totals.entered_unknown_count == 23 and r.source_record is None and r.source_conflicts == []
