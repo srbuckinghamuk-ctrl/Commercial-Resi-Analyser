@@ -1,11 +1,14 @@
 """R15 spec Sec 23. The due-diligence evidence schedule.
 
-Port of frontend/src/lib/model/due-diligence.ts. This task declares the
-catalogue; Task 3 adds the derivation. It never imports schedule or metrics
-(they import it)."""
+Port of frontend/src/lib/model/due-diligence.ts. Task 1 declares the
+catalogue; Task 2 adds the seed builder; Task 3 adds the derivation. It never
+imports schedule or metrics (they import it)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+from .types import DdItem
 
 DD_CATEGORIES: tuple[str, ...] = (
     "planning", "title_occupation", "existing_building", "construction", "finance", "exit",
@@ -57,3 +60,29 @@ DD_CATALOGUE: tuple[DdCatalogueEntry, ...] = (
 
 ENTERED_CODES: tuple[str, ...] = tuple(e.code for e in DD_CATALOGUE if not e.derived)
 DERIVED_CODES: tuple[str, ...] = tuple(e.code for e in DD_CATALOGUE if e.derived)
+
+
+def seed_items() -> list[DdItem]:
+    """R15 spec Sec 23.10's seed: every ENTERED catalogue item `unknown`, ids
+    deterministic (`dd-<code>`) so the migration is reproducible. Port of the
+    `items` half of defaultDueDiligence."""
+    return [
+        DdItem(
+            id=f"dd-{e.code}", code=e.code, category=e.category, label="",
+            status="unknown", evidence=None, expiry_date=None, owner="",
+            due_date=None, cost_impact_pence=None, programme_impact_months=None,
+            action="", notes="",
+        )
+        for e in DD_CATALOGUE if not e.derived
+    ]
+
+
+def default_due_diligence() -> dict[str, Any]:
+    """R15 spec Sec 23.10's seed document: no source record captured, every
+    entered item unknown. Port of defaultDueDiligence. Returns a plain dict
+    (this module's dict-level convention -- migrate.py validates the final
+    output)."""
+    return {
+        "source_record": None,
+        "items": [item.model_dump(mode="json") for item in seed_items()],
+    }

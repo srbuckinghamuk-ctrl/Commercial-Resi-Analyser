@@ -3,12 +3,13 @@ import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
   defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
-  defaultCalculatorInputsV11, defaultCalculatorInputsV12,
+  defaultCalculatorInputsV11, defaultCalculatorInputsV12, defaultCalculatorInputsV13,
+  captureSourceRecord,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
-  migrateV9toV10, migrateV10toV11, migrateV11toV12,
+  migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -435,5 +436,64 @@ describe('defaultCalculatorInputsV12 (R13b Task 15, spec §22.1)', () => {
     a.scenarios.base.phase_slip_months = 3;
     expect(b.vat.treatments[0].rate_pct).toBe(0);
     expect(b.scenarios.base.phase_slip_months).toBe(0);
+  });
+});
+
+describe('defaultCalculatorInputsV13 (R15 Task 2, spec §23.10)', () => {
+  // Same guard as the V10/V11/V12 blocks above, and the one that matters
+  // most here: this is the document EVERY freshly opened calculator now
+  // starts on, and the one every stored appraisal is compared against after
+  // `migrateInputsToV13` merges onto it.
+  it('with no project, is exactly what migrateV12toV13 makes of the v12 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV13>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV13()))
+      .toEqual(stripIds(migrateV12toV13(defaultCalculatorInputsV12())));
+  });
+
+  // Non-vacuity for the equality above: the fields v13 adds are asserted by
+  // name and value, so the comparison cannot be passing merely because both
+  // sides are the v12 document with a bumped version number.
+  it('starts with every catalogue item unknown, no source record, and null cost-plan provenance', () => {
+    const v13 = defaultCalculatorInputsV13();
+    expect(v13.inputs_version).toBe(13);
+    expect(v13.due_diligence.source_record).toBeNull();
+    expect(v13.due_diligence.items.every((i) => i.status === 'unknown')).toBe(true);
+    expect(v13.cost_plan.qs).toBeNull();
+  });
+
+  it('hands every caller its own document, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV13();
+    const b = defaultCalculatorInputsV13();
+    a.due_diligence.items[0].status = 'green';
+    expect(b.due_diligence.items[0].status).toBe('unknown');
+  });
+
+  // R15 spec §23.5: opening the calculator against a real listing captures
+  // the listing's structured fields into `due_diligence.source_record` --
+  // the project's own PROSE fields (address, description) are never copied.
+  it('captures the listing into due_diligence.source_record when a project is given', () => {
+    const project = {
+      id: 'p', price_pence: 1, floor_area_sqm: 360,
+      is_vacant: false, tenure: 'freehold' as const, lease_years_remaining: null,
+      source_name: 'rightmove', source_url: null, use_class: 'office' as const, epc_rating: 'D',
+    };
+    const now = new Date('2026-08-25T09:00:00Z');
+    const v13 = defaultCalculatorInputsV13(project, now);
+    expect(v13.due_diligence.source_record).toEqual(captureSourceRecord(
+      {
+        source_name: 'rightmove', source_url: null, is_vacant: false, tenure: 'freehold',
+        lease_years_remaining: null, floor_area_sqm: 360, use_class: 'office', epc_rating: 'D',
+      },
+      '2026-08-25T09:00:00.000Z',
+    ));
+    expect(v13.due_diligence.source_record!.captured_at).toBe('2026-08-25T09:00:00.000Z');
+  });
+
+  it('does not capture a source record when no project is given', () => {
+    expect(defaultCalculatorInputsV13().due_diligence.source_record).toBeNull();
   });
 });

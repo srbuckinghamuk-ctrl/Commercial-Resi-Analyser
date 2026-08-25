@@ -12,10 +12,13 @@ import {
   migrateV9toV10, migrateInputsToV10,
   migrateV10toV11, migrateInputsToV11,
   migrateV11toV12, migrateInputsToV12,
+  migrateV12toV13, migrateInputsToV13,
 } from './migrate';
+import { ENTERED_CODES } from './due-diligence';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
+  CalculatorInputsV12,
   MonitoringCategory, MonitoringLineInputs,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
@@ -1552,5 +1555,160 @@ describe('migrateInputsToV12 merge-onto-defaults branch', () => {
     const merged = migrateInputsToV12(snapshot);
     expect(merged.unit_sales).not.toBeNull();
     expect(merged.unit_sales!.units[0].completion.month_offset).toBe(6);
+  });
+});
+
+describe('v13 migration -- spec §23.10', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+  interface FixtureFile {
+    name: string;
+    kind: string;
+    inputs?: Record<string, unknown>;
+  }
+
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file,
+    doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+
+  // Fixture K (kind 'sensitivity') carries no `inputs` of its own — excluded
+  // the same way golden-fixtures.test.ts's `appraisalFixtures` already
+  // excludes it. `migrateInputsToV12` refuses a v13 document by design, so
+  // any v13-NATIVE fixture would be excluded here too (via the version
+  // filter) — none exists yet; Task 3 authors the first one (fixture Y).
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+
+  const fixtures = fixtureDocs.filter(
+    ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) <= 12,
+  );
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(19);
+    // Task 3 adds the v13-native fixture Y. Red until then -- see the
+    // module docstring and the commit body.
+    const versionExcluded = fixtureDocs.filter(
+      ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 12,
+    );
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['y-due-diligence.json']);
+  });
+
+  // `calc_version` is constant for the whole engine run, not version-
+  // dependent. Unlike the v12 block above, `due_diligence` and
+  // `monitoring_statement` are BOTH compared: design §7 says the engine
+  // seeds the catalogue for a pre-v13 document too, so both arms agree and
+  // there is nothing to exclude.
+  const metricsSansExcluded = (metrics: object): Record<string, unknown> => {
+    const { calc_version: _cv, ...rest } = metrics as unknown as Record<string, unknown>;
+    return rest;
+  };
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v12 to v13`, () => {
+      const inputs = doc.inputs!;
+      const v12Run = runAppraisal(migrateInputsToV12(inputs));
+      const v13Run = runAppraisal(migrateInputsToV13(inputs));
+      expect(metricsSansExcluded(v13Run.metrics), `${file}: metrics moved`)
+        .toEqual(metricsSansExcluded(v12Run.metrics));
+      expect(v13Run.model, `${file}: a ledger figure moved`).toEqual(v12Run.model);
+      expect(v13Run.schedule, `${file}: a schedule figure moved`).toEqual(v12Run.schedule);
+    });
+  }
+
+  // Property 1 of three. Field strings may be renamed under a stated alias
+  // map; the SET of issues raised must not grow or shrink. No field renames
+  // this release; kept so a future rename has a declared home rather than a
+  // loosened assertion.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v12 validation issue has a v13 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v12Issues = new Set(
+        validateInputs(migrateInputsToV12(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v13Issues = new Set(
+        validateInputs(migrateInputsToV13(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v13Issues).toEqual(v12Issues);
+    });
+  }
+
+  // Property 2 and Property 3, the matched pair that stops Property 2 being
+  // vacuous — R12's §18.7 lesson, applied from the start again this release
+  // (see the v10/v11/v12 blocks above's own comments). The seed writes every
+  // entered item `unknown` with no evidence, so a migrated document has
+  // nothing for §23.9's rules to fire on; property 2 checks that stays true,
+  // and property 3 proves the rules can actually fire when a document's
+  // due-diligence block is incomplete. Written now, against field prefixes
+  // rather than named rules, since the rules themselves do not exist until
+  // Task 6 -- red until then; see the commit body.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v13-only rule stays silent on a migrated document (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV13(inputs));
+      expect(issues.filter((i) =>
+        i.field.startsWith('due_diligence')
+        || i.field.startsWith('cost_plan.qs')
+        || i.field.startsWith('cost_plan.packages['))).toEqual([]);
+    });
+  }
+
+  it('the v13-only rules can actually fire (property 3 of three)', () => {
+    // Control: a migrated document whose due-diligence items list has its
+    // first item deleted -- rule 1 (an incomplete catalogue) fires with
+    // field `due_diligence`.
+    const raw = migrateInputsToV13(
+      fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
+    ) as unknown as Record<string, unknown>;
+    (raw.due_diligence as { items: unknown[] }).items.shift();
+    const fields = new Set(validateInputs(migrateInputsToV13(raw)).map((i) => i.field));
+    expect(fields.has('due_diligence')).toBe(true);
+  });
+
+  it('writes the seed: 23 unknown items, ids dd-<code>, cost_plan.qs and every price_basis null', () => {
+    const v12 = migrateInputsToV12(fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>);
+    const v13 = migrateV12toV13(v12);
+    expect(v13.inputs_version).toBe(13);
+    expect(v13.due_diligence.source_record).toBeNull();
+    expect(v13.due_diligence.items.map((i) => i.code)).toEqual([...ENTERED_CODES]);
+    expect(v13.due_diligence.items.length).toBe(23);
+    for (const item of v13.due_diligence.items) {
+      expect(item.status).toBe('unknown');
+      expect(item.evidence).toBeNull();
+      expect(item.id).toBe(`dd-${item.code}`);
+      expect(item.label).toBe('');
+    }
+    expect(v13.cost_plan.qs).toBeNull();
+    for (const pkg of v13.cost_plan.packages) {
+      expect(pkg.price_basis).toBeNull();
+    }
+    const {
+      inputs_version: _a, due_diligence: _b, cost_plan: _c, ...restV13
+    } = v13;
+    const {
+      inputs_version: _d, cost_plan: _e, ...restV12
+    } = v12;
+    expect(restV13).toEqual(restV12);
+  });
+
+  it('actively overwrites a stray due_diligence block', () => {
+    const v12 = migrateInputsToV12(fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>);
+    const poisoned = { ...v12, due_diligence: { poison: true } } as unknown as CalculatorInputsV12;
+    const v13 = migrateV12toV13(poisoned);
+    expect(v13.due_diligence.items.map((i) => i.code)).toEqual([...ENTERED_CODES]);
+  });
+
+  it('refuses double migration and unrecognised versions', () => {
+    expect(() => migrateInputsToV13({ inputs_version: 14 })).toThrow(/unrecognised inputs_version 14/);
+    expect(() => migrateInputsToV13({ inputs_version: 13 })).toThrow(/fails the v13 structural check/);
+    const v13 = migrateInputsToV13(
+      fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
+    );
+    expect(() => migrateV12toV13(v13 as unknown as CalculatorInputsV12)).toThrow(/already a v13 document/);
   });
 });

@@ -15,10 +15,18 @@ import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
-  CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, EquitySource, FacilityTerms,
+  CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
+  EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
+import type { SourceRecord } from './model/due-diligence';
+// Imported from due-diligence.ts, NOT migrate.ts, for the same cycle reason
+// defaultCalculatorInputsV11's own docstring gives: migrate.ts imports THIS
+// module (defaultCalculatorInputsV2), so importing migrate.ts back here
+// would be circular. due-diligence.ts imports neither.
+import { defaultDueDiligence } from './model/due-diligence';
+import type { Project } from '../types';
 
 export const DEFAULT_ACQUISITION: AcquisitionInputs = {
   purchase_price_pence: 0,
@@ -516,4 +524,52 @@ export function defaultCalculatorInputsV12(project?: {
   id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
 }): CalculatorInputsV12 {
   return { ...defaultCalculatorInputsV11(project), inputs_version: 12, unit_sales: null };
+}
+
+/** R15 spec §23.5. The listing's STRUCTURED fields, copied at capture time. */
+export function captureSourceRecord(
+  project: Pick<Project, 'source_name' | 'source_url' | 'is_vacant' | 'tenure' | 'lease_years_remaining' | 'floor_area_sqm' | 'use_class' | 'epc_rating'>,
+  capturedAt: string,
+): SourceRecord {
+  return {
+    captured_at: capturedAt,
+    source_name: project.source_name, source_url: project.source_url,
+    is_vacant: project.is_vacant, tenure: project.tenure,
+    lease_years_remaining: project.lease_years_remaining, floor_area_sqm: project.floor_area_sqm,
+    use_class: project.use_class, epc_rating: project.epc_rating,
+  };
+}
+
+export type DefaultDocumentProject = {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+} & Partial<Pick<Project, 'source_name' | 'source_url' | 'is_vacant' | 'tenure' | 'lease_years_remaining' | 'use_class' | 'epc_rating'>>;
+
+/**
+ * R15 Task 13's cutover target. `now` is injected so tests are reproducible.
+ *
+ * `hasListing` (rather than checking each field individually) is the
+ * discriminator between "a brand-new calculator with no project" and "a
+ * calculator opened against a real listing" -- `is_vacant` is present (even
+ * if `null`) only in the latter case, since a bare `{id, price_pence,
+ * floor_area_sqm}` (the shape every OTHER defaultCalculatorInputsVN takes)
+ * never carries it.
+ */
+export function defaultCalculatorInputsV13(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV13 {
+  const v12 = defaultCalculatorInputsV12(project);
+  const dd = defaultDueDiligence();
+  const hasListing = project !== undefined && 'is_vacant' in project;
+  return {
+    ...v12,
+    inputs_version: 13,
+    cost_plan: { ...v12.cost_plan, qs: null, packages: v12.cost_plan.packages.map((p) => ({ ...p, price_basis: null })) },
+    due_diligence: hasListing
+      ? { ...dd, source_record: captureSourceRecord({
+          source_name: project!.source_name ?? null, source_url: project!.source_url ?? null,
+          is_vacant: project!.is_vacant ?? null, tenure: project!.tenure ?? 'unknown',
+          lease_years_remaining: project!.lease_years_remaining ?? null,
+          floor_area_sqm: project!.floor_area_sqm, use_class: project!.use_class ?? 'other',
+          epc_rating: project!.epc_rating ?? null,
+        }, (now ?? new Date()).toISOString()) }
+      : dd,
+  };
 }

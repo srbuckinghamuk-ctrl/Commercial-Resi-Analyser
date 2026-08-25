@@ -125,3 +125,20 @@ export const ENTERED_CODES: readonly DdItemCode[] =
   DD_CATALOGUE.filter((e) => !e.derived).map((e) => e.code as DdItemCode);
 export const DERIVED_CODES: readonly DdDerivedCode[] =
   DD_CATALOGUE.filter((e) => e.derived).map((e) => e.code as DdDerivedCode);
+
+/**
+ * R15 spec §23.10's seed: every ENTERED catalogue item `unknown`, ids
+ * deterministic (`dd-<code>`) so the migration is reproducible. Port of
+ * default_due_diligence. Re-exported (not merely used) from migrate.ts —
+ * see that module's own defaultDueDiligence import.
+ */
+export function defaultDueDiligence(): DueDiligenceInputs {
+  return {
+    source_record: null,
+    items: DD_CATALOGUE.filter((e) => !e.derived).map((e) => ({
+      id: `dd-${e.code}`, code: e.code as DdItemCode, category: e.category, label: '',
+      status: 'unknown', evidence: null, expiry_date: null, owner: '', due_date: null,
+      cost_impact_pence: null, programme_impact_months: null, action: '', notes: '',
+    })),
+  };
+}

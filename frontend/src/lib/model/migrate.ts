@@ -5,7 +5,7 @@ import type {
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
-  CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12,
+  CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -17,6 +17,9 @@ import { DEFAULT_AREA_BRIDGE } from './areas';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { costPlanFromLegacyCosts } from './cost-plan';
 import { defaultVatInputs } from './vat';
+import { defaultDueDiligence } from './due-diligence';
+
+export { defaultDueDiligence };
 
 function isV2(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV2 {
   return snapshot.inputs_version === 2 && typeof snapshot.finance === 'object' && snapshot.finance !== null
@@ -1365,4 +1368,103 @@ export function migrateInputsToV12(
     };
   }
   return migrateV11toV12(migrateInputsToV11(snapshot, project));
+}
+
+// --- Release 15 (calc 2.14.0 -> 2.15.0): the due-diligence evidence
+// schedule (spec §23.10) ------------------------------------------------
+
+/** Mirror of isV12: `inputs_version === 13` AND the `due_diligence` key. */
+export function isV13(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV13 {
+  return snapshot.inputs_version === 13 && 'due_diligence' in snapshot;
+}
+
+/**
+ * §23.10. Two additions: `due_diligence`, the seed above, and two inert
+ * cost-plan writes — `qs: null` and `price_basis: null` on every package.
+ * Every existing document is bit-identical in every output — the numeric
+ * identity gate (`migrate.test.ts`) is what proves it.
+ *
+ * Precondition: `v12` must not already be a v13 document — this guards
+ * against double-migration (idempotence), same as migrateV11toV12.
+ */
+export function migrateV12toV13(v12: CalculatorInputsV12): CalculatorInputsV13 {
+  if (isV13(v12 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV12toV13: input is already a v13 document');
+  }
+  return {
+    ...v12,
+    inputs_version: 13,
+    cost_plan: {
+      ...v12.cost_plan,
+      qs: null,
+      packages: v12.cost_plan.packages.map((p) => ({ ...p, price_basis: null })),
+    },
+    due_diligence: defaultDueDiligence(),
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V13: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+
+export function migrateInputsToV13(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV13 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V13.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV13: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V13.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 13 && !isV13(snapshot)) {
+    throw new Error(
+      'migrateInputsToV13: inputs_version is 13 but the document fails the v13 structural check '
+      + '(missing `due_diligence`) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV13(snapshot)) {
+    const v12Chain = migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(migrateV7toV8(migrateV6toV7(
+      migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project))))),
+    ))))));
+    const defaults = migrateV12toV13(v12Chain);
+    const saved = snapshot as unknown as Partial<CalculatorInputsV13>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 13,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      monitoring: saved.monitoring ?? null,
+      unit_sales: saved.unit_sales ?? null,
+      due_diligence: saved.due_diligence ?? defaults.due_diligence,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV12toV13(migrateInputsToV12(snapshot, project));
 }
