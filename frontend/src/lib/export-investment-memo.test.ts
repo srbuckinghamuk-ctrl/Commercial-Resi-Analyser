@@ -2301,10 +2301,21 @@ describe('§23.8 due diligence on the memo', () => {
     expect(noRecord).not.toContain('Listing record captured from');
   });
 
-  it('marks a derived row as derived', async () => {
-    const t = await ddMemoText(ddDoc());
-    expect(t).toContain('Equity sources');
-    expect(t).toContain('(derived)');
+  it('marks a derived row as derived, with the status the run graded it', async () => {
+    // Fix round 1 (M2). "Equity sources" + "(derived)" also print on the seed
+    // document, so the first version of this test proved only that the column
+    // existed. The row's STATUS is what the memo can only get by reading the
+    // row: fixture Y's one equity source is unconfirmed, which §23.4 grades
+    // unknown, and confirming that single field — the one input the derived
+    // row is graded from — turns the same row green. Neither assertion below
+    // passes on the other document.
+    //
+    // Not the seed twin: `seed: true` replaces the due-diligence items, not
+    // the funding block, so fixture Y's unconfirmed source survives it and the
+    // row is unknown there too.
+    expect(prose(await ddMemoText(ddDoc()))).toMatch(/Equity sources \(derived\) Unknown/);
+    expect(prose(await ddMemoText(ddDoc({ equityStatus: 'confirmed' }))))
+      .toMatch(/Equity sources \(derived\) Green/);
   });
 
   it('drops the nine-phrase risk text-match and keeps the register as the project log', async () => {
@@ -2382,9 +2393,16 @@ describe('§23.8 due diligence on the memo', () => {
     );
     expect(p).toMatch(/\(RIBA Stage 3, \d{1,2} \w{3} \d{4}, issued\); fixed-price coverage 46\.15%\./);
 
+    // Fix round 1 (I2): worded over ENTERED items, and the derived rows Y
+    // leaves unknown (equity_sources, lender_valuation) are stated rather
+    // than covered by silence — §9's schedule shows them as unknown, and a
+    // limitation claiming otherwise would contradict the section above it.
     const evidenced = prose(await ddMemoText(fullyEvidencedDoc()));
-    expect(evidenced).toContain('every due-diligence item is evidenced or marked not applicable');
-    expect(evidenced).not.toContain('due-diligence items remain unknown');
+    expect(evidenced).toContain(
+      'every entered due-diligence item is evidenced or marked not applicable; '
+      + '2 derived rows remain unknown (see Section 9)',
+    );
+    expect(evidenced).not.toContain('due-diligence items remain unknown;');
 
     // qs null: the pre-R15 detailed-mode sentence, unchanged.
     const noQs = prose(await ddMemoText(ddDoc({ qs: null })));
@@ -2406,7 +2424,11 @@ describe('§23.8 due diligence on the memo', () => {
       },
     })));
     expect(p).not.toContain('due-diligence items remain unknown');
-    expect(p).not.toContain('every due-diligence item is evidenced or marked not applicable');
-    expect(p).toContain('no due-diligence item is unknown, but 5 remain red or amber');
+    expect(p).not.toContain('every entered due-diligence item is evidenced');
+    expect(p).toContain(
+      'no entered due-diligence item is unknown, but 5 remain red or amber with an action '
+      + 'outstanding, and the cost and programme impacts stated against them are not in the '
+      + 'appraisal; 2 derived rows remain unknown (see Section 9).',
+    );
   });
 });

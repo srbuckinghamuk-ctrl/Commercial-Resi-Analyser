@@ -126,6 +126,14 @@ describe('the due-diligence derivation (§23.3-§23.4)', () => {
     expect(t.cost_impact_total_pence).toBe(2_550_000);
     expect(t.programme_impact_max_months).toBe(3);
     expect(t.unassessed_impact_count).toBe(1);
+    // Task 8 fix round 1 (I1/I2): the counts the report prints, published on
+    // the block. entered_total counts the 23 catalogue rows plus the custom
+    // row; assessed_count is red + amber; stated_impact_count is the subset of
+    // those whose cost the total above actually sums (structural_survey states
+    // neither impact, so it is excluded); derived_unknown_count is
+    // equity_sources + lender_valuation.
+    expect([t.entered_total, t.assessed_count, t.stated_impact_count, t.derived_unknown_count])
+      .toEqual([24, 5, 4, 2]);
   });
 
   it('row order is catalogue then custom, and derived rows name their source', () => {
@@ -162,6 +170,9 @@ describe('the due-diligence derivation (§23.3-§23.4)', () => {
     const r2 = computeFor(ddDoc({ impacts: { structural_survey: [100_000, 0] } }));
     expect(r2.totals.cost_impact_total_pence).toBe(2_650_000);
     expect(r2.totals.unassessed_impact_count).toBe(0);
+    // ... and moves stated_impact_count with it: the count follows the SUM's
+    // own membership, not the assessed count (5 assessed, now all 5 stated).
+    expect([r2.totals.assessed_count, r2.totals.stated_impact_count]).toEqual([5, 5]);
   });
 
   const rowOf = (doc: Parameters<typeof computeFor>[0], code: string): DdRow =>

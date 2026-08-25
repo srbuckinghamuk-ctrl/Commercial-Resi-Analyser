@@ -87,6 +87,13 @@ def test_category_counts_match_the_hand_table():
     assert t.cost_impact_total_pence == 2_550_000
     assert t.programme_impact_max_months == 3
     assert t.unassessed_impact_count == 1
+    # Task 8 fix round 1 (I1/I2): the counts the report prints, published on the
+    # block. entered_total counts the 23 catalogue rows plus the custom row;
+    # assessed_count is red + amber; stated_impact_count is the subset of those
+    # whose cost the total above actually sums (structural_survey states
+    # neither impact, so it is excluded); derived_unknown_count is
+    # equity_sources + lender_valuation.
+    assert (t.entered_total, t.assessed_count, t.stated_impact_count, t.derived_unknown_count) == (24, 5, 4, 2)
 
 
 def test_row_order_is_catalogue_then_custom_and_derived_rows_name_their_source():
@@ -114,6 +121,9 @@ def test_impact_totals_sum_assessed_red_amber_only_and_max_months():
     # Assessing structural_survey moves the total and clears the unassessed count.
     r2 = compute(dd_doc({"impacts": {"structural_survey": (100_000, 0)}}))
     assert r2.totals.cost_impact_total_pence == 2_650_000 and r2.totals.unassessed_impact_count == 0
+    # ... and moves stated_impact_count with it: the count follows the SUM's own
+    # membership, not the assessed count (5 assessed, now all 5 stated).
+    assert (r2.totals.assessed_count, r2.totals.stated_impact_count) == (5, 5)
 
 
 def test_derived_row_mapping_each_status_by_one_field():

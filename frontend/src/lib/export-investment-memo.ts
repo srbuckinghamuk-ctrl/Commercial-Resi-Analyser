@@ -529,12 +529,13 @@ export function generateInvestmentMemo(
   // category counts, the totals, `addressed_pct`, the impact total, the
   // programme maximum and the unassessed count are all fields on this block.
   const dd = metrics.due_diligence;
+  // Task 8 fix round 1 (I1). EVERY count this file prints is a field on
+  // `totals` — `entered_total`, `assessed_count`, `stated_impact_count` and
+  // `derived_unknown_count` were added to both engines' result blocks for
+  // exactly this reason. Nothing here filters `rows` to arrive at a number;
+  // the flag message's "N of M entered items unknown" reads the same
+  // `entered_total`, so the banner and §13's limitation cannot disagree.
   const ddTotals = dd.totals;
-  // The one partition the block does not carry as a number. Identical to the
-  // filter `dueDiligenceFlags` (model/due-diligence.ts) applies for its own
-  // "N of M entered items unknown" message, so the flag banner and §13's
-  // limitation cannot print two different denominators for the same document.
-  const ddEnteredRows = dd.rows.filter((r) => r.kind !== 'derived');
   const ddRow = (code: string): DdRow | null => dd.rows.find((r) => r.code === code) ?? null;
   // `fmtPctSafe` (module-level, one decimal) would silently round
   // `pre_sold.pct` (computed to two decimals by `pct()`, model/pct.ts —
@@ -2402,11 +2403,12 @@ export function generateInvestmentMemo(
   // was.
   //
   // Every figure is read off `metrics.due_diligence` (see the `dd` local at the
-  // top of this function). The only local arithmetic is the count of assessed
-  // rows whose impacts are stated — red plus amber less the block's own
-  // `unassessed_impact_count` — which is a presentational count of two
-  // already-computed counts, in the same family as this file's £/sq ft
-  // conversions, not a re-derivation of any figure.
+  // top of this function) — including every count. Fix round 1 (I1): the three
+  // counts this section prints were computed here from `rows` in the first
+  // pass, which is a second implementation of a count in a report generator
+  // (spec §11.9); they are now `totals.entered_total`,
+  // `totals.assessed_count` and `totals.stated_impact_count`, computed once,
+  // in both engines, beside every other total.
   y = sectionTitle(y, 9, 'Due Diligence and Risk');
 
   y = bodyText(
@@ -2414,7 +2416,7 @@ export function generateInvestmentMemo(
     `The evidence schedule carries ${ddTotals.total} items: ${ddTotals.red} red, `
     + `${ddTotals.amber} amber, ${ddTotals.green} green, ${ddTotals.unknown} unknown, `
     + `${ddTotals.not_applicable} not applicable. `
-    + `${fmtPctExactSafe(ddTotals.addressed_pct)} of the ${ddEnteredRows.length} entered items are `
+    + `${fmtPctExactSafe(ddTotals.addressed_pct)} of the ${ddTotals.entered_total} entered items are `
     + `addressed — evidenced, or marked not applicable with a reason — and `
     + `${ddTotals.entered_unknown_count} remain unknown. An unknown item is never treated as green `
     // Not "the five derived rows": the count belongs to the catalogue
@@ -2447,14 +2449,12 @@ export function generateInvestmentMemo(
   });
   y = lastAutoTableFinalY(doc) + 6;
 
-  const ddAssessedCount = ddTotals.red + ddTotals.amber;
-  if (ddAssessedCount > 0) {
-    const statedCount = ddAssessedCount - ddTotals.unassessed_impact_count;
+  if (ddTotals.assessed_count > 0) {
     y = bodyText(
       y,
-      `The ${ddAssessedCount} red and amber items carry a stated cost impact `
-      + `${fmt(ddTotals.cost_impact_total_pence)} across ${statedCount} `
-      + `item${statedCount === 1 ? '' : 's'}, `
+      `The ${ddTotals.assessed_count} red and amber items carry a stated cost impact `
+      + `${fmt(ddTotals.cost_impact_total_pence)} across ${ddTotals.stated_impact_count} `
+      + `item${ddTotals.stated_impact_count === 1 ? '' : 's'}, `
       + `${ddTotals.programme_impact_max_months === null
           ? 'no stated programme impact'
           : `at least ${ddTotals.programme_impact_max_months} `
@@ -3201,7 +3201,9 @@ export function generateInvestmentMemo(
   // catalogue labels (the same labels §9's schedule prints, so a reader can
   // find each one in the table above).
   if (ddTotals.entered_unknown_count > 0) {
-    const unknownLabels = ddEnteredRows.filter((r) => r.status === 'unknown').map((r) => r.label);
+    const unknownLabels = dd.rows
+      .filter((r) => r.kind !== 'derived' && r.status === 'unknown')
+      .map((r) => r.label);
     // Named individually up to a bound, then counted. An unexamined document
     // has every entered item unknown, and spelling all 23 labels out turns one
     // line of a numbered checklist into five — which is how this line pushed
@@ -3277,6 +3279,48 @@ export function generateInvestmentMemo(
   );
 
   y = subHeading(y, 'What the figures rest on');
+  /**
+   * R15 (spec §23.8/§13.4). The sentence this replaces said due diligence was
+   * narrative and a free-form risk register with no evidenced schedule — false
+   * the moment §9's schedule shipped, which is the same stale-disclosure fault
+   * R8, R9 and R10 each fixed in this very list.
+   *
+   * Three arms, because there are three states and they are not
+   * interchangeable: entered items still unknown, entered items assessed but
+   * open, and a schedule with nothing left to do. Collapsing the middle arm
+   * into either neighbour would put a false statement in a lender document —
+   * "every item is evidenced" over an amber row with no evidence, or "N remain
+   * unknown" where none do.
+   *
+   * Fix round 1 (I2): every arm is worded over ENTERED items, and a derived
+   * row left unknown is stated separately rather than covered by silence. A
+   * document can have nothing entered outstanding and still be missing a
+   * lender valuation or an equity confirmation — §9's schedule shows those
+   * rows as unknown, and before this the limitation flatly contradicted it.
+   */
+  function ddLimitation(): string {
+    const opening = 'Due diligence is recorded as an evidenced schedule with status, owner and '
+      + 'date (Section 9)';
+    const derivedTail = ddTotals.derived_unknown_count === 0
+      ? ''
+      : `; ${ddTotals.derived_unknown_count} derived `
+        + `${ddTotals.derived_unknown_count === 1 ? 'row remains' : 'rows remain'} unknown `
+        + '(see Section 9)';
+    if (ddTotals.entered_unknown_count > 0) {
+      return `${opening}, but ${ddTotals.entered_unknown_count} of ${ddTotals.entered_total} `
+        + 'due-diligence items remain unknown; an unknown item is never treated as green, and '
+        + 'each one must be evidenced before the position stated here is relied on.';
+    }
+    if (ddTotals.assessed_count > 0) {
+      return `${opening}: no entered due-diligence item is unknown, but `
+        + `${ddTotals.assessed_count} remain red or amber with an action outstanding, and the `
+        + `cost and programme impacts stated against them are not in the appraisal${derivedTail}.`;
+    }
+    return `${opening}: every entered due-diligence item is evidenced or marked not `
+      + `applicable${derivedTail}. The schedule records what the sponsor holds; it is not a `
+      + 'legal, technical or valuation opinion on what those documents say.';
+  }
+
   const limitations: string[] = [
     // R10 Task 13 fix round 1 (F3, spec §16.6/§16.9). In detailed mode
     // construction cost IS a priced package schedule, so the pre-R10 sentence
@@ -3344,30 +3388,8 @@ export function generateInvestmentMemo(
     bridge.developed_gia_sqm > 0
       ? 'Areas rest on the entered area schedule (Section 3), reconciled from existing GIA through to net internal area; see that schedule for every entered and derived line and the stated basis of the construction cost area.'
       : 'No area schedule has been entered for this appraisal. Areas are taken from the unit schedule and the entered construction area only, with no existing-to-developed reconciliation to check them against.',
-    // R15 (spec §23.8/§13.4). The sentence this replaces said due diligence
-    // was narrative and a free-form risk register with no evidenced schedule —
-    // false the moment §9's schedule shipped, which is the same
-    // stale-disclosure fault R8, R9 and R10 each fixed in this very list. What
-    // replaces it is conditioned on the document, and has three arms because
-    // there are three states and they are not interchangeable: items still
-    // unknown, items assessed but open, and a schedule with nothing left to
-    // do. Collapsing the middle arm into either neighbour would put a false
-    // statement in a lender document — "every item is evidenced" over an amber
-    // row with no evidence, or "N remain unknown" where none do.
-    ddTotals.entered_unknown_count > 0
-      ? `Due diligence is recorded as an evidenced schedule with status, owner and date (Section 9), `
-        + `but ${ddTotals.entered_unknown_count} of ${ddEnteredRows.length} due-diligence items `
-        + 'remain unknown; an unknown item is never treated as green, and each one must be '
-        + 'evidenced before the position stated here is relied on.'
-      : ddAssessedCount > 0
-        ? 'Due diligence is recorded as an evidenced schedule with status, owner and date '
-          + `(Section 9): no due-diligence item is unknown, but ${ddAssessedCount} remain red or `
-          + 'amber with an action outstanding, and the cost and programme impacts stated against '
-          + 'them are not in the appraisal.'
-        : 'Due diligence is recorded as an evidenced schedule with status, owner and date '
-          + '(Section 9): every due-diligence item is evidenced or marked not applicable. The '
-          + 'schedule records what the sponsor holds; it is not a legal, technical or valuation '
-          + 'opinion on what those documents say.',
+    // R15 (spec §23.8/§13.4). See `ddLimitation` above.
+    ddLimitation(),
   ];
   if (metrics.lender_gdv_pence === null) {
     limitations.push('No lender-underwritten valuation has been provided. Every loan-to-value figure on a lender basis is therefore unavailable rather than assumed from the developer GDV.');

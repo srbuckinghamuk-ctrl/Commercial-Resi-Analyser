@@ -193,17 +193,27 @@ describe('investment memorandum release gate', () => {
 
     it('never claims a full cost plan', async () => {
       const { info, run } = await report(makeInputs());
-      const text = documentText(info).toLowerCase();
       // R15 (Task 8): the corpus is no longer headline-mode throughout — the
       // two v13 routes carry a priced package schedule — so the heading is
       // asserted against the run's OWN mode rather than against the
       // assumption that every route is a rate x area estimate. What the check
       // is really about is unchanged: neither mode may call itself a full
       // cost plan.
-      expect(text).toContain(
-        run.metrics.cost_plan.mode === 'detailed' ? 'detailed cost plan' : 'headline cost estimate',
+      //
+      // Fix round 1 (M1): asserted as the §5 SUB-HEADING, drawn at 11 pt bold,
+      // not as a case-folded substring of the whole document — §13's
+      // limitation sentence contains the words "a detailed cost plan" on every
+      // detailed route, so the lower-cased document text was satisfied whether
+      // or not the heading was ever drawn.
+      const expectedHeading = run.metrics.cost_plan.mode === 'detailed'
+        ? 'Detailed Cost Plan'
+        : 'Headline Cost Estimate';
+      const headings = info.pages.flatMap(
+        (page) => bodyItems(page).filter((i) => i.sizePt >= 11).map((i) => i.text),
       );
-      expect(text).not.toContain('full cost plan');
+      expect(headings.some((h) => h.startsWith(expectedHeading)), `§5 heading "${expectedHeading}"`)
+        .toBe(true);
+      expect(documentText(info).toLowerCase()).not.toContain('full cost plan');
     });
 
     // R14 (Task 12, spec §9/§20.4). Every ROUTES fixture carries
@@ -1005,8 +1015,16 @@ describe('R15 — the due-diligence gate on the memo (spec §23.7/§23.8)', () =
     const { info } = await report(inputs, { provenance: prov });
     expect(info.pages.flatMap(watermarkTexts)).toEqual([]);
     expect(documentText(info)).toContain('FINAL');
+    // Fix round 1 (I2): worded over ENTERED items, with the derived row this
+    // document still leaves unknown stated rather than covered by silence.
+    // ONE, not two: this fixture confirms `equity_sources[0]`, so the only
+    // derived row left unknown is `lender_valuation` — a document can have
+    // nothing entered outstanding and still carry no lender valuation, which
+    // is exactly the case the old wording contradicted §9 about.
+    expect(run.metrics.due_diligence.totals.derived_unknown_count).toBe(1);
     expect(documentProse(info)).toContain(
-      'every due-diligence item is evidenced or marked not applicable',
+      'every entered due-diligence item is evidenced or marked not applicable; '
+      + '1 derived row remains unknown (see Section 9)',
     );
   });
 

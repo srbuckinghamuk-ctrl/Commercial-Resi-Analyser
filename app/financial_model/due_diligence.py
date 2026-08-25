@@ -170,6 +170,23 @@ class DdTotals:
     cost_impact_total_pence: int = 0
     programme_impact_max_months: int | None = None
     unassessed_impact_count: int = 0
+    # R15 Task 8 fix round 1 (I1). The three counts the REPORT prints, published
+    # here rather than counted by each surface: a report generator that filters
+    # `rows` itself is a second implementation of a count (spec Sec 11.9), and
+    # the two engines' reports would be free to disagree about the same
+    # document. `entered_total` is also the denominator of the flag message
+    # ("N of M entered items unknown"), so message and memo read one field.
+    entered_total: int = 0
+    # Red plus amber over ALL rows -- the rows carrying an assessment.
+    assessed_count: int = 0
+    # Assessed rows with a NON-NULL cost_impact_pence: exactly the set
+    # `cost_impact_total_pence` sums, so "stated cost impact X across N items"
+    # counts the rows the total is made of.
+    stated_impact_count: int = 0
+    # I2. Unknown over DERIVED rows. The report's Sec 13 limitation is worded
+    # over entered items, and a derived row left unknown must not be silently
+    # covered by "every item is evidenced" -- so it is stated separately.
+    derived_unknown_count: int = 0
 
 
 @dataclass
@@ -326,6 +343,14 @@ def compute_due_diligence(
     totals.unassessed_impact_count = sum(
         1 for r in assessed if r.cost_impact_pence is None or r.programme_impact_months is None
     )
+    # R15 Task 8 fix round 1 (I1/I2). Counted here, where every other total is,
+    # from the same `rows`/`entered_rows`/`assessed` partitions above.
+    totals.entered_total = len(entered_rows)
+    totals.assessed_count = len(assessed)
+    totals.stated_impact_count = sum(1 for r in assessed if r.cost_impact_pence is not None)
+    totals.derived_unknown_count = sum(
+        1 for r in rows if r.kind == "derived" and r.status == "unknown"
+    )
 
     conflicts: list[DdSourceConflict] = []
     if source_record is not None:
@@ -360,7 +385,10 @@ def due_diligence_flags(result: DueDiligenceResult, cost_plan: CostPlanResult) -
     by the engine modules it reads results from."""
     out: list[ModelFlag] = []
     t = result.totals
-    entered = sum(1 for r in result.rows if r.kind != "derived")
+    # R15 Task 8 fix round 1 (I1): the denominator is the published count, not
+    # a second partition of `rows` taken here -- the memo's Sec 13 limitation
+    # prints the same "N of M" and now reads the identical field.
+    entered = t.entered_total
     if t.entered_unknown_count > 0:
         out.append(ModelFlag(
             code="due_diligence_unknown", severity="amber", month=None, amount_pence=None,

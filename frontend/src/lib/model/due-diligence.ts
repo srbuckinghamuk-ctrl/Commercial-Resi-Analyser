@@ -224,6 +224,23 @@ export interface DdTotals {
   cost_impact_total_pence: number;
   programme_impact_max_months: number | null;
   unassessed_impact_count: number;
+  /** R15 Task 8 fix round 1 (I1). The three counts the REPORT prints, published
+   *  here rather than counted by each surface: a report generator that filters
+   *  `rows` itself is a second implementation of a count (spec §11.9), and the
+   *  two engines' reports would be free to disagree about the same document.
+   *  `entered_total` is also the denominator of the flag message ("N of M
+   *  entered items unknown"), so message and memo read one field. */
+  entered_total: number;
+  /** Red plus amber over ALL rows — the rows carrying an assessment. */
+  assessed_count: number;
+  /** Assessed rows with a NON-NULL `cost_impact_pence`: exactly the set
+   *  `cost_impact_total_pence` sums, so "stated cost impact X across N items"
+   *  counts the rows the total is made of. */
+  stated_impact_count: number;
+  /** I2. Unknown over DERIVED rows. The report's §13 limitation is worded over
+   *  entered items, and a derived row left unknown must not be silently covered
+   *  by "every item is evidenced" — so it is stated separately. */
+  derived_unknown_count: number;
 }
 
 export interface DdSourceConflict {
@@ -376,6 +393,7 @@ export function computeDueDiligence(
     red: 0, amber: 0, green: 0, unknown: 0, not_applicable: 0, total: 0,
     entered_unknown_count: 0, addressed_pct: null, cost_impact_total_pence: 0,
     programme_impact_max_months: null, unassessed_impact_count: 0,
+    entered_total: 0, assessed_count: 0, stated_impact_count: 0, derived_unknown_count: 0,
   };
   const enteredRows = rows.filter((r) => r.kind !== 'derived');
   for (const r of rows) {
@@ -398,6 +416,14 @@ export function computeDueDiligence(
   totals.programme_impact_max_months = months.length > 0 ? Math.max(...months) : null;
   totals.unassessed_impact_count = assessed.filter(
     (r) => r.cost_impact_pence == null || r.programme_impact_months == null,
+  ).length;
+  // R15 Task 8 fix round 1 (I1/I2). Counted here, where every other total is,
+  // from the same `rows`/`enteredRows`/`assessed` partitions above.
+  totals.entered_total = enteredRows.length;
+  totals.assessed_count = assessed.length;
+  totals.stated_impact_count = assessed.filter((r) => r.cost_impact_pence != null).length;
+  totals.derived_unknown_count = rows.filter(
+    (r) => r.kind === 'derived' && r.status === 'unknown',
   ).length;
 
   const conflicts: DdSourceConflict[] = [];
@@ -444,7 +470,10 @@ export function computeDueDiligence(
 export function dueDiligenceFlags(result: DueDiligenceResult, costPlan: CostPlanResult): ModelFlag[] {
   const out: ModelFlag[] = [];
   const t = result.totals;
-  const entered = result.rows.filter((r) => r.kind !== 'derived').length;
+  // R15 Task 8 fix round 1 (I1): the denominator is the published count, not a
+  // second partition of `rows` taken here — the memo's §13 limitation prints
+  // the same "N of M" and now reads the identical field.
+  const entered = t.entered_total;
   if (t.entered_unknown_count > 0) {
     out.push({
       code: 'due_diligence_unknown', severity: 'amber', month: null, amount_pence: null,
