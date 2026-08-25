@@ -1,16 +1,41 @@
 import type {
-  CalculatorInputsV12, AppraisalRun, AreaBasis,
+  CalculatorInputsV12, CalculatorInputsV13, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
-  VatOverride, RecoveryBasis,
+  VatOverride, RecoveryBasis, QsProvenance, PriceBasis, ValidationIssue,
 } from '../../lib/model';
-import { COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES } from '../../lib/model';
-import { penceToPounds, penceToPoundsExact, humanise } from '../../lib/format';
+import {
+  COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES, QS_STAGES, QS_STATUSES, PRICE_BASIS_VALUES,
+} from '../../lib/model';
+import { penceToPounds, penceToPoundsExact, humanise, formatPct } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV12;
+  /** R15 Task 10 (spec §23.6). Widened the same way `DueDiligencePage` was
+   *  (Task 9): until Task 13's cutover the calculator's state is still a
+   *  `CalculatorInputsV12`, which has no `due_diligence` key, but this page
+   *  reads nothing from that block -- only `cost_plan.qs` and each package's
+   *  `price_basis`, both already shared by V12 and V13's identical
+   *  `CostPlanInputs`. The union just lets a V13 document (e.g. a
+   *  due-diligence fixture) be passed straight through in a test without a
+   *  cast. */
+  inputs: CalculatorInputsV12 | CalculatorInputsV13;
   onChange: (partial: Partial<CalculatorInputsV12>) => void;
   run: AppraisalRun;
 }
+
+const PRICE_BASIS_LABEL: Record<PriceBasis, string> = {
+  fixed_price: 'Fixed price',
+  provisional_sum: 'Provisional sum',
+  estimate: 'Estimate',
+};
+
+/** R15 spec §23.6. Unchecking "No QS recorded" seeds this record rather than
+ *  an empty object with arbitrary defaults -- `order_of_cost` and `draft` are
+ *  the same first-stage, least-committed values `QS_STAGES[0]`/`QS_STATUSES[0]`
+ *  already name, spelled out so the seed cannot silently drift from the enum
+ *  order (spec's own worked example asserts this literal shape). */
+const DEFAULT_QS: QsProvenance = {
+  source: '', stage: 'order_of_cost', date: '', status: 'draft', base_date: '',
+};
 
 const PACKAGE_CODE_LABEL: Record<CostPackageCode, string> = Object.fromEntries(
   COST_PACKAGE_CODES.map((code) => [code, humanise(code)]),
@@ -253,6 +278,28 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
     onChange({ cost_plan: { ...costPlan, mode } });
   };
 
+  // R15 spec §23.6. The checkbox reads `qs === null` directly (checked ⇔
+  // no QS recorded); unchecking it seeds `DEFAULT_QS` and checking it clears
+  // back to `null` -- the same null/seed shape `handleModeChange`'s package
+  // conversion above and `VatOverrideControl`'s add/clear pair already use,
+  // never a zeroed-but-present object masquerading as "not recorded".
+  const setNoQsRecorded = (noQsRecorded: boolean) => {
+    onChange({ cost_plan: { ...costPlan, qs: noQsRecorded ? null : DEFAULT_QS } });
+  };
+
+  const updateQs = (partial: Partial<QsProvenance>) => {
+    if (costPlan.qs === null) return;
+    onChange({ cost_plan: { ...costPlan, qs: { ...costPlan.qs, ...partial } } });
+  };
+
+  // Rendered, never re-derived: `validateDueDiligence`'s rules 8/9 (spec
+  // §23.6) own the message text -- this only selects the ones that belong to
+  // the QS record, the same pattern AcquisitionPage's `overrideReasonIssue`
+  // and MonitoringEditor's `issuesFor` already use.
+  const qsIssues: ValidationIssue[] = run.validation.filter(
+    (i) => i.field === 'cost_plan.qs' || i.field.startsWith('cost_plan.qs.'),
+  );
+
   const updatePackage = (id: string, partial: Partial<CostPackage>) => {
     onChange({
       cost_plan: {
@@ -462,6 +509,76 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
         </>
       ) : (
         <>
+          {/* R15 spec §23.6. QS provenance is a single record on the plan
+              (not per-package) -- who priced it, at what RIBA stage, when,
+              its draft/issued/reviewed status, and the base date R15b's
+              inflation model will anchor to. Validation rule 8 rejects it
+              outright on a headline plan, but this card only ever renders
+              inside the detailed-mode block, so that arm is unreachable from
+              here. */}
+          <div style={{ marginTop: 24, marginBottom: 20, padding: 14, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
+            <h4 style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>QS provenance</h4>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94a3b8', fontSize: 13, marginBottom: 10 }}>
+              <input
+                type="checkbox"
+                checked={costPlan.qs === null}
+                onChange={(e) => setNoQsRecorded(e.target.checked)}
+              />
+              No QS recorded
+            </label>
+            {costPlan.qs !== null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  aria-label="QS source"
+                  placeholder="Source"
+                  value={costPlan.qs.source}
+                  onChange={(e) => updateQs({ source: e.target.value })}
+                  style={{ width: 200, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                />
+                <select
+                  aria-label="QS stage"
+                  value={costPlan.qs.stage}
+                  onChange={(e) => updateQs({ stage: e.target.value as QsProvenance['stage'] })}
+                  style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                >
+                  {QS_STAGES.map((stage) => <option key={stage} value={stage}>{humanise(stage)}</option>)}
+                </select>
+                <select
+                  aria-label="QS status"
+                  value={costPlan.qs.status}
+                  onChange={(e) => updateQs({ status: e.target.value as QsProvenance['status'] })}
+                  style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                >
+                  {QS_STATUSES.map((status) => <option key={status} value={status}>{humanise(status)}</option>)}
+                </select>
+                <div>
+                  <label style={{ color: '#64748b', fontSize: 11, display: 'block', marginBottom: 2 }}>Date</label>
+                  <input
+                    type="date"
+                    aria-label="QS date"
+                    value={costPlan.qs.date}
+                    onChange={(e) => updateQs({ date: e.target.value })}
+                    style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ color: '#64748b', fontSize: 11, display: 'block', marginBottom: 2 }}>Base date</label>
+                  <input
+                    type="date"
+                    aria-label="QS base date"
+                    value={costPlan.qs.base_date}
+                    onChange={(e) => updateQs({ base_date: e.target.value })}
+                    style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                  />
+                </div>
+              </div>
+            )}
+            {qsIssues.map((issue, i) => (
+              <div key={`${issue.field}-${i}`} style={{ color: '#f87171', fontSize: 12, marginTop: 6 }}>{issue.message}</div>
+            ))}
+          </div>
+
           {/* R10 §3.2/§6. The compact package grid: code, label, amount,
               contingency class, lender-eligible, remove; plus add-row. */}
           <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Packages</h4>
@@ -531,6 +648,27 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                   />
                   Lender-eligible
                 </label>
+                {/* R15 spec §23.6. `null` (the migration default and every
+                    freshly added row's seed) reads back as the empty-string
+                    sentinel a <select> can hold; writing it back through
+                    converts it to `null` again, never an empty-string value
+                    that would fail validation rule 9. */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ color: '#64748b', fontSize: 11 }}>Price basis</span>
+                  <select
+                    aria-label="Package price basis"
+                    value={pkg.price_basis ?? ''}
+                    onChange={(e) => updatePackage(pkg.id, {
+                      price_basis: e.target.value === '' ? null : e.target.value as PriceBasis,
+                    })}
+                    style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                  >
+                    <option value="">Unset</option>
+                    {PRICE_BASIS_VALUES.map((basis) => (
+                      <option key={basis} value={basis}>{PRICE_BASIS_LABEL[basis]}</option>
+                    ))}
+                  </select>
+                </div>
                 <VatOverrideControl
                   label={pkg.label !== '' ? pkg.label : pkg.code}
                   // eslint-disable-next-line no-restricted-syntax -- legitimate write-side override editor (spec §17.2 rule 3); never compares against the category row, so it does not reimplement resolveVatTreatment's precedence -- see VatOverrideControl's doc comment above
@@ -553,6 +691,19 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
           >
             + Add package
           </button>
+
+          {/* R15 spec §23.6. Read verbatim off `run.metrics.cost_plan.price_basis`
+              -- no arithmetic here. `null` only in headline mode (cost-plan.ts),
+              and this whole block is already inside the detailed-mode arm, so a
+              non-null check would be redundant; kept anyway as the defensive
+              read every other `result.*` access on this page uses. */}
+          {result.price_basis && (
+            <p style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+              {`Fixed-price coverage ${formatPct(result.price_basis.fixed_price_coverage_pct, 2)} · `
+                + `provisional sums ${formatPct(result.price_basis.provisional_sums_pct, 2)} · `
+                + `unclassified ${penceToPounds(result.price_basis.unclassified_pence)}`}
+            </p>
+          )}
         </>
       )}
 

@@ -6,6 +6,7 @@ import type { AppraisalRun, CalculatorInputsV12, CostPackage, FeeLine } from '..
 import { defaultCalculatorInputsV12 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
+import { ddDoc, QS } from '../../lib/model/__fixtures__/due-diligence-docs';
 
 /**
  * R9 Task 10 fix round 1. The riskiest wiring point this page added: which
@@ -595,5 +596,162 @@ describe('ConversionCostsPage — per-line VAT override control (spec §17.2 rul
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText(/vat override/i)).not.toBeInTheDocument();
+  });
+});
+
+// R15 Task 10, spec §23.6. QS provenance card and per-package price basis.
+describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
+  it('shows "No QS recorded" checked when cost_plan.qs is null', () => {
+    const inputs = detailedInputs(); // qs: null
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.getByLabelText('No QS recorded')).toBeChecked();
+    expect(screen.queryByLabelText('QS source')).not.toBeInTheDocument();
+  });
+
+  it('shows "No QS recorded" unchecked, and the editable fields, when cost_plan.qs is set', () => {
+    const inputs: CalculatorInputsV12 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.getByLabelText('No QS recorded')).not.toBeChecked();
+    expect(screen.getByLabelText('QS source')).toHaveValue('Gardiner & Theobald');
+  });
+
+  it('unchecking "No QS recorded" writes the seeded QS record', () => {
+    const inputs = detailedInputs(); // qs: null
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByLabelText('No QS recorded'));
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: {
+        ...inputs.cost_plan,
+        qs: { source: '', stage: 'order_of_cost', date: '', status: 'draft', base_date: '' },
+      },
+    });
+  });
+
+  it('checking "No QS recorded" writes qs: null', () => {
+    const inputs: CalculatorInputsV12 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.click(screen.getByLabelText('No QS recorded'));
+
+    expect(onChange).toHaveBeenCalledWith({ cost_plan: { ...inputs.cost_plan, qs: null } });
+  });
+
+  it('editing the QS source writes through, leaving the other QS fields untouched', () => {
+    const inputs: CalculatorInputsV12 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const run = runAppraisal(inputs);
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
+
+    fireEvent.change(screen.getByLabelText('QS source'), { target: { value: 'Turner & Townsend' } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: { ...inputs.cost_plan, qs: { ...QS, source: 'Turner & Townsend' } },
+    });
+  });
+
+  it('shows the rule-8 issue text when run.validation carries it', () => {
+    const inputs: CalculatorInputsV12 = {
+      ...detailedInputs(),
+      cost_plan: { ...detailedInputs().cost_plan, qs: { ...QS, source: '' } },
+    };
+    const run = runAppraisal(inputs);
+    expect(run.validation.some((i) => i.field === 'cost_plan.qs.source')).toBe(true);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.getByText('QS provenance needs a source.')).toBeInTheDocument();
+  });
+
+  it('shows no rule-8 issue text on a valid QS record', () => {
+    const inputs: CalculatorInputsV12 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.queryByText('QS provenance needs a source.')).not.toBeInTheDocument();
+  });
+});
+
+describe('ConversionCostsPage — per-package price basis (spec 23.6)', () => {
+  it('lists Unset / Fixed price / Provisional sum / Estimate, selected at Unset for a null price_basis', () => {
+    const inputs = detailedInputs(); // both packages price_basis: null
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package price basis' });
+    expect(selects).toHaveLength(2);
+    const options = within(selects[0]).getAllByRole('option').map((o) => o.textContent);
+    expect(options).toEqual(['Unset', 'Fixed price', 'Provisional sum', 'Estimate']);
+    expect(selects[0]).toHaveValue('');
+  });
+
+  it('changing a price basis select writes price_basis on that package only', () => {
+    const inputs = detailedInputs(); // p1, p2, both price_basis: null
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package price basis' });
+    fireEvent.change(selects[0], { target: { value: 'fixed_price' } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: {
+        ...inputs.cost_plan,
+        packages: [
+          { ...inputs.cost_plan.packages[0], price_basis: 'fixed_price' },
+          inputs.cost_plan.packages[1],
+        ],
+      },
+    });
+  });
+
+  it('writes price_basis: null when switching a select back to Unset', () => {
+    const inputs = detailedInputs();
+    inputs.cost_plan.packages[0].price_basis = 'estimate';
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package price basis' });
+    fireEvent.change(selects[0], { target: { value: '' } });
+
+    const updated = (onChange.mock.calls[0][0].cost_plan.packages as CostPackage[])
+      .find((p) => p.id === 'p1')!;
+    expect(updated.price_basis).toBeNull();
+  });
+
+  it('newPackage() seeds price_basis: null', () => {
+    const inputs = detailedInputs();
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Add package' }));
+
+    const packages = onChange.mock.calls[0][0].cost_plan.packages as CostPackage[];
+    expect(packages[packages.length - 1].price_basis).toBeNull();
+  });
+});
+
+// R15 Task 10, spec §23.6. Fixture Y: detailed mode, three packages tagged
+// fixed_price (12,000,000p) / provisional_sum (8,000,000p) / null
+// (6,000,000p, unclassified), base build 26,000,000p -- 46.15% / 30.77% /
+// £60,000, exactly as `PriceBasisSummary` computes it (cost-plan.ts).
+describe('ConversionCostsPage — price basis coverage line (spec 23.6)', () => {
+  it('prints the coverage line from run.metrics.cost_plan.price_basis on fixture Y', () => {
+    const inputs = ddDoc();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.getByText(
+      'Fixed-price coverage 46.15% · provisional sums 30.77% · unclassified £60,000',
+    )).toBeInTheDocument();
+  });
+
+  it('is absent in headline mode', () => {
+    const inputs = defaultCalculatorInputsV12(); // headline, no packages
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    expect(screen.queryByText(/Fixed-price coverage/)).not.toBeInTheDocument();
   });
 });
