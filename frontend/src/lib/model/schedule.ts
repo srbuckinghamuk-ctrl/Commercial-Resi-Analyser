@@ -12,6 +12,7 @@ import { computeVat } from './vat';
 import { isProgrammeNetwork, isLegacyProgramme, derivePhases } from './programme';
 import { computeInvestmentCase } from './investment-case';
 import { computeUnitSales } from './unit-sales';
+import { computePackageTiming } from './package-timing';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -36,6 +37,7 @@ function emptyUses(): MonthUses {
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
     statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0,
+    lender_eligible_construction_pence: 0,
   };
 }
 
@@ -126,17 +128,21 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       bucket.set(phaseId, (bucket.get(phaseId) ?? 0) + amount);
     };
 
-    // Construction: each package's own amount joins its resolved phase's
-    // bucket. The remainder — contingency and compliance, or a headline
-    // document's WHOLE total, since headline mode carries no package rows at
-    // all — is not itself a "line" and always resolves through the category
-    // default, joining whichever bucket that is.
+    // Construction: each package's own amount, PLUS its own tender-price
+    // inflation (R15b spec §24.3/§24.4 — 0 for every document that predates
+    // the QS allowance, so this is byte-identical to calc 2.15.0 for the
+    // whole pre-R15b corpus), joins its resolved phase's bucket. The
+    // remainder — contingency and compliance, or a headline document's WHOLE
+    // total, since headline mode carries no package rows at all — is not
+    // itself a "line" and always resolves through the category default,
+    // joining whichever bucket that is.
     const constructionBuckets = new Map<string, number>();
     let constructionRemainder = constructionTotal;
     costPlan.packages.forEach((pkg) => {
       const id = resolvedPhaseId(pkg.phase_id, 'construction', network);
-      addToBucket(constructionBuckets, id, pkg.amount_pence);
-      constructionRemainder -= pkg.amount_pence;
+      const amount = pkg.amount_pence + pkg.inflation_pence;
+      addToBucket(constructionBuckets, id, amount);
+      constructionRemainder -= amount;
     });
     addToBucket(constructionBuckets, resolvedPhaseId(null, 'construction', network), constructionRemainder);
 
@@ -216,6 +222,34 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       place(legacyProgramme.packages.professional, professionalTotal, (m, v) => { uses[m].professional_pence += v; });
       place(legacyProgramme.packages.statutory, statutorySpreadTotal, (m, v) => { uses[m].statutory_pence += v; });
     }
+  }
+
+  // R15b spec §24.4. The uses above are bucket-spread and byte-identical to
+  // calc 2.15.0. Beside them, each package's UNROUNDED spend per month —
+  // (amount + inflation) × w_k, a float, never spreadByCurve — gives each
+  // month's lender-eligible SHARE; the share is applied to the bucketed
+  // figure, never added to it. Unrounded, so that on a single-window plan the
+  // share is the packages' own eligible fraction whatever the amounts, and
+  // R14's uniform ratio is recovered exactly. Denominator 0 (a remainder-only
+  // month) → the uniform ratio, so contingency in a phase no package resolves
+  // to is neither un-advanceable (0) nor advanced in full (1).
+  const packageTiming = computePackageTiming(inputs);
+  const eligibleByMonth = new Array<number>(term).fill(0);
+  const allByMonth = new Array<number>(term).fill(0);
+  if (costPlan.mode === 'detailed') {
+    const timingById = new Map(packageTiming.map((t) => [t.id, t]));
+    for (const p of costPlan.packages) {
+      const t = timingById.get(p.id); if (t == null) continue;
+      t.weights.forEach((w, i) => {
+        const m = Math.min(Math.max(0, Math.floor(t.start_month + i)), term - 1);
+        const v = (p.amount_pence + p.inflation_pence) * w;
+        allByMonth[m] += v; if (p.lender_eligible) eligibleByMonth[m] += v;
+      });
+    }
+  }
+  for (let m = 0; m < term; m++) {
+    const share = allByMonth[m] === 0 ? costPlan.lender_eligible_ratio : eligibleByMonth[m] / allByMonth[m];
+    uses[m].lender_eligible_construction_pence = Math.round(uses[m].construction_pence * share);
   }
 
   // R12 spec §18.6. `resolveAnchorMonth` is the single resolution rule for
@@ -420,8 +454,13 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
       )),
       refinance: refinance == null ? null : refinance.month,
     },
-    // R14 spec §4.2(b). Computed once on the cost plan, republished here so the
-    // ledger reads one figure and never re-derives it.
+    // R14 spec §4.2(b). Computed once on the cost plan, republished here for
+    // disclosure and as the denominator-zero fallback (R15b spec §24.4) — the
+    // §4.2(b) advance cap itself reads `uses[m].lender_eligible_construction_
+    // pence` instead.
     lender_eligible_ratio: costPlan.lender_eligible_ratio,
+    // R15b spec §24.2/§24.4. Computed once above, republished — never
+    // recomputed.
+    package_timing: packageTiming,
   };
 }

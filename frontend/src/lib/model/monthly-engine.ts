@@ -169,10 +169,15 @@ export function runLedger(
         // facility — monthly-engine.test.ts's "funds the build but never advances
         // against the VAT" is the guard, and it has been watched failing.
         //
-        // R14 spec §4.2(b): only lender-eligible construction cost is advanceable.
-        // The ratio is the cost plan's eligible share of base build (1 in headline
-        // mode); contingency and compliance follow it proportionally (§16.9).
-        const eligible = Math.round(u.construction_pence * schedule.lender_eligible_ratio)
+        // R14 spec §4.2(b), refined by R15b spec §24.4: only lender-eligible
+        // construction cost is advanceable. The cap reads the PER-MONTH figure
+        // published on the schedule — `uses[m].lender_eligible_construction_
+        // pence` — never the uniform `lender_eligible_ratio`; that ratio stays
+        // published on `Schedule` for disclosure and as the denominator-zero
+        // fallback `buildSchedule` itself applies when computing the per-month
+        // figure, but the ledger no longer reads it directly. Professional and
+        // statutory follow it in full, as before (§16.9).
+        const eligible = u.lender_eligible_construction_pence
           + u.professional_pence + u.statutory_pence;
         const advanceCap = Math.round((eligible * finance.development_cost_advance_pct) / 100);
         const undrawnNet = Math.max(0, netFacility - cumNetUsed);

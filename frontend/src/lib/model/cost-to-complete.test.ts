@@ -14,9 +14,13 @@ import type { VatResult } from './vat';
 // "tests must be self-contained" convention) rather than imported/exported, so this fixture-B
 // worksheet stays pinned to the exact schedule/ledger inputs it was hand-derived against.
 function uses(partial: Partial<MonthUses>): MonthUses {
+  // R15b spec §24.4: `lender_eligible_construction_pence` defaults to the
+  // all-eligible value (`construction_pence`) so these hand-built schedules
+  // keep their pre-R15b meaning; a caller overriding it explicitly still wins.
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0, ...partial,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0,
+    lender_eligible_construction_pence: partial.construction_pence ?? 0, ...partial,
   };
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
@@ -66,6 +70,8 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
     // hand-built schedules keep the pre-R14 cap base exactly.
     lender_eligible_ratio: 1,
+    // R15b spec §24.2. No packages in these hand-built schedules.
+    package_timing: [],
   };
 }
 

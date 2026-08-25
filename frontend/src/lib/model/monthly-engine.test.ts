@@ -14,9 +14,13 @@ import type {
 import type { VatResult } from './vat';
 
 function uses(partial: Partial<MonthUses>): MonthUses {
+  // R15b spec §24.4: `lender_eligible_construction_pence` defaults to the
+  // all-eligible value (`construction_pence`) so these hand-built schedules
+  // keep their pre-R15b meaning; a caller overriding it explicitly still wins.
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0, ...partial,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0,
+    lender_eligible_construction_pence: partial.construction_pence ?? 0, ...partial,
   };
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
@@ -68,6 +72,8 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
     // hand-built schedules keep the pre-R14 cap base exactly.
     lender_eligible_ratio: 1,
+    // R15b spec §24.2. No packages in these hand-built schedules.
+    package_timing: [],
   };
 }
 
@@ -929,5 +935,34 @@ describe('R14 §4.2(b): lender_eligible scales the development-cost advance cap'
     ).inputs as CalculatorInputsV3;
     const schedule = buildSchedule(f);
     expect(schedule.lender_eligible_ratio).toBe(1);
+  });
+
+  it('the cap reads the per-month figure: two schedules identical except ' +
+    'uses[8].lender_eligible_construction_pence produce different month-8 draws', () => {
+    const fixtureDir = resolve(__dirname, '../../../../fixtures/financial-model');
+    const q = JSON.parse(
+      readFileSync(resolve(fixtureDir, 'q-detailed-cost-plan.json'), 'utf-8'),
+    ).inputs;
+    // Same starve as the ineligible-package test above: at 50% the scaled cap
+    // is the binding term in months 1–10, so month 8's draw is cap-bound.
+    const doc = {
+      ...q,
+      finance: { ...q.finance, development_cost_advance_pct: 50 },
+      equity_sources: [{ ...q.equity_sources[0], amount_pence: 1 }],
+    };
+    const base = buildSchedule(doc);
+    expect(base.uses[8].lender_eligible_construction_pence).toBeGreaterThan(0);
+    // Copy the built schedule and overwrite ONLY month 8's per-month figure —
+    // the ledger must read this, never recompute from `lender_eligible_ratio`
+    // (unchanged below, so a ledger that ignored the per-month field would
+    // produce identical month-8 draws on both twins).
+    const less = structuredClone(base);
+    less.uses[8].lender_eligible_construction_pence =
+      Math.floor(base.uses[8].lender_eligible_construction_pence / 2);
+    expect(less.lender_eligible_ratio).toBe(base.lender_eligible_ratio);
+
+    const baseLedger = runLedger(base, doc.finance, doc.equity_sources);
+    const lessLedger = runLedger(less, doc.finance, doc.equity_sources);
+    expect(lessLedger.months[8].draw_pence).toBeLessThan(baseLedger.months[8].draw_pence);
   });
 });

@@ -9,6 +9,9 @@ import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax'
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 import type { VatInputs, VatResult } from './vat';
 import type { ProgrammeNetwork, DerivedPhase } from './programme';
+// R15b Task 3: `PackageTiming` now exists (`computePackageTiming`'s return
+// type) and `Schedule.package_timing` republishes it below.
+import type { PackageTiming } from './package-timing';
 // Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
 // rejects an unused type import, and the re-exports below do not count as uses.
 // R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
@@ -503,6 +506,12 @@ export interface MonthUses {
    *  after the uses/receipts arrays are fully built — never a source figure
    *  itself (§17.5's one-direction rule). */
   vat_pence: number;
+  /** R15b spec §24.4. The lender-eligible share of THIS month's
+   *  `construction_pence`, computed from the per-package unrounded spend
+   *  (never re-derived from the uniform `lender_eligible_ratio`, which stays
+   *  published for disclosure and the denominator-zero fallback only). Read
+   *  by the §4.2(b) advance cap in place of the R14 uniform ratio. */
+  lender_eligible_construction_pence: number;
 }
 
 export interface MonthReceipts {
@@ -584,9 +593,16 @@ export interface Schedule {
     tranches: number[];
     refinance: number | null;
   };
-  /** R14 spec §4.2(b). Computed once on the cost plan, republished here so the
-   *  ledger reads one figure and never re-derives it. */
+  /** R14 spec §4.2(b). Computed once on the cost plan, republished here for
+   *  disclosure and as the denominator-zero fallback (R15b spec §24.4) — the
+   *  §4.2(b) advance cap itself reads `uses[m].lender_eligible_construction_
+   *  pence` instead. */
   lender_eligible_ratio: number;
+  /** R15b spec §24.2/§24.4. `computePackageTiming(inputs)`'s full result,
+   *  computed once in `buildSchedule` and republished — never recomputed —
+   *  one entry per `cost_plan.packages[]`, in order. `[]` when the document
+   *  has no `cost_plan` or no packages. */
+  package_timing: PackageTiming[];
 }
 
 export interface LedgerMonth {

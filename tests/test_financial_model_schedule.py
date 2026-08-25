@@ -4,7 +4,9 @@ describe blocks (Release 3a Task 4 / Release 3b Task 4, spec Sec 6.1 / Sec
 4.4.1, calc 2.2.0 / calc 2.3.0). Same scenarios, same expected arrays as the
 TS side.
 """
+import json
 from dataclasses import asdict
+from pathlib import Path
 
 from app.financial_model import run_appraisal
 from app.financial_model.areas import developed_area_sqm
@@ -14,6 +16,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v4,
     migrate_inputs_to_v6,
     migrate_inputs_to_v7,
+    migrate_inputs_to_v13,
     migrate_v2_to_v3,
     migrate_v3_to_v4,
     migrate_v4_to_v5,
@@ -62,11 +65,20 @@ from app.financial_model.types import (
     cost_plan_from_legacy_costs,
     default_contingency_classes,
 )
+from app.financial_model.package_timing import compute_package_timing
 from app.financial_model.programme import ProgrammeDerivation, derive_phases
 from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, default_vat_treatments
+from .fixtures_cost_plan_in_time import doc_s, doc_z, parse
 from .fixtures_investment_case import anchored_slipped_doc, explicit_refinance_doc, investment_case_doc
 from .fixtures_unit_sales import held_twin_doc, unit_sales_doc
+
+CPT_FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "financial-model"
+
+
+def _cpt_load(stem: str):
+    raw = json.loads((CPT_FIXTURE_DIR / f"{stem}.json").read_text(encoding="utf-8"))["inputs"]
+    return migrate_inputs_to_v13(raw)
 
 PROGRAMME = {
     "anchor_month": None,
@@ -1249,3 +1261,80 @@ class TestUnitSalesInSchedule:
         # The result block is republished, never recomputed.
         assert released.metrics.unit_sales is released.schedule.unit_sales
         assert held.metrics.unit_sales["totals"]["deposits_released_pence"] == 0
+
+
+class TestPerMonthEligibleShare:
+    """R15b spec Sec 24.4. Transliteration of schedule.test.ts's
+    'R15b spec Sec 24.4 per-month eligible share' describe block."""
+
+    def test_z_pence_by_hand(self):
+        s = build_schedule(parse(doc_z()))
+        e = [u.lender_eligible_construction_pence for u in s.uses]
+        assert (s.uses[6].construction_pence, e[6]) == (3_187_730, 3_187_730)
+        assert (s.uses[8].construction_pence, e[8]) == (9_217_334, 8_065_167)
+        assert e[10] == 8_065_167
+        assert (s.uses[11].construction_pence, e[11]) == (11_403_543, 10_265_224)
+        assert (s.uses[12].construction_pence, e[12]) == (13_589_753, 12_460_639)
+        assert (s.uses[13].construction_pence, e[13]) == (15_775_964, 14_653_411)
+        assert e[5] == 0
+        assert e[14] == 0
+
+    def test_s_share_exactly_point_9_in_main_window_1_in_strip_out(self):
+        s = build_schedule(parse(doc_s()))
+        assert s.uses[8].lender_eligible_construction_pence == 9_495_000
+        assert s.uses[6].lender_eligible_construction_pence == 3_000_000
+
+    def test_r14_recovery_on_every_auto_path_detailed_fixture(self):
+        checked = 0
+        for stem in ("q-detailed-cost-plan", "w-monitoring-on-site"):
+            doc = _cpt_load(stem)
+            assert doc.programme is None  # auto path, not a network
+            s = build_schedule(doc)
+            assert len(s.uses) > 0
+            for u in s.uses:
+                assert u.lender_eligible_construction_pence == money_round(
+                    u.construction_pence * s.lender_eligible_ratio,
+                )
+                checked += 1
+        assert checked > 0
+
+    def test_all_eligible_network_x_share_1_everywhere(self):
+        doc = _cpt_load("x-unit-sales-ledger")
+        s = build_schedule(doc)
+        assert len(s.uses) > 0
+        for u in s.uses:
+            assert u.lender_eligible_construction_pence == u.construction_pence
+
+    def test_denominator_zero_arm_takes_the_uniform_ratio(self):
+        d = doc_s()
+        # Tag every package to strip_out, so the construction phase bucket is
+        # the 3,300,000 contingency remainder alone -- no package resolves to
+        # it, so its months' denominator is 0 and the uniform ratio applies.
+        for p in d["cost_plan"]["packages"]:
+            p["phase_id"] = "strip_out"
+        s = build_schedule(parse(d))
+        assert abs(s.lender_eligible_ratio - 60 / 66) < 1e-12
+        # Months 8-13: construction 550,000 (3,300,000 / 6), eligible
+        # round(550,000 x 60/66) = 500,000.
+        for m in range(8, 14):
+            assert s.uses[m].construction_pence == 550_000
+            assert s.uses[m].lender_eligible_construction_pence == 500_000
+        # Months 6, 7: all five packages (66,000,000 over 2 months =
+        # 33,000,000/month), eligible round(33,000,000 x 60/66) = 30,000,000.
+        for m in (6, 7):
+            assert s.uses[m].construction_pence == 33_000_000
+            assert s.uses[m].lender_eligible_construction_pence == 30_000_000
+
+    def test_headline_mode_eligible_equals_construction_every_month(self):
+        doc = _cpt_load("t-investment-case")
+        s = build_schedule(doc)
+        assert len(s.uses) > 0
+        for u in s.uses:
+            assert u.lender_eligible_construction_pence == u.construction_pence
+
+    def test_package_timing_is_republished_one_per_package_in_order(self):
+        doc = parse(doc_s())
+        s = build_schedule(doc)
+        assert s.package_timing == compute_package_timing(doc)
+        assert [t.id for t in s.package_timing] == [p.id for p in doc.cost_plan.packages]
+        assert len(s.package_timing) == 5

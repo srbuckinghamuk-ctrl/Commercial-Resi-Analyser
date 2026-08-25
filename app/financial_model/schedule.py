@@ -26,6 +26,7 @@ from .curves import spread_by_curve
 from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
 from .investment_case import InvestmentCaseResult, compute_investment_case
+from .package_timing import PackageTiming, compute_package_timing
 from .programme import DerivedPhase, derive_phases, is_legacy_programme, is_programme_network
 from .unit_sales import UnitSalesResult, compute_unit_sales
 from .types import (
@@ -142,6 +143,12 @@ class MonthUses:
     # after the uses/receipts lists are fully built -- never a source figure
     # itself (Sec 17.5's one-direction rule).
     vat_pence: int
+    # R15b spec Sec 24.4. The lender-eligible share of THIS month's
+    # construction_pence, computed from the per-package unrounded spend
+    # (never re-derived from the uniform lender_eligible_ratio, which stays
+    # published for disclosure and the denominator-zero fallback only). Read
+    # by the Sec 4.2(b) advance cap in place of the R14 uniform ratio.
+    lender_eligible_construction_pence: int
 
 
 @dataclass
@@ -258,12 +265,21 @@ class Schedule:
     resolved_exit_months: ScheduleResolvedExitMonths = field(
         default_factory=lambda: ScheduleResolvedExitMonths(tranches=[], refinance=None),
     )
-    # R14 spec Sec 4.2(b). Computed once on the cost plan, republished here so
-    # the ledger reads one figure and never re-derives it. Defaulted (like
+    # R14 spec Sec 4.2(b). Computed once on the cost plan, republished here for
+    # disclosure and as the denominator-zero fallback (R15b spec Sec 24.4) --
+    # the Sec 4.2(b) advance cap itself reads
+    # uses[m].lender_eligible_construction_pence instead. Defaulted (like
     # `refinance` above) so pre-existing direct-construction call sites (tests)
     # do not need to change; 1.0 is the all-eligible/headline value, so a
     # schedule built without it behaves exactly as calc <= 2.12.0 did.
     lender_eligible_ratio: float = 1.0
+    # R15b spec Sec 24.2/24.4. compute_package_timing(inputs)'s full result,
+    # computed once in build_schedule and republished -- never recomputed --
+    # one entry per cost_plan.packages[], in order. [] when the document has
+    # no cost_plan or no packages. Defaulted (like lender_eligible_ratio
+    # above) so pre-existing direct-construction call sites (tests) do not
+    # need to change.
+    package_timing: list[PackageTiming] = field(default_factory=list)
 
 
 @dataclass
@@ -304,6 +320,7 @@ def _empty_uses() -> MonthUses:
     return MonthUses(
         acquisition_pence=0, construction_pence=0, professional_pence=0,
         statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
+        lender_eligible_construction_pence=0,
     )
 
 
@@ -399,8 +416,11 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         def add_to_bucket(bucket: dict[str, int], phase_id: str, amount: int) -> None:
             bucket[phase_id] = bucket.get(phase_id, 0) + amount
 
-        # Construction: each package's own amount joins its resolved phase's
-        # bucket. The remainder -- contingency and compliance, or a headline
+        # Construction: each package's own amount, PLUS its own tender-price
+        # inflation (R15b spec Sec 24.3/24.4 -- 0 for every document that
+        # predates the QS allowance, so this is byte-identical to calc 2.15.0
+        # for the whole pre-R15b corpus), joins its resolved phase's bucket.
+        # The remainder -- contingency and compliance, or a headline
         # document's WHOLE total, since headline mode carries no package
         # rows at all -- is not itself a "line" and always resolves through
         # the category default, joining whichever bucket that is.
@@ -408,8 +428,9 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         construction_remainder = construction_total
         for pkg in cost_plan.packages:
             pid = resolved_phase_id(pkg.phase_id, "construction", network)
-            add_to_bucket(construction_buckets, pid, pkg.amount_pence)
-            construction_remainder -= pkg.amount_pence
+            amount = pkg.amount_pence + pkg.inflation_pence
+            add_to_bucket(construction_buckets, pid, amount)
+            construction_remainder -= amount
         add_to_bucket(
             construction_buckets, resolved_phase_id(None, "construction", network), construction_remainder,
         )
@@ -496,6 +517,39 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             place(legacy_programme.packages.construction, construction_total, "construction_pence")
             place(legacy_programme.packages.professional, professional_total, "professional_pence")
             place(legacy_programme.packages.statutory, statutory_spread_total, "statutory_pence")
+
+    # R15b spec Sec 24.4. The uses above are bucket-spread and byte-identical
+    # to calc 2.15.0 for the whole pre-R15b corpus (every package's
+    # inflation_pence is 0 there). Beside them, each package's UNROUNDED
+    # spend per month -- (amount + inflation) * w_k, a float, never
+    # spread_by_curve -- gives each month's lender-eligible SHARE; the share
+    # is applied to the bucketed figure, never added to it. Unrounded, so
+    # that on a single-window plan the share is the packages' own eligible
+    # fraction whatever the amounts, and R14's uniform ratio is recovered
+    # exactly. Denominator 0 (a remainder-only month) -> the uniform ratio,
+    # so contingency in a phase no package resolves to is neither
+    # un-advanceable (0) nor advanced in full (1).
+    package_timing = compute_package_timing(inputs)
+    eligible_by_month = [0.0] * term
+    all_by_month = [0.0] * term
+    if cost_plan.mode == "detailed":
+        timing_by_id = {t.id: t for t in package_timing}
+        for pkg in cost_plan.packages:
+            t = timing_by_id.get(pkg.id)
+            if t is None:
+                continue
+            for i, w in enumerate(t.weights):
+                m = min(max(math.floor(t.start_month + i), 0), term - 1)
+                v = (pkg.amount_pence + pkg.inflation_pence) * w
+                all_by_month[m] += v
+                if pkg.lender_eligible:
+                    eligible_by_month[m] += v
+    for m in range(term):
+        share = (
+            cost_plan.lender_eligible_ratio if all_by_month[m] == 0
+            else eligible_by_month[m] / all_by_month[m]
+        )
+        uses[m].lender_eligible_construction_pence = money_round(uses[m].construction_pence * share)
 
     # R12 spec Sec 18.6. `resolve_anchor_month` is the single resolution rule
     # for sales_phasing tranches and refinance: an anchor resolves against the
@@ -693,9 +747,14 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         # unit_sales is None.
         unit_sales=unit_sales,
         resolved_exit_months=resolved_exit_months,
-        # R14 spec Sec 4.2(b). Computed once on the cost plan, republished here
-        # so the ledger reads one figure and never re-derives it.
+        # R14 spec Sec 4.2(b). Computed once on the cost plan, republished
+        # here for disclosure and as the denominator-zero fallback (R15b spec
+        # Sec 24.4) -- the Sec 4.2(b) advance cap itself reads
+        # uses[m].lender_eligible_construction_pence instead.
         lender_eligible_ratio=cost_plan.lender_eligible_ratio,
+        # R15b spec Sec 24.2/24.4. Computed once above, republished -- never
+        # recomputed.
+        package_timing=package_timing,
         totals=ScheduleTotals(
             acquisition_pence=acquisition_total,
             construction_pence=construction_total,

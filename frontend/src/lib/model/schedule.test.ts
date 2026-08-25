@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { buildSchedule, spreadStraightLine } from './schedule';
 import { defaultCalculatorInputsV2, defaultCalculatorInputsV7 } from '../conversion-defaults';
 import type {
@@ -8,6 +10,7 @@ import type {
 import {
   migrateInputsToV3, migrateInputsToV4, migrateInputsToV6, migrateV3toV4,
   migrateV2toV3, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
+  migrateInputsToV13,
 } from './migrate';
 import type { ProposedUnitV6 } from '../conversion-types';
 import { costPlanFromLegacyCosts, defaultContingencyClasses } from './cost-plan';
@@ -15,8 +18,15 @@ import { DEFAULT_VAT, defaultVatTreatments } from './vat';
 import { runAppraisal } from './index';
 import { validateInputs } from './validation';
 import { derivePhases } from './programme';
+import { computePackageTiming } from './package-timing';
 import { anchoredSlippedDoc, investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
 import { unitSalesDoc, heldTwinDoc } from './__fixtures__/unit-sales-docs';
+import { docS, docZ } from './__fixtures__/cost-plan-in-time-docs';
+
+const CPT_FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+const cptLoad = (stem: string) => migrateInputsToV13(
+  JSON.parse(readFileSync(resolve(CPT_FIXTURE_DIR, `${stem}.json`), 'utf-8')).inputs,
+);
 
 function baseInputs(): CalculatorInputsV2 {
   const inputs = defaultCalculatorInputsV2();
@@ -1148,5 +1158,84 @@ describe('§22.3 unit sales in the schedule', () => {
     // The result block is republished, never recomputed.
     expect(released.metrics.unit_sales).toBe(released.schedule.unit_sales);
     expect(held.metrics.unit_sales!.totals.deposits_released_pence).toBe(0);
+  });
+});
+
+describe('R15b spec §24.4 per-month eligible share', () => {
+  it('Z: strip-out months at share 1, the main window below the uniform ratio, the M&E months above it — pence by hand', () => {
+    const s = buildSchedule(docZ());
+    const e = s.uses.map((u) => u.lender_eligible_construction_pence);
+    expect([s.uses[6].construction_pence, e[6]]).toEqual([3_187_730, 3_187_730]);
+    expect([s.uses[8].construction_pence, e[8]]).toEqual([9_217_334, 8_065_167]);
+    expect(e[10]).toBe(8_065_167);
+    expect([s.uses[11].construction_pence, e[11]]).toEqual([11_403_543, 10_265_224]);
+    expect([s.uses[12].construction_pence, e[12]]).toEqual([13_589_753, 12_460_639]);
+    expect([s.uses[13].construction_pence, e[13]]).toEqual([15_775_964, 14_653_411]);
+    expect(e[5]).toBe(0); expect(e[14]).toBe(0);
+  });
+
+  it('S: share exactly 0.9 in the main window and 1 in strip-out', () => {
+    const s = buildSchedule(docS());
+    expect(s.uses[8].lender_eligible_construction_pence).toBe(9_495_000);
+    expect(s.uses[6].lender_eligible_construction_pence).toBe(3_000_000);
+  });
+
+  it('R14 recovery: on every auto-path detailed fixture, every month equals round(construction × lender_eligible_ratio)', () => {
+    let checked = 0;
+    for (const stem of ['q-detailed-cost-plan', 'w-monitoring-on-site']) {
+      const doc = cptLoad(stem);
+      expect(doc.programme).toBeNull(); // auto path, not a network
+      const s = buildSchedule(doc);
+      expect(s.uses.length).toBeGreaterThan(0);
+      s.uses.forEach((u) => {
+        expect(u.lender_eligible_construction_pence)
+          .toBe(Math.round(u.construction_pence * s.lender_eligible_ratio));
+        checked += 1;
+      });
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('all-eligible network (X): share 1 everywhere → eligible === construction', () => {
+    const doc = cptLoad('x-unit-sales-ledger');
+    const s = buildSchedule(doc);
+    expect(s.uses.length).toBeGreaterThan(0);
+    s.uses.forEach((u) => expect(u.lender_eligible_construction_pence).toBe(u.construction_pence));
+  });
+
+  it('denominator-zero arm: a default construction phase carrying only contingency takes the uniform ratio', () => {
+    const d = docS();
+    // Tag every package to strip_out, so the construction phase bucket is the
+    // 3,300,000 contingency remainder alone — no package resolves to it, so
+    // its months' denominator is 0 and the uniform ratio applies.
+    d.cost_plan.packages = d.cost_plan.packages.map((p) => ({ ...p, phase_id: 'strip_out' }));
+    const s = buildSchedule(d);
+    expect(s.lender_eligible_ratio).toBeCloseTo(60 / 66, 12);
+    // Months 8–13: construction 550,000 (3,300,000 / 6), eligible round(550,000 × 60/66) = 500,000.
+    for (let m = 8; m <= 13; m++) {
+      expect(s.uses[m].construction_pence).toBe(550_000);
+      expect(s.uses[m].lender_eligible_construction_pence).toBe(500_000);
+    }
+    // Months 6, 7: all five packages (66,000,000 over 2 months = 33,000,000/month),
+    // eligible round(33,000,000 × 60/66) = 30,000,000.
+    for (const m of [6, 7]) {
+      expect(s.uses[m].construction_pence).toBe(33_000_000);
+      expect(s.uses[m].lender_eligible_construction_pence).toBe(30_000_000);
+    }
+  });
+
+  it('headline mode: eligible === construction every month (fixture T)', () => {
+    const doc = cptLoad('t-investment-case');
+    const s = buildSchedule(doc);
+    expect(s.uses.length).toBeGreaterThan(0);
+    s.uses.forEach((u) => expect(u.lender_eligible_construction_pence).toBe(u.construction_pence));
+  });
+
+  it('package_timing is republished on the schedule, one per package, in order', () => {
+    const doc = docS();
+    const s = buildSchedule(doc);
+    expect(s.package_timing).toEqual(computePackageTiming(doc));
+    expect(s.package_timing.map((t) => t.id)).toEqual(doc.cost_plan.packages.map((p) => p.id));
+    expect(s.package_timing.length).toBe(5);
   });
 });

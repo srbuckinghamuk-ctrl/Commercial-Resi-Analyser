@@ -347,12 +347,18 @@ def run_ledger(
                 # silently funds the VAT from the facility -- "funds the build but never
                 # advances against the VAT" is the guard, and it has been watched failing.
                 #
-                # R14 spec Sec 4.2(b): only lender-eligible construction cost is
-                # advanceable. The ratio is the cost plan's eligible share of base
-                # build (1 in headline mode); contingency and compliance follow it
-                # proportionally (Sec 16.9).
+                # R14 spec Sec 4.2(b), refined by R15b spec Sec 24.4: only
+                # lender-eligible construction cost is advanceable. The cap reads
+                # the PER-MONTH figure published on the schedule --
+                # u.lender_eligible_construction_pence -- never the uniform
+                # lender_eligible_ratio; that ratio stays published on Schedule
+                # for disclosure and as the denominator-zero fallback
+                # build_schedule itself applies when computing the per-month
+                # figure, but the ledger no longer reads it directly.
+                # Professional and statutory follow it in full, as before (Sec
+                # 16.9).
                 eligible = (
-                    money_round(u.construction_pence * schedule.lender_eligible_ratio)
+                    u.lender_eligible_construction_pence
                     + u.professional_pence + u.statutory_pence
                 )
                 advance_cap = money_round((eligible * finance.development_cost_advance_pct) / 100)

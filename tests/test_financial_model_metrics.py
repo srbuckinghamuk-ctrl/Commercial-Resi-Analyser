@@ -89,6 +89,10 @@ def uses(**partial) -> MonthUses:
         statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
     )
     base.update(partial)
+    # R15b spec Sec 24.4: lender_eligible_construction_pence defaults to the
+    # all-eligible value (construction_pence) so these hand-built schedules
+    # keep their pre-R15b meaning; a caller overriding it explicitly still wins.
+    base.setdefault("lender_eligible_construction_pence", base["construction_pence"])
     return MonthUses(**base)
 
 
@@ -370,8 +374,12 @@ def test_s_break_even_replays_at_the_resolved_months_not_the_raw_offsets():
     run = run_appraisal(parse_calculator_inputs(json.loads(_S.read_text(encoding="utf-8"))["inputs"]))
     assert run.schedule.resolved_exit_months.tranches == [16, 19]
     # Pre-fix (raw months 20/21) both engines printed 90,971,520 -- the negative control.
+    # R15b spec Sec 24.4: fixture S's ledger cap now reads the per-month
+    # eligible figure -- strip-out months fully advanced, the main window at
+    # 54/60 -- so this figure moved from the pre-R15b 88,720,089 (verified:
+    # both engines agree to the penny, TS and Python).
     assert run.metrics.senior_breakeven_pence != 90_971_520
-    assert run.metrics.senior_breakeven_pence == 88_720_089
+    assert run.metrics.senior_breakeven_pence == 88_711_322
 
 
 def test_reading_the_resolved_month_changes_which_anchor_disturbs_the_facility_not_solvability():
@@ -404,12 +412,15 @@ def test_reading_the_resolved_month_changes_which_anchor_disturbs_the_facility_n
     # after all draws finish, so no such redraw occurs. Both are genuinely
     # solvable; the resolved month changes WHICH ledger-level flag fires, not
     # whether senior_breakeven_pence exists.
+    # R15b spec Sec 24.4: these two figures moved from the pre-R15b
+    # 96,756,404 / 88,462,082 (verified: both engines agree to the penny, TS
+    # and Python).
     early = run_appraisal(_s_with_first_anchor("strip_out")).metrics
     late = run_appraisal(_s_with_first_anchor("building_control")).metrics
-    assert early.senior_breakeven_pence == 96_756_404
+    assert early.senior_breakeven_pence == 96_289_098
     assert any(f.code == "facility_redrawn_after_redemption" for f in early.flags)
     assert not any(f.code == "senior_breakeven_unsolvable" for f in early.flags)
-    assert late.senior_breakeven_pence == 88_462_082
+    assert late.senior_breakeven_pence == 88_453_341
     assert not any(f.code == "facility_redrawn_after_redemption" for f in late.flags)
     assert not any(f.code == "senior_breakeven_unsolvable" for f in late.flags)
 
