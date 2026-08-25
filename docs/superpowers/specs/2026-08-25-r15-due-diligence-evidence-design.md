@@ -277,9 +277,19 @@ carries evidence, with `source` naming the field. The mapping is normative:
 ## 7. §23.4 — The derivation
 
 A pure module, `due-diligence.ts` / `due_diligence.py`, shaped like
-`investment-case`: it takes the inputs and returns the result block of §23.8.
-No ledger balance enters it; nothing downstream reads it except the
-provenance layer (§23.7) and the flags (§23.9).
+`monitoring`: it takes the inputs, the cost plan result, the VAT result, the
+acquisition-tax result and the schedule (for the construction start month),
+and returns the result block of §23.8. It is computed **once, in
+`derive_metrics` / `deriveMetrics`**, exactly where `monitoring_statement` is,
+and published on `AppraisalResultV2` — not on `Schedule`, because nothing in
+the ledger reads it. No ledger balance enters it; nothing downstream reads it
+except the provenance layer (§23.7) and the flags (§23.9).
+
+**A pre-v13 document is computed through the same engine** (R10's
+`cost_plan_from_legacy_costs` rule): a document with no `due_diligence`
+attribute is read as the migration seed — the 23 catalogue items `unknown`,
+no source record — so the v12 → v13 identity gate compares the result block
+and the `due_diligence_unknown` flag on both arms and needs no exclusion.
 
 For every item (23 entered, plus custom, plus 5 derived), in catalogue order
 then custom items in `items[]` order:
@@ -390,8 +400,17 @@ seven, with conditions 5 and 6 renumbered 6 and 7. Banner:
 DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE
 ```
 
-Predicate: `due_diligence.entered_unknown_count === 0`. `buildProvenance`
-takes it as a fourth gate input beside the tax and VAT bases;
+Predicate: `due_diligence.totals.entered_unknown_count === 0`. `buildProvenance`
+takes it as a fourth gate input beside the tax and VAT bases, computed by
+`dueDiligenceGateFor(run)`. **A document with no `due_diligence` key at all
+is not re-graded** — `taxBasisConfirmedFor`'s R8 rule, for R8's reason: a
+raw v4 document handed straight to `runAppraisal` in a test offered its
+author no field to fill, so its silence cannot be graded; every production
+entry point migrates to v13 before running, so every stored document *is*
+graded. The engine still seeds and reports the 23 unknowns for such a
+document (§23.4) and the amber flag still fires; only the FINAL condition
+exempts it, and the existing release-gate FINAL routes (v4 `sellAllInputs`)
+stay FINAL on exactly that basis;
 `provenance.py`'s `draft_reason` mirrors it; `DRAFT_REASON_SENTENCE` and
 `WATERMARK_TEXT` are `Record<DraftReason, string>`, so the compiler requires
 both texts (§17.10's precedent).
@@ -419,8 +438,9 @@ both texts (§17.10's precedent).
 
 ### The result block
 
-`Schedule` gains `due_diligence`, republished onto `AppraisalResultV2` exactly
-as `unit_sales` is; never null.
+`AppraisalResultV2` gains `due_diligence`, computed once in
+`derive_metrics` / `deriveMetrics` exactly as `monitoring_statement` is; never
+null (§23.4's pre-v13 seed).
 
 ```
 DueDiligenceResult:
@@ -434,6 +454,8 @@ DueDiligenceResult:
             cost_impact_total_pence, programme_impact_max_months, unassessed_impact_count }
   source_record: SourceRecord | null                     -- republished
   source_conflicts: Array<{ rule: 'occupation' | 'existing_area', statement: string }>
+  consent_expiry: { expiry_month, construction_start_month, expires_before_start } | null
+                                                         -- null unless planning_route has an expiry AND acquisition_date is set
 ```
 
 ### Surfaces
@@ -593,11 +615,15 @@ the client's `migrateInputsToV13`, the default builders' source-record capture
 
 ## 15. Fixture Y — `y-due-diligence`
 
-A detailed-mode cost plan (so `qs`, `price_basis` and the coverage block have
-subjects), a network programme with a `construction` phase starting at month
-4, an `acquisition_date`, a captured source record with `is_vacant: false`
-and a listing area 40% below the entered existing GIA, and a schedule
-exercising every status:
+**Fixture X's document, unchanged in every money field**, plus the evidence
+layer: X is already a detailed-mode cost plan with a network programme whose
+`construction` phase starts at month 4 and an `acquisition_date` of
+2026-09-01. Y adds a captured source record with `is_vacant: false` and a
+listing area of 360 m² against an entered existing GIA of 600 m² (manual
+basis, so no cost moves), turns X's one equity source `unconfirmed` (still
+committed under §2 — no money moves), and carries a schedule exercising every
+status. Because no arithmetic changes, **Y's money pins are X's, copied**,
+and the inertness guard asserts the equality directly:
 
 | Feature | Setting | What it pins |
 |---|---|---|
@@ -609,7 +635,7 @@ exercising every status:
 | `party_wall`, `rights_of_light` | `not_applicable` with notes | the column, and that they count as addressed |
 | three items | `unknown` | `entered_unknown_count 3`, `addressed_pct` by hand, `due_diligence_unknown` |
 | one `custom` item under `existing_building` | `amber` with action | custom rows in the counts |
-| packages | two `fixed_price`, one `provisional_sum`, one `estimate`, one `null` | coverage and provisional figures by hand; `provisional_sums_present` |
+| packages | X's three: `structure` `fixed_price`, `envelope` `provisional_sum`, `mech_elec_public_health` `null` | coverage 46.15%, provisional 30.77%, unclassified 6,000,000 by hand; `provisional_sums_present`; the `estimate` basis is exercised in the unit tests |
 | `qs` | `riba_3`, `issued` | derived `cost_plan_qs` green |
 | equity | one `unconfirmed` | derived `equity_sources` unknown, and the document still not gated by it |
 
@@ -659,7 +685,7 @@ Registered in every fixture roster: `EXPECTED_FIXTURE_STEMS` on both sides,
 | **§1.6 version list** | requires v13 |
 | **Memo** | §9 carries fixture Y's counts and both conflict lines; the nine-phrase text-match is gone (a `risks[]` row reading "planning is fine" no longer satisfies anything); §3 prints the planning reference and expiry; §13 limitation 5 is the conditioned sentence; the FINAL twin renders FINAL |
 | **Spider caveat** | provisional with the HRB note unless the item is green/n-a |
-| **Message drift** | `test_validation_messages_match_the_typescript_engine` widened to §22.7 and §23.9 |
+| **Message drift** | `test_validation_messages_match_the_typescript_engine`'s window start moves from the `investment_case` block to the `unit_sales` block, so §22.7, §19.7 and §23.9 (placed immediately before the jurisdiction block) are all inside it; the §22.7 messages the widened window shows to differ (TS em-dash, Python hyphen) are aligned by editing the **Python** strings to the TS text verbatim — a wording change with no behaviour change, so the identity gate is untouched |
 | **Unit-sales identity** | `unit_sales.totals.gross_pence == totals.gross_sales_pence` on fixture X and corpus-wide where non-null |
 | **Entry points** | both engines' entry-point guards pass only once every production call site names v13; the default builders capture the source record from a project |
 
