@@ -74,6 +74,13 @@ const DRAFT_REASON_SENTENCE: Record<DraftReason, string> = {
   // for why: an unconfirmed VAT basis does not make the arithmetic wrong, so
   // it must not displace a reason saying the figures themselves may be.
   vat_basis_unconfirmed: 'a VAT treatment that actually bears VAT is not yet evidence-confirmed',
+  // R15 (spec §23.7). Ordered immediately below vat_basis_unconfirmed in
+  // draftReason() (report-provenance.ts) — see that function's own comment
+  // for why: an unknown due-diligence item does not make the arithmetic
+  // wrong, so it must not displace a reason saying the figures themselves
+  // may be, but it must outrank not_approved — an approval read over
+  // unevidenced title, leases or consents is the stale case's cousin.
+  due_diligence_incomplete: 'one or more due-diligence items are still unknown - unknown is never treated as green',
   not_approved: 'no lender case has been credit approved',
   // R14b (spec §21.3). Controller ruling (Task 6): added here so `tsc -b`
   // stays green at that task's commit; Task 7 builds the rest of the
@@ -86,6 +93,7 @@ const WATERMARK_TEXT: Record<DraftReason, string> = {
   senior_not_repaid: 'DRAFT - SENIOR DEBT NOT REPAID - NOT FOR LENDER RELIANCE',
   tax_basis_unconfirmed: 'DRAFT - TAX BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
   vat_basis_unconfirmed: 'DRAFT - VAT BASIS UNCONFIRMED - NOT FOR LENDER RELIANCE',
+  due_diligence_incomplete: 'DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE',
   not_approved: 'DRAFT - NOT APPROVED FOR LENDER RELIANCE',
   lender_case_stale: 'DRAFT - LENDER CASE STALE - NOT FOR LENDER RELIANCE',
 };

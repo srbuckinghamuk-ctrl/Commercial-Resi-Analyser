@@ -12,6 +12,7 @@ import type { AnyCalculatorInputs, CalculatorInputsV8 } from './model';
 import {
   qaProject, sellAllInputs, legacyV1Snapshot, welshInputs,
 } from './report-qa/memo-fixtures';
+import { ddDoc } from './model/__fixtures__/due-diligence-docs';
 
 describe('tax basis in provenance (R8)', () => {
   const reconciled = { report_safe: true, senior_repaid: true };
@@ -288,17 +289,18 @@ describe('buildProvenance derives the tax basis (R8)', () => {
 describe('R9 — the area bridge does not gate the document', () => {
   const approvedStatus = 'credit_approved';
 
-  it('leaves the DraftReason union at its six R14b members', () => {
+  it('leaves the DraftReason union at its seven R15 members', () => {
     // R8's memory records that the ORDER of this union is load-bearing and that
     // inverting it survived all 1070 tests while being production-reachable.
     // R9 added no member; R11 added exactly one ('vat_basis_unconfirmed', spec
-    // §17.10); R14b adds exactly one more ('lender_case_stale', spec §21.3)
+    // §17.10); R14b added exactly one more ('lender_case_stale', spec §21.3);
+    // R15 adds exactly one more still ('due_diligence_incomplete', spec §23.7)
     // and this test is what makes that a decision rather than an omission
     // somebody later "fixes".
     //
     // Review fix round 1 (Important 2): a `DraftReason[]` array only checks
     // that the listed literals are ASSIGNABLE to the union, not that they
-    // EXHAUST it — a seventh member added elsewhere would not fail that
+    // EXHAUST it — an eighth member added elsewhere would not fail that
     // version of this test. A `Record` over the union requires every member
     // as a key: a missing (or, symmetrically, an extra-but-unlisted) member
     // becomes a compile error, which is what actually pins the deliberate
@@ -308,10 +310,11 @@ describe('R9 — the area bridge does not gate the document', () => {
       senior_not_repaid: true,
       tax_basis_unconfirmed: true,
       vat_basis_unconfirmed: true,
+      due_diligence_incomplete: true,
       not_approved: true,
       lender_case_stale: true,
     };
-    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(6);
+    expect(Object.keys(ALL_DRAFT_REASONS)).toHaveLength(7);
   });
 
   it('keeps a document with a large unallocated balance FINAL when nothing else blocks it', () => {
@@ -470,5 +473,110 @@ describe('R14b — buildProvenance derives lender case staleness (spec §21.3)',
     expect(prov.lenderCase).toBeNull();
     expect(prov.lenderCaseStale).toBe(false);
     expect(prov.draftReason).toBe('not_approved');
+  });
+});
+
+// R15 (spec §23.7). `draftReason` stays pure here too -- it receives the
+// due-diligence gate, it does not compute one (that is `dueDiligenceGateFor`,
+// tested on its own terms in the buildProvenance describe block below).
+// Ordered immediately below vat_basis_unconfirmed for the same rationale
+// already written into draftReason(): an unknown due-diligence item does not
+// make the arithmetic wrong, so it must not displace a reason saying the
+// figures themselves may be -- but it must outrank not_approved, because an
+// approval read over unevidenced title, leases or consents is the stale
+// case's cousin.
+describe('R15 — due diligence in the draft gate (spec §23.7)', () => {
+  const reconciled = { report_safe: true, senior_repaid: true };
+  const confirmedTax = { taxBasisConfirmed: true };
+  const confirmedVat = { vatBasisConfirmed: true };
+  const incomplete = { dueDiligenceComplete: false };
+  const complete = { dueDiligenceComplete: true };
+
+  it('gates on an incomplete due-diligence catalogue', () => {
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax, confirmedVat, undefined, incomplete))
+      .toBe('due_diligence_incomplete');
+  });
+
+  it('orders below vat_basis_unconfirmed', () => {
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax, { vatBasisConfirmed: false }, undefined, incomplete))
+      .toBe('vat_basis_unconfirmed');
+  });
+
+  it('orders above not_approved with no lender case at all', () => {
+    expect(draftReason(reconciled, null, confirmedTax, confirmedVat, undefined, incomplete))
+      .toBe('due_diligence_incomplete');
+  });
+
+  it('outranks lender_case_stale — the gate is checked before the case even matters', () => {
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax, confirmedVat,
+      { lenderCaseStale: true }, incomplete)).toBe('due_diligence_incomplete');
+  });
+
+  it('does not displace a more fundamental reason', () => {
+    expect(draftReason({ report_safe: false, senior_repaid: true }, 'credit_approved',
+      confirmedTax, confirmedVat, undefined, incomplete)).toBe('unreconciled');
+    expect(draftReason({ report_safe: true, senior_repaid: false }, 'credit_approved',
+      confirmedTax, confirmedVat, undefined, incomplete)).toBe('senior_not_repaid');
+  });
+
+  // The sixth argument was added after every existing call site was written.
+  // A default that did not preserve today's behaviour would silently change
+  // the meaning of every one- through five-argument caller in the app.
+  it('keeps five-argument callers behaving exactly as before', () => {
+    expect(draftReason(reconciled, 'credit_approved', confirmedTax, confirmedVat, { lenderCaseStale: false }))
+      .toBeNull();
+    expect(draftReason(reconciled, null, confirmedTax, confirmedVat, { lenderCaseStale: false }))
+      .toBe('not_approved');
+    expect(documentStatus(reconciled, 'credit_approved', confirmedTax, confirmedVat, { lenderCaseStale: false }))
+      .toBe('FINAL');
+    expect(documentStatus(reconciled, null, confirmedTax, confirmedVat, { lenderCaseStale: false }))
+      .toBe('DRAFT');
+  });
+
+  it('carries through documentStatus', () => {
+    expect(documentStatus(reconciled, 'credit_approved', confirmedTax, confirmedVat, undefined, incomplete))
+      .toBe('DRAFT');
+    expect(documentStatus(reconciled, 'credit_approved', confirmedTax, confirmedVat, undefined, complete))
+      .toBe('FINAL');
+  });
+});
+
+// R15 (spec §23.7). `ddDoc()` (model/__fixtures__/due-diligence-docs.ts) is
+// fixture Y with three entered items still `unknown` (cil_s106,
+// leases_tenancies, fire_strategy) and a derived `equity_sources` row that is
+// also `unknown` -- the derived row is never counted by
+// `entered_unknown_count` (due-diligence.ts) and so must never gate the
+// document, only the three entered ones do.
+describe('buildProvenance derives the due-diligence gate', () => {
+  it('holds a document in DRAFT while entered items are still unknown', () => {
+    const run = runAppraisal(ddDoc());
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.dueDiligenceComplete).toBe(false);
+    expect(prov.draftReason).toBe('due_diligence_incomplete');
+  });
+
+  it('reaches FINAL once every entered item is evidenced, though a derived row may still read unknown', () => {
+    const evidence = { source: 'Site solicitor', reference: 'Report ref 1', date: '2026-08-01' };
+    const doc = ddDoc({
+      status: { cil_s106: 'green', leases_tenancies: 'green', fire_strategy: 'green' },
+      evidence: { cil_s106: evidence, leases_tenancies: evidence, fire_strategy: evidence },
+    });
+    const run = runAppraisal(doc);
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.dueDiligenceComplete).toBe(true);
+    expect(prov.draftReason).toBeNull();
+    expect(prov.documentStatus).toBe('FINAL');
+    // The derived equity_sources row is a fact about the funding structure,
+    // not evidence gathered on the due-diligence page — it stays unknown and
+    // must not have re-opened the gate this test just closed.
+    const equityRow = run.metrics.due_diligence.rows.find((r) => r.code === 'equity_sources');
+    expect(equityRow?.status).toBe('unknown');
+  });
+
+  it('treats a raw pre-v13 document as due-diligence complete (the R8 exemption)', () => {
+    const run = runAppraisal(sellAllInputs());
+    expect('due_diligence' in run.inputs).toBe(false);
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.dueDiligenceComplete).toBe(true);
   });
 });

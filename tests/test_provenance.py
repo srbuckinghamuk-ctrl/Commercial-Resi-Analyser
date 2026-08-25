@@ -85,6 +85,41 @@ class TestDraftReasonOrdering:
             lender_case_status="credit_approved", lender_case_stale=True,
             tax_basis_confirmed=False,
         ) == "tax_basis_unconfirmed"
+        # R15: stale must not outrank the due-diligence gate either -- an
+        # unevidenced document is exactly the same failure mode as an approval
+        # read over a moved document, so the earlier-seated gate wins.
+        assert draft_reason(
+            report_safe=True, senior_repaid=True,
+            lender_case_status="credit_approved", lender_case_stale=True,
+            due_diligence_complete=False,
+        ) == "due_diligence_incomplete"
+
+    def test_due_diligence_gate_sits_between_vat_and_approval(self):
+        # R15, spec Sec 23.7. An unknown due-diligence item does not make a
+        # figure wrong, so it must not outrank the two reasons that say
+        # figures may be (tax/VAT basis unconfirmed); it must outrank
+        # not_approved because an approval read over unevidenced title is the
+        # stale case's cousin -- both print FINAL over something the lender
+        # never actually saw confirmed.
+        assert draft_reason(
+            report_safe=True, senior_repaid=True,
+            lender_case_status="credit_approved",
+            due_diligence_complete=False,
+        ) == "due_diligence_incomplete"
+        # No lender case at all: due_diligence_incomplete still wins over
+        # not_approved -- the diagonal that makes the gate's position a
+        # decision rather than dead code.
+        assert draft_reason(
+            report_safe=True, senior_repaid=True,
+            lender_case_status=None,
+            due_diligence_complete=False,
+        ) == "due_diligence_incomplete"
+        # A more fundamental basis gate still outranks it.
+        assert draft_reason(
+            report_safe=True, senior_repaid=True,
+            lender_case_status="credit_approved",
+            vat_basis_confirmed=False, due_diligence_complete=False,
+        ) == "vat_basis_unconfirmed"
 
 
 class TestDocumentStatus:
