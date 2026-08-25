@@ -5448,3 +5448,273 @@ this document, `migration-notes.md` §16, and `memo-fixtures.ts`. It is the one
 document the v12 → v13 identity gate excludes by the stored-version filter
 (§16.1) — it is v13-native, so it has no v12 arm to compare against, and the
 companion test names it explicitly so the exclusion cannot grow in silence.
+
+---
+
+## 24. The cost plan in time [R15b — calc 2.16.0]
+
+### 24.1 Fixture Z — the cost plan in time (`fixtures/financial-model/z-cost-plan-in-time.json`)
+
+**Purpose:** the release's golden case for spec §24. It is the corpus's first
+document to carry a QS-provenanced tender-price inflation allowance
+(`cost_plan.qs.inflation`), a phase whose spend curve is not straight-line
+feeding the cost plan (`mande_fitout`, `back_loaded`), a per-package
+`price_basis` classification exercised end to end, a package-level VAT
+override that actually charges (`pkg-externals`, `vat.registered: true`), and
+a percentage-of-construction-total fee line whose base is the *inflated*
+construction total. It proves the whole of Tasks 1–5 (curve-aware package
+timing, inflation, VAT-with-registration, the lender-eligible construction
+share) landing on one document, and — via its companion §24.2 — that the same
+Task 3 re-pin the R14 uniform ratio required moves S correctly on its own.
+
+Z is **fixture S (`s-dated-programme.json`, migrated to `inputs_version: 14`)
+with these changes and no other:**
+
+| Change | Value |
+|---|---|
+| `cost_plan.qs` | `{ source: 'Gleeds', stage: 'riba_3', date: '2026-02-15', status: 'issued', base_date: '2026-02-01', inflation: { annual_pct: 6 } }` |
+| a new phase `mande_fitout` | `code: 'other'` (`mech_elec_public_health` is not a `PhaseCode`), `label: 'M&E fit-out'`, `duration_months: 3`, `slip_months: 0`, `start_offset: 0`, `curve: { kind: 'back_loaded' }`, `predecessors: [{ phase_id: 'construction', type: 'SS', lag_months: 3 }]`, appended to `phases[]` |
+| `pkg-mande.phase_id` | `'mande_fitout'` |
+| `price_basis` | `pkg-enabling` `fixed_price`, `pkg-structure` `fixed_price`, `pkg-envelope` `fixed_price`, `pkg-mande` `estimate`, `pkg-externals` `provisional_sum` |
+| `pkg-externals.vat_override` | `{ rate_pct: 20, recoverable_pct: 0, recovery_basis: 'blocked' }` |
+| `vat.registered` | `true` (S has `false`, which makes every treatment inert — `resolveVatTreatment` returns `INERT` when unregistered — so the override would pin nothing on S. S's six treatments themselves stay at rate 0 / `unconfirmed`, so nothing else moves) |
+| a new fee line | `{ id: 'fee-pm', code: 'other_professional', category: 'professional', label: 'Project manager', basis: 'pct_of_construction_total', amount_pence: 0, pct: 1, per_dwelling: false, vat_override: null, phase_id: null }` |
+| `inputs_version` | `14` |
+
+S's facts the derivation relies on: `acquisition.acquisition_date`
+`2026-08-01`; `finance.term_months` 24; the detailed plan — `pkg-enabling`
+6,000,000 (`lender_eligible: true`, `phase_id: 'strip_out'`), `pkg-structure`
+24,000,000, `pkg-envelope` 18,000,000, `pkg-mande` 12,000,000, `pkg-externals`
+6,000,000 (`lender_eligible: false`); base build **66,000,000**; `general`
+contingency 5% (the other two classes 0%); `category_phase_ids.construction =
+'construction'`; every fee line `fixed`; equity 105,750,000 = the acquisition
+cost exactly, so from month 1 every use is met from the facility
+(`development_cost_advance_pct` 100, net 100,000,000, gross 110,000,000, 12%
+rolled up).
+
+#### Step 1 — S's derived windows, by hand (§18.2)
+
+acquisition 0–1; planning FS acquisition → start 1, dur 3, finish 4;
+conditions FS planning → 4–6; design SS planning → 1–5; procurement FS design
+→ 5–7; strip_out FS conditions → **6–8** (months 6, 7); construction FS
+procurement (7) and FS strip_out (8) → **8–14** (months 8–13); testing 14–15;
+building_control 15–16; practical_completion milestone at 16; marketing SS
+construction + 3 → 11–15; unit_completions 16–18; sales 18–21; maturity_tail
+milestone at 21.
+
+Z's **mande_fitout** is SS construction + 3 → **11–14** (months 11, 12, 13) —
+inside construction's window, so `programme_finish` (22 = `maturity_tail`'s
+start, 21, + 1) and every other phase's window are S's, unmoved. The new
+phase is appended to `phases[]` after `maturity_tail` (the builder pushes it
+onto the end of the array, not into `construction`'s neighbourhood), so
+`programme_phase_ids` gains one entry at the tail rather than being
+re-ordered.
+
+#### Step 2 — package windows, weights, midpoints
+
+| Package | Resolved phase | Window | Curve | Weights | `midpoint_month` |
+|---|---|---|---|---|---|
+| enabling | `strip_out` | 6–8 | straight | 1/2, 1/2 | **6.5** |
+| structure, envelope, externals | `construction` | 8–14 | straight | 1/6 × 6 | **10.5** |
+| mande | `mande_fitout` | 11–14 | back_loaded | 1/6, 2/6, 3/6 | 11·1/6 + 12·2/6 + 13·3/6 = 74/6 = **12.333…** |
+
+The mande midpoint is the curve-aware guard's own witness: the window's
+centre is 12, and the back-loaded curve pulls the true midpoint later,
+to 12.333…, because more of the package's spend lands in the window's later
+months.
+
+#### Step 3 — months from base, and the inflation factor
+
+`monthsBetween('2026-02-01', '2026-08-01') = 6` (the QS base date to the
+acquisition date), so a package's `months_from_base` is `6 +
+midpoint_month`, and `inflation_factor = 1.06 ^ (months_from_base / 12)`.
+
+| Package | `months_from_base` | `inflation_factor` = 1.06^(months/12) | `inflation_pence` = money_round(amount × (factor − 1)) |
+|---|---|---|---|
+| enabling | 12.5 | 1.0625766701… | **375,460** |
+| structure | 16.5 | 1.0834167976… | **2,002,003** |
+| envelope | 16.5 | 1.0834167976… | **1,501,502** |
+| mande | 18.333… | 1.0931046420… | **1,117,256** |
+| externals | 16.5 | 1.0834167976… | **500,501** |
+
+`cost_plan.inflation_total_pence` = 375,460 + 2,002,003 + 1,501,502 + 1,117,256
++ 500,501 = **5,496,722** — the sum of the five ROUNDED lines, not
+`money_round` applied to an unrounded total. `latest_midpoint_month` is the
+mande package's 12.333… (the latest of the five midpoints);
+`latest_midpoint_months_from_base` is 18.333…, and
+`cost_plan.latest_midpoint_whole_months_from_base` — the integer the flag
+message and the memo sentence print — is `Math.floor(18.333…)` = **18**.
+`cost_plan.inflation_pct_of_base_build` = `pct(5,496,722, 66,000,000)` =
+8.3283… → **8.33**.
+
+#### Step 4 — the stack
+
+Base build is **66,000,000**, unchanged and **uninflated** — inflation is a
+line item, not a rebasing of the packages it is computed from (the guard
+Task 2 exists to hold). `general` contingency = `money_round(66,000,000 ×
+5/100)` = **3,300,000**, computed on that same uninflated base. So:
+
+```
+construction_total_pence = base_build + inflation_total + contingency_total + compliance
+                          = 66,000,000 + 5,496,722 + 3,300,000 + 0
+                          = 74,796,722
+```
+
+`fee-pm` is `pct_of_construction_total`, so its base is that inflated figure,
+printed: `money_round(74,796,722 × 1/100)` = **747,967**. So
+`professional_total_pence` = S's 8,000,000 (unchanged — `fee-pm` is the only
+new professional line) + 747,967 = **8,747,967**.
+`lender_eligible_base_pence` stays **60,000,000** (externals is still the
+sole ineligible package, and eligibility is a base-build-line property, not
+an inflated one), so `lender_eligible_ratio` = 60,000,000 / 66,000,000 =
+**0.9090909090909091**, unmoved from S. Price basis: fixed 48,000,000
+(enabling + structure + envelope, 72.73%), provisional 6,000,000 (externals,
+9.09%), estimate 12,000,000 (mande), unclassified 0.
+
+#### Step 5 — buckets and the per-month share
+
+The construction category resolves to three buckets. `strip_out` (enabling,
+tagged) = 6,000,000 + 375,460 = 6,375,460 over its 2-month window (6, 7) →
+**3,187,730** each month. `construction` (structure + envelope + externals,
+untagged, plus the contingency remainder — which is never a package line and
+always resolves through the category default) = (24,000,000 + 2,002,003) +
+(18,000,000 + 1,501,502) + (6,000,000 + 500,501) + 3,300,000 = 55,304,006
+over its 6-month window (8–13) → 9,217,334 in months 8–12 and the residue
+**9,217,336** in month 13. `mande_fitout` = 12,000,000 + 1,117,256 =
+13,117,256, back-loaded over its 3-month window (11–13):
+`money_round(13,117,256 × 1/6)` = **2,186,209** (month 11),
+`money_round(13,117,256 × 2/6)` = **4,372,419** (month 12), residue
+**6,558,628** (month 13).
+
+`uses_construction_pence[m]` is the sum of every bucket active in month `m`:
+
+```
+m 0–5    : 0
+m 6, 7   : 3,187,730                              (strip_out only)
+m 8, 9, 10: 9,217,334                             (construction only)
+m 11     : 9,217,334 + 2,186,209 = 11,403,543      (construction + mande)
+m 12     : 9,217,334 + 4,372,419 = 13,589,753      (construction + mande)
+m 13     : 9,217,336 + 6,558,628 = 15,775,964      (construction residue + mande residue)
+m 14–23  : 0
+```
+
+**The lender-eligible share is computed from UNROUNDED per-package spend**
+— `(amount + inflation) × w_k` as a float, never `spreadByCurve`'s rounded
+output — so that `share(m)` is the eligible fraction of the packages
+themselves, independent of whether the bucket total divides evenly (Task 3's
+ruling; design §24.4's "per-package spread" is refined to this). Per-package
+spend per month: enabling 3,187,730; structure 26,002,003/6 =
+4,333,667.1666…; envelope 19,501,502/6 = 3,250,250.333…; externals
+6,500,501/6 = 1,083,416.8333…; mande 13,117,256 × (1/6, 2/6, 3/6) =
+2,186,209.333…, 4,372,418.666…, 6,558,628.
+
+| m | `uses.construction` | eligible Σ | all Σ | `share(m)` | `lender_eligible_construction_pence` | R14 uniform (60/66) for contrast |
+|---|---|---|---|---|---|---|
+| 6, 7 | 3,187,730 | 3,187,730 | 3,187,730 | **1** | **3,187,730** | 2,897,936 |
+| 8, 9, 10 | 9,217,334 | 7,583,917.5 | 8,667,334.333… | 0.874999995193… | **8,065,167** | 8,379,395 |
+| 11 | 11,403,543 | 9,770,126.833… | 10,853,543.666… | 0.900178516196… | **10,265,224** | 10,366,857 |
+| 12 | 13,589,753 | 11,956,336.166… | 13,039,753 | 0.916914313229… | **12,460,639** | 12,354,321 |
+| 13 | 15,775,964 | 14,142,545.5 | 15,225,962.333… | 0.928844114440… | **14,653,411** | 14,341,785 |
+
+Every other month has 0 construction and 0 eligible. The share at months
+8–10 is not exactly 7/8 because the per-package *inflation* pence are
+rounded (45,503,505 / 52,004,006 for the eligible/all inflation sums over the
+window), which is why the tests pin the pence, not the ratio — a ratio pin
+would be blind to a rounding-order regression that a pence pin catches.
+
+#### Step 6 — VAT
+
+`pkg-externals` carries the override: net base = 6,000,000 + 500,501 (its own
+inflation line) = 6,500,501; VAT = `money_round(6,500,501 × 20/100)` =
+**1,300,100**, recoverable 0 (`recovery_basis: 'blocked'`). The remaining
+construction-category base — 74,796,722 − 6,500,501 = **68,296,221** — stays
+at S's rate-0 `unconfirmed` treatment. `irrecoverable_vat_pence` (schedule
+totals; `metrics.irrecoverable_vat_pence`) = **1,300,100** — S's is 0, because
+S is unregistered and every treatment is inert.
+
+#### Registration
+
+Z is registered in every fixture roster: `EXPECTED_FIXTURE_STEMS` on both
+sides, this document, and (Task 6 having already moved every entry point onto
+v14) `tests/test_migrate_v14.py` / `migrate.test.ts`'s v13 → v14 identity
+gate, which excludes it by the stored-version filter — Z is v14-native, so it
+has no v13 arm to compare against, and both companion assertions name
+`z-cost-plan-in-time.json` explicitly so the exclusion cannot grow in
+silence. `docZ()` / `doc_z()` load the fixture through
+`migrateInputsToV14` / `migrate_inputs_to_v14` — a no-op on a document that
+is already v14-shaped, the same discipline `docY`-equivalent loaders use —
+rather than building the document by mutation at test time; `docZNoAllowance()`
+/ `doc_z_no_allowance()` load Z the same way and then null the QS allowance.
+
+### 24.2 Fixture S under calc 2.16.0 — the re-pin
+
+S has no QS allowance and every construction package straight-lines through
+`construction`'s single window, so its Task 3 re-pin is closed-form rather
+than needing Step 5's per-month float table.
+
+```
+construction bucket, months 8-13 = (60,000,000 + 3,300,000 contingency) / 6
+                                  = 10,550,000 per month
+
+eligible packages in that bucket = 24,000,000 + 18,000,000 + 12,000,000 = 54,000,000
+all packages in that bucket      = 24,000,000 + 18,000,000 + 12,000,000 + 6,000,000 + 3,300,000(*)
+                                  = 60,000,000 + 3,300,000 = 63,300,000
+
+share = 54,000,000 / 60,000,000 = 0.9 exactly
+      (the four eligible LINES total 4,000,000+3,000,000+2,000,000 per month over
+       4,000,000+3,000,000+2,000,000+1,000,000 per month -- a clean ratio, no
+       rounding boundary, since S is deliberately built to exercise none in its
+       own cost stack)
+
+lender_eligible_construction_pence = money_round(10,550,000 x 0.9) = 9,495,000
+unfunded per month                 = 10,550,000 - 9,495,000        = 1,055,000
+strip_out months (6, 7)            = share 1 (3,000,000 fully advanced each)
+
+funding_gap_pence = 6 x 1,055,000 = 6,330,000
+```
+
+(*) the contingency remainder is never a package line, and is itself treated
+as eligible-base — the 3,300,000 sits inside the "all" denominator only.
+
+Contrast with the pre-R15b, R14 uniform-ratio rule: the gap there was the
+whole construction total taken at the single ratio
+`lender_eligible_base_pence / base_build_pence` = 60,000,000 / 66,000,000 =
+6/11, so `Σ construction × (1 − 6/11)` = 69,300,000 × 6/66 = **6,300,000** —
+the number this release moves on from. The strip-out months are the
+discriminator: under the uniform ratio every month, strip-out included, was
+scaled by 6/11 (funding `round(3,000,000 × 10/11)` = 2,727,273, a 272,727
+shortfall each month); under the per-month share the strip-out packages are
+themselves 100% eligible, so they fund in full and the whole gap concentrates
+in the six main-window months instead of eight. **New `funding_gap_pence` =
+6,330,000** — 30,000 more than the old figure, not less, because
+concentrating full funding onto the two strip-out months raises the
+per-month shortfall in the (now smaller) set of months that still carry one.
+
+Peak debt and every other debt-denominated metric move by the re-timed draws
+this produces, and are pinned from the two engines agreeing, with the
+6,330,000 figure above as the hand anchor that must not itself move:
+
+```
+funding_gap_pence              =   6,330,000   (hand-derived above)
+peak_debt_pence                =  82,924,400   (m16, pre-receipt)
+peak_debt_month                =          16
+finance_costs_pence            =   9,933,151
+total_development_cost_pence   = 200,633,151
+profit_pence                   =  49,366,849
+profit_on_cost_pct             =       24.61
+profit_on_gdv_pct              =       19.75
+gross_ltc_pct                  =       41.33
+net_ltc_pct                    =       40.96
+ltgdv_developer_pct            =       33.17
+senior_breakeven_pence         =  88,711,322
+redemption_schedule_months           = [16, 19]
+redemption_schedule_balances_pence   = [82,924,400, 9,478,151]
+redemption_balance_at_disposal_pence =   9,478,151
+```
+
+`cost_before_finance_pence` is **unchanged** at 190,700,000: the §4.2(b) cap
+governs what the facility can *advance*, never what the scheme *spends* —
+the funding gap is a financing-side shortfall, not a cost. These are the
+figures now stored in `s-dated-programme.json`'s `expected_metrics`,
+superseding the R14 (calc 2.13.0) pins the fixture's own `note` field
+records for contrast.
