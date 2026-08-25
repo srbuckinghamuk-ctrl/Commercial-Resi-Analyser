@@ -2664,15 +2664,42 @@ def _extract_ts_err_messages(block: str) -> list[str]:
             # raises it on both `unit_sales` and `sales_phasing`. Resolve the
             # binding rather than skip the call: that hoisted string is a real
             # rule message, and it is one of the messages that drifted.
+            #
+            # Fix round 1, Minor 2: resolve against the source BEFORE the call
+            # site and take the LAST match, i.e. the nearest preceding
+            # declaration. Searching the whole window and taking the first
+            # match returns the wrong string the moment a second `const msg`
+            # is declared later in the window -- and `msg` is exactly the kind
+            # of short, reusable name a second rule block would pick.
             name_match = re.match(r"[A-Za-z_$][\w$]*", block[i:])
             assert name_match is not None, f"unreadable err() message argument at {block[i:i + 40]!r}"
             name = name_match.group(0)
-            decl = re.search(rf"\bconst {re.escape(name)} = (?=['\"`])", block)
-            assert decl is not None, f"cannot resolve the err() message identifier {name!r}"
-            message, _ = _extract_ts_err_message(block, decl.end())
+            decls = list(re.finditer(rf"\bconst {re.escape(name)} = (?=['\"`])", block[:i]))
+            assert decls, f"cannot resolve the err() message identifier {name!r}"
+            message, _ = _extract_ts_err_message(block, decls[-1].end())
             i += len(name)
         out.append(message)
     return out
+
+
+def test_the_extractor_resolves_a_hoisted_const_to_the_nearest_preceding_declaration():
+    """Fix round 1, Minor 2 -- a test of the test. Two `const msg` bindings in
+    one window, each raised on its own rule: the extractor must return each
+    call's OWN message, in source order. Resolving by first-match-anywhere
+    returns the first message twice, which is a drift guard silently
+    comparing the wrong string."""
+    snippet = """
+      const msg = 'the first hoisted rule message';
+      err('alpha', msg);
+      if (other) {
+        const msg = 'the second hoisted rule message';
+        err('beta', msg);
+      }
+    """
+    assert _extract_ts_err_messages(snippet) == [
+        "the first hoisted rule message",
+        "the second hoisted rule message",
+    ]
 
 
 def test_validation_messages_match_the_typescript_engine():
@@ -2732,8 +2759,23 @@ def test_validation_messages_match_the_typescript_engine():
     # to enclose -- the brief's "so the drift guard's window covers it".
     dd_start = ts.index("export function validateDueDiligence(")
     dd_end = ts.index("export function validateMonitoring(")
-    ts_msgs = _extract_ts_err_messages(ts[start:end]) + _extract_ts_err_messages(ts[dd_start:dd_end])
-    assert len(ts_msgs) >= 45, "the extractor stopped matching — fix it, do not lower the bound"
+    # Fix round 1, I1. `ts.index` cannot tell the two anchors apart if
+    # validateDueDiligence is ever moved BELOW validateMonitoring: the slice
+    # would silently be empty, and the first window alone still clears a
+    # single combined bound -- so every Sec 23.9 message would stop being
+    # compared with the suite fully green. This repo's rule is that a guard
+    # must not be able to go vacuous by its own subject moving, so the order
+    # is asserted and EACH window carries its own bound rather than one total.
+    assert dd_start < dd_end, (
+        "validateDueDiligence must be declared before validateMonitoring in validation.ts -- "
+        "this guard slices between those two anchors, and the reversed order silently empties "
+        "the Sec 23.9 window"
+    )
+    unit_sales_msgs = _extract_ts_err_messages(ts[start:end])
+    due_diligence_msgs = _extract_ts_err_messages(ts[dd_start:dd_end])
+    assert len(unit_sales_msgs) >= 45, "the extractor stopped matching — fix it, do not lower the bound"
+    assert len(due_diligence_msgs) >= 25, "the extractor stopped matching — fix it, do not lower the bound"
+    ts_msgs = unit_sales_msgs + due_diligence_msgs
 
     tree = ast.parse(py)
     py_strings: list[str] = []
