@@ -219,6 +219,11 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   unit_sales_deposits_received_pence: (r) =>
     r.metrics.unit_sales!.months.map((m) => m.deposits_received_pence),
   receipts_gross_sale_pence: (r) => r.schedule.receipts.map((x) => x.gross_sale_pence),
+  // R13b Task 7 fix round 2 (review finding 1): report_safe lives on
+  // `AppraisalRun.reconciliation`, not `metrics` -- the same reasoning as
+  // funding_gap_pence above, which is the standing precedent for a quantity
+  // outside `metrics` reached through this whole-run mapper table.
+  report_safe: (r) => r.reconciliation.report_safe,
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -879,6 +884,10 @@ describe('golden fixtures (shared with the Python engine)', () => {
           ...Array(8).fill(0), 2600000, 0, 3000000, 1050000, 44500000, 23400000,
           ...Array(6).fill(0), 19950000, ...Array(3).fill(0),
         ],
+        // Task 7 fix round 2 (review finding 1): report_safe added to this fixture's own
+        // control entry -- truly true (funding_gap_pence is 0 since the fix-round-1 equity
+        // resize, so no red flag fires).
+        report_safe: false,
       },
     },
   ];

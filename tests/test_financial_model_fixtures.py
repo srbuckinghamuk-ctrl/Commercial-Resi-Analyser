@@ -260,6 +260,11 @@ _FLAT_KEYS = {
         lambda r: [m["deposits_received_pence"] for m in r.metrics.unit_sales["months"]]
     ),
     "receipts_gross_sale_pence": lambda r: [x.gross_sale_pence for x in r.schedule.receipts],
+    # R13b Task 7 fix round 2 (review finding 1): report_safe lives on
+    # `AppraisalRun.reconciliation`, not `metrics` -- the same reasoning as
+    # funding_gap_pence above, which is the standing precedent for a
+    # quantity outside `metrics` reached through this whole-run mapper table.
+    "report_safe": lambda r: r.reconciliation.report_safe,
 }
 
 
@@ -1467,6 +1472,10 @@ _NEGATIVE_CONTROLS = [
             [0] * 8 + [2600000, 0, 3000000, 1050000, 44500000, 23400000]
             + [0] * 6 + [19950000] + [0] * 3
         ),
+        # Task 7 fix round 2 (review finding 1): report_safe added to this
+        # fixture's own control entry -- truly True (funding_gap_pence is 0
+        # since the fix-round-1 equity resize, so no red flag fires).
+        "report_safe": False,
     }),
 ]
 

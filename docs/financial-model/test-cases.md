@@ -4919,11 +4919,13 @@ funding_gap[0] = 30,850,000 - 30,850,000 - 0 = 0p
 No other month ever carried a gap (equity was already exhausted after month
 0 under the old figure too), so the ledger total is now
 `funding_gap_pence = 0`, the red `funding_gap` flag no longer fires, and
-`reconciliation.report_safe` — computed by `reconcile()`/`validate_inputs`,
-not itself an `expected_metrics` key reachable by the golden harness — is
-now **True** (`sources_equal_uses`, `debt_rollforward_ok`,
+`reconciliation.report_safe` — computed by `reconcile()`/`validate_inputs`
+and read off the whole `AppraisalRun` by its own `_FLAT_KEYS` mapper
+(`funding_gap_pence`, pinned two lines above, is the standing precedent for a
+quantity reached this way rather than through `metrics`) — is **True** and
+is pinned: `sources_equal_uses`, `debt_rollforward_ok`,
 `closing_never_negative`, `facility_within_limit`, `senior_repaid` and
-`funding_complete` all hold, with an empty `issues` list). Because the old
+`funding_complete` all hold, with an empty `issues` list. Because the old
 and new equity figures both happen to be fully consumed by month 0 (Step 6),
 **every ledger figure from month 1 onward — every draw, interest accrual and
 closing balance, and therefore peak debt, the redemption schedule, the exit
@@ -4974,10 +4976,12 @@ total_development_cost_pence = 62,005,000 + 3,130,199                 = 65,135,1
 profit_pence = gross_sales 94,500,000 - total_development_cost 65,135,199 = 29,364,801
 ```
 
-The facility fully redeems at month 13 within the 24-month term and every
-sold unit's completion receipt has landed by month 20 (also within term), so
-nothing is retained and nothing is still mid-realisation at the model
-horizon: `profit_is_unrealised` is **false**.
+`profit_is_unrealised` turns on one thing only — `retained_value_pence > 0`
+(`app/financial_model/metrics.py:575`; spec §3.11/§3.16.1) — not on
+redemption timing or the model horizon (those govern the separate
+`return_on_equity_is_unrealised` flag instead). This fixture is `route:
+'sell_all'` with `retained_units: []`, so `retained_value_pence` is 0 and
+`profit_is_unrealised` is **false**.
 
 #### Step 10 — the pins
 
@@ -4996,6 +5000,7 @@ it to the penny (`test_financial_model_fixtures.py` and
 | `redemption_balance_at_disposal_pence` | 0 | Step 8 |
 | `redemption_schedule_balances_pence` | [20389323, 25074604, 25741975, 24938895, 2151749, 0] | Step 8 |
 | `profit_is_unrealised` | false | Step 9 |
+| `report_safe` | true | Step 7 |
 | `selling_costs_pence` | 2,155,000 | Step 4 |
 | `unit_sales.*`, `unit_sales_unit_*`, `unit_sales_deposits_received_pence`, `receipts_gross_sale_pence` | — | Steps 4–5 |
 | `redemption_schedule_months` | [8, 10, 11, 12, 13, 20] | Step 5 |
