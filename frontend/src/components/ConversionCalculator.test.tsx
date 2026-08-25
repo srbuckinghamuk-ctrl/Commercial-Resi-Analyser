@@ -103,7 +103,9 @@ describe('ConversionCalculator — Sensitivity is page 11', () => {
   it('offers fifteen numbered pages with Sensitivity eleventh', () => {
     render(<ConversionCalculator project={PROJECT} />);
     for (const label of [
-      '11. Sensitivity', '12. Exit', '13. Risk', '14. Deal Spider', '15. Investor',
+      // R15 Task 9 (spec §23.8): page 13 is now the due-diligence schedule,
+      // with the free-form risk register below it as the project log.
+      '11. Sensitivity', '12. Exit', '13. Due Diligence', '14. Deal Spider', '15. Investor',
     ]) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }

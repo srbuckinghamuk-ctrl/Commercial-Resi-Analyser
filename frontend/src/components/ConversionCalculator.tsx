@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
 import { migrateInputsToV12 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV12 } from '../lib/model';
+import type { AppraisalRun, CalculatorInputsV12, CalculatorInputsV13 } from '../lib/model';
 import { defaultCalculatorInputsV12 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
@@ -20,7 +20,7 @@ import AppraisalSummaryPage from './calculator/AppraisalSummaryPage';
 import ScenariosPage from './calculator/ScenariosPage';
 import SensitivityPage from './calculator/SensitivityPage';
 import ExitStrategyPage from './calculator/ExitStrategyPage';
-import RiskRegisterPage from './calculator/RiskRegisterPage';
+import DueDiligencePage from './calculator/DueDiligencePage';
 import DealSpiderPage from './calculator/DealSpiderPage';
 import InvestorSummaryPage from './calculator/InvestorSummaryPage';
 import LenderCasePage from './calculator/LenderCasePage';
@@ -66,7 +66,7 @@ const PAGES: { key: CalcPage; label: string; num: number }[] = [
   { key: 'scenarios', label: 'Scenarios', num: 10 },
   { key: 'sensitivity', label: 'Sensitivity', num: 11 },
   { key: 'exit_strategy', label: 'Exit', num: 12 },
-  { key: 'risk_register', label: 'Risk', num: 13 },
+  { key: 'risk_register', label: 'Due Diligence', num: 13 },
   { key: 'deal_spider', label: 'Deal Spider', num: 14 },
   { key: 'investor_summary', label: 'Investor', num: 15 },
   { key: 'lender_case', label: 'Lender Case', num: 16 },
@@ -214,7 +214,13 @@ export default function ConversionCalculator({ project }: Props) {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV12>) => {
+  // R15 Task 9. The Due Diligence page writes `due_diligence`, a v13-only key,
+  // while this component's STATE is still a v12 document until Task 13's
+  // cutover -- so the parameter is widened and nothing else is. `inputs_version`
+  // is deliberately omitted from the widened type: the spread below must never
+  // be able to restamp the document's own version, which is the one thing the
+  // cutover (and only the cutover) is allowed to do.
+  const updateInputs = useCallback((partial: Partial<Omit<CalculatorInputsV13, 'inputs_version'>>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -412,7 +418,7 @@ export default function ConversionCalculator({ project }: Props) {
           <ExitStrategyPage inputs={inputs} onChange={updateInputs} run={run} />
         )}
         {activePage === 'risk_register' && (
-          <RiskRegisterPage inputs={inputs} onChange={updateInputs} />
+          <DueDiligencePage inputs={inputs} onChange={updateInputs} run={run} project={project} />
         )}
         {activePage === 'deal_spider' && (
           <DealSpiderPage inputs={inputs} onChange={updateInputs} project={project} />

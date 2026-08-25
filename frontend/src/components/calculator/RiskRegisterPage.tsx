@@ -1,10 +1,20 @@
 import { useCallback } from 'react';
 import type { RiskItem, Likelihood, Impact } from '../../lib/conversion-types';
-import type { CalculatorInputsV12 } from '../../lib/model';
+import type { CalculatorInputsV12, CalculatorInputsV13 } from '../../lib/model';
 
+/**
+ * R15 Task 9 (spec §23.8): no longer a page in its own right. It renders
+ * BELOW the due-diligence schedule as the project log, which is why the
+ * heading is an `<h4>` under `DueDiligencePage`'s `<h3>` rather than the
+ * page's own numbered `<h3>`.
+ *
+ * The union on `inputs` (and the v13 `onChange`) exists only because the
+ * calculator's state is still v12 until Task 13's cutover; this component
+ * reads and writes `risks`, which is identical on both versions.
+ */
 interface Props {
-  inputs: CalculatorInputsV12;
-  onChange: (partial: Partial<CalculatorInputsV12>) => void;
+  inputs: CalculatorInputsV12 | CalculatorInputsV13;
+  onChange: (partial: Partial<CalculatorInputsV13>) => void;
 }
 
 const LIKELIHOOD_OPTIONS: Likelihood[] = ['low', 'medium', 'high'];
@@ -49,7 +59,7 @@ export default function RiskRegisterPage({ inputs, onChange }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>13. Risk Register</h3>
+      <h4 style={{ color: '#e2e8f0', fontSize: 15, marginBottom: 12 }}>Risk register (project log)</h4>
 
       {risks.map((risk, i) => (
         <div key={risk.id} style={{ padding: 16, marginBottom: 12, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
