@@ -661,3 +661,44 @@ export function dueDiligenceFinalInputs(): CalculatorInputsV14 {
     },
   };
 }
+
+/**
+ * R15b (Task 10, spec §24.6/§24.3). The release's golden cost-plan-in-time
+ * case: fixture Z (fixtures/financial-model/z-cost-plan-in-time.json) — a
+ * fourteen-phase network, five packages (one, `pkg-mande`, tagged to its own
+ * phase `mande_fitout`; the rest resolving to the construction category
+ * default) and a QS record (Gleeds, RIBA Stage 3, 15 Feb 2026, issued)
+ * carrying a 6% p.a. tender-price inflation allowance from a 1 Feb 2026 base
+ * date.
+ *
+ * Loaded independently of `docZ()` (frontend/src/lib/model/__fixtures__/
+ * cost-plan-in-time-docs.ts, the loader Tasks 7-9 share with
+ * export-investment-memo.test.ts) rather than imported from it — this file's
+ * own doc comment at the top is explicit that a fixture satisfying one suite
+ * must not quietly move another's ground, the same reasoning
+ * `dueDiligenceInputs` immediately above gives for reading fixture Y's JSON a
+ * second time rather than importing `ddDoc()`.
+ */
+export function costPlanInTimeInputs(): CalculatorInputsV14 {
+  const raw = JSON.parse(
+    readFileSync(resolve(FIXTURE_DIR, 'z-cost-plan-in-time.json'), 'utf-8'),
+  ) as { inputs: Record<string, unknown> };
+  return migrateInputsToV14(raw.inputs);
+}
+
+/**
+ * Fixture Z with the QS provenance kept but the allowance cleared: every
+ * package's `inflation_pence` reads 0 and `inflation_factor` null, while
+ * `latest_midpoint_whole_months_from_base` is still published — the state
+ * `no_inflation_allowance` fires on, and the memo's own no-allowance
+ * disclosure sentence prints from. The twin of `docZNoAllowance()`
+ * (cost-plan-in-time-docs.ts), built the same one-field-changed way, over
+ * this file's own independently-loaded document rather than that module's.
+ */
+export function costPlanInTimeNoAllowanceInputs(): CalculatorInputsV14 {
+  const inputs = costPlanInTimeInputs();
+  return {
+    ...inputs,
+    cost_plan: { ...inputs.cost_plan, qs: { ...inputs.cost_plan.qs!, inflation: null } },
+  };
+}

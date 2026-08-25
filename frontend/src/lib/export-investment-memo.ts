@@ -11,7 +11,7 @@ import {
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
-import { repairGluedDescription, humanise } from './format';
+import { repairGluedDescription, humanise, penceToPoundsExact } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
 import {
@@ -19,7 +19,7 @@ import {
 } from './report-layout';
 import type { DraftReason, ReportProvenance } from './report-provenance';
 import type { Jurisdiction } from './tax/acquisition-tax';
-import type { RecoveryBasis, VatChargeCategory, QsStage } from './model';
+import type { RecoveryBasis, VatChargeCategory, QsStage, CostPackageLine } from './model';
 import type { DdCategory, DdRow, DdStatus } from './model/due-diligence';
 import type { ProposedUnit, ProposedUnitV6, UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
@@ -52,8 +52,26 @@ const CONTENT_BOTTOM = 272;
 
 /** A table's header row plus roughly three body rows at the memo's 8-9pt sizes. */
 const TABLE_MIN_BLOCK_MM = 34;
-/** Tables at or below this height are kept whole rather than split (see `table`). */
-const MOVE_WHOLE_MAX_MM = 110;
+/**
+ * Tables at or below this height are kept whole rather than split (see `table`).
+ *
+ * R15b (release-gate finding, spec §24.6 area): fixture Z's Basis of
+ * Preparation and Limitations table — seven limitation rows plus its foot —
+ * measures 110.6 mm, a hair over the previous 110 mm cutoff. That pushed it
+ * into the "long, may split" branch, which only reserves
+ * `TABLE_MIN_BLOCK_MM` before starting it; on Z it started with ~77 mm free
+ * on the page, split after five rows, and stranded the last two rows plus
+ * the foot alone on an otherwise-blank final page — the release gate's own
+ * near-blank-page defect, reproduced by a table that would in fact have fit
+ * on one fresh page with room to spare. Raised with headroom rather than
+ * pinned to that one figure, because the cutoff is a genuine trade-off (the
+ * comment on `table` below): a table just over 110 mm is exactly the size
+ * most likely to fit whole on a fresh page while still stranding only a
+ * modest amount of white space on the page it moved off, so the previous
+ * cutoff was catching the worst case (moving a very tall table) and the
+ * best case (a table that only just needed to move) at the same threshold.
+ */
+const MOVE_WHOLE_MAX_MM = 130;
 
 /**
  * Two distinct reasons a document is not a final lender paper, and they must not
@@ -1584,6 +1602,21 @@ export function generateInvestmentMemo(
             + `unclassified ${fmt(basis.unclassified_pence)}.`)
         + ` Cost base date ${fmtPlainDate(cp.qs.base_date)}.`,
       );
+      // R15b (spec §24.6/§24.7). The `no_inflation_allowance` flag's own
+      // disclosure, printed as prose beside the QS provenance it qualifies —
+      // the flag itself still prints through the memo's generic flag list
+      // (no change there). Skipped when there is no calendar to measure the
+      // months against (`latest_midpoint_whole_months_from_base === null`,
+      // Task 2's own null case: no acquisition date, or no packages) — the
+      // same guard `no_inflation_allowance` itself is skipped by.
+      if (cp.qs.inflation === null && cp.latest_midpoint_whole_months_from_base !== null) {
+        y = bodyText(
+          y,
+          `No tender-price inflation allowance recorded: priced at ${fmtPlainDate(cp.qs.base_date)}; `
+          + `package spend midpoints fall up to ${cp.latest_midpoint_whole_months_from_base} whole `
+          + 'months later.',
+        );
+      }
     }
   }
   // Every row below is either a raw stored input (rate, area) or an
@@ -1627,12 +1660,28 @@ export function generateInvestmentMemo(
     const notes = raw.notes.trim();
     return notes === '' ? PRICE_BASIS_LABEL[basis] : `${PRICE_BASIS_LABEL[basis]} — ${notes}`;
   }
+  // R15b (spec §24.6). Phase / midpoint / inflation, appended to the package's
+  // own Element cell rather than as separate table columns — the table has
+  // three columns (Element, Amount, £/sq ft) throughout the whole document,
+  // and none of the three new figures is an amount or a rate; all three are
+  // read verbatim off this package's own `CostPackageLine`, never recomputed.
+  // `network`'s phase label lookup: `resolved_phase_id` is null on the auto
+  // and legacy timing arms (no phase network on this document at all), which
+  // reads as "no phase network" here rather than a blank -- the same
+  // vocabulary the Costs page's own disabled-picker hint uses.
+  function packageTiming(p: CostPackageLine): string {
+    const phaseLabel = network != null && p.resolved_phase_id != null
+      ? network.phases.find((ph) => ph.id === p.resolved_phase_id)?.label ?? p.resolved_phase_id
+      : null;
+    return ` — phase ${phaseLabel ?? 'no phase network'}, midpoint ${p.midpoint_month.toFixed(2)}, `
+      + `inflation ${penceToPoundsExact(p.inflation_pence)}`;
+  }
   const constructionRows: MemoRow[] =
     cp.mode === 'detailed'
       ? [
           ['  Package schedule', '', ''],
           ...cp.packages.map((p): MemoRow => [
-            `    ${p.label || humanise(p.code)} (${humanise(p.code)})`,
+            `    ${p.label || humanise(p.code)} (${humanise(p.code)})${packageTiming(p)}`,
             fmt(p.amount_pence),
             packageExclusion(p.id),
           ]),
@@ -1650,6 +1699,24 @@ export function generateInvestmentMemo(
           ['  Sound insulation', fmt(inputs.conversion_costs.sound_insulation_pence), ''],
           ['  Part L compliance', fmt(inputs.conversion_costs.part_l_compliance_pence), ''],
         ];
+  // R15b (spec §24.6). Between the package schedule and the contingency
+  // rows -- contingency resolves against `base_build_pence`, which does not
+  // include this figure (computeCostPlan's own construction_total sums base
+  // build + inflation + contingency + compliance as three siblings, not one
+  // inside another), so the row sits beside the schedule it was computed
+  // from rather than folded into either sub-total above or below it. Only in
+  // detailed mode with a recorded allowance -- `inflation_total_pence` is
+  // already 0 whenever `qs` is null or carries no allowance, so this row
+  // would otherwise print a bare "£0" with nothing to explain it.
+  const inflationRows: MemoRow[] =
+    cp.mode === 'detailed' && cp.qs !== null && cp.qs.inflation !== null
+      ? [[
+          '  Tender-price inflation to spend midpoints — '
+          + `${fmtPctExact(cp.qs.inflation.annual_pct)} p.a. from ${fmtPlainDate(cp.qs.base_date)}`,
+          penceToPoundsExact(cp.inflation_total_pence),
+          '',
+        ]]
+      : [];
   // Spec §16: each of the three classes rounds independently against its own
   // NAMED base — three allowances at 5% are deliberately not one at 15%. The
   // base shown here is the resolved figure (`c.base_pence`), never re-derived.
@@ -1690,6 +1757,7 @@ export function generateInvestmentMemo(
       ['', '', ''],
       ['CONSTRUCTION', '', ''],
       ...constructionRows,
+      ...inflationRows,
       ...contingencyRows,
       ['  Sub-total construction (inc. contingency)', fmt(metrics.construction_cost_pence), perSqftPence(metrics.construction_cost_pence, totalSqm)],
       ['', '', ''],
@@ -2796,6 +2864,18 @@ export function generateInvestmentMemo(
     y,
     `Senior repayment break-even prints under Key Lending Metrics (§7) and developer profit break-even under Investor Returns (§8).${salesPhasing != null ? ' Both figures are computed on this appraisal\'s phased-disposal basis (calc 2.3.0, spec §5.11/§5.12).' : ''}`,
   );
+  // R15b (spec §24.6/§4.2(b)). The controller's own advance-cap rule, stated
+  // rather than left implicit: development advances draw against
+  // lender-eligible construction spend for the month, never the whole
+  // facility, while professional and statutory costs draw in full.
+  // `development_cost_advance_pct` is a raw stored input (the entered cap
+  // percentage), not a computed figure.
+  y = bodyText(
+    y,
+    `Development advances are capped at ${fmtPctExact(inputs.finance.development_cost_advance_pct)} `
+    + 'of lender-eligible construction spend month by month, plus professional and statutory costs '
+    + 'in full (spec §4.2(b)).',
+  );
 
   // ── Section 11: Exit Strategy ──
   y = sectionTitle(y, 11, 'Exit Strategy');
@@ -3341,7 +3421,16 @@ export function generateInvestmentMemo(
           : 'Construction cost rests on a priced package schedule (a detailed cost plan) priced by '
             + `${cp.qs.source} (${QS_STAGE_LABEL[cp.qs.stage]}, ${fmtPlainDate(cp.qs.date)}, `
             + `${cp.qs.status}); fixed-price coverage `
-            + `${cp.price_basis === null ? 'not classified' : fmtPctExactSafe(cp.price_basis.fixed_price_coverage_pct)}.`)
+            + `${cp.price_basis === null ? 'not classified' : fmtPctExactSafe(cp.price_basis.fixed_price_coverage_pct)}`
+            // R15b (spec §24.6/§13.4). The same two-arm rule the sentence
+            // above already follows for the QS record itself: the residual
+            // limitation names what IS recorded (a rate and a base date) or
+            // says plainly that nothing is, never a sentence that has gone
+            // stale either way.
+            + (cp.qs.inflation !== null
+                ? `; tender-price inflation ${fmtPctExact(cp.qs.inflation.annual_pct)} p.a. to each `
+                  + `package's spend midpoint from ${fmtPlainDate(cp.qs.base_date)}.`
+                : '; no tender-price inflation allowance is recorded.'))
       : 'Construction cost is a headline rate x area estimate with named allowances, not a priced quantity-surveyed package schedule. No provisional sums, fixed-price coverage or package-level exclusions are modelled.',
     // R11 (spec §17.13). This sentence used to say VAT was not modelled as a
     // cash flow at all — false the moment the VAT engine shipped (Section 5,

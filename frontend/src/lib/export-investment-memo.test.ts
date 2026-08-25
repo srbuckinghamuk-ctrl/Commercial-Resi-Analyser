@@ -36,6 +36,11 @@ import {
 // R15 (spec §23.8). Aliased for the same reason as `unitSalesMemoText` above:
 // a third independent `memoText`, over fixture Y's v13 documents.
 import { ddDoc, memoText as ddMemoText } from './model/__fixtures__/due-diligence-docs';
+// R15b (Task 10, spec §24.6). Fixture Z's shared loader (Tasks 7-9's own
+// module) — `docZ()`/`docZNoAllowance()` are already the corpus's single
+// source for this fixture; a second JSON load here would risk drifting from
+// what the Costs page and cost-plan tests exercise.
+import { docZ, docZNoAllowance } from './model/__fixtures__/cost-plan-in-time-docs';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -2391,7 +2396,13 @@ describe('§23.8 due diligence on the memo', () => {
       'Construction cost rests on a priced package schedule (a detailed cost plan) priced by '
       + 'Gardiner & Theobald (RIBA Stage 3, ',
     );
-    expect(p).toMatch(/\(RIBA Stage 3, \d{1,2} \w{3} \d{4}, issued\); fixed-price coverage 46\.15%\./);
+    // R15b (spec §24.6/§13.4): the sentence no longer ends at the coverage
+    // figure — it names the tender-price inflation position too. Fixture Y's
+    // QS record carries no `inflation` key at all (undefined, normalised to
+    // null by computeCostPlan), so this is the no-allowance arm.
+    expect(p).toMatch(
+      /\(RIBA Stage 3, \d{1,2} \w{3} \d{4}, issued\); fixed-price coverage 46\.15%; no tender-price inflation allowance is recorded\./,
+    );
 
     // Fix round 1 (I2): worded over ENTERED items, and the derived rows Y
     // leaves unknown (equity_sources, lender_valuation) are stated rather
@@ -2430,5 +2441,76 @@ describe('§23.8 due diligence on the memo', () => {
       + 'outstanding, and the cost and programme impacts stated against them are not in the '
       + 'appraisal; 2 derived rows remain unknown (see Section 9).',
     );
+  });
+});
+
+// R15b (Task 10, spec §24.6). Fixture Z's package timing, tender-price
+// inflation and the finance section's per-month advance cap sentence — every
+// figure below is a published field off run.metrics.cost_plan /
+// run.inputs.finance, checked through the raw-latin1 `pdfText()` helper this
+// whole file uses (see its own doc comment above). Fragments are kept short
+// and free of literal parentheses: jsPDF escapes "(" / ")" inside its PDF
+// text-show strings, and a wrapped bodyText sentence starts a fresh
+// text-show operation at each line break with no inserted space at the join
+// (see the fixture-I and fixture-J tests above for the same two caveats).
+describe('R15b cost plan in time (spec §24.6)', () => {
+  it('prints the tender-price inflation row between the package schedule and the contingency rows', async () => {
+    const run = runAppraisal(docZ());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('Tender-price inflation to spend midpoints');
+    expect(text).toContain('6% p.a. from 1 Feb 2026');
+    expect(text).toContain('£54,967.22');
+  });
+
+  it("carries the package's resolved phase, midpoint and inflation (M&E fit-out)", async () => {
+    const run = runAppraisal(docZ());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('M&E fit-out');
+    expect(text).toContain('12.33');
+    expect(text).toContain('£11,172.56');
+  });
+
+  it('discloses no allowance is recorded when the QS block carries none', async () => {
+    const run = runAppraisal(docZNoAllowance());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('No tender-price inflation allowance recorded');
+    expect(text).toContain('priced at 1 Feb 2026');
+    // `doc.splitTextToSize` wraps this sentence with the line break landing
+    // right after "18" (no inserted space at the join) — the two fragments
+    // below each live wholly within one wrapped line, per this describe
+    // block's own doc comment.
+    expect(text).toContain('up to 18');
+    expect(text).toContain('whole months later');
+  });
+
+  it('ends the §13.4 cost-basis sentence with the tender-price inflation rate and base date, or its absence', async () => {
+    const withAllowance = await pdfText(generateInvestmentMemo(mockProject, runAppraisal(docZ()), mockEligibility));
+    expect(withAllowance).toContain("tender-price inflation 6% p.a. to each package's spend midpoint");
+    expect(withAllowance).toContain('from 1 Feb 2026');
+
+    const noAllowance = await pdfText(
+      generateInvestmentMemo(mockProject, runAppraisal(docZNoAllowance()), mockEligibility),
+    );
+    expect(noAllowance).toContain('no tender-price inflation allowance is recorded');
+  });
+
+  it('caps development advances at the entered percentage of lender-eligible construction spend, month by month', async () => {
+    const run = runAppraisal(docZ());
+    expect(run.inputs.finance.development_cost_advance_pct).toBe(100);
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('Development advances are capped at 100%');
+    expect(text).toContain('lender-eligible construction spend month by month');
+    expect(text).toContain('professional and statutory costs');
+    expect(text).toContain('in full');
+    // No literal parens (jsPDF escapes them) — the ASCII-safe text either side.
+    expect(text).toContain('spec §4.2');
+  });
+
+  it('never prints a per-package-programme, uniform-ratio or bare "No inflation" limitation', async () => {
+    const run = runAppraisal(docZ());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).not.toContain('per-package programme');
+    expect(text).not.toContain('uniform ratio');
+    expect(text).not.toContain('No inflation');
   });
 });
