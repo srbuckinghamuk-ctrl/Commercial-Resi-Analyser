@@ -724,20 +724,13 @@ describe('R14 monitoring cost-to-complete section (spec §9/§13.4)', () => {
  * deposits, net total 92,345,000p, pre-sold 81.48% at month 12 (practical
  * completion basis).
  *
- * `fmtGBP` above (this file, ahead of "R10 cost-plan modes") rounds to whole
- * pounds — correct for the headline totals it was written for, but the
- * unit-sales ledger's per-unit fee/net figures carry real pence (e.g. fixture
- * X's u3 legal fee is 135,659p = £1,356.59, the apportioned residue of a
- * scheme-level fee split across four unequal units), so this section prints
- * pence rather than rounding them away. `fmtGBPExact` below is that
- * two-decimal formatter, scoped to this describe block only.
+ * Task 13 ruling (round 2): the section prints whole pounds via `fmtGBP`
+ * above, exactly like every other memo table — a lender reading a report
+ * where one table alone carries pence would notice the inconsistency before
+ * they noticed the precision. A prior round of this task added a two-decimal
+ * `fmtGBPExact` for this describe block specifically; that formatter (and its
+ * mirror in export-investment-memo.ts, `fmtExact`) has been removed.
  */
-function fmtGBPExact(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', {
-    style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2,
-  });
-}
-
 describe('R13b unit sales ledger section (spec §22.6/§13.4)', () => {
   it('prints the section and its net total only for a document carrying a unit sales ledger', async () => {
     const inputs = unitSalesLedgerInputs();
@@ -748,7 +741,7 @@ describe('R13b unit sales ledger section (spec §22.6/§13.4)', () => {
 
     const text = documentText(info);
     expect(text).toContain('Unit Sales Ledger');
-    expect(text).toContain(fmtGBPExact(run.metrics.unit_sales!.totals.net_pence)); // £923,450.00
+    expect(text).toContain(fmtGBP(run.metrics.unit_sales!.totals.net_pence)); // £923,450
     expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
     expect(sparsePages(info)).toEqual([]);
     expect(orphanHeadings(info).map((o) => o.text)).toEqual([]);

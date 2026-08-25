@@ -2193,19 +2193,23 @@ describe('§22.6 unit sales ledger', () => {
     // The §19.6 pattern (this file, "prints every figure verbatim off the
     // result block" above): tamper the result block after the run and assert
     // the tampered figure is printed, not one re-derived from the inputs.
+    // Task 13 ruling (round 2): the section prints whole pounds via the
+    // memo's existing `fmt` (0 dp), like every other memo table — so the
+    // tampered net figure here is itself a whole-pound amount, not a
+    // pence-bearing one, to pin what the section actually renders.
     const doc = unitSalesDoc();
     const run = runAppraisal(doc);
     const real = run.metrics.unit_sales;
     expect(real).not.toBeNull();
     const tampered = {
       ...real!,
-      units: real!.units.map((u, i) => (i === 0 ? { ...u, net_pence: 12_345_678 } : u)),
+      units: real!.units.map((u, i) => (i === 0 ? { ...u, net_pence: 12_345_600 } : u)),
       pre_sold: { ...real!.pre_sold, pct: 55.55 },
     };
     const tamperedRun = { ...run, metrics: { ...run.metrics, unit_sales: tampered } };
     const blob = generateInvestmentMemo(mockProject, tamperedRun, null);
     const text = documentText(await inspectPdf(blob));
-    expect(text).toContain('£123,456.78');
+    expect(text).toContain('£123,456');
     expect(text).toContain('Pre-sold 55.55%');
   });
 });

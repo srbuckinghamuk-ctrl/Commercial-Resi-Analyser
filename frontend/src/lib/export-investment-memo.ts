@@ -173,28 +173,6 @@ function fmt(pence: number): string {
   });
 }
 
-/**
- * R13b (spec §22.6). `fmt` above rounds every figure to the whole pound —
- * correct for the headline totals it was written for, which are themselves
- * rounded rate x area or percentage-of-round-figure amounts. The unit sales
- * ledger's per-unit fee and net figures are not: a scheme-level agent/legal
- * fee apportioned across unequal units leaves a genuine pence residue (e.g.
- * fixture X's u3 legal fee is 135,659p = £1,356.59), so printing this
- * section through `fmt` would silently round real money away. `fmtExact`
- * is the two-decimal-place formatter this section uses instead — the same
- * pairing `fmtPctExact` (below) is to `fmtPctSafe` for percentages, and
- * documented for the identical reason (§19.6's own comment on that
- * function).
- */
-function fmtExact(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', {
-    style: 'currency',
-    currency: 'GBP',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 function fmtPct(pct: number): string {
   return `${pct.toFixed(1)}%`;
 }
@@ -2728,7 +2706,7 @@ export function generateInvestmentMemo(
   if (unitSales != null) {
     y = subHeading(y, 'Unit Sales Ledger');
     const basisLabel = unitSales.pre_sold.basis === 'practical_completion' ? 'practical completion' : 'first completion';
-    y = bodyText(y, `Pre-sold ${fmtPreSoldPct(unitSales.pre_sold.pct)} of the sold portion (${fmtExact(unitSales.pre_sold.exchanged_value_pence)} of ${fmtExact(unitSales.totals.gross_pence)}) exchanged by ${monthLabel(unitSales.pre_sold.reference_month)}, measured at ${basisLabel} (spec §22.4). Deposits are ${unitSales.deposit_release === 'released_on_exchange' ? 'released to the developer at exchange' : 'held to completion'}.`);
+    y = bodyText(y, `Pre-sold ${fmtPreSoldPct(unitSales.pre_sold.pct)} of the sold portion (${fmt(unitSales.pre_sold.exchanged_value_pence)} of ${fmt(unitSales.totals.gross_pence)}) exchanged by ${monthLabel(unitSales.pre_sold.reference_month)}, measured at ${basisLabel} (spec §22.4). Deposits are ${unitSales.deposit_release === 'released_on_exchange' ? 'released to the developer at exchange' : 'held to completion'}.`);
     // §13.4, exact text: a released deposit is a modelling assumption this
     // document does not itself evidence — printed only when the document's
     // own `deposit_release` says deposits are released at exchange.
@@ -2736,13 +2714,13 @@ export function generateInvestmentMemo(
       y = bodyText(y, 'A deposit shown as released is a modelling assumption about the sale contract that this model does not evidence (spec §13.4).');
     }
     const rows = unitSales.units.map((u) => [
-      u.unit_id, fmtExact(u.gross_pence),
+      u.unit_id, fmt(u.gross_pence),
       u.exchange_month == null ? 'at completion' : monthLabel(u.exchange_month),
       monthLabel(u.completion_month),
-      fmtExact(u.deposit_pence), fmtExact(u.agent_fee_pence), fmtExact(u.legal_fee_pence), fmtExact(u.net_pence),
+      fmt(u.deposit_pence), fmt(u.agent_fee_pence), fmt(u.legal_fee_pence), fmt(u.net_pence),
     ]);
-    rows.push(['Total', fmtExact(unitSales.totals.gross_pence), '', '', fmtExact(unitSales.totals.deposits_pence),
-      fmtExact(unitSales.totals.agent_fees_pence), fmtExact(unitSales.totals.legal_fees_pence), fmtExact(unitSales.totals.net_pence)]);
+    rows.push(['Total', fmt(unitSales.totals.gross_pence), '', '', fmt(unitSales.totals.deposits_pence),
+      fmt(unitSales.totals.agent_fees_pence), fmt(unitSales.totals.legal_fees_pence), fmt(unitSales.totals.net_pence)]);
     table({
       startY: y, margin: { left: MARGIN_L, right: MARGIN_R },
       head: [['Unit', 'Gross', 'Exchange', 'Completion', 'Deposit', 'Agent', 'Legal', 'Net']],
