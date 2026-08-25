@@ -19,6 +19,7 @@ from .breakeven import (
 )
 from .cost_plan import CostPlanResult, compute_cost_plan
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
+from .due_diligence import DueDiligenceResult, compute_due_diligence, due_diligence_flags
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, run_ledger
 from .investment_case import InvestmentCaseResult
 from .lender_valuation import compute_lender_gdv
@@ -241,6 +242,10 @@ class AppraisalResultV2:
     # None exactly when the input monitoring block is None (every document
     # before construction is under way, and every migrated document).
     monitoring_statement: MonitoringStatement | None
+    # R15 spec Sec 23.4. Computed ONCE here, from the cost_plan, the schedule's
+    # vat and the acquisition tax already derived; never recomputed by the UI or
+    # the memo; never None -- a pre-v13 document is read as the seed.
+    due_diligence: DueDiligenceResult
     # Ledger flags (model.flags, unmutated) followed by metric flags computed by
     # derive_metrics itself (senior/developer breakeven unsolvable, cap-exhausted).
     # Wired in Release 3a Task 6 -- derive_metrics is pure and no longer mutates
@@ -800,6 +805,13 @@ def derive_metrics(
     monitoring_statement = compute_monitoring_statement(schedule, model, inputs, cost_plan)
     flags.extend(monitoring_flags(monitoring_statement, model))
 
+    # R15 spec Sec 23.4. Computed ONCE, here, from the cost_plan, the schedule's
+    # vat and the acquisition tax already derived above -- the UI and the memo
+    # never call compute_due_diligence themselves. Never None: a pre-v13
+    # document is read as Sec 23.10's seed, not as an empty schedule.
+    due_diligence = compute_due_diligence(inputs, cost_plan, schedule.vat, acquisition_tax, schedule)
+    flags.extend(due_diligence_flags(due_diligence, cost_plan))
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -881,5 +893,6 @@ def derive_metrics(
         # second derivation.
         unit_sales=schedule.unit_sales,
         monitoring_statement=monitoring_statement,
+        due_diligence=due_diligence,
         flags=flags,
     )

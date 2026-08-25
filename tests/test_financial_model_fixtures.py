@@ -25,6 +25,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v12,
     migrate_inputs_to_v13,
 )
+from app.financial_model.due_diligence import DD_CATALOGUE
 from app.financial_model.schedule import build_schedule
 from app.financial_model.validation import ValidationIssue, validate_inputs
 from app.financial_model.sensitivity import (
@@ -102,6 +103,14 @@ APPRAISAL_FIXTURES = [
 # cost_to_complete-only signature, mirroring golden-fixtures.test.ts's FLAT_KEYS) so a
 # pinnable quantity living outside `metrics` -- like the ledger's funding gap -- can be
 # pinned without restructuring the harness.
+#
+# R15 spec Sec 23.9's four flag codes, named once for the flag_codes_r15 mapper
+# below. Mirrors golden-fixtures.test.ts's R15_FLAG_CODES.
+_R15_FLAG_CODES = frozenset({
+    "due_diligence_unknown", "source_conflict", "consent_expires_before_start",
+    "provisional_sums_present",
+})
+
 _FLAT_KEYS = {
     # spec Sec 5.10, Release 2b Task 6
     "cost_to_complete_first_shortfall_month": (
@@ -267,6 +276,36 @@ _FLAT_KEYS = {
     # funding_gap_pence above, which is the standing precedent for a
     # quantity outside `metrics` reached through this whole-run mapper table.
     "report_safe": lambda r: r.reconciliation.report_safe,
+    # R15 spec Sec 23.8, fixture Y: due_diligence.rows/categories/source_conflicts
+    # are LISTS of dataclasses, so a dotted expected_metrics path cannot reach
+    # them (the cost_plan.contingency reasoning above). The scalar totals and the
+    # consent-expiry fields need no mapper -- they go through the dotted path.
+    #
+    # The category counts are pinned as one row of six per category, in
+    # DD_CATEGORIES order, rather than as a list of objects: the fixture JSON has
+    # to stay language-neutral, and comparing a dataclass against a dict would
+    # never pass. `due_diligence_row_codes` is not decoration -- without it
+    # `due_diligence_row_statuses` is positional against a shape nothing pins, so
+    # a reordering of the catalogue would silently re-key every status.
+    # Mirrors golden-fixtures.test.ts's five R15 mappers.
+    "due_diligence_category_counts": (
+        lambda r: [
+            [c.red, c.amber, c.green, c.unknown, c.not_applicable, c.total]
+            for c in r.metrics.due_diligence.categories
+        ]
+    ),
+    "due_diligence_row_codes": lambda r: [row.code for row in r.metrics.due_diligence.rows],
+    "due_diligence_row_statuses": lambda r: [row.status for row in r.metrics.due_diligence.rows],
+    "due_diligence_source_conflict_rules": (
+        lambda r: [c.rule for c in r.metrics.due_diligence.source_conflicts]
+    ),
+    # Sec 23.9's four flag codes as they reach `metrics.flags`, in flag order --
+    # the only pin that proves derive_metrics EXTENDS the flag list rather than
+    # merely computing the schedule. Filtered rather than pinned whole, so an
+    # unrelated flag from another release cannot break fixture Y.
+    "flag_codes_r15": (
+        lambda r: [f.code for f in r.metrics.flags if f.code in _R15_FLAG_CODES]
+    ),
 }
 
 
@@ -1490,6 +1529,43 @@ _NEGATIVE_CONTROLS = [
         # fixture's own control entry -- truly True (funding_gap_pence is 0
         # since the fix-round-1 equity resize, so no red flag fires).
         "report_safe": False,
+    }),
+    # R15 Task 5 (the same convention stated above): fixture Y adds five new
+    # _FLAT_KEYS mappers (spec Sec 23.8) -- the category counts, the two row
+    # arrays, the conflict rules and the Sec 23.9 flag codes. Each wrong value is
+    # a plausible REAL mistake rather than an arbitrary one: the counts read in
+    # (red, amber, green, unknown, n/a) order with amber and green transposed --
+    # the transposition that would report a scheme as better evidenced than it
+    # is; the row arrays with the custom row placed FIRST rather than last (the
+    # ordering rule Sec 23.3 states) and with the derived rows' statuses dropped
+    # to their entered neighbours'; the conflict rules in the opposite order; and
+    # the flag list with one `source_conflict` lost, which is what a set-valued
+    # filter (rather than an ordered one) would return. Mirrors
+    # golden-fixtures.test.ts's negativeControls entry for fixture Y.
+    ("y-due-diligence", {
+        # truly [[0,1,3,1,0,5], ...] -- planning's amber and green transposed
+        "due_diligence_category_counts": [
+            [0, 3, 1, 1, 0, 5], [1, 0, 1, 1, 2, 5], [0, 2, 5, 1, 0, 8],
+            [0, 1, 3, 0, 0, 4], [0, 0, 3, 1, 0, 4], [0, 0, 2, 1, 0, 3],
+        ],
+        # truly the 28 catalogue codes then "custom" -- the custom row first
+        "due_diligence_row_codes": ["custom"] + [e.code for e in DD_CATALOGUE],
+        # truly [..., "unknown", "green", "amber"] at 26/27/28 -- the custom row's
+        # amber moved to the front, shifting every status by one
+        "due_diligence_row_statuses": [
+            "amber", "green", "amber", "green", "green", "unknown", "red", "green", "unknown",
+            "not_applicable", "not_applicable", "amber", "green", "green", "green", "unknown",
+            "green", "green", "green", "amber", "green", "green", "green", "unknown", "green",
+            "green", "green", "unknown", "green",
+        ],
+        # truly ["occupation", "existing_area"] -- the two rules transposed
+        "due_diligence_source_conflict_rules": ["existing_area", "occupation"],
+        # truly five codes with `source_conflict` twice -- deduplicated, which is
+        # what a set-valued filter would return
+        "flag_codes_r15": [
+            "due_diligence_unknown", "source_conflict", "consent_expires_before_start",
+            "provisional_sums_present",
+        ],
     }),
 ]
 

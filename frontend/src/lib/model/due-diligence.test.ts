@@ -230,6 +230,13 @@ const VAT_BEARING_UNCONFIRMED = {
   registered: true, treatmentPatch: { construction: { rate_pct: 20 } },
 };
 
+/** The four R15 flag codes (spec §23.9), so a test that filters `metrics.flags`
+ *  down to this release's own additions does not have to restate them inline. */
+const R15_FLAG_CODES = new Set([
+  'due_diligence_unknown', 'source_conflict', 'consent_expires_before_start',
+  'provisional_sums_present',
+]);
+
 describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
   it('tax_basis goes unknown through the VAT half alone', () => {
     const taxBasis = (doc: CalculatorInputsV13): DdRow =>
@@ -277,6 +284,37 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
       ['due_diligence_unknown', 'amber', null, null,
         'due diligence: 23 of 23 entered items unknown - unknown is never treated as green'],
     ]);
+  });
+
+  it('the result is published on metrics and the flags fire', () => {
+    // §23.8: deriveMetrics computes the schedule ONCE and publishes it, and
+    // §23.9's four flag codes reach `metrics.flags` — not merely
+    // `dueDiligenceFlags`, which Task 3 already covered in isolation.
+    const metrics = runAppraisal(ddDoc()).metrics;
+    expect(metrics.due_diligence.totals.entered_unknown_count).toBe(3);
+    const r15 = metrics.flags.filter((f) => R15_FLAG_CODES.has(f.code));
+    expect(r15.map((f) => f.code)).toEqual([
+      'due_diligence_unknown', 'source_conflict', 'source_conflict',
+      'consent_expires_before_start', 'provisional_sums_present',
+    ]);
+    expect(r15.find((f) => f.code === 'provisional_sums_present')!.amount_pence).toBe(8_000_000);
+    expect(r15.find((f) => f.code === 'consent_expires_before_start')!.month).toBe(2);
+  });
+
+  it('money is inert', () => {
+    // §23.8: the evidence layer is DISCLOSURE, not cost. Fixture Y against its
+    // seed twin — which strips the source record, every entered status, the QS
+    // record and every price basis — must move no figure at all, so the whole
+    // monthly model is compared and not just the five headline totals.
+    const evidenced = runAppraisal(ddDoc());
+    const seeded = runAppraisal(ddDoc({ seed: true }));
+    for (const name of [
+      'gdv_pence', 'total_development_cost_pence', 'profit_pence',
+      'peak_debt_pence', 'finance_costs_pence',
+    ] as const) {
+      expect(evidenced.metrics[name], name).toEqual(seeded.metrics[name]);
+    }
+    expect(evidenced.model).toEqual(seeded.model);
   });
 
   it('constructionStartMonth reads the legacy packages arm', () => {

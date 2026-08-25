@@ -1,5 +1,6 @@
 """R15 spec Sec 23. Twin of due-diligence.test.ts."""
 import json
+from dataclasses import asdict
 
 from app.financial_model import run_appraisal
 from app.financial_model.due_diligence import (
@@ -211,6 +212,48 @@ def test_the_seed_twin_raises_the_unknown_flag_and_nothing_else():
         ("due_diligence_unknown", "amber", None, None,
          "due diligence: 23 of 23 entered items unknown - unknown is never treated as green"),
     ]
+
+
+# --- Sec 23.8/23.9: the schedule on the result, and the four flags ----------
+
+#: The four R15 flag codes (spec Sec 23.9), so a test that filters `metrics.flags`
+#: down to this release's own additions does not have to restate them inline.
+R15_FLAG_CODES = {
+    "due_diligence_unknown", "source_conflict", "consent_expires_before_start",
+    "provisional_sums_present",
+}
+
+
+def test_result_is_published_on_metrics_and_flags_fire():
+    """Sec 23.8: derive_metrics computes the schedule ONCE and publishes it, and
+    Sec 23.9's four flag codes reach `metrics.flags` -- not merely
+    `due_diligence_flags`, which Task 3 already covered in isolation."""
+    metrics = run_appraisal(dd_doc()).metrics
+    assert metrics.due_diligence.totals.entered_unknown_count == 3
+    r15 = [f for f in metrics.flags if f.code in R15_FLAG_CODES]
+    assert [f.code for f in r15] == [
+        "due_diligence_unknown", "source_conflict", "source_conflict",
+        "consent_expires_before_start", "provisional_sums_present",
+    ]
+    provisional = next(f for f in r15 if f.code == "provisional_sums_present")
+    assert provisional.amount_pence == 8_000_000
+    consent = next(f for f in r15 if f.code == "consent_expires_before_start")
+    assert consent.month == 2
+
+
+def test_money_is_inert():
+    """Sec 23.8: the evidence layer is DISCLOSURE, not cost. Fixture Y against
+    its seed twin -- which strips the source record, every entered status, the
+    QS record and every price basis -- must move no figure at all, so the whole
+    monthly model is compared and not just the five headline totals."""
+    evidenced = run_appraisal(dd_doc())
+    seeded = run_appraisal(dd_doc({"seed": True}))
+    for name in (
+        "gdv_pence", "total_development_cost_pence", "profit_pence",
+        "peak_debt_pence", "finance_costs_pence",
+    ):
+        assert getattr(evidenced.metrics, name) == getattr(seeded.metrics, name), name
+    assert asdict(evidenced.model) == asdict(seeded.model)
 
 
 def test_construction_start_reads_the_legacy_packages_arm():

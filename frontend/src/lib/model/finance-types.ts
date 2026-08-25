@@ -29,7 +29,9 @@ import type { MonitoringStatement } from './monitoring';
 import type { UnitSalesInputs } from './unit-sales';
 // R15 Task 1: `due_diligence` is the only CalculatorInputsV13 addition, and the
 // input types live in due-diligence.ts (the unit-sales pattern above).
-import type { DueDiligenceInputs } from './due-diligence';
+// R15 Task 5: `DueDiligenceResult` now exists (`computeDueDiligence`'s return
+// type) and `AppraisalResultV2.due_diligence` reads it below.
+import type { DueDiligenceInputs, DueDiligenceResult } from './due-diligence';
 
 export type { SpendCurve };
 
@@ -829,6 +831,10 @@ export interface AppraisalResultV2 {
    *  null exactly when the input `monitoring` block is null (every document
    *  before construction is under way, and every migrated document). */
   monitoring_statement: MonitoringStatement | null;
+  /** R15 spec §23.4. Computed ONCE in `deriveMetrics`, from the `costPlan`, the
+   *  schedule's `vat` and the acquisition tax already derived; never recomputed
+   *  by the UI or the memo; never null — a pre-v13 document is read as the seed. */
+  due_diligence: DueDiligenceResult;
   /** Ledger flags (model.flags, unmutated) followed by metric flags computed by
    * deriveMetrics itself (senior/developer breakeven unsolvable, cap-exhausted).
    * Wired in Release 3a Task 6 — deriveMetrics is pure and no longer mutates

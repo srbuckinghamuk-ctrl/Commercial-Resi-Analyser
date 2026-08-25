@@ -11,6 +11,7 @@ import {
 import { costPlanFromLegacyCosts, computeCostPlan } from './cost-plan';
 import { areaBridge } from './areas';
 import { VAT_CHARGE_CATEGORIES } from './vat';
+import { DD_CATALOGUE } from './due-diligence';
 import { runSensitivity } from './sensitivity';
 import type { SensitivityConfig } from './sensitivity';
 import { applyScenario } from './apply-scenario';
@@ -110,6 +111,14 @@ const appraisalFixtures = fixtures.filter((f) => f.kind !== 'sensitivity');
 // The mapper takes the whole AppraisalRun (widened in Release 3a from the previous
 // cost_to_complete-only signature) so a pinnable quantity living outside `metrics` —
 // like the ledger's funding gap — can be pinned without restructuring the harness.
+//
+// R15 spec §23.9's four flag codes, named once for the `flag_codes_r15` mapper
+// below. Mirrors tests/test_financial_model_fixtures.py's _R15_FLAG_CODES.
+const R15_FLAG_CODES = new Set([
+  'due_diligence_unknown', 'source_conflict', 'consent_expires_before_start',
+  'provisional_sums_present',
+]);
+
 const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // spec §5.10, Release 2b Task 6
   cost_to_complete_first_shortfall_month: (r) => r.metrics.cost_to_complete?.first_shortfall_month ?? null,
@@ -225,6 +234,28 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // funding_gap_pence above, which is the standing precedent for a quantity
   // outside `metrics` reached through this whole-run mapper table.
   report_safe: (r) => r.reconciliation.report_safe,
+  // R15 spec §23.8, fixture Y: due_diligence.rows/categories/source_conflicts are
+  // ARRAYS of objects, so a dotted expected_metrics path cannot reach them — the
+  // same reasoning as the contingency/fee mappers above. The scalar totals and
+  // the consent-expiry fields need no mapper: they go through the dotted path.
+  //
+  // The category counts are pinned as one row of six per category, in
+  // DD_CATEGORIES order, rather than as an array of objects, so the fixture JSON
+  // stays language-neutral (the Python mirror holds a list of dataclasses here).
+  // `due_diligence_row_codes` is not decoration — without it
+  // `due_diligence_row_statuses` is positional against a shape nothing pins, so a
+  // reordering of the catalogue would silently re-key every status.
+  due_diligence_category_counts: (r) => r.metrics.due_diligence.categories.map(
+    (c) => [c.red, c.amber, c.green, c.unknown, c.not_applicable, c.total],
+  ),
+  due_diligence_row_codes: (r) => r.metrics.due_diligence.rows.map((row) => row.code),
+  due_diligence_row_statuses: (r) => r.metrics.due_diligence.rows.map((row) => row.status),
+  due_diligence_source_conflict_rules: (r) => r.metrics.due_diligence.source_conflicts.map((c) => c.rule),
+  // §23.9's four flag codes as they reach `metrics.flags`, in flag order — the
+  // only pin that proves deriveMetrics EXTENDS the flag list rather than merely
+  // computing the schedule. Filtered rather than pinned whole, so an unrelated
+  // flag from another release cannot break fixture Y.
+  flag_codes_r15: (r) => r.metrics.flags.filter((f) => R15_FLAG_CODES.has(f.code)).map((f) => f.code),
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -902,6 +933,46 @@ describe('golden fixtures (shared with the Python engine)', () => {
         // control entry -- truly true (funding_gap_pence is 0 since the fix-round-1 equity
         // resize, so no red flag fires).
         report_safe: false,
+      },
+    },
+    // R15 Task 5 (the same convention this block states): fixture Y adds five new
+    // FLAT_KEYS mappers (spec §23.8) — the category counts, the two row arrays,
+    // the conflict rules and the §23.9 flag codes. Each wrong value is a
+    // plausible REAL mistake rather than an arbitrary one: the counts read in
+    // (red, amber, green, unknown, n/a) order with amber and green transposed —
+    // the transposition that would report a scheme as better evidenced than it
+    // is; the row arrays with the custom row placed FIRST rather than last (the
+    // ordering rule §23.3 states), which shifts every status by one; the conflict
+    // rules in the opposite order; and the flag list with one `source_conflict`
+    // lost, which is what a set-valued filter (rather than an ordered one) would
+    // return. Mirrors tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS
+    // entry for Y.
+    {
+      namePrefix: 'Y — due-diligence evidence schedule',
+      wrongValues: {
+        // truly [[0,1,3,1,0,5], ...] — planning's amber and green transposed
+        due_diligence_category_counts: [
+          [0, 3, 1, 1, 0, 5], [1, 0, 1, 1, 2, 5], [0, 2, 5, 1, 0, 8],
+          [0, 1, 3, 0, 0, 4], [0, 0, 3, 1, 0, 4], [0, 0, 2, 1, 0, 3],
+        ],
+        // truly the 28 catalogue codes then 'custom' — the custom row first
+        due_diligence_row_codes: ['custom', ...DD_CATALOGUE.map((e) => e.code)],
+        // truly [..., 'unknown', 'green', 'amber'] at 26/27/28 — the custom row's
+        // amber moved to the front, shifting every status by one
+        due_diligence_row_statuses: [
+          'amber', 'green', 'amber', 'green', 'green', 'unknown', 'red', 'green', 'unknown',
+          'not_applicable', 'not_applicable', 'amber', 'green', 'green', 'green', 'unknown',
+          'green', 'green', 'green', 'amber', 'green', 'green', 'green', 'unknown', 'green',
+          'green', 'green', 'unknown', 'green',
+        ],
+        // truly ['occupation', 'existing_area'] — the two rules transposed
+        due_diligence_source_conflict_rules: ['existing_area', 'occupation'],
+        // truly five codes with `source_conflict` twice — deduplicated, which is
+        // what a set-valued filter would return
+        flag_codes_r15: [
+          'due_diligence_unknown', 'source_conflict', 'consent_expires_before_start',
+          'provisional_sums_present',
+        ],
       },
     },
   ];

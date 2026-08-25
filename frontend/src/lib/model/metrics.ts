@@ -16,6 +16,7 @@ import { pct } from './pct';
 import { areaBridge } from './areas';
 import { computeCostPlan } from './cost-plan';
 import { computeMonitoringStatement } from './monitoring';
+import { computeDueDiligence, dueDiligenceFlags } from './due-diligence';
 import type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
 import { calculateGdvBreakdown } from '../conversion-calc-engine';
 import { chargeableConsiderationPence } from './vat';
@@ -566,6 +567,13 @@ export function deriveMetrics(
   const monitoringStatement = computeMonitoringStatement(schedule, model, inputs, costPlan);
   flags.push(...monitoringFlags(monitoringStatement, model));
 
+  // R15 spec §23.4. Computed ONCE, here, from the `costPlan`, the schedule's
+  // `vat` and the acquisition tax already derived above — the UI and the memo
+  // never call `computeDueDiligence` themselves. Never null: a pre-v13 document
+  // is read as §23.10's seed, not as an empty schedule.
+  const dueDiligence = computeDueDiligence(inputs, costPlan, schedule.vat, acquisitionTax, schedule);
+  flags.push(...dueDiligenceFlags(dueDiligence, costPlan));
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -641,6 +649,7 @@ export function deriveMetrics(
     // second derivation.
     unit_sales: schedule.unit_sales,
     monitoring_statement: monitoringStatement,
+    due_diligence: dueDiligence,
     flags,
   };
 }

@@ -2028,6 +2028,12 @@ Base document: Fixture F (`f-dev-finance-12mo`). Config: the §12.3/§12.4 defau
 carries no `inputs` of its own — it names `base_fixture: "f-dev-finance-12mo"`, so Fixture F's
 document cannot drift away from the sensitivity contract built on it.
 
+**R15 (§23.9), flags only.** Every `flags` list in this worksheet gained `due_diligence_unknown`
+when the evidence schedule was wired into `deriveMetrics`. Fixture F is a pre-v13 document, so
+§23.10's seed is what its schedule reads — 23 of 23 entered items unknown — and §23.9's amber
+flag fires on the base case and on every cell. Not one figure below moved: the flag is
+disclosure, not cost.
+
 **Derived inputs, by axis.** The four levers write to disjoint fields (§12.1), so the
 grid's derived inputs are the cross product of two short lists, not twenty-five
 separate derivations.

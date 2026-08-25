@@ -2,6 +2,7 @@
   "name": "K — sensitivity suite over Fixture F",
   "kind": "sensitivity",
   "base_fixture": "f-dev-finance-12mo",
+  "note": "R15 spec §23.9. Every `flags` list below gained `due_diligence_unknown` when Task 5 wired the evidence schedule into `derive_metrics`. Base fixture F is a pre-v13 document, so §23.10's seed is what its schedule reads — 23 of 23 entered items unknown — and §23.9's amber flag fires on the base case and on every cell. It is a DISCLOSURE flag, not a money one: not one hand-derived figure in this fixture moved, which is the same claim fixture Y's own note makes.",
   "config": {
     "rows": { "lever": "construction_cost", "steps": [-5, 0, 5, 10, 15] },
     "cols": { "lever": "gdv", "steps": [-15, -10, -5, 0, 5] },
@@ -31,7 +32,7 @@
     "irr_annual_pct": 91.2,
     "ltgdv_developer_pct": 48.84,
     "peak_debt_pence": 58604953,
-    "flags": []
+    "flags": ["due_diligence_unknown"]
   },
   "expected_corner_cells": [
     {
@@ -43,7 +44,7 @@
       "irr_annual_pct": 3.45,
       "ltgdv_developer_pct": 62.2,
       "peak_debt_pence": 63448870,
-      "flags": ["funding_gap"]
+      "flags": ["funding_gap", "due_diligence_unknown"]
     },
     {
       "row_step": -5,
@@ -54,7 +55,7 @@
       "irr_annual_pct": 126.26,
       "ltgdv_developer_pct": 44.7,
       "peak_debt_pence": 56322905,
-      "flags": []
+      "flags": ["due_diligence_unknown"]
     }
   ],
   "expected_tornado_order": ["gdv", "construction_cost", "timeline", "interest_rate"],

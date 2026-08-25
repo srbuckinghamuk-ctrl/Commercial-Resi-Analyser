@@ -6,7 +6,10 @@ convention already used across both languages' test suites.
 """
 import copy
 import json
+# `replace` is a pydantic-model helper defined below in this file; the dataclass
+# one is imported under its own name rather than shadowing it.
 from dataclasses import fields
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 
 import pytest
@@ -811,7 +814,29 @@ class TestAcquisitionTaxIsJurisdictionAware:
         carried = [f.name for f in fields(before) if f.name not in new_fields]
         assert len(carried) == len(fields(before)) - 2
         for name in carried:
+            # due_diligence is asserted below rather than here -- not excluded.
+            if name == "due_diligence":
+                continue
             assert getattr(after, name) == getattr(before, name), name
+
+        # R15 spec Sec 23.4. The evidence schedule carries ONE string across this
+        # migration: the tax_basis row's evidence `source` is the jurisdiction's
+        # provenance, which a v2-v4 document does not have at all and which
+        # migrate_inputs_to_v5 writes as `migrated_default`. That is disclosure
+        # telling the truth about itself, not a figure moving -- the row's STATUS
+        # is unknown either side. Patching that one string onto the v4 schedule
+        # and comparing the whole result keeps every other row, count and total
+        # under the same identity claim the loop above makes. Mirrors
+        # metrics.test.ts's test of the same name.
+        assert next(
+            r for r in before.due_diligence.rows if r.code == "tax_basis"
+        ).evidence["source"] == ""
+        patched = dataclass_replace(before.due_diligence, rows=[
+            dataclass_replace(r, evidence={**r.evidence, "source": "migrated_default"})
+            if r.code == "tax_basis" else r
+            for r in before.due_diligence.rows
+        ])
+        assert patched == after.due_diligence
 
         # Negative control: the comparison above is only meaningful if the
         # metrics object it strips down is actually populated with the figures
