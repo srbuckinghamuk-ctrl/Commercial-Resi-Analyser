@@ -1016,7 +1016,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
       // function the engine's pre-v7 fallback uses, per cost-plan.ts's own docstring
       // on why a second, divergent copy would be unsafe.
       if (versionOf(fx) === 7) {
-        expect(migrated.cost_plan).toEqual((fx.inputs as unknown as { cost_plan: unknown }).cost_plan);
+        // R15 spec §23.6 added `qs` as a new TOP-LEVEL CostPlanInputs default
+        // (unlike `phase_id`/`vat_override`/`price_basis`, which live on the
+        // wholesale-replaced `packages`/`fee_lines` arrays and so never diverge
+        // here). This pre-R15 fixture predates the field, so the migration's
+        // `{ ...defaults.cost_plan, ...saved.cost_plan }` merge fills it in —
+        // "survives untouched" now means untouched plus that one new default.
+        expect(migrated.cost_plan).toEqual({
+          ...(fx.inputs as unknown as { cost_plan: Record<string, unknown> }).cost_plan,
+          qs: null,
+        });
       } else {
         expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs));
       }

@@ -980,9 +980,10 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         packages: [
           { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
             amount_pence: 1_000_000, contingency_class: 'existing_building',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
           { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
-            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null },
+            contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
+            price_basis: null },
         ],
         contingency: [
           { name: 'general', pct: 5 },
@@ -997,6 +998,7 @@ describe('R9 — the appraisal result carries the area bridge', () => {
             basis: 'fixed', amount_pence: 700_000, pct: 0, per_dwelling: false, vat_override: null,
             phase_id: null },
         ],
+        qs: null,
       },
     });
     expect(run.metrics.cost_plan.construction_total_pence).toBe(run.schedule.totals.construction_pence);

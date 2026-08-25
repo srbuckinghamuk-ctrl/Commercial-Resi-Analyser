@@ -27,6 +27,9 @@ import type { MonitoringStatement } from './monitoring';
 // R13b Task 1: `unit_sales` is the only CalculatorInputsV12 addition, and the
 // input types live in unit-sales.ts (the investment-case pattern above).
 import type { UnitSalesInputs } from './unit-sales';
+// R15 Task 1: `due_diligence` is the only CalculatorInputsV13 addition, and the
+// input types live in due-diligence.ts (the unit-sales pattern above).
+import type { DueDiligenceInputs } from './due-diligence';
 
 export type { SpendCurve };
 
@@ -420,10 +423,21 @@ export interface CalculatorInputsV12 extends Omit<CalculatorInputsV11, 'inputs_v
   unit_sales: UnitSalesInputs | null;
 }
 
+/**
+ * R15 spec §23.1. `due_diligence` is the only addition, and — unlike
+ * `unit_sales`/`monitoring` — it is NOT nullable: an unexamined document is one
+ * whose every item is `unknown`, and the migration writes that explicitly.
+ */
+export interface CalculatorInputsV13 extends Omit<CalculatorInputsV12, 'inputs_version'> {
+  inputs_version: 13;
+  due_diligence: DueDiligenceInputs;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12;
+  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
+  | CalculatorInputsV13;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -455,7 +469,19 @@ export type FlagCode =
   | 'monitoring_cost_variance'
   /** R14 spec §20.3. Fires when the monitoring statement's `reporting_month`
    *  is later than the inception ledger's last repaying month. */
-  | 'monitoring_dated_after_redemption';
+  | 'monitoring_dated_after_redemption'
+  /** R15 spec §23.9. Fires when a required catalogue item's status is
+   *  `unknown` at export or lender-pack time. */
+  | 'due_diligence_unknown'
+  /** R15 spec §23.9. Fires when the source record's structured fields
+   *  disagree with a due-diligence item's evidence for the same fact. */
+  | 'source_conflict'
+  /** R15 spec §23.9. Fires when a consent's `expiry_date` falls before the
+   *  programme's start month. */
+  | 'consent_expires_before_start'
+  /** R15 spec §23.9. Fires when any cost-plan package carries a
+   *  `provisional_sum` or `estimate` `price_basis`. */
+  | 'provisional_sums_present';
 
 export interface ModelFlag {
   code: FlagCode;

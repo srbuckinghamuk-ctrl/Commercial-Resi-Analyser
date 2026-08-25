@@ -157,6 +157,7 @@ function newPackage(): CostPackage {
     notes: '',
     vat_override: null,
     phase_id: null,
+    price_basis: null,
   };
 }
 

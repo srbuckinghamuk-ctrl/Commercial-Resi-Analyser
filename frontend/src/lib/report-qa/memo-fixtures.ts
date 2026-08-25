@@ -477,17 +477,17 @@ export function detailedCostPlanInputs(): CalculatorInputsV8 {
         {
           id: 'pkg-structure', code: 'structure', label: 'Structural repairs',
           amount_pence: 20_000_000, contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope — windows, cladding, roof',
           amount_pence: 10_000_000, contingency_class: 'existing_building', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
         {
           id: 'pkg-externals', code: 'externals', label: 'Externals and landscaping',
           amount_pence: 5_000_000, contingency_class: 'abnormal', lender_eligible: false, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
       ],
       contingency: [
@@ -500,6 +500,7 @@ export function detailedCostPlanInputs(): CalculatorInputsV8 {
         if (f.code === 'planning_consultant') return { ...f, basis: 'pct_of_construction_total' as const, amount_pence: 0, pct: 1.5 };
         return f;
       }),
+      qs: null,
     },
   });
 }

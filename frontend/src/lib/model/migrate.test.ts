@@ -546,11 +546,13 @@ function detailedV7Document(): CalculatorInputsV7 {
           // R9 recorded against a gate that could not fail.
           vat_override: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
           phase_id: null,
+          price_basis: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope',
           amount_pence: 10_000_000, contingency_class: 'existing_building',
           lender_eligible: true, notes: '', vat_override: null, phase_id: null,
+          price_basis: null,
         },
       ],
       contingency: v7.cost_plan.contingency.map((c) => ({
@@ -563,6 +565,7 @@ function detailedV7Document(): CalculatorInputsV7 {
           ? { ...f, vat_override: { rate_pct: 20, recoverable_pct: 0, recovery_basis: 'blocked' as const } }
           : f
       )),
+      qs: null,
     },
   };
 }

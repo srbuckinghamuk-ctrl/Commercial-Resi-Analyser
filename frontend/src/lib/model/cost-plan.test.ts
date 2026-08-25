@@ -23,7 +23,7 @@ const CLASSES = (general: number, existing: number, abnormal: number) => [
 const pkg = (id: string, amount: number, over = {}) => ({
   id, code: 'structure' as const, label: id, amount_pence: amount,
   contingency_class: 'general' as const, lender_eligible: true, notes: '',
-  vat_override: null, phase_id: null, ...over,
+  vat_override: null, phase_id: null, price_basis: null, ...over,
 });
 
 /** R11 spec §17.8. Two small builders used by the planted-divergence test and
@@ -45,7 +45,8 @@ function detailedCostPlanDocument(over: {
   contingency?: CalculatorInputsV7['cost_plan']['contingency'];
 } = {}): CalculatorInputsV7 {
   const packages = over.packages?.map((p) => (
-    { label: p.id, lender_eligible: true, notes: '', vat_override: null, ...p, phase_id: p.phase_id ?? null }
+    { label: p.id, lender_eligible: true, notes: '', vat_override: null, ...p,
+      phase_id: p.phase_id ?? null, price_basis: p.price_basis ?? null }
   ));
   const contingency = over.contingency?.map((c) => ({ package_ids: [] as string[], ...c }));
   return doc({

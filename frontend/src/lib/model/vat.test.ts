@@ -264,6 +264,7 @@ function buildWorkedVatCase(opts: WorkedVatOpts = {}) {
       packages: [],
       contingency: defaultContingencyClasses(0),
       fee_lines: [],
+      qs: null,
     },
     finance: {
       ...v7.finance,
@@ -338,17 +339,18 @@ function buildDetailedVatCase(opts: { mode?: 'detailed' | 'headline' } = {}) {
         {
           id: 'p1', code: 'structure', label: 'Structure', amount_pence: 60_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
         {
           id: 'p2', code: 'envelope', label: 'Envelope', amount_pence: 40_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '',
           vat_override: { rate_pct: 5, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
-          phase_id: null,
+          phase_id: null, price_basis: null,
         },
       ],
       contingency: defaultContingencyClasses(10),
       fee_lines: [],
+      qs: null,
     },
     finance: { ...v7.finance, term_months: 7 },
     programme: null,

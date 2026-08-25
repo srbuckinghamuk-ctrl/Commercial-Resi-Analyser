@@ -938,6 +938,7 @@ describe('R10 — cost plan validation', () => {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
       vat_override: null, ...overrides, phase_id: overrides.phase_id ?? null,
+      price_basis: overrides.price_basis ?? null,
     };
   }
 
@@ -1299,7 +1300,7 @@ describe('R11 — VAT validation (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override, phase_id: null,
+      vat_override: override, phase_id: null, price_basis: null,
     };
   }
 
@@ -1625,7 +1626,7 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override, phase_id: null,
+      vat_override: override, phase_id: null, price_basis: null,
     };
   }
 
@@ -1836,12 +1837,13 @@ function detailedCostPlan(): CostPlanInputs {
     packages: [{
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: null, phase_id: null,
+      vat_override: null, phase_id: null, price_basis: null,
     }],
     contingency: [
       { name: 'general', pct: 5 }, { name: 'existing_building', pct: 0 }, { name: 'abnormal', pct: 0 },
     ],
     fee_lines: [],
+    qs: null,
   };
 }
 

@@ -27,6 +27,10 @@ export const CONTINGENCY_CLASS_NAMES: readonly ContingencyClassName[] = [
   'general', 'existing_building', 'abnormal',
 ];
 
+/** R15 spec §23.6. null = not classified (the migration default). */
+export type PriceBasis = 'fixed_price' | 'provisional_sum' | 'estimate';
+export const PRICE_BASIS_VALUES: readonly PriceBasis[] = ['fixed_price', 'provisional_sum', 'estimate'];
+
 export interface CostPackage {
   id: string;
   code: CostPackageCode;
@@ -55,6 +59,9 @@ export interface CostPackage {
    *  window. null on every migrated row and on every line the user has not
    *  re-tagged; resolved ONLY through `resolvedPhaseId()` (Task 11). */
   phase_id: string | null;
+  /** R15 spec §23.6. null = not classified (the migration default). Read only
+   *  by computeCostPlan's price-basis summary. */
+  price_basis: PriceBasis | null;
 }
 
 /** R11 spec §17.8. One mechanism: the package's own `contingency_class` tag.
@@ -116,6 +123,19 @@ export interface FeeLine {
   phase_id: string | null;
 }
 
+export type QsStage = 'order_of_cost' | 'riba_2' | 'riba_3' | 'riba_4' | 'tender' | 'contract_sum';
+export const QS_STAGES: readonly QsStage[] = ['order_of_cost', 'riba_2', 'riba_3', 'riba_4', 'tender', 'contract_sum'];
+export type QsStatus = 'draft' | 'issued' | 'reviewed';
+export const QS_STATUSES: readonly QsStatus[] = ['draft', 'issued', 'reviewed'];
+/** R15 spec §23.6. Detailed mode only (validation rule 8). */
+export interface QsProvenance {
+  source: string;
+  stage: QsStage;
+  date: string;       // ISO yyyy-mm-dd
+  status: QsStatus;
+  base_date: string;  // ISO; R15b's inflation origin
+}
+
 export interface CostPlanInputs {
   mode: CostPlanMode;
   packages: CostPackage[];
@@ -123,6 +143,9 @@ export interface CostPlanInputs {
    *  order. This is schema, not a user-managed list. */
   contingency: ContingencyClass[];
   fee_lines: FeeLine[];
+  /** R15 spec §23.6. null on every migrated document and on every plan the
+   *  user has not entered a QS provenance record for. */
+  qs: QsProvenance | null;
 }
 
 export function defaultContingencyClasses(generalPct: number): ContingencyClass[] {
@@ -142,6 +165,7 @@ export const DEFAULT_COST_PLAN: CostPlanInputs = {
   packages: [],
   contingency: defaultContingencyClasses(10),
   fee_lines: [],
+  qs: null,
 };
 
 import type { ConversionCostInputs } from '../conversion-types';
@@ -184,6 +208,7 @@ export function costPlanFromLegacyCosts(cc: ConversionCostInputs): CostPlanInput
       fee('cil_s106', 'CIL / S106', cc.cil_s106_pence),
       fee('building_control', 'Building control', cc.building_control_pence),
     ],
+    qs: null,
   };
 }
 
