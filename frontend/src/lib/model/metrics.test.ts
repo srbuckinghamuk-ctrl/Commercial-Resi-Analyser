@@ -20,6 +20,7 @@ import { buildSchedule } from './schedule';
 import { computeCostPlan } from './cost-plan';
 import { originalBudgets } from './monitoring';
 import { investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
+import { unitSalesDoc, heldTwinDoc } from './__fixtures__/unit-sales-docs';
 
 const MONITORING_FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
@@ -73,6 +74,7 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     vat: emptyVat(u.length),
     programme: null,
     investment_case: null,
+    unit_sales: null,
     resolved_exit_months: { tranches: [], refinance: null },
     // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
     // hand-built schedules keep the pre-R14 cap base exactly.
@@ -445,6 +447,203 @@ describe('§5.11 under phasing', () => {
     const f = run.metrics.flags.find((x) => x.code === 'senior_breakeven_unsolvable');
     expect(f?.message).toMatch(/sales sweep/);
     expect(run.metrics.flags.some((x) => x.code === 'breakeven_cap_exhausted')).toBe(false);
+  });
+});
+
+// R13b Task 9 (spec §5.11 correction). Fixture S's two tranches are anchored
+// (unit_completions+0 -> resolved month 16, unit_completions+3 -> resolved month
+// 19) but carry deliberately-disagreeing raw month_offset values (20, 21).
+// Before this task the phased break-even replay read tr.month_offset — the raw,
+// unresolved month — rather than schedule.resolved_exit_months.tranches, so an
+// anchored tranche on a slipped programme replayed receipts at a month the
+// ledger never used.
+const FIXTURE_S_PATH = resolve(MONITORING_FIXTURE_DIR, 's-dated-programme.json');
+
+function fixtureSInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_S_PATH, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
+function sWithFirstAnchor(phaseId: string): AnyCalculatorInputs {
+  const doc = structuredClone(fixtureSInputs()) as AnyCalculatorInputs & {
+    sales_phasing: { tranches: Array<{ anchor: { phase_id: string; offset_months: number } | null }> };
+  };
+  doc.sales_phasing.tranches[0].anchor = { phase_id: phaseId, offset_months: 0 };
+  return doc;
+}
+
+function sWithBothAnchored(phaseId: string): AnyCalculatorInputs {
+  const doc = structuredClone(fixtureSInputs()) as AnyCalculatorInputs & {
+    sales_phasing: { tranches: Array<{ anchor: { phase_id: string; offset_months: number } | null }> };
+  };
+  doc.sales_phasing.tranches[0].anchor = { phase_id: phaseId, offset_months: 0 };
+  doc.sales_phasing.tranches[1].anchor = { phase_id: phaseId, offset_months: 1 };
+  return doc;
+}
+
+describe('§5.11 correction — anchored tranches replay at their resolved months (fixture S)', () => {
+  it('S break-even replays at the resolved months, not the raw offsets', () => {
+    const run = runAppraisal(fixtureSInputs());
+    expect(run.schedule.resolved_exit_months.tranches).toEqual([16, 19]);
+    // Pre-fix (raw months 20/21) both engines printed 90,971,520 — the negative control.
+    expect(run.metrics.senior_breakeven_pence).not.toBe(90_971_520);
+    expect(run.metrics.senior_breakeven_pence).toBe(88_720_089);
+  });
+
+  it('reading the resolved month changes which anchor disturbs the facility, not solvability', () => {
+    // Both documents keep month_offset 20 on the first tranche (a decoy never
+    // consulted while an anchor is present) — only the first tranche's anchor
+    // differs. Anchored to strip_out it resolves to month 6; anchored to
+    // building_control, month 15. Draws run through month 13 in both cases.
+    //
+    // Deviation from brief (Task 9): the brief's own test asserted
+    // early.senior_breakeven_pence === null with a senior_breakeven_unsolvable
+    // flag. That does not reconcile — verified independently in both engines
+    // (this test and its Python twin agree to the penny: 96,756,404 /
+    // 88,462,082) and by a direct monotonicity trace of phasedReplayRedeems
+    // across G in 1,000,000p steps (a single clean feasible/infeasible
+    // boundary, no non-monotonic artefact). §5.11's structural-unsolvable
+    // guard — untouched by this task ("the tranche arm's arithmetic ... is
+    // untouched") — fires only when draws continue after the LAST tranche's
+    // resolved month. Only the FIRST tranche's anchor moves here; the second
+    // tranche stays anchored at unit_completions+3 (month 19), so
+    // Math.max(...schedule.resolved_exit_months.tranches) is 19 in BOTH
+    // cases, and draws stop at month 13 — the guard never fires for either
+    // anchor, matching the untouched spec definition ("facility draws
+    // continue after the FINAL tranche month").
+    //
+    // The real, reconciled difference: strip_out's month (6) falls WHILE the
+    // facility is still drawing, so the first tranche's 30% sweep fully
+    // redeems the facility early and it is redrawn by the remaining draws
+    // (months 7-13) — raising the pre-existing, unrelated
+    // facility_redrawn_after_redemption flag — before the second tranche
+    // clears the new balance at month 19. building_control's month (15)
+    // falls after all draws finish, so no such redraw occurs. Both are
+    // genuinely solvable; the resolved month changes WHICH ledger-level flag
+    // fires, not whether senior_breakeven_pence exists.
+    const early = runAppraisal(sWithFirstAnchor('strip_out')).metrics;
+    const late = runAppraisal(sWithFirstAnchor('building_control')).metrics;
+    expect(early.senior_breakeven_pence).toBe(96_756_404);
+    expect(early.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(true);
+    expect(early.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+    expect(late.senior_breakeven_pence).toBe(88_462_082);
+    expect(late.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(false);
+    expect(late.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+  });
+
+  it('unsolvable guard fires when every resolved tranche precedes the last draw', () => {
+    // Controller ruling (task 9 review). Both tranches anchored to the SAME
+    // early phase this time — strip_out+0 / strip_out+1 -> resolved months 6
+    // and 7 (still month_offset 20/21, the same never-consulted decoys, and
+    // still strictly increasing, so validation passes). Draws run through
+    // month 13, i.e. past BOTH resolved tranche months now, so
+    // Math.max(...resolved) = 7 and the guard genuinely fires: no more
+    // receipts ever arrive after month 7 to redeem what months 8-13 keep
+    // drawing.
+    //
+    // This is the case the brief's original (single-tranche-anchored) pair
+    // could not actually exercise — there, the untouched second tranche
+    // stayed at month 19, so max(resolved) never moved below the last draw.
+    // Pre-fix, this same document was "solvable": the guard read
+    // Math.max(...phasing.tranches.map((x) => x.month_offset)) = max(20, 21)
+    // = 21, and no draws occur after month 21, so the raw-offset guard never
+    // fired — exactly the R13b defect this task fixes.
+    //
+    // building_control+0 / +1 -> resolved 15 and 16, both after the last
+    // draw (13), reproduces the base document's clean, solvable shape — the
+    // negative control proving the guard is anchor-direction-sensitive, not
+    // just always-on.
+    const early = runAppraisal(sWithBothAnchored('strip_out')).metrics;
+    const late = runAppraisal(sWithBothAnchored('building_control')).metrics;
+    expect(early.senior_breakeven_pence).toBeNull();
+    expect(early.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(true);
+    expect(late.senior_breakeven_pence).not.toBeNull();
+    expect(late.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+  });
+});
+
+describe('unit-sales break-even basis (spec §22.5/§5.12)', () => {
+  it('unit-sales path solves the phased break-even and agrees with the engine-verified relationship to held', () => {
+    // Deviation from brief (task 8): the brief's own test (and the task instructions'
+    // Step 11 "hand check") assert released < held — the intuitive claim that releasing
+    // deposits early should LOWER the break-even, since cash reaches the facility sooner.
+    // It does not reconcile against either engine on fixture X's fee-BEARING facility.
+    //
+    // Root cause, confirmed by direct replay trace (not a bug in this task's code):
+    // phasedReplayRedeems (pre-existing, unmodified here) reserves the fixed exit fee
+    // (520,000p, committed_gross_facility basis) out of EVERY partial sweep event with
+    // balance > 0, not just the final redeeming one — a documented §5.11 conservatism
+    // (see breakeven.ts's phasedReplayRedeems doc comment: "principal repayment is
+    // delayed by at most `fee` per tranche"). The released-deposit document creates THREE
+    // extra small early sweep events (months 8, 10, 11 — u1/u2/u4's exchange deposits)
+    // that the held twin does not have (it pays everything in one lump at each unit's
+    // completion): released sweeps at 6 distinct months, held at 3. At the solved G
+    // (36,624,486), the non-final sweeps are m8 1,007,658, m10 1,162,682, m11 406,939,
+    // m12 8,731,336, m13 16,668,184 (direct replay trace): m8, m10, m12 and m13 each
+    // divert EXACTLY 520,000p from principal (sweep > fee, so the fee is fully reserved);
+    // m11's sweep (406,939) is BELOW the fee, so its entire amount is lost — repaying
+    // nothing at all, not even "sweep minus fee". That totals 4×520,000 + 406,939 =
+    // 2,486,939p diverted/lost for released, against 2×520,000 = 1,040,000p for held (m12,
+    // m13 only) — a 1,446,939p sweep-level gap that reconciles with the observed
+    // 1,385,606p break-even gap (36,624,486 − 35,238,880), a real, reproducible cost that
+    // outweighs the benefit of receiving cash sooner.
+    //
+    // This IS the timing benefit fighting the fee-reservation cost, not a broken
+    // implementation masquerading as one: isolate the fee reservation by zeroing
+    // exit_fee_pct on both documents (§22.5's test-only exitFeePct override) and the
+    // ordering flips back to the intuitive released < held, proving deposit timing
+    // genuinely helps once the reservation artefact is removed, and that a broken arm
+    // (e.g. dropping the deposit lines entirely) would only push released further above
+    // held, not reverse it. Per this task's instruction, the arithmetic that produces the
+    // fee-bearing reversal is unchanged (verbatim from the brief) — only the test's
+    // asserted direction on the fee-bearing fixture is corrected, with this trail in
+    // place of the brief's unreconciled claim, and the fee-free liveness guard below is
+    // the assertion that actually falsifies a broken deposit-timing implementation.
+    const released = runAppraisal(unitSalesDoc()).metrics;
+    const held = runAppraisal(heldTwinDoc()).metrics;
+    expect(released.senior_breakeven_pence).not.toBeNull();
+    expect(held.senior_breakeven_pence).not.toBeNull();
+    expect(released.senior_breakeven_pence as number).toBeGreaterThan(held.senior_breakeven_pence as number);
+    expect(released.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+
+    // Fee-free twins: with the fee-reservation conservatism isolated out (exitFeePct=0
+    // on both), released is genuinely lower than held — 33,522,952 vs 33,664,679 — the
+    // timing-liveness guard the fixture-fee assertion above cannot provide on its own.
+    const feeFreeReleased = runAppraisal(unitSalesDoc({ exitFeePct: 0 })).metrics;
+    const feeFreeHeld = runAppraisal(unitSalesDoc({ depositRelease: 'held_to_completion', exitFeePct: 0 })).metrics;
+    expect(feeFreeReleased.senior_breakeven_pence).not.toBeNull();
+    expect(feeFreeHeld.senior_breakeven_pence).not.toBeNull();
+    expect(feeFreeReleased.senior_breakeven_pence as number).toBeLessThan(feeFreeHeld.senior_breakeven_pence as number);
+  });
+
+  it('developer break-even uses the per-unit cost basis', () => {
+    // Same document with u3's 2.0% override removed: the blended rate falls (350,000 ->
+    // 262,500 on u3), so the developer break-even falls with it.
+    const withOverride = runAppraisal(unitSalesDoc()).metrics.developer_breakeven_pence;
+    const doc = unitSalesDoc();
+    const rows = doc.unit_sales!.units.map((r) => ({ ...r })) as Array<Record<string, unknown>>;
+    rows[2].agent_fee_pct = null;
+    const without = runAppraisal(unitSalesDoc({ rows })).metrics.developer_breakeven_pence;
+    expect(withOverride).not.toBeNull();
+    expect(without).not.toBeNull();
+    expect(withOverride as number).toBeGreaterThan(without as number);
+  });
+
+  it('unsolvable reason is receipt-worded on the per-unit path', () => {
+    // R13b final review wave: move every completion to fixed month 3 with
+    // exchange null and deposit_pct 0, so the only receipt is at month 3
+    // while construction draws still run months 4-11 -- the same
+    // structurally-unsolvable shape as the tranche arm, but reached via
+    // unitSalesResult rather than salesPhasing, so the message must say
+    // "sale receipt", not "sales tranche".
+    const rows = ['u1', 'u2', 'u3', 'u4'].map((unitId) => ({
+      unit_id: unitId, exchange: null, completion: { month_offset: 3, anchor: null },
+      deposit_pct: 0, agent_fee_pct: null, legal_fee_pence: null,
+    }));
+    const metrics = runAppraisal(unitSalesDoc({ rows })).metrics;
+    expect(metrics.senior_breakeven_pence).toBeNull();
+    const flag = metrics.flags.find((f) => f.code === 'senior_breakeven_unsolvable');
+    expect(flag).toBeDefined();
+    expect(flag?.message).toContain('final sale receipt');
   });
 });
 

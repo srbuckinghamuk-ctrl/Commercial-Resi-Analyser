@@ -14,6 +14,9 @@ import type { ProgrammeNetwork, DerivedPhase } from './programme';
 // R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
 // return type) and `Schedule.investment_case` reads it below.
 import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-case';
+// R13b Task 6: `UnitSalesResult` now exists (`computeUnitSales`'s return
+// type) and `Schedule.unit_sales`/`AppraisalResultV2.unit_sales` read it below.
+import type { UnitSalesResult } from './unit-sales';
 // R14 Task 9: `MonitoringStatement` now exists (`computeMonitoringStatement`'s
 // return type) and `AppraisalResultV2.monitoring_statement` reads it below.
 // Type-only, so this does not create a runtime import cycle even though
@@ -21,6 +24,9 @@ import type { InvestmentCaseInputs, InvestmentCaseResult } from './investment-ca
 // `import type` is fully erased at compile time, exactly as `investment-case.ts`'s
 // own type-only import back into this file already relies on.
 import type { MonitoringStatement } from './monitoring';
+// R13b Task 1: `unit_sales` is the only CalculatorInputsV12 addition, and the
+// input types live in unit-sales.ts (the investment-case pattern above).
+import type { UnitSalesInputs } from './unit-sales';
 
 export type { SpendCurve };
 
@@ -183,6 +189,15 @@ export { OPEX_CODES } from './investment-case';
 // (imported above); the UI needs both it and its line type off the same barrel
 // `../../lib/model` every other result type is read from.
 export type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
+
+// R13b Task 1: the unit-sales input types live in unit-sales.ts (the
+// investment-case pattern); Task 4 adds `UnitSalesResult` and its row/month/
+// basis types to this list.
+export type {
+  DepositRelease, SaleEvent, UnitSale, UnitSalesInputs,
+  PreSoldBasis, UnitSaleRow, UnitSalesMonth, UnitSalesResult,
+} from './unit-sales';
+export { DEPOSIT_RELEASE_VALUES } from './unit-sales';
 
 /** R12 spec §18.6. A month expressed relative to a phase's derived start. */
 export interface PhaseAnchor {
@@ -394,10 +409,21 @@ export interface CalculatorInputsV11 extends Omit<CalculatorInputsV10, 'inputs_v
   monitoring: MonitoringInputs | null;
 }
 
+/**
+ * R13b spec §22.1. `unit_sales` is the only addition: a two-state field,
+ * top level beside `investment_case` and `monitoring`, `null` = the document
+ * does not use the per-unit path (every existing document, bit-identical per
+ * the v12 identity gate); non-null = one row per sold unit.
+ */
+export interface CalculatorInputsV12 extends Omit<CalculatorInputsV11, 'inputs_version'> {
+  inputs_version: 12;
+  unit_sales: UnitSalesInputs | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
-  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11;
+  | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -515,6 +541,10 @@ export interface Schedule {
    *  `investment_case` is null: no block is synthesised for a document that
    *  never asked for one. */
   investment_case: InvestmentCaseResult | null;
+  /** R13b spec §22.6. `computeUnitSales`'s full result, computed once here
+   *  and republished — never recomputed — onto `AppraisalResultV2`. null
+   *  exactly when the INPUT `unit_sales` is null. */
+  unit_sales: UnitSalesResult | null;
   /** R13 spec §19.6, closing §18.10 limitation 9. The memo and CashflowPage
    *  print a tranche's or the refinance's month; before this field existed
    *  they printed the RAW `month_offset` while the ledger used the resolved
@@ -764,6 +794,10 @@ export interface AppraisalResultV2 {
    *  the INPUT `investment_case` is null. The UI and the report read it from
    *  here and never call `computeInvestmentCase`. */
   investment_case: InvestmentCaseResult | null;
+  /** R13b spec §22.6. The SCHEDULE's `unit_sales`, republished — not a second
+   *  derivation, the treatment §17.12 gave `vat`. null exactly when the INPUT
+   *  `unit_sales` is null. */
+  unit_sales: UnitSalesResult | null;
   /** R14 spec §20.4. Computed ONCE in `deriveMetrics`, from the `costPlan` it
    *  already holds and the `model` — never recomputed by the UI or the memo.
    *  null exactly when the input `monitoring` block is null (every document
@@ -776,4 +810,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.13.0';
+export const CALC_VERSION = '2.14.0';

@@ -19,9 +19,9 @@ import type {
   CalculatorInputsV8, AcquisitionInputsV5,
 } from '../model';
 import {
-  migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV11,
+  migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV11, migrateInputsToV12,
 } from '../model';
-import type { CalculatorInputsV11 } from '../model/finance-types';
+import type { CalculatorInputsV11, CalculatorInputsV12 } from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
 export const qaProject: Project = {
@@ -161,10 +161,10 @@ export function sellAllInputs(): CalculatorInputsV4 {
       { id: 'r4', description: 'Sales absorption slower than modelled', likelihood: 'medium', impact: 'medium', mitigation: 'Retain-and-refinance contingent exit' },
     ],
     scenarios: {
-      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
-      upside: { label: 'Upside', gdv_adjustment_pct: 8, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
-      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 12, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
-      severe: { label: 'Severe', gdv_adjustment_pct: -18, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
+      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
+      upside: { label: 'Upside', gdv_adjustment_pct: 8, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
+      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 12, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
+      severe: { label: 'Severe', gdv_adjustment_pct: -18, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
     },
     deal_spider: {
       storeys: 3,
@@ -546,4 +546,28 @@ export function monitoringOnSiteInputs(): CalculatorInputsV11 {
     readFileSync(resolve(FIXTURE_DIR, 'w-monitoring-on-site.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
   return migrateInputsToV11(raw.inputs);
+}
+
+/**
+ * R13b (Task 13, spec §22.6/§13.4). The release's golden unit-sales-ledger
+ * case: a v12 document (fixture X, fixtures/financial-model/
+ * x-unit-sales-ledger.json — four units of unequal value, released deposits,
+ * one agent override, one legal override, a seven-phase network with a
+ * practical_completion milestone) carrying a non-null `unit_sales` block.
+ * Every OTHER fixture this file exports carries `unit_sales: null` (nothing
+ * before v12 has the field at all, and no other v12 fixture exists here),
+ * which is exactly what lets `memo-release-gate.test.ts`'s ROUTES sweep
+ * assert the memo's new "Unit Sales Ledger" section is absent everywhere
+ * except the document built from this function — the same
+ * `monitoringOnSiteInputs` precedent immediately above.
+ *
+ * NOT added to `ROUTES`: that array is the negative-control corpus the
+ * absence assertion walks, and this is the one fixture the assertion must
+ * NOT hold for.
+ */
+export function unitSalesLedgerInputs(): CalculatorInputsV12 {
+  const raw = JSON.parse(
+    readFileSync(resolve(FIXTURE_DIR, 'x-unit-sales-ledger.json'), 'utf-8'),
+  ) as { inputs: Record<string, unknown> };
+  return migrateInputsToV12(raw.inputs);
 }

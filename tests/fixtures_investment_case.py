@@ -59,7 +59,7 @@ FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-mode
 
 SensitivityLever = Literal[
     "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
-    "exit_yield", "operating_cost", "vacancy",
+    "exit_yield", "operating_cost", "vacancy", "sales_slip",
 ]
 
 
@@ -509,6 +509,10 @@ _LEVER_FIELD: dict[str, str] = {
     "exit_yield": "exit_yield_adjustment_pct",
     "operating_cost": "operating_cost_adjustment_pct",
     "vacancy": "vacancy_adjustment_pct",
+    # R13b spec Sec 22.8. Task 10's ninth lever; inert on ic_doc() (no
+    # unit_sales), but this table's own order-independence test (extended to
+    # nine below) still covers its tie-break slot in LEVER_ORDER.
+    "sales_slip": "sales_slip_months",
 }
 
 

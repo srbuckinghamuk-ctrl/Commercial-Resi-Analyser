@@ -26,7 +26,7 @@ async def db_engine():
 def _case_row(project_id, status: str) -> LenderCaseORM:
     return LenderCaseORM(
         project_id=project_id, status=status,
-        locked_inputs_snapshot={}, locked_calc_version="2.13.0",
+        locked_inputs_snapshot={}, locked_calc_version="2.14.0",
         locked_inputs_version=11, locked_input_hash="a" * 64,
         locked_outputs_hash="b" * 64, locked_audit_hash="c" * 64,
         case_hash="d" * 64, created_by="T. Test",

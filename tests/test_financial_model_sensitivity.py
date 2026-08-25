@@ -34,6 +34,7 @@ from app.financial_model.types import (
     parse_calculator_inputs,
 )
 from .fixtures_investment_case import explicit_refinance_doc, ic_doc
+from .fixtures_unit_sales import unit_sales_doc
 
 FIXTURE_F = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 FIXTURE_I = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "i-phased-sales.json"
@@ -82,7 +83,7 @@ def test_default_tornado_matches_the_spec():
 def test_lever_order_matches_the_spec():
     assert list(LEVER_ORDER) == [
         "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
-        "exit_yield", "operating_cost", "vacancy",
+        "exit_yield", "operating_cost", "vacancy", "sales_slip",
     ]
 
 
@@ -1076,3 +1077,31 @@ def test_gives_a_zero_width_tornado_bar_not_an_error_on_a_null_investment_case()
     assert bar.low.profit_pence is not None
     assert bar.low.profit_pence == bar.high.profit_pence
     assert bar.span_pence == 0
+
+
+# R13b spec Sec 22.8. The ninth lever: sales_slip. Mirror of the "sales_slip
+# lever" describe block in sensitivity.test.ts.
+
+def test_sales_slip_gives_a_zero_width_tornado_bar_on_a_null_unit_sales_document():
+    doc = explicit_refinance_doc()
+    result = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]), cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[TornadoRange(lever="sales_slip", low=-1, high=1)]))
+    bar = result.tornado[0]
+    assert bar.low.profit_pence is not None and bar.low.profit_pence == bar.high.profit_pence
+
+
+def test_sales_slip_cells_go_invalid_not_clamped_at_both_ends():
+    result = run_sensitivity(unit_sales_doc(), SensitivityConfig(
+        rows=SensitivityAxis(lever="sales_slip", steps=[-5, 0, 4]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]), tornado=[]))
+    cells = [result.matrix[i][0] for i in range(3)]
+    assert cells[0].profit_pence is None and any(e.field == "unit_sales.units[0].exchange" for e in cells[0].validation_errors)
+    assert cells[1].profit_pence is not None and cells[1].validation_errors == []
+    assert cells[2].profit_pence is None and any(e.field == "unit_sales.units[3].completion" for e in cells[2].validation_errors)
+
+
+def test_sales_slip_steps_must_be_whole_months():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="sales_slip", steps=[0.5]), cols=SensitivityAxis(lever="gdv", steps=[0]), tornado=[]))
+    assert any("sales_slip steps must be whole months." == i.message for i in issues)

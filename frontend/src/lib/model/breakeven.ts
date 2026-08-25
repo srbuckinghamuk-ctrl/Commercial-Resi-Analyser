@@ -86,6 +86,16 @@ export function solveDeveloperBreakeven(t: DeveloperBreakevenTerms): number | nu
   return bisectMinimalFeasible(lo, hi, feasible);
 }
 
+/** R13b spec §22.5. One dated receipt at its BASE (unstressed) gross; the replay
+ * scales every line by G / G_base. A released deposit is a line with no costs;
+ * a completion carries the unit's agent rate and its fixed legal. */
+export interface ReceiptLine {
+  month: number;
+  base_gross_pence: number;
+  agent_fee_pct: number;
+  legal_fee_pence: number;
+}
+
 /** Phased senior break-even (spec §5.11 phased regime). Freezes the actual run's
  * draw+capitalised-fee schedule, scales tranche receipts by a uniform factor, and
  * replays §4.4's sweep (fee-once, sales_sweep_pct, both arms) with §4's interest
@@ -112,11 +122,36 @@ export interface PhasedSeniorBreakevenTerms {
   enforcement_cost_assumption_pence: number;
   finance: FacilityTerms;           // exit-fee basis terms
   committed_gross_facility_pence: number;
+  /** §22.5's second arm. When set the tranche arm is not consulted; the list is
+   *  already sorted by (month, units[] order) by its builder. */
+  receipt_lines?: ReceiptLine[];
 }
 
 /** Net tranche proceeds at total gross G, split per §4.4.1 (residue absorption,
- * pro-rata costs); enforcement deducted from the first tranche. Keyed by month. */
-function phasedNetByMonth(t: PhasedSeniorBreakevenTerms, totalGross: number): Map<number, number> {
+ * pro-rata costs); enforcement deducted from the first tranche. Keyed by month.
+ * When `t.receipt_lines` is set, §22.5's second arm replaces the tranche
+ * arithmetic entirely: each line's base gross scales by G / G_base, the last
+ * line absorbs the rounding residue, and the line's own agent rate / fixed
+ * legal apply. Exported for the receipt-lines arm test only — production
+ * callers reach it only through phasedReplayRedeems / solveSeniorBreakevenPhased. */
+export function phasedNetByMonth(t: PhasedSeniorBreakevenTerms, totalGross: number): Map<number, number> {
+  if (t.receipt_lines != null) {
+    const out = new Map<number, number>();
+    const baseTotal = t.receipt_lines.reduce((sum, line) => sum + line.base_gross_pence, 0);
+    if (totalGross <= 0 || baseTotal <= 0) return out;
+    let allocated = 0;
+    t.receipt_lines.forEach((line, i) => {
+      const last = i === t.receipt_lines!.length - 1;
+      const gross = last ? totalGross - allocated
+        : Math.round((line.base_gross_pence * totalGross) / baseTotal);
+      allocated += gross;
+      const agent = Math.round((gross * line.agent_fee_pct) / 100);
+      const enforcement = i === 0 ? t.enforcement_cost_assumption_pence : 0;
+      out.set(line.month, (out.get(line.month) ?? 0) + gross - agent - line.legal_fee_pence - enforcement);
+    });
+    return out;
+  }
+
   const out = new Map<number, number>();
   if (totalGross <= 0) return out;
   const agentFeeTotal = Math.round((totalGross * t.selling_agent_fee_pct) / 100);
@@ -205,11 +240,16 @@ export function phasedReplayRedeems(t: PhasedSeniorBreakevenTerms, totalGross: n
 }
 
 export function solveSeniorBreakevenPhased(t: PhasedSeniorBreakevenTerms): number | null {
-  if (t.selling_agent_fee_pct >= 100) return null;
-  if (t.tranches.length === 0) return null;
+  let lastMonth: number;
+  if (t.receipt_lines != null) {
+    if (t.receipt_lines.length === 0 || t.receipt_lines.some((line) => line.agent_fee_pct >= 100)) return null;
+    lastMonth = Math.max(...t.receipt_lines.map((line) => line.month));
+  } else {
+    if (t.selling_agent_fee_pct >= 100 || t.tranches.length === 0) return null;
+    lastMonth = Math.max(...t.tranches.map((x) => x.month_offset));
+  }
   if (t.sales_sweep_pct <= 0) return null;
-  const lastTranche = Math.max(...t.tranches.map((x) => x.month_offset));
-  for (let m = lastTranche + 1; m < t.draws_and_fees_pence.length; m++) {
+  for (let m = lastMonth + 1; m < t.draws_and_fees_pence.length; m++) {
     if (t.draws_and_fees_pence[m] > 0) return null;   // structurally unsolvable
   }
   // Upper-bound seed: the zero-receipts trajectory's terminal balance + fee is a lower

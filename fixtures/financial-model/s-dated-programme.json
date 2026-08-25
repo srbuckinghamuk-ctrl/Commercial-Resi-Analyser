@@ -193,6 +193,7 @@
     "funding_gap_pence": 6300000,
     "cost_to_complete_first_shortfall_month": null,
     "cost_to_complete_max_shortfall_pence": 0,
+    "senior_breakeven_pence": 88720089,
     "redemption_balance_at_disposal_pence": 9486865,
     "redemption_schedule_months": [16, 19],
     "redemption_schedule_balances_pence": [82932858, 9486865],

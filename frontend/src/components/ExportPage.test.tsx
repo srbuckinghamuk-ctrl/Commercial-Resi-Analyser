@@ -33,7 +33,7 @@ const { default: ExportPage } = await import('./ExportPage');
 const { getAppraisal, getLenderCase } = await import('../lib/api');
 const { generateAppraisalPdf } = await import('../lib/export-pdf');
 const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
-const { defaultCalculatorInputsV4, defaultCalculatorInputsV11 } = await import('../lib/conversion-defaults');
+const { defaultCalculatorInputsV4, defaultCalculatorInputsV12 } = await import('../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -131,12 +131,13 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
   // genuine v7 snapshot rather than v6.
   //
   // R11 Task 10: once more, to v8. R12 Task 18b: once more, to v9. R13 Task
-  // 18: once more, to v10. R14 Task 14: once more, to v11. The whole point of
-  // moving the server and both client halves in ONE commit is that this test
-  // can never be left pinned a version behind the boundary it guards.
-  it('exports from the v11 snapshot the server now stores, rather than failing on it', async () => {
+  // 18: once more, to v10. R14 Task 14: once more, to v11. R13b Task 15: once
+  // more, to v12. The whole point of moving the server and both client
+  // halves in ONE commit is that this test can never be left pinned a
+  // version behind the boundary it guards.
+  it('exports from the v12 snapshot the server now stores, rather than failing on it', async () => {
     const storedV11 = storedV4Appraisal();
-    storedV11.inputs_snapshot = defaultCalculatorInputsV11({
+    storedV11.inputs_snapshot = defaultCalculatorInputsV12({
       id: PROJECT.id, price_pence: PROJECT.price_pence, floor_area_sqm: PROJECT.floor_area_sqm,
     }) as unknown as Record<string, unknown>;
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV11);
@@ -151,11 +152,11 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     ).not.toBeInTheDocument();
 
     const run = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![1];
-    expect(run.inputs.inputs_version).toBe(11);
+    expect(run.inputs.inputs_version).toBe(12);
     // The block reached the engine, rather than being dropped somewhere on the
     // way through the export path. Narrowed with `in` rather than cast: `run.inputs`
-    // is the AnyCalculatorInputs union and only the v8, v9, v10 and v11 members
-    // declare `vat`, so a cast would assert exactly the thing under test.
+    // is the AnyCalculatorInputs union and only the v8, v9, v10, v11 and v12
+    // members declare `vat`, so a cast would assert exactly the thing under test.
     expect('vat' in run.inputs).toBe(true);
     if ('vat' in run.inputs) {
       expect(run.inputs.vat.registered).toBe(false);
@@ -174,6 +175,10 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     // two-state monitoring block intact (null here -- no statement entered).
     expect('monitoring' in run.inputs).toBe(true);
     if ('monitoring' in run.inputs) expect(run.inputs.monitoring).toBeNull();
+    // R13b spec 22: a v12 document reaches the export path with its nullable
+    // unit_sales block intact (null here -- no per-unit ledger entered).
+    expect('unit_sales' in run.inputs).toBe(true);
+    if ('unit_sales' in run.inputs) expect(run.inputs.unit_sales).toBeNull();
   });
 });
 
@@ -192,7 +197,7 @@ describe('ExportPage feeds the lender case into the memo provenance (R14b Task 9
       project_id: 'p1',
       status: 'credit_approved',
       locked_inputs_snapshot: {},
-      locked_calc_version: '2.13.0',
+      locked_calc_version: '2.14.0',
       locked_inputs_version: 11,
       locked_input_hash: 'input-hash',
       locked_outputs_hash: 'outputs-hash',

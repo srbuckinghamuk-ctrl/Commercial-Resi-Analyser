@@ -19,16 +19,17 @@ import { isProgrammeNetwork } from './programme';
 
 export type SensitivityLever =
   | 'gdv' | 'construction_cost' | 'timeline' | 'interest_rate' | 'phase_slip'
-  | 'exit_yield' | 'operating_cost' | 'vacancy';
+  | 'exit_yield' | 'operating_cost' | 'vacancy' | 'sales_slip';
 
 /** Spec §12.4 tie-break order, making the tornado sort total and so deterministic (§1.4).
  *  R12 spec §18.9 appended the fifth lever, `phase_slip`, at the end — it is the newest
  *  and lowest-priority tie-break, not a reordering of the four §12.1 levers. R13 spec
  *  §19.8 appends the three investment-case levers the same way: newest and
- *  lowest-priority, not a reordering of what came before. */
+ *  lowest-priority, not a reordering of what came before. R13b spec §22.8 appends the
+ *  ninth lever, `sales_slip`, last again, same rule. */
 export const LEVER_ORDER: readonly SensitivityLever[] = [
   'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
-  'exit_yield', 'operating_cost', 'vacancy',
+  'exit_yield', 'operating_cost', 'vacancy', 'sales_slip',
 ];
 
 /** Spec §12.6: an axis is capped at nine steps, bounding the suite at 81 cells. */
@@ -185,7 +186,7 @@ export function validateSensitivityConfig(
 
   for (const [name, axis] of axes) {
     const field = `sensitivity.${name}.lever`;
-    // Spec §12.6: an axis lever must be one of the eight §12.1/§18.9/§19.8 levers.
+    // Spec §12.6: an axis lever must be one of the nine §12.1/§18.9/§19.8/§22.8 levers.
     // `LEVER_ORDER` is the closed set — this is what stops a bad-cased or
     // misspelled lever from silently producing a matrix in which that axis does
     // nothing, or (in the Python mirror) crashing inside LEVER_ORDER.index()
@@ -210,14 +211,15 @@ export function validateSensitivityConfig(
     // meaning in the ledger. Constraining the timeline lever here is also what makes
     // the Python mirror's int() narrowing of `timeline_adjustment_months` safe — see
     // app/financial_model/apply_scenario.py. §18.9 extends the same rule to
-    // `phase_slip`: `slip_months` is a whole month count too.
+    // `phase_slip`: `slip_months` is a whole month count too. R13b spec §22.8 extends
+    // it again to `sales_slip`.
     if (
-      (axis.lever === 'timeline' || axis.lever === 'phase_slip')
+      (axis.lever === 'timeline' || axis.lever === 'phase_slip' || axis.lever === 'sales_slip')
       && axis.steps.some((s) => !Number.isInteger(s))
     ) {
       // Fix round 1, Finding 5: worded per the actual offending lever, not a fixed
       // "Timeline" — this surfaces verbatim in the calculator's issues panel.
-      const label = axis.lever === 'timeline' ? 'Timeline steps' : 'phase_slip steps';
+      const label = axis.lever === 'timeline' ? 'Timeline steps' : `${axis.lever} steps`;
       issues.push({ severity: 'error', field, message: `${label} must be whole months.` });
     }
   }
@@ -291,13 +293,13 @@ export function validateSensitivityConfig(
       });
     }
     // Spec §12.6, same whole-month rule as the axes above; §18.9 extends it to
-    // phase_slip.
+    // phase_slip, and R13b spec §22.8 extends it again to sales_slip.
     if (
-      (range.lever === 'timeline' || range.lever === 'phase_slip')
+      (range.lever === 'timeline' || range.lever === 'phase_slip' || range.lever === 'sales_slip')
       && (!Number.isInteger(range.low) || !Number.isInteger(range.high))
     ) {
       // Fix round 1, Finding 5: same rewording as the axis rule above.
-      const label = range.lever === 'timeline' ? 'Timeline bounds' : 'phase_slip bounds';
+      const label = range.lever === 'timeline' ? 'Timeline bounds' : `${range.lever} bounds`;
       issues.push({
         severity: 'error', field: 'sensitivity.tornado',
         message: `${label} must be whole months.`,
@@ -365,6 +367,7 @@ const ZERO_SCENARIO: ScenarioOverrides = {
   exit_yield_adjustment_pct: 0,
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
+  sales_slip_months: 0,
 };
 
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
@@ -383,6 +386,7 @@ function overridesFor(setting: LeverSetting): ScenarioOverrides {
     exit_yield_adjustment_pct: setting.lever === 'exit_yield' ? setting.value : 0,
     operating_cost_adjustment_pct: setting.lever === 'operating_cost' ? setting.value : 0,
     vacancy_adjustment_pct: setting.lever === 'vacancy' ? setting.value : 0,
+    sales_slip_months: setting.lever === 'sales_slip' ? setting.value : 0,
   };
 }
 

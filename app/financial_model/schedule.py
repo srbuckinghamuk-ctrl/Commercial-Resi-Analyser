@@ -27,6 +27,7 @@ from .engine import money_round
 from .acquisition_tax import calculate_acquisition_tax, resolve_acquisition_date
 from .investment_case import InvestmentCaseResult, compute_investment_case
 from .programme import DerivedPhase, derive_phases, is_legacy_programme, is_programme_network
+from .unit_sales import UnitSalesResult, compute_unit_sales
 from .types import (
     AcquisitionInputs,
     AcquisitionInputsV5,
@@ -250,6 +251,10 @@ class Schedule:
     # when the INPUT investment_case is None: no block is synthesised for a
     # document that never asked for one.
     investment_case: InvestmentCaseResult | None = None
+    # R13b spec Sec 22.6. compute_unit_sales's full result, computed once here
+    # and republished (never recomputed) onto AppraisalResultV2. None exactly
+    # when the INPUT unit_sales is None.
+    unit_sales: UnitSalesResult | None = None
     resolved_exit_months: ScheduleResolvedExitMonths = field(
         default_factory=lambda: ScheduleResolvedExitMonths(tranches=[], refinance=None),
     )
@@ -533,8 +538,26 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
     agent_fee = money_round((gross_sales * inputs.exit_strategy.selling_agent_fee_pct) / 100)
     selling_legal = inputs.exit_strategy.selling_legal_fee_pence if len(sold_units) > 0 else 0
     sales_phasing = getattr(inputs, "sales_phasing", None)
+    # R13b spec Sec 22.2/22.3. The sold set's (id, gross) pairs -- value plus
+    # ancillary, the same figure gross_sales summed above -- handed to the pure
+    # module so gdv and receipts stay equal by construction.
+    unit_sales = compute_unit_sales(
+        inputs, term, resolve_anchor_month,
+        [(u.id, u.estimated_value_pence + unit_ancillary_value_pence(u)) for u in sold_units],
+    )
     if gross_sales > 0:
-        if sales_phasing is None:
+        if unit_sales is not None:
+            # Sec 22.3: accumulate (+=), never the single-disposal arm's full
+            # replace. A released deposit is gross_sale_pence in the exchange
+            # month; the balance and both costs land at completion.
+            for row in unit_sales["units"]:
+                if row["deposit_released_pence"] > 0 and row["exchange_month"] is not None:
+                    receipts[row["exchange_month"]].gross_sale_pence += row["deposit_released_pence"]
+                c = row["completion_month"]
+                receipts[c].gross_sale_pence += row["gross_pence"] - row["deposit_released_pence"]
+                receipts[c].agent_fee_pence += row["agent_fee_pence"]
+                receipts[c].selling_legal_pence += row["legal_fee_pence"]
+        elif sales_phasing is None:
             # calc 2.2.0 behaviour, byte-identical: single disposal in the final
             # month (spec Sec 4.4).
             receipts[term - 1] = MonthReceipts(
@@ -619,7 +642,12 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
             net_proceeds_pence=net_proceeds_pence,
         )
 
-    selling_costs = agent_fee + selling_legal if gross_sales > 0 else 0
+    # Sec 22.2: totals are sum-of-units on the per-unit path.
+    selling_costs = (
+        unit_sales["totals"]["agent_fees_pence"] + unit_sales["totals"]["legal_fees_pence"]
+        if unit_sales is not None
+        else (agent_fee + selling_legal if gross_sales > 0 else 0)
+    )
 
     # R11 spec Sec 17.6. VAT is computed from the finished spend profile and
     # written back onto it. One pass, and strictly one-directional: nothing
@@ -660,6 +688,10 @@ def build_schedule(inputs: AnyCalculatorInputs) -> Schedule:
         # one. Computed once, above, and republished (never recomputed) onto
         # AppraisalResultV2 by Task 11.
         investment_case=investment_case,
+        # R13b spec Sec 22.6. Computed once, above, and republished (never
+        # recomputed) onto AppraisalResultV2. None exactly when the INPUT
+        # unit_sales is None.
+        unit_sales=unit_sales,
         resolved_exit_months=resolved_exit_months,
         # R14 spec Sec 4.2(b). Computed once on the cost plan, republished here
         # so the ledger reads one figure and never re-derives it.

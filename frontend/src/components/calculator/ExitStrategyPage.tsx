@@ -1,13 +1,14 @@
 import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
 import type {
-  CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11, AppraisalRun, SalesPhasingInputsV9,
-  InvestmentCaseInputs,
+  CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12,
+  AppraisalRun, SalesPhasingInputsV9, InvestmentCaseInputs,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import ExitAnchorControl from './ExitAnchorControl';
 import OperatingScheduleEditor from './OperatingScheduleEditor';
 import InvestmentCaseCard from './InvestmentCaseCard';
+import UnitSalesEditor, { seedUnitSales, reconcileUnitSalesRows } from './UnitSalesEditor';
 
 /**
  * R13 Task 15 (spec §19.1/§19.6), widened by R14 Task 14 (the entry-point
@@ -23,12 +24,21 @@ import InvestmentCaseCard from './InvestmentCaseCard';
  * for a v9 caller -- there is nothing to author yet, exactly as the release
  * note says.
  */
-type ExitCarrier = CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11;
+export type ExitCarrier = CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12;
 
 function hasInvestmentCase<T extends ExitCarrier>(
   x: T,
 ): x is T & (CalculatorInputsV10 | CalculatorInputsV11) {
   return 'investment_case' in x;
+}
+
+/**
+ * R13b Task 11 (spec §22.6). `unit_sales` exists on v12 only -- the same
+ * discriminator pattern `hasInvestmentCase` already uses for v10/v11's
+ * `investment_case`. A v9/v10/v11 caller simply never renders the ledger.
+ */
+function hasUnitSales<T extends ExitCarrier>(x: T): x is T & CalculatorInputsV12 {
+  return 'unit_sales' in x;
 }
 
 /** A blank starting policy for a case that has never been authored. Every
@@ -59,6 +69,7 @@ interface Props<T extends ExitCarrier> {
 export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChange, run }: Props<T>) {
   const exit = inputs.exit_strategy;
   const units = inputs.unit_mix.units;
+  const term = Math.max(1, Math.floor(inputs.finance.term_months));
 
   const updateExit = useCallback(
     (partial: Partial<typeof exit>) => {
@@ -67,15 +78,37 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
     [exit, onChange],
   );
 
+  // R13b Task 11 (spec §22.6). `usCarrier`/`unitSales` mirror `icCarrier`/`ic`
+  // below -- the sole v12 discriminator. `soldIds` is the set of units the
+  // ledger must carry exactly one row for: none under retain_all, every unit
+  // under sell_all, and every unit NOT in `retained_units` under blended.
+  const usCarrier = hasUnitSales(inputs);
+  const unitSales = usCarrier ? inputs.unit_sales : null;
+  const soldIds = exit.route === 'retain_all'
+    ? []
+    : units.filter((u) => exit.route === 'sell_all' || !exit.retained_units.some((r) => r.unit_id === u.id))
+      .map((u) => u.id);
+
   const updateRetained = useCallback(
     (unitId: string, rent: number) => {
       const existing = exit.retained_units.filter((r) => r.unit_id !== unitId);
       if (rent > 0) {
         existing.push({ unit_id: unitId, monthly_rent_pence: rent });
       }
-      updateExit({ retained_units: existing });
+      const partial: Record<string, unknown> = { exit_strategy: { ...exit, retained_units: existing } };
+      // R13b Task 11: a retained/un-retained unit changes the sold set, so a
+      // ledger already in play must be reconciled to it in the SAME payload
+      // -- never left carrying a row for a unit no longer sold.
+      if (usCarrier && unitSales != null) {
+        const newRetainedIds = new Set(existing.map((r) => r.unit_id));
+        const newSoldIds = exit.route === 'retain_all'
+          ? []
+          : units.filter((u) => exit.route === 'sell_all' || !newRetainedIds.has(u.id)).map((u) => u.id);
+        partial.unit_sales = reconcileUnitSalesRows(unitSales, newSoldIds, term);
+      }
+      onChange(partial as Partial<T>);
     },
-    [exit, updateExit],
+    [exit, onChange, usCarrier, unitSales, units, term],
   );
 
   const totalAnnualRent = useMemo(
@@ -113,7 +146,6 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
 
   const phasing = inputs.sales_phasing;
   const refinance = inputs.refinance;
-  const term = Math.max(1, Math.floor(inputs.finance.term_months));
   const pctSum = phasing?.tranches.reduce((a, b) => a + b.pct_of_gross_receipts, 0) ?? 0;
 
   // R12 Task 18b / R13 Task 14. A tranche this page creates is SEEDED
@@ -126,10 +158,25 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
   // reads the programme's phases and emits `PhaseAnchor | null`; it performs
   // no month arithmetic itself.
   const phasesForAnchor = inputs.programme?.phases ?? [];
+  // R13b Task 11 (spec §22.1 rule -- mutual exclusion with unit_sales).
+  // Enabling phasing on a v12 carrier must null `unit_sales` in the SAME
+  // payload, or the editor would briefly hold an invalid document (both
+  // blocks non-null). Disabling phasing does not touch unit_sales: by the
+  // same invariant it is already null whenever phasing is non-null, so there
+  // is nothing to clear.
   const togglePhasing = () => onChange({
     sales_phasing: phasing ? null
       : { tranches: [{ month_offset: term - 1, pct_of_gross_receipts: 100, anchor: null }] },
+    ...(usCarrier && !phasing ? { unit_sales: null } : {}),
   } as Partial<T>);
+  // R13b Task 11. The ledger's own toggle -- exact mirror of `togglePhasing`
+  // for the other side of the exclusive pair. Enabling seeds one row per
+  // currently-sold unit and nulls `sales_phasing` in the same payload;
+  // disabling just nulls the block (phasing, if the user wants it, is a
+  // separate click on its own toggle).
+  const toggleUnitSales = () => onChange((unitSales
+    ? { unit_sales: null }
+    : { unit_sales: seedUnitSales(soldIds, term), sales_phasing: null }) as unknown as Partial<T>);
   const updateTranche = (i: number, partial: Partial<SalesPhasingInputsV9['tranches'][number]>) => {
     if (!phasing) return;
     const tranches = phasing.tranches.map((t, j) => (j === i ? { ...t, ...partial } : t));
@@ -159,7 +206,13 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
   // is invalid the moment the route changes, not merely unreachable in the UI.
   const selectRoute = (route: ExitRoute) => {
     const partial: Record<string, unknown> = { exit_strategy: { ...exit, route } };
-    if (route === 'retain_all') partial.sales_phasing = null;
+    if (route === 'retain_all') {
+      partial.sales_phasing = null;
+      // R13b Task 11 (spec §22.7 rule 2, mirroring rule 1's sales_phasing
+      // clear above): retain_all sells nothing, so a non-null ledger is
+      // invalid the moment the route changes.
+      if (usCarrier) partial.unit_sales = null;
+    }
     if (route === 'sell_all') {
       partial.refinance = null;
       if (icCarrier) partial.investment_case = null;
@@ -305,6 +358,21 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
             return (
               <div key={unit.id} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                 <span style={{ color: '#94a3b8', width: 140, fontSize: 14 }}>Unit {i + 1} ({unit.type})</span>
+                {/* R13b Task 11: the ledger's reconciliation needs an explicit
+                    retain/sell toggle, not merely "rent > 0" -- a unit can be
+                    retained at a genuinely-zero rent. Checking it retains at
+                    the existing rent (or a placeholder default if none was
+                    ever entered); unchecking removes the retained_units row,
+                    exactly as entering 0 already did. */}
+                <input
+                  type="checkbox"
+                  aria-label={`Retain ${unit.id}`}
+                  checked={retained != null}
+                  onChange={(e) => updateRetained(
+                    unit.id,
+                    e.target.checked ? (retained?.monthly_rent_pence || DEFAULT_RETAINED_RENT_PENCE) : 0,
+                  )}
+                />
                 <div style={{ position: 'relative', width: 140, display: 'inline-block' }}>
                   <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
                   <input
@@ -339,7 +407,36 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
                 Σ {pctSum}%
               </span>
             )}
+            {/* R13b Task 11 (spec §22.6): the per-unit ledger, mutually
+                exclusive with phasing above -- both toggles' click handlers
+                write the exclusive null in the same payload (togglePhasing/
+                toggleUnitSales above), belt and braces against the two ever
+                being non-null together. */}
+            {usCarrier && (
+              <button
+                onClick={toggleUnitSales}
+                style={{
+                  padding: '6px 16px', background: unitSales ? '#1e3a5f' : '#2563eb', color: '#fff',
+                  border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                }}
+              >
+                {unitSales ? 'Disable per-unit ledger' : 'Use per-unit ledger'}
+              </button>
+            )}
           </div>
+
+          {usCarrier && unitSales != null && (
+            <UnitSalesEditor
+              unitSales={unitSales}
+              result={run.schedule.unit_sales}
+              phases={phasesForAnchor}
+              term={term}
+              units={units.map((u) => ({ id: u.id, type: u.type }))}
+              schemeAgentPct={exit.selling_agent_fee_pct}
+              schemeLegalPence={exit.selling_legal_fee_pence}
+              onChange={(next) => onChange({ unit_sales: next } as unknown as Partial<T>)}
+            />
+          )}
 
           {phasing && (
             <div>

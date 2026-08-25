@@ -1,12 +1,12 @@
-import type { AppraisalRun, CalculatorInputsV11 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV12 } from '../../lib/model';
 import { isLegacyProgramme, isProgrammeNetwork } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
 
 interface Props {
-  inputs: CalculatorInputsV11;
-  onChange: (partial: Partial<CalculatorInputsV11>) => void;
+  inputs: CalculatorInputsV12;
+  onChange: (partial: Partial<CalculatorInputsV12>) => void;
   run: AppraisalRun;
 }
 
@@ -71,7 +71,14 @@ export default function CashflowPage({ run }: Props) {
     const refinanceClause = refinance != null && schedule.resolved_exit_months.refinance != null
       ? `; refinance in ${label(schedule.resolved_exit_months.refinance)}`
       : '';
-    return `${spendClause}${disposalClause}${refinanceClause}; see calculation specification §4.4–§6.1.`;
+    // R13b spec §22.6: per-unit ledger disposal months, resolved via
+    // `units[].completion_month` (the ledger's own resolved month) -- never
+    // the raw `month_offset` an anchored row was entered with.
+    const unitSalesClause = run.metrics.unit_sales != null
+      ? `; per-unit sales: ${run.metrics.unit_sales.units.length} units completing in `
+        + `${run.metrics.unit_sales.units.map((u) => label(u.completion_month)).join(', ')}`
+      : '';
+    return `${spendClause}${disposalClause}${refinanceClause}${unitSalesClause}; see calculation specification §4.4–§6.1.`;
   })();
 
   // R11 Task 14 (spec §17.13, ruling R25). `uses_total_pence` has silently
@@ -92,6 +99,14 @@ export default function CashflowPage({ run }: Props) {
   // or an absolute value. Read from `model.months[]`, never recomputed here.
   const hasNoi = model.months.some((m) => m.net_operating_income_pence !== 0);
   const noiTotal = model.months.reduce((s, m) => s + m.net_operating_income_pence, 0);
+  // R13b spec §22.6: "deposits released" reads `run.metrics.unit_sales`
+  // (null when the document carries no per-unit ledger) -- never summed or
+  // recomputed here. `hasDeposits` is false on the held twin (deposit_release
+  // = 'held_to_completion' zeroes every month's release) as well as on the
+  // null path.
+  const unitSales = run.metrics.unit_sales;
+  const hasDeposits = unitSales != null && unitSales.months.some((m) => m.deposits_received_pence !== 0);
+  const depositsTotal = unitSales?.totals.deposits_released_pence ?? 0;
 
   return (
     <div>
@@ -132,6 +147,7 @@ export default function CashflowPage({ run }: Props) {
             <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
               {['Month', 'Costs (VAT-incl.)', 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
                 'Undrawn net', 'Headroom', ...(hasNoi ? ['NOI'] : []), 'Receipts (net)',
+                ...(hasDeposits ? ['Deposits released'] : []),
                 ...(hasRefi ? ['Refi proceeds'] : []),
                 'Repayment', 'Distribution', 'Gap'].map((h) => (
                 <th key={h} style={th}>{h}</th>
@@ -159,6 +175,9 @@ export default function CashflowPage({ run }: Props) {
                   </td>
                 )}
                 <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(m.net_receipts_pence)}</td>
+                {hasDeposits && (
+                  <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(unitSales!.months[m.month].deposits_received_pence)}</td>
+                )}
                 {hasRefi && <td style={{ ...td, color: '#22c55e' }}>{penceToPounds(m.refinance_proceeds_pence)}</td>}
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.repayment_pence)}</td>
                 <td style={{ ...td, color: m.distribution_pence >= 0 ? '#22c55e' : '#ef4444' }}>{penceToPounds(m.distribution_pence)}</td>
@@ -182,6 +201,7 @@ export default function CashflowPage({ run }: Props) {
               <td style={td}>—</td>
               {hasNoi && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(noiTotal)}</td>}
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(netReceiptsTotal)}</td>
+              {hasDeposits && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(depositsTotal)}</td>}
               {hasRefi && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(refiTotal)}</td>}
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.repayments_pence)}</td>
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.distributions_pence)}</td>

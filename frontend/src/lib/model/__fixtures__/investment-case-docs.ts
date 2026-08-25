@@ -708,6 +708,10 @@ const LEVER_STEPS: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof Scenari
   exit_yield: 'exit_yield_adjustment_pct',
   operating_cost: 'operating_cost_adjustment_pct',
   vacancy: 'vacancy_adjustment_pct',
+  // R13b spec §22.8. Task 10's ninth lever; inert on icDoc() (no unit_sales),
+  // but this table's own order-independence test (extended to nine) still
+  // covers its tie-break slot in LEVER_ORDER.
+  sales_slip: 'sales_slip_months',
 };
 
 /**
@@ -726,6 +730,7 @@ export function applyLeversInOrder(
     timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
     phase_slip_phase_id: null, phase_slip_months: 0,
     exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   };
   return leverNames.reduce((acc, lever) => {
     if (lever === 'phase_slip') {

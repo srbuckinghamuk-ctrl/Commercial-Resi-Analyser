@@ -214,6 +214,7 @@ Alembic revision the release shipped, where it moved the persistence schema at a
 | R13 | 2.12.0 | v10 | — | The investment case: hold-period NOI, a yield valuation, an LTV/DSCR/ICR-sized take-out | §19 |
 | R14 | 2.13.0 | v11 | — | §5.10's C1 correction, the monitoring statement, `lender_eligible` wired into §4.2(b) | §20 |
 | **R14b** | **2.13.0 — unchanged** | **v11 — unchanged** | **006** | **Lender case governance: `lender_cases` + `lender_case_events`, the state machine, `case_hash`, derived staleness, the Python governance twin. No engine change, no schema change, no fixture pin moved — the release is versioned by the migration and by the spec section alone** | **§21** |
+| R13b | 2.14.0 | v12 | — | The unit-level sales ledger: per-unit timing, deposits, cost overrides, pre-sales coverage, `sales_slip`; §5.11 replays anchored tranches at resolved months | §22 |
 
 **Why R14b bumps neither number.** Nothing inside `inputs_snapshot` moves and no arithmetic
 changes, so an inputs bump would be a lie and a calc bump would be worse than one: `calc_version`

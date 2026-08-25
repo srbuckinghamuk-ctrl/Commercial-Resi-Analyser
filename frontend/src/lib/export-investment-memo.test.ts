@@ -25,6 +25,13 @@ import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 import {
   anchoredSlippedDoc, investmentCaseDoc, explicitRefinanceDoc, memoText,
 } from './model/__fixtures__/investment-case-docs';
+// R13b (spec §22.6). Aliased: this file already imports a `memoText` from
+// investment-case-docs.ts above — the two are independent helpers (different
+// document version, different generated project) that happen to share a
+// name, per that module's own doc comment ("Twin of investment-case-docs.ts").
+import {
+  unitSalesDoc, heldTwinDoc, memoText as unitSalesMemoText,
+} from './model/__fixtures__/unit-sales-docs';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -106,10 +113,10 @@ function baseInputs(): CalculatorInputsV2 {
       { id: 'r2', description: 'Sales rate slower than expected', likelihood: 'medium', impact: 'medium', mitigation: 'Competitive pricing strategy, flexible exit' },
     ],
     scenarios: {
-      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
-      upside: { label: 'Upside', gdv_adjustment_pct: 10, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
-      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 15, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
-      severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0 },
+      base: { label: 'Base Case', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0, timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
+      upside: { label: 'Upside', gdv_adjustment_pct: 10, construction_cost_adjustment_pct: -5, timeline_adjustment_months: -2, interest_rate_adjustment_pct: 0, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
+      downside: { label: 'Downside', gdv_adjustment_pct: -10, construction_cost_adjustment_pct: 15, timeline_adjustment_months: 3, interest_rate_adjustment_pct: 1, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
+      severe: { label: 'Severe', gdv_adjustment_pct: -15, construction_cost_adjustment_pct: 20, timeline_adjustment_months: 6, interest_rate_adjustment_pct: 2, phase_slip_phase_id: null, phase_slip_months: 0, exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0, sales_slip_months: 0 },
     },
     deal_spider: {
       storeys: 2,
@@ -2163,5 +2170,46 @@ describe('§19.6 the memo investment-case section', () => {
     // `dscr_cap_pence` — deliberately left untampered — equals the real
     // quantum and would still appear regardless of what this test proves).
     expect(text).not.toContain(fmt(real!.stabilised.annual_noi_pence));
+  });
+});
+
+describe('§22.6 unit sales ledger', () => {
+  it('prints the ledger table, the coverage sentence and the §13.4 released-deposit sentence', async () => {
+    const t = await unitSalesMemoText(unitSalesDoc());
+    expect(t).toContain('Unit Sales Ledger');
+    expect(t).toContain('Pre-sold 81.48%');
+    expect(t).toContain('modelling assumption about the sale contract');
+    expect(t).toContain('Per-unit sales: 4 units');
+  });
+
+  it('omits the section and the released-deposit sentence entirely on the null path and on the held twin', async () => {
+    expect(await unitSalesMemoText(unitSalesDoc({ unitSales: null }))).not.toContain('Unit Sales Ledger');
+    const held = await unitSalesMemoText(heldTwinDoc());
+    expect(held).toContain('Unit Sales Ledger');
+    expect(held).not.toContain('modelling assumption about the sale contract');
+  });
+
+  it('prints every figure verbatim off metrics.unit_sales, never recomputing', async () => {
+    // The §19.6 pattern (this file, "prints every figure verbatim off the
+    // result block" above): tamper the result block after the run and assert
+    // the tampered figure is printed, not one re-derived from the inputs.
+    // Task 13 ruling (round 2): the section prints whole pounds via the
+    // memo's existing `fmt` (0 dp), like every other memo table — so the
+    // tampered net figure here is itself a whole-pound amount, not a
+    // pence-bearing one, to pin what the section actually renders.
+    const doc = unitSalesDoc();
+    const run = runAppraisal(doc);
+    const real = run.metrics.unit_sales;
+    expect(real).not.toBeNull();
+    const tampered = {
+      ...real!,
+      units: real!.units.map((u, i) => (i === 0 ? { ...u, net_pence: 12_345_600 } : u)),
+      pre_sold: { ...real!.pre_sold, pct: 55.55 },
+    };
+    const tamperedRun = { ...run, metrics: { ...run.metrics, unit_sales: tampered } };
+    const blob = generateInvestmentMemo(mockProject, tamperedRun, null);
+    const text = documentText(await inspectPdf(blob));
+    expect(text).toContain('£123,456');
+    expect(text).toContain('Pre-sold 55.55%');
   });
 });

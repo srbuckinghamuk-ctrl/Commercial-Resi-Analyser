@@ -5,6 +5,7 @@ import { resolve, join } from 'node:path';
 import SensitivityPage from './SensitivityPage';
 import { runAppraisal, migrateInputsToV8, migrateV8toV9 } from '../../lib/model';
 import type { CalculatorInputsV8, CalculatorInputsV9, ProgrammeNetwork } from '../../lib/model';
+import { unitSalesDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -448,5 +449,27 @@ describe('SensitivityPage — the phase_slip lever and its phase-target picker',
     const rowHeaderTexts = within(matrix).getAllByRole('rowheader').map((h) => h.textContent ?? '');
     expect(rowHeaderTexts.some((t) => t.includes('Slip: Design'))).toBe(true);
     expect(rowHeaderTexts.some((t) => t.includes('Slip: Construction'))).toBe(false);
+  });
+});
+
+// R13b Task 10 (spec §22.8). `sales_slip` needs a unit-sales ledger to have a
+// completion date to move -- withheld from the lever dropdown, same
+// reasoning as `phase_slip` and its phase network above.
+describe('SensitivityPage — the sales_slip lever', () => {
+  it('does NOT offer sales_slip on a document without a unit-sales ledger', () => {
+    render(<SensitivityPage inputs={buildInputs()} />);
+    const rowLeverOptions = within(screen.getByLabelText(/row lever/i)).getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(rowLeverOptions).not.toContain('Sales slip');
+    const colLeverOptions = within(screen.getByLabelText(/column lever/i)).getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(colLeverOptions).not.toContain('Sales slip');
+  });
+
+  it('offers sales_slip on a document with a unit-sales ledger', () => {
+    render(<SensitivityPage inputs={unitSalesDoc()} />);
+    const rowLeverOptions = within(screen.getByLabelText(/row lever/i)).getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(rowLeverOptions).toContain('Sales slip');
   });
 });

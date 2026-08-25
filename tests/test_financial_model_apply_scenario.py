@@ -37,6 +37,7 @@ from app.financial_model.types import (
     parse_calculator_inputs,
 )
 from .fixtures_investment_case import apply_levers_in_order, explicit_refinance_doc, ic_doc
+from .fixtures_unit_sales import unit_sales_doc
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 
@@ -498,15 +499,69 @@ def test_the_three_levers_are_a_no_op_by_construction_on_an_investment_case_none
     assert out.investment_case is None
 
 
-def test_keeps_all_eight_levers_order_independent():
+def test_keeps_all_nine_levers_order_independent():
+    # sales_slip is inert on ic_doc() (no unit_sales) -- this test just needs
+    # its tie-break slot in LEVER_ORDER exercised; test_keeps_all_nine_levers_
+    # order_independent_on_a_unit_sales_document (below) is the live one.
     orders = [
         ["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
-         "exit_yield", "operating_cost", "vacancy"],
+         "exit_yield", "operating_cost", "vacancy", "sales_slip"],
         ["vacancy", "exit_yield", "phase_slip", "gdv", "operating_cost", "interest_rate",
-         "timeline", "construction_cost"],
+         "timeline", "construction_cost", "sales_slip"],
         ["operating_cost", "timeline", "vacancy", "interest_rate", "gdv", "exit_yield",
-         "construction_cost", "phase_slip"],
+         "construction_cost", "phase_slip", "sales_slip"],
     ]
     results = [run_appraisal(apply_levers_in_order(ic_doc(), order)).metrics for order in orders]
     assert results[1] == results[0]
     assert results[2] == results[0]
+
+
+# R13b spec Sec 22.8. The ninth lever: sales_slip. Fixture X's rows are u1
+# completion practical_completion+0, u2 +1, u3 unit_completions+1, u4 fixed
+# month 20; term 24. Mirror of the "sales_slip lever" describe block in
+# apply-scenario.test.ts.
+
+def _slip(months: int) -> ScenarioOverrides:
+    return ScenarioOverrides(label="s", gdv_adjustment_pct=0, construction_cost_adjustment_pct=0,
+                             timeline_adjustment_months=0, interest_rate_adjustment_pct=0, sales_slip_months=months)
+
+
+def test_sales_slip_adds_to_completion_only_fixed_or_anchored_additively():
+    out = apply_scenario(unit_sales_doc(), _slip(3))
+    rows = out.unit_sales.units
+    assert rows[3].completion.month_offset == 23          # fixed 20 + 3
+    assert rows[0].completion.anchor.offset_months == 3   # practical_completion + 0 -> + 3
+    assert rows[1].completion.anchor.offset_months == 4   # + 1 -> + 4, stressed FROM its recorded position
+    assert rows[3].exchange.month_offset == 11            # exchange untouched
+    assert rows[0].exchange.anchor.offset_months == 0
+
+
+def test_sales_slip_is_a_no_op_on_the_null_path():
+    doc = unit_sales_doc({"unit_sales": None})
+    assert apply_scenario(doc, _slip(3)).model_dump() == apply_scenario(doc, _slip(0)).model_dump()
+
+
+_FIELD_OF = {
+    "gdv": "gdv_adjustment_pct", "construction_cost": "construction_cost_adjustment_pct",
+    "timeline": "timeline_adjustment_months", "interest_rate": "interest_rate_adjustment_pct",
+    "exit_yield": "exit_yield_adjustment_pct", "operating_cost": "operating_cost_adjustment_pct",
+    "vacancy": "vacancy_adjustment_pct", "sales_slip": "sales_slip_months",
+}
+
+
+def _overrides_for_lever(lever: str, value: float) -> ScenarioOverrides:
+    return _slip(0).model_copy(update={_FIELD_OF[lever]: value})
+
+
+def test_keeps_all_nine_levers_order_independent_on_a_unit_sales_document():
+    levers = {"gdv": 5, "construction_cost": 5, "timeline": 2, "interest_rate": 1,
+              "exit_yield": 0, "operating_cost": 0, "vacancy": 0, "sales_slip": 2}
+    orders = [list(levers), list(reversed(levers)), ["sales_slip", "timeline", "gdv", "interest_rate", "construction_cost", "vacancy", "exit_yield", "operating_cost"]]
+    def apply_in(order):
+        doc = unit_sales_doc()
+        for lever in order:
+            doc = apply_scenario(doc, _overrides_for_lever(lever, levers[lever]))
+        return run_appraisal(doc).metrics
+    results = [apply_in(o) for o in orders]
+    assert results[1] == results[0] and results[2] == results[0]
+    assert apply_in(orders[0]).unit_sales["units"][3]["completion_month"] == 22  # 20 + 2, inside term 26

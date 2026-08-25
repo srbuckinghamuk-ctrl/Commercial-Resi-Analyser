@@ -16,6 +16,12 @@ import { resolve, join, relative } from 'node:path';
  * other direction (server on v7, client on v6) and made every saved appraisal
  * unloadable, and R9, R11, R12 and R13 each recorded a version of it.
  *
+ * R13b Task 15 (spec §22.9) moves the version chain it derives from again, to
+ * v12: the unit-sales ledger's every arm is reachable only from a v12
+ * document, so the same failure mode — a production entry point left calling
+ * v11 while the rest of the boundary moves on — applies here exactly as it
+ * did to v10/v11.
+ *
  * **If this test failed and you are looking for what to do**: a production file
  * calls `migrateInputsToV{N}` for an N that is not the newest migration this
  * module offers. Either move that call site to the newest one, or — if you are
@@ -42,8 +48,9 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *
  *  R13 Task 5b (moved to v11 by R14 Task 14): `lib/model/__fixtures__/
  *  investment-case-docs.ts` is also exempt -- not because it calls an old
- *  version (it always calls the NEWEST one, `migrateInputsToV11`, correctly),
- *  but because it is not a PRODUCTION entry point at all. This guard's own
+ *  version (it calls the migration matching the fixture version it loads --
+ *  v11, for its investment-case/monitoring fixtures -- correctly), but
+ *  because it is not a PRODUCTION entry point at all. This guard's own
  *  stated purpose is "if a production entry point keeps calling the old
  *  migration, no user ever holds a [new] document" -- a `__fixtures__` file
  *  is imported only by `.test.ts` files (mirroring Jest/Vitest's own
@@ -55,22 +62,30 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  guard must not produce, or a real offender risks being lost in the noise.
  *
  *  R13 Task 18 (moved to v11 by R14 Task 14): `lib/report-qa/memo-fixtures.ts`
- *  is exempt for the identical reason. Task 16 gave it a migration call (also
- *  correctly the NEWEST one, `migrateInputsToV11`), so it is not a
- *  stale-call-site offender either way -- the question is only whether it
- *  belongs in the file-enumeration list at all. Its own header comment
- *  already states "Test-support only; not imported by the application", and
- *  grepping every import of it in this tree confirms that: every consumer is
- *  a `.test.ts`/`.test.tsx` file (`memo-release-gate.test.ts`,
- *  `quick-report-gate.test.ts`, `report-provenance.test.ts`,
- *  `AcquisitionPage.test.tsx`). It fails the `__fixtures__` naming convention
- *  only because it predates that convention, not because it reaches a user --
- *  it does not. Exempting it keeps the pinned enumeration list naming only
- *  files a real user's browser can load. */
+ *  is exempt for the identical reason. Task 16 gave it a migration call (it
+ *  too calls the migration matching the fixture version it loads -- v11, for
+ *  its monitoring fixtures), so it is not a stale-call-site offender either
+ *  way -- the question is only whether it belongs in the file-enumeration
+ *  list at all. Its own header comment already states "Test-support only;
+ *  not imported by the application", and grepping every import of it in this
+ *  tree confirms that: every consumer is a `.test.ts`/`.test.tsx` file
+ *  (`memo-release-gate.test.ts`, `quick-report-gate.test.ts`,
+ *  `report-provenance.test.ts`, `AcquisitionPage.test.tsx`). It fails the
+ *  `__fixtures__` naming convention only because it predates that
+ *  convention, not because it reaches a user -- it does not. Exempting it
+ *  keeps the pinned enumeration list naming only files a real user's browser
+ *  can load.
+ *
+ *  R13b Task 15: `lib/model/__fixtures__/unit-sales-docs.ts` is exempt for
+ *  the same reason again -- it calls the migration matching the fixture
+ *  version it loads, `migrateInputsToV12`, to build fixture X (the
+ *  unit-sales-ledger document) as test support, and is imported only by
+ *  `.test.ts` files, so it reaches no user either. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
   'lib/model/__fixtures__/investment-case-docs.ts',
+  'lib/model/__fixtures__/unit-sales-docs.ts',
   'lib/report-qa/memo-fixtures.ts',
 ]);
 
@@ -124,8 +139,8 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(11);
-    expect(VERSIONS).toContain(10);
+    expect(NEWEST).toBe(12);
+    expect(VERSIONS).toContain(11);
   });
 
   it('enumerates the production files that actually hold the entry points', () => {

@@ -11,6 +11,7 @@ import { computeCostPlan } from './cost-plan';
 import { computeVat } from './vat';
 import { isProgrammeNetwork, isLegacyProgramme, derivePhases } from './programme';
 import { computeInvestmentCase } from './investment-case';
+import { computeUnitSales } from './unit-sales';
 
 /** Straight-line spread in integer pence; the final month absorbs the rounding residue. */
 export function spreadStraightLine(total: number, months: number): number[] {
@@ -255,8 +256,28 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
   const agentFee = Math.round((grossSales * inputs.exit_strategy.selling_agent_fee_pct) / 100);
   const sellingLegal = soldUnits.length > 0 ? inputs.exit_strategy.selling_legal_fee_pence : 0;
   const salesPhasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
+  // R13b spec §22.2/§22.3. The sold set's [unit_id, gross] pairs — value plus
+  // ancillary, the same figure grossSales sums above — handed to the pure
+  // module so gdv and receipts stay equal by construction.
+  const unitSales = computeUnitSales(
+    inputs, term, resolveAnchorMonth,
+    soldUnits.map((u) => [u.id, u.estimated_value_pence + unitAncillaryValuePence(u)] as [string, number]),
+  );
   if (grossSales > 0) {
-    if (salesPhasing == null) {
+    if (unitSales != null) {
+      // §22.3: accumulate (+=), never the single-disposal arm's full replace.
+      // A released deposit is gross_sale_pence in the exchange month; the
+      // balance and both costs land at completion.
+      unitSales.units.forEach((row) => {
+        if (row.deposit_released_pence > 0 && row.exchange_month != null) {
+          receipts[row.exchange_month].gross_sale_pence += row.deposit_released_pence;
+        }
+        const c = row.completion_month;
+        receipts[c].gross_sale_pence += row.gross_pence - row.deposit_released_pence;
+        receipts[c].agent_fee_pence += row.agent_fee_pence;
+        receipts[c].selling_legal_pence += row.legal_fee_pence;
+      });
+    } else if (salesPhasing == null) {
       // calc 2.2.0 behaviour, byte-identical: single disposal in the final month (spec §4.4)
       receipts[term - 1] = {
         gross_sale_pence: grossSales,
@@ -330,7 +351,10 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     })(),
   };
 
-  const sellingCosts = grossSales > 0 ? agentFee + sellingLegal : 0;
+  // §22.2: totals are sum-of-units on the per-unit path.
+  const sellingCosts = unitSales != null
+    ? unitSales.totals.agent_fees_pence + unitSales.totals.legal_fees_pence
+    : (grossSales > 0 ? agentFee + sellingLegal : 0);
 
   // R11 spec §17.6. VAT is computed from the finished spend profile and written
   // back onto it. One pass, and strictly one-directional: nothing above this line
@@ -379,6 +403,10 @@ export function buildSchedule(inputs: AnyCalculatorInputs): Schedule {
     // result block is computed once, here, and republished (never
     // recomputed) onto `AppraisalResultV2` by Task 11.
     investment_case: investmentCase,
+    // R13b spec §22.6. Computed once, above, and republished (never
+    // recomputed) onto `AppraisalResultV2`. null exactly when the INPUT
+    // `unit_sales` is null.
+    unit_sales: unitSales,
     // R13 spec §19.6, closing §18.10 limitation 9. The memo and CashflowPage
     // print a tranche's month; before this field existed they printed the RAW
     // `month_offset` while the ledger used the resolved one, so an anchored

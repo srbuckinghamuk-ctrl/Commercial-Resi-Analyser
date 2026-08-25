@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  solveSeniorBreakeven, solveDeveloperBreakeven, solveSeniorBreakevenPhased, phasedReplayRedeems,
+  solveSeniorBreakeven, solveDeveloperBreakeven, solveSeniorBreakevenPhased, phasedReplayRedeems, phasedNetByMonth,
 } from './breakeven';
-import type { SeniorBreakevenTerms, DeveloperBreakevenTerms, PhasedSeniorBreakevenTerms } from './breakeven';
+import type { SeniorBreakevenTerms, DeveloperBreakevenTerms, PhasedSeniorBreakevenTerms, ReceiptLine } from './breakeven';
 import { DEFAULT_FACILITY_TERMS } from '../conversion-defaults';
 import type { FacilityTerms } from './finance-types';
 
@@ -325,6 +325,88 @@ describe('solveSeniorBreakevenPhased (spec §5.11 phased regime)', () => {
     const exact = g as number;
     expect(phasedReplayRedeems(t, exact)).toBe(true);
     expect(phasedReplayRedeems(t, exact - 1)).toBe(false);
+  });
+});
+
+describe('receipt-lines arm (spec §22.5)', () => {
+  // Twin of the file's solveSeniorBreakevenPhased describe's `base` — same shape.
+  const phasedBase = (): PhasedSeniorBreakevenTerms => ({
+    draws_and_fees_pence: [10_000_000, 0, 0, 0],
+    vat_reclaims_pence: [0, 0, 0, 0],
+    monthly_rate: 0.02,
+    rolled_up: true,
+    sales_sweep_pct: 100,
+    tranches: [
+      { month_offset: 2, pct_of_gross_receipts: 50 },
+      { month_offset: 3, pct_of_gross_receipts: 50 },
+    ],
+    selling_agent_fee_pct: 0,
+    selling_legal_fee_pence: 0,
+    enforcement_cost_assumption_pence: 0,
+    finance: { ...TERMS_FEE_FREE },
+    committed_gross_facility_pence: 0,
+  });
+
+  const termsFor = (lines: ReceiptLine[], enforcement = 0): PhasedSeniorBreakevenTerms => ({
+    ...phasedBase(),
+    tranches: [],
+    receipt_lines: lines,
+    enforcement_cost_assumption_pence: enforcement,
+    selling_agent_fee_pct: 0,
+  });
+
+  it('scales lines uniformly with last-line residue and fixed legal', () => {
+    const lines: ReceiptLine[] = [
+      { month: 6, base_gross_pence: 2_600_000, agent_fee_pct: 0, legal_fee_pence: 0 },
+      { month: 12, base_gross_pence: 23_400_000, agent_fee_pct: 1.5, legal_fee_pence: 201_550 },
+    ];
+    // G = 13,000,000 = exactly half of the 26,000,000 base.
+    const net = phasedNetByMonth(termsFor(lines, 100_000), 13_000_000);
+    expect(net).toEqual(new Map([
+      [6, 1_300_000 - 100_000],                    // deposit line, enforcement off the FIRST line
+      [12, 11_700_000 - 175_500 - 201_550],         // agent scales (round(11,700,000×1.5%)), legal does not
+    ]));
+    // One penny more: the first line rounds down, the LAST line absorbs the residue.
+    const net2 = phasedNetByMonth(termsFor(lines), 13_000_001);
+    expect(net2).toEqual(new Map([
+      [6, 1_300_000],
+      [12, 11_700_001 - 175_500 - 201_550],
+    ]));
+  });
+
+  it('zero or negative total gross yields no receipts', () => {
+    const net = phasedNetByMonth(termsFor([{ month: 6, base_gross_pence: 1, agent_fee_pct: 0, legal_fee_pence: 0 }]), 0);
+    expect(net.size).toBe(0);
+  });
+
+  it('structural guards read the lines, not the tranches', () => {
+    const base = termsFor([
+      { month: 2, base_gross_pence: 5_000_000, agent_fee_pct: 0, legal_fee_pence: 0 },
+      { month: 3, base_gross_pence: 5_000_000, agent_fee_pct: 0, legal_fee_pence: 0 },
+    ]);
+    expect(solveSeniorBreakevenPhased(base)).not.toBeNull();
+    expect(solveSeniorBreakevenPhased({ ...base, receipt_lines: [] })).toBeNull();
+    // draws after the last line month → structurally unsolvable (a draw at
+    // month 2 after a single line at month 1; the base draws only at month 0)
+    expect(solveSeniorBreakevenPhased({
+      ...base,
+      draws_and_fees_pence: [10_000_000, 0, 5_000_000, 0],
+      receipt_lines: [{ month: 1, base_gross_pence: 10_000_000, agent_fee_pct: 0, legal_fee_pence: 0 }],
+    })).toBeNull();
+    expect(solveSeniorBreakevenPhased({
+      ...base,
+      receipt_lines: [{ month: 3, base_gross_pence: 10_000_000, agent_fee_pct: 100, legal_fee_pence: 0 }],
+    })).toBeNull();
+  });
+
+  it('two equal lines reproduce the two-tranche hand figure', () => {
+    // The tranche fixture's 50/50 split at months 2 and 3 is the same receipt
+    // profile as two equal lines: the arms must agree.
+    const lines: ReceiptLine[] = [
+      { month: 2, base_gross_pence: 5_000_000, agent_fee_pct: 0, legal_fee_pence: 0 },
+      { month: 3, base_gross_pence: 5_000_000, agent_fee_pct: 0, legal_fee_pence: 0 },
+    ];
+    expect(solveSeniorBreakevenPhased(termsFor(lines))).toBe(solveSeniorBreakevenPhased(phasedBase()));
   });
 });
 

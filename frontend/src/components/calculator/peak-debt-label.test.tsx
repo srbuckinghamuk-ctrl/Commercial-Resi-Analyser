@@ -3,8 +3,10 @@ import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import FinancePage from './FinancePage';
 import InvestorSummaryPage from './InvestorSummaryPage';
-import { runAppraisal, migrateV8toV9, migrateV9toV10, migrateV10toV11 } from '../../lib/model';
-import type { CalculatorInputsV11 } from '../../lib/model';
+import {
+  runAppraisal, migrateV8toV9, migrateV9toV10, migrateV10toV11, migrateV11toV12,
+} from '../../lib/model';
+import type { CalculatorInputsV12 } from '../../lib/model';
 import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import type { Project } from '../../types';
 
@@ -20,19 +22,19 @@ const PROJECT = {
 /**
  * A development-finance deal whose peak debt lands on a known ledger month.
  *
- * R12 Task 18b, R13 Task 18, R14 Task 14. Built as a v8 document with the
- * legacy three-package programme and handed to `migrateV8toV9`, then
- * `migrateV9toV10`, then `migrateV10toV11` -- the SAME route a stored
- * appraisal now takes on load. The v8->v9 step writes a predecessor-free
- * network whose derived start is each phase's `start_offset` floor, so the
- * three windows below are unchanged and every month these tests assert on
- * still holds; the v9->v10 and v10->v11 steps are purely additive
- * (`investment_case: null`, an unchanged `refinance: null`; `monitoring: null`)
- * and touch none of them. It is written this way rather than as a hand-built
- * network so the fixture cannot drift from the migration chain it is meant
- * to mirror.
+ * R12 Task 18b, R13 Task 18, R14 Task 14, R13b Task 15. Built as a v8 document
+ * with the legacy three-package programme and handed to `migrateV8toV9`, then
+ * `migrateV9toV10`, then `migrateV10toV11`, then `migrateV11toV12` -- the SAME
+ * route a stored appraisal now takes on load. The v8->v9 step writes a
+ * predecessor-free network whose derived start is each phase's
+ * `start_offset` floor, so the three windows below are unchanged and every
+ * month these tests assert on still holds; the v9->v10, v10->v11 and
+ * v11->v12 steps are purely additive (`investment_case: null`, an unchanged
+ * `refinance: null`; `monitoring: null`; `unit_sales: null`) and touch none
+ * of them. It is written this way rather than as a hand-built network so the
+ * fixture cannot drift from the migration chain it is meant to mirror.
  */
-function anchoredInputs(anchor: string | null): CalculatorInputsV11 {
+function anchoredInputs(anchor: string | null): CalculatorInputsV12 {
   const inputs = defaultCalculatorInputsV8();
   inputs.finance.funding_source = 'development_finance';
   inputs.finance.committed_net_facility_pence = 60_000_000;
@@ -51,7 +53,7 @@ function anchoredInputs(anchor: string | null): CalculatorInputsV11 {
       statutory: { start_offset: 1, duration_months: 5, curve: { kind: 'straight_line' } },
     },
   };
-  return migrateV10toV11(migrateV9toV10(migrateV8toV9(inputs)));
+  return migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(inputs))));
 }
 
 /** The peak-debt month is shown on four surfaces. Before this fix the Cashflow

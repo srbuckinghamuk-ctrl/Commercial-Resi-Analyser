@@ -15,7 +15,7 @@ import { CLASS_MA_AXES } from './spider-axes';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
-  CalculatorInputsV10, CalculatorInputsV11, EquitySource, FacilityTerms,
+  CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
@@ -121,6 +121,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
   upside: {
     label: 'Upside',
@@ -133,6 +134,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
   downside: {
     label: 'Downside',
@@ -145,6 +147,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
   severe: {
     label: 'Severe',
@@ -157,6 +160,7 @@ export const DEFAULT_SCENARIOS: {
     exit_yield_adjustment_pct: 0,
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
+    sales_slip_months: 0,
   },
 };
 
@@ -499,4 +503,17 @@ export function defaultCalculatorInputsV11(project?: {
     inputs_version: 11,
     monitoring: null,
   };
+}
+
+/**
+ * R13b Task 15 (spec §22.1, the entry-point cutover): the client's persistence
+ * boundary moves on again. `unit_sales: null` and `sales_slip_months: 0` (already
+ * in DEFAULT_SCENARIOS since Task 1) are the only additions. Spelled out rather
+ * than calling `migrateV11toV12` for the cycle reason `defaultCalculatorInputsV11` gives;
+ * `conversion-defaults.test.ts` pins the two against each other field for field.
+ */
+export function defaultCalculatorInputsV12(project?: {
+  id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
+}): CalculatorInputsV12 {
+  return { ...defaultCalculatorInputsV11(project), inputs_version: 12, unit_sales: null };
 }

@@ -93,6 +93,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'u-investment-case-ltv-binds',
   'v-exhausted-reserve',
   'w-monitoring-on-site',
+  'x-unit-sales-ledger',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -202,6 +203,27 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
     (r) => r.metrics.monitoring_statement?.totals.estimated_final_cost_pence ?? null,
   monitoring_surplus_pence: (r) => r.metrics.monitoring_statement?.surplus_pence ?? null,
   lender_eligible_ratio: (r) => r.metrics.cost_plan.lender_eligible_ratio,
+  // R13b spec §22.6, fixture X: unit_sales.units/months are ARRAYS of objects, so a
+  // dotted expected_metrics path cannot reach them — the same reasoning as the
+  // contingency/fee mappers above.
+  unit_sales_unit_ids: (r) => r.metrics.unit_sales!.units.map((u) => u.unit_id),
+  unit_sales_unit_gross_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.gross_pence),
+  unit_sales_unit_deposit_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.deposit_pence),
+  unit_sales_unit_deposit_released_pence: (r) =>
+    r.metrics.unit_sales!.units.map((u) => u.deposit_released_pence),
+  unit_sales_unit_agent_fee_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.agent_fee_pence),
+  unit_sales_unit_legal_fee_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.legal_fee_pence),
+  unit_sales_unit_net_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.net_pence),
+  unit_sales_unit_exchange_months: (r) => r.metrics.unit_sales!.units.map((u) => u.exchange_month),
+  unit_sales_unit_completion_months: (r) => r.metrics.unit_sales!.units.map((u) => u.completion_month),
+  unit_sales_deposits_received_pence: (r) =>
+    r.metrics.unit_sales!.months.map((m) => m.deposits_received_pence),
+  receipts_gross_sale_pence: (r) => r.schedule.receipts.map((x) => x.gross_sale_pence),
+  // R13b Task 7 fix round 2 (review finding 1): report_safe lives on
+  // `AppraisalRun.reconciliation`, not `metrics` -- the same reasoning as
+  // funding_gap_pence above, which is the standing precedent for a quantity
+  // outside `metrics` reached through this whole-run mapper table.
+  report_safe: (r) => r.reconciliation.report_safe,
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -291,12 +313,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // document (spec §20.2) -- so every migrate-to-vN loop below excludes it by
   // the same design that excluded T/U/V from the v9 loops.
   const v11Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 11);
+  // R13b Task 2: fixture X is BORN at v12 -- the corpus's first v12-native
+  // document (spec §22) -- so every migrate-to-vN loop below excludes it by
+  // the same design that excluded T/U/V/W from the v9 loops.
+  const v12Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 12);
 
-  it('every fixture is v5 through v11, and each group is non-empty', () => {
+  it('every fixture is v5 through v12, and each group is non-empty', () => {
     expect(
       v5Fixtures.length + v6Fixtures.length + v7Fixtures.length
       + v8Fixtures.length + v9Fixtures.length + v10Fixtures.length
-      + v11Fixtures.length,
+      + v11Fixtures.length + v12Fixtures.length,
     ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
@@ -320,6 +346,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
     ]);
     expect(v11Fixtures.map((f) => f.name)).toEqual([
       'W — monitoring statement on site, detailed cost plan, one ineligible package',
+    ]);
+    expect(v12Fixtures.map((f) => f.name)).toEqual([
+      'X — unit sales ledger, released deposits, per-unit costs, anchored completions',
     ]);
   });
 
@@ -393,7 +422,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV6
   // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
   // for the identical reason one version further on (`monitoring`).
-  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -413,7 +442,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV7
   // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
   // for the identical reason one version further on (`monitoring`).
-  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12].includes(versionOf(f)))) {
     // R10: the same identity guarantee one version further on, and the one that now
     // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
@@ -471,7 +500,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -488,6 +517,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'U — retain-all with an investment case, LTV binds',
       'V — exhausted interest reserve, rolled-up development finance',
       'W — monitoring statement on site, detailed cost plan, one ineligible package',
+      'X — unit sales ledger, released deposits, per-unit costs, anchored completions',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
     // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
@@ -512,18 +542,24 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // additionally strip the R14 `monitoring` block and the detailed cost plan
     // the fixture is entirely about.
     //
+    // R13b Task 2 widens it once more to include 12: fixture X is BORN at v12
+    // for the same reason — it did not exist before R8, and stamping it v3/v4
+    // would additionally strip the R13b `unit_sales` block the fixture is
+    // entirely about.
+    //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
     // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
     // so it is vacuously true for every member and can never fail. Enumerating
-    // 6/7/8/9/10/11 keeps the check able to fail: it catches a fixture excluded for
-    // a SEVENTH, unstated reason (e.g. a future non-v5..v11 fixture, or a change to
-    // preR8Fixtures's own filter that this assertion was never updated to match).
+    // 6/7/8/9/10/11/12 keeps the check able to fail: it catches a fixture excluded
+    // for an EIGHTH, unstated reason (e.g. a future non-v5..v12 fixture, or a change
+    // to preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
         jurisdictionOf(fx) !== 'england_ni'
           || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8
-          || versionOf(fx) === 9 || versionOf(fx) === 10 || versionOf(fx) === 11,
+          || versionOf(fx) === 9 || versionOf(fx) === 10 || versionOf(fx) === 11
+          || versionOf(fx) === 12,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -818,6 +854,42 @@ describe('golden fixtures (shared with the Python engine)', () => {
         lender_eligible_ratio: 0.9166666666666667,              // truly 0.9166666666666666
       },
     },
+    // R13b Task 7 (the same convention this block states): fixture X adds eleven new
+    // FLAT_KEYS array mappers (spec §22.6) — the nine per-unit rows and the two
+    // month-indexed arrays — and every one needs a control here. Each wrong value is a
+    // plausible REAL mistake rather than an arbitrary one: u2/u3 (or u1/u2, or u1/u3)
+    // transposed — the two units missing an exchange or legal override sit adjacent in
+    // the input list — u3's 2.0% agent-fee override dropped to the scheme default, an
+    // anchor offset dropped by one month, and a receipt landing in the wrong month.
+    // Mirrors tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS entry for X.
+    {
+      namePrefix: 'X — unit sales ledger',
+      wrongValues: {
+        unit_sales_unit_ids: ['u1', 'u3', 'u2', 'u4'],                    // truly ['u1','u2','u3','u4']
+        unit_sales_unit_gross_pence: [26000000, 17500000, 30000000, 21000000], // truly [...,30000000,17500000,...]
+        unit_sales_unit_deposit_pence: [2600000, 0, 3000000, 1050000],    // truly [...,3000000,0,...]
+        unit_sales_unit_deposit_released_pence: [2600000, 0, 3000000, 1050000], // truly [...,3000000,0,...]
+        // u3's 2.0% override dropped to the scheme default (1.5% of 17500000 = 262500)
+        unit_sales_unit_agent_fee_pence: [390000, 450000, 262500, 315000],  // truly [...,350000,...]
+        unit_sales_unit_legal_fee_pence: [135659, 150000, 201550, 162791],  // truly [201550,150000,135659,...]
+        unit_sales_unit_net_pence: [29400000, 25408450, 17014341, 20522209], // truly [25408450,29400000,...]
+        unit_sales_unit_exchange_months: [7, 10, null, 11],                 // truly [8,10,null,11]
+        unit_sales_unit_completion_months: [12, 12, 13, 20],                // truly [12,13,13,20]
+        // truly u1's released deposit landing in month 8 -- shifted one month late
+        unit_sales_deposits_received_pence: [
+          ...Array(9).fill(0), 2600000, 3000000, 1050000, ...Array(12).fill(0),
+        ],
+        // truly months 12/13 (u1's completion, then u2+u3's) -- the two figures transposed
+        receipts_gross_sale_pence: [
+          ...Array(8).fill(0), 2600000, 0, 3000000, 1050000, 44500000, 23400000,
+          ...Array(6).fill(0), 19950000, ...Array(3).fill(0),
+        ],
+        // Task 7 fix round 2 (review finding 1): report_safe added to this fixture's own
+        // control entry -- truly true (funding_gap_pence is 0 since the fix-round-1 equity
+        // resize, so no red flag fires).
+        report_safe: false,
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -856,7 +928,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `vat`,
   // `programme`'s v9 shape, `refinance`'s v10 narrowing AND `investment_case`
   // to produce a v6 one). R14 Task 8 widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -923,7 +995,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `refinance`'s
   // v10 narrowing and `investment_case` to produce a v7 one). R14 Task 8
   // widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -980,7 +1052,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // v10 narrowing and `investment_case` to produce a v8 one). R14 Task 8
   // widens it once more to v11 (`monitoring`); `preV8Fixtures` therefore stays
   // at 12, since fixture W was never inside this gate.
-  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11].includes(versionOf(f)));
+  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12].includes(versionOf(f)));
 
   it.each(preV8Fixtures.map((f) => f.name))(
     'migrating %s to v8 moves no computed figure, and writes the specified block',
@@ -1728,6 +1800,7 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       });
       expect(levered.unit_mix.units.every((u) => u.estimated_value_pence === expected)).toBe(true);
     }
@@ -1741,6 +1814,7 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       });
       expect(levered.conversion_costs.construction_cost_per_sqm_pence).toBe(expected);
     }
@@ -1754,6 +1828,7 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       });
       expect(levered.finance.term_months).toBe(expected);
     }
@@ -1767,6 +1842,7 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         exit_yield_adjustment_pct: 0,
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
+        sales_slip_months: 0,
       });
       expect(levered.finance.annual_interest_rate_pct).toBe(expected);
     }
@@ -1826,6 +1902,7 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
           exit_yield_adjustment_pct: 0,
           operating_cost_adjustment_pct: 0,
           vacancy_adjustment_pct: 0,
+          sales_slip_months: 0,
         })).metrics;
         const cell = result.matrix[ri][ci];
         expect(cell.profit_pence).toBe(expected.profit_pence);

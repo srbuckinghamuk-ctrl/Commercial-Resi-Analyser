@@ -150,6 +150,23 @@ export function applyScenario<T extends AnyCalculatorInputs>(
         },
       },
     } : {}),
+    // R13b spec §22.8. ADDITIVE, completion only: the anchor offset when
+    // anchored, else month_offset. Exchange dates are marketing facts and do
+    // not move. Gated on presence, so a v2-v11 document and a v12 document
+    // whose unit_sales is null are both no-ops by construction.
+    ...('unit_sales' in inputs && inputs.unit_sales != null && overrides.sales_slip_months !== 0
+      ? {
+        unit_sales: {
+          ...inputs.unit_sales,
+          units: inputs.unit_sales.units.map((row) => ({
+            ...row,
+            completion: row.completion.anchor != null
+              ? { ...row.completion, anchor: { ...row.completion.anchor, offset_months: row.completion.anchor.offset_months + overrides.sales_slip_months } }
+              : { ...row.completion, month_offset: row.completion.month_offset + overrides.sales_slip_months },
+          })),
+        },
+      }
+      : {}),
     // The spread above already carries `inputs_version`/`lender_valuation` (v3) or their
     // absence (v2) through unchanged; TS can't verify a generic spread-and-override
     // reproduces exactly T, so this cast documents what the runtime shape guarantees.

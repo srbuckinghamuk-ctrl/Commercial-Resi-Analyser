@@ -4,6 +4,7 @@ existing Python home). Helpers duplicated verbatim from
 tests/test_financial_model_engine.py, matching the "tests must be self-contained"
 convention already used across both languages' test suites.
 """
+import copy
 import json
 from dataclasses import fields
 from pathlib import Path
@@ -63,10 +64,12 @@ from app.financial_model.types import (
     UnitAncillary,
     UnitMixInputs,
     UnitMixInputsV6,
+    parse_calculator_inputs,
 )
 from app.financial_model.vat import VatMonthLine, VatResult
 
 from .fixtures_investment_case import explicit_refinance_doc, investment_case_doc
+from .fixtures_unit_sales import held_twin_doc, unit_sales_doc
 
 MONITORING_FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -342,6 +345,202 @@ class TestSec511UnderPhasing:
         f = next(x for x in run.metrics.flags if x.code == "senior_breakeven_unsolvable")
         assert "sales sweep" in f.message
         assert not any(x.code == "breakeven_cap_exhausted" for x in run.metrics.flags)
+
+
+# R13b Task 9 (spec Sec 5.11 correction). Fixture S's two tranches are anchored
+# (unit_completions+0 -> resolved month 16, unit_completions+3 -> resolved month
+# 19) but carry deliberately-disagreeing raw month_offset values (20, 21). Before
+# this task the phased break-even replay read tr.month_offset -- the raw,
+# unresolved month -- rather than schedule.resolved_exit_months.tranches, so an
+# anchored tranche on a slipped programme replayed receipts at a month the
+# ledger never used.
+_S = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "s-dated-programme.json"
+
+
+def _s_with_first_anchor(phase_id: str):
+    doc = copy.deepcopy(json.loads(_S.read_text(encoding="utf-8"))["inputs"])
+    doc["sales_phasing"]["tranches"][0]["anchor"] = {"phase_id": phase_id, "offset_months": 0}
+    return parse_calculator_inputs(doc)
+
+
+def test_s_break_even_replays_at_the_resolved_months_not_the_raw_offsets():
+    run = run_appraisal(parse_calculator_inputs(json.loads(_S.read_text(encoding="utf-8"))["inputs"]))
+    assert run.schedule.resolved_exit_months.tranches == [16, 19]
+    # Pre-fix (raw months 20/21) both engines printed 90,971,520 -- the negative control.
+    assert run.metrics.senior_breakeven_pence != 90_971_520
+    assert run.metrics.senior_breakeven_pence == 88_720_089
+
+
+def test_reading_the_resolved_month_changes_which_anchor_disturbs_the_facility_not_solvability():
+    # Both documents keep month_offset 20 on the first tranche (a decoy never
+    # consulted while an anchor is present) -- only the first tranche's anchor
+    # differs. Anchored to strip_out it resolves to month 6; anchored to
+    # building_control, month 15. Draws run through month 13 in both cases.
+    #
+    # Deviation from brief (Task 9): the brief's own test asserted
+    # early.senior_breakeven_pence is None with a senior_breakeven_unsolvable
+    # flag. That does not reconcile -- verified independently in both engines
+    # (this test and its TS twin agree to the penny: 96,756,404 / 88,462,082)
+    # and by a direct monotonicity trace of phased_replay_redeems across G in
+    # 1,000,000p steps (a single clean feasible/infeasible boundary, no
+    # non-monotonic artefact). Sec 5.11's structural-unsolvable guard --
+    # untouched by this task ("the tranche arm's arithmetic ... is untouched")
+    # -- fires only when draws continue after the LAST tranche's resolved
+    # month. Only the FIRST tranche's anchor moves here; the second tranche
+    # stays anchored at unit_completions+3 (month 19), so max(resolved) is 19
+    # in BOTH cases, and draws stop at month 13 -- the guard never fires for
+    # either anchor, matching the untouched spec definition ("facility draws
+    # continue after the FINAL tranche month").
+    #
+    # The real, reconciled difference: strip_out's month (6) falls WHILE the
+    # facility is still drawing, so the first tranche's 30% sweep fully
+    # redeems the facility early and it is redrawn by the remaining draws
+    # (months 7-13) -- raising the pre-existing, unrelated
+    # facility_redrawn_after_redemption flag -- before the second tranche
+    # clears the new balance at month 19. building_control's month (15) falls
+    # after all draws finish, so no such redraw occurs. Both are genuinely
+    # solvable; the resolved month changes WHICH ledger-level flag fires, not
+    # whether senior_breakeven_pence exists.
+    early = run_appraisal(_s_with_first_anchor("strip_out")).metrics
+    late = run_appraisal(_s_with_first_anchor("building_control")).metrics
+    assert early.senior_breakeven_pence == 96_756_404
+    assert any(f.code == "facility_redrawn_after_redemption" for f in early.flags)
+    assert not any(f.code == "senior_breakeven_unsolvable" for f in early.flags)
+    assert late.senior_breakeven_pence == 88_462_082
+    assert not any(f.code == "facility_redrawn_after_redemption" for f in late.flags)
+    assert not any(f.code == "senior_breakeven_unsolvable" for f in late.flags)
+
+
+def _s_with_both_anchored(phase_id: str):
+    doc = copy.deepcopy(json.loads(_S.read_text(encoding="utf-8"))["inputs"])
+    doc["sales_phasing"]["tranches"][0]["anchor"] = {"phase_id": phase_id, "offset_months": 0}
+    doc["sales_phasing"]["tranches"][1]["anchor"] = {"phase_id": phase_id, "offset_months": 1}
+    return parse_calculator_inputs(doc)
+
+
+def test_unsolvable_guard_fires_when_every_resolved_tranche_precedes_the_last_draw():
+    # Controller ruling (task 9 review). Both tranches anchored to the SAME
+    # early phase this time -- strip_out+0 / strip_out+1 -> resolved months 6
+    # and 7 (still month_offset 20/21, the same never-consulted decoys, and
+    # still strictly increasing, so validation passes). Draws run through
+    # month 13, i.e. past BOTH resolved tranche months now, so
+    # max(resolved) = 7 and the guard genuinely fires: no more receipts ever
+    # arrive after month 7 to redeem what months 8-13 keep drawing.
+    #
+    # This is the case the brief's original (single-tranche-anchored) pair
+    # could not actually exercise -- there, the untouched second tranche
+    # stayed at month 19, so max(resolved) never moved below the last draw.
+    # Pre-fix, this same document was "solvable": the guard read
+    # max(tr.month_offset for tr in phasing.tranches) = max(20, 21) = 21, and
+    # no draws occur after month 21, so the raw-offset guard never fired --
+    # exactly the R13b defect this task fixes.
+    #
+    # building_control+0 / +1 -> resolved 15 and 16, both after the last draw
+    # (13), reproduces the base document's clean, solvable shape -- the
+    # negative control proving the guard is anchor-direction-sensitive, not
+    # just always-on.
+    early = run_appraisal(_s_with_both_anchored("strip_out")).metrics
+    late = run_appraisal(_s_with_both_anchored("building_control")).metrics
+    assert early.senior_breakeven_pence is None
+    assert any(f.code == "senior_breakeven_unsolvable" for f in early.flags)
+    assert late.senior_breakeven_pence is not None
+    assert not any(f.code == "senior_breakeven_unsolvable" for f in late.flags)
+
+
+class TestUnitSalesBreakevenBasis:
+    """R13b spec Sec 22.5/5.12. Transliteration of metrics.test.ts's matching
+    'unit-sales break-even basis' describe block."""
+
+    def test_unit_sales_path_solves_the_phased_breakeven_and_agrees_with_the_engine_verified_relationship_to_held(self):
+        # Deviation from brief (task 8): the brief's own test (and the task
+        # instructions' Step 11 "hand check") assert released < held -- the
+        # intuitive claim that releasing deposits early should LOWER the
+        # break-even, since cash reaches the facility sooner. It does not
+        # reconcile against either engine on fixture X's fee-BEARING facility.
+        #
+        # Root cause, confirmed by direct replay trace (not a bug in this
+        # task's code): phased_replay_redeems (pre-existing, unmodified here)
+        # reserves the fixed exit fee (520,000p, committed_gross_facility
+        # basis) out of EVERY partial sweep event with balance > 0, not just
+        # the final redeeming one -- a documented Sec 5.11 conservatism
+        # (see breakeven.py's phased_replay_redeems docstring: "principal
+        # repayment is delayed by at most `fee` per tranche"). The
+        # released-deposit document creates THREE extra small early sweep
+        # events (months 8, 10, 11 -- u1/u2/u4's exchange deposits) that the
+        # held twin does not have (it pays everything in one lump at each
+        # unit's completion): released sweeps at 6 distinct months, held at 3.
+        # At the solved G (36,624,486), the non-final sweeps are m8
+        # 1,007,658, m10 1,162,682, m11 406,939, m12 8,731,336, m13
+        # 16,668,184 (direct replay trace): m8, m10, m12 and m13 each divert
+        # EXACTLY 520,000p from principal (sweep > fee, so the fee is fully
+        # reserved); m11's sweep (406,939) is BELOW the fee, so its entire
+        # amount is lost -- repaying nothing at all, not even "sweep minus
+        # fee". That totals 4x520,000 + 406,939 = 2,486,939p diverted/lost
+        # for released, against 2x520,000 = 1,040,000p for held (m12, m13
+        # only) -- a 1,446,939p sweep-level gap that reconciles with the
+        # observed 1,385,606p break-even gap (36,624,486 - 35,238,880), a
+        # real, reproducible cost that outweighs the benefit of receiving
+        # cash sooner.
+        #
+        # This IS the timing benefit fighting the fee-reservation cost, not a
+        # broken implementation masquerading as one: isolate the fee
+        # reservation by zeroing exit_fee_pct on both documents (§22.5's
+        # test-only `exit_fee_pct` override) and the ordering flips back to
+        # the intuitive released < held, proving deposit timing genuinely
+        # helps once the reservation artefact is removed, and that a broken
+        # arm (e.g. dropping the deposit lines entirely) would only push
+        # released further above held, not reverse it. Per this task's
+        # instruction, the arithmetic that produces the fee-bearing reversal
+        # is unchanged (verbatim from the brief) -- only the test's asserted
+        # direction on the fee-bearing fixture is corrected, with this trail
+        # in place of the brief's unreconciled claim, and the fee-free
+        # liveness guard below is the assertion that actually falsifies a
+        # broken deposit-timing implementation.
+        released = run_appraisal(unit_sales_doc()).metrics
+        held = run_appraisal(held_twin_doc()).metrics
+        assert released.senior_breakeven_pence is not None and held.senior_breakeven_pence is not None
+        assert released.senior_breakeven_pence > held.senior_breakeven_pence
+        assert not any(f.code == "senior_breakeven_unsolvable" for f in released.flags)
+
+        # Fee-free twins: with the fee-reservation conservatism isolated out
+        # (exit_fee_pct=0 on both), released is genuinely lower than held --
+        # 33,522,952 vs 33,664,679 -- the timing-liveness guard the fixture-fee
+        # assertion above cannot provide on its own.
+        fee_free_released = run_appraisal(unit_sales_doc({"exit_fee_pct": 0})).metrics
+        fee_free_held = run_appraisal(
+            unit_sales_doc({"deposit_release": "held_to_completion", "exit_fee_pct": 0}),
+        ).metrics
+        assert fee_free_released.senior_breakeven_pence is not None
+        assert fee_free_held.senior_breakeven_pence is not None
+        assert fee_free_released.senior_breakeven_pence < fee_free_held.senior_breakeven_pence
+
+    def test_developer_breakeven_uses_the_per_unit_cost_basis(self):
+        # Same document with u3's 2.0% override removed: the blended rate falls
+        # (350,000 -> 262,500 on u3), so the developer break-even falls with it.
+        with_override = run_appraisal(unit_sales_doc()).metrics.developer_breakeven_pence
+        rows = unit_sales_doc().model_dump(mode="json")["unit_sales"]["units"]
+        rows[2]["agent_fee_pct"] = None
+        without = run_appraisal(unit_sales_doc({"rows": rows})).metrics.developer_breakeven_pence
+        assert with_override is not None and without is not None
+        assert with_override > without
+
+    def test_unsolvable_reason_is_receipt_worded_on_the_per_unit_path(self):
+        # R13b final review wave: move every completion to fixed month 3 with
+        # exchange=None and deposit_pct=0, so the only receipt is at month 3
+        # while construction draws still run months 4-11 -- the same
+        # structurally-unsolvable shape as the tranche arm, but reached via
+        # unit_sales_result rather than sales_phasing, so the message must
+        # say "sale receipt", not "sales tranche".
+        rows = [
+            {"unit_id": u, "exchange": None, "completion": {"month_offset": 3, "anchor": None},
+             "deposit_pct": 0, "agent_fee_pct": None, "legal_fee_pence": None}
+            for u in ("u1", "u2", "u3", "u4")
+        ]
+        metrics = run_appraisal(unit_sales_doc({"rows": rows})).metrics
+        assert metrics.senior_breakeven_pence is None
+        flag = next((f for f in metrics.flags if f.code == "senior_breakeven_unsolvable"), None)
+        assert flag is not None
+        assert "final sale receipt" in flag.message
 
 
 class TestBreakevenFlagsWithAStructuralReason:

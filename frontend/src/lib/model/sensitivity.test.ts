@@ -11,6 +11,7 @@ import { applyScenario } from './apply-scenario';
 import { migrateInputsToV9 } from './migrate';
 import { derivePhases } from './programme';
 import { icDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
+import { unitSalesDoc } from './__fixtures__/unit-sales-docs';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
 import type { AnyCalculatorInputs, SalesPhasingInputs, CalculatorInputsV9 } from './finance-types';
 import type { Phase } from './programme';
@@ -67,7 +68,7 @@ describe('sensitivity defaults (spec §12.3, §12.4)', () => {
   it('pins the tie-break lever order', () => {
     expect(LEVER_ORDER).toEqual([
       'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
-      'exit_yield', 'operating_cost', 'vacancy',
+      'exit_yield', 'operating_cost', 'vacancy', 'sales_slip',
     ]);
   });
 
@@ -367,6 +368,7 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
       exit_yield_adjustment_pct: 0,
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
+      sales_slip_months: 0,
     });
     expect(levered.finance.committed_net_facility_pence).toBe(inputs.finance.committed_net_facility_pence);
     expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);
@@ -702,6 +704,7 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   exit_yield_adjustment_pct: 0,
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
+  sales_slip_months: 0,
 };
 
 /** Applies all five §12.1/§18.9 levers to `doc` via `applyScenario`, once per lever,
@@ -810,9 +813,9 @@ describe('phase_slip lever — §18.9', () => {
     const doc = networkDoc(20);
     const levers: Record<SensitivityLever, number> = {
       gdv: 5, construction_cost: -3, timeline: 2, interest_rate: 1, phase_slip: 2,
-      // Unused by this guard's `orders` below — R13's own eight-lever
-      // order-independence test lives in apply-scenario.test.ts.
-      exit_yield: 0, operating_cost: 0, vacancy: 0,
+      // Unused by this guard's `orders` below — R13's own eight-lever (now
+      // nine, R13b) order-independence test lives in apply-scenario.test.ts.
+      exit_yield: 0, operating_cost: 0, vacancy: 0, sales_slip: 0,
     };
     const orders: SensitivityLever[][] = [
       ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip'],
@@ -1150,5 +1153,45 @@ describe('§19.8 cell validity', () => {
     expect(t.low.profit_pence).not.toBeNull();
     expect(t.low.profit_pence).toBe(t.high.profit_pence);
     expect(t.span_pence).toBe(0);
+  });
+});
+
+// R13b spec §22.8. The ninth lever: sales_slip. Mirror of the Python
+// "sales_slip lever" tests in test_financial_model_sensitivity.py.
+describe('sales_slip lever — spec §22.8', () => {
+  it('gives a zero-width tornado bar on a null unit-sales document', () => {
+    const doc = explicitRefinanceDoc();
+    const result = runSensitivity(doc, {
+      rows: { lever: 'gdv', steps: [0] },
+      cols: { lever: 'construction_cost', steps: [0] },
+      tornado: [{ lever: 'sales_slip', low: -1, high: 1 }],
+    });
+    const bar = result.tornado[0];
+    expect(bar.low.profit_pence).not.toBeNull();
+    expect(bar.low.profit_pence).toBe(bar.high.profit_pence);
+  });
+
+  it('sends cells invalid, not clamped, at both ends', () => {
+    const result = runSensitivity(unitSalesDoc(), {
+      rows: { lever: 'sales_slip', steps: [-5, 0, 4] },
+      cols: { lever: 'gdv', steps: [0] },
+      tornado: [],
+    });
+    const cells = [0, 1, 2].map((i) => result.matrix[i][0]);
+    expect(cells[0].profit_pence).toBeNull();
+    expect(cells[0].validation_errors.some((e) => e.field === 'unit_sales.units[0].exchange')).toBe(true);
+    expect(cells[1].profit_pence).not.toBeNull();
+    expect(cells[1].validation_errors).toEqual([]);
+    expect(cells[2].profit_pence).toBeNull();
+    expect(cells[2].validation_errors.some((e) => e.field === 'unit_sales.units[3].completion')).toBe(true);
+  });
+
+  it('rejects a fractional sales_slip step', () => {
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'sales_slip', steps: [0.5] },
+      cols: { lever: 'gdv', steps: [0] },
+      tornado: [],
+    });
+    expect(issues.some((i) => i.message === 'sales_slip steps must be whole months.')).toBe(true);
   });
 });

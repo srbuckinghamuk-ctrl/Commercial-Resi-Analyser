@@ -3,12 +3,12 @@ import {
   defaultCalculatorInputs, defaultCalculatorInputsV3, defaultCalculatorInputsV4,
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
   defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
-  defaultCalculatorInputsV11,
+  defaultCalculatorInputsV11, defaultCalculatorInputsV12,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
-  migrateV9toV10, migrateV10toV11,
+  migrateV9toV10, migrateV10toV11, migrateV11toV12,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -391,6 +391,46 @@ describe('defaultCalculatorInputsV11 (R14 Task 14, spec §20.1)', () => {
   it('hands every caller its own document, not one shared mutable default', () => {
     const a = defaultCalculatorInputsV11();
     const b = defaultCalculatorInputsV11();
+    a.vat.treatments[0].rate_pct = 20;
+    a.scenarios.base.phase_slip_months = 3;
+    expect(b.vat.treatments[0].rate_pct).toBe(0);
+    expect(b.scenarios.base.phase_slip_months).toBe(0);
+  });
+});
+
+describe('defaultCalculatorInputsV12 (R13b Task 15, spec §22.1)', () => {
+  // Same guard as the V10/V11 blocks above, and the one that matters most
+  // here: this is the document EVERY freshly opened calculator now starts
+  // on, and the one every stored appraisal is compared against after
+  // `migrateInputsToV12` merges onto it. If the two drifted, a new appraisal
+  // and a migrated one would be different documents while both claiming to
+  // be v12.
+  it('is exactly what migrateV11toV12 makes of the v11 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV12>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV12()))
+      .toEqual(stripIds(migrateV11toV12(defaultCalculatorInputsV11())));
+  });
+
+  // Non-vacuity for the equality above: the field v12 adds is asserted by
+  // name and value, so the comparison cannot be passing merely because both
+  // sides are the v11 document with a bumped version number.
+  it('starts with no unit sales ledger entered', () => {
+    const v12 = defaultCalculatorInputsV12();
+    expect(v12.inputs_version).toBe(12);
+    // null unit_sales = no per-unit sales ledger entered, bit-identical -- a
+    // brand-new appraisal behaves exactly as it did before R13b until a
+    // ledger is entered on the calculator's unit sales editor.
+    expect(v12.unit_sales).toBeNull();
+    expect(v12.monitoring).toBeNull();
+  });
+
+  it('hands every caller its own document, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV12();
+    const b = defaultCalculatorInputsV12();
     a.vat.treatments[0].rate_pct = 20;
     a.scenarios.base.phase_slip_months = 3;
     expect(b.vat.treatments[0].rate_pct).toBe(0);

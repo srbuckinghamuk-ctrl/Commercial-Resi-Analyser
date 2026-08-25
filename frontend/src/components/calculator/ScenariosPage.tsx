@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import type { ScenarioOverrides } from '../../lib/conversion-types';
-import type { AppraisalRun, CalculatorInputsV11 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV12 } from '../../lib/model';
 import { runAppraisal } from '../../lib/model';
 import { applyScenario } from '../../lib/model/apply-scenario';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV11;
-  onChange: (partial: Partial<CalculatorInputsV11>) => void;
+  inputs: CalculatorInputsV12;
+  onChange: (partial: Partial<CalculatorInputsV12>) => void;
 }
 
 type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';
@@ -70,6 +70,10 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
               <label style={{ color: '#94a3b8', fontSize: 13 }}>
                 Interest rate adjustment (%)
                 <input type="number" step="0.1" value={inputs.scenarios[key].interest_rate_adjustment_pct} onChange={(e) => updateScenario(key, { interest_rate_adjustment_pct: Number(e.target.value) })} style={{ width: '100%', padding: '4px 8px', marginTop: 4, background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
+              </label>
+              <label style={{ color: '#94a3b8', fontSize: 13 }}>
+                Sales slip (months)
+                <input type="number" step="1" value={inputs.scenarios[key].sales_slip_months} onChange={(e) => updateScenario(key, { sales_slip_months: Number(e.target.value) })} style={{ width: '100%', padding: '4px 8px', marginTop: 4, background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }} />
               </label>
             </div>
           </div>

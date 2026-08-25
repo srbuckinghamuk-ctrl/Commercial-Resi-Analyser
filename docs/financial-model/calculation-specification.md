@@ -1,10 +1,12 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.13.0`.
+**Status:** Authoritative. Calculation version `2.14.0`.
 **Date:** 24 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.14.0** — the unit-level sales ledger (§22, R13b): per-unit exchange/completion timing, deposits held or released, per-unit selling-cost overrides, pre-sales coverage, the `sales_slip` lever (§12.1's ninth). **One pre-existing computed value moves: §5.11's phased break-even now replays anchored tranches at their resolved months** (fixture S: 90,971,520 → 88,720,089); every unanchored document is unchanged. §5.12 gains the per-unit cost basis. Inputs v12.
+- **2.13.0** — cost-to-complete corrected (§5.10, C1), `lender_eligible` wired into §4.2(b), the monitoring statement (§20, R14). Inputs v11. [Bullet added by R13b; R14 recorded this release in §1.6 and §20 but omitted the changelog line.]
 - **R14b, 24 August 2026 — no calculation-version bump and no inputs-version bump.** Lender case governance (§21): the release that makes a FINAL document possible at all. A lender case is a **locked whole-document snapshot** of a stored appraisal — its `inputs_snapshot`, `calc_version`, `inputs_version` and all three provenance hashes, copied at creation and never rewritten — carrying governance state through the eight-status machine `report-provenance.ts` has declared since R7 and nothing has ever populated. §13.3's condition 5 (an approved case) therefore becomes reachable, and gains a sixth condition beside it: an approval is only good for the document it was given against, so a case whose locked `input_hash` no longer matches the live stored row is **stale** and defeats FINAL under a banner of its own (§21.3). The case gets its own hash, `case_hash` (§13.2.1), **chained onto** the locked `audit_hash` rather than folded into it — §13.2's twice-stated "the audit hash gains no new parts" ruling is restated, not repealed, because a case transition happens without an appraisal re-save and would otherwise silently invalidate every stored hash. §13.1's provenance panel gains the case rows, which are the case hash's own components rather than a readable selection of them, so the reviewer-recompute property §13.2 gives the audit hash holds for the case hash too. **No engine change, no input-schema change, no fixture pin moves**: the release is versioned by Alembic migration 006 (two new tables, `lender_cases` and `lender_case_events`) and by this specification's §21, and the corpus-walk tests passing unmodified is itself the no-arithmetic guard. Governance also stops being a one-language concern — `app/financial_model/provenance.py` is created as the Python twin of `report-provenance.ts`'s governance core, under the same porting contract as `monitoring.py`, because the API cannot enforce a state machine that exists only in the client.
 - **2.12.0** — the investment case (§19, R13), with inputs v10 adding a top-level `investment_case: InvestmentCase | null` beside `programme`, `vat` and `cost_plan`: a stabilisation schedule (an occupancy ramp reusing §18.6's `PhaseAnchor` resolution), a user-managed schedule of operating lines (a ten-value `OpexCode` enum plus `other`, each fixed pence or a percent of effective gross rent), a net-initial-yield valuation, and a take-out sized as `min(LTV cap, DSCR cap, ICR cap)` with the binding constraint named and all three caps published. `refinance` narrows `investment_value_pence` and `ltv_pct` to nullable — non-null when `investment_case` is null (today's explicit path, unchanged), both null when it is not (§19.1) — and gains an `arrangement_fee_basis`/`arrangement_fee_pct` pair for a percentage arrangement fee on the derived quantum. NOI enters the ledger as its own signed receipt class, applied in full to the senior facility, in the fixed within-month order VAT reclaim → NOI → sales sweep → refinance (§19.5); it is never a sale receipt, so it never enters `gross_sale_pence` or GDV, and it never enters §3 profit — but it legitimately moves every debt-denominated metric (LTGDV, senior break-even, profit-on-GDV) by repaying the facility early, same as any other debt-reducing receipt. `Schedule` gains `investment_case: InvestmentCaseResult | null` (republished, never recomputed) and `resolved_exit_months`, which closes §18.10 limitation 9: the investment memo and `CashflowPage` now read the resolved tranche/refinance month instead of the raw `month_offset` (Task 12; Task 14 shipped the anchor UI control, not this reporting fix — see §18.10 limitation 9's rewrite). §12.1's lever table goes from five levers to eight (`exit_yield`, `operating_cost`, `vacancy`), still disjoint and order-independent; §12.2 gains the take-out carve-out — the take-out is not the committed facility and is re-solved in every cell, deliberately, or the three new levers would be inert. Cell validity for the three degenerate cases (non-positive yield, non-positive occupancy, a negative operating-line value) is existing validation (§19.7 rules 8, 9, 11), not new sensitivity logic — `measure()` already routes every levered document through validation before appraising (§12.7). The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties (§19.9), following §18.7's corrected shape from the start. §4.5 is **superseded for the `investment_case != null` case**; its explicit `investment_value_pence × ltv_pct` path is unchanged and remains live. **No existing computed value changed** — `investment_case = null` is bit-identical to calc 2.11.0, corpus-wide, in both engines.
 - **2.11.0** — the dated, dependent programme (§18, R12), with inputs v9 carrying `programme` as a **precedence network**: phases with an `id`, a fourteen-value `code` enum plus `other`, a signed `slip_months`, an earliest-start floor `start_offset` and `FS`/`SS` predecessors with lags; a derivation that computes every start, a backward pass that reports total float and the critical path; cost lines that resolve to a phase (`line.phase_id ?? category_phase_ids[line.category]`, §18.5) and spend over that phase's derived window; sale tranches and `refinance` that may **anchor** to a phase; a fifth sensitivity lever, `phase_slip` (§12.1, §18.9); and a hard `programme.overrun` error where the derived finish passes maturity — never a clamp (§18.8). **No existing computed value changed** — `programme = null` remains the auto-window path of §6, bit-identical to calc 2.10.0, and the v8 three-package shape migrates to three predecessor-free phases whose derived windows *are* the old windows by construction rather than by arithmetic coincidence (§18.7). §6.1 is **superseded for the explicit-programme case** and §6's auto-window text is unchanged and remains live. The migration gate is numeric **and** validation-side, the latter as three separately-falsifiable properties rather than one set equality (§18.7), because §18.8's overrun rule has no v8 counterpart at all. §12.1's lever table goes from four levers to five, still writing to disjoint fields and still order-independent; §12.6 gains the `phase_id` target rules; §16 gains the phase-resolution note for packages and fee lines. Spreading is per **(phase, category) bucket**, not per line — the auto and legacy arms spread a category total exactly once, and bucketing is what keeps penny-identity true by construction (§18.5, §18.10 limitation 7).
@@ -56,7 +58,7 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
 
 Calc 2.13.0 (R14) corrects §5.10's remaining-funding term for rolled-up facilities (C1), wires `lender_eligible` into §4.2(b), and adds §20's monitoring statement. **It changes `cost_to_complete` on every rolled-up facility with an interest reserve** — the corrected figure; every other computed value on every existing document is identical (the v11 identity gate, `tests/test_migrate_v11.py`).
 
@@ -145,6 +147,7 @@ Each metric states: numerator / denominator (for ratios), included costs, exclud
 - **Timing:** the month of the receipt they relate to.
 - **Gross/net:** deducted from gross receipts before the debt sweep.
 - **Zero-debt:** unchanged. **Retained units:** incur **no** selling costs.
+- **Per-unit regime [R13b — calc 2.14.0]:** when `unit_sales` is non-null each sold unit's agent fee is `round(gross_u × (agent_fee_pct ?? selling_agent_fee_pct)/100)` and its legal fee is its own `legal_fee_pence` or its pro-rata share of `selling_legal_fee_pence` (§22.2); `selling_costs_pence` is the **sum of the units**, which can differ from the formula above by rounding. The two regimes are distinct, not one formula with a special case.
 
 ### 3.8 Cost before finance [R1]
 
@@ -308,6 +311,7 @@ Serviced interest is a developer cash use in the month accrued. It is funded fro
 - Receipts insufficient to cover principal plus exit fee do not discharge the facility; the balance carries.
 - Residual cash after the sweep distributes to equity the same month.
 - R1 timing: `sell_all` and the sold portion of `blended` receive all receipts in the final month of the term (single-month disposal, disclosed as an assumption) when `sales_phasing` is null — see §4.4.1 for the phased regime.
+- Per-unit regime [R13b — calc 2.14.0]: when `unit_sales` is non-null (mutually exclusive with `sales_phasing`, §22.7 rule 1) each unit's receipt lands in its own resolved completion month, and a released deposit lands in its exchange month — §22.3.
 - `retain_all` (and the retained portion of `blended`): **no sale receipt, ever**. The ledger ends with the senior balance outstanding at term end; the appraisal reports "Senior debt outstanding at maturity — repayment source (sale/refinance) not modelled." as a red flag when `refinance` is null — see §4.5 for the refinance regime.
 - Practical completion never implies disposal or repayment.
 
@@ -469,7 +473,8 @@ Minimum gross sale price `P` such that `P = redemption_balance_at_disposal + exi
 
 This is the `sales_phasing = null` regime, unchanged. See below for the phased regime.
 
-Phased regime [R3b — calc 2.3.0]: when `sales_phasing` is non-null, the
+Phased regime [R3b — calc 2.3.0; corrected R13b — calc 2.14.0]: when
+`sales_phasing` or `unit_sales` is non-null, the
 break-even is the minimum total gross sales G (integer pence, uniform
 price-fall assumption: every tranche scales by the same factor, so tranche
 shares stay pct_k) such that a REPLAY of the sweep fully redeems the facility
@@ -498,9 +503,15 @@ Structurally unsolvable cases return null with the red flag
 cap-exhausted flag: facility draws after the final tranche month (no sale
 price can redeem), or `sales_sweep_pct = 0`.
 
+**Resolved months [R13b correction].** The replay places each tranche at the month the ledger used — §18.6's resolved month, read off the schedule's `resolved_exit_months` — not the entered `month_offset`. From calc 2.3.0 to 2.13.0 the replay read the raw offset, so an anchored tranche on a slipped programme replayed receipts at a month the ledger never used (fixture S, whose tranches resolve to 16/19 while their offsets read 20/21: 90,971,520 → 88,720,089). The tranches resolve to 16/19 against raw 20/21 — four and two months earlier — and the exit fee on S is a fixed-basis constant, so only rolled-up interest falls; this is not a reduction "less exit fee". The structural-unsolvable test ("draws continue after the final tranche") reads the same resolved months, so it can now fire — correctly — for a document whose anchored disposal precedes its last draw.
+
+**The receipt-lines arm [R13b — calc 2.14.0].** Under `unit_sales` the replay's receipts are a list of dated lines `{ month, base_gross, agent_fee_pct, legal_fee_pence }` — one per released deposit (no costs) and one per completion (gross less the released deposit, the unit's effective agent rate, its fixed legal) — sorted by month then unit order. At trial total G every line's gross is `round(base_gross × G / G_base)` with the last line absorbing the residue; agent fees scale with the line's gross; legal fees are fixed; the enforcement-cost assumption comes off the first line. The uniform price-fall assumption is unchanged — deposits scale with price because they are a percentage of it. The fee reservation, the VAT-reclaim ordering and the bisection are untouched. Under the lines arm the replay's exit-fee reservation (already this section's documented conservative assumption) is paid once per **sweep event** — one per distinct receipt month, so lines completing in the same month reserve it once — and a document with released deposits has more sweep months than its held twin, so its phased break-even is MORE conservatively overstated: fixture X (equity 30,850,000, covering its month-0 acquisition use exactly, no funding gap, `report_safe`) prints 36,624,486 (released) vs 35,238,880 (held) at its 1% gross-facility exit fee, while with the exit fee at zero the ordering is the intuitive released 33,522,952 < held 33,664,679.
+
 ### 5.12 Developer profit break-even [R2 — implemented in calc 2.1.0]
 
 Minimum gross sale price giving zero developer profit: `TDC` restated at the break-even receipts (selling costs re-solved). Distinct metric from §5.11, never conflated.
+
+Per-unit regime [R13b — calc 2.14.0]: the re-solved selling costs use the ledger's **effective blended agent rate** `Σ agent_u / G × 100` and the **summed** legal `Σ legal_u`, so the cost reproduces the ledger's own at `P = G` and scales the agent component with price as the ledger would.
 
 ---
 
@@ -620,7 +631,7 @@ the three named scenarios (`base`, `upside`, `downside`), which share its lever 
 
 ### 12.1 Levers
 
-A **lever** is one named adjustment applied to an inputs document. There are eight:
+A **lever** is one named adjustment applied to an inputs document. There are nine:
 
 | Lever | Unit | Effect on the inputs document |
 |---|---|---|
@@ -632,6 +643,7 @@ A **lever** is one named adjustment applied to an inputs document. There are eig
 | `exit_yield` [R13 — calc 2.12.0] | percentage points | adds to `investment_case.valuation.cap_yield_pct` (§19.8) |
 | `operating_cost` [R13 — calc 2.12.0] | percent | scales every `investment_case.operating_lines[].value` (§19.8) |
 | `vacancy` [R13 — calc 2.12.0] | percentage points | **subtracts** from `investment_case.stabilisation.stabilised_occupancy_pct` (§19.8) |
+| `sales_slip` [R13b — calc 2.14.0] | months (signed) | adds to every `unit_sales.units[].completion` — `anchor.offset_months` when anchored, else `month_offset` (§22.8) |
 
 A percent lever of `p` multiplies its target by `(1 + p/100)` and rounds half-up to
 integer pence (§1.1). A months or percentage-point lever adds its value directly.
@@ -640,7 +652,7 @@ lowers occupancy — a positive `vacancy` value is a worse position, matching th
 convention every other stress lever already carries (a positive `interest_rate` or
 `construction_cost` value is also the adverse direction).
 
-The eight levers write to **disjoint input fields**, so applying several to one document
+The nine levers write to **disjoint input fields**, so applying several to one document
 is order-independent. Any lever added in a later release that shares a field with an
 existing lever must define its composition order in this section at the same time.
 
@@ -667,6 +679,8 @@ five levers to one document in several orders and requires identical results (§
 `phase_slip` is the first lever that carries a **target** as well as a magnitude, so
 `SensitivityAxis` and `TornadoRange` carry `phase_id` alongside `lever` (§12.6), and
 the duplicate checks key the pair `(lever, phase_id)` rather than `lever` alone.
+
+**`sales_slip`'s composition order, stated at the time it is added.** It writes `unit_sales.units[].completion` and nothing else; no other lever touches it, so all nine remain disjoint and application remains order-independent — asserted by the several-orders test gaining an entry, and by a second such test on a document that actually carries a ledger. It carries no target, so its duplicate checks key on `lever` alone. On `unit_sales = null` it is a no-op by construction: a zero-width tornado bar.
 
 ### 12.2 The facility is invariant
 
@@ -736,7 +750,7 @@ this is the `(construction_cost = 0, gdv = 0)` cell.
 
 The following are input errors, not flags:
 
-- an axis or a tornado bar naming a lever that is not one of the five §12.1 levers;
+- an axis or a tornado bar naming a lever that is not one of the nine §12.1 levers;
 - an axis with an empty step list, or any non-finite step;
 - an axis with more than nine steps (the suite is bounded at 81 cells);
 - a row axis and a column axis naming the same **`(lever, phase_id)` pair**;
@@ -745,8 +759,9 @@ The following are input errors, not flags:
 - a step, or a tornado bound, for the `timeline` lever that is not a whole number of months;
 - **[R12 — calc 2.11.0]** an axis or tornado range with `lever === 'phase_slip'` and `phase_id` null, or with any other lever and `phase_id` set;
 - **[R12 — calc 2.11.0]** a step, or a tornado bound, for the `phase_slip` lever that is not a whole number of months.
+- **[R13b — calc 2.14.0]** a step, or a tornado bound, for the `sales_slip` lever that is not a whole number of months.
 
-The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline` and `phase_slip` levers are therefore constrained to whole months at the point of input rather than rounded later.
+The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline`, `phase_slip` and `sales_slip` levers are therefore constrained to whole months at the point of input rather than rounded later.
 
 The duplicate checks key the **pair** rather than the lever alone because two `phase_slip` axes targeting different phases are a legitimate matrix, and a tornado may carry one bar per slipped phase. The lever name itself stays a closed set: encoding the target into the lever string (`'phase_slip:planning'`) would have forced the membership check that stops a misspelled lever reaching the engine to be loosened into a prefix match.
 
@@ -1100,6 +1115,7 @@ failing condition:
   unconfirmed migrated facility terms, jurisdiction/tax basis, VAT treatment,
   absent area bridge, narrative-only due diligence, and any failing governance
   condition from §13.3.
+- **Released deposits [R13b — calc 2.14.0].** A deposit the ledger shows as released at exchange is a modelling assumption about the sale contract that the model does not evidence; the memo prints that sentence beside the coverage figure whenever `deposit_release` is `released_on_exchange` (§22.6).
 
 ### 13.5 Layout invariants
 
@@ -2700,9 +2716,7 @@ Both engines run the numeric gate corpus-wide.
 
 Recorded so they are not read as oversights.
 
-1. **No unit-level sale timing or per-unit selling costs**, and no deposits —
-   the deferred half of §7.8, scheduled as its own release (the release
-   plan).
+1. ~~No unit-level sale timing or per-unit selling costs, and no deposits~~ — **closed by R13b (§22)**; kept as history.
 2. **Rent is flat in nominal terms** over the hold. No review pattern, no
    indexation, no stepped rent.
 3. **Occupancy is scheme-level.** There are no per-unit voids or per-unit
@@ -3354,3 +3368,149 @@ before it is trusted, and named with the change it would miss (§17's rule).
 | History ordering is deterministic | Two cases created within the same second must come back in creation order, which fails under `created_at` alone and under the case's own random UUID |
 | Spec-versions pin | `spec-versions.test.ts` must stay green **untouched**: R14b promised to move no version constant, and a red result there means it accidentally did |
 | The corpus is untouched | Every golden-fixture walk passes unmodified. This release contains no arithmetic, and an unmodified corpus is the guard that says so |
+
+## 22. The unit-level sales ledger [R13b — calc 2.14.0]
+
+The other half of audit §7.8, deferred by R13 (§19.10 limitation 1). Until this release the sold portion was one total split by tranche percentages under one scheme-level agent rate and one flat legal fee (§4.4.1); nothing recorded which unit completed when, an exchange as distinct from a completion, or a deposit. §22 adds a per-unit path, mutually exclusive with the tranche path, that writes into the same receipt fields.
+
+### 22.1 The schema
+
+`inputs_version: 12`. `unit_sales` is a two-state top-level field beside `investment_case` and `monitoring`:
+
+```
+unit_sales: null | {
+  deposit_release: 'held_to_completion' | 'released_on_exchange'
+  units: UnitSale[]
+}
+
+UnitSale:
+  unit_id:         string            -- names a unit_mix.units[].id
+  exchange:        SaleEvent | null  -- null = exchange and completion are simultaneous
+  completion:      SaleEvent
+  deposit_pct:     number            -- 0..100, of the unit's gross (value + ancillary, §15.5)
+  agent_fee_pct:   number | null     -- null = scheme selling_agent_fee_pct
+  legal_fee_pence: integer | null    -- null = share of scheme selling_legal_fee_pence
+
+SaleEvent:
+  month_offset: integer
+  anchor:       PhaseAnchor | null   -- §18.6's rule, §18.6's resolver
+```
+
+`null` is the migration default and means the document does not use this path. A unit's gross is `estimated_value_pence` plus its ancillary value — the figure `gross_sales` already sums — so `gdv_pence` and `gross_sales_pence` stay equal by construction and the `gdv` lever reaches every row. `ScenarioOverrides` gains `sales_slip_months: integer` (§22.8).
+
+### 22.2 The per-unit derivation
+
+For each row *u* over the sold set (by route and `retained_units`), in `units[]` order:
+
+```
+gross_u      = estimated_value_pence + ancillary value
+deposit_u    = round_half_up(gross_u × deposit_pct / 100)
+agent_u      = round_half_up(gross_u × (agent_fee_pct ?? selling_agent_fee_pct) / 100)
+legal_u      = legal_fee_pence                                        if non-null
+             = round_half_up(selling_legal_fee_pence × gross_u / Σ gross over null-legal rows);
+               the LAST null-legal row in units[] order absorbs the residue
+net_u        = gross_u − agent_u − legal_u
+completion_m = resolve(completion); exchange_m = resolve(exchange), or completion_m when exchange is null
+```
+
+`resolve` is §18.6's single resolver. Totals are the sums of the rows: `selling_costs_pence = Σ (agent_u + legal_u)` (§3.7's per-unit bullet). When every row's `legal_fee_pence` is non-null the scheme flat fee is unused — by this rule, not silently. The resolved months are published on the result block (§22.6); no surface prints an entered offset.
+
+### 22.3 The ledger
+
+No new receipt class. Each row accumulates into the existing `MonthReceipts` fields:
+
+| `deposit_release` | exchange month | completion month |
+|---|---|---|
+| `held_to_completion` | nothing | `gross += gross_u`; `agent += agent_u`; `legal += legal_u` |
+| `released_on_exchange` | `gross += deposit_u` | `gross += gross_u − deposit_u`; costs as above |
+
+Σ gross over months = G exactly on both settings, so §3.1, §4.4's sweep arms, the declining redemption schedule (a released-deposit month is a disposal month in it), §5.10 and §7 are unchanged. A released deposit sweeps under §4.4 like any receipt. Selling costs book in the completion month (§3.7). §19.5's within-month order is unchanged: VAT reclaim → NOI → sales sweep → refinance. `redemption_balance_at_disposal_pence` remains the balance before receipts in the final disposal month — the last completion.
+
+### 22.4 Pre-sales coverage
+
+```
+reference_month = earliest start among programme phases with code 'practical_completion',
+                  when programme is a network with at least one    (basis 'practical_completion')
+                = min over rows of completion_m                    (basis 'first_completion')
+exchanged_value_at_ref = Σ gross_u over rows with exchange_m <= reference_month
+pre_sold_pct = pct(exchanged_value_at_ref, G)
+```
+
+plus a per-month cumulative series of exchanged value, completed value and released deposits received. Earliest PC is the conservative choice. It is a figure, not a covenant test; no flag.
+
+### 22.5 The break-even seam
+
+§5.11's replay gains the receipt-lines arm and the tranche arm is handed resolved months; §5.12 uses the effective blended rate and summed legal. All three are stated in those sections.
+
+### 22.6 Outputs and reporting
+
+`Schedule` gains `unit_sales`, republished (never recomputed) onto `AppraisalResultV2`; `null` exactly when the input is null:
+
+```
+UnitSalesResult:
+  deposit_release
+  units:  Array<{ unit_id, gross_pence, exchange_month: integer | null, completion_month,
+                  deposit_pence, deposit_released_pence, agent_fee_pence, legal_fee_pence, net_pence }>
+  months: Array<{ month, exchanged_value_pence, completed_value_pence, deposits_received_pence }>   -- first two cumulative
+  totals: { gross_pence, deposits_pence, deposits_released_pence, agent_fees_pence, legal_fees_pence, net_pence }
+  pre_sold: { reference_month, basis, exchanged_value_pence, pct }
+```
+
+`resolved_exit_months.tranches` is `[]` on this path. Surfaces: the Exit page's per-unit editor (exclusive with phasing in the same payload; rows reconciled to the sold set), the cashflow page's released-deposits column and disposal-month note, the memo's exit paragraph arm and "Unit Sales Ledger" section with the §13.4 sentence. The section is omitted entirely when null (§13.5).
+
+### 22.7 Validation
+
+Input errors, not flags; applying only when `unit_sales` is non-null unless stated:
+
+1. `unit_sales` and `sales_phasing` both non-null — an error on **both** fields. *Applies regardless.*
+2. `route = 'retain_all'` with a non-null block — nothing is sold.
+3. Every sold unit has exactly one row and every row names a sold unit: a missing sold unit, a row for a retained unit, a row for an absent unit, and a duplicate `unit_id` are four distinct messages.
+4. Each event: `month_offset` a whole month in `[0, term − 1]`; an anchor names an existing phase and requires a network `programme`; the **resolved** month lies in `[0, term − 1]`.
+5. Resolved `exchange_m <= completion_m` where `exchange` is non-null.
+6. `deposit_pct` finite in `[0, 100]`, and `0` when `exchange` is null.
+7. `agent_fee_pct` null or finite in `[0, 100)`; `legal_fee_pence` null or an integer `>= 0`.
+8. `deposit_release` in the enum.
+9. Sold gross `> 0`.
+
+`scenarios.*.sales_slip_months` must be a whole number. No new flags.
+
+### 22.8 Sensitivity: the `sales_slip` lever
+
+§12.1's ninth lever adds signed months to every row's completion — `anchor.offset_months` when anchored, else `month_offset` — **completion only**, additively, through `applyScenario`. A slip that drives a completion before its exchange, or outside the term, makes the position an invalid cell (§12.7), never a clamp. On `unit_sales = null` it is a zero-width bar. The lever is offered only when the document carries a ledger, as `phase_slip` is only offered with a network.
+
+### 22.9 Migration and the persistence boundary
+
+```
+v11 unit_sales: (absent)                         →  v12 null
+v11 scenarios.<each>.sales_slip_months: (absent) →  v12 0
+```
+
+Both inert by construction. The numeric identity gate runs the same code over each v11 document and its migrated twin, corpus-wide in both engines, and requires equality; the validation gate is §19.9's three separately falsifiable properties (property 3's control: both blocks non-null trips rule 1). The separate claim — calc 2.14.0 reproduces 2.13.0 on every `unit_sales = null` document — carries one named exception, fixture S's `senior_breakeven_pence` (§5.11's correction), evidenced by every pre-existing golden pin standing while S gains a pin whose pre-fix value is recorded beside it.
+
+### 22.10 Stated limitations
+
+1. Uniform price fall in the break-even; no per-unit price stress.
+2. A unit's price is its `unit_mix` value — no incentives, discounts, part-exchange or bulk pricing.
+3. One deposit per unit, at exchange; no staged deposits, deposit interest or stakeholder-release conditions; the release switch is scheme-level.
+4. Coverage is a figure, not a test.
+5. The coverage reference month is the earliest PC; a phased block release is measured at its first PC.
+6. Exchange dates are stressed by no lever.
+7. Rows carry no evidence status (R15, on §14.6/§15.9/§16.9/§19.10's reasoning).
+8. The two sales paths remain two; there is no conversion between them.
+9. No appraisal workbook exists (spec §11.9); the ledger is printed in the memo and on the pages only.
+10. The phased break-even's fee reservation is paid once per sweep event — one per distinct receipt month, so lines completing in the same month reserve it once — and a deposit-heavy document has more sweep months than its held twin, so its break-even is overstated relative to it; the timing benefit of a released deposit is visible only with the exit fee removed.
+
+### Guards this release must watch fail
+
+| Guard | Watched by |
+|---|---|
+| Deposit liveness | released vs held twin: the exchange month's receipt, absolute finance costs and the redemption months differ; `gdv_pence`, `gross_sales_pence`, `selling_costs_pence` identical |
+| Sum-of-units costs, residue absorption | the hand table (201,550 / 135,659 / 162,791; 33/33/34) |
+| Exclusion, coverage both ways, resolved window, exchange <= completion | §22.7's rule tests, each with an accepting twin |
+| Pre-sold basis switch | the same rows with and without a PC milestone: 12/`practical_completion`/81.48 vs 12/`first_completion`/81.48 vs 9/`practical_completion`/27.51 |
+| Receipt-lines arm | two-line hand figures at half price; released < held; two equal lines reproduce the two-tranche minimum |
+| §5.11 correction | S off 90,971,520 to 88,720,089; the strip_out/building_control unsolvable pair — both failed on the pre-fix code |
+| Tranche-arm identity | G, I, J, L pins unchanged |
+| Lever | nine levers order-independent on a ledger document; zero-width bar on null; −5 and +4 invalid cells |
+| Memo | present with the pinned rows, absent when null; figures follow a tampered result block |
+| Entry points | both guards require v12 |

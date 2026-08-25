@@ -10,6 +10,8 @@ from .areas import AreaBridgeResult, area_bridge
 from .breakeven import (
     DeveloperBreakevenTerms,
     PhasedSeniorBreakevenTerms,
+    ReceiptLine,
+    ResolvedTranche,
     SeniorBreakevenTerms,
     solve_developer_breakeven,
     solve_senior_breakeven,
@@ -21,6 +23,7 @@ from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, 
 from .investment_case import InvestmentCaseResult
 from .lender_valuation import compute_lender_gdv
 from .monitoring import MonitoringStatement, MonitoringStatementLine, compute_monitoring_statement
+from .unit_sales import UnitSalesResult
 # Sec 17.12's counterfactual runs the pipeline's first two stages a second time.
 # Imported HERE rather than reached through run_appraisal, which is what makes the
 # recursion impossible by construction: __init__.py imports this module, so there
@@ -229,6 +232,10 @@ class AppraisalResultV2:
     # the INPUT investment_case is None. The UI and the report read it from
     # here and never call compute_investment_case.
     investment_case: InvestmentCaseResult | None
+    # R13b spec Sec 22.6. The SCHEDULE's unit_sales, republished -- not a
+    # second derivation, the treatment Sec 17.12 gave vat. None exactly when
+    # the INPUT unit_sales is None.
+    unit_sales: UnitSalesResult | None
     # R14 spec Sec 20.4. Computed ONCE in derive_metrics, from the cost_plan it
     # already holds and the model -- never recomputed by the UI or the memo.
     # None exactly when the input monitoring block is None (every document
@@ -470,6 +477,22 @@ def vat_carry_interest_pence(
     return model.totals.interest_pence - cf_model.totals.interest_pence
 
 
+def receipt_lines_from_unit_sales(us: UnitSalesResult) -> list[ReceiptLine]:
+    """Sec 22.5. One line per released deposit (exchange month, no costs) and
+    one per completion (gross less the released deposit, the unit's agent
+    rate, its fixed legal). Sorted by month, then units[] order, deposit
+    before completion for the same unit -- enforcement comes off the first."""
+    lines: list[tuple[int, int, int, ReceiptLine]] = []
+    for i, row in enumerate(us["units"]):
+        agent_pct = (row["agent_fee_pence"] / row["gross_pence"] * 100) if row["gross_pence"] > 0 else 0.0
+        if row["deposit_released_pence"] > 0 and row["exchange_month"] is not None:
+            lines.append((row["exchange_month"], i, 0, ReceiptLine(row["exchange_month"], row["deposit_released_pence"], 0.0, 0)))
+        lines.append((row["completion_month"], i, 1, ReceiptLine(
+            row["completion_month"], row["gross_pence"] - row["deposit_released_pence"], agent_pct, row["legal_fee_pence"],
+        )))
+    return [line for _, _, _, line in sorted(lines, key=lambda x: (x[0], x[1], x[2]))]
+
+
 def derive_metrics(
     inputs: AnyCalculatorInputs, schedule: Schedule, model: MonthlyModel,
 ) -> AppraisalResultV2:
@@ -611,7 +634,14 @@ def derive_metrics(
     # keeps growing), or sales_sweep_pct is 0% (proceeds never reach the facility at
     # all). `sales_phasing` only exists on v4 inputs; the `getattr(..., None)` guard
     # keeps this branch inert for v2/v3 callers exactly as before.
+    # R13b spec Sec 22.5: the per-unit sales ledger is a THIRD source for the phased
+    # regime, alongside sales_phasing -- schedule.unit_sales, when present, takes
+    # priority over phasing (a document can carry both, e.g. unitSalesDoc's
+    # sales_phasing_too override) and drives receipt_lines_from_unit_sales's lines
+    # rather than the tranche list, so the disposal replay reads the ledger's own
+    # per-unit exchange/completion timing instead of the coarser tranche schedule.
     phasing = getattr(inputs, "sales_phasing", None)
+    unit_sales_result = schedule.unit_sales
     redemption_balance = model.redemption_balance_at_disposal_pence
     senior_breakeven: int | None = None
     senior_breakeven_pct_of_lender_gdv: float | None = None
@@ -619,7 +649,7 @@ def derive_metrics(
     senior_attempted_null = False
     senior_unsolvable_reason: str | None = None
     if redemption_balance is not None:
-        if phasing is None:
+        if unit_sales_result is None and phasing is None:
             breakeven_terms = SeniorBreakevenTerms(
                 redemption_balance_pence=redemption_balance,
                 exit_fee_pence=exit_fee_amount(
@@ -638,21 +668,43 @@ def derive_metrics(
                     lender_gdv.lender_gdv_pence - senior_breakeven, lender_gdv.lender_gdv_pence,
                 )
         else:
-            last_tranche = max(tr.month_offset for tr in phasing.tranches)
+            if unit_sales_result is not None:
+                lines = receipt_lines_from_unit_sales(unit_sales_result)
+                last_month = max((line.month for line in lines), default=-1)
+                tranche_arg: list = []
+                lines_arg: list[ReceiptLine] | None = lines
+            else:
+                # R13b Sec 5.11 correction: before this the replay read
+                # tr.month_offset, so an anchored tranche on a slipped programme
+                # replayed receipts at a month the ledger never used (fixture S:
+                # 20/21 vs 16/19).
+                resolved = schedule.resolved_exit_months.tranches
+                tranche_arg = [
+                    ResolvedTranche(m, tr.pct_of_gross_receipts)
+                    for m, tr in zip(resolved, phasing.tranches)
+                ]
+                last_month = max(resolved)
+                lines_arg = None
             # Mirrors solve_senior_breakeven_phased's own internal guard exactly
-            # (draws_and_fees_pence[m] > 0 for m past the last tranche) --
+            # (draws_and_fees_pence[m] > 0 for m past the last tranche/line) --
             # capitalised_fees_pence is 0 for every month past 0 in the current engine
             # (arrangement fee capitalises once, at month 0 only, in run_ledger), so
             # this is currently equivalent to draw_pence alone; summing both here keeps
             # the two checks provably identical rather than coincidentally so.
             if any(
-                mm.month > last_tranche and mm.draw_pence + mm.capitalised_fees_pence > 0
+                mm.month > last_month and mm.draw_pence + mm.capitalised_fees_pence > 0
                 for mm in model.months
             ):
-                senior_unsolvable_reason = (
-                    "senior break-even unavailable — facility draws continue after the "
-                    "final sales tranche, so no sale price redeems the facility"
-                )
+                if unit_sales_result is not None:
+                    senior_unsolvable_reason = (
+                        "senior break-even unavailable — facility draws continue after "
+                        "the final sale receipt, so no sale price redeems the facility"
+                    )
+                else:
+                    senior_unsolvable_reason = (
+                        "senior break-even unavailable — facility draws continue after the "
+                        "final sales tranche, so no sale price redeems the facility"
+                    )
             elif inputs.finance.sales_sweep_pct <= 0:
                 senior_unsolvable_reason = (
                     "senior break-even unavailable — sales sweep is 0%, so sale "
@@ -676,12 +728,13 @@ def derive_metrics(
                     monthly_rate=inputs.finance.annual_interest_rate_pct / 100 / 12,
                     rolled_up=inputs.finance.interest_type == "rolled_up",
                     sales_sweep_pct=inputs.finance.sales_sweep_pct,
-                    tranches=phasing.tranches,
+                    tranches=tranche_arg,
                     selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
                     selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
                     enforcement_cost_assumption_pence=inputs.finance.enforcement_cost_assumption_pence,
                     finance=inputs.finance,
                     committed_gross_facility_pence=model.committed_gross_facility_pence,
+                    receipt_lines=lines_arg,
                 )
                 senior_breakeven = solve_senior_breakeven_phased(phased_terms)
                 senior_attempted_null = senior_breakeven is None
@@ -699,14 +752,25 @@ def derive_metrics(
     # appraisal with zero sales gets None: there is no sale price to solve for. There is no
     # ordering invariant between this figure and senior_breakeven_pence (design Sec B5) --
     # they cover different cost bases and answer different questions.
+    # R13b spec Sec 22.6/5.12. On the per-unit sales-ledger path the flat scheme-wide
+    # exit_strategy rate is replaced by the blended EFFECTIVE rate the ledger actually
+    # charged (totals.agent_fees_pence / totals.gross_pence) and the summed per-unit
+    # legal fees, so the developer break-even's selling-cost basis matches the same
+    # per-unit costs the ledger itself used, rather than re-deriving a flat estimate.
     developer_breakeven: int | None = None
     developer_attempted_null = False
     if t.gross_sales_pence > 0:
         tdc_ex_selling = tdc - t.selling_costs_pence
+        if unit_sales_result is not None and unit_sales_result["totals"]["gross_pence"] > 0:
+            dev_agent_pct = unit_sales_result["totals"]["agent_fees_pence"] / unit_sales_result["totals"]["gross_pence"] * 100
+            dev_legal = unit_sales_result["totals"]["legal_fees_pence"]
+        else:
+            dev_agent_pct = inputs.exit_strategy.selling_agent_fee_pct
+            dev_legal = inputs.exit_strategy.selling_legal_fee_pence
         developer_breakeven_terms = DeveloperBreakevenTerms(
             tdc_ex_selling_pence=tdc_ex_selling,
-            selling_agent_fee_pct=inputs.exit_strategy.selling_agent_fee_pct,
-            selling_legal_fee_pence=inputs.exit_strategy.selling_legal_fee_pence,
+            selling_agent_fee_pct=dev_agent_pct,
+            selling_legal_fee_pence=dev_legal,
         )
         developer_breakeven = solve_developer_breakeven(developer_breakeven_terms)
         developer_attempted_null = developer_breakeven is None
@@ -813,6 +877,9 @@ def derive_metrics(
         # Sec 17.12's vat treatment, applied here: the SCHEDULE's investment
         # case, republished -- not a second derivation.
         investment_case=schedule.investment_case,
+        # R13b spec Sec 22.6. The SCHEDULE's unit_sales, republished -- not a
+        # second derivation.
+        unit_sales=schedule.unit_sales,
         monitoring_statement=monitoring_statement,
         flags=flags,
     )

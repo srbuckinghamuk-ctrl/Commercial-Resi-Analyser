@@ -22,6 +22,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v9,
     migrate_inputs_to_v10,
     migrate_inputs_to_v11,
+    migrate_inputs_to_v12,
 )
 from app.financial_model.schedule import build_schedule
 from app.financial_model.validation import ValidationIssue, validate_inputs
@@ -78,6 +79,7 @@ EXPECTED_FIXTURE_STEMS = [
     "u-investment-case-ltv-binds",
     "v-exhausted-reserve",
     "w-monitoring-on-site",
+    "x-unit-sales-ledger",
 ]
 
 # Every fixture that carries its own `inputs` document, i.e. everything the run_appraisal
@@ -241,6 +243,28 @@ _FLAT_KEYS = {
         if r.metrics.monitoring_statement else None
     ),
     "lender_eligible_ratio": lambda r: r.metrics.cost_plan.lender_eligible_ratio,
+    # R13b spec Sec 22.6, fixture X: unit_sales.units/months are LISTS, so a
+    # dotted path cannot reach them (the cost_plan.contingency reasoning above).
+    "unit_sales_unit_ids": lambda r: [u["unit_id"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_gross_pence": lambda r: [u["gross_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_deposit_pence": lambda r: [u["deposit_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_deposit_released_pence": (
+        lambda r: [u["deposit_released_pence"] for u in r.metrics.unit_sales["units"]]
+    ),
+    "unit_sales_unit_agent_fee_pence": lambda r: [u["agent_fee_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_legal_fee_pence": lambda r: [u["legal_fee_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_net_pence": lambda r: [u["net_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_exchange_months": lambda r: [u["exchange_month"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_completion_months": lambda r: [u["completion_month"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_deposits_received_pence": (
+        lambda r: [m["deposits_received_pence"] for m in r.metrics.unit_sales["months"]]
+    ),
+    "receipts_gross_sale_pence": lambda r: [x.gross_sale_pence for x in r.schedule.receipts],
+    # R13b Task 7 fix round 2 (review finding 1): report_safe lives on
+    # `AppraisalRun.reconciliation`, not `metrics` -- the same reasoning as
+    # funding_gap_pence above, which is the standing precedent for a
+    # quantity outside `metrics` reached through this whole-run mapper table.
+    "report_safe": lambda r: r.reconciliation.report_safe,
 }
 
 
@@ -322,14 +346,18 @@ _V10_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) 
 # document (spec Sec 20.2), so every migrate-to-vN parametrisation below excludes it
 # by the same design that excluded T/U/V from the v9 ones.
 _V11_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 11]
+# R13b Task 2: fixture X is BORN at v12 -- the corpus's first v12-native
+# document (spec Sec 22), so every migrate-to-vN parametrisation below excludes
+# it by the same design that excluded T/U/V/W from the v9 ones.
+_V12_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 12]
 
 
-def test_every_fixture_is_v5_to_v11_and_each_group_is_non_empty() -> None:
+def test_every_fixture_is_v5_to_v12_and_each_group_is_non_empty() -> None:
     """Mirrors golden-fixtures.test.ts. Without this, a fixture whose inputs_version
     was mistyped would drop out of every parametrisation rather than fail."""
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
-        + len(_V9_FIXTURES) + len(_V10_FIXTURES) + len(_V11_FIXTURES)
+        + len(_V9_FIXTURES) + len(_V10_FIXTURES) + len(_V11_FIXTURES) + len(_V12_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -343,6 +371,7 @@ def test_every_fixture_is_v5_to_v11_and_each_group_is_non_empty() -> None:
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
     ]
     assert [p.stem for p in _V11_FIXTURES] == ["w-monitoring-on-site"]
+    assert [p.stem for p in _V12_FIXTURES] == ["x-unit-sales-ledger"]
 
 
 def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
@@ -420,7 +449,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # once more to v11 -- fixture W is v11-native and migrate_inputs_to_v6 refuses
 # it for the same reason, one version further on (`monitoring` too).
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11, 12)
 ]
 
 
@@ -446,7 +475,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # drop `refinance`'s v10 narrowing and `investment_case` to produce a v7 one).
 # R14 Task 8 widens it once more to v11, for the identical reason (`monitoring`).
 _PRE_V8_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11, 12)
 ]
 
 
@@ -1100,7 +1129,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
         "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
         "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
-        "w-monitoring-on-site",
+        "w-monitoring-on-site", "x-unit-sales-ledger",
     ]
     # Every exclusion is justified by one of the two stated reasons, not by silence.
     # R10 widens the second reason from "== 6" to "== 6 or 7", and R11 widens it again
@@ -1125,12 +1154,17 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     # additionally strip the R14 `monitoring` block and the detailed cost plan
     # the fixture is entirely about.
     #
+    # R13b Task 2 widens it once more to include 12: fixture X is BORN at v12
+    # for the same reason -- it did not exist before R8, and stamping it v3/v4
+    # would additionally strip the R13b `unit_sales` block the fixture is
+    # entirely about.
+    #
     # Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     # about, NOT negate _PRE_R8_FIXTURES's own defining condition ("== 5" flipped to
     # "!= 5") -- that phrasing is the literal complement of how `excluded` was built,
     # so it is vacuously true for every member and can never fail. Enumerating
-    # 6/7/8/9/10/11 keeps the check able to fail: it catches a fixture excluded for a
-    # SEVENTH, unstated reason (e.g. a future non-v5..v11 fixture, or a change to
+    # 6/7/8/9/10/11/12 keeps the check able to fail: it catches a fixture excluded for
+    # an EIGHTH, unstated reason (e.g. a future non-v5..v12 fixture, or a change to
     # _PRE_R8_FIXTURES's own filter that this assertion was never updated to match).
     for path in excluded:
         version = _version_of(_load_fixture(path))
@@ -1142,6 +1176,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 9
             or version == 10
             or version == 11
+            or version == 12
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -1398,6 +1433,50 @@ _NEGATIVE_CONTROLS = [
         "monitoring_surplus_pence": 10_101_206,                   # truly 10101207
         "lender_eligible_ratio": 0.9166666666666667,              # truly 0.9166666666666666
     }),
+    # R13b Task 7 (the same convention stated above): fixture X adds eleven new
+    # _FLAT_KEYS array mappers (spec Sec 22.6) -- the nine per-unit rows and the
+    # two month-indexed arrays -- and every one needs a control here. Each wrong
+    # value is a plausible REAL mistake rather than an arbitrary one: u2/u3 (or
+    # u1/u2, or u1/u3) transposed -- the two units missing an exchange or legal
+    # override sit adjacent in the input list -- u3's 2.0% agent-fee override
+    # dropped to the scheme default, an anchor offset dropped by one month, and
+    # a receipt landing in the wrong month. Mirrors golden-fixtures.test.ts's
+    # negativeControls entry for fixture X.
+    ("x-unit-sales-ledger", {
+        # truly ["u1", "u2", "u3", "u4"] -- u2/u3 transposed
+        "unit_sales_unit_ids": ["u1", "u3", "u2", "u4"],
+        # truly [26000000, 30000000, 17500000, 21000000] -- u2/u3 transposed
+        "unit_sales_unit_gross_pence": [26000000, 17500000, 30000000, 21000000],
+        # truly [2600000, 3000000, 0, 1050000] -- u2/u3 transposed
+        "unit_sales_unit_deposit_pence": [2600000, 0, 3000000, 1050000],
+        # truly [2600000, 3000000, 0, 1050000] -- u2/u3 transposed
+        "unit_sales_unit_deposit_released_pence": [2600000, 0, 3000000, 1050000],
+        # truly [390000, 450000, 350000, 315000] -- u3's 2.0% override dropped to
+        # the scheme default (1.5% of 17500000 = 262500)
+        "unit_sales_unit_agent_fee_pence": [390000, 450000, 262500, 315000],
+        # truly [201550, 150000, 135659, 162791] -- u1/u3 transposed
+        "unit_sales_unit_legal_fee_pence": [135659, 150000, 201550, 162791],
+        # truly [25408450, 29400000, 17014341, 20522209] -- u1/u2 transposed
+        "unit_sales_unit_net_pence": [29400000, 25408450, 17014341, 20522209],
+        # truly [8, 10, None, 11] -- u1's marketing anchor offset dropped by one month
+        "unit_sales_unit_exchange_months": [7, 10, None, 11],
+        # truly [12, 13, 13, 20] -- u2's practical_completion + 1 anchor offset dropped
+        "unit_sales_unit_completion_months": [12, 12, 13, 20],
+        # truly u1's released deposit landing in month 8 -- shifted one month late
+        "unit_sales_deposits_received_pence": (
+            [0] * 9 + [2600000, 3000000, 1050000] + [0] * 12
+        ),
+        # truly months 12/13 (u1's completion, then u2+u3's) -- the two figures
+        # transposed
+        "receipts_gross_sale_pence": (
+            [0] * 8 + [2600000, 0, 3000000, 1050000, 44500000, 23400000]
+            + [0] * 6 + [19950000] + [0] * 3
+        ),
+        # Task 7 fix round 2 (review finding 1): report_safe added to this
+        # fixture's own control entry -- truly True (funding_gap_pence is 0
+        # since the fix-round-1 equity resize, so no red flag fires).
+        "report_safe": False,
+    }),
 ]
 
 
@@ -1541,7 +1620,17 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # `monitoring`). `isinstance(programmed, CalculatorInputsV9)` still holds for a
     # v11 result unchanged: CalculatorInputsV11 subclasses CalculatorInputsV10
     # subclasses CalculatorInputsV9.
-    if inputs.inputs_version >= 11:
+    #
+    # R13b Task 2: and once more for v12 -- fixture X (v12-native) cannot go
+    # through migrate_inputs_to_v11 either, by the identical design one version
+    # further on (migrate_inputs_to_v11 refuses a v12 document -- it would have
+    # to drop `unit_sales`). `isinstance(programmed, CalculatorInputsV9)` still
+    # holds for a v12 result unchanged: CalculatorInputsV12 subclasses
+    # CalculatorInputsV11 subclasses CalculatorInputsV10 subclasses
+    # CalculatorInputsV9.
+    if inputs.inputs_version >= 12:
+        programmed = migrate_inputs_to_v12(inputs.model_dump(mode="json"))
+    elif inputs.inputs_version >= 11:
         programmed = migrate_inputs_to_v11(inputs.model_dump(mode="json"))
     elif inputs.inputs_version >= 10:
         programmed = migrate_inputs_to_v10(inputs.model_dump(mode="json"))
@@ -1573,6 +1662,21 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
         ic = getattr(programmed, "investment_case", None)
         if ic is not None:
             ic.stabilisation.anchor = None
+        # R13b Task 2: the identical orphaning applies to a v12 document's
+        # unit_sales exchange/completion anchors (Sec 22.1) -- fixture X's
+        # anchors name `marketing`/`practical_completion`/`unit_completions`,
+        # none of which exist on `_network_for_term`'s three-phase network.
+        # No engine reads `unit_sales` yet (Tasks 3-6), so nothing observably
+        # breaks either way today; cleared anyway to match the
+        # sales_phasing/refinance/investment_case treatment above rather than
+        # leaving a dangling anchor for a later task's validation rule to trip
+        # over once it lands.
+        us = getattr(programmed, "unit_sales", None)
+        if us is not None:
+            for row in us.units:
+                if row.exchange is not None:
+                    row.exchange.anchor = None
+                row.completion.anchor = None
     else:
         programmed = migrate_inputs_to_v8(inputs.model_dump(mode="json"))
         assert isinstance(programmed, CalculatorInputsV7)

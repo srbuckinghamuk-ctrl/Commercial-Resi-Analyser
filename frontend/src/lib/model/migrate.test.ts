@@ -11,6 +11,7 @@ import {
   migrateV8toV9, migrateInputsToV9, PACKAGE_TO_PHASE,
   migrateV9toV10, migrateInputsToV10,
   migrateV10toV11, migrateInputsToV11,
+  migrateV11toV12, migrateInputsToV12,
 } from './migrate';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
@@ -1008,10 +1009,10 @@ describe('v10 migration -- spec §19.9', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(4);
+    expect(versionExcluded.length).toBe(5);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       't-investment-case.json', 'u-investment-case-ltv-binds.json',
-      'v-exhausted-reserve.json', 'w-monitoring-on-site.json',
+      'v-exhausted-reserve.json', 'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
     ]);
   });
 
@@ -1251,9 +1252,9 @@ describe('v11 migration -- spec §20.1', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
     );
-    expect(versionExcluded.length).toBe(1);
+    expect(versionExcluded.length).toBe(2);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
-      'w-monitoring-on-site.json',
+      'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
     ]);
   });
 
@@ -1405,5 +1406,148 @@ describe('migrateInputsToV11 merge-onto-defaults branch', () => {
     const merged = migrateInputsToV11(snapshot);
     expect(merged.monitoring).not.toBeNull();
     expect(merged.monitoring!.reporting_month).toBe(3);
+  });
+});
+
+describe('v12 migration -- spec §22.9', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+  interface FixtureFile {
+    name: string;
+    kind: string;
+    inputs?: Record<string, unknown>;
+  }
+
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file,
+    doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+
+  // Fixture K (kind 'sensitivity') carries no `inputs` of its own — excluded
+  // the same way golden-fixtures.test.ts's `appraisalFixtures` already
+  // excludes it. `migrateInputsToV11` refuses a v12 document by design, so
+  // any v12-NATIVE fixture would be excluded here too (via the version
+  // filter) — none exists yet; Task 2 authors the first one (fixture X).
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+
+  const fixtures = fixtureDocs.filter(
+    ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) <= 11,
+  );
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(18);
+    // Task 2 adds the v12-native fixture X.
+    const versionExcluded = fixtureDocs.filter(
+      ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 11,
+    );
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['x-unit-sales-ledger.json']);
+  });
+
+  // `calc_version` is constant for the whole engine run, not version-
+  // dependent, and `monitoring_statement` is `null` on every document this
+  // gate runs over regardless of arm.
+  const metricsSansExcluded = (metrics: object): Record<string, unknown> => {
+    const { calc_version: _cv, monitoring_statement: _ms, ...rest } =
+      metrics as unknown as Record<string, unknown>;
+    return rest;
+  };
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v11 to v12`, () => {
+      const inputs = doc.inputs!;
+      const v11Run = runAppraisal(migrateInputsToV11(inputs));
+      const v12Run = runAppraisal(migrateInputsToV12(inputs));
+      expect(metricsSansExcluded(v12Run.metrics), `${file}: metrics moved`)
+        .toEqual(metricsSansExcluded(v11Run.metrics));
+      expect(v12Run.model, `${file}: a ledger figure moved`).toEqual(v11Run.model);
+      expect(v12Run.schedule, `${file}: a schedule figure moved`).toEqual(v11Run.schedule);
+    });
+  }
+
+  // Property 1 of three. Field strings may be renamed under a stated alias
+  // map; the SET of issues raised must not grow or shrink. No field renames
+  // this release; kept so a future rename has a declared home rather than a
+  // loosened assertion.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v11 validation issue has a v12 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v11Issues = new Set(
+        validateInputs(migrateInputsToV11(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v12Issues = new Set(
+        validateInputs(migrateInputsToV12(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v12Issues).toEqual(v11Issues);
+    });
+  }
+
+  // Property 2 and Property 3, the matched pair that stops Property 2 being
+  // vacuous — R12's §18.7 lesson, applied from the start again this release
+  // (see the v10/v11 blocks above's own comments). `unit_sales` is written
+  // `null` by the migration, so a migrated document has nothing for §22.7's
+  // unit-sales rules to fire on; property 2 checks that stays true, and
+  // property 3 proves the rules can actually fire when a document does carry
+  // the block.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v12-only rule stays silent on a migrated document (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV12(inputs));
+      expect(issues.filter((i) => i.field.startsWith('unit_sales') || i.field.endsWith('sales_slip_months'))).toEqual([]);
+    });
+  }
+
+  it('the v12-only rules can actually fire (property 3 of three)', () => {
+    // Control: fixture I carries sales_phasing; giving it a unit_sales block trips rule 1.
+    const raw = migrateInputsToV12(
+      fixtureDocs.find(({ file }) => file === 'i-phased-sales.json')!.doc.inputs as Record<string, unknown>,
+    ) as unknown as Record<string, unknown>;
+    raw.unit_sales = { deposit_release: 'held_to_completion', units: [] };
+    const fields = new Set(validateInputs(migrateInputsToV12(raw)).map((i) => i.field));
+    expect(fields.has('unit_sales')).toBe(true);
+    expect(fields.has('sales_phasing')).toBe(true);
+  });
+
+  it('writes unit_sales: null and sales_slip_months: 0 on all four scenarios, nothing else', () => {
+    const v11 = migrateInputsToV11(fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>);
+    const v12 = migrateV11toV12(v11);
+    expect(v12.inputs_version).toBe(12);
+    expect(v12.unit_sales).toBeNull();
+    for (const k of ['base', 'upside', 'downside', 'severe'] as const) {
+      expect(v12.scenarios[k].sales_slip_months).toBe(0);
+    }
+    const { inputs_version: _a, unit_sales: _b, scenarios: _c, ...restV12 } = v12;
+    const { inputs_version: _d, scenarios: _e, ...restV11 } = v11;
+    expect(restV12).toEqual(restV11);
+  });
+
+  it('refuses double migration and unrecognised versions', () => {
+    expect(() => migrateInputsToV12({ inputs_version: 13 })).toThrow(/unrecognised inputs_version 13/);
+    expect(() => migrateInputsToV12({ inputs_version: 12 })).toThrow(/fails the v12 structural check/);
+  });
+});
+
+describe('migrateInputsToV12 merge-onto-defaults branch', () => {
+  it('carries a saved, non-null unit_sales block through the merge branch, not the default null', () => {
+    const v12 = migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(defaultV8Document()))));
+    const snapshot = {
+      ...JSON.parse(JSON.stringify(v12)),
+      unit_sales: {
+        deposit_release: 'released_on_exchange',
+        units: [{
+          unit_id: 'u1', exchange: { month_offset: 3, anchor: null },
+          completion: { month_offset: 6, anchor: null },
+          deposit_pct: 10, agent_fee_pct: null, legal_fee_pence: null,
+        }],
+      },
+    };
+    const merged = migrateInputsToV12(snapshot);
+    expect(merged.unit_sales).not.toBeNull();
+    expect(merged.unit_sales!.units[0].completion.month_offset).toBe(6);
   });
 });

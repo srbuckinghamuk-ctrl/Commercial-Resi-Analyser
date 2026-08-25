@@ -1051,3 +1051,91 @@ figure is unchanged. Its post-R14 behaviour is exactly the R13 row with one
 written null attached, plus whatever §5.10's correction does to its
 cost-to-complete series on its own interest basis. It reports no monitoring
 statement, which is expected — it never asked for one.
+
+## 15. v11 → v12 (Release 13b, calc `2.14.0`)
+
+**What's added.** `CalculatorInputsV12` is `CalculatorInputsV11` plus one new
+top-level field, `unit_sales: UnitSalesInputs | null` (spec §22.1), and one new
+`ScenarioOverrides` field, `sales_slip_months: integer` (spec §22.8).
+`CalculatorInputsV12` subclasses `CalculatorInputsV11`, for the same reason
+every prior version extended rather than replaced: the engine dispatches on
+the class, and a flat re-declaration would make those `isinstance` checks
+silently false for v12 documents.
+
+| v11 field | v12 field | Behaviour |
+|---|---|---|
+| *(absent)* | `unit_sales` | Written `null`. A document that never asked for a per-unit sales ledger does not acquire an empty one; `null` is spec §22.1's "does not use this path" state, which is what every stored appraisal has always computed under the tranche regime (§4.4.1) or the R1 single-month disposal. |
+| *(absent)* | `scenarios.<each>.sales_slip_months` | Written `0`. A months lever at zero is a no-op by §12.1's own multiplication/addition rule, the same discipline `phase_slip_months` was written under at v9. |
+
+**Two written additions, both inert by construction.** No field is renamed, no
+field is narrowed, no default is written that the engine then reads as live.
+`unit_sales: null` is read by exactly the sites spec §22 names —
+`compute_unit_sales` / `computeUnitSales`, which returns `None`/`null` and
+contributes nothing to the ledger, and `validate_unit_sales` /
+`validateUnitSales`, which returns before raising anything — both structural
+reads, so a pre-v12 document with no attribute at all and a v12 document
+carrying `null` take the identical path. `sales_slip_months: 0` is read by
+`applyScenario`/`apply_scenario`'s `sales_slip` arm, which adds zero to every
+row's completion when `unit_sales` is null anyway (a zero-width bar twice
+over).
+
+**Implementation** (`migrateV11toV12` / `migrate_v11_to_v12`, `migrateInputsToV12`
+/ `migrate_inputs_to_v12`). The entry point mirrors `migrateInputsToV11`'s shape,
+including its version predicate (membership of the declared tuple, not a range
+check) and its two refusals — an unrecognised `inputs_version` throws, and a
+document declaring version 12 that fails the v12 structural check throws rather
+than falling through to a permissive earlier path. `migrate_v11_to_v12` refuses a
+document that is already v12, so double-migration raises instead of silently
+re-stamping.
+
+### 15.1 The identity claim, and where it is tested
+
+**Claim: the v11 → v12 migration moves no computed figure and adds no
+validation issue that is not a genuinely new rule. Every existing appraisal
+produces byte-identical output either side of it.**
+
+The gate lives in `tests/test_migrate_v12.py` and its vitest twin. It runs
+corpus-wide, and it filters on `doc["inputs"]["inputs_version"]` — the
+*stored* version, not the runtime one — the same discipline §14.1 names. A
+companion test asserts the filtered corpus has not shrunk and names the one
+deliberately excluded document (`x-unit-sales-ledger`, the first v12-native
+fixture), so the gate cannot pass by running over nothing.
+
+The numeric arm compares the v11 run and the v12 run of the same raw document
+on all three outputs — metrics, ledger and schedule — not metrics alone. The
+validation arm is **three separately-falsifiable properties, not one set
+equality** (spec §19.9's shape, carried forward again):
+
+1. **Every v11 issue has a v12 counterpart.** v12 renames nothing, so no alias
+   map is needed for this property to hold.
+2. **The v12-only rules of spec §22.7 raise no issue on a migrated document.**
+   Every one of them is gated on `unit_sales` being non-null, and the
+   migration writes `null`.
+3. **A control document that trips a v12-only rule raises it.** Without
+   property 3, property 2 would pass identically whether the new rules were
+   wired up or silently inert — its control is a document carrying both
+   `unit_sales` and `sales_phasing` non-null, which trips §22.7 rule 1
+   regardless of which field is read first.
+
+**The §5.11 correction is the one computed value that moves, and it is not a
+migration effect.** Calc 2.14.0 also corrects spec §5.11's phased break-even
+replay to place each anchored tranche at its **resolved** month rather than
+its entered `month_offset`. That changes `senior_breakeven_pence` — and only
+that figure — on documents whose sale tranches carry a live `anchor` on a
+programme where the resolved month differs from the offset; fixture S is the
+corpus's one instance (90,971,520 → 88,720,089). The distinction matters for
+reading the gate the same way it did at §14.1: the correction applies equally
+to the v11 run and the v12 run of the same document, so it cancels out of the
+identity comparison entirely. What moves under calc 2.14.0 is a *version*
+difference, recorded in spec §1.6 and pinned on fixture S; what the migration
+moves is nothing.
+
+### 15.2 The York appraisal after R13b
+
+The Stonegate record (§10.2, §13.2, §14.2) gains `unit_sales: null` and
+`sales_slip_months: 0` on each scenario, and nothing else. It has never
+carried `sales_phasing`, an `anchor`, or a `programme` network with the
+`practical_completion` code, so no §5.11 or §22 code path is reachable for
+it — its post-R13b behaviour is exactly the R14 row with two written no-ops
+attached. It reports no unit sales ledger, which is expected — it never
+asked for one.

@@ -1,7 +1,7 @@
 import type {
   AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
-  CalculatorInputsV11,
-  ModelFlag, MonthlyModel, Schedule,
+  CalculatorInputsV11, CalculatorInputsV12,
+  ModelFlag, MonthlyModel, Schedule, UnitSalesResult,
 } from './finance-types';
 import type { InvestmentCaseResult } from './investment-case';
 import { CALC_VERSION } from './finance-types';
@@ -10,7 +10,7 @@ import { calculateAcquisitionTax, resolveAcquisitionDate } from '../tax/acquisit
 import { computeLenderGdv } from './lender-valuation';
 import { exitFeeAmount, runLedger } from './monthly-engine';
 import { solveDeveloperBreakeven, solveSeniorBreakeven, solveSeniorBreakevenPhased } from './breakeven';
-import type { DeveloperBreakevenTerms, SeniorBreakevenTerms, PhasedSeniorBreakevenTerms } from './breakeven';
+import type { DeveloperBreakevenTerms, SeniorBreakevenTerms, PhasedSeniorBreakevenTerms, ReceiptLine } from './breakeven';
 import { computeCostToComplete } from './cost-to-complete';
 import { pct } from './pct';
 import { areaBridge } from './areas';
@@ -228,11 +228,13 @@ function vatCarryInterestPence(
   // the V10 addition to `AnyCalculatorInputs` -- VAT is untouched by the
   // investment case, so the widening is mechanical. R14: `CalculatorInputsV11`
   // added on the same basis -- VAT is untouched by the monitoring block too.
+  // R13b: `CalculatorInputsV12` added on the same basis again -- VAT is
+  // untouched by the unit-sales block too.
   if (!('vat' in inputs)) return 0;
   const vat = inputs.vat;
   if (!vat.registered) return 0;
   const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10
-    | CalculatorInputsV11 = {
+    | CalculatorInputsV11 | CalculatorInputsV12 = {
     ...inputs,
     vat: { ...vat, registered: false },
     // R33. `buildSchedule` charges acquisition tax through its own site
@@ -250,6 +252,31 @@ function vatCarryInterestPence(
   const cfSchedule = buildSchedule(counterfactual);
   const cfModel = runLedger(cfSchedule, counterfactual.finance, counterfactual.equity_sources);
   return model.totals.interest_pence - cfModel.totals.interest_pence;
+}
+
+/** §22.5. One line per released deposit (exchange month, no costs) and one
+ *  per completion (gross less the released deposit, the unit's agent rate,
+ *  its fixed legal). Sorted by month, then units[] order, deposit before
+ *  completion for the same unit — enforcement comes off the first. */
+export function receiptLinesFromUnitSales(us: UnitSalesResult): ReceiptLine[] {
+  const lines: Array<[number, number, number, ReceiptLine]> = [];
+  us.units.forEach((row, i) => {
+    const agentPct = row.gross_pence > 0 ? (row.agent_fee_pence / row.gross_pence) * 100 : 0;
+    if (row.deposit_released_pence > 0 && row.exchange_month != null) {
+      lines.push([row.exchange_month, i, 0, {
+        month: row.exchange_month, base_gross_pence: row.deposit_released_pence, agent_fee_pct: 0, legal_fee_pence: 0,
+      }]);
+    }
+    lines.push([row.completion_month, i, 1, {
+      month: row.completion_month,
+      base_gross_pence: row.gross_pence - row.deposit_released_pence,
+      agent_fee_pct: agentPct,
+      legal_fee_pence: row.legal_fee_pence,
+    }]);
+  });
+  return lines
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2])
+    .map(([, , , line]) => line);
 }
 
 export function deriveMetrics(
@@ -380,7 +407,14 @@ export function deriveMetrics(
   // price can ever redeem what keeps growing), or sales_sweep_pct is 0% (proceeds never
   // reach the facility at all). `sales_phasing` only exists on v4 inputs; the `'sales_phasing'
   // in inputs` guard keeps this branch inert for v2/v3 callers exactly as before.
+  // R13b spec §22.5: the per-unit sales ledger is a THIRD source for the phased regime,
+  // alongside sales_phasing — schedule.unit_sales, when present, takes priority over
+  // phasing (a document can carry both, e.g. unitSalesDoc's salesPhasingToo override) and
+  // drives receiptLinesFromUnitSales's lines rather than the tranche list, so the disposal
+  // replay reads the ledger's own per-unit exchange/completion timing instead of the
+  // coarser tranche schedule.
   const phasing = 'sales_phasing' in inputs ? inputs.sales_phasing : null;
+  const unitSalesResult = schedule.unit_sales;
   const redemptionBalance = model.redemption_balance_at_disposal_pence;
   let seniorBreakeven: number | null = null;
   let seniorBreakevenPctOfLenderGdv: number | null = null;
@@ -388,7 +422,7 @@ export function deriveMetrics(
   let seniorAttemptedNull = false;
   let seniorUnsolvableReason: string | null = null;
   if (redemptionBalance != null) {
-    if (phasing == null) {
+    if (unitSalesResult == null && phasing == null) {
       const breakevenTerms: SeniorBreakevenTerms = {
         redemption_balance_pence: redemptionBalance,
         exit_fee_pence: exitFeeAmount(
@@ -406,15 +440,35 @@ export function deriveMetrics(
           pct(lenderGdv.lender_gdv_pence - seniorBreakeven, lenderGdv.lender_gdv_pence);
       }
     } else {
-      const lastTranche = Math.max(...phasing.tranches.map((x) => x.month_offset));
+      let lastMonth: number;
+      let trancheArg: PhasedSeniorBreakevenTerms['tranches'];
+      let linesArg: ReceiptLine[] | undefined;
+      if (unitSalesResult != null) {
+        const lines = receiptLinesFromUnitSales(unitSalesResult);
+        lastMonth = lines.length > 0 ? Math.max(...lines.map((line) => line.month)) : -1;
+        trancheArg = [];
+        linesArg = lines;
+      } else {
+        // R13b §5.11 correction: before this the replay read tr.month_offset, so
+        // an anchored tranche on a slipped programme replayed receipts at a
+        // month the ledger never used (fixture S: 20/21 vs 16/19).
+        trancheArg = phasing!.tranches.map((tr, i) => ({
+          month_offset: schedule.resolved_exit_months.tranches[i],
+          pct_of_gross_receipts: tr.pct_of_gross_receipts,
+        }));
+        lastMonth = Math.max(...schedule.resolved_exit_months.tranches);
+        linesArg = undefined;
+      }
       // Mirrors solveSeniorBreakevenPhased's own internal guard exactly (draws_and_fees_
-      // pence[m] > 0 for m past the last tranche) — capitalised_fees_pence is 0 for every
-      // month past 0 in the current engine (arrangement fee capitalises once, at month 0
-      // only, in runLedger), so this is currently equivalent to draw_pence alone; summing
-      // both here keeps the two checks provably identical rather than coincidentally so.
-      if (model.months.some((mm) => mm.month > lastTranche && mm.draw_pence + mm.capitalised_fees_pence > 0)) {
-        seniorUnsolvableReason =
-          'senior break-even unavailable — facility draws continue after the final sales tranche, so no sale price redeems the facility';
+      // pence[m] > 0 for m past the last tranche/line) — capitalised_fees_pence is 0 for
+      // every month past 0 in the current engine (arrangement fee capitalises once, at
+      // month 0 only, in runLedger), so this is currently equivalent to draw_pence alone;
+      // summing both here keeps the two checks provably identical rather than
+      // coincidentally so.
+      if (model.months.some((mm) => mm.month > lastMonth && mm.draw_pence + mm.capitalised_fees_pence > 0)) {
+        seniorUnsolvableReason = unitSalesResult != null
+          ? 'senior break-even unavailable — facility draws continue after the final sale receipt, so no sale price redeems the facility'
+          : 'senior break-even unavailable — facility draws continue after the final sales tranche, so no sale price redeems the facility';
       } else if (inputs.finance.sales_sweep_pct <= 0) {
         seniorUnsolvableReason =
           'senior break-even unavailable — sales sweep is 0%, so sale proceeds never repay the facility';
@@ -433,12 +487,13 @@ export function deriveMetrics(
           monthly_rate: inputs.finance.annual_interest_rate_pct / 100 / 12,
           rolled_up: inputs.finance.interest_type === 'rolled_up',
           sales_sweep_pct: inputs.finance.sales_sweep_pct,
-          tranches: phasing.tranches,
+          tranches: trancheArg,
           selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
           selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
           enforcement_cost_assumption_pence: inputs.finance.enforcement_cost_assumption_pence,
           finance: inputs.finance,
           committed_gross_facility_pence: model.committed_gross_facility_pence,
+          receipt_lines: linesArg,
         };
         seniorBreakeven = solveSeniorBreakevenPhased(phasedTerms);
         seniorAttemptedNull = seniorBreakeven == null;
@@ -459,14 +514,28 @@ export function deriveMetrics(
   // appraisal with zero sales gets null: there is no sale price to solve for. There is no
   // ordering invariant between this figure and senior_breakeven_pence (design §B5) — they
   // cover different cost bases and answer different questions.
+  // R13b spec §22.6/§5.12. On the per-unit sales-ledger path the flat scheme-wide
+  // exit_strategy rate is replaced by the blended EFFECTIVE rate the ledger actually
+  // charged (totals.agent_fees_pence / totals.gross_pence) and the summed per-unit legal
+  // fees, so the developer break-even's selling-cost basis matches the same per-unit costs
+  // the ledger itself used, rather than re-deriving a flat estimate.
   let developerBreakeven: number | null = null;
   let developerAttemptedNull = false;
   if (t.gross_sales_pence > 0) {
     const tdcExSelling = tdc - t.selling_costs_pence;
+    let devAgentPct: number;
+    let devLegal: number;
+    if (unitSalesResult != null && unitSalesResult.totals.gross_pence > 0) {
+      devAgentPct = (unitSalesResult.totals.agent_fees_pence / unitSalesResult.totals.gross_pence) * 100;
+      devLegal = unitSalesResult.totals.legal_fees_pence;
+    } else {
+      devAgentPct = inputs.exit_strategy.selling_agent_fee_pct;
+      devLegal = inputs.exit_strategy.selling_legal_fee_pence;
+    }
     const developerBreakevenTerms: DeveloperBreakevenTerms = {
       tdc_ex_selling_pence: tdcExSelling,
-      selling_agent_fee_pct: inputs.exit_strategy.selling_agent_fee_pct,
-      selling_legal_fee_pence: inputs.exit_strategy.selling_legal_fee_pence,
+      selling_agent_fee_pct: devAgentPct,
+      selling_legal_fee_pence: devLegal,
     };
     developerBreakeven = solveDeveloperBreakeven(developerBreakevenTerms);
     developerAttemptedNull = developerBreakeven == null;
@@ -567,6 +636,9 @@ export function deriveMetrics(
     // §17.12's `vat` treatment, applied here: the SCHEDULE's investment case,
     // republished — not a second derivation.
     investment_case: schedule.investment_case,
+    // R13b spec §22.6. The SCHEDULE's `unit_sales`, republished — not a
+    // second derivation.
+    unit_sales: schedule.unit_sales,
     monitoring_statement: monitoringStatement,
     flags,
   };

@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import UnitMixPage from './UnitMixPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV11 } from '../../lib/model';
-import { defaultCalculatorInputsV11 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV12 } from '../../lib/model';
+import { defaultCalculatorInputsV12 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 
@@ -32,8 +32,8 @@ function unit(id: string): ProposedUnitV6 {
 }
 
 function setup() {
-  const base = defaultCalculatorInputsV11();
-  const inputs: CalculatorInputsV11 = { ...base, unit_mix: { units: [unit('u1')] } };
+  const base = defaultCalculatorInputsV12();
+  const inputs: CalculatorInputsV12 = { ...base, unit_mix: { units: [unit('u1')] } };
   const run = runAppraisal(inputs);
   const onChange = vi.fn();
   render(<UnitMixPage inputs={inputs} onChange={onChange} run={run} />);

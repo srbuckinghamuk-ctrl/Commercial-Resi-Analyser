@@ -16,11 +16,13 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R11** | Line-level VAT and TOGC cash flow | P1 | inputs v8, calc minor |
 | **R12** | Dated, dependent programme phases | P1 | inputs v9, calc minor |
 | **R13** | The investment case: hold-period NOI, operating costs/vacancy/stabilisation, a derived take-out sized on LTV/DSCR/ICR with the binding constraint named | P1 | inputs v10, calc minor |
-| **R13b** | Unit-level sales ledger: per-unit completion timing, per-unit selling costs, deposits — the half of audit §7.8 deferred out of R13 (§2 of the R13 design) | P1 | inputs version TBD (next after v10 at scheduling time), calc minor |
+| **R13b** — **DONE, shipped** | Unit-level sales ledger: per-unit completion timing, per-unit selling costs, deposits — the half of audit §7.8 deferred out of R13 (§2 of the R13 design) | P1 | inputs v12, calc 2.14.0 |
 | **R14** — **DONE, shipped** | §5.10 corrected (C1), monitoring cost-to-complete statement, `lender_eligible` wired | P1 | inputs v11, calc 2.13.0 |
 | **R14b** — **DONE, shipped** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | two new tables + API (migration 006), Python governance twin; no calc bump, no inputs bump — and `audit_hash` is **not** extended, see the status paragraph |
-| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v12 (v11 is R14's) |
+| **R15** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v13 (v12 is R13b's) |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
+
+**R16 UX debt recorded by R13b:** the R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) have no ScenariosPage input; `sales_slip_months` got one in R13b.
 
 **R10 status (calc 2.9.0, inputs v7):** shipped. It gave the appraisal a mutually
 exclusive headline/detailed cost-plan mode, the audit's own package schedule and
