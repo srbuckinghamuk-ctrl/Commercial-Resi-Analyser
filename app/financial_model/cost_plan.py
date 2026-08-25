@@ -176,6 +176,23 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
     # `getattr(None, ...)` is safe and returns the default -- no need to guard
     # plan_qs is None separately here.
     inflation = getattr(plan_qs, "inflation", None)
+    # spec Sec 24.7 rule 1 owns the error; the engine degrades rather than
+    # overflowing. A non-finite or negative rate reads as None here -- the
+    # same "no allowance" state an absent `inflation` attribute produces --
+    # so `factor`/`inflation_pence` fall to their None/0 defaults below
+    # instead of feeding an infinite/NaN `x` into `money_round`'s
+    # `math.floor(x + 0.5)`, which raises OverflowError. `months_from_base`
+    # and the latest-midpoint fields do not read this value at all, so they
+    # are unaffected and still published. (Pydantic already rejects a
+    # negative or NaN annual_pct at parse time -- InflationAllowance.annual_pct
+    # is `Field(ge=0)` -- so only `inf` reaches this check in this engine; the
+    # `>= 0` arm is kept for parity with the TS engine, which is not
+    # type-coerced and can reach it directly.)
+    inflation_rate = (
+        inflation.annual_pct
+        if inflation is not None and math.isfinite(inflation.annual_pct) and inflation.annual_pct >= 0
+        else None
+    )
     base_to_month_0 = (
         months_between(base_date, acq_date) if base_date is not None and acq_date is not None else None
     )
@@ -190,8 +207,8 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
             None if base_to_month_0 is None else max(0.0, base_to_month_0 + midpoint)
         )
         factor = (
-            (1 + inflation.annual_pct / 100) ** (months_from_base / 12)
-            if inflation is not None and months_from_base is not None
+            (1 + inflation_rate / 100) ** (months_from_base / 12)
+            if inflation_rate is not None and months_from_base is not None
             else None
         )
         inflation_pence = 0 if factor is None else money_round(p.amount_pence * (factor - 1))

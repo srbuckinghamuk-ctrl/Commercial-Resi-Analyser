@@ -3242,18 +3242,10 @@ class TestTenderPriceInflationValidation:
     fixture these four rules are written against -- Z with one field broken
     at a time is each negative case.
 
-    Pre-existing, out-of-scope finding from writing rule 1's finiteness test:
-    `compute_cost_plan` (called from inside `validate_inputs` itself, ahead of
-    this class's own rule) derives `factor = (1 + annual_pct / 100) **
-    (months_from_base / 12)` and rounds it with `money_round`, which is
-    `math.floor(x + 0.5)` -- an `OverflowError` on an infinite `x`. An
-    `annual_pct: inf` document WITH an acquisition_date therefore crashes
-    `validate_inputs` before rule 1 can report it, where the TS engine's
-    `Math.round(Infinity)` degrades to a (nonsensical but non-crashing)
-    `Infinity` pence figure instead. `test_rule_1...` below sidesteps the
-    crash (clears acquisition_date so no package has a `months_from_base` to
-    derive a factor from) rather than fixing `compute_cost_plan`/`money_round`
-    generally, which is this task's own scope boundary, not Sec 24.7's.
+    Controller ruling: a non-finite or negative `annual_pct` degrades to "no
+    allowance" inside `compute_cost_plan` itself (zero inflation, no
+    overflow) -- this class's rule 1 is what reports it as an error, not what
+    keeps the engine from crashing on it.
     """
 
     @staticmethod
@@ -3301,14 +3293,13 @@ class TestTenderPriceInflationValidation:
         msg = "Tender-price inflation rate must be a finite number of at least 0."
         non_finite = doc_z()
         non_finite["cost_plan"]["qs"]["inflation"] = {"annual_pct": float("inf")}
-        # Also clears acquisition_date, so every package's months_from_base is
-        # None and compute_cost_plan's `factor` is never derived from the
-        # infinite rate (see the class docstring's `money_round(inf)` note) --
-        # this isolates rule 1's own finiteness check from that pre-existing,
-        # out-of-scope overflow in the shared compute path. Rule 2 also fires
-        # on this document; that is expected and not asserted against here.
-        non_finite["acquisition"]["acquisition_date"] = None
         assert self._has_err(parse(non_finite), field_, msg)
+        # Controller ruling: the engine degrades a non-finite rate to "no
+        # allowance" rather than overflowing (compute_cost_plan's
+        # `inflation_rate` gate) -- validation (above) owns the error,
+        # run_appraisal must not raise and must publish zero inflation.
+        run = run_appraisal(parse(non_finite))
+        assert run.metrics.cost_plan.inflation_total_pence == 0
         zero = doc_z()
         zero["cost_plan"]["qs"]["inflation"] = {"annual_pct": 0}
         assert self._err_fields(parse(zero)) == []

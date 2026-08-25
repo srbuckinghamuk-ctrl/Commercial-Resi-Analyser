@@ -382,6 +382,16 @@ export function computeCostPlan(
   const baseDate = qsInput != null && qsInput.base_date.trim() !== '' ? qsInput.base_date : null;
   // `?? null`: a raw pre-v14 stored document has no `inflation` key at all.
   const inflation = qsInput != null ? (qsInput.inflation ?? null) : null;
+  // spec §24.7 rule 1 owns the error; the engine degrades rather than
+  // overflowing. A non-finite or negative rate reads as `null` here — the
+  // same "no allowance" state an absent `inflation` key produces — so
+  // `factor`/`inflation_pence` fall to their null/0 defaults below instead of
+  // computing `Math.pow`/`Math.round` on a NaN or Infinity. `months_from_base`
+  // and the latest-midpoint fields do not read this value at all, so they are
+  // unaffected and still published.
+  const inflationRate = inflation != null && Number.isFinite(inflation.annual_pct) && inflation.annual_pct >= 0
+    ? inflation.annual_pct
+    : null;
   const baseToMonth0 = baseDate != null && acqDate != null ? monthsBetween(baseDate, acqDate) : null;
 
   const packages: CostPackageLine[] = plan.packages.map((p) => {
@@ -390,8 +400,8 @@ export function computeCostPlan(
     const finish = t?.finish_month ?? 0;
     const midpoint = t?.midpoint_month ?? 0;
     const monthsFromBase = baseToMonth0 == null ? null : Math.max(0, baseToMonth0 + midpoint);
-    const factor = inflation != null && monthsFromBase != null
-      ? Math.pow(1 + inflation.annual_pct / 100, monthsFromBase / 12)
+    const factor = inflationRate != null && monthsFromBase != null
+      ? Math.pow(1 + inflationRate / 100, monthsFromBase / 12)
       : null;
     const inflationPence = factor == null ? 0 : Math.round(p.amount_pence * (factor - 1));
     return {

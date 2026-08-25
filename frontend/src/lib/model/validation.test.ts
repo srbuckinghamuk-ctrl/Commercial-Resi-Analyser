@@ -2955,8 +2955,13 @@ describe('§24.7 tender-price inflation validation', () => {
     negative.cost_plan.qs!.inflation = { annual_pct: -1 };
     expect(has(negative, field, msg)).toBe(true);
     const nonFinite = docZ();
-    nonFinite.cost_plan.qs!.inflation = { annual_pct: Infinity };
+    nonFinite.cost_plan.qs!.inflation = { annual_pct: Number.POSITIVE_INFINITY };
     expect(has(nonFinite, field, msg)).toBe(true);
+    // Controller ruling: the engine degrades a non-finite rate to "no
+    // allowance" rather than overflowing — validation (above) owns the
+    // error, computeCostPlan must not throw and must publish zero inflation.
+    expect(() => runAppraisal(nonFinite)).not.toThrow();
+    expect(runAppraisal(nonFinite).metrics.cost_plan.inflation_total_pence).toBe(0);
     const zero = docZ();
     zero.cost_plan.qs!.inflation = { annual_pct: 0 };
     expect(errFields(zero)).toEqual([]);
