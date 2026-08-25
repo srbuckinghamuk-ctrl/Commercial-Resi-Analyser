@@ -203,6 +203,22 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
     (r) => r.metrics.monitoring_statement?.totals.estimated_final_cost_pence ?? null,
   monitoring_surplus_pence: (r) => r.metrics.monitoring_statement?.surplus_pence ?? null,
   lender_eligible_ratio: (r) => r.metrics.cost_plan.lender_eligible_ratio,
+  // R13b spec §22.6, fixture X: unit_sales.units/months are ARRAYS of objects, so a
+  // dotted expected_metrics path cannot reach them — the same reasoning as the
+  // contingency/fee mappers above.
+  unit_sales_unit_ids: (r) => r.metrics.unit_sales!.units.map((u) => u.unit_id),
+  unit_sales_unit_gross_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.gross_pence),
+  unit_sales_unit_deposit_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.deposit_pence),
+  unit_sales_unit_deposit_released_pence: (r) =>
+    r.metrics.unit_sales!.units.map((u) => u.deposit_released_pence),
+  unit_sales_unit_agent_fee_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.agent_fee_pence),
+  unit_sales_unit_legal_fee_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.legal_fee_pence),
+  unit_sales_unit_net_pence: (r) => r.metrics.unit_sales!.units.map((u) => u.net_pence),
+  unit_sales_unit_exchange_months: (r) => r.metrics.unit_sales!.units.map((u) => u.exchange_month),
+  unit_sales_unit_completion_months: (r) => r.metrics.unit_sales!.units.map((u) => u.completion_month),
+  unit_sales_deposits_received_pence: (r) =>
+    r.metrics.unit_sales!.months.map((m) => m.deposits_received_pence),
+  receipts_gross_sale_pence: (r) => r.schedule.receipts.map((x) => x.gross_sale_pence),
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -831,6 +847,38 @@ describe('golden fixtures (shared with the Python engine)', () => {
         monitoring_estimated_final_cost_pence: 27520001,        // truly 27520000
         monitoring_surplus_pence: 10101206,                     // truly 10101207
         lender_eligible_ratio: 0.9166666666666667,              // truly 0.9166666666666666
+      },
+    },
+    // R13b Task 7 (the same convention this block states): fixture X adds eleven new
+    // FLAT_KEYS array mappers (spec §22.6) — the nine per-unit rows and the two
+    // month-indexed arrays — and every one needs a control here. Each wrong value is a
+    // plausible REAL mistake rather than an arbitrary one: u2/u3 (or u1/u2, or u1/u3)
+    // transposed — the two units missing an exchange or legal override sit adjacent in
+    // the input list — u3's 2.0% agent-fee override dropped to the scheme default, an
+    // anchor offset dropped by one month, and a receipt landing in the wrong month.
+    // Mirrors tests/test_financial_model_fixtures.py's _NEGATIVE_CONTROLS entry for X.
+    {
+      namePrefix: 'X — unit sales ledger',
+      wrongValues: {
+        unit_sales_unit_ids: ['u1', 'u3', 'u2', 'u4'],                    // truly ['u1','u2','u3','u4']
+        unit_sales_unit_gross_pence: [26000000, 17500000, 30000000, 21000000], // truly [...,30000000,17500000,...]
+        unit_sales_unit_deposit_pence: [2600000, 0, 3000000, 1050000],    // truly [...,3000000,0,...]
+        unit_sales_unit_deposit_released_pence: [2600000, 0, 3000000, 1050000], // truly [...,3000000,0,...]
+        // u3's 2.0% override dropped to the scheme default (1.5% of 17500000 = 262500)
+        unit_sales_unit_agent_fee_pence: [390000, 450000, 262500, 315000],  // truly [...,350000,...]
+        unit_sales_unit_legal_fee_pence: [135659, 150000, 201550, 162791],  // truly [201550,150000,135659,...]
+        unit_sales_unit_net_pence: [29400000, 25408450, 17014341, 20522209], // truly [25408450,29400000,...]
+        unit_sales_unit_exchange_months: [7, 10, null, 11],                 // truly [8,10,null,11]
+        unit_sales_unit_completion_months: [12, 12, 13, 20],                // truly [12,13,13,20]
+        // truly u1's released deposit landing in month 8 -- shifted one month late
+        unit_sales_deposits_received_pence: [
+          ...Array(9).fill(0), 2600000, 3000000, 1050000, ...Array(12).fill(0),
+        ],
+        // truly months 12/13 (u1's completion, then u2+u3's) -- the two figures transposed
+        receipts_gross_sale_pence: [
+          ...Array(8).fill(0), 2600000, 0, 3000000, 1050000, 44500000, 23400000,
+          ...Array(6).fill(0), 19950000, ...Array(3).fill(0),
+        ],
       },
     },
   ];

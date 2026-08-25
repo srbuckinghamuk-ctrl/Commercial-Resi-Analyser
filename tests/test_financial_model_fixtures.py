@@ -243,6 +243,23 @@ _FLAT_KEYS = {
         if r.metrics.monitoring_statement else None
     ),
     "lender_eligible_ratio": lambda r: r.metrics.cost_plan.lender_eligible_ratio,
+    # R13b spec Sec 22.6, fixture X: unit_sales.units/months are LISTS, so a
+    # dotted path cannot reach them (the cost_plan.contingency reasoning above).
+    "unit_sales_unit_ids": lambda r: [u["unit_id"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_gross_pence": lambda r: [u["gross_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_deposit_pence": lambda r: [u["deposit_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_deposit_released_pence": (
+        lambda r: [u["deposit_released_pence"] for u in r.metrics.unit_sales["units"]]
+    ),
+    "unit_sales_unit_agent_fee_pence": lambda r: [u["agent_fee_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_legal_fee_pence": lambda r: [u["legal_fee_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_net_pence": lambda r: [u["net_pence"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_exchange_months": lambda r: [u["exchange_month"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_unit_completion_months": lambda r: [u["completion_month"] for u in r.metrics.unit_sales["units"]],
+    "unit_sales_deposits_received_pence": (
+        lambda r: [m["deposits_received_pence"] for m in r.metrics.unit_sales["months"]]
+    ),
+    "receipts_gross_sale_pence": lambda r: [x.gross_sale_pence for x in r.schedule.receipts],
 }
 
 
@@ -1410,6 +1427,46 @@ _NEGATIVE_CONTROLS = [
         "monitoring_estimated_final_cost_pence": 27_520_001,      # truly 27520000
         "monitoring_surplus_pence": 10_101_206,                   # truly 10101207
         "lender_eligible_ratio": 0.9166666666666667,              # truly 0.9166666666666666
+    }),
+    # R13b Task 7 (the same convention stated above): fixture X adds eleven new
+    # _FLAT_KEYS array mappers (spec Sec 22.6) -- the nine per-unit rows and the
+    # two month-indexed arrays -- and every one needs a control here. Each wrong
+    # value is a plausible REAL mistake rather than an arbitrary one: u2/u3 (or
+    # u1/u2, or u1/u3) transposed -- the two units missing an exchange or legal
+    # override sit adjacent in the input list -- u3's 2.0% agent-fee override
+    # dropped to the scheme default, an anchor offset dropped by one month, and
+    # a receipt landing in the wrong month. Mirrors golden-fixtures.test.ts's
+    # negativeControls entry for fixture X.
+    ("x-unit-sales-ledger", {
+        # truly ["u1", "u2", "u3", "u4"] -- u2/u3 transposed
+        "unit_sales_unit_ids": ["u1", "u3", "u2", "u4"],
+        # truly [26000000, 30000000, 17500000, 21000000] -- u2/u3 transposed
+        "unit_sales_unit_gross_pence": [26000000, 17500000, 30000000, 21000000],
+        # truly [2600000, 3000000, 0, 1050000] -- u2/u3 transposed
+        "unit_sales_unit_deposit_pence": [2600000, 0, 3000000, 1050000],
+        # truly [2600000, 3000000, 0, 1050000] -- u2/u3 transposed
+        "unit_sales_unit_deposit_released_pence": [2600000, 0, 3000000, 1050000],
+        # truly [390000, 450000, 350000, 315000] -- u3's 2.0% override dropped to
+        # the scheme default (1.5% of 17500000 = 262500)
+        "unit_sales_unit_agent_fee_pence": [390000, 450000, 262500, 315000],
+        # truly [201550, 150000, 135659, 162791] -- u1/u3 transposed
+        "unit_sales_unit_legal_fee_pence": [135659, 150000, 201550, 162791],
+        # truly [25408450, 29400000, 17014341, 20522209] -- u1/u2 transposed
+        "unit_sales_unit_net_pence": [29400000, 25408450, 17014341, 20522209],
+        # truly [8, 10, None, 11] -- u1's marketing anchor offset dropped by one month
+        "unit_sales_unit_exchange_months": [7, 10, None, 11],
+        # truly [12, 13, 13, 20] -- u2's practical_completion + 1 anchor offset dropped
+        "unit_sales_unit_completion_months": [12, 12, 13, 20],
+        # truly u1's released deposit landing in month 8 -- shifted one month late
+        "unit_sales_deposits_received_pence": (
+            [0] * 9 + [2600000, 3000000, 1050000] + [0] * 12
+        ),
+        # truly months 12/13 (u1's completion, then u2+u3's) -- the two figures
+        # transposed
+        "receipts_gross_sale_pence": (
+            [0] * 8 + [2600000, 0, 3000000, 1050000, 44500000, 23400000]
+            + [0] * 6 + [19950000] + [0] * 3
+        ),
     }),
 ]
 
