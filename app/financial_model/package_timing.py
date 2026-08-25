@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass
 
 from .curves import curve_weights
+from .engine import money_round
 from .programme import derive_phases, is_legacy_programme, is_programme_network
 from .types import AnyCalculatorInputs, SimpleSpendCurve, SpendCurve
 
@@ -34,7 +35,10 @@ class PackageTiming:
     duration_months: int   # >= 1
     curve: SpendCurve
     weights: list[float]   # curve_weights(duration_months, curve)
-    midpoint_month: float  # Sum_k weights[k] * (start_month + k)
+    # start_month + Sum_k weights[k] * k, the fractional part rounded to 12 dp
+    # so a straight-line window's midpoint is exact and a whole-month floor
+    # downstream is not defeated by an ulp (spec Sec 24.2).
+    midpoint_month: float
 
 
 def compute_package_timing(inputs: AnyCalculatorInputs) -> list[PackageTiming]:
@@ -87,9 +91,18 @@ def compute_package_timing(inputs: AnyCalculatorInputs) -> list[PackageTiming]:
             duration = max(1, term - 2)
             curve = SimpleSpendCurve(kind="straight_line")
         weights = curve_weights(duration, curve)
-        midpoint = 0.0
+        # The start is folded in ONCE, outside the accumulation, and the
+        # fractional part rounded to 12 dp: summing weights[k] * (start + k)
+        # directly (start folded in on every term) accumulates 1/D-style binary
+        # rounding error start times over, which can land a whole-month
+        # window's midpoint one ulp off its exact value -- defeating a
+        # downstream floor on months_from_base (spec Sec 24.2, controller
+        # ruling). Same ascending-k accumulation order as package-timing.ts so
+        # the two engines produce the same double before rounding.
+        frac = 0.0
         for k, w in enumerate(weights):
-            midpoint = midpoint + w * (start + k)
+            frac = frac + w * k
+        midpoint = start + money_round(frac * 1e12) / 1e12
         out.append(PackageTiming(
             id=pkg.id, phase_id=phase_id, start_month=start, finish_month=start + duration,
             duration_months=duration, curve=curve, weights=weights, midpoint_month=midpoint,

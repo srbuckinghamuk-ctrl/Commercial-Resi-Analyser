@@ -15,7 +15,10 @@ export interface PackageTiming {
   duration_months: number;   // >= 1
   curve: SpendCurve;
   weights: number[];         // curveWeights(duration_months, curve)
-  midpoint_month: number;    // Σ_k weights[k] × (start_month + k)
+  /** start_month + Σ_k weights[k] × k, the fractional part rounded to 12 dp so
+   *  a straight-line window's midpoint is exact and a whole-month floor
+   *  downstream is not defeated by an ulp (spec §24.2). */
+  midpoint_month: number;
 }
 
 /** R15b spec §24.2. One entry per `cost_plan.packages[]`, in order — the only
@@ -51,7 +54,14 @@ export function computePackageTiming(inputs: AnyCalculatorInputs): PackageTiming
       start = 1; duration = Math.max(1, term - 2); curve = { kind: 'straight_line' };
     }
     const weights = curveWeights(duration, curve);
-    const midpoint = weights.reduce((s, w, k) => s + w * (start + k), 0);
+    // The start is folded in ONCE, outside the accumulation, and the
+    // fractional part rounded to 12 dp: summing weights[k] × (start + k)
+    // directly (start folded in on every term) accumulates 1/D-style binary
+    // rounding error start times over, which can land a whole-month window's
+    // midpoint one ulp off its exact value — defeating a downstream
+    // `Math.floor` on `months_from_base` (spec §24.2, controller ruling).
+    const frac = weights.reduce((s, w, k) => s + w * k, 0);
+    const midpoint = start + Math.round(frac * 1e12) / 1e12;
     return {
       id: pkg.id, phase_id: phaseId, start_month: start, finish_month: start + duration,
       duration_months: duration, curve, weights, midpoint_month: midpoint,

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.financial_model.curves import curve_weights
+from app.financial_model.engine import money_round
 from app.financial_model.migrate import migrate_inputs_to_v8, migrate_inputs_to_v13
 from app.financial_model.package_timing import compute_package_timing
 from app.financial_model.types import (
@@ -54,12 +55,21 @@ class TestComputePackageTiming:
         assert structure.phase_id == "construction"
         assert structure.start_month == 8
         assert structure.finish_month == 14
-        # Not a plain == 10.5: with equal 1/6 weights summed ascending
-        # (s + w * (start + k), spec Sec 24.2's fixed order -- ties the TS and
-        # Python doubles bit-for-bit), the accumulated 1/6 rounding error lands
-        # one ULP below the mathematically-exact 10.5.
-        assert structure.midpoint_month == pytest.approx(10.5, abs=1e-9)
+        assert structure.midpoint_month == 10.5
         assert structure.weights == [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6]
+
+    def test_straight_line_6_month_window_from_month_8_has_midpoint_exactly_10_5(self):
+        # Guard for the controller ruling: the start is folded into the
+        # midpoint ONCE (start + Sum w_k*k rounded to 12 dp), not on every
+        # accumulated term (Sum w_k*(start+k)) -- the latter lands one ULP
+        # below 10.5 for this exact window (six equal 1/6 weights), which
+        # would defeat a downstream floor on months_from_base.
+        structure = next(
+            x for x in compute_package_timing(_load("s-dated-programme")) if x.id == "pkg-structure"
+        )
+        assert structure.start_month == 8
+        assert structure.duration_months == 6
+        assert structure.midpoint_month == 10.5
 
     def test_midpoint_is_curve_aware_back_loaded_3_month_phase_from_month_11_gives_74_over_6(self):
         doc = _load("s-dated-programme")
@@ -124,16 +134,17 @@ class TestComputePackageTiming:
         assert len(t) == len(doc.cost_plan.packages)
         assert len(t) > 0
         w = curve_weights(4, SimpleSpendCurve(kind="s_curve"))
-        expected_midpoint = 0.0
+        frac = 0.0
         for k, wk in enumerate(w):
-            expected_midpoint = expected_midpoint + wk * (2 + k)
+            frac = frac + wk * k
+        expected_midpoint = 2 + money_round(frac * 1e12) / 1e12
         for x in t:
             assert x.phase_id is None
             assert x.start_month == 2
             assert x.finish_month == 6
             assert x.duration_months == 4
             assert x.curve == SimpleSpendCurve(kind="s_curve")
-            assert x.midpoint_month == pytest.approx(expected_midpoint, abs=1e-10)
+            assert x.midpoint_month == expected_midpoint
 
     def test_no_cost_plan_empty_headline_mode_with_no_packages_empty(self):
         # a-all-cash carries no `cost_plan` field at all (pre-v7, unmigrated).

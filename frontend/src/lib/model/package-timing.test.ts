@@ -15,14 +15,20 @@ describe('computePackageTiming (R15b spec §24.2)', () => {
     const t = computePackageTiming(load('s-dated-programme'));
     const byId = Object.fromEntries(t.map((x) => [x.id, x]));
     expect(byId['pkg-enabling']).toMatchObject({ phase_id: 'strip_out', start_month: 6, finish_month: 8, duration_months: 2, midpoint_month: 6.5 });
-    expect(byId['pkg-structure']).toMatchObject({ phase_id: 'construction', start_month: 8, finish_month: 14 });
-    // Not a plain toMatchObject on midpoint_month: with equal 1/6 weights summed
-    // ascending (s + w × (start + k), spec §24.2's fixed order — ties the TS and
-    // Python doubles bit-for-bit), the accumulated 1/6 rounding error lands one ULP
-    // below the mathematically-exact 10.5, exactly as curves.py's module docstring
-    // describes for this class of float divergence.
-    expect(byId['pkg-structure'].midpoint_month).toBeCloseTo(10.5, 10);
+    expect(byId['pkg-structure']).toMatchObject({ phase_id: 'construction', start_month: 8, finish_month: 14, midpoint_month: 10.5 });
     expect(byId['pkg-structure'].weights).toEqual([1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6]);
+  });
+
+  it('a straight-line 6-month window from month 8 has midpoint exactly 10.5 (=== / ==, not approx)', () => {
+    // Guard for the controller ruling: the start is folded into the midpoint
+    // ONCE (start + Σ w_k×k rounded to 12 dp), not on every accumulated term
+    // (Σ w_k×(start+k)) — the latter lands one ULP below 10.5 for this exact
+    // window (six equal 1/6 weights), which would defeat a downstream
+    // Math.floor on months_from_base.
+    const structure = computePackageTiming(load('s-dated-programme')).find((x) => x.id === 'pkg-structure')!;
+    expect(structure.start_month).toBe(8);
+    expect(structure.duration_months).toBe(6);
+    expect(structure.midpoint_month).toBe(10.5);
   });
 
   it("the midpoint is curve-aware: a back_loaded 3-month phase from month 11 gives 74/6, not 12", () => {
@@ -34,6 +40,7 @@ describe('computePackageTiming (R15b spec §24.2)', () => {
     doc.cost_plan.packages.find((p) => p.id === 'pkg-mande')!.phase_id = 'mande_fitout';
     const m = computePackageTiming(doc).find((x) => x.id === 'pkg-mande')!;
     expect(m).toMatchObject({ phase_id: 'mande_fitout', start_month: 11, finish_month: 14 });
+    // 74/6 is not exact to 12 dp, so this stays a toBeCloseTo, not ===.
     expect(m.midpoint_month).toBeCloseTo(74 / 6, 10);
     expect(m.midpoint_month).not.toBe(12);
   });
@@ -73,12 +80,13 @@ describe('computePackageTiming (R15b spec §24.2)', () => {
     expect(t.length).toBe(doc.cost_plan.packages.length);
     expect(t.length).toBeGreaterThan(0);
     const w = curveWeights(4, { kind: 's_curve' });
-    const expectedMidpoint = w.reduce((s, wk, k) => s + wk * (2 + k), 0);
+    const frac = w.reduce((s, wk, k) => s + wk * k, 0);
+    const expectedMidpoint = 2 + Math.round(frac * 1e12) / 1e12;
     for (const x of t) {
       expect(x).toMatchObject({
         phase_id: null, start_month: 2, finish_month: 6, duration_months: 4, curve: { kind: 's_curve' },
       });
-      expect(x.midpoint_month).toBeCloseTo(expectedMidpoint, 10);
+      expect(x.midpoint_month).toBe(expectedMidpoint);
     }
   });
 
