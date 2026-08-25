@@ -513,7 +513,10 @@ export function computeCostPlan(
       fixed_price_coverage_pct: pct(fixed, baseBuild),
       provisional_sums_pct: pct(provisional, baseBuild),
     };
-    qs = plan.qs ?? null;
+    // Normalised so a raw pre-v14 document publishes the same shape as its
+    // migrated twin (spec §24.8's no-exclusion gate; Python's model_dump does
+    // the same).
+    qs = plan.qs != null ? { ...plan.qs, inflation: plan.qs.inflation ?? null } : null;
   }
 
   // R15b spec §24.3. The latest package spend midpoint and its distance from

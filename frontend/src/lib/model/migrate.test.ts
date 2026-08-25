@@ -1730,44 +1730,34 @@ describe('v13 migration -- spec §23.10', () => {
 // R15b Task 6 (spec §24.8). Ported wholesale from the v13 block above with
 // the v13→v14 substitutions.
 //
-// **Deviation from the task brief, stated rather than silently matched**
-// (this file's own established convention — see test_entry_point_guard.py's
-// standing instruction, mirrored here): the brief's resolution expected the
-// flag comparison's allowed exclusion (`no_inflation_allowance`) to be
-// NON-EMPTY specifically on fixture Y. It is not — verified directly below
-// (`the allowed flag exclusion is never exercised by this migration`) and
-// against the live engine before this block was written.
-// `QsProvenance.inflation` already defaults to `null` on EVERY engine read
-// regardless of document version (`cost-plan.ts`'s own `?? null`), so an
-// absent key (the v13 arm) and an explicit `null` (the v14 arm) are the SAME
-// observation on every fixture, Y included — this migration cannot move a
-// flag on any document in the corpus. Unlike the v12→v13 gate's
-// `due_diligence_unknown` (a real, always-nonempty ADDITION — a pre-v13
-// document has no `due_diligence` block at all to seed `unknown` INTO),
-// v13→v14 has no top-level field addition, `cost_plan.qs.inflation` having
-// already existed on `QsProvenance` since Task 1. The `⊆
-// {'no_inflation_allowance'}` bound is kept as a stated invariant (a future
-// rule reading the raw key's presence rather than `?? null` would need it).
+// **Controller ruling (ledgered, superseding an earlier draft of this
+// block).** An earlier version of this gate carried a `⊆
+// {'no_inflation_allowance'}` subset bound on the flag list, with a
+// standalone non-vacuity test claiming fixture Y proved that bound live. It
+// did not: `no_inflation_allowance` is result-derived from `qs.inflation ??
+// null`, and `QsProvenance.inflation` already defaults to `null` on EVERY
+// engine read regardless of the document's `inputs_version` — R8's rule
+// (spec §2) is that the engine reads a raw document's absent key the same
+// way it reads an explicit `null` seed, so this migration's one write is
+// inert to EVERY output, flags included, on EVERY fixture, Y included. A
+// subset bound that is always satisfied by an empty set is a hole, not an
+// invariant, so it is gone: `metricsSansExcluded` below excludes only
+// `calc_version` (same as the v13 block above it), and `metrics` — flags
+// inside it, in order — is compared with NO exclusion whatsoever, exactly
+// as `model` and `schedule` already are. The Y-specific assertion below is
+// kept and reworded to what is actually true: `no_inflation_allowance`
+// fires on fixture Y on BOTH arms, by name — proof the flag is a genuine,
+// non-trivial one the equality above is not passing over vacuously.
 //
-// **Second deviation, in the metrics comparison itself.** The brief's
-// resolution says "metrics deep-equal except the flag list" — untrue as
-// written for this engine specifically, and not for a computed-value reason:
-// `computeCostPlan` republishes `cost_plan.qs` as a RAW PASSTHROUGH of the
-// input object (`qs = plan.qs ?? null`, cost-plan.ts — a pre-existing R15b
-// design choice, unlike `price_basis`, which only feeds a computed summary
-// and is never republished verbatim), and TS has no runtime schema to
-// normalise it the way Python's `QsProvenance.model_dump()` does (every
-// declared field always present, `inflation` included, regardless of the
-// document's own version — see test_migrate_v14.py's own note on this exact
-// asymmetry). So the v14 arm's `cost_plan.qs` carries an explicit
-// `inflation: null` key the v13 arm's does not, on every fixture with a
-// non-null `qs` — a real object-shape difference `toEqual` correctly
-// reports, but not a computed FIGURE moving: `inflation` reads `?? null`
-// everywhere it is consumed, so its mere presence changes nothing else.
-// `metricsSansExcluded` below strips that one key from both arms before
-// comparison, the same way it strips `calc_version` and `flags` — every
-// OTHER field of `cost_plan.qs` (source, stage, date, status, base_date) is
-// still compared, unexcluded.
+// A second, related defect this ruling also closes: `computeCostPlan`
+// (`cost-plan.ts`) used to republish `cost_plan.qs` as a raw passthrough of
+// the input object, so a raw pre-v14 document's `qs` lacked the `inflation`
+// key its migrated v14 twin's `qs` carried explicitly — a real object-shape
+// difference with no Python equivalent (pydantic's `model_dump()` always
+// publishes every declared field). `computeCostPlan` now normalises the
+// republish (`{ ...plan.qs, inflation: plan.qs.inflation ?? null }`), so
+// both arms publish the identical shape and this gate needs no shape
+// exclusion at all, on either engine.
 describe('v14 migration -- spec §24.8', () => {
   const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
@@ -1804,20 +1794,12 @@ describe('v14 migration -- spec §24.8', () => {
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([]);
   });
 
-  // `calc_version` AND `flags` are excluded here — unlike the v13 block's
-  // `metricsSansExcluded`, which excludes only `calc_version`. The flag list
-  // is compared separately below (subset properties, not equality), exactly
-  // as the v12→v13 gate compares `due_diligence_unknown`. `cost_plan.qs.
-  // inflation`, when present, is stripped from BOTH arms — see the comment
-  // above this describe block for why: a real object-shape artifact of the
-  // raw-passthrough `qs` field, not a computed figure.
+  // `calc_version` only — no other exclusion. `metrics` (flags included, in
+  // order), `model` and `schedule` all compare with strict equality: this
+  // migration's one write is inert to every output (see the comment above
+  // this describe block for why).
   const metricsSansExcluded = (metrics: object): Record<string, unknown> => {
-    const { calc_version: _cv, flags: _f, ...rest } = metrics as unknown as Record<string, unknown>;
-    const cp = rest.cost_plan as { qs?: { inflation?: unknown } | null } | undefined;
-    if (cp?.qs != null && 'inflation' in cp.qs) {
-      const { inflation: _i, ...qsRest } = cp.qs;
-      return { ...rest, cost_plan: { ...cp, qs: qsRest } };
-    }
+    const { calc_version: _cv, ...rest } = metrics as unknown as Record<string, unknown>;
     return rest;
   };
 
@@ -1830,31 +1812,21 @@ describe('v14 migration -- spec §24.8', () => {
         .toEqual(metricsSansExcluded(v13Run.metrics));
       expect(v14Run.model, `${file}: a ledger figure moved`).toEqual(v13Run.model);
       expect(v14Run.schedule, `${file}: a schedule figure moved`).toEqual(v13Run.schedule);
-      // The flag list's allowed exclusion (§24.8): v14 may only ADD
-      // no_inflation_allowance, and must never DROP a flag v13 raised.
-      const v13Flags = new Set(v13Run.metrics.flags.map((f) => f.code));
-      const v14Flags = new Set(v14Run.metrics.flags.map((f) => f.code));
-      const added = [...v14Flags].filter((c) => !v13Flags.has(c));
-      const removed = [...v13Flags].filter((c) => !v14Flags.has(c));
-      expect(added.every((c) => c === 'no_inflation_allowance'), `${file}: v14 raised an unexpected new flag: ${added}`)
-        .toBe(true);
-      expect(removed, `${file}: v14 dropped a flag v13 raised`).toEqual([]);
     });
   }
 
-  it('the allowed flag exclusion is never exercised by this migration', () => {
-    // Non-vacuity check, in the OPPOSITE direction the v13 block's own
-    // `toContain('due_diligence_unknown')` runs: that proves an addition
-    // DOES fire; this proves `no_inflation_allowance` never fires as a
-    // RESULT of this migration specifically, corpus-wide, Y included. If
-    // this ever fails, the migration has stopped being inert and the
-    // comment above this describe block needs updating alongside the fix.
-    for (const { file, doc } of fixtures) {
-      const inputs = doc.inputs!;
-      const v13Flags = runAppraisal(migrateInputsToV13(inputs)).metrics.flags.map((f) => f.code).sort();
-      const v14Flags = runAppraisal(migrateInputsToV14(inputs)).metrics.flags.map((f) => f.code).sort();
-      expect(v14Flags, `${file}: flags moved between the v13 and v14 arms`).toEqual(v13Flags);
-    }
+  it('no_inflation_allowance fires on fixture Y on BOTH arms, by name (R8: an absent key reads the same as the seed)', () => {
+    // Non-vacuity for the strict equality above: proof the flag list is not
+    // matching merely because both arms raise nothing. Fixture Y's raw v13
+    // document has a real, non-null `qs` with no `inflation` key and a base
+    // date preceding a package midpoint (§24.7's firing condition) — the
+    // v13 arm reads that absence exactly as `?? null`, so the SAME amber
+    // flag fires on both arms, not just the migrated one.
+    const yRaw = fixtureDocs.find(({ file }) => file === 'y-due-diligence.json')!.doc.inputs as Record<string, unknown>;
+    const v13Flags = runAppraisal(migrateInputsToV13(yRaw)).metrics.flags.map((f) => f.code);
+    const v14Flags = runAppraisal(migrateInputsToV14(yRaw)).metrics.flags.map((f) => f.code);
+    expect(v13Flags, 'v13 (raw) arm').toContain('no_inflation_allowance');
+    expect(v14Flags, 'v14 (migrated) arm').toContain('no_inflation_allowance');
   });
 
   // Property 1 of three. No field renames this release.

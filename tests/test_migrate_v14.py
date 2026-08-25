@@ -8,27 +8,33 @@ Filter correction carried forward from test_migrate_v13.py's own docstring:
 level of the fixture file -- every fixture in fixtures/financial-model stores
 it nested there.
 
-**Deviation from the task brief, stated rather than silently matched**
-(test_entry_point_guard.py's own standing instruction, carried forward): the
-brief's resolution expected the flag comparison's allowed exclusion
-(`no_inflation_allowance`) to be NON-EMPTY specifically on fixture Y. It is
-not -- verified directly below (`test_the_flag_exclusion_bound_is_never_
-exercised_by_this_migration`) and by hand against the live engine before this
-file was written. `QsProvenance.inflation` already defaults to `None` on
-EVERY engine read regardless of document version (`types.py`'s own field
-default, mirrored by `cost-plan.ts`'s `?? null`) -- an absent key (the v13
-arm) and an explicit `null` (the v14 arm) are the SAME observation on every
-fixture, Y included, so this migration cannot move a flag on any document in
-the corpus. This is unlike the v12->v13 gate's `due_diligence_unknown`,
-which is a real, always-nonempty ADDITION (a pre-v13 document has no
-`due_diligence` block at all to seed `unknown` INTO); v13->v14 has no
-top-level field addition at all, `cost_plan.qs.inflation` having already
-existed on `QsProvenance` since Task 1. The `<= {"no_inflation_allowance"}`
-bound is kept as a stated invariant (a future rule reading the raw key
-presence rather than `?? None` would need it), and `test_migration_writes_
-the_seed_inside_a_non_null_qs` below proves the write is real at the one
-layer where it IS observable -- the raw dict `_v14_cost_plan` builds, before
-pydantic's own defaulting makes it invisible again.
+**Controller ruling (ledgered, superseding an earlier draft of this file).**
+An earlier version of this gate carried a `<= {"no_inflation_allowance"}`
+subset bound on the flag list, with a standalone non-vacuity test claiming
+fixture Y proved that bound live. It did not: `no_inflation_allowance` is
+result-derived from `qs.inflation`/`?? None`, and `QsProvenance.inflation`
+already defaults to `None` on EVERY engine read regardless of the document's
+`inputs_version` -- R8's rule (spec Sec 2) is that the engine reads a raw
+document's absent key the same way it reads an explicit `None` seed, so this
+migration's one write is inert to EVERY output, flags included, on EVERY
+fixture, Y included. A subset bound that is always satisfied by an empty set
+is a hole, not an invariant, so it is gone: `_metrics_dict` below excludes
+only `calc_version` (same as test_migrate_v13.py's own), and the whole
+`metrics` object -- flags included -- is compared with strict equality, the
+same as `model` and `schedule` already are. The Y-specific test is kept and
+reworded to what is actually true: `no_inflation_allowance` fires on fixture
+Y on BOTH arms, by name -- proof the flag is a genuine, non-trivial one the
+equality above is not passing over vacuously.
+
+A second, related defect this ruling also closes (TypeScript-only; this file
+never needed a matching fix): `computeCostPlan` (cost-plan.ts) used to
+republish `cost_plan.qs` as a raw passthrough of the input object, so a raw
+pre-v14 document's `qs` lacked the `inflation` key its migrated v14 twin's
+`qs` carried explicitly -- migrate.test.ts's own twin gate needed a shape
+exclusion this file never did, because `QsProvenance.model_dump()` already
+publishes every declared field regardless of document version.
+`computeCostPlan` now normalises its own republish to match, so neither
+engine's gate needs a shape exclusion any more.
 """
 import json
 from dataclasses import asdict
@@ -85,55 +91,40 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
 
 
 def _metrics_dict(metrics) -> dict:
-    """asdict(), minus `calc_version` (constant for the whole engine) AND
-    `flags` -- unlike test_migrate_v13.py's own `_metrics_dict`, the flag
-    list is compared separately below (subset properties, not equality),
-    exactly as the v12->v13 gate compares `due_diligence_unknown`."""
+    """asdict(), minus `calc_version` (constant for the whole engine) -- no
+    other exclusion. Flags compare with strict equality, in order, inside
+    this same dict: this migration's one write is inert to every output."""
     d = asdict(metrics)
     d.pop("calc_version", None)
-    d.pop("flags", None)
     return d
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_numeric_identity_corpus_wide(path):
     """Sec 24.8: no existing appraisal's computed values move. Every figure
-    the v13 arm produces, the v14 arm produces identically -- ledger and
-    schedule with no exclusion, metrics with no exclusion other than the
-    flag list."""
+    the v13 arm produces, the v14 arm produces identically -- ledger,
+    schedule and metrics (flags included) all with no exclusion."""
     raw = _FIXTURE_DOCS[path]["inputs"]
     v13_run = run_appraisal(migrate_inputs_to_v13(raw, None))
     v14_run = run_appraisal(migrate_inputs_to_v14(raw, None))
     assert _metrics_dict(v13_run.metrics) == _metrics_dict(v14_run.metrics), f"{path.stem}: metrics moved"
     assert asdict(v13_run.model) == asdict(v14_run.model), f"{path.stem}: a ledger figure moved"
     assert asdict(v13_run.schedule) == asdict(v14_run.schedule), f"{path.stem}: a schedule figure moved"
-    # The flag list's allowed exclusion (Sec 24.8, mirrors the v12->v13
-    # gate's due_diligence_unknown comparison): v14 may only ADD
-    # no_inflation_allowance, and must never DROP a flag v13 raised.
-    v13_flags = {f.code for f in v13_run.metrics.flags}
-    v14_flags = {f.code for f in v14_run.metrics.flags}
-    added = v14_flags - v13_flags
-    removed = v13_flags - v14_flags
-    assert added <= {"no_inflation_allowance"}, f"{path.stem}: v14 raised an unexpected new flag: {added}"
-    assert removed == set(), f"{path.stem}: v14 dropped a flag v13 raised: {removed}"
 
 
-def test_the_flag_exclusion_bound_is_never_exercised_by_this_migration():
-    """Non-vacuity check for the subset assertion above, in the OPPOSITE
-    direction test_migrate_v13.py's own non-vacuity check runs: that file
-    proves `due_diligence_unknown` DOES fire (a real addition); this proves
-    `no_inflation_allowance` NEVER fires as a RESULT of this migration
-    specifically (it may already fire identically on both arms, e.g. fixture
-    Y, because `QsProvenance.inflation` already defaults to `None`
-    regardless of document version) -- corpus-wide, Y included. If this ever
-    fails, the migration has stopped being inert and the docstring at the
-    top of this file (and migrate.test.ts's twin) needs updating alongside
-    the fix, not just this assertion."""
-    for path in FIXTURES:
-        raw = _FIXTURE_DOCS[path]["inputs"]
-        v13_flags = {f.code for f in run_appraisal(migrate_inputs_to_v13(raw, None)).metrics.flags}
-        v14_flags = {f.code for f in run_appraisal(migrate_inputs_to_v14(raw, None)).metrics.flags}
-        assert v13_flags == v14_flags, f"{path.stem}: flags moved between the v13 and v14 arms"
+def test_no_inflation_allowance_fires_on_fixture_y_on_both_arms():
+    """Non-vacuity for the strict equality above (R8: an absent key reads
+    the same as the seed). Fixture Y's raw v13 document has a real, non-null
+    `qs` with no `inflation` key and a base date preceding a package
+    midpoint (Sec 24.7's firing condition) -- the v13 arm reads that
+    absence exactly as `?? None`, so the SAME amber flag fires on both
+    arms, not just the migrated one. Proof the flag list equality above is
+    not passing over a vacuous "both arms raise nothing"."""
+    raw = _load_fixture(FIXTURE_DIR / "y-due-diligence.json")["inputs"]
+    v13_flags = {f.code for f in run_appraisal(migrate_inputs_to_v13(raw, None)).metrics.flags}
+    v14_flags = {f.code for f in run_appraisal(migrate_inputs_to_v14(raw, None)).metrics.flags}
+    assert "no_inflation_allowance" in v13_flags, "v13 (raw) arm"
+    assert "no_inflation_allowance" in v14_flags, "v14 (migrated) arm"
 
 
 ALIAS: dict[str, str] = {}   # no field renames this release; kept so a future
