@@ -41,6 +41,11 @@ import { ddDoc, memoText as ddMemoText } from './model/__fixtures__/due-diligenc
 // source for this fixture; a second JSON load here would risk drifting from
 // what the Costs page and cost-plan tests exercise.
 import { docZ, docZNoAllowance } from './model/__fixtures__/cost-plan-in-time-docs';
+// Controller ruling (spec §1.5, follow-up to Task 10): the auto-path
+// negative control for the package-timing suffix — a detailed-mode document
+// with no phase network at all, so `resolved_phase_id` is null on every
+// package and `phase` must not print.
+import { detailedCostPlanInputs } from './report-qa/memo-fixtures';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -2468,6 +2473,63 @@ describe('R15b cost plan in time (spec §24.6)', () => {
     expect(text).toContain('M&E fit-out');
     expect(text).toContain('12.33');
     expect(text).toContain('£11,172.56');
+    // Controller ruling (spec §1.5): all three parts present together on the
+    // one package row that has a resolved phase and a recorded allowance —
+    // scoped to a window starting at the row's own text so this cannot be
+    // satisfied by the three fragments appearing anywhere else on the page.
+    const idx = text.indexOf('M&E and public health');
+    expect(idx).toBeGreaterThan(-1);
+    const row = text.slice(idx, idx + 250);
+    expect(row).toContain('phase M&E fit-out');
+    expect(row).toContain('midpoint 12.33');
+    expect(row).toContain('inflation');
+  });
+
+  it("omits the word \"inflation\" from a package row when no allowance is recorded, but keeps phase and midpoint", async () => {
+    // Controller ruling (spec §1.5): a plan with a QS record and no
+    // allowance has genuinely no inflation figure to show — `inflation_pence`
+    // is 0 on every package, and printing "inflation £0.00" would read as an
+    // ASSESSED nil rather than the unknown/not-applicable it actually is.
+    // `resolved_phase_id` and `midpoint_month` are unaffected by the
+    // allowance, so both still print.
+    const run = runAppraisal(docZNoAllowance());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    const idx = text.indexOf('M&E and public health');
+    expect(idx).toBeGreaterThan(-1);
+    // The row's own text object ends at the next "ET" (PDF's end-text-block
+    // operator) — bounding the window to just this row, not the whole page,
+    // is what lets the absence assertion below mean something (the word
+    // "inflation" DOES appear elsewhere on this page, in the no-allowance
+    // disclosure sentence — see the next test). A `) Tj` boundary alone is
+    // NOT enough: a wrapped cell (this one, when it had an inflation clause
+    // to wrap onto) draws its continuation line as a second `Tj` after a
+    // `T*` inside the SAME text object, so cutting at the first `) Tj` would
+    // silently miss a wrapped second line.
+    const rowEnd = text.indexOf('ET', idx);
+    const row = text.slice(idx, rowEnd);
+    expect(row).toContain('phase M&E fit-out');
+    expect(row).toContain('midpoint 12.33');
+    expect(row).not.toContain('inflation');
+  });
+
+  it('omits both phase and inflation from a package row on an auto-path document, but always prints midpoint', async () => {
+    // Controller ruling (spec §1.5): `detailedCostPlanInputs()` (a detailed
+    // cost plan with no `programme` phase network at all — every package's
+    // `resolved_phase_id` is null, and its `qs` is null too) is the negative
+    // control for BOTH the phase and inflation parts at once. midpoint_month
+    // is still a real, engine-computed figure for every package regardless
+    // of the network, so it always prints.
+    const run = runAppraisal(detailedCostPlanInputs());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    const idx = text.indexOf('Structural repairs');
+    expect(idx).toBeGreaterThan(-1);
+    // See the previous test's comment: `ET`, not `) Tj`, bounds the whole
+    // (possibly wrapped) cell rather than just its first line.
+    const rowEnd = text.indexOf('ET', idx);
+    const row = text.slice(idx, rowEnd);
+    expect(row).toContain('midpoint');
+    expect(row).not.toContain('phase');
+    expect(row).not.toContain('inflation');
   });
 
   it('discloses no allowance is recorded when the QS block carries none', async () => {

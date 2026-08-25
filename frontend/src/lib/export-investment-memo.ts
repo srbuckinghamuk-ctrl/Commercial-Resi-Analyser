@@ -1660,21 +1660,36 @@ export function generateInvestmentMemo(
     const notes = raw.notes.trim();
     return notes === '' ? PRICE_BASIS_LABEL[basis] : `${PRICE_BASIS_LABEL[basis]} — ${notes}`;
   }
-  // R15b (spec §24.6). Phase / midpoint / inflation, appended to the package's
-  // own Element cell rather than as separate table columns — the table has
-  // three columns (Element, Amount, £/sq ft) throughout the whole document,
-  // and none of the three new figures is an amount or a rate; all three are
-  // read verbatim off this package's own `CostPackageLine`, never recomputed.
-  // `network`'s phase label lookup: `resolved_phase_id` is null on the auto
-  // and legacy timing arms (no phase network on this document at all), which
-  // reads as "no phase network" here rather than a blank -- the same
-  // vocabulary the Costs page's own disabled-picker hint uses.
+  // R15b (spec §24.6/§1.5 ruling). Phase / midpoint / inflation, appended to
+  // the package's own Element cell rather than as separate table columns --
+  // the table has three columns (Element, Amount, £/sq ft) throughout the
+  // whole document, and none of the three new figures is an amount or a
+  // rate; all three are read verbatim off this package's own
+  // `CostPackageLine`, never recomputed. Each part prints only when the plan
+  // carries the underlying fact -- see `packageTiming`'s own comment for the
+  // per-part rule; a document with no phase network, or no recorded
+  // inflation allowance, is not "no phase network" / "£0.00" text but a
+  // fact genuinely absent from the suffix.
   function packageTiming(p: CostPackageLine): string {
-    const phaseLabel = network != null && p.resolved_phase_id != null
-      ? network.phases.find((ph) => ph.id === p.resolved_phase_id)?.label ?? p.resolved_phase_id
+    // Controller ruling (spec §1.5): print only the parts the plan actually
+    // carries a fact for. `midpoint_month` is always a real spend-timing
+    // figure -- every package resolves to SOME window, network or not.
+    // `resolved_phase_id` is null on the auto/legacy timing arm (no phase
+    // network at all), which is "nothing to name", not "name it blank" --
+    // omitted rather than printed as a placeholder. `inflation_pence` is 0
+    // whenever there is no recorded allowance (`qs` null, or `qs.inflation`
+    // null) -- printing "£0.00" there would read as an ASSESSED nil, which
+    // §1.5 reserves for a genuine zero; omitted so the absence reads as
+    // unknown/not-applicable, matching the QS record's own null.
+    const phaseLabel = p.resolved_phase_id != null
+      ? network?.phases.find((ph) => ph.id === p.resolved_phase_id)?.label ?? p.resolved_phase_id
       : null;
-    return ` — phase ${phaseLabel ?? 'no phase network'}, midpoint ${p.midpoint_month.toFixed(2)}, `
-      + `inflation ${penceToPoundsExact(p.inflation_pence)}`;
+    const showInflation = cp.qs !== null && cp.qs.inflation !== null;
+    const parts: string[] = [];
+    if (phaseLabel != null) parts.push(`phase ${phaseLabel}`);
+    parts.push(`midpoint ${p.midpoint_month.toFixed(2)}`);
+    if (showInflation) parts.push(`inflation ${penceToPoundsExact(p.inflation_pence)}`);
+    return ` — ${parts.join(', ')}`;
   }
   const constructionRows: MemoRow[] =
     cp.mode === 'detailed'
