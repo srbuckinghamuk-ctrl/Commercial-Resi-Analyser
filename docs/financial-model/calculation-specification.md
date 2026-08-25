@@ -1025,7 +1025,7 @@ A document is **FINAL** only when all seven hold, tested in this order:
    current one (§14.6). [R8 — calc 2.7.0]
 4. A confirmed VAT basis (§17.10). [R11 — calc 2.10.0; the table row below was
    missing until R14]
-5. `due_diligence.totals.entered_unknown_count == 0` — no **entered**
+5. `metrics.due_diligence.totals.entered_unknown_count == 0` — no **entered**
    due-diligence item is `unknown` (§23.7). Derived rows (§23.3) do not feed
    this condition. A document carrying no `due_diligence` key at all is **not
    re-graded** against a condition that post-dates it (§14.6's rule for a
@@ -3775,7 +3775,7 @@ qs: the input block republished, or null
 DRAFT - DUE DILIGENCE INCOMPLETE - NOT FOR LENDER RELIANCE
 ```
 
-**Predicate:** `due_diligence.totals.entered_unknown_count == 0`. `buildProvenance` takes it as a fourth gate input beside the tax and VAT bases and the staleness flag, computed by `dueDiligenceGateFor(run)`; `provenance.py`'s `draft_reason` mirrors it. `DRAFT_REASON_SENTENCE` and `WATERMARK_TEXT` are `Record<DraftReason, string>`, so the compiler requires both texts (§17.10's precedent).
+**Predicate:** `metrics.due_diligence.totals.entered_unknown_count == 0`. `buildProvenance` takes it as a fourth gate input beside the tax and VAT bases and the staleness flag, computed by `dueDiligenceGateFor(run)`; `provenance.py`'s `draft_reason` mirrors it. `DRAFT_REASON_SENTENCE` and `WATERMARK_TEXT` are `Record<DraftReason, string>`, so the compiler requires both texts (§17.10's precedent).
 
 **A document with no `due_diligence` key at all is not re-graded.** This is `taxBasisConfirmedFor`'s R8 rule, kept for R8's reason: a raw pre-v13 document handed straight to the engine offered its author no field to fill, so its silence cannot be graded. Every production entry point migrates to v13 before running, so **every stored document is graded**; the exemption reaches only a raw document constructed in a test or held outside the persistence boundary, and the pre-existing release-gate FINAL routes stay FINAL on exactly that basis. The engine still seeds and reports the 23 unknowns for such a document (§23.4), and `due_diligence_unknown` still fires; only the FINAL condition exempts it.
 
@@ -3824,7 +3824,7 @@ DueDiligenceResult:
 
 Input errors, keyed `due_diligence.items[i].<field>`, `due_diligence.source_record.<field>` and `cost_plan.<field>` — and `due_diligence` itself for the missing-code message, which belongs to no single row. They apply structurally: a pre-v13 document has no `due_diligence` attribute, no `cost_plan.qs` and no `price_basis`, so it raises nothing.
 
-1. **The catalogue is complete and unambiguous.** Every entered catalogue code appears **exactly once**. Four distinct messages: a missing code, a derived code found in `items[]`, a code that is not in the catalogue, and a duplicate. A `custom` item requires a non-empty `label` and a category in the enum. Ids are unique. **`custom` is the one repeatable code** — it names no catalogue entry, so a document carrying two user-added items is normal and must not read as a duplicate.
+1. **The catalogue is complete and unambiguous.** Every entered catalogue code appears **exactly once**. Four distinct messages: a missing code, a derived code found in `items[]`, a code that is not in the catalogue, and a duplicate. A `custom` item requires a non-empty `label`. Every item's `category` is in the enum. Ids are unique. **`custom` is the one repeatable code** — it names no catalogue entry, so a document carrying two user-added items is normal and must not read as a duplicate.
 2. `status = green` requires `evidence` non-null with a non-empty `source` **and** a non-empty `date`.
 3. `status = red` or `amber` requires a non-empty `action`.
 4. `status = not_applicable` requires a non-empty `notes` — the reason it does not arise.

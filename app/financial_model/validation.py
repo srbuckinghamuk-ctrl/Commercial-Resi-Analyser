@@ -1537,7 +1537,7 @@ def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationI
     """R15 spec Sec 23.9 -- the due-diligence schedule's INPUT-only rules, plus
     the two cost-plan provenance rules (Sec 23.6) that arrived with it. The
     four result-derived flags (``due_diligence_unknown``, ``source_conflict``,
-    ``consent_expires_before_start``, ``qs_provenance_missing``) are the
+    ``consent_expires_before_start``, ``provisional_sums_present``) are the
     derivation's own -- they need the computed schedule, which this function
     (inputs only) cannot see, so they are raised as FlagCodes in metrics, not
     here.

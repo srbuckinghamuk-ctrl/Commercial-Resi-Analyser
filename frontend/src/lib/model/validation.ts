@@ -1352,7 +1352,7 @@ function isUnrealDate(value: string | null): boolean {
  * R15 spec §23.9 — the due-diligence schedule's INPUT-only rules, plus the two
  * cost-plan provenance rules (§23.6) that arrived with it. The four
  * result-derived flags (`due_diligence_unknown`, `source_conflict`,
- * `consent_expires_before_start`, `qs_provenance_missing`) are the
+ * `consent_expires_before_start`, `provisional_sums_present`) are the
  * derivation's own — they need the computed schedule, which this function
  * (inputs only) cannot see, so they are raised as `FlagCode`s in metrics, not
  * here.
