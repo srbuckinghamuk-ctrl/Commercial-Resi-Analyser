@@ -92,7 +92,16 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  for the same reason again -- it calls the migration matching the fixture
  *  version it loads (`migrateInputsToV14` from Task 6 on) to build fixture Z
  *  (the cost-plan-in-time document, S plus the §24.3 additions) as test
- *  support, and is imported only by `.test.ts` files. */
+ *  support, and is imported only by `.test.ts` files.
+ *
+ *  R15b Task 6 (review fix): `lib/report-qa/memo-fixtures.ts` still needs
+ *  this exemption, unchanged -- it now calls `migrateInputsToV14`, not
+ *  `migrateInputsToV13`, for its due-diligence fixture (the memo release
+ *  gate's golden case must render what the newest entry point actually
+ *  produces), but it still calls `migrateInputsToV11`/`migrateInputsToV12`
+ *  for its deliberately version-pinned monitoring/unit-sales fixtures, so it
+ *  would still fail "calls only the newest version" without the exemption --
+ *  the same reason it needed one before this fix. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',

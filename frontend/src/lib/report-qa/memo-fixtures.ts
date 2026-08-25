@@ -20,10 +20,10 @@ import type {
 } from '../model';
 import {
   migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV11, migrateInputsToV12,
-  migrateInputsToV13,
+  migrateInputsToV14,
 } from '../model';
 import type {
-  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
+  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV14,
 } from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
@@ -578,7 +578,7 @@ export function unitSalesLedgerInputs(): CalculatorInputsV12 {
 
 /**
  * R15 (Task 8, spec §23.8/§13.4). The release's golden due-diligence case: a
- * v13 document (fixture Y, fixtures/financial-model/y-due-diligence.json —
+ * document (fixture Y, fixtures/financial-model/y-due-diligence.json —
  * fixture X's money with the evidence layer added: 23 entered catalogue items
  * plus one custom row, three of them still unknown, a captured listing record
  * that conflicts with the schedule on two rules, a QS provenance record and
@@ -592,12 +592,20 @@ export function unitSalesLedgerInputs(): CalculatorInputsV12 {
  * routes add is the POPULATED arm -- a 29-row schedule table, a category
  * summary, two conflict lines and a source-record line -- under the same
  * page-bounds, sparse-page and orphan-heading gates.
+ *
+ * R15 Task 13 loaded this at v13, its own then-current version; R15b Task 6
+ * moves it on to v14 (spec §24.8) for the same reason -- the memo release
+ * gate renders whatever the newest entry point produces natively, and a
+ * fixture left pinned at v13 would exercise a shape no production path
+ * still produces. `cost_plan.qs.inflation` is inert on this fixture (its
+ * QS record has no allowance either way), so the ROUTES sweep's rendered
+ * output is unchanged by the move.
  */
-export function dueDiligenceInputs(): CalculatorInputsV13 {
+export function dueDiligenceInputs(): CalculatorInputsV14 {
   const raw = JSON.parse(
     readFileSync(resolve(FIXTURE_DIR, 'y-due-diligence.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
-  return migrateInputsToV13(raw.inputs);
+  return migrateInputsToV14(raw.inputs);
 }
 
 /**
@@ -613,7 +621,7 @@ export function dueDiligenceInputs(): CalculatorInputsV13 {
  * second JSON fixture, so the two twins cannot drift apart on any field
  * except the ones named here.
  */
-export function dueDiligenceFinalInputs(): CalculatorInputsV13 {
+export function dueDiligenceFinalInputs(): CalculatorInputsV14 {
   const doc = dueDiligenceInputs();
   const record = doc.due_diligence.source_record;
   return {
