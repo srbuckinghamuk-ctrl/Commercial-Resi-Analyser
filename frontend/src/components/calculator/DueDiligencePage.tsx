@@ -408,11 +408,12 @@ export default function DueDiligencePage({ inputs, onChange, run, project, now }
     (v) => v.field.startsWith('due_diligence.source_record'),
   );
 
-  // Composition of two published counts, not a derivation: `entered_total` and
-  // `entered_unknown_count` both come off `run.metrics.due_diligence.totals`,
-  // and the percentage is the engine's own `addressed_pct` verbatim.
-  const coverageLine = `${totals.entered_total - totals.entered_unknown_count} of `
-    + `${totals.entered_total} addressed `
+  // Every figure on this line is a published field of
+  // `run.metrics.due_diligence.totals`, read verbatim. `entered_addressed_count`
+  // exists so this is a read and not a `entered_total - entered_unknown_count`
+  // subtraction here (Task 9 fix round 1) -- a count computed in a component is
+  // a second implementation of the engine's own count (spec §11.9).
+  const coverageLine = `${totals.entered_addressed_count} of ${totals.entered_total} addressed `
     + `(${totals.addressed_pct == null ? 'n/a' : `${totals.addressed_pct}%`})`;
 
   /**

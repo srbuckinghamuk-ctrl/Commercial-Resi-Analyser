@@ -116,6 +116,7 @@
     "due_diligence.totals.assessed_count": 5,
     "due_diligence.totals.stated_impact_count": 4,
     "due_diligence.totals.derived_unknown_count": 2,
+    "due_diligence.totals.entered_addressed_count": 21,
     "due_diligence_category_counts": [[0, 1, 3, 1, 0, 5], [1, 0, 1, 1, 2, 5], [0, 2, 5, 1, 0, 8], [0, 1, 3, 0, 0, 4], [0, 0, 3, 1, 0, 4], [0, 0, 2, 1, 0, 3]],
     "due_diligence_row_codes": [
       "planning_route", "planning_conditions", "article_4_direction", "conservation_listed", "cil_s106",

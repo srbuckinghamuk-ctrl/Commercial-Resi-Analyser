@@ -187,6 +187,13 @@ class DdTotals:
     # over entered items, and a derived row left unknown must not be silently
     # covered by "every item is evidenced" -- so it is stated separately.
     derived_unknown_count: int = 0
+    # R15 Task 9 fix round 1. The numerator `addressed_pct` is taken over, and
+    # the count the Due Diligence page's coverage line prints ("N of M
+    # addressed"). Published rather than left to each surface to work out as
+    # `entered_total - entered_unknown_count`: a subtraction in a component is
+    # a second implementation of a count (spec Sec 11.9), and the page and the
+    # percentage would be free to disagree about the same document.
+    entered_addressed_count: int = 0
 
 
 @dataclass
@@ -351,6 +358,9 @@ def compute_due_diligence(
     totals.derived_unknown_count = sum(
         1 for r in rows if r.kind == "derived" and r.status == "unknown"
     )
+    # A projection of `entered_rows`, not `entered_total - entered_unknown_count`:
+    # counted from the same partition every other total above is counted from.
+    totals.entered_addressed_count = sum(1 for r in entered_rows if r.status != "unknown")
 
     conflicts: list[DdSourceConflict] = []
     if source_record is not None:

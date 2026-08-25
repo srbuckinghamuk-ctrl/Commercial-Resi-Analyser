@@ -134,6 +134,10 @@ describe('the due-diligence derivation (§23.3-§23.4)', () => {
     // equity_sources + lender_valuation.
     expect([t.entered_total, t.assessed_count, t.stated_impact_count, t.derived_unknown_count])
       .toEqual([24, 5, 4, 2]);
+    // Task 9 fix round 1: the numerator `addressed_pct` is taken over and the
+    // count the Due Diligence page's coverage line prints — 24 entered rows
+    // less the three unknown ones (cil_s106, leases_tenancies, fire_strategy).
+    expect(t.entered_addressed_count).toBe(21);
   });
 
   it('row order is catalogue then custom, and derived rows name their source', () => {

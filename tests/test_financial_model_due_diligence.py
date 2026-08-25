@@ -94,6 +94,10 @@ def test_category_counts_match_the_hand_table():
     # neither impact, so it is excluded); derived_unknown_count is
     # equity_sources + lender_valuation.
     assert (t.entered_total, t.assessed_count, t.stated_impact_count, t.derived_unknown_count) == (24, 5, 4, 2)
+    # Task 9 fix round 1: the numerator addressed_pct is taken over and the
+    # count the Due Diligence page's coverage line prints -- 24 entered rows
+    # less the three unknown ones (cil_s106, leases_tenancies, fire_strategy).
+    assert t.entered_addressed_count == 21
 
 
 def test_row_order_is_catalogue_then_custom_and_derived_rows_name_their_source():

@@ -241,6 +241,13 @@ export interface DdTotals {
    *  entered items, and a derived row left unknown must not be silently covered
    *  by "every item is evidenced" — so it is stated separately. */
   derived_unknown_count: number;
+  /** R15 Task 9 fix round 1. The numerator `addressed_pct` is taken over, and
+   *  the count the Due Diligence page's coverage line prints ("N of M
+   *  addressed"). Published rather than left to each surface to work out as
+   *  `entered_total - entered_unknown_count`: a subtraction in a component is a
+   *  second implementation of a count (spec §11.9), and the page and the
+   *  percentage would be free to disagree about the same document. */
+  entered_addressed_count: number;
 }
 
 export interface DdSourceConflict {
@@ -394,6 +401,7 @@ export function computeDueDiligence(
     entered_unknown_count: 0, addressed_pct: null, cost_impact_total_pence: 0,
     programme_impact_max_months: null, unassessed_impact_count: 0,
     entered_total: 0, assessed_count: 0, stated_impact_count: 0, derived_unknown_count: 0,
+    entered_addressed_count: 0,
   };
   const enteredRows = rows.filter((r) => r.kind !== 'derived');
   for (const r of rows) {
@@ -425,6 +433,9 @@ export function computeDueDiligence(
   totals.derived_unknown_count = rows.filter(
     (r) => r.kind === 'derived' && r.status === 'unknown',
   ).length;
+  // A projection of `enteredRows`, not `entered_total - entered_unknown_count`:
+  // counted from the same partition every other total above is counted from.
+  totals.entered_addressed_count = enteredRows.filter((r) => r.status !== 'unknown').length;
 
   const conflicts: DdSourceConflict[] = [];
   if (sourceRecord != null) {
