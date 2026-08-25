@@ -1,20 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import ExitStrategyPage from './ExitStrategyPage';
+import ExitStrategyPage, { type ExitCarrier } from './ExitStrategyPage';
+import { seedUnitSales } from './UnitSalesEditor';
 import { runAppraisal, validateInputs } from '../../lib/model';
-import type { CalculatorInputsV9, SalesPhasingInputsV9, RefinanceInputsV9 } from '../../lib/model';
+import type { CalculatorInputsV9, SalesPhasingInputsV9, RefinanceInputsV9, UnitSalesInputs } from '../../lib/model';
 import { defaultCalculatorInputsV9 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import { penceToPounds } from '../../lib/format';
 import type { ProgrammeNetwork } from '../../lib/model';
 import { retainAllDocMissingRents, icDoc } from '../../lib/model/__fixtures__/investment-case-docs';
+import { unitSalesDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
 
 function buildInputs(overrides: Partial<CalculatorInputsV9> = {}): CalculatorInputsV9 {
   const base = defaultCalculatorInputsV9();
   return { ...base, ...overrides };
 }
 
-function setup(inputs: CalculatorInputsV9, onChange = vi.fn()) {
+function setup(inputs: ExitCarrier, onChange = vi.fn()) {
   const run = runAppraisal(inputs);
   render(<ExitStrategyPage inputs={inputs} onChange={onChange} run={run} />);
   return { onChange, run };
@@ -533,5 +535,39 @@ describe('ExitStrategyPage — investment case completeness (§19.7 rule 2)', ()
     setup(inputs);
     expect(screen.queryByRole('button', { name: /^add an investment case$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /complete rent roll/i })).not.toBeInTheDocument();
+  });
+});
+
+// R13b Task 11 (spec §22.6). `unitSalesDoc()` is a v12 document -- the page
+// widens to `ExitCarrier` (CalculatorInputsV9 | V10 | V11 | V12) for exactly
+// this reason, mirroring how it already widened for the investment case.
+describe('ExitStrategyPage — unit sales ledger wiring (spec §22.6/§22.7)', () => {
+  it('enabling the per-unit ledger seeds one row per sold unit and nulls sales_phasing in the same payload', () => {
+    const inputs = {
+      ...unitSalesDoc({ unitSales: null }),
+      sales_phasing: { tranches: [{ month_offset: 23, pct_of_gross_receipts: 100, anchor: null }] },
+    };
+    const { onChange } = setup(inputs);
+    fireEvent.click(screen.getByRole('button', { name: /use per-unit ledger/i }));
+    expect(onChange).toHaveBeenCalledWith({ unit_sales: seedUnitSales(['u1', 'u2', 'u3', 'u4'], 24), sales_phasing: null });
+  });
+
+  it('phasing the sales nulls unit_sales in the same payload', () => {
+    const { onChange } = setup(unitSalesDoc());
+    fireEvent.click(screen.getByRole('button', { name: /phase the sales/i }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ unit_sales: null, sales_phasing: expect.anything() }));
+  });
+
+  it('switching to retain_all nulls unit_sales', () => {
+    const { onChange } = setup(unitSalesDoc());
+    fireEvent.click(screen.getByRole('button', { name: /retain all/i }));
+    expect(onChange.mock.calls[0][0]).toEqual(expect.objectContaining({ unit_sales: null, sales_phasing: null }));
+  });
+
+  it('retaining a unit under blended drops its sale row', () => {
+    const { onChange } = setup(unitSalesDoc({ route: 'blended' }));
+    fireEvent.click(screen.getByLabelText(/retain u2/i));
+    const partial = onChange.mock.calls[0][0] as { unit_sales: UnitSalesInputs };
+    expect(partial.unit_sales.units.map((u) => u.unit_id)).toEqual(['u1', 'u3', 'u4']);
   });
 });
