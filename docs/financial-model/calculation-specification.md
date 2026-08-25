@@ -4020,12 +4020,23 @@ cost_plan.qs: null | {
   mode (§23.1, §17.1's precedent), so inflation is detailed-mode-only by the
   same rule. `null` is §1.5's "no allowance modelled" — not the same fact as
   an allowance of `0`, which nobody has entered.
-- `annual_pct` carries no lower bound at the type; a negative or non-finite
-  value is a validation error (§24.7 rule 1), and the engine itself degrades
-  a value that somehow reaches it unvalidated to "no allowance" — factor
-  `null`, pence `0` — rather than computing `Math.pow`/`(1+x)**y` on it
-  (§24.3). There is no deflation by any path: a base date on or after a
-  package's midpoint clamps `months_from_base` to `0` and the factor to `1`.
+- **`annual_pct`'s bound is asymmetric across the two engines — the same
+  class of boundary asymmetry §23.1 already records for `code`.** The
+  TypeScript type carries no lower bound at all: a JSON payload arrives
+  uncoerced, so a negative or non-finite value reaches §24.7 rule 1's
+  validation error directly, and the engine's own degrade — factor `null`,
+  pence `0`, rather than computing `Math.pow`/`(1+x)**y` on it (§24.3) — is
+  what catches whatever an unvalidated caller still manages to pass it. The
+  Python model bounds `InflationAllowance.annual_pct` with `Field(ge=0)` at
+  the persistence boundary, so a negative value — and a `NaN`, since
+  pydantic's `ge` comparison is false against one — is rejected as a 422
+  before `validate_inputs` or `compute_cost_plan` ever runs; only a positive
+  `inf` clears that bound and reaches rule 1 and the degrade in that engine.
+  The `>= 0` arm inside `compute_cost_plan`'s own read is kept regardless,
+  for parity with the TypeScript engine, which has no type-level bound to do
+  that work for it. There is no deflation by any path in either engine: a
+  base date on or after a package's midpoint clamps `months_from_base` to
+  `0` and the factor to `1`.
 - `CostPackage.phase_id` (R12, §18.5) is the per-package programme;
   `CostPackage.lender_eligible` (R10, wired R14) is the per-package
   eligibility. Neither's shape changes here — §24 is built entirely on
@@ -4301,8 +4312,15 @@ rounded once with the advance percentage, as before.
 
 ### 24.6 Outputs and reporting
 
-`CostPlanResult` (§16.8) gains, per package and in total — both engines
-mirror field for field, in the order shown:
+`CostPlanResult` (§16.8) gains, per package and in total; both engines
+mirror field for field. §16.8's own listing already states each field's true
+position in the shape — this section restates the same fields with their
+full account rather than repeating a position claim, so the two never have
+a chance to disagree.
+
+**Per package**, appended contiguously to the end of `CostPackageLine` (this
+sub-list's order is exact — every field here is new, so there is no
+pre-existing neighbour to state a position against):
 
 ```
 packages[].phase_id                    the RAW input value, unchanged meaning; null on every migrated
@@ -4315,16 +4333,36 @@ packages[].months_from_base            float | null  -- null only when there is 
                                        whether or not an allowance is recorded
 packages[].inflation_factor            float | null  -- null exactly when there is no allowance
 packages[].inflation_pence             integer; 0 when there is no allowance (never null)
-inflation_total_pence                  integer; sum of the rounded per-package lines; 0 with no allowance
-inflation_pct_of_base_build            pct(inflation_total_pence, base_build_pence); null when base build is 0
-construction_total_pence               = base_build + inflation_total + contingency_total + compliance
-latest_midpoint_month                  float | null  -- the latest package midpoint; null with no packages
-latest_midpoint_months_from_base       float | null  -- null under the same calendar gate as months_from_base
-latest_midpoint_whole_months_from_base integer | null  -- Math.floor of the line above; the flag message and
-                                       the memo sentence print THIS, never the float
-qs                                     the input block republished (R15) — now normalised so a raw
-                                       pre-v14 document publishes `inflation: qs.inflation ?? null`, the
-                                       same shape as its migrated twin (§24.8)
+```
+
+**In total**, five new fields, positioned exactly as §16.8's own listing has
+them — four sit together after `implied_rate_pence_per_sqm`, the fifth
+amends a field already there:
+
+```
+construction_total_pence               UNCHANGED position, straight after compliance_pence; formula
+                                       amended to base_build + inflation_total + contingency_total
+                                       + compliance
+                                       [ ... base_build_pence, contingency[], contingency_total_pence,
+                                         compliance_pence, fees[], professional_total_pence,
+                                         statutory_total_pence, conversion_total_pence,
+                                         lender_eligible_base_pence, lender_eligible_ratio and
+                                         implied_rate_pence_per_sqm are §16.8's own, unmoved and
+                                         unchanged, and sit between the line above and the four below ]
+inflation_total_pence                  NEW — integer; sum of the rounded per-package lines; 0 with
+                                       no recorded allowance
+inflation_pct_of_base_build            NEW — pct(inflation_total_pence, base_build_pence); null when
+                                       base build is 0
+latest_midpoint_month                  NEW — float | null; the latest package midpoint; null with no
+                                       packages
+latest_midpoint_months_from_base       NEW — float | null; null under the same calendar gate as
+                                       months_from_base
+latest_midpoint_whole_months_from_base NEW — integer | null; Math.floor of the line above; the flag
+                                       message and the memo sentence print THIS, never the float
+price_basis                            UNCHANGED position (R15, §23.6) — the second-to-last field
+qs                                     UNCHANGED position — the LAST field; now normalised so a raw
+                                       pre-v14 document publishes `inflation: qs.inflation ?? null`,
+                                       the same shape as its migrated twin (§24.8)
 ```
 
 `Schedule.uses[m]` gains `lender_eligible_construction_pence` — the
