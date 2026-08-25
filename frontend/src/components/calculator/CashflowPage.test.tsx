@@ -8,6 +8,7 @@ import type { AppraisalRun, CalculatorInputsV11 } from '../../lib/model';
 import { defaultCalculatorInputsV11 } from '../../lib/conversion-defaults';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import { anchoredSlippedDoc } from '../../lib/model/__fixtures__/investment-case-docs';
+import { unitSalesDoc, heldTwinDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
 
 // Same fixture directory as AppraisalSummaryPage.test.tsx / export-investment-memo.test.ts.
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
@@ -251,5 +252,37 @@ describe('CashflowPage — NOI row (fixture T, retain-all investment case, spec 
     expect(run.model.months.every((m) => m.net_operating_income_pence === 0)).toBe(true);
     render(<CashflowPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByRole('columnheader', { name: 'NOI' })).not.toBeInTheDocument();
+  });
+});
+
+// R13b Task 12 (spec §22.6). `run.metrics.unit_sales` is `UnitSalesResult |
+// null` -- `null` on any document with no per-unit ledger, present with
+// every month's `deposits_received_pence` zero on the held twin (deposits
+// release AT completion there, not on exchange). The column must read this
+// block directly, never sum or recompute a deposits figure from the row
+// data. `inputs` is unused by CashflowPage's body (only `run` is
+// destructured -- see the anchoredSlippedDoc test above), and the fixture
+// builders return a `CalculatorInputsV12` document, not the `V11` the prop
+// is typed for, so a placeholder V11 default satisfies the prop's type
+// without a cast, matching the existing pattern in this file.
+describe('CashflowPage — deposits released column (R13b spec §22.6)', () => {
+  it('shows a deposits-released column only when a released deposit lands, read off metrics.unit_sales', () => {
+    const doc = unitSalesDoc();
+    const run = runAppraisal(doc);
+    render(<CashflowPage inputs={defaultCalculatorInputsV11()} onChange={vi.fn()} run={run} />);
+    expect(screen.getByRole('columnheader', { name: 'Deposits released' })).toBeInTheDocument();
+    // month 8's 2,600,000p -- penceToPounds rounds to whole pounds (maximumFractionDigits: 0),
+    // so this is '£26,000', not '£26,000.00' (see the ruling R25 VAT-disclosure
+    // assertions above, e.g. '£543', for the same whole-pound formatting).
+    expect(screen.getAllByText('£26,000').length).toBeGreaterThan(0);
+  });
+
+  it('hides the column on the held twin and on the null path', () => {
+    for (const doc of [heldTwinDoc(), unitSalesDoc({ unitSales: null })]) {
+      const run = runAppraisal(doc);
+      const { unmount } = render(<CashflowPage inputs={defaultCalculatorInputsV11()} onChange={vi.fn()} run={run} />);
+      expect(screen.queryByRole('columnheader', { name: 'Deposits released' })).toBeNull();
+      unmount();
+    }
   });
 });
