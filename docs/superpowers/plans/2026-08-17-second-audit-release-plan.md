@@ -20,7 +20,7 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R14** — **DONE, shipped** | §5.10 corrected (C1), monitoring cost-to-complete statement, `lender_eligible` wired | P1 | inputs v11, calc 2.13.0 |
 | **R14b** — **DONE, shipped** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | two new tables + API (migration 006), Python governance twin; no calc bump, no inputs bump — and `audit_hash` is **not** extended, see the status paragraph |
 | **R15** — **DONE, shipped** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v13, calc 2.15.0 |
-| **R15b** | The cost plan in time: per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint (§7.5's inflation ask), per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3) | P1 | inputs v14, calc minor |
+| **R15b** — **DONE, shipped** | The cost plan in time: per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint (§7.5's inflation ask), per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3) | P1 | inputs v14, calc 2.16.0 |
 | **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
 
 **R16 UX debt recorded by R13b:** the R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) have no ScenariosPage input; `sales_slip_months` got one in R13b.
@@ -155,6 +155,56 @@ guard's window now covers §22.7 and §23.9 as well as §19.7 (finding three
 TypeScript em-dash), and `unit_sales.totals.gross_pence == totals.gross_sales_pence`
 is asserted corpus-wide. See spec §23, `migration-notes.md` §16 and
 `test-cases.md` §23.
+
+**R15b status (calc 2.16.0, inputs v14):** shipped. It gave the appraisal a
+**cost plan in time**. Every detailed-mode package now resolves a window in
+time — its own tagged phase's `[start, finish)` and curve on a network, the
+shared construction window on the auto path, the construction package's own
+window on a raw legacy document — and a curve-weighted spend midpoint
+computed from that window's weights, independent of the package's amount.
+On that midpoint the release builds the two things a QS-priced plan and a
+lender both need: a tender-price inflation allowance, one flat annual rate
+compounded pro-rata from `qs.base_date` to each package's own midpoint, added
+as a disclosed line beside the priced sum rather than folded into it; and a
+per-month lender-eligible construction figure that §4.2(b)'s development-cost
+advance cap now reads in place of R14's single whole-line ratio. The Costs
+page gains the phase picker `phase_id` has lacked a writer for since R12
+(§18.10 limitation 9's shape, closed here), on both packages and fee lines,
+plus read-only window/midpoint/inflation cells and the QS card's inflation
+control; the memo prints a package's phase, midpoint and inflation only when
+the document actually carries those facts. That closes the whole of §7.5's
+inflation ask, §16.9 limitations 1 and 2, and §20.5 limitation 3 — the
+audit's own words, *"allow eligibility bases per package and show the
+base,"* stated as a per-month figure rather than a single ratio.
+
+**What moved, and why it is only fixture S.** The per-month lender-eligible
+share recovers R14's uniform ratio exactly, every month, on any document
+whose packages all share one spend window — the auto path, the legacy arm,
+and every network fixture in the corpus except one, because every other
+document's packages either share a phase or are all eligible together.
+Fixture S is the one document with packages in more than one window **and**
+an ineligible package among them, so it alone moves: `funding_gap_pence`
+6,300,000 → 6,330,000, and every debt-denominated metric that follows it,
+re-derived by hand (`test-cases.md` §24.2). The gap grows rather than
+shrinks, because the strip-out months that used to be scaled down with
+everything else now fund in full, and the whole shortfall concentrates into
+the fewer months that still carry one. Every other golden pin in the corpus
+is unchanged, asserted rather than assumed: the v13 → v14 identity gate
+compares metrics, ledger and schedule on both arms with no exclusion, and
+the recovery claim is asserted on every auto-path detailed fixture, every
+month, with a companion proof that the set of such fixtures is non-empty.
+`no_inflation_allowance` is the release's one new flag.
+
+**What is deferred, named rather than left implicit.** A dated tender-price
+index table (BCIS-style) in place of one flat rate; a per-package rate on a
+plan priced by more than one index; inflating fee lines or contingency
+bases (both stay uninflated by design — an appointment is priced at
+appointment, and a general contingency that grew with the programme would
+be indistinguishable from inflation); a true per-package draw ledger in
+place of the per-month share (the uses stay bucket-spread, §18.5's rounding
+argument, unchanged since R12); a per-month lender-eligible column on the
+Cash-flow page (which has no per-category column to hang one on today). See
+spec §24, `migration-notes.md` §17 and `test-cases.md` §24.
 
 **Inflation is R15b, scheduled rather than dropped or bolted on.** §7.5's
 inflation ask is not an evidence question, it is a **timing** question: you

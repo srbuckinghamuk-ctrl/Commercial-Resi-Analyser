@@ -609,3 +609,53 @@ Roughly fourteen tasks, subagent-driven as R9–R15 were, each with its review:
 13. Sensitivity assertions (lever order, cost lever scaling, `phase_slip`
     moving a midpoint).
 14. Spec §24 and the amendments; migration notes; governance; release plan.
+
+---
+
+## 18. Refinements at implementation
+
+Rulings made while building Tasks 1–10 that supersede this design document
+where they differ, carried into spec §24 as the normative statement:
+
+1. `CostPackageLine.phase_id` keeps its raw-input meaning; the resolved phase
+   is a new result field, `resolved_phase_id`, null on the auto and legacy
+   arms.
+2. `months_from_base` is published whenever `qs.base_date` is non-blank and
+   `acquisition_date` is non-null, regardless of whether an allowance is
+   recorded; only `inflation_factor`/`inflation_pence` are gated on the
+   allowance itself.
+3. `CostPlanResult` also publishes `inflation_pct_of_base_build` and
+   `latest_midpoint_whole_months_from_base` beside `latest_midpoint_month`
+   and `latest_midpoint_months_from_base`, so the flag message and the memo
+   sentence read a published integer rather than re-flooring a float
+   themselves.
+4. `midpoint_month = start_month + round12(Σ_k weights[k] × k)`, with `k`
+   folded in only once outside the accumulation and the fractional part
+   rounded to 12 dp, so a straight-line window's midpoint is exact and a
+   downstream whole-month floor cannot be defeated by an accumulated ulp.
+5. The per-month eligible share is computed from **unrounded** per-package
+   spend, `(amount + inflation) × w_k` as a float, never from
+   `spreadByCurve`'s rounded pence — so on any single-window plan the share
+   equals the packages' own eligible fraction exactly, whatever the
+   amounts, and R14's uniform ratio is recovered exactly rather than only up
+   to rounding; §24.9 limitation 3 narrows accordingly, to "a ratio over
+   per-package weights, not a per-package ledger."
+6. In the network arm, each package's `inflation_pence` joins its own
+   resolved phase's bucket; the default bucket's remainder — contingency and
+   compliance — is never itself a package line and always resolves through
+   the category default. A package's inflation spreads with the package. A
+   no-op on every pre-R15b document.
+7. A non-finite or negative `annual_pct` degrades in the engine to no
+   allowance (factor null, pence 0) rather than raising or propagating a
+   `NaN`/`Infinity`; §24.7 rule 1 owns raising the validation error.
+8. The flag `no_inflation_allowance` fires on a raw pre-v14 document exactly
+   as on its migrated twin (the engine reads the absent key as null, R8's
+   rule), so the v13 → v14 identity gate compares metrics — including the
+   flag list — with strict equality and no exclusion. The TS engine
+   republishes `qs` normalised (`inflation: qs.inflation ?? null`) so the
+   result shape is identical on both arms.
+9. The memo prints a package's timing as "midpoint x" always, "phase
+   [label]" only when a phase is resolved, and "inflation £x" only when an
+   allowance is recorded — never a placeholder for a fact the document does
+   not carry; the memo's advance-cap sentence under "Senior Debt Position" is
+   new, with no prior equivalent.
