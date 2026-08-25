@@ -1,7 +1,8 @@
 /**
  * R15b spec §24.3. The shared cost-plan-in-time document builders. `docS()`
  * loads fixture S (fixtures/financial-model/s-dated-programme.json) via
- * `migrateInputsToV13` — never a hand-authored default object. `docZ()` is
+ * `migrateInputsToV14` (R15b Task 6 moved this on from `migrateInputsToV13`,
+ * spec §24.8) — never a hand-authored default object. `docZ()` is
  * "S plus Z's changes, and no other" (design §13): a QS provenance record
  * with a tender-price inflation allowance, a new `mande_fitout` phase carrying
  * pkg-mande's spend, per-package price basis tags, a VAT override on
@@ -12,17 +13,17 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { migrateInputsToV13 } from '../migrate';   // Task 7 moves this to V14 and loads Z directly
-import type { CalculatorInputsV13 } from '../finance-types';
+import { migrateInputsToV14 } from '../migrate';   // Task 7 loads Z directly from its own fixture file
+import type { CalculatorInputsV14 } from '../finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../../fixtures/financial-model');
 
-export function docS(): CalculatorInputsV13 {
-  return migrateInputsToV13(JSON.parse(readFileSync(resolve(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8')).inputs);
+export function docS(): CalculatorInputsV14 {
+  return migrateInputsToV14(JSON.parse(readFileSync(resolve(FIXTURE_DIR, 's-dated-programme.json'), 'utf-8')).inputs);
 }
 
 /** Design §13: S plus Z's changes, and no other. */
-export function docZ(): CalculatorInputsV13 {
+export function docZ(): CalculatorInputsV14 {
   const d = docS();
   d.cost_plan.qs = {
     source: 'Gleeds', stage: 'riba_3', date: '2026-02-15', status: 'issued',
@@ -64,7 +65,7 @@ export function docZ(): CalculatorInputsV13 {
 /** Z with the QS provenance kept but the allowance cleared: months_from_base
  *  and the latest-midpoint fields are still published, every inflation_pence
  *  is 0 and every inflation_factor is null. */
-export function docZNoAllowance(): CalculatorInputsV13 {
+export function docZNoAllowance(): CalculatorInputsV14 {
   const d = docZ();
   d.cost_plan.qs = { ...d.cost_plan.qs!, inflation: null };
   return d;

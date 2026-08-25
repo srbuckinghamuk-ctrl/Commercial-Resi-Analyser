@@ -1117,11 +1117,26 @@ class CalculatorInputsV13(CalculatorInputsV12):
     due_diligence: DueDiligenceInputs = Field(default_factory=DueDiligenceInputs)
 
 
+# --- Release 15b (calc 2.15.0 -> 2.16.0): the cost plan in time, tender-price
+# inflation (spec Sec 24.8) --------------------------------------------------
+
+
+class CalculatorInputsV14(CalculatorInputsV13):
+    """Mirrors CalculatorInputsV13 with Sec 24.8's one addition:
+    `cost_plan.qs.inflation`, already declared on `QsProvenance` (Task 1) with
+    a `None` default -- so nothing new is declared HERE. Subclasses V13 for
+    the reason V13 subclasses V12: the engine dispatches on it, and a flat
+    re-declaration would make those isinstance checks silently False for v14
+    documents. Twin of CalculatorInputsV14 in finance-types.ts."""
+
+    inputs_version: Literal[14] = 14  # type: ignore[assignment]
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
     | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-    | CalculatorInputsV13
+    | CalculatorInputsV13 | CalculatorInputsV14
 )
 
 
@@ -1133,6 +1148,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R15b Task 6: without this branch a v14 document falls through to the
+    # CalculatorInputsV2 default, silently dropping the due-diligence block
+    # and every other post-v2 field.
+    if version == 14:
+        return CalculatorInputsV14.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v13 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # due-diligence block and every other post-v2 field.

@@ -175,6 +175,70 @@ def test_v12_rejects_an_unknown_deposit_release():
         parse_calculator_inputs(_minimal_v12_doc({"deposit_release": "maybe", "units": []}))
 
 
+def _minimal_v13_doc() -> dict:
+    """A valid v13 document, built the same way `_minimal_v11_doc` is: a v12
+    document with v13's own top-level addition applied. Does NOT use
+    `migrate_inputs_to_v13` -- consistent with every other helper in this
+    file, which builds its shape by hand rather than depending on the
+    migration under test elsewhere."""
+    doc = _minimal_v12_doc()
+    doc["inputs_version"] = 13
+    doc["due_diligence"] = {"source_record": None, "items": []}
+    return doc
+
+
+def test_parse_dispatch_routes_v13_to_v13_with_due_diligence():
+    from app.financial_model.types import CalculatorInputsV13, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v13_doc())
+    assert isinstance(parsed, CalculatorInputsV13)
+    assert parsed.inputs_version == 13
+    assert parsed.due_diligence.items == []
+
+
+def _minimal_v14_doc(qs: dict | None = None) -> dict:
+    """R15b spec Sec 24.8. A valid v14 document: a v13 document with
+    `cost_plan.qs` set to `qs` (default None, matching every migrated
+    document -- there is no new top-level field, `inflation` living on
+    `QsProvenance`, already declared in Task 1)."""
+    doc = _minimal_v13_doc()
+    doc["inputs_version"] = 14
+    doc["cost_plan"]["qs"] = qs
+    return doc
+
+
+def test_parse_dispatch_routes_v14_to_v14():
+    from app.financial_model.types import CalculatorInputsV14, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v14_doc())
+    assert isinstance(parsed, CalculatorInputsV14)
+    assert parsed.inputs_version == 14
+    assert parsed.due_diligence.items == []
+
+
+def test_v14_qs_inflation_null_present_when_qs_set():
+    """Sec 24.8 boundary: a v14 document with a `qs` block round-trips with
+    `inflation: None` PRESENT (not absent) after `model_dump`."""
+    from app.financial_model.types import parse_calculator_inputs
+
+    qs = {
+        "source": "Gleeds", "stage": "riba_3", "date": "2026-02-15",
+        "status": "issued", "base_date": "2026-02-01", "inflation": None,
+    }
+    parsed = parse_calculator_inputs(_minimal_v14_doc(qs))
+    dumped = parsed.model_dump(mode="json")
+    assert "inflation" in dumped["cost_plan"]["qs"]
+    assert dumped["cost_plan"]["qs"]["inflation"] is None
+
+
+def test_v14_no_qs_has_no_inflation_anywhere():
+    from app.financial_model.types import parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v14_doc(None))
+    dumped = parsed.model_dump(mode="json")
+    assert dumped["cost_plan"]["qs"] is None
+
+
 def test_calc_version_is_2_15_0():
     from app.financial_model.types import CALC_VERSION
     assert CALC_VERSION == "2.15.0"

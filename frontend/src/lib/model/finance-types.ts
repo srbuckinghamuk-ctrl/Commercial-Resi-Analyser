@@ -438,11 +438,24 @@ export interface CalculatorInputsV13 extends Omit<CalculatorInputsV12, 'inputs_v
   due_diligence: DueDiligenceInputs;
 }
 
+/**
+ * R15b spec §24.8. `cost_plan.qs.inflation` (already on `QsProvenance`, Task
+ * 1) is the only addition — there is no new top-level field, unlike every
+ * prior version bump. A v14 document is one where a non-null `qs` carries
+ * the key explicitly rather than by absence; `isV14`/`migrateV13toV14`
+ * enforce that shape, not this interface (TS erases the distinction at
+ * compile time, same as `due_diligence`'s non-nullability could not be
+ * enforced by the v12 interface either).
+ */
+export interface CalculatorInputsV14 extends Omit<CalculatorInputsV13, 'inputs_version'> {
+  inputs_version: 14;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
   | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-  | CalculatorInputsV13;
+  | CalculatorInputsV13 | CalculatorInputsV14;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'

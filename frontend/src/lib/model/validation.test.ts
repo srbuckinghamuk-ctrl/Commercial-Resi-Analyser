@@ -29,7 +29,7 @@ import type {
   CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
 } from './finance-types';
 import { unitSalesDoc, noProgrammeDoc } from './__fixtures__/unit-sales-docs';
-import type { CalculatorInputsV12, CalculatorInputsV13 } from './finance-types';
+import type { AnyCalculatorInputs, CalculatorInputsV12, CalculatorInputsV14 } from './finance-types';
 import { migrateInputsToV12, migrateInputsToV13 } from './migrate';
 import { QS, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
 import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
@@ -2652,9 +2652,14 @@ describe('§22.7 unit sales validation', () => {
  * of those is asserted here.
  */
 describe('§23.9 due diligence validation', () => {
-  const errs = (d: CalculatorInputsV13) => validateInputs(d).filter((i) => i.severity === 'error');
-  const errFields = (d: CalculatorInputsV13) => errs(d).map((i) => i.field);
-  const has = (d: CalculatorInputsV13, field: string, message: string) =>
+  // `AnyCalculatorInputs`, not `CalculatorInputsV14`: this block's "a migrated
+  // document raises no due-diligence issue" test deliberately feeds a v13
+  // result (`migrateInputsToV13(rawYAsV12())`) through the same helpers as
+  // `ddDoc()`'s v14 documents, proving the §23.9 rules read identically
+  // either side of the v13->v14 boundary (spec §24.8's migration is inert).
+  const errs = (d: AnyCalculatorInputs) => validateInputs(d).filter((i) => i.severity === 'error');
+  const errFields = (d: AnyCalculatorInputs) => errs(d).map((i) => i.field);
+  const has = (d: AnyCalculatorInputs, field: string, message: string) =>
     errs(d).some((i) => i.field === field && i.message === message);
 
   /** A complete raw due-diligence item — every field written, never left to a
@@ -2929,18 +2934,18 @@ describe('§23.9 due diligence validation', () => {
 // Twin of TestDueDiligenceValidation's "Sec 24.7" tests in
 // tests/test_financial_model_validation.py.
 describe('§24.7 tender-price inflation validation', () => {
-  const errs = (d: CalculatorInputsV13) => validateInputs(d).filter((i) => i.severity === 'error');
-  const warns = (d: CalculatorInputsV13) => validateInputs(d).filter((i) => i.severity === 'warning');
-  const errFields = (d: CalculatorInputsV13) => errs(d).map((i) => i.field);
-  const has = (d: CalculatorInputsV13, field: string, message: string) =>
+  const errs = (d: CalculatorInputsV14) => validateInputs(d).filter((i) => i.severity === 'error');
+  const warns = (d: CalculatorInputsV14) => validateInputs(d).filter((i) => i.severity === 'warning');
+  const errFields = (d: CalculatorInputsV14) => errs(d).map((i) => i.field);
+  const has = (d: CalculatorInputsV14, field: string, message: string) =>
     errs(d).some((i) => i.field === field && i.message === message);
-  const warnHas = (d: CalculatorInputsV13, field: string, message: string) =>
+  const warnHas = (d: CalculatorInputsV14, field: string, message: string) =>
     warns(d).some((i) => i.field === field && i.message === message);
   // Z is registered for VAT and carries a genuine, unrelated §17.9 warning
   // (the final VAT return period's reclaim falls outside the term) — scoped
   // to this rule's own field so that warning does not make every "no warning
   // fires" assertion below vacuous.
-  const inflationWarnFields = (d: CalculatorInputsV13) =>
+  const inflationWarnFields = (d: CalculatorInputsV14) =>
     warns(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
 
   it('Z is accepted: a real allowance, a real calendar, a real base date', () => {

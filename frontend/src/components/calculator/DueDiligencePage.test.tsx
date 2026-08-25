@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import DueDiligencePage from './DueDiligencePage';
 import { runAppraisal, OCCUPATION_CONFLICT, EXISTING_AREA_CONFLICT } from '../../lib/model';
-import type { CalculatorInputsV13, DdItem } from '../../lib/model';
+import type { CalculatorInputsV14, DdItem } from '../../lib/model';
 import { captureSourceRecord } from '../../lib/conversion-defaults';
 import { ddDoc } from '../../lib/model/__fixtures__/due-diligence-docs';
 import { FIXTURE_PROJECT } from '../../lib/model/__fixtures__/investment-case-docs';
@@ -45,7 +45,7 @@ const SCHEDULE_RENDER_TIMEOUT_MS = 60_000;
 /** The item array `onChange` was handed, or a failure if it was not called. */
 function itemsFrom(onChange: ReturnType<typeof vi.fn>): DdItem[] {
   expect(onChange).toHaveBeenCalledTimes(1);
-  const partial = onChange.mock.calls[0][0] as Partial<CalculatorInputsV13>;
+  const partial = onChange.mock.calls[0][0] as Partial<CalculatorInputsV14>;
   expect(partial.due_diligence).toBeDefined();
   return partial.due_diligence!.items;
 }

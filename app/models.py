@@ -351,8 +351,12 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v13, not by this schema) -- may be any of v1 through
-    # v13. A v5+ document's `acquisition` block carries the R8 fields
+    # migrate_inputs_to_v14, not by this schema) -- may be any of v1 through
+    # v14 (a v13 document adds the R15 top-level `due_diligence` block and
+    # `cost_plan.qs`/`price_basis`, defined on `DueDiligenceInputs` /
+    # `CalculatorInputsV13`; a v14 document (R15b, spec Sec 24.8) adds
+    # `cost_plan.qs.inflation`, defined on `QsProvenance` / `CalculatorInputsV14`
+    # in the same module). A v5+ document's `acquisition` block carries the R8 fields
     # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
     # `acquisition_date`, `acquisition_tax_override_pence`,
     # `acquisition_tax_override_reason`) defined on

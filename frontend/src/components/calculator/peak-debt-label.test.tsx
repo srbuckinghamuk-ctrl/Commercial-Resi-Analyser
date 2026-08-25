@@ -5,8 +5,9 @@ import FinancePage from './FinancePage';
 import InvestorSummaryPage from './InvestorSummaryPage';
 import {
   runAppraisal, migrateV8toV9, migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13,
+  migrateV13toV14,
 } from '../../lib/model';
-import type { CalculatorInputsV13 } from '../../lib/model';
+import type { CalculatorInputsV14 } from '../../lib/model';
 import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import type { Project } from '../../types';
 
@@ -22,21 +23,22 @@ const PROJECT = {
 /**
  * A development-finance deal whose peak debt lands on a known ledger month.
  *
- * R12 Task 18b, R13 Task 18, R14 Task 14, R13b Task 15, R15 Task 13. Built as
- * a v8 document with the legacy three-package programme and handed to
- * `migrateV8toV9`, then `migrateV9toV10`, then `migrateV10toV11`, then
- * `migrateV11toV12`, then `migrateV12toV13` -- the SAME route a stored
- * appraisal now takes on load. The v8->v9 step writes a predecessor-free
- * network whose derived start is each phase's `start_offset` floor, so the
- * three windows below are unchanged and every month these tests assert on
- * still holds; the v9->v10, v10->v11, v11->v12 and v12->v13 steps are purely
- * additive (`investment_case: null`, an unchanged `refinance: null`;
- * `monitoring: null`; `unit_sales: null`; `due_diligence` seeded) and touch
- * none of them. It is written this way rather than as a hand-built network
- * so the fixture cannot drift from the migration chain it is meant to
- * mirror.
+ * R12 Task 18b, R13 Task 18, R14 Task 14, R13b Task 15, R15 Task 13, R15b
+ * Task 6. Built as a v8 document with the legacy three-package programme and
+ * handed to `migrateV8toV9`, then `migrateV9toV10`, then `migrateV10toV11`,
+ * then `migrateV11toV12`, then `migrateV12toV13`, then `migrateV13toV14` --
+ * the SAME route a stored appraisal now takes on load. The v8->v9 step
+ * writes a predecessor-free network whose derived start is each phase's
+ * `start_offset` floor, so the three windows below are unchanged and every
+ * month these tests assert on still holds; the v9->v10, v10->v11, v11->v12,
+ * v12->v13 and v13->v14 steps are purely additive (`investment_case: null`,
+ * an unchanged `refinance: null`; `monitoring: null`; `unit_sales: null`;
+ * `due_diligence` seeded; `cost_plan.qs.inflation` inert, `qs` already null
+ * on this headline-mode fixture) and touch none of them. It is written this
+ * way rather than as a hand-built network so the fixture cannot drift from
+ * the migration chain it is meant to mirror.
  */
-function anchoredInputs(anchor: string | null): CalculatorInputsV13 {
+function anchoredInputs(anchor: string | null): CalculatorInputsV14 {
   const inputs = defaultCalculatorInputsV8();
   inputs.finance.funding_source = 'development_finance';
   inputs.finance.committed_net_facility_pence = 60_000_000;
@@ -55,7 +57,7 @@ function anchoredInputs(anchor: string | null): CalculatorInputsV13 {
       statutory: { start_offset: 1, duration_months: 5, curve: { kind: 'straight_line' } },
     },
   };
-  return migrateV12toV13(migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(inputs)))));
+  return migrateV13toV14(migrateV12toV13(migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(inputs))))));
 }
 
 /** The peak-debt month is shown on four surfaces. Before this fix the Cashflow

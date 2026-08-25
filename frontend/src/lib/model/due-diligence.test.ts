@@ -12,7 +12,7 @@ import { runAppraisal } from './index';
 import { QS, computeFor, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
 import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
 import type { DdItemCode, DdRow } from './due-diligence';
-import type { AnyCalculatorInputs, CalculatorInputsV13, LenderValuation } from './finance-types';
+import type { AnyCalculatorInputs, CalculatorInputsV14, LenderValuation } from './finance-types';
 
 /** R15 spec §23. Twin of test_financial_model_due_diligence.py. */
 
@@ -256,7 +256,7 @@ const R15_FLAG_CODES = new Set([
 
 describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
   it('tax_basis goes unknown through the VAT half alone', () => {
-    const taxBasis = (doc: CalculatorInputsV13): DdRow =>
+    const taxBasis = (doc: CalculatorInputsV14): DdRow =>
       computeFor(doc).rows.find((x) => x.code === 'tax_basis')!;
 
     expect(taxBasis(ddDoc({ vat: VAT_BEARING_UNCONFIRMED })).status).toBe('unknown');

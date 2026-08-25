@@ -1,6 +1,6 @@
 """R15b spec Sec 24.3. The shared cost-plan-in-time document builders. `doc_s()`
 loads fixture S (fixtures/financial-model/s-dated-programme.json) via
-migrate_inputs_to_v13 -- never a hand-authored dict. `doc_z()` is "S plus Z's
+migrate_inputs_to_v14 -- never a hand-authored dict. `doc_z()` is "S plus Z's
 changes, and no other" (design Sec 13): a QS provenance record with a
 tender-price inflation allowance, a new `mande_fitout` phase carrying
 pkg-mande's spend, per-package price basis tags, a VAT override on
@@ -11,29 +11,33 @@ language's own naming convention for the same functions (snake_case here,
 camelCase there). Every builder returns a plain dict -- the money-plan idiom
 `tests/fixtures_due_diligence.py` and `tests/test_cost_plan.py`'s
 `_y_cost_plan_doc` already use -- and `parse()` validates it back into a
-CalculatorInputsV13 at the call site."""
+CalculatorInputsV14 at the call site.
+
+R15b Task 6 moved this module onto `migrate_inputs_to_v14` (spec Sec 24.8's
+entry-point cutover); Task 7 loads Z directly from its own fixture file
+rather than building it here by mutation."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Any
 
-from app.financial_model.migrate import migrate_inputs_to_v13
-from app.financial_model.types import CalculatorInputsV13, parse_calculator_inputs
+from app.financial_model.migrate import migrate_inputs_to_v14
+from app.financial_model.types import CalculatorInputsV14, parse_calculator_inputs
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "financial-model"
 
 
-def parse(doc: dict[str, Any]) -> CalculatorInputsV13:
+def parse(doc: dict[str, Any]) -> CalculatorInputsV14:
     parsed = parse_calculator_inputs(doc)
-    assert isinstance(parsed, CalculatorInputsV13)
+    assert isinstance(parsed, CalculatorInputsV14)
     return parsed
 
 
 def doc_s() -> dict[str, Any]:
     raw = json.loads((FIXTURE_DIR / "s-dated-programme.json").read_text(encoding="utf-8"))["inputs"]
-    v13 = migrate_inputs_to_v13(raw, None)
-    return v13.model_dump(mode="json")
+    v14 = migrate_inputs_to_v14(raw, None)
+    return v14.model_dump(mode="json")
 
 
 def doc_z() -> dict[str, Any]:

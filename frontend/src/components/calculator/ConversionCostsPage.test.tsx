@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import ConversionCostsPage from './ConversionCostsPage';
 import { runAppraisal } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV13, CostPackage, FeeLine } from '../../lib/model';
-import { defaultCalculatorInputsV13 } from '../../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV14, CostPackage, FeeLine } from '../../lib/model';
+import { defaultCalculatorInputsV14 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 import { ddDoc, QS } from '../../lib/model/__fixtures__/due-diligence-docs';
@@ -16,8 +16,8 @@ import { ddDoc, QS } from '../../lib/model/__fixtures__/due-diligence-docs';
  * 40, retained 100 -> developed 520) so the bridge-derived figure asserted
  * here (520) is the same one that suite already pins.
  */
-function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV13 {
-  const inputs = defaultCalculatorInputsV13();
+function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV14 {
+  const inputs = defaultCalculatorInputsV14();
   return {
     ...inputs,
     areas: {
@@ -84,7 +84,7 @@ describe('ConversionCostsPage — construction area basis selector', () => {
 // so a component that recomputed the contingency amount itself, instead of
 // reading the run, would render something else (or throw).
 function runWithContingencyAmount(amountPence: number): AppraisalRun {
-  const inputs = defaultCalculatorInputsV13();
+  const inputs = defaultCalculatorInputsV14();
   const run = runAppraisal(inputs);
   return {
     ...run,
@@ -113,8 +113,8 @@ function runWithContingencyAmount(amountPence: number): AppraisalRun {
 // value, so a label that happened to equal the code's human name would make
 // this test ambiguous for a reason that has nothing to do with what it is
 // checking.
-function detailedInputs(): CalculatorInputsV13 {
-  const base = defaultCalculatorInputsV13();
+function detailedInputs(): CalculatorInputsV14 {
+  const base = defaultCalculatorInputsV14();
   return {
     ...base,
     finance: { ...base.finance, funding_source: 'cash', term_months: 12 },
@@ -152,7 +152,7 @@ function detailedInputs(): CalculatorInputsV13 {
 
 describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan, never recomputes them', () => {
   it('renders the contingency amount from the run, not from its own arithmetic', () => {
-    const inputs = defaultCalculatorInputsV13();
+    const inputs = defaultCalculatorInputsV14();
     const run = runWithContingencyAmount(12_345_678);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
     expect(screen.getByText(/123,456\.78/)).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
     expect(screen.getByDisplayValue('Structure')).toBeInTheDocument();
     // And the negative half — without it, a grid rendered unconditionally passes.
     cleanup();
-    const headline: CalculatorInputsV13 = {
+    const headline: CalculatorInputsV14 = {
       ...inputs,
       cost_plan: { ...inputs.cost_plan, mode: 'headline' as const, packages: [] },
     };
@@ -216,8 +216,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   // duplicated -- and that it happens through the SAME onChange every other
   // edit on this page uses, not a second code path.
   it('offers to convert compliance allowances into a package when switching to detailed mode', () => {
-    const base = defaultCalculatorInputsV13();
-    const inputs: CalculatorInputsV13 = {
+    const base = defaultCalculatorInputsV14();
+    const inputs: CalculatorInputsV14 = {
       ...base,
       conversion_costs: {
         ...base.conversion_costs,
@@ -249,7 +249,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('switches mode without prompting when there is no compliance to convert', () => {
-    const inputs = defaultCalculatorInputsV13(); // compliance fields are 0 by default
+    const inputs = defaultCalculatorInputsV14(); // compliance fields are 0 by default
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     const confirmSpy = vi.spyOn(window, 'confirm');
@@ -263,8 +263,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('leaves the compliance fields untouched when the user declines the conversion', () => {
-    const base = defaultCalculatorInputsV13();
-    const inputs: CalculatorInputsV13 = {
+    const base = defaultCalculatorInputsV14();
+    const inputs: CalculatorInputsV14 = {
       ...base,
       conversion_costs: { ...base.conversion_costs, fire_safety_pence: 200_000 },
     };
@@ -312,7 +312,7 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 
   it('allows switching back to headline once every package is zeroed', () => {
     const inputs = detailedInputs();
-    const zeroed: CalculatorInputsV13 = {
+    const zeroed: CalculatorInputsV14 = {
       ...inputs,
       cost_plan: {
         ...inputs.cost_plan,
@@ -337,8 +337,8 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 // construction_total 4,400,000 (no compliance, no other fee lines) are
 // pinned literals so the resolved-base assertions below are falsifiable,
 // not just "some text appeared".
-function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV13 {
-  const base = defaultCalculatorInputsV13();
+function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV14 {
+  const base = defaultCalculatorInputsV14();
   return {
     ...base,
     areas: { ...base.areas, basis: 'manual' },
@@ -490,8 +490,8 @@ function unit(id: string): ProposedUnitV6 {
 
 describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (multiplied) amount (I3, fix round 1)', () => {
   it('shows the resolved amount, not the per-dwelling figure typed in', () => {
-    const base = defaultCalculatorInputsV13();
-    const inputs: CalculatorInputsV13 = {
+    const base = defaultCalculatorInputsV14();
+    const inputs: CalculatorInputsV14 = {
       ...base,
       unit_mix: { units: ['u1', 'u2', 'u3'].map(unit) },
       cost_plan: {
@@ -592,7 +592,7 @@ describe('ConversionCostsPage — per-line VAT override control (spec §17.2 rul
   });
 
   it('does not render the override control in headline mode', () => {
-    const inputs = defaultCalculatorInputsV13();
+    const inputs = defaultCalculatorInputsV14();
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText(/vat override/i)).not.toBeInTheDocument();
@@ -610,7 +610,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('shows "No QS recorded" unchecked, and the editable fields, when cost_plan.qs is set', () => {
-    const inputs: CalculatorInputsV13 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV14 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.getByLabelText('No QS recorded')).not.toBeChecked();
@@ -634,7 +634,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('checking "No QS recorded" writes qs: null', () => {
-    const inputs: CalculatorInputsV13 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV14 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
@@ -645,7 +645,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('editing the QS source writes through, leaving the other QS fields untouched', () => {
-    const inputs: CalculatorInputsV13 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV14 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
@@ -658,7 +658,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('shows the rule-8 issue text when run.validation carries it', () => {
-    const inputs: CalculatorInputsV13 = {
+    const inputs: CalculatorInputsV14 = {
       ...detailedInputs(),
       cost_plan: { ...detailedInputs().cost_plan, qs: { ...QS, source: '' } },
     };
@@ -669,7 +669,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('shows no rule-8 issue text on a valid QS record', () => {
-    const inputs: CalculatorInputsV13 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV14 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText('QS provenance needs a source.')).not.toBeInTheDocument();
@@ -749,7 +749,7 @@ describe('ConversionCostsPage — price basis coverage line (spec 23.6)', () => 
   });
 
   it('is absent in headline mode', () => {
-    const inputs = defaultCalculatorInputsV13(); // headline, no packages
+    const inputs = defaultCalculatorInputsV14(); // headline, no packages
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText(/Fixed-price coverage/)).not.toBeInTheDocument();
