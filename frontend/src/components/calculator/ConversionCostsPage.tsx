@@ -1,10 +1,11 @@
 import type {
   CalculatorInputsV14, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
-  VatOverride, RecoveryBasis, QsProvenance, PriceBasis, ValidationIssue,
+  VatOverride, RecoveryBasis, QsProvenance, PriceBasis, ValidationIssue, ProgrammeNetwork,
 } from '../../lib/model';
 import {
   COST_PACKAGE_CODES, CONTINGENCY_CLASS_NAMES, QS_STAGES, QS_STATUSES, PRICE_BASIS_VALUES,
+  isProgrammeNetwork,
 } from '../../lib/model';
 import { penceToPounds, penceToPoundsExact, humanise, formatPct } from '../../lib/format';
 
@@ -167,6 +168,50 @@ function VatOverrideControl({ label, override, onSet, onClear }: {
   );
 }
 
+/** R15b spec §24.6. One hint line above the package grid, not per row --
+ *  disabled selects already say "no phases to pick" visually; this names why. */
+const PHASE_HINT = 'Tag lines to phases once the programme is a phase network';
+
+/** R15b spec §24.6. The phase picker shared by package and fee-line rows.
+ *  `categoryDefaultPhaseId` is `programme.category_phase_ids.construction` for
+ *  a package, `.professional`/`.statutory` for a fee line by its own
+ *  category (schedule.ts's `resolvedPhaseId` uses the same lookup at
+ *  resolve time) -- the option's label names that phase so the reader sees
+ *  what "default" resolves to without cross-referencing the programme page.
+ *  `network` null or not a phase network (§18.1's two-state field) disables
+ *  the control outright rather than offering phases that cannot be reached:
+ *  a legacy programme has no phase ids for `phase_id` to name. Only ever
+ *  writes `phase_id` -- never derives or recomputes a resolved phase, which
+ *  is schedule.ts's job alone. */
+function PhasePicker({ label, phaseId, network, categoryDefaultPhaseId, onSet }: {
+  label: string;
+  phaseId: string | null;
+  network: ProgrammeNetwork | null;
+  categoryDefaultPhaseId: string | null;
+  onSet: (phaseId: string | null) => void;
+}) {
+  const taggablePhases = network ? network.phases.filter((p) => p.duration_months >= 1) : [];
+  const defaultPhase = network
+    ? network.phases.find((p) => p.id === categoryDefaultPhaseId) ?? null
+    : null;
+  return (
+    <select
+      aria-label={label}
+      disabled={network === null}
+      value={network ? (phaseId ?? '') : ''}
+      onChange={(e) => onSet(e.target.value === '' ? null : e.target.value)}
+      style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+    >
+      <option value="">
+        {defaultPhase ? `Category default — ${defaultPhase.label}` : 'Category default'}
+      </option>
+      {taggablePhases.map((p) => (
+        <option key={p.id} value={p.id}>{`${p.label} (${p.id})`}</option>
+      ))}
+    </select>
+  );
+}
+
 function newPackage(): CostPackage {
   return {
     id: crypto.randomUUID(),
@@ -186,6 +231,14 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
   const costs = inputs.conversion_costs;
   const costPlan = inputs.cost_plan;
   const result = run.metrics.cost_plan;
+  // R15b spec §24.6. Same "null, or a legacy shape that fails the network
+  // guard, both mean no phase network" read package-timing.ts and schedule.ts
+  // already use (`resolvedPhaseId` / `computePackageTiming`) -- the phase
+  // picker's null case must match the engine's, or the control would offer
+  // phases the engine never resolves against.
+  const network = inputs.programme != null && isProgrammeNetwork(inputs.programme)
+    ? inputs.programme
+    : null;
   // I3 (fix round 1). Read once here (a direct property access, not a
   // computation) so the per_dwelling fee note below can say how many units
   // the engine multiplied by, without duplicating the engine's own
@@ -439,6 +492,16 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                 onClear={() => updateFeeLine(fee.id, { vat_override: null })}
               />
             )}
+            {/* R15b spec §24.6. Same control the package grid uses below --
+                category default named from `programme.category_phase_ids`
+                by THIS line's own category (professional/statutory). */}
+            <PhasePicker
+              label="Fee line phase"
+              phaseId={fee.phase_id}
+              network={network}
+              categoryDefaultPhaseId={network ? network.category_phase_ids[fee.category] : null}
+              onSet={(phaseId) => updateFeeLine(fee.id, { phase_id: phaseId })}
+            />
           </div>
         );
       })}
@@ -568,6 +631,32 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                     style={{ padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                   />
                 </div>
+                {/* R15b spec §24.3/§24.6. Same null/seed shape as "No QS
+                    recorded" above: unchecking (allowance now wanted) seeds
+                    `{ annual_pct: 0 }`, never a value the user has not typed;
+                    checking (no allowance) clears back to `null`, never a
+                    zeroed-but-present record. */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#94a3b8', fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="No inflation allowance"
+                    checked={costPlan.qs.inflation === null}
+                    onChange={(e) => updateQs({ inflation: e.target.checked ? null : { annual_pct: 0 } })}
+                  />
+                  No inflation allowance
+                </label>
+                {costPlan.qs.inflation !== null && (
+                  <div style={{ position: 'relative', width: 90 }}>
+                    <input
+                      type="number"
+                      aria-label="Tender-price inflation % p.a."
+                      value={costPlan.qs.inflation.annual_pct}
+                      onChange={(e) => updateQs({ inflation: { annual_pct: Number(e.target.value) } })}
+                      style={{ width: '100%', padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+                    />
+                    <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>%</span>
+                  </div>
+                )}
               </div>
             )}
             {qsIssues.map((issue, i) => (
@@ -585,6 +674,12 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
             Compliance allowances (fire safety, sound insulation, Part L) are priced within a
             package here — typically &quot;Fire, acoustic &amp; thermal&quot; — not as separate figures.
           </p>
+          {/* R15b spec §24.6. Rendered ONCE above the grid, not per row --
+              every row's select is already visibly disabled, so a repeated
+              hint would only restate that fact once per package. */}
+          {network === null && (
+            <p style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>{PHASE_HINT}</p>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
             {costPlan.packages.map((pkg) => (
               <div key={pkg.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -672,6 +767,30 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
                   onSet={(o) => updatePackage(pkg.id, { vat_override: o })}
                   onClear={() => updatePackage(pkg.id, { vat_override: null })}
                 />
+                {/* R15b spec §24.6. Phase tag (write side) plus the three
+                    timing cells (read side, spec §24.2/§24.3) -- window,
+                    midpoint, tender-price inflation, all read verbatim off
+                    this package's line in `run.metrics.cost_plan.packages`,
+                    never recomputed here. `toFixed` on `midpoint_month` is
+                    formatting only: the engine already publishes the exact
+                    12-dp figure (Task 1/2), this only controls the string. */}
+                <PhasePicker
+                  label="Package phase"
+                  phaseId={pkg.phase_id}
+                  network={network}
+                  categoryDefaultPhaseId={network ? network.category_phase_ids.construction : null}
+                  onSet={(phaseId) => updatePackage(pkg.id, { phase_id: phaseId })}
+                />
+                {(() => {
+                  const line = result.packages.find((p) => p.id === pkg.id);
+                  return (
+                    <div style={{ display: 'flex', gap: 10, color: '#64748b', fontSize: 12 }}>
+                      <span>{line ? `${line.start_month}–${line.finish_month}` : '—'}</span>
+                      <span>{line ? line.midpoint_month.toFixed(2) : '—'}</span>
+                      <span>{line ? penceToPoundsExact(line.inflation_pence) : '—'}</span>
+                    </div>
+                  );
+                })()}
                 <button
                   onClick={() => removePackage(pkg.id)}
                   style={{ padding: '4px 10px', background: '#1e293b', border: '1px solid #7f1d1d', borderRadius: 4, color: '#f87171', fontSize: 13, cursor: 'pointer' }}
@@ -697,7 +816,11 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
             <p style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
               {`Fixed-price coverage ${formatPct(result.price_basis.fixed_price_coverage_pct, 2)} · `
                 + `provisional sums ${formatPct(result.price_basis.provisional_sums_pct, 2)} · `
-                + `unclassified ${penceToPounds(result.price_basis.unclassified_pence)}`}
+                + `unclassified ${penceToPounds(result.price_basis.unclassified_pence)} · `
+                /* R15b spec §24.3/§24.6. Both figures republished on
+                   CostPlanResult verbatim -- no division performed here. */
+                + `inflation to spend midpoints ${penceToPoundsExact(result.inflation_total_pence)} `
+                + `(${formatPct(result.inflation_pct_of_base_build, 2)} of base build)`}
             </p>
           )}
         </>

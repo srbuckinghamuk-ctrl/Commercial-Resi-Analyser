@@ -1,12 +1,27 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import ConversionCostsPage from './ConversionCostsPage';
-import { runAppraisal } from '../../lib/model';
+import { runAppraisal, migrateInputsToV14 } from '../../lib/model';
 import type { AppraisalRun, CalculatorInputsV14, CostPackage, FeeLine } from '../../lib/model';
 import { defaultCalculatorInputsV14 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 import { ddDoc, QS } from '../../lib/model/__fixtures__/due-diligence-docs';
+import { docZ, docZNoAllowance } from '../../lib/model/__fixtures__/cost-plan-in-time-docs';
+
+// R15b Task 9 (spec §24.6). Fixture Q (fixtures/financial-model/q-detailed-cost-plan.json):
+// detailed mode, `programme: null` -- the auto-path document the phase picker
+// must show disabled on. Loaded the same way package-timing.test.ts's `load()`
+// loads it: raw JSON through `migrateInputsToV14`, never a hand-authored object.
+const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+function docQ(): CalculatorInputsV14 {
+  const raw = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'q-detailed-cost-plan.json'), 'utf-8')) as {
+    inputs: Record<string, unknown>;
+  };
+  return migrateInputsToV14(raw.inputs);
+}
 
 /**
  * R9 Task 10 fix round 1. The riskiest wiring point this page added: which
@@ -743,8 +758,13 @@ describe('ConversionCostsPage — price basis coverage line (spec 23.6)', () => 
     const inputs = ddDoc();
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    // R15b Task 9 (spec §24.6). ddDoc()'s QS carries no inflation allowance
+    // (QS.inflation is null, __fixtures__/due-diligence-docs.ts), so the
+    // appended clause is £0.00 at 0.00% of base build -- the coverage line's
+    // OWN suffix, not a re-derivation of the figures already asserted above.
     expect(screen.getByText(
-      'Fixed-price coverage 46.15% · provisional sums 30.77% · unclassified £60,000',
+      'Fixed-price coverage 46.15% · provisional sums 30.77% · unclassified £60,000 · '
+      + 'inflation to spend midpoints £0.00 (0.00% of base build)',
     )).toBeInTheDocument();
   });
 
@@ -753,5 +773,206 @@ describe('ConversionCostsPage — price basis coverage line (spec 23.6)', () => 
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText(/Fixed-price coverage/)).not.toBeInTheDocument();
+  });
+
+  // R15b Task 9 (spec §24.6). `inflation_total_pence` / `inflation_pct_of_base_build`
+  // are read verbatim off `run.metrics.cost_plan` -- fixture Z's hand-derived
+  // worksheet figures (cost-plan.test.ts's own §24.3 describe block), never
+  // recomputed here.
+  it('appends the inflation clause on fixture Z', () => {
+    const inputs = docZ();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+    const line = screen.getByText(/inflation to spend midpoints/);
+    expect(line.textContent).toContain('inflation to spend midpoints £54,967.22 (8.33% of base build)');
+  });
+});
+
+// R15b Task 9 (spec §24.6). The phase picker on packages and fee lines.
+// Fixture Z's programme is a phase network with 15 phases; two carry
+// duration_months 0 (`practical_completion`, `maturity_tail`) and must NOT be
+// offered as a tag target -- a zero-duration phase has no window to place a
+// spend midpoint inside. `category_phase_ids` names 'construction' (label
+// "Main construction") as every package's category default, 'design'
+// ("Technical design") as every professional fee's, and 'conditions'
+// ("Discharge of conditions") as every statutory fee's.
+describe('ConversionCostsPage — package/fee-line phase picker (spec 24.6)', () => {
+  it('lists the category default plus every duration >= 1 phase, excluding the two milestones', () => {
+    const inputs = docZ();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package phase' });
+    expect(selects).toHaveLength(inputs.cost_plan.packages.length);
+    const options = within(selects[0]).getAllByRole('option').map((o) => o.textContent);
+    expect(options[0]).toBe('Category default — Main construction');
+    expect(options).toContain('Main construction (construction)');
+    expect(options).toContain('Enabling works and strip-out (strip_out)');
+    expect(options).toContain('M&E fit-out (mande_fitout)');
+    expect(options.some((t) => t?.includes('practical_completion'))).toBe(false);
+    expect(options.some((t) => t?.includes('maturity_tail'))).toBe(false);
+    expect(options).toHaveLength(14); // 1 default + 13 phases with duration_months >= 1
+  });
+
+  it('choosing a phase on a package row writes phase_id on that package only', () => {
+    const inputs = docZ();
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package phase' });
+    const structureIndex = inputs.cost_plan.packages.findIndex((p) => p.id === 'pkg-structure');
+    fireEvent.change(selects[structureIndex], { target: { value: 'mande_fitout' } });
+
+    const updated = (onChange.mock.calls[0][0].cost_plan.packages as CostPackage[])
+      .find((p) => p.id === 'pkg-structure')!;
+    expect(updated.phase_id).toBe('mande_fitout');
+    // Every other package is untouched.
+    const others = (onChange.mock.calls[0][0].cost_plan.packages as CostPackage[])
+      .filter((p) => p.id !== 'pkg-structure');
+    others.forEach((p, i) => {
+      const original = inputs.cost_plan.packages.filter((pp) => pp.id !== 'pkg-structure')[i];
+      expect(p).toEqual(original);
+    });
+  });
+
+  it('choosing the category default on a package row writes phase_id: null', () => {
+    const inputs = docZ();
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Package phase' });
+    const enablingIndex = inputs.cost_plan.packages.findIndex((p) => p.id === 'pkg-enabling');
+    fireEvent.change(selects[enablingIndex], { target: { value: '' } });
+
+    const updated = (onChange.mock.calls[0][0].cost_plan.packages as CostPackage[])
+      .find((p) => p.id === 'pkg-enabling')!;
+    expect(updated.phase_id).toBeNull();
+  });
+
+  it('fee-line rows carry the same "Fee line phase" control, category-scoped default', () => {
+    const inputs = docZ();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Fee line phase' });
+    expect(selects).toHaveLength(inputs.cost_plan.fee_lines.length);
+    const architectIndex = inputs.cost_plan.fee_lines.findIndex((f) => f.id === 'fee-architect');
+    const architectOptions = within(selects[architectIndex]).getAllByRole('option').map((o) => o.textContent);
+    expect(architectOptions[0]).toBe('Category default — Technical design');
+
+    const priorApprovalIndex = inputs.cost_plan.fee_lines.findIndex((f) => f.id === 'fee-prior-approval');
+    const priorApprovalOptions = within(selects[priorApprovalIndex]).getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(priorApprovalOptions[0]).toBe('Category default — Discharge of conditions');
+  });
+
+  it('choosing a phase on a fee-line row writes phase_id on that fee line only', () => {
+    const inputs = docZ();
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Fee line phase' });
+    const architectIndex = inputs.cost_plan.fee_lines.findIndex((f) => f.id === 'fee-architect');
+    fireEvent.change(selects[architectIndex], { target: { value: 'design' } });
+
+    const updated = (onChange.mock.calls[0][0].cost_plan.fee_lines as FeeLine[])
+      .find((f) => f.id === 'fee-architect')!;
+    expect(updated.phase_id).toBe('design');
+  });
+
+  it('choosing the category default on a fee-line row writes phase_id: null', () => {
+    const inputs = docZ();
+    inputs.cost_plan.fee_lines.find((f) => f.id === 'fee-prior-approval')!.phase_id = 'planning';
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    const selects = screen.getAllByRole('combobox', { name: 'Fee line phase' });
+    const priorApprovalIndex = inputs.cost_plan.fee_lines.findIndex((f) => f.id === 'fee-prior-approval');
+    fireEvent.change(selects[priorApprovalIndex], { target: { value: '' } });
+
+    const updated = (onChange.mock.calls[0][0].cost_plan.fee_lines as FeeLine[])
+      .find((f) => f.id === 'fee-prior-approval')!;
+    expect(updated.phase_id).toBeNull();
+  });
+
+  // Fixture Q: detailed mode, `programme: null` -- the auto path. Both
+  // controls must be disabled rather than silently offering phases that do
+  // not exist, and the hint renders exactly once above the grid, not per row.
+  it('disables every phase select and shows the hint exactly once on an auto-path document (Q)', () => {
+    const inputs = docQ();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    const packageSelects = screen.getAllByRole('combobox', { name: 'Package phase' });
+    const feeSelects = screen.getAllByRole('combobox', { name: 'Fee line phase' });
+    expect(packageSelects.length).toBeGreaterThan(0);
+    expect(feeSelects.length).toBeGreaterThan(0);
+    [...packageSelects, ...feeSelects].forEach((s) => expect(s).toBeDisabled());
+    expect(screen.getAllByText('Tag lines to phases once the programme is a phase network'))
+      .toHaveLength(1);
+  });
+});
+
+// R15b Task 9 (spec §24.6). Timing cells: three read-only figures per package
+// row, read from `run.metrics.cost_plan.packages`, never recomputed.
+// Fixture Z's pkg-enabling is on `strip_out` (window 6-8, midpoint 6.5,
+// inflation 375,460p) -- cost-plan.test.ts's own §24.3 describe block pins
+// the same figures from `computeCostPlan` directly.
+describe('ConversionCostsPage — package timing cells (spec 24.6)', () => {
+  it('prints the window, midpoint and inflation for pkg-enabling on fixture Z', () => {
+    const inputs = docZ();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    expect(screen.getByText('6–8')).toBeInTheDocument();
+    expect(screen.getByText('6.50')).toBeInTheDocument();
+    expect(screen.getByText('£3,754.60')).toBeInTheDocument();
+  });
+});
+
+// R15b Task 9 (spec §24.6). The QS card's inflation control. `docZ()` carries
+// `annual_pct: 6`; `docZNoAllowance()` is the same document with the
+// allowance cleared to `null` (__fixtures__/cost-plan-in-time-docs.ts).
+describe('ConversionCostsPage — QS inflation allowance control (spec 24.6)', () => {
+  it('on fixture Z (allowance present): unchecked, with the % input at 6', () => {
+    const inputs = docZ();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    expect(screen.getByLabelText('No inflation allowance')).not.toBeChecked();
+    expect(screen.getByLabelText('Tender-price inflation % p.a.')).toHaveValue(6);
+  });
+
+  it('checking "No inflation allowance" on fixture Z writes inflation: null', () => {
+    const inputs = docZ();
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    fireEvent.click(screen.getByLabelText('No inflation allowance'));
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: { ...inputs.cost_plan, qs: { ...inputs.cost_plan.qs, inflation: null } },
+    });
+  });
+
+  it('on fixture Z with no allowance: checked, and no % input shown', () => {
+    const inputs = docZNoAllowance();
+    const run = runAppraisal(inputs);
+    render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
+
+    expect(screen.getByLabelText('No inflation allowance')).toBeChecked();
+    expect(screen.queryByLabelText('Tender-price inflation % p.a.')).not.toBeInTheDocument();
+  });
+
+  it('unchecking "No inflation allowance" on the no-allowance document seeds { annual_pct: 0 }', () => {
+    const inputs = docZNoAllowance();
+    const onChange = vi.fn();
+    render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
+
+    fireEvent.click(screen.getByLabelText('No inflation allowance'));
+
+    expect(onChange).toHaveBeenCalledWith({
+      cost_plan: { ...inputs.cost_plan, qs: { ...inputs.cost_plan.qs, inflation: { annual_pct: 0 } } },
+    });
   });
 });
