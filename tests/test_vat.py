@@ -23,12 +23,15 @@ from app.financial_model.validation import validate_inputs
 from app.financial_model.vat import (
     DEFAULT_VAT,
     VAT_CHARGE_CATEGORIES,
+    VatChargeLine,
+    VatResult,
     chargeable_consideration_pence,
     compute_vat,
     default_vat_treatments,
     is_purchase_vat_chargeable,
     resolve_vat_treatment,
     spread_pro_rata,
+    vat_basis_confirmed,
     vat_return_periods,
 )
 
@@ -871,3 +874,69 @@ def test_the_real_position_is_expressible_exactly_with_nothing_new_in_the_schema
     assert run.metrics.acquisition_tax_pence > without.metrics.acquisition_tax_pence
     # The whole amount lands in the irrecoverable total.
     assert run.schedule.vat.total_irrecoverable_pence >= 10_000_000
+
+
+# --- R15 Task 3 fix round 1: vat_basis_confirmed (spec Sec 17.10) -----------
+#
+# The Python twin of vatBasisGate, which vat.test.ts already pins over four
+# cases (bearing-and-unconfirmed, unconfirmed-but-charging-nothing,
+# unregistered, and the purchase leg). Fixture Y rates every category at 0%,
+# so nothing running through the due-diligence derivation can tell this
+# predicate apart from `return True` -- these four hand-built results can.
+
+
+def _charge(evidence_status: str, vat_pence: int) -> VatChargeLine:
+    return VatChargeLine(
+        id="category:construction", category="construction", label="Construction",
+        source="category", net_base_pence=10_000_000, rate_pct=20.0, recoverable_pct=0.0,
+        recovery_basis="unconfirmed", evidence_status=evidence_status,  # type: ignore[arg-type]
+        vat_pence=vat_pence, recoverable_pence=0, irrecoverable_pence=vat_pence,
+    )
+
+
+def _vat_result(
+    charges: list[VatChargeLine],
+    purchase_vat_chargeable: bool = False,
+    purchase_evidence_status: str = "confirmed",
+) -> VatResult:
+    return VatResult(
+        registered=True, charges=charges, periods=[], months=[],
+        total_input_vat_pence=sum(c.vat_pence for c in charges),
+        total_recoverable_pence=0,
+        total_irrecoverable_pence=sum(c.vat_pence for c in charges),
+        total_reclaimed_pence=0, receivable_at_maturity_pence=0,
+        peak_carry_pence=0, peak_carry_month=None, purchase_vat_pence=0,
+        purchase_vat_chargeable=purchase_vat_chargeable,
+        purchase_evidence_status=purchase_evidence_status,  # type: ignore[arg-type]
+    )
+
+
+def test_vat_basis_gates_on_an_unconfirmed_row_that_actually_bears_vat():
+    assert vat_basis_confirmed(_vat_result([_charge("unconfirmed", 2_000_000)])) is False
+
+
+def test_vat_basis_does_not_gate_once_the_bearing_row_is_confirmed():
+    assert vat_basis_confirmed(_vat_result([_charge("confirmed", 2_000_000)])) is True
+
+
+def test_vat_basis_gates_on_an_unconfirmed_purchase_leg_when_purchase_vat_is_chargeable():
+    """The SECOND disjunct: purchase.evidence_status is structurally separate
+    from any treatments row's, so a document with no unconfirmed charge line at
+    all still gates when the purchase leg is unevidenced (ruling R42)."""
+    assert vat_basis_confirmed(_vat_result(
+        [_charge("confirmed", 2_000_000)],
+        purchase_vat_chargeable=True, purchase_evidence_status="unconfirmed",
+    )) is False
+    # And the same document with purchase VAT NOT chargeable does not gate --
+    # an unevidenced fact about a charge nobody is making is not material.
+    assert vat_basis_confirmed(_vat_result(
+        [_charge("confirmed", 2_000_000)],
+        purchase_vat_chargeable=False, purchase_evidence_status="unconfirmed",
+    )) is True
+
+
+def test_vat_basis_does_not_gate_on_an_unconfirmed_row_that_charges_nothing():
+    """"Material" means the category actually bears VAT. Without the
+    `vat_pence != 0` conjunct this returns False, since every migrated
+    treatments row is `unconfirmed` and every fixture would gate."""
+    assert vat_basis_confirmed(_vat_result([_charge("unconfirmed", 0)])) is True

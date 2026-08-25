@@ -67,6 +67,10 @@ def dd_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV13:
     equity_status: str          -- e1's evidence_status
     lender_valuation: dict      -- the lender_valuation block
     requires_confirmation: bool -- finance.requires_confirmation
+    vat: dict                   -- a PATCH onto the vat block: top-level keys
+                                   are merged, and `treatment_patch` is a
+                                   {category: {field: value}} map applied to
+                                   the matching treatments rows
     qs: None | dict             -- cost_plan.qs
     price_basis: {package_id: str | None}
     mode: 'headline'            -- headline mode AND no packages, as the Costs
@@ -132,6 +136,14 @@ def dd_doc(overrides: dict[str, Any] | None = None) -> CalculatorInputsV13:
         raw["lender_valuation"] = copy.deepcopy(o["lender_valuation"])
     if "requires_confirmation" in o:
         raw["finance"]["requires_confirmation"] = o["requires_confirmation"]
+    if "vat" in o:
+        patch = dict(o["vat"])
+        treatment_patch = patch.pop("treatment_patch", {})
+        raw["vat"].update(patch)
+        for category, fields in treatment_patch.items():
+            for treatment in raw["vat"]["treatments"]:
+                if treatment["category"] == category:
+                    treatment.update(fields)
 
     if "qs" in o:
         raw["cost_plan"]["qs"] = copy.deepcopy(o["qs"])

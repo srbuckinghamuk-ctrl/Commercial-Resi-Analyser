@@ -1,9 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES, monthsBetween } from './due-diligence';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES, constructionStartMonth, dueDiligenceFlags,
+  monthsBetween,
+} from './due-diligence';
 import { migrateInputsToV12 } from './migrate';
+import { buildSchedule } from './schedule';
+import { runAppraisal } from './index';
 import { QS, computeFor, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
 import type { DdItemCode, DdRow } from './due-diligence';
-import type { LenderValuation } from './finance-types';
+import type { AnyCalculatorInputs, CalculatorInputsV13, LenderValuation } from './finance-types';
 
 /** R15 spec §23. Twin of test_financial_model_due_diligence.py. */
 
@@ -209,5 +216,89 @@ describe('the due-diligence derivation (§23.3-§23.4)', () => {
     expect(r.totals.entered_unknown_count).toBe(23);
     expect(r.source_record).toBeNull();
     expect(r.source_conflicts).toEqual([]);
+  });
+});
+
+// --- Fix round 1: the three arms the fixed test list above did not reach -----
+
+/** Registered, with construction rated 20% and its treatments row left
+ *  `unconfirmed` (fixture Y's default) — the minimal VAT setting that makes a
+ *  charge line BEAR VAT on an unevidenced basis, so `vatBasisGate` is false.
+ *  Fixture Y itself rates every category 0%, so the `tax_basis` row's VAT half
+ *  is otherwise indistinguishable from a constant true. */
+const VAT_BEARING_UNCONFIRMED = {
+  registered: true, treatmentPatch: { construction: { rate_pct: 20 } },
+};
+
+describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
+  it('tax_basis goes unknown through the VAT half alone', () => {
+    const taxBasis = (doc: CalculatorInputsV13): DdRow =>
+      computeFor(doc).rows.find((x) => x.code === 'tax_basis')!;
+
+    expect(taxBasis(ddDoc({ vat: VAT_BEARING_UNCONFIRMED })).status).toBe('unknown');
+    // The jurisdiction half is untouched on both arms, so confirming the SAME
+    // bearing row's evidence — and nothing else — restores green. Without
+    // this, `registered: true` alone could be what moved the row.
+    expect(taxBasis(ddDoc({
+      vat: {
+        ...VAT_BEARING_UNCONFIRMED,
+        treatmentPatch: { construction: { rate_pct: 20, evidence_status: 'confirmed' } },
+      },
+    })).status).toBe('green');
+  });
+
+  it('the flag table on fixture Y is exactly five flags', () => {
+    const doc = ddDoc();
+    const run = runAppraisal(doc);
+    const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+    expect(flags.map((f) => [f.code, f.severity, f.month, f.amount_pence, f.message])).toEqual([
+      ['due_diligence_unknown', 'amber', null, null,
+        'due diligence: 3 of 24 entered items unknown - unknown is never treated as green'],
+      ['source_conflict', 'red', null, null,
+        'source conflict: the listing records the property as occupied; vacant possession is '
+        + 'marked green - evidence the surrender or correct the status'],
+      ['source_conflict', 'red', null, null,
+        'source conflict: the listing floor area and the entered existing GIA differ by more '
+        + 'than 25%'],
+      ['consent_expires_before_start', 'red', 2, null,
+        'planning consent lapses at month 2, before construction starts at month 4'],
+      ['provisional_sums_present', 'amber', null, 8_000_000,
+        'provisional sums are present in the cost plan: 8000000p'],
+    ]);
+  });
+
+  it('the seed twin raises the unknown flag and nothing else', () => {
+    // No source record, no consent expiry and no price basis, so four of the
+    // five arms above must fall silent rather than fire on absent data.
+    const doc = ddDoc({ seed: true });
+    const run = runAppraisal(doc);
+    const flags = dueDiligenceFlags(computeFor(doc), run.metrics.cost_plan);
+    expect(flags.map((f) => [f.code, f.severity, f.month, f.amount_pence, f.message])).toEqual([
+      ['due_diligence_unknown', 'amber', null, null,
+        'due diligence: 23 of 23 entered items unknown - unknown is never treated as green'],
+    ]);
+  });
+
+  it('constructionStartMonth reads the legacy packages arm', () => {
+    // Fixture H is the R3a explicit-programme document: its `programme` carries
+    // `packages`, not `phases`, so it is the only route into
+    // constructionStartMonth's legacy branch.
+    //
+    // It is used AS STORED, not migrated: migrateV8toV9 converts the legacy
+    // three-package block into a precedence network, so a migrated H would take
+    // the network arm and leave this branch as unreachable as it was before
+    // this test. Running the stored document directly is exactly how
+    // golden-fixtures.test.ts runs the pre-v9 corpus, and it is the shape the
+    // legacy arm exists to serve.
+    //
+    // 1 is H's own `packages.construction.start_offset`, written as a literal —
+    // and its professional (2) and statutory (4) offsets differ, so reading the
+    // wrong package fails here rather than passing by coincidence.
+    const doc = JSON.parse(
+      readFileSync(resolve(__dirname, '../../../../fixtures/financial-model/h-programme-scurve.json'), 'utf-8'),
+    ) as { inputs: AnyCalculatorInputs };
+    const programme = (doc.inputs as unknown as { programme: Record<string, unknown> }).programme;
+    expect('phases' in programme).toBe(false);
+    expect(constructionStartMonth(doc.inputs, buildSchedule(doc.inputs))).toBe(1);
   });
 });

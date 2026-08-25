@@ -1,12 +1,19 @@
 """R15 spec Sec 23. Twin of due-diligence.test.ts."""
+import json
+
+from app.financial_model import run_appraisal
 from app.financial_model.due_diligence import (
     DD_CATALOGUE,
     DERIVED_CODES,
     ENTERED_CODES,
+    construction_start_month,
+    due_diligence_flags,
     months_between,
 )
+from app.financial_model.schedule import build_schedule
+from app.financial_model.types import parse_calculator_inputs
 
-from .fixtures_due_diligence import QS, compute, dd_doc, raw_y_as_v12
+from .fixtures_due_diligence import FIXTURE_DIR, QS, compute, dd_doc, raw_y_as_v12
 
 # The literal table BOTH test files carry (spec Sec 23.2). A relabelled or
 # reordered entry fails here and in due-diligence.test.ts alike.
@@ -144,3 +151,84 @@ def test_pre_v13_document_is_read_as_the_seed():
     v12 = migrate_inputs_to_v12(raw_y_as_v12(), None)
     r = compute(v12)
     assert r.totals.entered_unknown_count == 23 and r.source_record is None and r.source_conflicts == []
+
+
+# --- Fix round 1: the three arms the fixed test list above did not reach -----
+
+#: Registered, with construction rated 20% and its treatments row left
+#: `unconfirmed` (fixture Y's default) -- the minimal VAT setting that makes a
+#: charge line BEAR VAT on an unevidenced basis, so vat_basis_confirmed is
+#: False. Fixture Y itself rates every category 0%, so the tax_basis row's VAT
+#: half is otherwise indistinguishable from a constant True.
+VAT_BEARING_UNCONFIRMED = {
+    "registered": True, "treatment_patch": {"construction": {"rate_pct": 20}},
+}
+
+
+def test_tax_basis_goes_unknown_through_the_vat_half_alone():
+    def tax_basis(doc):
+        return next(x for x in compute(doc).rows if x.code == "tax_basis")
+
+    unconfirmed = tax_basis(dd_doc({"vat": VAT_BEARING_UNCONFIRMED}))
+    assert unconfirmed.status == "unknown"
+    # The jurisdiction half is untouched on both arms, so confirming the SAME
+    # bearing row's evidence -- and nothing else -- restores green. Without
+    # this, `registered: True` alone could be what moved the row.
+    confirmed = tax_basis(dd_doc({"vat": {
+        **VAT_BEARING_UNCONFIRMED,
+        "treatment_patch": {"construction": {"rate_pct": 20, "evidence_status": "confirmed"}},
+    }}))
+    assert confirmed.status == "green"
+
+
+def test_flag_table_on_fixture_y_is_exactly_five_flags():
+    doc = dd_doc()
+    run = run_appraisal(doc)
+    flags = due_diligence_flags(compute(doc), run.metrics.cost_plan)
+    assert [(f.code, f.severity, f.month, f.amount_pence, f.message) for f in flags] == [
+        ("due_diligence_unknown", "amber", None, None,
+         "due diligence: 3 of 24 entered items unknown - unknown is never treated as green"),
+        ("source_conflict", "red", None, None,
+         "source conflict: the listing records the property as occupied; vacant possession is "
+         "marked green - evidence the surrender or correct the status"),
+        ("source_conflict", "red", None, None,
+         "source conflict: the listing floor area and the entered existing GIA differ by more "
+         "than 25%"),
+        ("consent_expires_before_start", "red", 2, None,
+         "planning consent lapses at month 2, before construction starts at month 4"),
+        ("provisional_sums_present", "amber", None, 8_000_000,
+         "provisional sums are present in the cost plan: 8000000p"),
+    ]
+
+
+def test_the_seed_twin_raises_the_unknown_flag_and_nothing_else():
+    """No source record, no consent expiry and no price basis, so four of the
+    five arms above must fall silent rather than fire on absent data."""
+    doc = dd_doc({"seed": True})
+    run = run_appraisal(doc)
+    flags = due_diligence_flags(compute(doc), run.metrics.cost_plan)
+    assert [(f.code, f.severity, f.month, f.amount_pence, f.message) for f in flags] == [
+        ("due_diligence_unknown", "amber", None, None,
+         "due diligence: 23 of 23 entered items unknown - unknown is never treated as green"),
+    ]
+
+
+def test_construction_start_reads_the_legacy_packages_arm():
+    """Fixture H is the R3a explicit-programme document: its `programme` carries
+    `packages`, not `phases`, so it is the only route into
+    construction_start_month's legacy branch.
+
+    It is parsed NATIVELY, not migrated: migrate_v8_to_v9 converts the legacy
+    three-package block into a precedence network, so a migrated H would take
+    the network arm and leave this branch as unreachable as it was before this
+    test. Parsing natively is exactly how test_golden_fixture_parity runs the
+    pre-v9 corpus, and it is the shape the legacy arm exists to serve.
+
+    1 is H's own `packages.construction.start_offset`, written as a literal --
+    and its professional (2) and statutory (4) offsets differ, so reading the
+    wrong package fails here rather than passing by coincidence."""
+    doc = parse_calculator_inputs(
+        json.loads((FIXTURE_DIR / "h-programme-scurve.json").read_text(encoding="utf-8"))["inputs"],
+    )
+    assert not hasattr(doc.programme, "phases")
+    assert construction_start_month(doc, build_schedule(doc)) == 1

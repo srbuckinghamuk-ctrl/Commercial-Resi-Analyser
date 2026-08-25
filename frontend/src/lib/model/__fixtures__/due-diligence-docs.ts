@@ -85,6 +85,13 @@ export interface DdDocOverrides {
   equityStatus?: string;
   lenderValuation?: LenderValuation;
   requiresConfirmation?: boolean;
+  /** A PATCH onto the vat block: top-level keys are merged, and
+   *  `treatmentPatch` is a `{ category: { field: value } }` map applied to the
+   *  matching treatments rows. */
+  vat?: {
+    registered?: boolean;
+    treatmentPatch?: Record<string, Record<string, unknown>>;
+  };
   qs?: QsProvenance | null;
   priceBasis?: Record<string, PriceBasis | null>;
   /** Headline mode AND no packages, as the Costs page's own mode switch
@@ -165,6 +172,25 @@ export function ddDoc(overrides: DdDocOverrides = {}): CalculatorInputsV13 {
   if (o.lenderValuation !== undefined) raw.lender_valuation = { ...o.lenderValuation };
   if (o.requiresConfirmation !== undefined) {
     (raw.finance as Record<string, unknown>).requires_confirmation = o.requiresConfirmation;
+  }
+  if (o.vat !== undefined) {
+    const patch: Record<string, unknown> = { ...o.vat };
+    delete patch.treatmentPatch;
+    const vat = raw.vat as { treatments: Array<Record<string, unknown>> } & Record<string, unknown>;
+    Object.assign(vat, patch);
+    // §17.2's single-accessor guard is about RESOLVING a treatment for a
+    // charge; this is a fixture builder WRITING the raw input block, the same
+    // write the migration and the defaults do (the rule's own message exempts
+    // an ObjectExpression write for exactly that reason). Nothing here reads a
+    // resolved rate, and this module is imported only by `.test.ts` files, so
+    // the narrow per-site exemption the rule's message sanctions is used rather
+    // than a file-wide allowlist entry.
+    for (const [category, fields] of Object.entries(o.vat.treatmentPatch ?? {})) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const treatment of vat.treatments) {
+        if (treatment.category === category) Object.assign(treatment, fields);
+      }
+    }
   }
 
   if ('qs' in o) costPlan.qs = o.qs == null ? null : { ...o.qs };
