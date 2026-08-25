@@ -4153,6 +4153,15 @@ untouched by either anchor swap. A resolved month earlier than the facility's
 own draw schedule changes WHICH ledger-level flag the run carries, not whether
 `senior_breakeven_pence` exists.
 
+Controller ruling (task 9 review): a further pair anchoring BOTH tranches to
+`strip_out` (`+0`/`+1` → resolved 6 and 7, both before the last draw at month
+13, so `max(resolved) = 7`) proves the unsolvable guard genuinely live on the
+resolved months — `senior_breakeven_pence` is `None` with a
+`senior_breakeven_unsolvable` flag, where the pre-fix guard read
+`max(month_offset) = max(20, 21) = 21` and stayed "solvable" — with the same
+pair anchored to `building_control` (`+0`/`+1` → resolved 15 and 16, both
+after the last draw) as the solvable negative control.
+
 ### 20.4 Fixture W — monitoring on site (`fixtures/financial-model/w-monitoring-on-site.json`)
 
 **Purpose:** the release's golden case for §20.2's statement and its

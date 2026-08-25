@@ -411,6 +411,42 @@ def test_reading_the_resolved_month_changes_which_anchor_disturbs_the_facility_n
     assert not any(f.code == "senior_breakeven_unsolvable" for f in late.flags)
 
 
+def _s_with_both_anchored(phase_id: str):
+    doc = copy.deepcopy(json.loads(_S.read_text(encoding="utf-8"))["inputs"])
+    doc["sales_phasing"]["tranches"][0]["anchor"] = {"phase_id": phase_id, "offset_months": 0}
+    doc["sales_phasing"]["tranches"][1]["anchor"] = {"phase_id": phase_id, "offset_months": 1}
+    return parse_calculator_inputs(doc)
+
+
+def test_unsolvable_guard_fires_when_every_resolved_tranche_precedes_the_last_draw():
+    # Controller ruling (task 9 review). Both tranches anchored to the SAME
+    # early phase this time -- strip_out+0 / strip_out+1 -> resolved months 6
+    # and 7 (still month_offset 20/21, the same never-consulted decoys, and
+    # still strictly increasing, so validation passes). Draws run through
+    # month 13, i.e. past BOTH resolved tranche months now, so
+    # max(resolved) = 7 and the guard genuinely fires: no more receipts ever
+    # arrive after month 7 to redeem what months 8-13 keep drawing.
+    #
+    # This is the case the brief's original (single-tranche-anchored) pair
+    # could not actually exercise -- there, the untouched second tranche
+    # stayed at month 19, so max(resolved) never moved below the last draw.
+    # Pre-fix, this same document was "solvable": the guard read
+    # max(tr.month_offset for tr in phasing.tranches) = max(20, 21) = 21, and
+    # no draws occur after month 21, so the raw-offset guard never fired --
+    # exactly the R13b defect this task fixes.
+    #
+    # building_control+0 / +1 -> resolved 15 and 16, both after the last draw
+    # (13), reproduces the base document's clean, solvable shape -- the
+    # negative control proving the guard is anchor-direction-sensitive, not
+    # just always-on.
+    early = run_appraisal(_s_with_both_anchored("strip_out")).metrics
+    late = run_appraisal(_s_with_both_anchored("building_control")).metrics
+    assert early.senior_breakeven_pence is None
+    assert any(f.code == "senior_breakeven_unsolvable" for f in early.flags)
+    assert late.senior_breakeven_pence is not None
+    assert not any(f.code == "senior_breakeven_unsolvable" for f in late.flags)
+
+
 class TestUnitSalesBreakevenBasis:
     """R13b spec Sec 22.5/5.12. Transliteration of metrics.test.ts's matching
     'unit-sales break-even basis' describe block."""

@@ -471,6 +471,15 @@ function sWithFirstAnchor(phaseId: string): AnyCalculatorInputs {
   return doc;
 }
 
+function sWithBothAnchored(phaseId: string): AnyCalculatorInputs {
+  const doc = structuredClone(fixtureSInputs()) as AnyCalculatorInputs & {
+    sales_phasing: { tranches: Array<{ anchor: { phase_id: string; offset_months: number } | null }> };
+  };
+  doc.sales_phasing.tranches[0].anchor = { phase_id: phaseId, offset_months: 0 };
+  doc.sales_phasing.tranches[1].anchor = { phase_id: phaseId, offset_months: 1 };
+  return doc;
+}
+
 describe('§5.11 correction — anchored tranches replay at their resolved months (fixture S)', () => {
   it('S break-even replays at the resolved months, not the raw offsets', () => {
     const run = runAppraisal(fixtureSInputs());
@@ -518,6 +527,36 @@ describe('§5.11 correction — anchored tranches replay at their resolved month
     expect(early.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
     expect(late.senior_breakeven_pence).toBe(88_462_082);
     expect(late.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(false);
+    expect(late.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+  });
+
+  it('unsolvable guard fires when every resolved tranche precedes the last draw', () => {
+    // Controller ruling (task 9 review). Both tranches anchored to the SAME
+    // early phase this time — strip_out+0 / strip_out+1 -> resolved months 6
+    // and 7 (still month_offset 20/21, the same never-consulted decoys, and
+    // still strictly increasing, so validation passes). Draws run through
+    // month 13, i.e. past BOTH resolved tranche months now, so
+    // Math.max(...resolved) = 7 and the guard genuinely fires: no more
+    // receipts ever arrive after month 7 to redeem what months 8-13 keep
+    // drawing.
+    //
+    // This is the case the brief's original (single-tranche-anchored) pair
+    // could not actually exercise — there, the untouched second tranche
+    // stayed at month 19, so max(resolved) never moved below the last draw.
+    // Pre-fix, this same document was "solvable": the guard read
+    // Math.max(...phasing.tranches.map((x) => x.month_offset)) = max(20, 21)
+    // = 21, and no draws occur after month 21, so the raw-offset guard never
+    // fired — exactly the R13b defect this task fixes.
+    //
+    // building_control+0 / +1 -> resolved 15 and 16, both after the last
+    // draw (13), reproduces the base document's clean, solvable shape — the
+    // negative control proving the guard is anchor-direction-sensitive, not
+    // just always-on.
+    const early = runAppraisal(sWithBothAnchored('strip_out')).metrics;
+    const late = runAppraisal(sWithBothAnchored('building_control')).metrics;
+    expect(early.senior_breakeven_pence).toBeNull();
+    expect(early.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(true);
+    expect(late.senior_breakeven_pence).not.toBeNull();
     expect(late.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
   });
 });
