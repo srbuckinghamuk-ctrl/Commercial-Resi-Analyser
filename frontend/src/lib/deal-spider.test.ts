@@ -15,6 +15,7 @@ import { migrateInputsToV5, migrateInputsToV8 } from './model';
 import { calculateAcquisitionTax, asChargeableConsideration } from './tax/acquisition-tax';
 import type { CalculatorInputsV2, CalculatorInputsV8, EvidenceStatus } from './model';
 import type { EligibilityAssessment, EligibilityCriterion } from '../types';
+import { ddDoc } from './model/__fixtures__/due-diligence-docs';
 
 // ── Fixtures ─────────────────────────────────────────────
 
@@ -273,6 +274,55 @@ describe('building safety axis', () => {
     mid.deal_spider.building_height_m = 14;
     mid.deal_spider.storeys = 4;
     expect(axisResult(mid, 'building_safety').score).toBe(3);
+  });
+});
+
+// R15 Task 11 (audit 7.1, spec §23). The band above is a physical guess;
+// this is a separate question — has the higher-risk-building screening
+// itself been competently confirmed? `def.short` for `building_safety` is
+// 'Safety' (spider-axes.ts), so the caveat line this produces is
+// 'Safety: <note>', not 'Building safety: <note>'.
+describe('building safety axis — HRB confirmation caveat (R15 Task 11, audit 7.1)', () => {
+  it('is not provisional and carries no caveat on fixture Y, where higher_risk_building is green', () => {
+    const doc = ddDoc();
+    const item = doc.due_diligence.items.find((i) => i.code === 'higher_risk_building')!;
+    expect(item.status).toBe('green'); // the premise this test rests on
+    const result = computeSpider(doc, null);
+    const axis = result.axes.find((a) => a.id === 'building_safety')!;
+    expect(axis.provisional).toBe(false);
+    expect(axis.note).toBeNull();
+    expect(result.caveats.some((c) => c.startsWith('Safety:'))).toBe(false);
+  });
+
+  it('is provisional with the screening caveat when higher_risk_building is unknown', () => {
+    const doc = ddDoc({ status: { higher_risk_building: 'unknown' } });
+    const result = computeSpider(doc, null);
+    const axis = result.axes.find((a) => a.id === 'building_safety')!;
+    expect(axis.provisional).toBe(true);
+    expect(result.caveats).toContain(
+      'Safety: screening only - higher-risk-building status not competently confirmed',
+    );
+  });
+
+  it('clears the caveat when higher_risk_building is not_applicable (with notes)', () => {
+    const doc = ddDoc({
+      status: { higher_risk_building: 'not_applicable' },
+      notes: { higher_risk_building: 'Site is a single-storey unit — HRB screening does not apply.' },
+    });
+    const result = computeSpider(doc, null);
+    const axis = result.axes.find((a) => a.id === 'building_safety')!;
+    expect(axis.provisional).toBe(false);
+    expect(result.caveats.some((c) => c.startsWith('Safety:'))).toBe(false);
+  });
+
+  it('caveats a pre-v13 document, which has no due_diligence key at all', () => {
+    const doc = fixtureInputs(); // CalculatorInputsV2 — no due_diligence block
+    const result = computeSpider(doc, null);
+    const axis = result.axes.find((a) => a.id === 'building_safety')!;
+    expect(axis.provisional).toBe(true);
+    expect(result.caveats).toContain(
+      'Safety: screening only - higher-risk-building status not competently confirmed',
+    );
   });
 });
 

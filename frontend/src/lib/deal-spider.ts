@@ -301,6 +301,20 @@ export function computeSpider(
 
   const deliverabilityPct = Math.min(ndssPassPct(inputs.unit_mix.units), spider.daylight_pass_pct);
 
+  // R15 Task 11 (audit 7.1, spec §23). `buildingSafetyBand` above scores the
+  // physical band (height/storeys/flag) and is unchanged -- this is a SEPARATE
+  // question: has the higher-risk-building screening itself actually been done
+  // and evidenced, or is the band just an unconfirmed guess? A pre-v13
+  // document has no `due_diligence` key at all (same `in` guard as the
+  // jurisdiction/acquisition-date reads above), so it is treated the same as
+  // an unconfirmed catalogue item -- caveated, not silently trusted. `red` and
+  // `amber` do not confirm the item either: only `green` (screened and
+  // evidenced) or `not_applicable` (screened and reasoned, per validation
+  // rule 4's required notes) count as competently confirmed.
+  const hrbConfirmed = 'due_diligence' in inputs && inputs.due_diligence.items.some(
+    (i) => i.code === 'higher_risk_building' && (i.status === 'green' || i.status === 'not_applicable'),
+  );
+
   const raws: Record<SpiderAxisId, number> = {
     margin_resilience: downsideMetrics.profit_on_cost_pct ?? 0,
     prior_approval: priorApproval.raw,
@@ -321,11 +335,14 @@ export function computeSpider(
     const provisional =
       def.id === 'prior_approval' ? priorApproval.provisional
       : def.id === 'tax_advantage' ? taxAdvantageProvisional
+      : def.id === 'building_safety' ? !hrbConfirmed
       : false;
     const note =
       def.id === 'prior_approval' ? priorApproval.note
       : def.id === 'tax_advantage' ? taxAdvantageNote
-      : null;
+      : def.id === 'building_safety'
+        ? (hrbConfirmed ? null : 'screening only - higher-risk-building status not competently confirmed')
+        : null;
     if (provisional && note) caveats.push(`${def.short}: ${note}`);
     return {
       id: def.id,
