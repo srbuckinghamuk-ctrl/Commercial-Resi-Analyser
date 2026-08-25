@@ -3009,9 +3009,21 @@ describe('§24.7 tender-price inflation validation', () => {
     expect(inflationWarnFields(docZNoAllowance())).toEqual([]);
   });
 
-  it('headline mode: the four rules do not apply even with a stray inflation record', () => {
+  it('headline mode: the four rules do not apply, even to a document that would '
+    + 'otherwise trip two of them', () => {
+    // The gate under test is `plan.mode === 'detailed'` — proving it needs a
+    // document that WOULD raise if the gate were deleted. `annual_pct: -1`
+    // (rule 1) and `acquisition_date: null` (rule 2) both fire on docZ() in
+    // detailed mode (see the rule 1/rule 2 tests above); switching to
+    // headline mode is the only thing suppressing them here. (Headline mode
+    // with a non-null `qs` and with packages present each raise their own
+    // R15/R10 errors — unrelated to this rule set — so the assertion is
+    // scoped to the `cost_plan.qs.inflation` field prefix, not "no errors at
+    // all".)
     const d = docZ();
     d.cost_plan.mode = 'headline';
+    d.cost_plan.qs!.inflation = { annual_pct: -1 };
+    d.acquisition.acquisition_date = null;
     const ourFields = errs(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
     expect(ourFields).toEqual([]);
     expect(inflationWarnFields(d)).toEqual([]);

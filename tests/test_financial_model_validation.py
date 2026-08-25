@@ -3343,9 +3343,22 @@ class TestTenderPriceInflationValidation:
         assert self._err_fields(parse(doc_z_no_allowance())) == []
         assert self._inflation_warn_fields(parse(doc_z_no_allowance())) == []
 
-    def test_headline_mode_the_four_rules_do_not_apply_even_with_a_stray_inflation_record(self):
+    def test_headline_mode_the_four_rules_do_not_apply_even_to_a_document_that_would_otherwise_trip_two(self):
+        # The gate under test is `plan.mode == "detailed"` -- proving it needs
+        # a document that WOULD raise if the gate were deleted. `annual_pct:
+        # inf` (rule 1's finiteness arm -- a negative literal is already a
+        # Pydantic 422 at parse time in this engine, see rule 1's own test)
+        # and `acquisition_date: None` (rule 2) both fire on doc_z() in
+        # detailed mode (see the rule 1/rule 2 tests above); switching to
+        # headline mode is the only thing suppressing them here. (Headline
+        # mode with a non-None `qs` and with packages present each raise
+        # their own R15/R10 errors -- unrelated to this rule set -- so the
+        # assertion is scoped to the `cost_plan.qs.inflation` field prefix,
+        # not "no errors at all".)
         d = doc_z()
         d["cost_plan"]["mode"] = "headline"
+        d["cost_plan"]["qs"]["inflation"] = {"annual_pct": float("inf")}
+        d["acquisition"]["acquisition_date"] = None
         parsed = parse(d)
         our_fields = [i.field for i in self._errors(parsed) if i.field.startswith("cost_plan.qs.inflation")]
         assert our_fields == []
