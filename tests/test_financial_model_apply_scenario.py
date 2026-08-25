@@ -620,18 +620,26 @@ _Z_ORDERS = [
 ]
 
 
-def test_keeps_all_nine_levers_order_independent_on_z_full_metrics_and_inflation_fields():
-    metrics = [run_appraisal(_apply_in_order_z(order)).metrics for order in _Z_ORDERS]
-    assert metrics[1] == metrics[0]
-    assert metrics[2] == metrics[0]
+def test_keeps_all_nine_levers_order_independent_on_z_full_document_equality():
+    # Review fix (Task 8): the requirement is full-document equality under the
+    # nine-lever permutations -- the same shape test_sales_slip_is_a_no_op_on_the_
+    # null_path (and the TS "composes order-independently with the other four
+    # levers -- full document equality" test, "Fix round 1, Finding 4") already use
+    # (model_dump() equality on the APPLIED DOCUMENT) -- not a derived-output proxy
+    # like run_appraisal(...).metrics, which can pass while something the proxy did
+    # not look at silently diverges.
+    applied = [_apply_in_order_z(order) for order in _Z_ORDERS]
+    dumped = [d.model_dump(mode="json") for d in applied]
+    assert dumped[1] == dumped[0]
+    assert dumped[2] == dumped[0]
 
     # Resolution (a): compute_cost_plan on Z under this non-trivial nine-lever
-    # combination must yield identical inflation_pence per package and
+    # combination must ALSO yield identical inflation_pence per package and
     # inflation_total_pence regardless of the order the levers were applied in.
-    plans = []
-    for order in _Z_ORDERS:
-        d = _apply_in_order_z(order)
-        plans.append(compute_cost_plan(d, developed_area_sqm(d), len(d.unit_mix.units)))
+    plans = [
+        compute_cost_plan(d, developed_area_sqm(d), len(d.unit_mix.units))
+        for d in applied
+    ]
     pence = lambda cp: {p.id: p.inflation_pence for p in cp.packages}  # noqa: E731
     assert pence(plans[1]) == pence(plans[0])
     assert pence(plans[2]) == pence(plans[0])

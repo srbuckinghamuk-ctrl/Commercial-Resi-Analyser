@@ -780,18 +780,20 @@ describe('R15b spec §24 — the levers reach the cost plan in time (Task 8)', (
     ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip', 'sales_slip'],
   ];
 
-  it('keeps all nine levers order-independent on Z — full appraisal metrics AND the cost plan\'s inflation fields', () => {
-    const metrics = ORDERS.map((o) => runAppraisal(applyInOrder(o)).metrics);
-    expect(metrics[1]).toEqual(metrics[0]);
-    expect(metrics[2]).toEqual(metrics[0]);
+  it('keeps all nine levers order-independent on Z — full document equality, inflation fields included', () => {
+    // Review fix (Task 8): the requirement is full-document equality under the
+    // nine-lever permutations, the same shape the "composes order-independently
+    // with the other four levers" test above already uses (`toEqual` on the
+    // APPLIED DOCUMENT) — not a derived-output proxy like runAppraisal(...).metrics,
+    // which can pass while something the proxy did not look at silently diverges.
+    const applied = ORDERS.map((o) => applyInOrder(o));
+    expect(applied[1]).toEqual(applied[0]);
+    expect(applied[2]).toEqual(applied[0]);
 
     // Resolution (a): computeCostPlan on Z under this non-trivial nine-lever
-    // combination must yield identical inflation_pence per package and
+    // combination must ALSO yield identical inflation_pence per package and
     // inflation_total_pence regardless of the order the levers were applied in.
-    const plans = ORDERS.map((o) => {
-      const d = applyInOrder(o);
-      return computeCostPlan(d, developedAreaSqm(d), d.unit_mix.units.length);
-    });
+    const plans = applied.map((d) => computeCostPlan(d, developedAreaSqm(d), d.unit_mix.units.length));
     const pence = (cp: ReturnType<typeof computeCostPlan>) =>
       Object.fromEntries(cp.packages.map((p) => [p.id, p.inflation_pence]));
     expect(pence(plans[1])).toEqual(pence(plans[0]));
