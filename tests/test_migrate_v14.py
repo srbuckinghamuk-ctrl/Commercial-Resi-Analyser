@@ -66,10 +66,10 @@ def _load_fixture(path: Path) -> dict:
 #
 # Unlike test_migrate_v13.py's own `<= 12` filter (which excluded the
 # v13-native fixture Y), this file's filter is `<= 13`: Y is a valid "before"
-# document for the v13->v14 gate the same way every other corpus fixture is,
-# and there is no v14-native fixture yet (Task 7 adds Z) -- so, unlike
-# test_migrate_v13.py, `version_excluded` is empty rather than `["y-due-
-# diligence"]`.
+# document for the v13->v14 gate the same way every other corpus fixture is.
+# R15b Task 7 adds Z, the corpus's first v14-native fixture, so
+# `version_excluded` now names it -- the same position Y held one release
+# earlier for the v12->v13 gate.
 ALL_FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 _FIXTURE_DOCS: dict[Path, dict] = {p: _load_fixture(p) for p in ALL_FIXTURES}
 FIXTURES = [
@@ -86,8 +86,7 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 13
     ]
-    # No v14-native fixture exists yet -- Task 7 adds Z.
-    assert sorted(p.stem for p in version_excluded) == []
+    assert sorted(p.stem for p in version_excluded) == ["z-cost-plan-in-time"]
 
 
 def _metrics_dict(metrics) -> dict:

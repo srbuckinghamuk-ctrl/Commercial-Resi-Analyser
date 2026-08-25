@@ -1013,14 +1013,19 @@ describe('v10 migration -- spec §19.9', () => {
     // §20.2's hand-derived golden case). This filter is `<= 9`, so it excludes
     // every version ABOVE 9, v11 included, and the bound moves from three to
     // four. `fixtures.length` is unchanged -- W was never inside this gate.
+    //
+    // R15b Task 7: z-cost-plan-in-time.json is stored at inputs v14 (spec
+    // §24's hand-derived golden case). This filter is still `<= 9`, so it
+    // excludes Z too, and the bound moves from six to seven.
+    // `fixtures.length` is unchanged -- Z was never inside this gate either.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(6);
+    expect(versionExcluded.length).toBe(7);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       't-investment-case.json', 'u-investment-case-ltv-binds.json',
       'v-exhausted-reserve.json', 'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
-      'y-due-diligence.json',
+      'y-due-diligence.json', 'z-cost-plan-in-time.json',
     ]);
   });
 
@@ -1257,12 +1262,16 @@ describe('v11 migration -- spec §20.1', () => {
     // .json is `inputs_version: 11`, so the `<= 10` arm of `fixtures`'s filter
     // excludes it and it is covered by the golden suite instead. Mirrors how
     // the v10 block above records its own T/U/V/W exclusion bound growing.
+    //
+    // R15b Task 7: z-cost-plan-in-time.json is v14-native, also excluded by
+    // this `<= 10` filter, so the exclusion bound moves from three to four.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
     );
-    expect(versionExcluded.length).toBe(3);
+    expect(versionExcluded.length).toBe(4);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       'w-monitoring-on-site.json', 'x-unit-sales-ledger.json', 'y-due-diligence.json',
+      'z-cost-plan-in-time.json',
     ]);
   });
 
@@ -1448,11 +1457,13 @@ describe('v12 migration -- spec §22.9', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(18);
     // R13b Task 2 adds the v12-native fixture X; R15 Task 3 adds the v13-native
     // fixture Y, above this gate's `<= 11` filter for the same reason X is.
+    // R15b Task 7 adds the v14-native fixture Z, above the same filter for
+    // the same reason.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 11,
     );
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
-      'x-unit-sales-ledger.json', 'y-due-diligence.json',
+      'x-unit-sales-ledger.json', 'y-due-diligence.json', 'z-cost-plan-in-time.json',
     ]);
   });
 
@@ -1592,11 +1603,15 @@ describe('v13 migration -- spec §23.10', () => {
 
   it('the migration corpus is not empty and did not silently shrink', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(19);
-    // R15 Task 3 adds the v13-native fixture Y.
+    // R15 Task 3 adds the v13-native fixture Y. R15b Task 7 adds the
+    // v14-native fixture Z, above this gate's `<= 12` filter for the same
+    // reason Y is.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 12,
     );
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['y-due-diligence.json']);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'y-due-diligence.json', 'z-cost-plan-in-time.json',
+    ]);
   });
 
   // `calc_version` is constant for the whole engine run, not version-
@@ -1776,8 +1791,10 @@ describe('v14 migration -- spec §24.8', () => {
   // Fixture K excluded the same way every other block in this file excludes
   // it. Unlike the v13 block's `<= 12` filter (which excluded the v13-native
   // fixture Y), this filter is `<= 13`: Y is a valid "before" document for
-  // the v13→v14 gate the same way every other corpus fixture is, and there
-  // is no v14-native fixture yet (Task 7 adds Z).
+  // the v13→v14 gate the same way every other corpus fixture is. R15b Task 7
+  // adds Z, the corpus's first v14-native fixture, so `versionExcluded` now
+  // names it — the same position Y held one release earlier for the
+  // v12→v13 gate.
   const versionOf = (doc: FixtureFile): number =>
     (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
 
@@ -1790,8 +1807,7 @@ describe('v14 migration -- spec §24.8', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 13,
     );
-    // No v14-native fixture exists yet — Task 7 adds Z.
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([]);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['z-cost-plan-in-time.json']);
   });
 
   // `calc_version` only — no other exclusion. `metrics` (flags included, in
