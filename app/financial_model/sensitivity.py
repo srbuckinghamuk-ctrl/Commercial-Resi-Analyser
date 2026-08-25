@@ -168,7 +168,7 @@ def validate_sensitivity_config(
     phase_ids = _network_phase_ids(inputs)
 
     for name, axis in (("rows", config.rows), ("cols", config.cols)):
-        # Spec Sec 12.6: an axis lever must be one of the eight Sec 12.1/18.9/19.8 levers.
+        # Spec Sec 12.6: an axis lever must be one of the nine Sec 12.1/18.9/19.8/22.8 levers.
         # LEVER_ORDER is the closed set -- this is what stops a bad-cased or
         # misspelled lever from crashing later inside LEVER_ORDER.index() in
         # run_sensitivity (the TS mirror instead silently no-ops that axis, so this

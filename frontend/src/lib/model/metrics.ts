@@ -466,8 +466,9 @@ export function deriveMetrics(
       // summing both here keeps the two checks provably identical rather than
       // coincidentally so.
       if (model.months.some((mm) => mm.month > lastMonth && mm.draw_pence + mm.capitalised_fees_pence > 0)) {
-        seniorUnsolvableReason =
-          'senior break-even unavailable — facility draws continue after the final sales tranche, so no sale price redeems the facility';
+        seniorUnsolvableReason = unitSalesResult != null
+          ? 'senior break-even unavailable — facility draws continue after the final sale receipt, so no sale price redeems the facility'
+          : 'senior break-even unavailable — facility draws continue after the final sales tranche, so no sale price redeems the facility';
       } else if (inputs.finance.sales_sweep_pct <= 0) {
         seniorUnsolvableReason =
           'senior break-even unavailable — sales sweep is 0%, so sale proceeds never repay the facility';

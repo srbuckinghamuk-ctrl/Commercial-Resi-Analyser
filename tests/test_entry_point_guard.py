@@ -11,6 +11,12 @@ nobody inhabits. That is not hypothetical: R10 shipped exactly this split in
 the other direction (server on v7, client on v6) and made every saved
 appraisal unloadable; R9, R11, R12 and R13 each recorded a version of it.
 
+R13b Task 15 (spec Sec 22.9) moves the version chain it derives from again, to
+v12: the unit-sales ledger's every arm is reachable only from a v12 document,
+so the same failure mode -- a production entry point left calling v11 while
+the rest of the boundary moves on -- applies here exactly as it did to
+v10/v11.
+
 **If this test failed and you are looking for what to do**: a production module
 calls ``migrate_inputs_to_v{N}`` for an N that is not the newest migration
 ``app/financial_model/migrate.py`` offers. Either move that call site to the

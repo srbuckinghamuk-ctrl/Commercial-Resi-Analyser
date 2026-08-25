@@ -627,6 +627,24 @@ describe('unit-sales break-even basis (spec §22.5/§5.12)', () => {
     expect(without).not.toBeNull();
     expect(withOverride as number).toBeGreaterThan(without as number);
   });
+
+  it('unsolvable reason is receipt-worded on the per-unit path', () => {
+    // R13b final review wave: move every completion to fixed month 3 with
+    // exchange null and deposit_pct 0, so the only receipt is at month 3
+    // while construction draws still run months 4-11 -- the same
+    // structurally-unsolvable shape as the tranche arm, but reached via
+    // unitSalesResult rather than salesPhasing, so the message must say
+    // "sale receipt", not "sales tranche".
+    const rows = ['u1', 'u2', 'u3', 'u4'].map((unitId) => ({
+      unit_id: unitId, exchange: null, completion: { month_offset: 3, anchor: null },
+      deposit_pct: 0, agent_fee_pct: null, legal_fee_pence: null,
+    }));
+    const metrics = runAppraisal(unitSalesDoc({ rows })).metrics;
+    expect(metrics.senior_breakeven_pence).toBeNull();
+    const flag = metrics.flags.find((f) => f.code === 'senior_breakeven_unsolvable');
+    expect(flag).toBeDefined();
+    expect(flag?.message).toContain('final sale receipt');
+  });
 });
 
 describe('breakevenFlags with a structural reason', () => {

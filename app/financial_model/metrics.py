@@ -695,10 +695,16 @@ def derive_metrics(
                 mm.month > last_month and mm.draw_pence + mm.capitalised_fees_pence > 0
                 for mm in model.months
             ):
-                senior_unsolvable_reason = (
-                    "senior break-even unavailable — facility draws continue after the "
-                    "final sales tranche, so no sale price redeems the facility"
-                )
+                if unit_sales_result is not None:
+                    senior_unsolvable_reason = (
+                        "senior break-even unavailable — facility draws continue after "
+                        "the final sale receipt, so no sale price redeems the facility"
+                    )
+                else:
+                    senior_unsolvable_reason = (
+                        "senior break-even unavailable — facility draws continue after the "
+                        "final sales tranche, so no sale price redeems the facility"
+                    )
             elif inputs.finance.sales_sweep_pct <= 0:
                 senior_unsolvable_reason = (
                     "senior break-even unavailable — sales sweep is 0%, so sale "

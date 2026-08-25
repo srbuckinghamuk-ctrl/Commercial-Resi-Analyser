@@ -186,7 +186,7 @@ export function validateSensitivityConfig(
 
   for (const [name, axis] of axes) {
     const field = `sensitivity.${name}.lever`;
-    // Spec §12.6: an axis lever must be one of the eight §12.1/§18.9/§19.8 levers.
+    // Spec §12.6: an axis lever must be one of the nine §12.1/§18.9/§19.8/§22.8 levers.
     // `LEVER_ORDER` is the closed set — this is what stops a bad-cased or
     // misspelled lever from silently producing a matrix in which that axis does
     // nothing, or (in the Python mirror) crashing inside LEVER_ORDER.index()

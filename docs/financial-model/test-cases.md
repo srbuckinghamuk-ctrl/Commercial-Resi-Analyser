@@ -5065,7 +5065,7 @@ alongside `developer_breakeven_pence`, in Step 11 below.
 R13b spec §22.5/§5.12. `redemption_balance_at_disposal_pence` is **0** (Step
 8: the facility fully redeems at month 13), and the metrics gate
 `if redemption_balance is not None` still enters the phased regime (0 is not
-`None`) — the final disposal month is 20, three units still complete after
+`None`) — the final disposal month is 20, one unit (u4) still completes after
 the facility is already clear, so the phased replay solves from the FULL
 draw schedule regardless of the balance already being 0 at disposal. Both
 `senior_breakeven_pence` and `developer_breakeven_pence` are therefore real,

@@ -524,6 +524,24 @@ class TestUnitSalesBreakevenBasis:
         assert with_override is not None and without is not None
         assert with_override > without
 
+    def test_unsolvable_reason_is_receipt_worded_on_the_per_unit_path(self):
+        # R13b final review wave: move every completion to fixed month 3 with
+        # exchange=None and deposit_pct=0, so the only receipt is at month 3
+        # while construction draws still run months 4-11 -- the same
+        # structurally-unsolvable shape as the tranche arm, but reached via
+        # unit_sales_result rather than sales_phasing, so the message must
+        # say "sale receipt", not "sales tranche".
+        rows = [
+            {"unit_id": u, "exchange": None, "completion": {"month_offset": 3, "anchor": None},
+             "deposit_pct": 0, "agent_fee_pct": None, "legal_fee_pence": None}
+            for u in ("u1", "u2", "u3", "u4")
+        ]
+        metrics = run_appraisal(unit_sales_doc({"rows": rows})).metrics
+        assert metrics.senior_breakeven_pence is None
+        flag = next((f for f in metrics.flags if f.code == "senior_breakeven_unsolvable"), None)
+        assert flag is not None
+        assert "final sale receipt" in flag.message
+
 
 class TestBreakevenFlagsWithAStructuralReason:
     """Transliteration of metrics.test.ts's `breakevenFlags with a structural
