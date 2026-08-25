@@ -67,6 +67,7 @@ from app.financial_model.types import (
 from app.financial_model.vat import VatMonthLine, VatResult
 
 from .fixtures_investment_case import explicit_refinance_doc, investment_case_doc
+from .fixtures_unit_sales import held_twin_doc, unit_sales_doc
 
 MONITORING_FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -342,6 +343,59 @@ class TestSec511UnderPhasing:
         f = next(x for x in run.metrics.flags if x.code == "senior_breakeven_unsolvable")
         assert "sales sweep" in f.message
         assert not any(x.code == "breakeven_cap_exhausted" for x in run.metrics.flags)
+
+
+class TestUnitSalesBreakevenBasis:
+    """R13b spec Sec 22.5/5.12. Transliteration of metrics.test.ts's matching
+    'unit-sales break-even basis' describe block."""
+
+    def test_unit_sales_path_solves_the_phased_breakeven_and_agrees_with_the_engine_verified_relationship_to_held(self):
+        # Deviation from brief (task 8): the brief's own test (and the task
+        # instructions' Step 11 "hand check") assert released < held -- the
+        # intuitive claim that releasing deposits early should LOWER the
+        # break-even, since cash reaches the facility sooner. It does not
+        # reconcile against either engine on fixture X.
+        #
+        # Root cause, confirmed by direct replay trace (not a bug in this
+        # task's code): phased_replay_redeems (pre-existing, unmodified here)
+        # reserves the fixed exit fee (520,000p, committed_gross_facility
+        # basis) out of EVERY partial sweep event with balance > 0, not just
+        # the final redeeming one -- a documented Sec 5.11 conservatism
+        # (see breakeven.py's phased_replay_redeems docstring: "principal
+        # repayment is delayed by at most `fee` per tranche"). The
+        # released-deposit document creates THREE extra small early sweep
+        # events (months 8, 10, 11 -- u1/u2/u4's exchange deposits, each well
+        # under the 520,000p fee) that the held twin does not have (it pays
+        # everything in one lump at each unit's completion): released sweeps
+        # at 6 distinct months, held at 3. Each of the released document's 5
+        # non-final events reserves 520,000p that is never actually applied to
+        # principal, versus 2 for held -- a real, reproducible cost that
+        # outweighs the benefit of receiving cash sooner. Verified two ways:
+        # (a) a replay trace at each document's own solved G shows exactly 5
+        # vs 2 non-final reservations; (b) with exit_fee_pct temporarily
+        # zeroed (isolating the reservation mechanism), the ordering flips to
+        # the intuitive released (33,522,952) < held (33,664,679) -- proving
+        # the reversal on the real fixture is the fee-reservation
+        # conservatism, not a defect in receipt_lines_from_unit_sales or the
+        # guards. Per this task's instruction, the arithmetic that produces
+        # this is unchanged (verbatim from the brief) -- only the test's
+        # asserted direction is corrected, with this trail in place of the
+        # brief's unreconciled claim.
+        released = run_appraisal(unit_sales_doc()).metrics
+        held = run_appraisal(held_twin_doc()).metrics
+        assert released.senior_breakeven_pence is not None and held.senior_breakeven_pence is not None
+        assert released.senior_breakeven_pence > held.senior_breakeven_pence
+        assert not any(f.code == "senior_breakeven_unsolvable" for f in released.flags)
+
+    def test_developer_breakeven_uses_the_per_unit_cost_basis(self):
+        # Same document with u3's 2.0% override removed: the blended rate falls
+        # (350,000 -> 262,500 on u3), so the developer break-even falls with it.
+        with_override = run_appraisal(unit_sales_doc()).metrics.developer_breakeven_pence
+        rows = unit_sales_doc().model_dump(mode="json")["unit_sales"]["units"]
+        rows[2]["agent_fee_pct"] = None
+        without = run_appraisal(unit_sales_doc({"rows": rows})).metrics.developer_breakeven_pence
+        assert with_override is not None and without is not None
+        assert with_override > without
 
 
 class TestBreakevenFlagsWithAStructuralReason:

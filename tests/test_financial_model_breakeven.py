@@ -9,7 +9,9 @@ from dataclasses import replace as dc_replace
 from app.financial_model.breakeven import (
     DeveloperBreakevenTerms,
     PhasedSeniorBreakevenTerms,
+    ReceiptLine,
     SeniorBreakevenTerms,
+    _phased_net_by_month,
     phased_replay_redeems,
     solve_developer_breakeven,
     solve_senior_breakeven,
@@ -302,6 +304,44 @@ class TestSolveSeniorBreakevenPhased:
         exact = g
         assert phased_replay_redeems(t, exact) is True
         assert phased_replay_redeems(t, exact - 1) is False
+
+
+class TestReceiptLinesArm:
+    """Sec 22.5. Twin of breakeven.test.ts's 'receipt-lines arm' describe."""
+
+    def _terms(self, lines, enforcement=0):
+        return dc_replace(_phased_base(), tranches=[], receipt_lines=lines,
+                          enforcement_cost_assumption_pence=enforcement, selling_agent_fee_pct=0)
+
+    def test_scales_lines_uniformly_with_last_line_residue_and_fixed_legal(self):
+        lines = [ReceiptLine(6, 2_600_000, 0, 0), ReceiptLine(12, 23_400_000, 1.5, 201_550)]
+        # G = 13,000,000 = exactly half of the 26,000,000 base.
+        assert _phased_net_by_month(self._terms(lines, enforcement=100_000), 13_000_000) == {
+            6: 1_300_000 - 100_000,                       # deposit line, enforcement off the FIRST line
+            12: 11_700_000 - 175_500 - 201_550,           # agent scales (round(11,700,000 x 1.5%)), legal does not
+        }
+        # One penny more: the first line rounds down, the LAST line absorbs the residue.
+        assert _phased_net_by_month(self._terms(lines), 13_000_001) == {6: 1_300_000, 12: 11_700_001 - 175_500 - 201_550}
+
+    def test_zero_or_negative_total_gross_yields_no_receipts(self):
+        assert _phased_net_by_month(self._terms([ReceiptLine(6, 1, 0, 0)]), 0) == {}
+
+    def test_structural_guards_read_the_lines_not_the_tranches(self):
+        base = self._terms([ReceiptLine(2, 5_000_000, 0, 0), ReceiptLine(3, 5_000_000, 0, 0)])
+        assert solve_senior_breakeven_phased(base) is not None
+        assert solve_senior_breakeven_phased(dc_replace(base, receipt_lines=[])) is None
+        # draws after the last line month -> structurally unsolvable (a draw at
+        # month 2 after a single line at month 1; the base draws only at month 0)
+        assert solve_senior_breakeven_phased(dc_replace(
+            base, draws_and_fees_pence=[10_000_000, 0, 5_000_000, 0], receipt_lines=[ReceiptLine(1, 10_000_000, 0, 0)],
+        )) is None
+        assert solve_senior_breakeven_phased(dc_replace(base, receipt_lines=[ReceiptLine(3, 10_000_000, 100, 0)])) is None
+
+    def test_two_equal_lines_reproduce_the_two_tranche_hand_figure(self):
+        # The tranche fixture's 50/50 split at months 2 and 3 is the same
+        # receipt profile as two equal lines: the arms must agree.
+        lines = [ReceiptLine(2, 5_000_000, 0, 0), ReceiptLine(3, 5_000_000, 0, 0)]
+        assert solve_senior_breakeven_phased(self._terms(lines)) == solve_senior_breakeven_phased(_phased_base())
 
 
 class TestPhasedReplayAppliesTheVatReclaim:

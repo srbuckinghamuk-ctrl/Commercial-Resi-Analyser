@@ -106,6 +106,17 @@ def solve_developer_breakeven(t: DeveloperBreakevenTerms) -> int | None:
 
 
 @dataclass
+class ReceiptLine:
+    """R13b spec Sec 22.5. One dated receipt at its BASE (unstressed) gross; the
+    replay scales every line by G / G_base. A released deposit is a line with
+    no costs; a completion carries the unit's agent rate and its fixed legal."""
+    month: int
+    base_gross_pence: int
+    agent_fee_pct: float
+    legal_fee_pence: int
+
+
+@dataclass
 class PhasedSeniorBreakevenTerms:
     """Phased senior break-even (spec Sec 5.11 phased regime). Freezes the actual
     run's draw+capitalised-fee schedule, scales tranche receipts by a uniform
@@ -134,12 +145,36 @@ class PhasedSeniorBreakevenTerms:
     enforcement_cost_assumption_pence: int
     finance: FacilityTerms           # exit-fee basis terms
     committed_gross_facility_pence: int
+    # Sec 22.5's second arm. When non-None the tranche arm is not consulted; the
+    # list is already sorted by (month, units[] order) by its builder.
+    receipt_lines: list[ReceiptLine] | None = None
 
 
 def _phased_net_by_month(t: PhasedSeniorBreakevenTerms, total_gross: int) -> dict[int, int]:
     """Net tranche proceeds at total gross G, split per spec Sec 4.4.1 (residue
     absorption, pro-rata costs); enforcement deducted from the first tranche.
-    Keyed by month."""
+    Keyed by month. When ``t.receipt_lines`` is set, Sec 22.5's second arm
+    replaces the tranche arithmetic entirely: each line's base gross scales by
+    G / G_base, the last line absorbs the rounding residue, and the line's own
+    agent rate / fixed legal apply."""
+    if t.receipt_lines is not None:
+        out: dict[int, int] = {}
+        base_total = sum(line.base_gross_pence for line in t.receipt_lines)
+        if total_gross <= 0 or base_total <= 0:
+            return out
+        allocated = 0
+        for i, line in enumerate(t.receipt_lines):
+            last = i == len(t.receipt_lines) - 1
+            gross = (
+                total_gross - allocated if last
+                else money_round((line.base_gross_pence * total_gross) / base_total)
+            )
+            allocated += gross
+            agent = money_round((gross * line.agent_fee_pct) / 100)
+            enforcement = t.enforcement_cost_assumption_pence if i == 0 else 0
+            out[line.month] = out.get(line.month, 0) + gross - agent - line.legal_fee_pence - enforcement
+        return out
+
     out: dict[int, int] = {}
     if total_gross <= 0:
         return out
@@ -241,14 +276,17 @@ def phased_replay_redeems(t: PhasedSeniorBreakevenTerms, total_gross: int) -> bo
 
 
 def solve_senior_breakeven_phased(t: PhasedSeniorBreakevenTerms) -> int | None:
-    if t.selling_agent_fee_pct >= 100:
-        return None
-    if len(t.tranches) == 0:
-        return None
+    if t.receipt_lines is not None:
+        if len(t.receipt_lines) == 0 or any(line.agent_fee_pct >= 100 for line in t.receipt_lines):
+            return None
+        last_month = max(line.month for line in t.receipt_lines)
+    else:
+        if t.selling_agent_fee_pct >= 100 or len(t.tranches) == 0:
+            return None
+        last_month = max(x.month_offset for x in t.tranches)
     if t.sales_sweep_pct <= 0:
         return None
-    last_tranche = max(x.month_offset for x in t.tranches)
-    for m in range(last_tranche + 1, len(t.draws_and_fees_pence)):
+    for m in range(last_month + 1, len(t.draws_and_fees_pence)):
         if t.draws_and_fees_pence[m] > 0:
             return None  # structurally unsolvable
 

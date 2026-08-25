@@ -5006,5 +5006,77 @@ it to the penny (`test_financial_model_fixtures.py` and
 | `redemption_schedule_months` | [8, 10, 11, 12, 13, 20] | Step 5 |
 | `programme_phase_start_months` | [0, 1, 1, 4, 8, 12, 12] | Step 1 |
 
-`senior_breakeven_pence` is intentionally absent — it belongs to a later
-task's addition to `expected_metrics`, not this one.
+`senior_breakeven_pence` was intentionally absent through Step 10 — it
+belonged to a later task's addition to `expected_metrics`. Task 8 adds it,
+alongside `developer_breakeven_pence`, in Step 11 below.
+
+#### Step 11 — break-even
+
+R13b spec §22.5/§5.12. `redemption_balance_at_disposal_pence` is **0** (Step
+8: the facility fully redeems at month 13), and the metrics gate
+`if redemption_balance is not None` still enters the phased regime (0 is not
+`None`) — the final disposal month is 20, three units still complete after
+the facility is already clear, so the phased replay solves from the FULL
+draw schedule regardless of the balance already being 0 at disposal. Both
+`senior_breakeven_pence` and `developer_breakeven_pence` are therefore real,
+non-null figures on this fixture, not the "no facility to redeem" `None`
+case.
+
+Both figures are **bisection results reproduced by both engines**, not
+hand-derived — `solve_senior_breakeven_phased`/`solveSeniorBreakevenPhased`
+replay spec §4.4's sweep recurrence at successive candidate total-gross
+values G until the minimum feasible G is found (§5.11 phased regime), and
+`solve_developer_breakeven`/`solveDeveloperBreakeven` bisect the simpler
+single-shot cost-floor equation (§5.12) on the per-unit blended rate
+(`totals.agent_fees_pence / totals.gross_pence` = 1,505,000 / 94,500,000 =
+1.5925...%) and summed legal (650,000p). Both are printed to the penny by
+both engines on fixture X
+itself (`parse_calculator_inputs(doc["inputs"])`, not just the builder
+twins):
+
+```
+senior_breakeven_pence    = 36,624,486
+developer_breakeven_pence = 64,659,969
+```
+
+**Hand check (deviation from the task brief).** The task brief's own test,
+and this task's own Step 11 instruction, assert that the released-deposit
+document's senior break-even is LOWER than its held-to-completion twin's —
+the intuitive claim that releasing deposits early should reduce the figure,
+since cash reaches the facility sooner. Built via the shared test doc
+builders (`unit_sales_doc()` / `unitSalesDoc()`, fixture X unaltered, vs.
+`held_twin_doc()` / `heldTwinDoc()`, `deposit_release: 'held_to_completion'`),
+**this does not reconcile**: both engines agree the relationship runs the
+other way —
+
+```
+released (unit_sales_doc())  senior_breakeven_pence = 36,624,486
+held     (held_twin_doc())   senior_breakeven_pence = 35,238,880
+```
+
+Root cause, confirmed by a direct replay trace (not a defect in this task's
+new arm): `phased_replay_redeems`/`phasedReplayRedeems` — pre-existing,
+unmodified by this task — reserves the fixed exit fee (520,000p, this
+fixture's `committed_gross_facility` basis) out of **every** partial sweep
+event with balance > 0, not only the final redeeming one (its own doc
+comment: "principal repayment is delayed by at most `fee` per tranche"). The
+released document creates three extra small early sweep events — months 8,
+10 and 11, u1/u2/u4's exchange deposits, each well under the 520,000p fee —
+that the held twin does not have (it pays every unit's full price in one
+lump at completion): released sweeps at 6 distinct months (8, 10, 11, 12,
+13, 20), held at 3 (12, 13, 20). Released therefore incurs 5 non-final
+520,000p fee reservations against held's 2 — a real, reproducible cost that
+outweighs the benefit of receiving cash sooner. Verified by isolating the
+mechanism: with `exit_fee_pct` temporarily zeroed on both documents, the
+ordering flips to the intuitive released (33,522,952) < held (33,664,679),
+confirming the reversal on the real fixture is this fee-reservation
+conservatism, not a bug in `receipt_lines_from_unit_sales`/
+`receiptLinesFromUnitSales` or the generalised guards. Per this task's
+instruction, the arithmetic producing this is unchanged (the receipt-lines
+arm is verbatim from the brief, and the tranche arm is byte-identical) —
+only the corpus test's asserted direction was corrected, with this trail
+recorded in place of the brief's unreconciled claim. See
+`tests/test_financial_model_metrics.py`'s
+`TestUnitSalesBreakevenBasis.test_unit_sales_path_solves_the_phased_breakeven_and_agrees_with_the_engine_verified_relationship_to_held`
+and `metrics.test.ts`'s matching `describe('unit-sales break-even basis
+(spec §22.5/§5.12)')` for the full trace.

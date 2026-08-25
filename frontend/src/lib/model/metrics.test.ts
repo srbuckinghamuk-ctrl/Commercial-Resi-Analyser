@@ -20,6 +20,7 @@ import { buildSchedule } from './schedule';
 import { computeCostPlan } from './cost-plan';
 import { originalBudgets } from './monitoring';
 import { investmentCaseDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
+import { unitSalesDoc, heldTwinDoc } from './__fixtures__/unit-sales-docs';
 
 const MONITORING_FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
@@ -446,6 +447,56 @@ describe('§5.11 under phasing', () => {
     const f = run.metrics.flags.find((x) => x.code === 'senior_breakeven_unsolvable');
     expect(f?.message).toMatch(/sales sweep/);
     expect(run.metrics.flags.some((x) => x.code === 'breakeven_cap_exhausted')).toBe(false);
+  });
+});
+
+describe('unit-sales break-even basis (spec §22.5/§5.12)', () => {
+  it('unit-sales path solves the phased break-even and agrees with the engine-verified relationship to held', () => {
+    // Deviation from brief (task 8): the brief's own test (and the task instructions'
+    // Step 11 "hand check") assert released < held — the intuitive claim that releasing
+    // deposits early should LOWER the break-even, since cash reaches the facility sooner.
+    // It does not reconcile against either engine on fixture X.
+    //
+    // Root cause, confirmed by direct replay trace (not a bug in this task's code):
+    // phasedReplayRedeems (pre-existing, unmodified here) reserves the fixed exit fee
+    // (520,000p, committed_gross_facility basis) out of EVERY partial sweep event with
+    // balance > 0, not just the final redeeming one — a documented §5.11 conservatism
+    // (see breakeven.ts's phasedReplayRedeems doc comment: "principal repayment is
+    // delayed by at most `fee` per tranche"). The released-deposit document creates THREE
+    // extra small early sweep events (months 8, 10, 11 — u1/u2/u4's exchange deposits,
+    // each well under the 520,000p fee) that the held twin does not have (it pays
+    // everything in one lump at each unit's completion): released sweeps at 6 distinct
+    // months, held at 3. Each of the released document's 5 non-final events reserves
+    // 520,000p that is never actually applied to principal, versus 2 for held — a real,
+    // reproducible cost that outweighs the benefit of receiving cash sooner. Verified two
+    // ways (see tests/test_financial_model_metrics.py's matching test for the full trace):
+    // (a) a replay trace at each document's own solved G shows exactly 5 vs 2 non-final
+    // reservations; (b) with exit_fee_pct temporarily zeroed (isolating the reservation
+    // mechanism), the ordering flips to the intuitive released (33,522,952) < held
+    // (33,664,679) — proving the reversal on the real fixture is the fee-reservation
+    // conservatism, not a defect in receiptLinesFromUnitSales or the guards. Per this
+    // task's instruction, the arithmetic that produces this is unchanged (verbatim from
+    // the brief) — only the test's asserted direction is corrected, with this trail in
+    // place of the brief's unreconciled claim.
+    const released = runAppraisal(unitSalesDoc()).metrics;
+    const held = runAppraisal(heldTwinDoc()).metrics;
+    expect(released.senior_breakeven_pence).not.toBeNull();
+    expect(held.senior_breakeven_pence).not.toBeNull();
+    expect(released.senior_breakeven_pence as number).toBeGreaterThan(held.senior_breakeven_pence as number);
+    expect(released.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+  });
+
+  it('developer break-even uses the per-unit cost basis', () => {
+    // Same document with u3's 2.0% override removed: the blended rate falls (350,000 ->
+    // 262,500 on u3), so the developer break-even falls with it.
+    const withOverride = runAppraisal(unitSalesDoc()).metrics.developer_breakeven_pence;
+    const doc = unitSalesDoc();
+    const rows = doc.unit_sales!.units.map((r) => ({ ...r })) as Array<Record<string, unknown>>;
+    rows[2].agent_fee_pct = null;
+    const without = runAppraisal(unitSalesDoc({ rows })).metrics.developer_breakeven_pence;
+    expect(withOverride).not.toBeNull();
+    expect(without).not.toBeNull();
+    expect(withOverride as number).toBeGreaterThan(without as number);
   });
 });
 
