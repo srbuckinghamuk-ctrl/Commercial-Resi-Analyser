@@ -18,6 +18,7 @@ import {
   welshInputs, scottishInputs, unconfirmedJurisdictionInputs,
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
   detailedCostPlanInputs, investmentCaseInputs, monitoringOnSiteInputs,
+  unitSalesLedgerInputs,
 } from './memo-fixtures';
 import { humanise } from '../format';
 
@@ -196,6 +197,18 @@ describe('investment memorandum release gate', () => {
       const { info, run } = await report(makeInputs());
       expect(run.metrics.monitoring_statement).toBeNull();
       expect(documentText(info)).not.toContain('Monitoring cost-to-complete');
+    });
+
+    // R13b (Task 13, spec §22.6). Every ROUTES fixture carries `unit_sales:
+    // null` (nothing before v12 has the field, and no other v12 fixture is a
+    // ROUTES member), so `metrics.unit_sales` is null on every one of them —
+    // the negative control for the section's presence test on fixture X below
+    // (`unitSalesLedgerInputs`, not a ROUTES member), the same pattern the
+    // monitoring test immediately above uses for fixture W.
+    it('never prints the unit sales ledger section', async () => {
+      const { info, run } = await report(makeInputs());
+      expect(run.metrics.unit_sales).toBeNull();
+      expect(documentText(info)).not.toContain('Unit Sales Ledger');
     });
 
     it('states its own limitations, including the tax and VAT basis', async () => {
@@ -694,6 +707,48 @@ describe('R14 monitoring cost-to-complete section (spec §9/§13.4)', () => {
       + 'forecast; certified and committed figures are as entered by the sponsor and have '
       + 'not been verified by a monitoring surveyor.',
     );
+    expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
+    expect(orphanHeadings(info).map((o) => o.text)).toEqual([]);
+  });
+});
+
+/**
+ * R13b (Task 13, spec §22.6/§13.4). The memo's "Unit Sales Ledger" section,
+ * printed only when `metrics.unit_sales != null`. The ROUTES sweep above
+ * (`describe.each(ROUTES)`) is the negative control — every one of those
+ * fixtures carries a null result, and the "never prints the unit sales
+ * ledger section" test inside it asserts absence across the whole corpus.
+ * `unitSalesLedgerInputs()` (fixture X, fixtures/financial-model/
+ * x-unit-sales-ledger.json) is the single positive case: four units, released
+ * deposits, net total 92,345,000p, pre-sold 81.48% at month 12 (practical
+ * completion basis).
+ *
+ * `fmtGBP` above (this file, ahead of "R10 cost-plan modes") rounds to whole
+ * pounds — correct for the headline totals it was written for, but the
+ * unit-sales ledger's per-unit fee/net figures carry real pence (e.g. fixture
+ * X's u3 legal fee is 135,659p = £1,356.59, the apportioned residue of a
+ * scheme-level fee split across four unequal units), so this section prints
+ * pence rather than rounding them away. `fmtGBPExact` below is that
+ * two-decimal formatter, scoped to this describe block only.
+ */
+function fmtGBPExact(pence: number): string {
+  return (pence / 100).toLocaleString('en-GB', {
+    style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+describe('R13b unit sales ledger section (spec §22.6/§13.4)', () => {
+  it('prints the section and its net total only for a document carrying a unit sales ledger', async () => {
+    const inputs = unitSalesLedgerInputs();
+    const { info, run } = await report(inputs);
+    const unitSales = run.metrics.unit_sales;
+    expect(unitSales).not.toBeNull(); // fixture sanity check
+    expect(unitSales!.totals.net_pence).toBe(92_345_000);
+
+    const text = documentText(info);
+    expect(text).toContain('Unit Sales Ledger');
+    expect(text).toContain(fmtGBPExact(run.metrics.unit_sales!.totals.net_pence)); // £923,450.00
     expect(overflowingItems(info).map((v) => v.item.text)).toEqual([]);
     expect(sparsePages(info)).toEqual([]);
     expect(orphanHeadings(info).map((o) => o.text)).toEqual([]);

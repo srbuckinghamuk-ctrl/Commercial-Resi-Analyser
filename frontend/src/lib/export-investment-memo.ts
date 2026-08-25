@@ -173,6 +173,28 @@ function fmt(pence: number): string {
   });
 }
 
+/**
+ * R13b (spec §22.6). `fmt` above rounds every figure to the whole pound —
+ * correct for the headline totals it was written for, which are themselves
+ * rounded rate x area or percentage-of-round-figure amounts. The unit sales
+ * ledger's per-unit fee and net figures are not: a scheme-level agent/legal
+ * fee apportioned across unequal units leaves a genuine pence residue (e.g.
+ * fixture X's u3 legal fee is 135,659p = £1,356.59), so printing this
+ * section through `fmt` would silently round real money away. `fmtExact`
+ * is the two-decimal-place formatter this section uses instead — the same
+ * pairing `fmtPctExact` (below) is to `fmtPctSafe` for percentages, and
+ * documented for the identical reason (§19.6's own comment on that
+ * function).
+ */
+function fmtExact(pence: number): string {
+  return (pence / 100).toLocaleString('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function fmtPct(pct: number): string {
   return `${pct.toFixed(1)}%`;
 }
@@ -437,6 +459,20 @@ export function generateInvestmentMemo(
   // reads them off the raw input block, guarded exactly like `refinance`
   // above: a pre-v11 document carries no `monitoring` field at all.
   const monitoringInputs = 'monitoring' in inputs ? inputs.monitoring : null;
+  // R13b (spec §22.6). `metrics.unit_sales` (`UnitSalesResult | null`) —
+  // republished off `schedule.unit_sales` in `deriveMetrics`, not read from
+  // `inputs.unit_sales` directly, exactly like `bridge`/`vat`/every other
+  // result-block local in this file: a pre-v12 document produces a null
+  // result the same way it carries no `unit_sales` input field at all. The
+  // exit paragraph and the "Unit Sales Ledger" section below read only this.
+  const unitSales = metrics.unit_sales;
+  // `fmtPctSafe` (module-level, one decimal) would silently round
+  // `pre_sold.pct` (computed to two decimals by `pct()`, model/pct.ts —
+  // e.g. fixture X's 81.48) to "81.5%", disagreeing with the result block
+  // by a printed digit. Null-safe pairing of `fmtPctExact` above, for the
+  // same reason §19.6's yield/purchaser's-costs figures use it instead of
+  // `fmtPctSafe`.
+  const fmtPreSoldPct = (p: number | null) => (p === null ? 'n/a' : fmtPctExact(p));
   // Finding 2 (Task 4 fix round 1): `anchor_month` exists on BOTH the legacy and
   // v9 shapes and was never shape-dependent — read it from the un-narrowed
   // value via the same centralised helper CashflowPage.tsx uses, not from
@@ -1372,16 +1408,22 @@ export function generateInvestmentMemo(
   );
   y = bodyText(
     y,
-    salesPhasing != null
-      // R13 spec §19.6, closing §18.10 limitation 9. `schedule.resolved_exit_months`
-      // is the ledger's own resolved month for each tranche (an anchored tranche's
-      // month_offset is only its ENTERED value, which schedule.ts may override via
-      // its anchor) — read, not recomputed, exactly like `schedule.refinance.month`
-      // in the refinance line below, which was never affected by this defect.
-      ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${schedule.resolved_exit_months.tranches.map((m) => monthLabel(m)).join(', ')}).`
-      : schedule.totals.gross_sales_pence > 0
-        ? 'Sales phasing: single disposal in final month.'
-        : 'Sales phasing: not applicable — no units sold.',
+    // R13b (spec §22.6). A document carrying a unit sales ledger states its
+    // exit at the per-unit level and takes priority over the tranche-level
+    // `salesPhasing` arm below — the two blocks are alternative inputs for
+    // the same exit event, never both meaningful on one document.
+    unitSales != null
+      ? `Per-unit sales: ${unitSales.units.length} units completing ${[...new Set(unitSales.units.map((u) => u.completion_month))].sort((a, b) => a - b).map((m) => monthLabel(m)).join(', ')}; pre-sold ${fmtPreSoldPct(unitSales.pre_sold.pct)} at ${monthLabel(unitSales.pre_sold.reference_month)} (${unitSales.pre_sold.basis === 'practical_completion' ? 'practical completion' : 'first completion'}).`
+      : salesPhasing != null
+        // R13 spec §19.6, closing §18.10 limitation 9. `schedule.resolved_exit_months`
+        // is the ledger's own resolved month for each tranche (an anchored tranche's
+        // month_offset is only its ENTERED value, which schedule.ts may override via
+        // its anchor) — read, not recomputed, exactly like `schedule.refinance.month`
+        // in the refinance line below, which was never affected by this defect.
+        ? `Sales phasing: ${salesPhasing.tranches.length} tranches (months ${schedule.resolved_exit_months.tranches.map((m) => monthLabel(m)).join(', ')}).`
+        : schedule.totals.gross_sales_pence > 0
+          ? 'Sales phasing: single disposal in final month.'
+          : 'Sales phasing: not applicable — no units sold.',
   );
   y = bodyText(
     y,
@@ -2674,6 +2716,45 @@ export function generateInvestmentMemo(
         `The take-out does not clear the balance it is applied against: additional equity of ${fmt(model.totals.refinance_shortfall_equity_pence)} was required to close the refinance event (spec §4.5/§19.5).`,
       );
     }
+  }
+
+  // R13b (spec §22.6, §13.4). The unit sales ledger — printed only when the
+  // document carries one (`unit_sales` non-null, reachable only from a v12
+  // document, spec §22.1). Every figure below is `metrics.unit_sales`
+  // (`computeUnitSales`'s output, computed once in `deriveMetrics` — this
+  // file's own no-recalculation rule); nothing here sums, apportions or
+  // otherwise derives a number. Template: the R14 monitoring
+  // cost-to-complete block above.
+  if (unitSales != null) {
+    y = subHeading(y, 'Unit Sales Ledger');
+    const basisLabel = unitSales.pre_sold.basis === 'practical_completion' ? 'practical completion' : 'first completion';
+    y = bodyText(y, `Pre-sold ${fmtPreSoldPct(unitSales.pre_sold.pct)} of the sold portion (${fmtExact(unitSales.pre_sold.exchanged_value_pence)} of ${fmtExact(unitSales.totals.gross_pence)}) exchanged by ${monthLabel(unitSales.pre_sold.reference_month)}, measured at ${basisLabel} (spec §22.4). Deposits are ${unitSales.deposit_release === 'released_on_exchange' ? 'released to the developer at exchange' : 'held to completion'}.`);
+    // §13.4, exact text: a released deposit is a modelling assumption this
+    // document does not itself evidence — printed only when the document's
+    // own `deposit_release` says deposits are released at exchange.
+    if (unitSales.deposit_release === 'released_on_exchange') {
+      y = bodyText(y, 'A deposit shown as released is a modelling assumption about the sale contract that this model does not evidence (spec §13.4).');
+    }
+    const rows = unitSales.units.map((u) => [
+      u.unit_id, fmtExact(u.gross_pence),
+      u.exchange_month == null ? 'at completion' : monthLabel(u.exchange_month),
+      monthLabel(u.completion_month),
+      fmtExact(u.deposit_pence), fmtExact(u.agent_fee_pence), fmtExact(u.legal_fee_pence), fmtExact(u.net_pence),
+    ]);
+    rows.push(['Total', fmtExact(unitSales.totals.gross_pence), '', '', fmtExact(unitSales.totals.deposits_pence),
+      fmtExact(unitSales.totals.agent_fees_pence), fmtExact(unitSales.totals.legal_fees_pence), fmtExact(unitSales.totals.net_pence)]);
+    table({
+      startY: y, margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Unit', 'Gross', 'Exchange', 'Completion', 'Deposit', 'Agent', 'Legal', 'Net']],
+      body: rows,
+      styles: { fontSize: 8, cellPadding: 1.5 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: { 1: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' } },
+      didParseCell(data) { if (data.column.index === 0 && data.cell.raw === 'Total') data.cell.styles.fontStyle = 'bold'; },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
   }
 
   y = subHeading(y, 'Contingent Exit');
