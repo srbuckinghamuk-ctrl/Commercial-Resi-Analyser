@@ -4123,9 +4123,9 @@ this task the phased senior break-even replay (§5.11 phased regime) read
 tranches' receipts at months 20 and 21, months the ledger never actually used.
 Both engines printed **90,971,520** for `senior_breakeven_pence` on this
 fixture through calc 2.13.0. At the correct, ledger-used months — 16 and 19 —
-the facility redeems both tranches two and two months earlier than the raw
-replay assumed, so the phased break-even needs less rolled-up interest and
-less exit fee, and the minimum falls to **88,720,089**. This is the one
+the facility redeems both tranches four and two months earlier than the raw
+replay assumed, so the phased break-even needs less rolled-up interest, and
+the minimum falls to **88,720,089**. This is the one
 pre-existing computed value R13b moves on fixture S, recorded here as a
 corrected reported metric, not a fixture change (spec §5.11, changelog
 2.14.0). `senior_breakeven_pence: 88720089` is now pinned in
@@ -4137,7 +4137,7 @@ The correction also changes a second, previously-untested observable: an
 mid-programme instead of after all draws stop. Anchoring S's first tranche to
 `strip_out` (resolved month 6, `month_offset` still the same disagreeing
 decoy) instead of its own `unit_completions+0` anchor puts that tranche's
-sweep three months before the facility's construction draws finish (month
+sweep seven months before the facility's construction draws finish (month
 13): the tranche's 30% share fully redeems the facility early and the
 remaining draws (months 7–13) redraw it, raising the pre-existing
 `facility_redrawn_after_redemption` flag, before the second tranche (still
