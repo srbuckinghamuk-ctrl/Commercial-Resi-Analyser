@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { RiskItem, Likelihood, Impact } from '../../lib/conversion-types';
-import type { CalculatorInputsV12, CalculatorInputsV13 } from '../../lib/model';
+import type { CalculatorInputsV13 } from '../../lib/model';
 
 /**
  * R15 Task 9 (spec §23.8): no longer a page in its own right. It renders
@@ -8,12 +8,12 @@ import type { CalculatorInputsV12, CalculatorInputsV13 } from '../../lib/model';
  * heading is an `<h4>` under `DueDiligencePage`'s `<h3>` rather than the
  * page's own numbered `<h3>`.
  *
- * The union on `inputs` (and the v13 `onChange`) exists only because the
- * calculator's state is still v12 until Task 13's cutover; this component
- * reads and writes `risks`, which is identical on both versions.
+ * R15 Task 13 (the entry-point cutover) narrows the union this Props type
+ * carried to `CalculatorInputsV13` alone: the calculator's state is now a
+ * native v13 document, so there is no v12 arm left to admit.
  */
 interface Props {
-  inputs: CalculatorInputsV12 | CalculatorInputsV13;
+  inputs: CalculatorInputsV13;
   onChange: (partial: Partial<CalculatorInputsV13>) => void;
 }
 

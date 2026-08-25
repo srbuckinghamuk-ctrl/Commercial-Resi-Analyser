@@ -3,7 +3,7 @@ import { render, screen, within, fireEvent, cleanup } from '@testing-library/rea
 import DueDiligencePage from './DueDiligencePage';
 import { runAppraisal, OCCUPATION_CONFLICT, EXISTING_AREA_CONFLICT } from '../../lib/model';
 import type { CalculatorInputsV13, DdItem } from '../../lib/model';
-import { defaultCalculatorInputsV12, captureSourceRecord } from '../../lib/conversion-defaults';
+import { captureSourceRecord } from '../../lib/conversion-defaults';
 import { ddDoc } from '../../lib/model/__fixtures__/due-diligence-docs';
 import { FIXTURE_PROJECT } from '../../lib/model/__fixtures__/investment-case-docs';
 
@@ -247,18 +247,4 @@ describe('DueDiligencePage — coverage and the project log', () => {
     expect(within(log).getByRole('button', { name: '+ Add Risk' })).toBeInTheDocument();
   }, SCHEDULE_RENDER_TIMEOUT_MS);
 
-  // The Task 13 guard: until the calculator's state is v13 the page holds a
-  // document with no `due_diligence` block, and must still render the log.
-  it('renders the register alone when the document carries no due-diligence block', () => {
-    // Exactly what the calculator holds today: a v12 document, run as-is
-    // (the engine reads a pre-v13 document as §23.10's seed).
-    const v12 = defaultCalculatorInputsV12();
-    const run = runAppraisal(v12);
-    render(<DueDiligencePage inputs={v12} onChange={vi.fn()} run={run} project={FIXTURE_PROJECT} />);
-
-    const log = screen.getByTestId('dd-project-log');
-    expect(within(log).getByRole('heading', { name: 'Risk register (project log)' })).toBeInTheDocument();
-    expect(screen.queryByTestId('dd-source-record')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('dd-row-dd-vacant_possession')).not.toBeInTheDocument();
-  });
 });

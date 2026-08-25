@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV12, MonitoringStatement, MonitoringStatementLine } from '../../lib/model';
-import { defaultCalculatorInputsV12 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV13, MonitoringStatement, MonitoringStatementLine } from '../../lib/model';
+import { defaultCalculatorInputsV13 } from '../../lib/conversion-defaults';
 import { penceToPounds } from '../../lib/format';
 
 // R14 fix-wave finding 3b: a hand-built literal statement, same shape
@@ -77,7 +77,7 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // version the file actually holds rather than the v4 it used to claim.
 const fixtureG = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 
 // R11 spec §17.13 (ruling R45). The pinned VAT fixture itself is fully
 // recoverable (total_irrecoverable_pence 0 by construction, so the §17.5
@@ -86,17 +86,17 @@ const fixtureG = JSON.parse(
 // irrecoverable figure without touching the fixture on disk.
 const vatFixture = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV12 };
+) as { inputs: CalculatorInputsV13 };
 
-function inputsWithIrrecoverableVat(): CalculatorInputsV12 {
-  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV12;
+function inputsWithIrrecoverableVat(): CalculatorInputsV13 {
+  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV13;
   const construction = cloned.vat.treatments.find((t) => t.category === 'construction')!;
   construction.recoverable_pct = 50;
   return cloned;
 }
 
 describe('AppraisalSummaryPage — null lender state', () => {
-  const inputs = defaultCalculatorInputsV12();
+  const inputs = defaultCalculatorInputsV13();
   const run = runAppraisal(inputs);
 
   it('renders the existing not-available treatment for lender GDV and LTGDV lender', () => {
@@ -200,7 +200,7 @@ describe('AppraisalSummaryPage — VAT LTC caveat (spec §17.13, ruling R34/R45)
 });
 
 describe('AppraisalSummaryPage — monitoring cost-to-complete wiring (R14 fix wave finding 3b)', () => {
-  const inputs = defaultCalculatorInputsV12();
+  const inputs = defaultCalculatorInputsV13();
   const baseRun = runAppraisal(inputs);
 
   it('renders the "Monitoring cost-to-complete" heading when metrics.monitoring_statement is non-null', () => {

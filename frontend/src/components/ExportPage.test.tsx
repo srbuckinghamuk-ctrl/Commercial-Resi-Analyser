@@ -152,7 +152,7 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     ).not.toBeInTheDocument();
 
     const run = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![1];
-    expect(run.inputs.inputs_version).toBe(12);
+    expect(run.inputs.inputs_version).toBe(13);
     // The block reached the engine, rather than being dropped somewhere on the
     // way through the export path. Narrowed with `in` rather than cast: `run.inputs`
     // is the AnyCalculatorInputs union and only the v8, v9, v10, v11 and v12

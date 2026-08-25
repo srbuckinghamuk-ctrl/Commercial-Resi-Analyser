@@ -1,5 +1,5 @@
 import type {
-  CalculatorInputsV12, CalculatorInputsV13, AppraisalRun, AreaBasis,
+  CalculatorInputsV13, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
   VatOverride, RecoveryBasis, QsProvenance, PriceBasis, ValidationIssue,
 } from '../../lib/model';
@@ -9,16 +9,11 @@ import {
 import { penceToPounds, penceToPoundsExact, humanise, formatPct } from '../../lib/format';
 
 interface Props {
-  /** R15 Task 10 (spec §23.6). Widened the same way `DueDiligencePage` was
-   *  (Task 9): until Task 13's cutover the calculator's state is still a
-   *  `CalculatorInputsV12`, which has no `due_diligence` key, but this page
-   *  reads nothing from that block -- only `cost_plan.qs` and each package's
-   *  `price_basis`, both already shared by V12 and V13's identical
-   *  `CostPlanInputs`. The union just lets a V13 document (e.g. a
-   *  due-diligence fixture) be passed straight through in a test without a
-   *  cast. */
-  inputs: CalculatorInputsV12 | CalculatorInputsV13;
-  onChange: (partial: Partial<CalculatorInputsV12>) => void;
+  /** R15 Task 13 (the entry-point cutover) narrows the union `Task 10`
+   *  introduced to `CalculatorInputsV13` alone: the calculator's state is
+   *  now a native v13 document. */
+  inputs: CalculatorInputsV13;
+  onChange: (partial: Partial<CalculatorInputsV13>) => void;
   run: AppraisalRun;
 }
 

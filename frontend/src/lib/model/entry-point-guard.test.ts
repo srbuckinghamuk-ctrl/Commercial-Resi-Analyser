@@ -146,8 +146,8 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(12);
-    expect(VERSIONS).toContain(11);
+    expect(NEWEST).toBe(13);
+    expect(VERSIONS).toContain(12);
   });
 
   it('enumerates the production files that actually hold the entry points', () => {

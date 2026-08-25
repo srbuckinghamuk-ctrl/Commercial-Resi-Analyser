@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import type { Project } from '../../types';
 import type {
-  AppraisalRun, CalculatorInputsV12, CalculatorInputsV13, ValidationIssue,
+  AppraisalRun, CalculatorInputsV13, ValidationIssue,
 } from '../../lib/model';
 import type {
   DdCategory, DdItem, DdRow, DdSourceConflict, DdStatus, DueDiligenceInputs, SourceRecord,
@@ -26,14 +26,10 @@ import RiskRegisterPage from './RiskRegisterPage';
  * Every write goes through `onChange({ due_diligence: … })`.
  */
 interface Props {
-  /**
-   * R15 Task 13 removes the union. Until the cutover the calculator's state is
-   * still a `CalculatorInputsV12`, which carries no `due_diligence` block at
-   * all — so the schedule editor sits behind the `'due_diligence' in inputs`
-   * guard below and only the register renders. Task 13 narrows this to
-   * `CalculatorInputsV13` and deletes the guard.
-   */
-  inputs: CalculatorInputsV12 | CalculatorInputsV13;
+  /** R15 Task 13 (the entry-point cutover): the calculator's state is a
+   *  native `CalculatorInputsV13` document, so `due_diligence` is always
+   *  present and the schedule editor always renders alongside the register. */
+  inputs: CalculatorInputsV13;
   onChange: (partial: Partial<CalculatorInputsV13>) => void;
   run: AppraisalRun;
   project: Project | null;
@@ -358,33 +354,32 @@ function ListingProse({ project }: { project: Project }) {
 }
 
 export default function DueDiligencePage({ inputs, onChange, run, project, now }: Props) {
-  // Task 13 removes this guard along with the V12 arm of `Props['inputs']`.
-  const dd: DueDiligenceInputs | null = 'due_diligence' in inputs ? inputs.due_diligence : null;
+  // R15 Task 13 (the entry-point cutover): `inputs` is always a native
+  // `CalculatorInputsV13`, so `due_diligence` is always present -- the
+  // `'due_diligence' in inputs` guard and every `dd == null` early return it
+  // forced below are gone with the V12 arm of `Props['inputs']`.
+  const dd: DueDiligenceInputs = inputs.due_diligence;
   const result = run.metrics.due_diligence;
   const totals = result.totals;
 
   const writeItems = useCallback((items: DdItem[]) => {
-    if (dd == null) return;
     onChange({ due_diligence: { ...dd, items } });
   }, [dd, onChange]);
 
   const updateItem = useCallback((id: string, partial: Partial<DdItem>) => {
-    if (dd == null) return;
     writeItems(dd.items.map((item) => (item.id === id ? { ...item, ...partial } : item)));
   }, [dd, writeItems]);
 
   const removeItem = useCallback((id: string) => {
-    if (dd == null) return;
     writeItems(dd.items.filter((item) => item.id !== id));
   }, [dd, writeItems]);
 
   const addCustom = useCallback((category: DdCategory) => {
-    if (dd == null) return;
     writeItems([...dd.items, emptyCustomItem(category)]);
   }, [dd, writeItems]);
 
   const recapture = useCallback(() => {
-    if (dd == null || project == null) return;
+    if (project == null) return;
     const at = (now == null ? new Date() : now()).toISOString();
     onChange({ due_diligence: { ...dd, source_record: captureSourceRecord(project, at) } });
   }, [dd, project, onChange, now]);
@@ -394,7 +389,7 @@ export default function DueDiligencePage({ inputs, onChange, run, project, now }
   // today but keeps the filter honest if a rule is ever raised on the item
   // itself; the `.` on the startsWith is what stops `items[1]` swallowing
   // `items[10]`.
-  const indexById = new Map((dd?.items ?? []).map((item, i) => [item.id, i]));
+  const indexById = new Map(dd.items.map((item, i) => [item.id, i]));
   const issuesForRow = (rowId: string): ValidationIssue[] => {
     const index = indexById.get(rowId);
     if (index === undefined) return [];
@@ -439,67 +434,63 @@ export default function DueDiligencePage({ inputs, onChange, run, project, now }
     <div>
       <h3 style={{ color: TEXT, fontSize: 18, marginBottom: 20 }}>13. Due Diligence</h3>
 
-      {dd != null && (
-        <>
-          <div style={{ ...cardStyle, marginBottom: 20 }}>
-            <div style={{ color: TEXT, fontSize: 15, fontWeight: 600 }}>{coverageLine}</div>
-            <div style={{ color: MUTED, fontSize: 12, marginTop: 4 }}>
-              Addressed means evidenced, or marked not applicable with a reason. An unknown item is
-              never treated as green.
-            </div>
-            <IssueList issues={coverageIssues} />
-          </div>
+      <div style={{ ...cardStyle, marginBottom: 20 }}>
+        <div style={{ color: TEXT, fontSize: 15, fontWeight: 600 }}>{coverageLine}</div>
+        <div style={{ color: MUTED, fontSize: 12, marginTop: 4 }}>
+          Addressed means evidenced, or marked not applicable with a reason. An unknown item is
+          never treated as green.
+        </div>
+        <IssueList issues={coverageIssues} />
+      </div>
 
-          <SourceRecordCard
-            record={result.source_record}
-            conflicts={result.source_conflicts}
-            issues={recordIssues}
-            canCapture={project != null}
-            onCapture={recapture}
-          />
+      <SourceRecordCard
+        record={result.source_record}
+        conflicts={result.source_conflicts}
+        issues={recordIssues}
+        canCapture={project != null}
+        onCapture={recapture}
+      />
 
-          {DD_CATEGORIES.map((category) => {
-            const summary = result.categories.find((c) => c.category === category)!;
-            const counts = `red ${summary.red} · amber ${summary.amber} · green ${summary.green} `
-              + `· unknown ${summary.unknown} · n/a ${summary.not_applicable}`;
-            return (
-              <section
-                key={category}
-                data-testid={`dd-category-${category}`}
-                style={{ marginBottom: 24 }}
-              >
-                <h4 style={{ color: TEXT, fontSize: 15, marginBottom: 4 }}>{CATEGORY_LABELS[category]}</h4>
-                <div style={{ color: MUTED, fontSize: 12, marginBottom: 10 }}>{counts}</div>
+      {DD_CATEGORIES.map((category) => {
+        const summary = result.categories.find((c) => c.category === category)!;
+        const counts = `red ${summary.red} · amber ${summary.amber} · green ${summary.green} `
+          + `· unknown ${summary.unknown} · n/a ${summary.not_applicable}`;
+        return (
+          <section
+            key={category}
+            data-testid={`dd-category-${category}`}
+            style={{ marginBottom: 24 }}
+          >
+            <h4 style={{ color: TEXT, fontSize: 15, marginBottom: 4 }}>{CATEGORY_LABELS[category]}</h4>
+            <div style={{ color: MUTED, fontSize: 12, marginBottom: 10 }}>{counts}</div>
 
-                {category === 'title_occupation' && project != null && <ListingProse project={project} />}
+            {category === 'title_occupation' && project != null && <ListingProse project={project} />}
 
-                {result.rows.filter((r) => r.category === category).map((row) => (
-                  row.kind === 'derived'
-                    ? <DerivedRow key={row.id} row={row} />
-                    : (
-                      <EnteredRow
-                        key={row.id}
-                        row={row}
-                        rowName={nameFor(row)}
-                        issues={issuesForRow(row.id)}
-                        onUpdate={updateItem}
-                        onRemove={removeItem}
-                      />
-                    )
-                ))}
+            {result.rows.filter((r) => r.category === category).map((row) => (
+              row.kind === 'derived'
+                ? <DerivedRow key={row.id} row={row} />
+                : (
+                  <EnteredRow
+                    key={row.id}
+                    row={row}
+                    rowName={nameFor(row)}
+                    issues={issuesForRow(row.id)}
+                    onUpdate={updateItem}
+                    onRemove={removeItem}
+                  />
+                )
+            ))}
 
-                <button
-                  aria-label={`Add custom item to ${CATEGORY_LABELS[category]}`}
-                  onClick={() => addCustom(category)}
-                  style={{ padding: '6px 16px', background: BORDER, color: TEXT, border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
-                >
-                  + Add custom item
-                </button>
-              </section>
-            );
-          })}
-        </>
-      )}
+            <button
+              aria-label={`Add custom item to ${CATEGORY_LABELS[category]}`}
+              onClick={() => addCustom(category)}
+              style={{ padding: '6px 16px', background: BORDER, color: TEXT, border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+            >
+              + Add custom item
+            </button>
+          </section>
+        );
+      })}
 
       <section data-testid="dd-project-log">
         <RiskRegisterPage inputs={inputs} onChange={onChange} />
