@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { computeCostPlan } from './cost-plan';
 import { defaultCalculatorInputsV6, defaultCalculatorInputsV7 } from '../conversion-defaults';
-import type { CalculatorInputsV7 } from './finance-types';
+import { migrateInputsToV13 } from './migrate';
+import { runAppraisal } from './index';
+import type { CalculatorInputsV7, CalculatorInputsV13 } from './finance-types';
+import type { PriceBasis, QsProvenance } from './cost-plan';
 
 /** A v7 document with the cost plan (and optionally the cost fields) replaced.
  *  `defaultCalculatorInputsV7` comes from Task 1. */
@@ -427,5 +432,84 @@ describe('computeCostPlan — reported extras', () => {
       0, 1,
     );
     expect(r.implied_rate_pence_per_sqm).toBeNull();
+  });
+});
+
+// R15 spec §23.6. Fixture Y (docs/... y-derivation.md) is fixture X
+// (fixtures/financial-model/x-unit-sales-ledger.json) with the evidence layer
+// added and no money field changed. Task 4 runs BEFORE Task 3, so the shared
+// `ddDoc`/fixture-Y builders do not exist yet — this is a local, task-scoped
+// equivalent covering only the cost-plan additions (`cost_plan.qs`,
+// per-package `price_basis`) fixture Y carries. Twin of
+// `_y_cost_plan_doc` in tests/test_cost_plan.py.
+const FIXTURE_DIR_Y = resolve(__dirname, '../../../../fixtures/financial-model');
+
+function rawXForY(): Record<string, unknown> {
+  const parsed = JSON.parse(readFileSync(resolve(FIXTURE_DIR_Y, 'x-unit-sales-ledger.json'), 'utf-8')) as {
+    inputs: Record<string, unknown>;
+  };
+  return JSON.parse(JSON.stringify(parsed.inputs)) as Record<string, unknown>;
+}
+
+const Y_QS: QsProvenance = {
+  source: 'Gardiner & Theobald', stage: 'riba_3', date: '2026-08-01',
+  status: 'issued', base_date: '2026-07-01',
+};
+const Y_PRICE_BASIS: Record<string, PriceBasis | null> = {
+  'pkg-structure': 'fixed_price', 'pkg-envelope': 'provisional_sum', 'pkg-mande': null,
+};
+
+interface YCostPlanDocOverrides {
+  qs?: QsProvenance | null;
+  price_basis?: Record<string, PriceBasis | null>;
+  mode?: 'headline' | 'detailed';
+}
+
+function yCostPlanDoc(overrides: YCostPlanDocOverrides = {}): CalculatorInputsV13 {
+  const v13 = migrateInputsToV13(rawXForY());
+  const plan = JSON.parse(JSON.stringify(v13)) as CalculatorInputsV13;
+
+  plan.cost_plan.qs = 'qs' in overrides ? overrides.qs ?? null : { ...Y_QS };
+
+  const basis: Record<string, PriceBasis | null> = { ...Y_PRICE_BASIS, ...overrides.price_basis };
+  plan.cost_plan.packages = plan.cost_plan.packages.map((p) => ({
+    ...p, price_basis: basis[p.id] ?? null,
+  }));
+
+  if (overrides.mode) {
+    plan.cost_plan.mode = overrides.mode;
+    if (overrides.mode === 'headline') plan.cost_plan.packages = [];
+  }
+
+  return plan;
+}
+
+describe('computeCostPlan — price-basis summary and QS provenance (R15 spec §23.6)', () => {
+  it('reports the price-basis summary by hand on fixture Y', () => {
+    const r = runAppraisal(yCostPlanDoc()).metrics.cost_plan;
+    const pb = r.price_basis!;
+    expect([pb.fixed_price_pence, pb.provisional_sums_pence, pb.estimate_pence, pb.unclassified_pence])
+      .toEqual([12_000_000, 8_000_000, 0, 6_000_000]);
+    expect([pb.fixed_price_coverage_pct, pb.provisional_sums_pct]).toEqual([46.15, 30.77]);
+    expect(r.qs).toEqual({
+      source: 'Gardiner & Theobald', stage: 'riba_3', date: '2026-08-01',
+      status: 'issued', base_date: '2026-07-01',
+    });
+  });
+
+  it('moves coverage by its share when the null package is classified', () => {
+    const pb = runAppraisal(yCostPlanDoc({ price_basis: { 'pkg-mande': 'fixed_price' } }))
+      .metrics.cost_plan.price_basis!;
+    expect([pb.fixed_price_pence, pb.unclassified_pence, pb.fixed_price_coverage_pct])
+      .toEqual([18_000_000, 0, 69.23]);
+    const pb2 = runAppraisal(yCostPlanDoc({ price_basis: { 'pkg-mande': 'estimate' } }))
+      .metrics.cost_plan.price_basis!;
+    expect([pb2.estimate_pence, pb2.unclassified_pence]).toEqual([6_000_000, 0]);
+  });
+
+  it('publishes no price basis and no QS in headline mode', () => {
+    const r = runAppraisal(yCostPlanDoc({ mode: 'headline', qs: null })).metrics.cost_plan;
+    expect(r.price_basis).toBeNull();
+    expect(r.qs).toBeNull();
   });
 });

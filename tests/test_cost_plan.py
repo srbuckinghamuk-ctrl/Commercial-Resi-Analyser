@@ -11,14 +11,20 @@ so the two engines' v7 defaults have RE-CONVERGED. See
 `test_default_v7_matches_typescripts_default_calculator_inputs_v7` below,
 which pins the same eight fee-line literals
 `conversion-defaults.test.ts` pins on the TS side."""
+import copy
+import json
+from pathlib import Path
+
+from app.financial_model import run_appraisal
 from app.financial_model.cost_plan import compute_cost_plan
-from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7
+from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7, migrate_inputs_to_v13
 from app.financial_model.types import (
     CONTINGENCY_CLASS_NAMES,
     COST_PACKAGE_CODES,
     DEFAULT_COST_PLAN,
     FEE_CODE_CATEGORY,
     CalculatorInputsV7,
+    CalculatorInputsV13,
     CostPlanInputs,
     default_contingency_classes,
 )
@@ -596,3 +602,69 @@ class TestComputeCostPlanReportedExtras:
             0, 1,
         )
         assert r.implied_rate_pence_per_sqm is None
+
+
+# R15 spec Sec 23.6. Fixture Y (docs/... y-derivation.md) is fixture X
+# (fixtures/financial-model/x-unit-sales-ledger.json) with the evidence layer
+# added and no money field changed. Task 4 runs BEFORE Task 3, so the shared
+# `dd_doc`/`fixtures_due_diligence` builders do not exist yet -- this is a
+# local, task-scoped equivalent covering only the cost-plan additions
+# (`cost_plan.qs`, per-package `price_basis`) fixture Y carries.
+_FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "financial-model"
+
+_Y_QS = {
+    "source": "Gardiner & Theobald", "stage": "riba_3", "date": "2026-08-01",
+    "status": "issued", "base_date": "2026-07-01",
+}
+_Y_PRICE_BASIS = {"pkg-structure": "fixed_price", "pkg-envelope": "provisional_sum", "pkg-mande": None}
+
+
+def _y_cost_plan_doc(overrides: dict | None = None) -> CalculatorInputsV13:
+    o = dict(overrides or {})
+    raw = json.loads((_FIXTURE_DIR / "x-unit-sales-ledger.json").read_text(encoding="utf-8"))["inputs"]
+    v13 = migrate_inputs_to_v13(raw, None)
+    plan = v13.model_dump(mode="json")
+
+    plan["cost_plan"]["qs"] = o["qs"] if "qs" in o else copy.deepcopy(_Y_QS)
+
+    basis = dict(_Y_PRICE_BASIS)
+    basis.update(o.get("price_basis", {}))
+    for p in plan["cost_plan"]["packages"]:
+        p["price_basis"] = basis.get(p["id"])
+
+    if "mode" in o:
+        plan["cost_plan"]["mode"] = o["mode"]
+        if o["mode"] == "headline":
+            plan["cost_plan"]["packages"] = []
+
+    return CalculatorInputsV13.model_validate(plan)
+
+
+class TestPriceBasisSummaryAndQsProvenance:
+    def test_price_basis_summary_by_hand_on_fixture_y(self):
+        r = run_appraisal(_y_cost_plan_doc()).metrics.cost_plan
+        pb = r.price_basis
+        assert (pb.fixed_price_pence, pb.provisional_sums_pence, pb.estimate_pence, pb.unclassified_pence) == (
+            12_000_000, 8_000_000, 0, 6_000_000,
+        )
+        assert (pb.fixed_price_coverage_pct, pb.provisional_sums_pct) == (46.15, 30.77)
+        assert r.qs == {
+            "source": "Gardiner & Theobald", "stage": "riba_3", "date": "2026-08-01",
+            "status": "issued", "base_date": "2026-07-01",
+        }
+
+    def test_classifying_the_null_package_moves_coverage_by_its_share(self):
+        pb = run_appraisal(
+            _y_cost_plan_doc({"price_basis": {"pkg-mande": "fixed_price"}})
+        ).metrics.cost_plan.price_basis
+        assert (pb.fixed_price_pence, pb.unclassified_pence, pb.fixed_price_coverage_pct) == (
+            18_000_000, 0, 69.23,
+        )
+        pb2 = run_appraisal(
+            _y_cost_plan_doc({"price_basis": {"pkg-mande": "estimate"}})
+        ).metrics.cost_plan.price_basis
+        assert (pb2.estimate_pence, pb2.unclassified_pence) == (6_000_000, 0)
+
+    def test_headline_mode_publishes_no_price_basis_and_no_qs(self):
+        r = run_appraisal(_y_cost_plan_doc({"mode": "headline", "qs": None})).metrics.cost_plan
+        assert r.price_basis is None and r.qs is None

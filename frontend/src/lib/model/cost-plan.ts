@@ -4,6 +4,7 @@
  *  AcquisitionInputsV5 (R8) and UnitMixInputsV6 (R9). */
 
 import type { VatOverride } from './vat';
+import { pct } from './pct';
 
 export type CostPlanMode = 'headline' | 'detailed';
 
@@ -251,6 +252,21 @@ export interface FeeLineResult {
   phase_id: string | null;
 }
 
+/** R15 spec §23.6. Mirrors PriceBasisSummary in cost_plan.py, field for field
+ *  and in order. `amount_pence` of every package summed by its `price_basis`
+ *  tag; a package with no tag (null — the migration default) falls into
+ *  `unclassified_pence`. The two coverage percentages are against
+ *  `base_build_pence`, via the shared `pct` helper (2 dp, null when the
+ *  denominator is 0). */
+export interface PriceBasisSummary {
+  fixed_price_pence: number;
+  provisional_sums_pence: number;
+  estimate_pence: number;
+  unclassified_pence: number;
+  fixed_price_coverage_pct: number | null;
+  provisional_sums_pct: number | null;
+}
+
 /** Spec §16. The ONLY shape the UI and the memo may read cost from. Every
  *  contingency and fee line reports its BASE as well as its amount — that is the
  *  audit's "show the base" discharged as data rather than prose. */
@@ -281,6 +297,12 @@ export interface CostPlanResult {
   lender_eligible_ratio: number;
   /** Display only; enters no calculation. null when the area is 0. */
   implied_rate_pence_per_sqm: number | null;
+  /** R15 spec §23.6. LAST two fields, both null in headline mode. `qs` is the
+   *  input block republished verbatim — the cost plan is the one place the
+   *  memo reads it from, so it never re-derives provenance from the raw
+   *  input document. */
+  price_basis: PriceBasisSummary | null;
+  qs: QsProvenance | null;
 }
 
 /** A pre-v7 document has no `cost_plan`, read structurally exactly like the
@@ -384,6 +406,33 @@ export function computeCostPlan(
   const professionalTotal = totalFor('professional');
   const statutoryTotal = totalFor('statutory');
 
+  // R15 spec §23.6. `p.price_basis ?? null`, not a bare read: a raw
+  // pre-R15 stored document (run through the golden-fixture corpus's OWN
+  // inputs_version, unmigrated) has no `price_basis` key on the line at all,
+  // so it reads `undefined` there -- treated the same as an untagged v13
+  // package (unclassified), not a fifth bucket.
+  let priceBasis: PriceBasisSummary | null = null;
+  let qs: QsProvenance | null = null;
+  if (detailed) {
+    const sumFor = (basis: PriceBasis) =>
+      plan.packages.reduce((s, p) => s + ((p.price_basis ?? null) === basis ? p.amount_pence : 0), 0);
+    const fixed = sumFor('fixed_price');
+    const provisional = sumFor('provisional_sum');
+    const estimate = sumFor('estimate');
+    const unclassified = plan.packages.reduce(
+      (s, p) => s + ((p.price_basis ?? null) === null ? p.amount_pence : 0), 0,
+    );
+    priceBasis = {
+      fixed_price_pence: fixed,
+      provisional_sums_pence: provisional,
+      estimate_pence: estimate,
+      unclassified_pence: unclassified,
+      fixed_price_coverage_pct: pct(fixed, baseBuild),
+      provisional_sums_pct: pct(provisional, baseBuild),
+    };
+    qs = plan.qs ?? null;
+  }
+
   return {
     mode: plan.mode,
     packages,
@@ -400,5 +449,7 @@ export function computeCostPlan(
     // R14 spec §5. Unrounded — the ONE rounding is on the product, in the ledger.
     lender_eligible_ratio: !detailed || baseBuild === 0 ? 1 : lenderEligibleBase / baseBuild,
     implied_rate_pence_per_sqm: areaSqm > 0 ? Math.round(baseBuild / areaSqm) : null,
+    price_basis: priceBasis,
+    qs,
   };
 }

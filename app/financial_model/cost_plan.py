@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .engine import money_round
+from .engine import money_round, pct
 
 
 @dataclass
@@ -51,6 +51,23 @@ class FeeLineResult:
 
 
 @dataclass
+class PriceBasisSummary:
+    """R15 spec Sec 23.6. Mirrors PriceBasisSummary in cost-plan.ts, field for
+    field and in order. `amount_pence` of every package summed by its
+    `price_basis` tag; a package with no tag (None -- the migration default)
+    falls into `unclassified_pence`. The two coverage percentages are against
+    `base_build_pence`, via the shared `pct` helper (2 dp, None when the
+    denominator is 0)."""
+
+    fixed_price_pence: int
+    provisional_sums_pence: int
+    estimate_pence: int
+    unclassified_pence: int
+    fixed_price_coverage_pct: float | None
+    provisional_sums_pct: float | None
+
+
+@dataclass
 class CostPlanResult:
     """Spec Sec 16. Mirrors CostPlanResult in cost-plan.ts field for field.
     The ONLY shape the UI and the report may read cost from. Every contingency
@@ -81,6 +98,12 @@ class CostPlanResult:
     # rounding is on the product (construction_pence * ratio), in the ledger.
     lender_eligible_ratio: float = 1.0
     implied_rate_pence_per_sqm: int | None = None
+    # R15 spec Sec 23.6. LAST two fields, both None in headline mode. `qs` is
+    # the input block republished verbatim (model_dump(mode="json")) -- the
+    # cost plan is the one place the report reads it from, so it never
+    # re-derives provenance from the raw input document.
+    price_basis: PriceBasisSummary | None = None
+    qs: dict[str, Any] | None = None
 
 
 def _cost_plan_of(inputs) -> Any:
@@ -189,6 +212,27 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
     professional_total = sum(f.amount_pence for f in fees if f.category == "professional")
     statutory_total = sum(f.amount_pence for f in fees if f.category == "statutory")
 
+    # R15 spec Sec 23.6. Read through getattr so a pre-v13 package (which has
+    # no `price_basis` attribute at all -- not merely None) is treated the
+    # same as an untagged v13 one: unclassified, not an AttributeError.
+    price_basis_summary = None
+    qs = None
+    if detailed:
+        fixed = sum(p.amount_pence for p in plan.packages if getattr(p, "price_basis", None) == "fixed_price")
+        provisional = sum(p.amount_pence for p in plan.packages if getattr(p, "price_basis", None) == "provisional_sum")
+        estimate = sum(p.amount_pence for p in plan.packages if getattr(p, "price_basis", None) == "estimate")
+        unclassified = sum(p.amount_pence for p in plan.packages if getattr(p, "price_basis", None) is None)
+        price_basis_summary = PriceBasisSummary(
+            fixed_price_pence=fixed,
+            provisional_sums_pence=provisional,
+            estimate_pence=estimate,
+            unclassified_pence=unclassified,
+            fixed_price_coverage_pct=pct(fixed, base_build),
+            provisional_sums_pct=pct(provisional, base_build),
+        )
+        plan_qs = getattr(plan, "qs", None)
+        qs = None if plan_qs is None else plan_qs.model_dump(mode="json")
+
     return CostPlanResult(
         mode=plan.mode,
         packages=packages,
@@ -209,4 +253,6 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
         implied_rate_pence_per_sqm=(
             money_round(base_build / area_sqm) if area_sqm > 0 else None
         ),
+        price_basis=price_basis_summary,
+        qs=qs,
     )
