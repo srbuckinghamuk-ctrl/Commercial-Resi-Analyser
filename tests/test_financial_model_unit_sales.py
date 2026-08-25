@@ -1,11 +1,16 @@
 """R13b spec Sec 22.2-22.4. Twin of unit-sales.test.ts. Every literal is from
 the plan's hand-derivation table; if one does not reconcile, report it."""
+import json
+
 import pytest
 
+from app.financial_model import run_appraisal
+from app.financial_model.migrate import migrate_inputs_to_v13
 from app.financial_model.unit_sales import compute_unit_sales
 from .fixtures_unit_sales import (
     anchor_resolver, held_twin_doc, no_programme_doc, pc_early_doc, residue_doc, sold_gross, unit_sales_doc,
 )
+from .test_financial_model_fixtures import APPRAISAL_FIXTURES
 
 
 def _run(doc):
@@ -118,3 +123,33 @@ def test_completion_month_is_clamped_into_the_term():
     doc = unit_sales_doc({"rows": rows})
     r = compute_unit_sales(doc, 24, anchor_resolver(doc), [("u1", 26_000_000)])
     assert r["units"][0]["completion_month"] == 23  # validation owns the real rule
+
+
+def test_unit_sales_gross_equals_schedule_gross_sales_corpus_wide():
+    """R13b's carried backlog item, closed here (R15 Task 6).
+
+    Sec 22.4's unit ledger and the Sec 4.4 schedule reach the sold-portion
+    gross by two different routes -- the ledger sums the per-unit rows it
+    built, the schedule sums the unit mix under the exit route -- and nothing
+    tied the two together. A change to either route could move one and leave
+    the other, and every figure derived from `gross_sales_pence` (the scheme
+    agent fee, the receipts ledger, the pre-sold percentage) would then
+    disagree with the unit table printed beside it in the same report.
+
+    Corpus-wide over every fixture carrying its own inputs; fixture K names a
+    `base_fixture` instead, so APPRAISAL_FIXTURES already excludes it. Each is
+    migrated to v13 so the identity is asserted on the document shape the
+    engine actually receives today. Twin of unit-sales.test.ts's own
+    corpus-wide check."""
+    checked = 0
+    for path in APPRAISAL_FIXTURES:
+        raw = json.loads(path.read_text(encoding="utf-8"))["inputs"]
+        run = run_appraisal(migrate_inputs_to_v13(raw, None))
+        unit_sales = run.metrics.unit_sales
+        if unit_sales is None:
+            continue
+        checked += 1
+        assert unit_sales["totals"]["gross_pence"] == run.schedule.totals.gross_sales_pence, path.stem
+    # Fixtures X and Y both carry a unit_sales block. An identity that is
+    # never actually asserted is the failure mode this guard exists against.
+    assert checked >= 2

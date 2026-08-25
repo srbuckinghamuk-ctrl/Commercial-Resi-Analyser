@@ -1647,9 +1647,9 @@ describe('v13 migration -- spec §23.10', () => {
   // entered item `unknown` with no evidence, so a migrated document has
   // nothing for §23.9's rules to fire on; property 2 checks that stays true,
   // and property 3 proves the rules can actually fire when a document's
-  // due-diligence block is incomplete. Written now, against field prefixes
-  // rather than named rules, since the rules themselves do not exist until
-  // Task 6 -- red until then; see the commit body.
+  // due-diligence block is incomplete. Written in Task 2 against field
+  // prefixes rather than named rules, since the rules themselves did not
+  // exist until Task 6's `validateDueDiligence` turned these green.
   for (const { file, doc } of fixtures) {
     it(`${file}: every v13-only rule stays silent on a migrated document (property 2 of three)`, () => {
       const inputs = doc.inputs!;

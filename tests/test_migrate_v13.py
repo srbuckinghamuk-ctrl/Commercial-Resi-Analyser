@@ -7,10 +7,10 @@ A single `set(v12_issues) == set(v13_issues)` assertion passes vacuously when
 the new rules cannot fire at all, which is exactly how R12 shipped a gate that
 proved nothing until it was rewritten mid-release -- R13 avoided the trap by
 building all three properties from the start, and this file follows suit.
-Properties 2 and 3 are Task 6's, though: Sec 23.9's due-diligence-only
-validation rules do not exist yet, so there is nothing for them to exercise
-until then -- they are written now (against field prefixes, not specific
-rule names) and stay red until Task 6 lands.
+Properties 2 and 3 were written here in Task 2, before Sec 23.9's
+due-diligence validation rules existed to exercise them -- against field
+prefixes rather than specific rule names, and red until Task 6 implemented
+`validate_due_diligence`, which is what turned them green.
 
 Filter correction carried forward from test_migrate_v11.py's own docstring:
 `_stored_version` reads `inputs_version` off `doc["inputs"]`, NOT the top
@@ -120,15 +120,14 @@ ALIAS: dict[str, str] = {}   # no field renames this release; kept so a future
                              # loosened assertion.
 
 
-# Properties 2 and 3 (v13-only validation rules are silent on a migrated
-# document, and can actually fire) are Task 6's. The seed writes every entered
-# item `unknown` with no evidence, so a migrated document has nothing for Sec
+# Properties 2 and 3: the v13-only validation rules are silent on a migrated
+# document, and can actually fire. The seed writes every entered item
+# `unknown` with no evidence, so a migrated document has nothing for Sec
 # 23.9's rules to fire on; property 2 checks that stays true, and property 3
 # (the matched non-vacuity check -- R12's Sec 18.7 lesson) proves the rules
 # can actually fire when a document's due-diligence block is incomplete.
-# Written now, against field prefixes rather than named rules, since the
-# rules themselves do not exist until Task 6 -- red until then; see the
-# commit body.
+# Written in Task 2 against field prefixes rather than named rules, since the
+# rules themselves did not exist until Task 6.
 
 
 def test_property_2_v13_only_rules_are_silent_on_a_migrated_document():

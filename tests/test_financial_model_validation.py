@@ -24,6 +24,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v9,
     migrate_inputs_to_v10,
     migrate_inputs_to_v12,
+    migrate_inputs_to_v13,
     migrate_v2_to_v3,
     migrate_v6_to_v7,
     migrate_v8_to_v9,
@@ -44,6 +45,7 @@ from app.financial_model.types import (
     ContingencyClass,
     CostPackage,
     CostPlanInputs,
+    DdItem,
     Dependency,
     EquitySource,
     FeeLine,
@@ -60,12 +62,14 @@ from app.financial_model.types import (
     ProgrammePackages,
     ProposedUnit,
     ProposedUnitV6,
+    QsProvenance,
     RefinanceInputs,
     RefinanceInputsV9,
     RetainedUnit,
     SalesPhasingInputsV9,
     SalesPhasingTrancheV9,
     SimpleSpendCurve,
+    SourceRecord,
     UnitMixInputsV6,
     UserDefinedSpendCurve,
     VatOverride,
@@ -73,6 +77,7 @@ from app.financial_model.types import (
 from app.financial_model.validation import reconcile, validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_vat_treatments
 
+from .fixtures_due_diligence import QS, dd_doc, raw_y_as_v12
 from .fixtures_investment_case import ic_doc
 from .fixtures_unit_sales import no_programme_doc, unit_sales_doc
 
@@ -2605,6 +2610,34 @@ def _extract_ts_err_message(block: str, i: int) -> tuple[str, int]:
     return "".join(buf), j + 1
 
 
+def _skip_ts_argument(block: str, i: int) -> int:
+    """Advances past ONE call argument, returning the index of the top-level
+    comma that ends it.
+
+    R15 Task 6 widened the drift window onto the Sec 22.7 block, whose err()
+    calls pass a VARIABLE as the field (``err(field, ...)``, and
+    ``err(`${field}.exchange`, ...)``) rather than the plain string literal
+    every Sec 19.7 call happens to use. Reading the field argument as a quoted
+    string, as this extractor did until now, walked straight off the end of a
+    bare identifier and mis-parsed the rest of the file. Quoted strings
+    (including template literals) and bracket nesting are both tracked, so any
+    argument shape is skipped cleanly."""
+    depth = 0
+    while True:
+        c = block[i]
+        if c in "'\"`":
+            _content, i = _extract_ts_err_message(block, i)
+            continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            assert depth > 0, f"err() call ended before its message argument at {block[i:i + 40]!r}"
+            depth -= 1
+        elif c == "," and depth == 0:
+            return i
+        i += 1
+
+
 def _extract_ts_err_messages(block: str) -> list[str]:
     """Every ``err(field, message)`` call's raw message argument in ``block``.
 
@@ -2619,17 +2652,25 @@ def _extract_ts_err_messages(block: str) -> list[str]:
 
     out: list[str] = []
     for m in re.finditer(r"\berr\(", block):
-        i = m.end()
-        while block[i] in " \n\t":
-            i += 1
-        _field, i = _extract_ts_err_message(block, i)  # the field argument, discarded
-        while block[i] in " \n\t":
-            i += 1
+        i = _skip_ts_argument(block, m.end())  # the field argument, discarded
         assert block[i] == ",", f"unexpected err() call shape at {block[i:i + 40]!r}"
         i += 1
         while block[i] in " \n\t":
             i += 1
-        message, i = _extract_ts_err_message(block, i)
+        if block[i] in "'\"`":
+            message, i = _extract_ts_err_message(block, i)
+        else:
+            # Sec 22.7 rule 1 hoists ONE message into a `const msg = '...'` and
+            # raises it on both `unit_sales` and `sales_phasing`. Resolve the
+            # binding rather than skip the call: that hoisted string is a real
+            # rule message, and it is one of the messages that drifted.
+            name_match = re.match(r"[A-Za-z_$][\w$]*", block[i:])
+            assert name_match is not None, f"unreadable err() message argument at {block[i:i + 40]!r}"
+            name = name_match.group(0)
+            decl = re.search(rf"\bconst {re.escape(name)} = (?=['\"`])", block)
+            assert decl is not None, f"cannot resolve the err() message identifier {name!r}"
+            message, _ = _extract_ts_err_message(block, decl.end())
+            i += len(name)
         out.append(message)
     return out
 
@@ -2637,22 +2678,30 @@ def _extract_ts_err_messages(block: str) -> list[str]:
 def test_validation_messages_match_the_typescript_engine():
     """Governance Sec 1: every rule added to validation.ts is added to
     validation.py with the SAME field string and the SAME message text. This
-    test reads the TS source and requires each Sec 19.7 message to appear in
+    test reads the TS source and requires each in-window message to appear in
     the Python source verbatim -- the two files drift silently otherwise, and
     a lender reading two different wordings for one rule is the visible
     symptom.
 
+    R15 Task 6 widened the window. It covered the Sec 19.7 block alone until
+    this release; it now runs from the Sec 22.7 unit-sales block (so Sec 22.7
+    and Sec 19.7 are both inside it) and reads validateDueDiligence's body as
+    a second window, because that function -- like validateMonitoring -- sits
+    below validateInputs and no start anchor inside validateInputs can reach
+    it. Widening it found three Sec 22.7 messages that had drifted since R13b
+    (the TS em-dash against an ASCII " - " in Python); the Python strings were
+    moved to the TS text, message text only.
+
     Two robustness fixes over the brief's own Step-4 pseudocode (both
     necessary -- the brief's version does not run; see this task's report):
 
-    1. TS extraction is scoped to the Sec 19.7 block (``const ic = ...`` to
-       the jurisdiction block that follows it), not matched by field-prefix
+    1. TS extraction is scoped by source location, not matched by field-prefix
        across the WHOLE file. The brief's `err\\('(?:investment_case|
        refinance|exit_strategy)...` pattern also catches pre-existing,
        out-of-scope rules (e.g. the Release 3b sell-all refinance guard) that
        this task does not own and that already carry an unrelated ASCII-hyphen
        vs em-dash drift between the two engines -- scoping by source location
-       is both more correct (it is what "Sec 19.7 message" means) and avoids
+       is both more correct (it is what "a Sec N message" means) and avoids
        failing on a pre-existing, unrelated mismatch.
     2. Python-side matching walks the AST (`ast.parse`) instead of doing a raw
        substring search on file text. Two things a text search gets wrong and
@@ -2673,10 +2722,18 @@ def test_validation_messages_match_the_typescript_engine():
     ts = Path("frontend/src/lib/model/validation.ts").read_text(encoding="utf-8")
     py = Path("app/financial_model/validation.py").read_text(encoding="utf-8")
 
-    start = ts.index("const ic = 'investment_case' in inputs")
+    start = ts.index("const unitSales = 'unit_sales' in inputs ? inputs.unit_sales : null;")
     end = ts.index("if ('jurisdiction' in inputs.acquisition) {")
-    ts_msgs = _extract_ts_err_messages(ts[start:end])
-    assert len(ts_msgs) >= 20, "the extractor stopped matching — fix it, do not lower the bound"
+    # R15 Task 6, second window: validateDueDiligence is a separate function
+    # (validateMonitoring's shape), so its err() calls sit BELOW validateInputs
+    # and outside the window above however far its start anchor is moved. The
+    # Sec 23.9 messages are the ones this release adds, so the guard reads
+    # that function's body too rather than covering only the blocks it happens
+    # to enclose -- the brief's "so the drift guard's window covers it".
+    dd_start = ts.index("export function validateDueDiligence(")
+    dd_end = ts.index("export function validateMonitoring(")
+    ts_msgs = _extract_ts_err_messages(ts[start:end]) + _extract_ts_err_messages(ts[dd_start:dd_end])
+    assert len(ts_msgs) >= 45, "the extractor stopped matching — fix it, do not lower the bound"
 
     tree = ast.parse(py)
     py_strings: list[str] = []
@@ -2804,3 +2861,286 @@ class TestUnitSalesValidation:
             raw["scenarios"]["downside"]["sales_slip_months"] = 1.5
         with pytest.raises(ValidationError):
             self._reparse(unit_sales_doc(), fractional_slip)
+
+
+class TestDueDiligenceValidation:
+    """Sec 23.9. Twin of validation.test.ts's '23.9 due diligence validation'.
+
+    Reachability, stated once here rather than repeated on every test: several
+    Sec 23.9 rules guard a field Pydantic ALREADY constrains, so in Python the
+    stray value is a 422 raised by ``model_validate`` and never reaches
+    ``validate_inputs`` at all. Those are asserted here as ``ValidationError``
+    and exercised as validation ISSUES in the TypeScript engine only, where a
+    raw JSON payload is not coerced:
+
+      * rule 0 (``status``) and rule 1f (``category``) -- ``DdStatus`` and
+        ``DdCategory`` are ``Literal``s;
+      * rule 6 (``cost_impact_pence`` / ``programme_impact_months``) -- ``int``
+        with ``ge=0``;
+      * rule 7's numeric and enum arms (``floor_area_sqm`` ``ge=0``,
+        ``lease_years_remaining`` ``int``/``ge=0``, ``tenure`` a ``Literal``);
+      * rule 8's ``stage``/``status`` and rule 9's ``price_basis``, all
+        ``Literal``s.
+
+    The rules themselves are implemented in validation.py regardless, for the
+    reason the Sec 22.7 sales-slip rule is (see its comment there): a rule
+    present in one engine and absent from the other is exactly the silent
+    asymmetry the dual-engine mirror exists to prevent, and the drift guard
+    compares the two engines' message lists.
+    """
+
+    @staticmethod
+    def _issues(doc):
+        return [i for i in validate_inputs(doc) if i.severity == "error"]
+
+    def _fields(self, doc):
+        return [i.field for i in self._issues(doc)]
+
+    def _has(self, doc, field_, message):
+        return any(i.field == field_ and i.message == message for i in self._issues(doc))
+
+    @staticmethod
+    def _item(**changes):
+        """A complete raw due-diligence item -- every field written, never
+        defaulted, because the TS twin reads the object as-is and a missing
+        key there is `undefined`, not the schema default."""
+        base = {
+            "id": "dd-extra", "code": "custom", "category": "existing_building",
+            "label": "Basement drainage", "status": "unknown", "evidence": None,
+            "expiry_date": None, "owner": "", "due_date": None,
+            "cost_impact_pence": None, "programme_impact_months": None,
+            "action": "", "notes": "",
+        }
+        return {**base, **changes}
+
+    @staticmethod
+    def _record(**changes):
+        """Fixture Y's captured listing record, optionally altered."""
+        base = {
+            "captured_at": "2026-08-25T09:00:00Z", "source_name": "rightmove",
+            "source_url": "https://example.test/listing/y", "is_vacant": False,
+            "tenure": "freehold", "lease_years_remaining": None,
+            "floor_area_sqm": 360, "use_class": "office", "epc_rating": "D",
+        }
+        return {**base, **changes}
+
+    def test_fixture_y_raises_no_error(self):
+        assert self._fields(dd_doc()) == []
+
+    def test_a_migrated_document_raises_no_due_diligence_issue(self):
+        # The seed writes every entered item `unknown` with no evidence, no
+        # action and no notes, `source_record` None, `qs` None and every
+        # `price_basis` None -- nothing for Sec 23.9 to fire on.
+        assert self._fields(migrate_inputs_to_v13(raw_y_as_v12(), None)) == []
+        assert self._fields(dd_doc({"seed": True})) == []
+        # A pre-v13 document has no due_diligence attribute at all.
+        v12 = migrate_inputs_to_v12(raw_y_as_v12(), None)
+        assert [f for f in self._fields(v12) if f.startswith(("due_diligence", "cost_plan.qs"))] == []
+
+    # --- rule 1: the catalogue --------------------------------------------
+
+    def test_rule_1a_a_missing_catalogue_item(self):
+        assert self._has(
+            dd_doc({"drop_item": "party_wall"}), "due_diligence",
+            'Due diligence item "party_wall" is missing - every catalogue item must be present.',
+        )
+        assert self._fields(dd_doc()) == []
+
+    def test_rule_1b_a_repeated_code(self):
+        assert self._has(
+            dd_doc({"dup_item": "insurance"}), "due_diligence.items[24].code",
+            'Due diligence item "insurance" appears more than once.',
+        )
+        # Accepting twin: `custom` is the ONE repeatable code -- it names no
+        # catalogue entry, so a second user-added item is a normal document,
+        # not a duplicate.
+        assert self._fields(dd_doc({"add_item": self._item(id="dd-custom-drainage")})) == []
+
+    def test_rule_1c_a_derived_code_cannot_be_entered(self):
+        assert self._has(
+            dd_doc({"add_item": self._item(code="lender_valuation", category="exit")}),
+            "due_diligence.items[24].code",
+            'Due diligence item "lender_valuation" is derived from the model and cannot be entered.',
+        )
+        assert self._fields(dd_doc({"add_item": self._item(category="exit")})) == []
+
+    def test_rule_1d_a_code_outside_the_catalogue(self):
+        assert self._has(
+            dd_doc({"add_item": self._item(code="drainage_survey")}),
+            "due_diligence.items[24].code",
+            'Due diligence item code "drainage_survey" is not in the catalogue.',
+        )
+        assert self._fields(dd_doc({"add_item": self._item()})) == []
+
+    def test_rule_1e_a_custom_item_needs_a_label(self):
+        assert self._has(
+            dd_doc({"add_item": self._item(label="   ")}), "due_diligence.items[24].label",
+            "A custom due diligence item needs a label.",
+        )
+        assert self._fields(dd_doc({"add_item": self._item(label="Drainage survey")})) == []
+
+    def test_rule_1f_a_category_outside_the_enum_is_a_pydantic_422(self):
+        # See the class docstring: DdCategory is a Literal, so this never
+        # reaches validate_inputs in Python. The ISSUE arm is tested in TS.
+        with pytest.raises(ValidationError):
+            DdItem.model_validate(self._item(category="drainage"))
+        assert DdItem.model_validate(self._item(category="construction")).category == "construction"
+
+    def test_rule_1g_a_duplicate_id(self):
+        assert self._has(
+            dd_doc({"add_item": self._item(id="dd-insurance")}), "due_diligence.items[24].id",
+            'Due diligence item id "dd-insurance" is not unique.',
+        )
+        assert self._fields(dd_doc({"add_item": self._item(id="dd-extra")})) == []
+
+    def test_rule_0_a_status_outside_the_enum_is_a_pydantic_422(self):
+        # See the class docstring: DdStatus is a Literal. The ISSUE arm is TS's.
+        with pytest.raises(ValidationError):
+            DdItem.model_validate(self._item(status="purple"))
+        assert DdItem.model_validate(self._item(status="green")).status == "green"
+
+    # --- rules 2-4: a status and the evidence it owes ----------------------
+
+    def test_rule_2_a_green_status_needs_evidence(self):
+        msg = "A green status needs evidence: record the source and the date."
+        field_ = "due_diligence.items[4].evidence"   # cil_s106
+        assert self._has(dd_doc({"status": {"cil_s106": "green"}}), field_, msg)
+        assert self._has(dd_doc({
+            "status": {"cil_s106": "green"},
+            "evidence": {"cil_s106": {"source": "  ", "reference": "CIL notice", "date": "2026-07-01"}},
+        }), field_, msg)
+        assert self._has(dd_doc({
+            "status": {"cil_s106": "green"},
+            "evidence": {"cil_s106": {"source": "City of York Council", "reference": "CIL notice", "date": "  "}},
+        }), field_, msg)
+        assert self._fields(dd_doc({
+            "status": {"cil_s106": "green"},
+            "evidence": {"cil_s106": {
+                "source": "City of York Council", "reference": "CIL notice", "date": "2026-07-01"}},
+        })) == []
+
+    def test_rule_3_a_red_or_amber_status_needs_an_action(self):
+        msg = "A red or amber status needs an action."
+        field_ = "due_diligence.items[4].action"
+        assert self._has(dd_doc({"status": {"cil_s106": "amber"}}), field_, msg)
+        assert self._has(dd_doc({"status": {"cil_s106": "red"}}), field_, msg)
+        assert self._has(dd_doc({"status": {"cil_s106": "amber"}, "action": {"cil_s106": " "}}), field_, msg)
+        assert self._fields(dd_doc({
+            "status": {"cil_s106": "amber"}, "action": {"cil_s106": "Request the CIL liability notice"},
+        })) == []
+
+    def test_rule_4_a_not_applicable_status_needs_a_reason(self):
+        msg = "A not-applicable status needs a reason in notes."
+        field_ = "due_diligence.items[4].notes"
+        assert self._has(dd_doc({"status": {"cil_s106": "not_applicable"}}), field_, msg)
+        assert self._fields(dd_doc({
+            "status": {"cil_s106": "not_applicable"}, "notes": {"cil_s106": "Outside the CIL charging area"},
+        })) == []
+
+    # --- rule 5: every present date is a real calendar date ----------------
+
+    def test_rule_5_evidence_date(self):
+        bad = {"source": "City of York Council", "reference": "26/01234/FUL", "date": "2026-02-31"}
+        assert self._has(
+            dd_doc({"evidence": {"planning_route": bad}}), "due_diligence.items[0].evidence.date",
+            "Evidence date must be a real calendar date in yyyy-mm-dd form.",
+        )
+        assert self._fields(dd_doc({"evidence": {"planning_route": {**bad, "date": "2026-02-28"}}})) == []
+
+    def test_rule_5_expiry_date(self):
+        assert self._has(
+            dd_doc({"expiry": {"planning_route": "2026-13-01"}}), "due_diligence.items[0].expiry_date",
+            "Expiry date must be a real calendar date in yyyy-mm-dd form.",
+        )
+        assert self._fields(dd_doc({"expiry": {"planning_route": "2026-12-01"}})) == []
+        assert self._fields(dd_doc({"expiry": {"planning_route": None}})) == []
+
+    def test_rule_5_due_date(self):
+        assert self._has(
+            dd_doc({"add_item": self._item(due_date="2026-02-30")}), "due_diligence.items[24].due_date",
+            "Due date must be a real calendar date in yyyy-mm-dd form.",
+        )
+        assert self._fields(dd_doc({"add_item": self._item(due_date="2026-02-28")})) == []
+
+    def test_rule_5_qs_dates(self):
+        assert self._has(
+            dd_doc({"qs": {**QS, "date": "2026-02-31"}}), "cost_plan.qs.date",
+            "QS date must be a real calendar date in yyyy-mm-dd form.",
+        )
+        assert self._has(
+            dd_doc({"qs": {**QS, "base_date": "01-07-2026"}}), "cost_plan.qs.base_date",
+            "QS base date must be a real calendar date in yyyy-mm-dd form.",
+        )
+        assert self._fields(dd_doc({"qs": dict(QS)})) == []
+
+    # --- rule 6: the impacts -----------------------------------------------
+
+    def test_rule_6_impacts_are_whole_and_non_negative(self):
+        # See the class docstring: both fields are `int` with `ge=0`, so these
+        # are 422s in Python. The ISSUE arm is tested in TS.
+        with pytest.raises(ValidationError):
+            DdItem.model_validate(self._item(cost_impact_pence=-1))
+        with pytest.raises(ValidationError):
+            DdItem.model_validate(self._item(cost_impact_pence=1.5))
+        with pytest.raises(ValidationError):
+            DdItem.model_validate(self._item(programme_impact_months=-1))
+        with pytest.raises(ValidationError):
+            DdItem.model_validate(self._item(programme_impact_months=0.5))
+        assert self._fields(dd_doc({"impacts": {"cil_s106": (0, 0)}})) == []
+
+    # --- rule 7: the captured listing record -------------------------------
+
+    def test_rule_7_captured_at_is_required(self):
+        assert self._has(
+            dd_doc({"source_record": self._record(captured_at="   ")}),
+            "due_diligence.source_record.captured_at",
+            "The captured listing record needs a captured_at timestamp.",
+        )
+        assert self._fields(dd_doc({"source_record": self._record()})) == []
+        assert self._fields(dd_doc({"source_record": None})) == []
+
+    def test_rule_7_numeric_and_enum_arms_are_pydantic_422s(self):
+        # See the class docstring. The ISSUE arms are tested in TS.
+        with pytest.raises(ValidationError):
+            SourceRecord.model_validate(self._record(floor_area_sqm=-1))
+        with pytest.raises(ValidationError):
+            SourceRecord.model_validate(self._record(lease_years_remaining=-1))
+        with pytest.raises(ValidationError):
+            SourceRecord.model_validate(self._record(lease_years_remaining=12.5))
+        with pytest.raises(ValidationError):
+            SourceRecord.model_validate(self._record(tenure="commonhold"))
+        assert self._fields(dd_doc({"source_record": self._record(
+            floor_area_sqm=0, lease_years_remaining=0, tenure="leasehold")})) == []
+
+    # --- rule 8: QS provenance ---------------------------------------------
+
+    def test_rule_8_qs_provenance_is_detailed_mode_only(self):
+        assert self._has(
+            dd_doc({"mode": "headline"}), "cost_plan.qs",
+            "QS provenance applies to a detailed cost plan only - switch to detailed mode or remove it.",
+        )
+        assert self._fields(dd_doc({"mode": "headline", "qs": None})) == []
+
+    def test_rule_8_qs_needs_a_source(self):
+        assert self._has(
+            dd_doc({"qs": {**QS, "source": "  "}}), "cost_plan.qs.source",
+            "QS provenance needs a source.",
+        )
+        assert self._fields(dd_doc({"qs": {**QS, "source": "Gleeds"}})) == []
+
+    def test_rule_8_stage_and_status_enums_are_pydantic_422s(self):
+        # See the class docstring. The ISSUE arms are tested in TS.
+        with pytest.raises(ValidationError):
+            QsProvenance.model_validate({**QS, "stage": "riba_9"})
+        with pytest.raises(ValidationError):
+            QsProvenance.model_validate({**QS, "status": "superseded"})
+        assert self._fields(dd_doc({"qs": {**QS, "stage": "tender", "status": "reviewed"}})) == []
+
+    # --- rule 9: the package price basis ------------------------------------
+
+    def test_rule_9_price_basis_enum_is_a_pydantic_422(self):
+        # See the class docstring. The ISSUE arm is tested in TS.
+        with pytest.raises(ValidationError):
+            CostPackage.model_validate({"id": "pkg-x", "code": "structure", "price_basis": "guess"})
+        assert self._fields(dd_doc({"price_basis": {"pkg-mande": "estimate"}})) == []
+        assert self._fields(dd_doc({"price_basis": {"pkg-mande": None}})) == []
