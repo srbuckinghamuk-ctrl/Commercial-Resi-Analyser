@@ -21,9 +21,8 @@ function spreadByWeights(total: number, idealWeights: number[]): number[] {
   return out;
 }
 
-/** Raised-cosine S-curve: cumulative W(k) = (1 − cos(πk/D)) / 2. */
-export function spreadSCurve(total: number, months: number): number[] {
-  if (months <= 0) return [];
+/** Raised-cosine S-curve weight vector: cumulative W(k) = (1 − cos(πk/D)) / 2. */
+function sCurveWeights(months: number): number[] {
   const weights: number[] = [];
   let prev = 0;
   for (let k = 1; k <= months; k++) {
@@ -31,14 +30,24 @@ export function spreadSCurve(total: number, months: number): number[] {
     weights.push(cum - prev);
     prev = cum;
   }
-  return spreadByWeights(total, weights);
+  return weights;
+}
+
+/** Raised-cosine S-curve: cumulative W(k) = (1 − cos(πk/D)) / 2. */
+export function spreadSCurve(total: number, months: number): number[] {
+  if (months <= 0) return [];
+  return spreadByWeights(total, sCurveWeights(months));
+}
+
+/** Linear-ramp weight vector: w_k = 2k / (D(D+1)). */
+function backLoadedWeights(months: number): number[] {
+  return Array.from({ length: months }, (_, i) => (2 * (i + 1)) / (months * (months + 1)));
 }
 
 /** Linear ramp: w_k = 2k / (D(D+1)). */
 export function spreadBackLoaded(total: number, months: number): number[] {
   if (months <= 0) return [];
-  const weights = Array.from({ length: months }, (_, i) => (2 * (i + 1)) / (months * (months + 1)));
-  return spreadByWeights(total, weights);
+  return spreadByWeights(total, backLoadedWeights(months));
 }
 
 /** Normalised explicit weights. Callers validate length/non-negativity/sum
@@ -46,6 +55,21 @@ export function spreadBackLoaded(total: number, months: number): number[] {
 export function spreadUserDefined(total: number, weights: number[]): number[] {
   const sum = weights.reduce((a, b) => a + b, 0);
   return spreadByWeights(total, weights.map((w) => w / sum));
+}
+
+/** R15b spec §24.2. The ideal per-month fractions w_k of §6.1 for a window of
+ *  `durationMonths`, Σ = 1. `spreadByCurve` is `round(total × w_k)` with the
+ *  final month absorbing the residue; a midpoint computed from these weights is
+ *  independent of the amount. `[]` for a non-positive duration. */
+export function curveWeights(durationMonths: number, curve: SpendCurve): number[] {
+  const months = Math.floor(durationMonths);
+  if (months <= 0) return [];
+  switch (curve.kind) {
+    case 'straight_line': return Array.from({ length: months }, () => 1 / months);
+    case 's_curve': return sCurveWeights(months);
+    case 'back_loaded': return backLoadedWeights(months);
+    case 'user_defined': { const sum = curve.weights.reduce((a, b) => a + b, 0); return curve.weights.map((w) => w / sum); }
+  }
 }
 
 export function spreadByCurve(total: number, durationMonths: number, curve: SpendCurve): number[] {

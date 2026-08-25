@@ -82,5 +82,8 @@ export { validateInputs, reconcile };
 export type { ReconciliationStatus, ValidationIssue };
 export { solveSeniorBreakevenPhased, phasedReplayRedeems } from './breakeven';
 export type { PhasedSeniorBreakevenTerms } from './breakeven';
+export { curveWeights } from './curves';
+export { computePackageTiming } from './package-timing';
+export type { PackageTiming } from './package-timing';
 export * from './finance-types';
 export * from './due-diligence';

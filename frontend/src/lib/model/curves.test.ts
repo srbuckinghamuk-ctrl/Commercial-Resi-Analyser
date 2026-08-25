@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { spreadBackLoaded, spreadByCurve, spreadSCurve, spreadUserDefined } from './curves';
+import {
+  curveWeights, spreadBackLoaded, spreadByCurve, spreadSCurve, spreadUserDefined,
+} from './curves';
 
 describe('spreadSCurve', () => {
   it('matches the hand-derived raised-cosine table for 60,000,000p over 6 months', () => {
@@ -63,4 +65,21 @@ describe('spreadByCurve', () => {
   it('identity: an already-integer duration is unaffected by the floor', () => {
     expect(spreadByCurve(100, 3, { kind: 'straight_line' })).toEqual([33, 33, 34]);
   });
+});
+
+describe('curveWeights (R15b spec §24.2)', () => {
+  it('back_loaded over 3 is 1/6, 2/6, 3/6', () => {
+    expect(curveWeights(3, { kind: 'back_loaded' })).toEqual([1 / 6, 2 / 6, 3 / 6]);
+  });
+  it('straight_line over 4 is four quarters; user_defined normalises', () => {
+    expect(curveWeights(4, { kind: 'straight_line' })).toEqual([0.25, 0.25, 0.25, 0.25]);
+    expect(curveWeights(2, { kind: 'user_defined', weights: [1, 3] })).toEqual([0.25, 0.75]);
+  });
+  it('agrees with spreadByCurve on every non-final month (the spread is round(total × w_k))', () => {
+    const w = curveWeights(5, { kind: 's_curve' });
+    const s = spreadByCurve(1_000_003, 5, { kind: 's_curve' });
+    for (let k = 0; k < 4; k++) expect(s[k]).toBe(Math.round(1_000_003 * w[k]));
+    expect(s.reduce((a, b) => a + b, 0)).toBe(1_000_003);
+  });
+  it('a non-positive duration gives []', () => { expect(curveWeights(0, { kind: 'back_loaded' })).toEqual([]); });
 });
