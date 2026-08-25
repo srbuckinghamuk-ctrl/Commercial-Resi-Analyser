@@ -449,9 +449,14 @@ export function deriveMetrics(
         trancheArg = [];
         linesArg = lines;
       } else {
-        // Task 9 rewrites this arm to use resolved months.
-        lastMonth = Math.max(...phasing!.tranches.map((x) => x.month_offset));
-        trancheArg = phasing!.tranches;
+        // R13b §5.11 correction: before this the replay read tr.month_offset, so
+        // an anchored tranche on a slipped programme replayed receipts at a
+        // month the ledger never used (fixture S: 20/21 vs 16/19).
+        trancheArg = phasing!.tranches.map((tr, i) => ({
+          month_offset: schedule.resolved_exit_months.tranches[i],
+          pct_of_gross_receipts: tr.pct_of_gross_receipts,
+        }));
+        lastMonth = Math.max(...schedule.resolved_exit_months.tranches);
         linesArg = undefined;
       }
       // Mirrors solveSeniorBreakevenPhased's own internal guard exactly (draws_and_fees_

@@ -4,6 +4,7 @@ existing Python home). Helpers duplicated verbatim from
 tests/test_financial_model_engine.py, matching the "tests must be self-contained"
 convention already used across both languages' test suites.
 """
+import copy
 import json
 from dataclasses import fields
 from pathlib import Path
@@ -63,6 +64,7 @@ from app.financial_model.types import (
     UnitAncillary,
     UnitMixInputs,
     UnitMixInputsV6,
+    parse_calculator_inputs,
 )
 from app.financial_model.vat import VatMonthLine, VatResult
 
@@ -343,6 +345,70 @@ class TestSec511UnderPhasing:
         f = next(x for x in run.metrics.flags if x.code == "senior_breakeven_unsolvable")
         assert "sales sweep" in f.message
         assert not any(x.code == "breakeven_cap_exhausted" for x in run.metrics.flags)
+
+
+# R13b Task 9 (spec Sec 5.11 correction). Fixture S's two tranches are anchored
+# (unit_completions+0 -> resolved month 16, unit_completions+3 -> resolved month
+# 19) but carry deliberately-disagreeing raw month_offset values (20, 21). Before
+# this task the phased break-even replay read tr.month_offset -- the raw,
+# unresolved month -- rather than schedule.resolved_exit_months.tranches, so an
+# anchored tranche on a slipped programme replayed receipts at a month the
+# ledger never used.
+_S = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "s-dated-programme.json"
+
+
+def _s_with_first_anchor(phase_id: str):
+    doc = copy.deepcopy(json.loads(_S.read_text(encoding="utf-8"))["inputs"])
+    doc["sales_phasing"]["tranches"][0]["anchor"] = {"phase_id": phase_id, "offset_months": 0}
+    return parse_calculator_inputs(doc)
+
+
+def test_s_break_even_replays_at_the_resolved_months_not_the_raw_offsets():
+    run = run_appraisal(parse_calculator_inputs(json.loads(_S.read_text(encoding="utf-8"))["inputs"]))
+    assert run.schedule.resolved_exit_months.tranches == [16, 19]
+    # Pre-fix (raw months 20/21) both engines printed 90,971,520 -- the negative control.
+    assert run.metrics.senior_breakeven_pence != 90_971_520
+    assert run.metrics.senior_breakeven_pence == 88_720_089
+
+
+def test_reading_the_resolved_month_changes_which_anchor_disturbs_the_facility_not_solvability():
+    # Both documents keep month_offset 20 on the first tranche (a decoy never
+    # consulted while an anchor is present) -- only the first tranche's anchor
+    # differs. Anchored to strip_out it resolves to month 6; anchored to
+    # building_control, month 15. Draws run through month 13 in both cases.
+    #
+    # Deviation from brief (Task 9): the brief's own test asserted
+    # early.senior_breakeven_pence is None with a senior_breakeven_unsolvable
+    # flag. That does not reconcile -- verified independently in both engines
+    # (this test and its TS twin agree to the penny: 96,756,404 / 88,462,082)
+    # and by a direct monotonicity trace of phased_replay_redeems across G in
+    # 1,000,000p steps (a single clean feasible/infeasible boundary, no
+    # non-monotonic artefact). Sec 5.11's structural-unsolvable guard --
+    # untouched by this task ("the tranche arm's arithmetic ... is untouched")
+    # -- fires only when draws continue after the LAST tranche's resolved
+    # month. Only the FIRST tranche's anchor moves here; the second tranche
+    # stays anchored at unit_completions+3 (month 19), so max(resolved) is 19
+    # in BOTH cases, and draws stop at month 13 -- the guard never fires for
+    # either anchor, matching the untouched spec definition ("facility draws
+    # continue after the FINAL tranche month").
+    #
+    # The real, reconciled difference: strip_out's month (6) falls WHILE the
+    # facility is still drawing, so the first tranche's 30% sweep fully
+    # redeems the facility early and it is redrawn by the remaining draws
+    # (months 7-13) -- raising the pre-existing, unrelated
+    # facility_redrawn_after_redemption flag -- before the second tranche
+    # clears the new balance at month 19. building_control's month (15) falls
+    # after all draws finish, so no such redraw occurs. Both are genuinely
+    # solvable; the resolved month changes WHICH ledger-level flag fires, not
+    # whether senior_breakeven_pence exists.
+    early = run_appraisal(_s_with_first_anchor("strip_out")).metrics
+    late = run_appraisal(_s_with_first_anchor("building_control")).metrics
+    assert early.senior_breakeven_pence == 96_756_404
+    assert any(f.code == "facility_redrawn_after_redemption" for f in early.flags)
+    assert not any(f.code == "senior_breakeven_unsolvable" for f in early.flags)
+    assert late.senior_breakeven_pence == 88_462_082
+    assert not any(f.code == "facility_redrawn_after_redemption" for f in late.flags)
+    assert not any(f.code == "senior_breakeven_unsolvable" for f in late.flags)
 
 
 class TestUnitSalesBreakevenBasis:

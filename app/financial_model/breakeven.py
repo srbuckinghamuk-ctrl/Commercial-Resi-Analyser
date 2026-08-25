@@ -106,6 +106,15 @@ def solve_developer_breakeven(t: DeveloperBreakevenTerms) -> int | None:
 
 
 @dataclass
+class ResolvedTranche:
+    """A tranche as the replay must see it: at the month the LEDGER used
+    (Sec 18.6's resolved month), not the entered month_offset. Sec 5.11
+    correction (R13b)."""
+    month_offset: int
+    pct_of_gross_receipts: float
+
+
+@dataclass
 class ReceiptLine:
     """R13b spec Sec 22.5. One dated receipt at its BASE (unstressed) gross; the
     replay scales every line by G / G_base. A released deposit is a line with

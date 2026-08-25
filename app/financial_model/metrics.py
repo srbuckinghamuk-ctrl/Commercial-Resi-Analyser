@@ -11,6 +11,7 @@ from .breakeven import (
     DeveloperBreakevenTerms,
     PhasedSeniorBreakevenTerms,
     ReceiptLine,
+    ResolvedTranche,
     SeniorBreakevenTerms,
     solve_developer_breakeven,
     solve_senior_breakeven,
@@ -673,9 +674,16 @@ def derive_metrics(
                 tranche_arg: list = []
                 lines_arg: list[ReceiptLine] | None = lines
             else:
-                # Task 9 rewrites this arm to use resolved months.
-                last_month = max(tr.month_offset for tr in phasing.tranches)
-                tranche_arg = phasing.tranches
+                # R13b Sec 5.11 correction: before this the replay read
+                # tr.month_offset, so an anchored tranche on a slipped programme
+                # replayed receipts at a month the ledger never used (fixture S:
+                # 20/21 vs 16/19).
+                resolved = schedule.resolved_exit_months.tranches
+                tranche_arg = [
+                    ResolvedTranche(m, tr.pct_of_gross_receipts)
+                    for m, tr in zip(resolved, phasing.tranches)
+                ]
+                last_month = max(resolved)
                 lines_arg = None
             # Mirrors solve_senior_breakeven_phased's own internal guard exactly
             # (draws_and_fees_pence[m] > 0 for m past the last tranche/line) --

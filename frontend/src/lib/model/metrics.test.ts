@@ -450,6 +450,78 @@ describe('§5.11 under phasing', () => {
   });
 });
 
+// R13b Task 9 (spec §5.11 correction). Fixture S's two tranches are anchored
+// (unit_completions+0 -> resolved month 16, unit_completions+3 -> resolved month
+// 19) but carry deliberately-disagreeing raw month_offset values (20, 21).
+// Before this task the phased break-even replay read tr.month_offset — the raw,
+// unresolved month — rather than schedule.resolved_exit_months.tranches, so an
+// anchored tranche on a slipped programme replayed receipts at a month the
+// ledger never used.
+const FIXTURE_S_PATH = resolve(MONITORING_FIXTURE_DIR, 's-dated-programme.json');
+
+function fixtureSInputs(): AnyCalculatorInputs {
+  return JSON.parse(readFileSync(FIXTURE_S_PATH, 'utf-8')).inputs as AnyCalculatorInputs;
+}
+
+function sWithFirstAnchor(phaseId: string): AnyCalculatorInputs {
+  const doc = structuredClone(fixtureSInputs()) as AnyCalculatorInputs & {
+    sales_phasing: { tranches: Array<{ anchor: { phase_id: string; offset_months: number } | null }> };
+  };
+  doc.sales_phasing.tranches[0].anchor = { phase_id: phaseId, offset_months: 0 };
+  return doc;
+}
+
+describe('§5.11 correction — anchored tranches replay at their resolved months (fixture S)', () => {
+  it('S break-even replays at the resolved months, not the raw offsets', () => {
+    const run = runAppraisal(fixtureSInputs());
+    expect(run.schedule.resolved_exit_months.tranches).toEqual([16, 19]);
+    // Pre-fix (raw months 20/21) both engines printed 90,971,520 — the negative control.
+    expect(run.metrics.senior_breakeven_pence).not.toBe(90_971_520);
+    expect(run.metrics.senior_breakeven_pence).toBe(88_720_089);
+  });
+
+  it('reading the resolved month changes which anchor disturbs the facility, not solvability', () => {
+    // Both documents keep month_offset 20 on the first tranche (a decoy never
+    // consulted while an anchor is present) — only the first tranche's anchor
+    // differs. Anchored to strip_out it resolves to month 6; anchored to
+    // building_control, month 15. Draws run through month 13 in both cases.
+    //
+    // Deviation from brief (Task 9): the brief's own test asserted
+    // early.senior_breakeven_pence === null with a senior_breakeven_unsolvable
+    // flag. That does not reconcile — verified independently in both engines
+    // (this test and its Python twin agree to the penny: 96,756,404 /
+    // 88,462,082) and by a direct monotonicity trace of phasedReplayRedeems
+    // across G in 1,000,000p steps (a single clean feasible/infeasible
+    // boundary, no non-monotonic artefact). §5.11's structural-unsolvable
+    // guard — untouched by this task ("the tranche arm's arithmetic ... is
+    // untouched") — fires only when draws continue after the LAST tranche's
+    // resolved month. Only the FIRST tranche's anchor moves here; the second
+    // tranche stays anchored at unit_completions+3 (month 19), so
+    // Math.max(...schedule.resolved_exit_months.tranches) is 19 in BOTH
+    // cases, and draws stop at month 13 — the guard never fires for either
+    // anchor, matching the untouched spec definition ("facility draws
+    // continue after the FINAL tranche month").
+    //
+    // The real, reconciled difference: strip_out's month (6) falls WHILE the
+    // facility is still drawing, so the first tranche's 30% sweep fully
+    // redeems the facility early and it is redrawn by the remaining draws
+    // (months 7-13) — raising the pre-existing, unrelated
+    // facility_redrawn_after_redemption flag — before the second tranche
+    // clears the new balance at month 19. building_control's month (15)
+    // falls after all draws finish, so no such redraw occurs. Both are
+    // genuinely solvable; the resolved month changes WHICH ledger-level flag
+    // fires, not whether senior_breakeven_pence exists.
+    const early = runAppraisal(sWithFirstAnchor('strip_out')).metrics;
+    const late = runAppraisal(sWithFirstAnchor('building_control')).metrics;
+    expect(early.senior_breakeven_pence).toBe(96_756_404);
+    expect(early.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(true);
+    expect(early.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+    expect(late.senior_breakeven_pence).toBe(88_462_082);
+    expect(late.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(false);
+    expect(late.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
+  });
+});
+
 describe('unit-sales break-even basis (spec §22.5/§5.12)', () => {
   it('unit-sales path solves the phased break-even and agrees with the engine-verified relationship to held', () => {
     // Deviation from brief (task 8): the brief's own test (and the task instructions'

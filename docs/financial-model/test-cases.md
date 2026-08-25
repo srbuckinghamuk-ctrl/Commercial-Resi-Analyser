@@ -4112,6 +4112,47 @@ and both `cost_to_complete_*` figures are **unchanged**.
    limitation of §5.10, not a defect introduced here, and it is what makes Q and
    S the corpus's standing examples of the allowed direction.
 
+#### R13b Task 9 — §5.11 correction: anchored tranches replay at their resolved months
+
+S's two sale tranches are anchored (`unit_completions+0`, `unit_completions+3`)
+but deliberately carry `month_offset` values (20, 21) that disagree with the
+programme's resolved months (16, 19) — see the fixture's own note, (e). Before
+this task the phased senior break-even replay (§5.11 phased regime) read
+`tr.month_offset` — the raw, unresolved month — rather than
+`schedule.resolved_exit_months.tranches` (§18.6/§19.6), so it replayed the two
+tranches' receipts at months 20 and 21, months the ledger never actually used.
+Both engines printed **90,971,520** for `senior_breakeven_pence` on this
+fixture through calc 2.13.0. At the correct, ledger-used months — 16 and 19 —
+the facility redeems both tranches two and two months earlier than the raw
+replay assumed, so the phased break-even needs less rolled-up interest and
+less exit fee, and the minimum falls to **88,720,089**. This is the one
+pre-existing computed value R13b moves on fixture S, recorded here as a
+corrected reported metric, not a fixture change (spec §5.11, changelog
+2.14.0). `senior_breakeven_pence: 88720089` is now pinned in
+`expected_metrics`.
+
+The correction also changes a second, previously-untested observable: an
+`anchor` that resolves EARLIER than the programme's own draw schedule finishes
+(rather than after it, as S's base document has) makes the phased sweep fire
+mid-programme instead of after all draws stop. Anchoring S's first tranche to
+`strip_out` (resolved month 6, `month_offset` still the same disagreeing
+decoy) instead of its own `unit_completions+0` anchor puts that tranche's
+sweep three months before the facility's construction draws finish (month
+13): the tranche's 30% share fully redeems the facility early and the
+remaining draws (months 7–13) redraw it, raising the pre-existing
+`facility_redrawn_after_redemption` flag, before the second tranche (still
+anchored at `unit_completions+3`, month 19) clears the new balance. Anchoring
+the same tranche to `building_control` (resolved month 15, after all draws
+finish) reproduces the base document's clean shape. Both variants are
+genuinely solvable — 96,756,404 and 88,462,082 respectively, reconciled to the
+penny across both engines and confirmed non-artefactual by a direct
+monotonicity trace of the replay across G — because §5.11's structural-
+unsolvable guard (unchanged by this task) fires only when draws continue after
+the LAST tranche's resolved month, and the second tranche's month (19) is
+untouched by either anchor swap. A resolved month earlier than the facility's
+own draw schedule changes WHICH ledger-level flag the run carries, not whether
+`senior_breakeven_pence` exists.
+
 ### 20.4 Fixture W — monitoring on site (`fixtures/financial-model/w-monitoring-on-site.json`)
 
 **Purpose:** the release's golden case for §20.2's statement and its
