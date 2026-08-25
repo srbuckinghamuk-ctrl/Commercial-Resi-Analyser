@@ -26,6 +26,9 @@ export const LEVER_LABEL: Record<SensitivityLever, string> = {
   exit_yield: 'Exit yield',
   operating_cost: 'Operating cost',
   vacancy: 'Vacancy',
+  // R13b spec §22.8. The ninth lever; needs a unit_sales document to have
+  // anything to write to (selectableLevers below).
+  sales_slip: 'Sales slip',
 };
 
 /**
@@ -43,6 +46,7 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   exit_yield: 'Yield',
   operating_cost: 'Opex',
   vacancy: 'Vacancy',
+  sales_slip: 'Sales',
 };
 
 /**
@@ -59,9 +63,19 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
  * sanctioned discriminator, programme.ts) — this module stays outside
  * `lib/model/` and takes the already-resolved boolean rather than the
  * document itself.
+ *
+ * R13b spec §22.8: `hasUnitSales` gates `sales_slip` the same way —
+ * `'unit_sales' in inputs && inputs.unit_sales != null` at the call site — a
+ * document with no unit-sales ledger has no completion date for the lever to
+ * move.
  */
-export function selectableLevers(hasPhaseNetwork: boolean): readonly SensitivityLever[] {
-  return hasPhaseNetwork ? LEVER_ORDER : LEVER_ORDER.filter((l) => l !== 'phase_slip');
+export function selectableLevers(
+  hasPhaseNetwork: boolean,
+  hasUnitSales: boolean,
+): readonly SensitivityLever[] {
+  return LEVER_ORDER.filter((l) => (
+    (l !== 'phase_slip' || hasPhaseNetwork) && (l !== 'sales_slip' || hasUnitSales)
+  ));
 }
 
 /** Decimal places each lever's unit is quoted to. Percentage-POINT levers are
@@ -80,8 +94,9 @@ export function formatStepLabel(lever: SensitivityLever, step: number): string {
   const text = signed(step, decimalsFor(lever));
   // R13 spec §19.8: operating_cost is a percent, same unit as gdv/construction_cost.
   if (lever === 'gdv' || lever === 'construction_cost' || lever === 'operating_cost') return `${text}%`;
-  // R12 spec §18.9: phase_slip is months, same unit as timeline.
-  if (lever === 'timeline' || lever === 'phase_slip') return `${text} months`;
+  // R12 spec §18.9: phase_slip is months, same unit as timeline. R13b spec
+  // §22.8: sales_slip is months too.
+  if (lever === 'timeline' || lever === 'phase_slip' || lever === 'sales_slip') return `${text} months`;
   // R13 spec §19.8: exit_yield and vacancy are percentage points, same unit as interest_rate.
   return `${text} pp`;
 }
@@ -92,7 +107,7 @@ export function formatRangeLabel(lever: SensitivityLever, low: number, high: num
   if (lever === 'gdv' || lever === 'construction_cost' || lever === 'operating_cost') {
     return `${signed(low, d)}% to ${signed(high, d)}%`;
   }
-  const unit = lever === 'timeline' || lever === 'phase_slip' ? 'months' : 'pp';
+  const unit = lever === 'timeline' || lever === 'phase_slip' || lever === 'sales_slip' ? 'months' : 'pp';
   return `${signed(low, d)} to ${signed(high, d)} ${unit}`;
 }
 

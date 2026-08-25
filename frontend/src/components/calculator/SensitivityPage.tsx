@@ -98,7 +98,7 @@ export default function SensitivityPage({ inputs }: Props) {
   // `phases`, is not invalidated by a fresh `[]` literal on every render of a
   // `programme = null` document.
   const phases = useMemo(() => network?.phases ?? [], [network]);
-  const levers = selectableLevers(network != null);
+  const levers = selectableLevers(network != null, 'unit_sales' in inputs && inputs.unit_sales != null);
 
   // R12 final review wave (Finding 3). The engine deliberately allows rows
   // and cols to both be `phase_slip`, targeting different phases (spec

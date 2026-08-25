@@ -35,6 +35,14 @@ describe('sensitivity-format', () => {
     expect(LEVER_LABEL.construction_cost).toBe('Construction cost');
     expect(LEVER_LABEL.timeline).toBe('Timeline');
     expect(LEVER_LABEL.interest_rate).toBe('Interest rate');
+    // R13b spec §22.8.
+    expect(LEVER_LABEL.sales_slip).toBe('Sales slip');
+  });
+
+  // R13b spec §22.8: sales_slip is months, same unit as timeline/phase_slip.
+  it('formats sales_slip in months', () => {
+    expect(formatStepLabel('sales_slip', 3)).toBe('+3 months');
+    expect(formatStepLabel('sales_slip', 3).endsWith('months')).toBe(true);
   });
 
   // The FE/FG/NR order is fixed, not the engine's flag order — the memo has
@@ -258,14 +266,30 @@ describe('omittedTornadoNotes', () => {
 // usable, and that picker can only be populated from a document that carries
 // a phase network -- so the lever itself is withheld from a document that
 // does not, rather than offered next to a picker with nothing to show.
+// R13b Task 10 (spec §22.8) adds the same gate for `sales_slip`, keyed on
+// `hasUnitSales` instead.
 describe('selectableLevers', () => {
-  it('offers all five levers, including phase_slip, when the document carries a phase network', () => {
-    expect(selectableLevers(true)).toEqual(LEVER_ORDER);
+  it('offers every lever, including phase_slip and sales_slip, when both preconditions hold', () => {
+    expect(selectableLevers(true, true)).toEqual(LEVER_ORDER);
   });
 
-  it('withholds phase_slip when the document has no phase network, leaving the other four', () => {
-    const levers = selectableLevers(false);
+  it('withholds phase_slip when the document has no phase network, leaving sales_slip', () => {
+    const levers = selectableLevers(false, true);
     expect(levers).not.toContain('phase_slip');
+    expect(levers).toContain('sales_slip');
     expect(levers).toEqual(LEVER_ORDER.filter((l) => l !== 'phase_slip'));
+  });
+
+  it('withholds sales_slip when the document has no unit-sales ledger, leaving phase_slip', () => {
+    const levers = selectableLevers(true, false);
+    expect(levers).not.toContain('sales_slip');
+    expect(levers).toContain('phase_slip');
+    expect(levers).toEqual(LEVER_ORDER.filter((l) => l !== 'sales_slip'));
+  });
+
+  it('withholds both when neither precondition holds', () => {
+    const levers = selectableLevers(false, false);
+    expect(levers).not.toContain('phase_slip');
+    expect(levers).not.toContain('sales_slip');
   });
 });

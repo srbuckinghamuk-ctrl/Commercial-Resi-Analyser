@@ -5,6 +5,7 @@ import { applyScenario } from './apply-scenario';
 import { migrateInputsToV6, migrateInputsToV9 } from './migrate';
 import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
 import { icDoc, explicitRefinanceDoc, applyLeversInOrder } from './__fixtures__/investment-case-docs';
+import { unitSalesDoc } from './__fixtures__/unit-sales-docs';
 import {
   defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
 } from '../conversion-defaults';
@@ -657,11 +658,14 @@ describe('§19.8 the three exit levers', () => {
     expect(out.investment_case).toBeNull();
   });
 
-  it('keeps all EIGHT levers order-independent', () => {
+  it('keeps all NINE levers order-independent', () => {
+    // sales_slip is inert on icDoc() (no unit_sales) -- this test just needs
+    // its tie-break slot in LEVER_ORDER exercised; the "sales_slip lever"
+    // describe block below is the live one.
     const orders: SensitivityLever[][] = [
-      ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip', 'exit_yield', 'operating_cost', 'vacancy'],
-      ['vacancy', 'exit_yield', 'phase_slip', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost'],
-      ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip'],
+      ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip', 'exit_yield', 'operating_cost', 'vacancy', 'sales_slip'],
+      ['vacancy', 'exit_yield', 'phase_slip', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost', 'sales_slip'],
+      ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip', 'sales_slip'],
     ];
     // deriveMetrics takes (inputs, schedule, model), not a single document — the
     // brief's Step 1 text names it directly, but every other order-independence
@@ -671,5 +675,65 @@ describe('§19.8 the three exit levers', () => {
     const results = orders.map((o) => runAppraisal(applyLeversInOrder(icDoc(), o)).metrics);
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
+  });
+});
+
+// R13b spec §22.8. The ninth lever: sales_slip. Fixture X's rows are u1
+// completion practical_completion+0, u2 +1, u3 unit_completions+1, u4 fixed
+// month 20; term 24. Mirror of the Python "sales_slip lever" tests in
+// test_financial_model_apply_scenario.py.
+describe('sales_slip lever — spec §22.8', () => {
+  const SLIP = (months: number): ScenarioOverrides => ({
+    ...BASE_OVERRIDES, label: 's', sales_slip_months: months,
+  });
+
+  it('adds to completion only, fixed or anchored, additively', () => {
+    const out = applyScenario(unitSalesDoc(), SLIP(3));
+    const rows = out.unit_sales!.units;
+    expect(rows[3].completion.month_offset).toBe(23);          // fixed 20 + 3
+    expect(rows[0].completion.anchor!.offset_months).toBe(3);  // practical_completion + 0 -> + 3
+    expect(rows[1].completion.anchor!.offset_months).toBe(4);  // + 1 -> + 4, stressed FROM its recorded position
+    expect(rows[3].exchange!.month_offset).toBe(11);            // exchange untouched
+    expect(rows[0].exchange!.anchor!.offset_months).toBe(0);
+  });
+
+  it('is a no-op on the null path', () => {
+    const doc = unitSalesDoc({ unitSales: null });
+    expect(applyScenario(doc, SLIP(3))).toEqual(applyScenario(doc, SLIP(0)));
+  });
+
+  const FIELD_OF: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof ScenarioOverrides> = {
+    gdv: 'gdv_adjustment_pct', construction_cost: 'construction_cost_adjustment_pct',
+    timeline: 'timeline_adjustment_months', interest_rate: 'interest_rate_adjustment_pct',
+    exit_yield: 'exit_yield_adjustment_pct', operating_cost: 'operating_cost_adjustment_pct',
+    vacancy: 'vacancy_adjustment_pct', sales_slip: 'sales_slip_months',
+  };
+
+  function overridesForLever(lever: Exclude<SensitivityLever, 'phase_slip'>, value: number): ScenarioOverrides {
+    return { ...BASE_OVERRIDES, [FIELD_OF[lever]]: value };
+  }
+
+  it('keeps all nine levers order-independent on a unit-sales document', () => {
+    const levers: Record<Exclude<SensitivityLever, 'phase_slip'>, number> = {
+      gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
+      exit_yield: 0, operating_cost: 0, vacancy: 0, sales_slip: 2,
+    };
+    const orders: Array<Exclude<SensitivityLever, 'phase_slip'>[]> = [
+      Object.keys(levers) as Exclude<SensitivityLever, 'phase_slip'>[],
+      (Object.keys(levers) as Exclude<SensitivityLever, 'phase_slip'>[]).slice().reverse(),
+      ['sales_slip', 'timeline', 'gdv', 'interest_rate', 'construction_cost', 'vacancy', 'exit_yield', 'operating_cost'],
+    ];
+    const applyIn = (order: Exclude<SensitivityLever, 'phase_slip'>[]) => {
+      let doc = unitSalesDoc();
+      for (const lever of order) {
+        doc = applyScenario(doc, overridesForLever(lever, levers[lever]));
+      }
+      return runAppraisal(doc).metrics;
+    };
+    const results = orders.map(applyIn);
+    expect(results[1]).toEqual(results[0]);
+    expect(results[2]).toEqual(results[0]);
+    const withSlip = applyIn(orders[0]);
+    expect(withSlip.unit_sales!.units[3].completion_month).toBe(22); // 20 + 2, inside term 26
   });
 });

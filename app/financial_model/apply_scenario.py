@@ -110,4 +110,16 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
             line.value = money_round(scaled) if line.basis == "fixed_pence_per_month" else scaled
         investment_case.valuation.cap_yield_pct += overrides.exit_yield_adjustment_pct
 
+    # R13b spec Sec 22.8. ADDITIVE, completion only: the anchor offset when
+    # anchored, else month_offset. Exchange dates are marketing facts and do
+    # not move. Gated on presence, so a v2-v11 document and a v12 document
+    # whose unit_sales is None are both no-ops by construction.
+    unit_sales = getattr(out, "unit_sales", None)
+    if unit_sales is not None and overrides.sales_slip_months != 0:
+        for row in unit_sales.units:
+            if row.completion.anchor is not None:
+                row.completion.anchor.offset_months += overrides.sales_slip_months
+            else:
+                row.completion.month_offset += overrides.sales_slip_months
+
     return out
