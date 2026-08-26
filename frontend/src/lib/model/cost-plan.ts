@@ -46,12 +46,14 @@ export interface CostPackage {
    *  mode has no packages, so every class there takes the whole base build
    *  regardless of tag -- see computeCostPlan's contingency resolution. */
   contingency_class: ContingencyClassName;
-  /** R10 records this; R14 (calc 2.13.0) WIRES it. The ledger's §4.2(b)
-   *  development-cost advance cap scales its construction line by the cost
-   *  plan's `lender_eligible_ratio` — the eligible share of base build — so
-   *  clearing this flag on a package shrinks every later month's advance cap
-   *  and widens the funding gap. Live in detailed mode only: headline mode has
-   *  no packages, and its ratio is pinned to 1. */
+  /** R10 records this; R14 (calc 2.13.0) WIRES it, R15b (spec §24.4) per-months
+   *  it: clearing this flag on a package removes that package's own spend
+   *  months from `uses[m].lender_eligible_construction_pence`, which shrinks
+   *  the ledger's §4.2(b) advance cap in exactly those months and widens the
+   *  funding gap. `lender_eligible_ratio` remains the disclosure figure and
+   *  the denominator-zero fallback — it no longer drives the cap itself. Live
+   *  in detailed mode only: headline mode has no packages, and its ratio is
+   *  pinned to 1. */
   lender_eligible: boolean;
   notes: string;
   /** R11 spec 17.1. Detailed mode only -- hard-rejected in headline mode

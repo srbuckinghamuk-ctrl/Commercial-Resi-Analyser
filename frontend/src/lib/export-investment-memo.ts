@@ -2884,13 +2884,16 @@ export function generateInvestmentMemo(
   // lender-eligible construction spend for the month, never the whole
   // facility, while professional and statutory costs draw in full.
   // `development_cost_advance_pct` is a raw stored input (the entered cap
-  // percentage), not a computed figure.
-  y = bodyText(
-    y,
-    `Development advances are capped at ${fmtPctExact(inputs.finance.development_cost_advance_pct)} `
-    + 'of lender-eligible construction spend month by month, plus professional and statutory costs '
-    + 'in full (spec §4.2(b)).',
-  );
+  // percentage), not a computed figure. Cash deals draw no facility at all,
+  // so the sentence only prints where there is a facility to cap.
+  if (inputs.finance.funding_source !== 'cash') {
+    y = bodyText(
+      y,
+      `Development advances are capped at ${fmtPctExact(inputs.finance.development_cost_advance_pct)} `
+      + 'of lender-eligible construction spend month by month, plus professional and statutory costs '
+      + 'in full (spec §4.2(b)).',
+    );
+  }
 
   // ── Section 11: Exit Strategy ──
   y = sectionTitle(y, 11, 'Exit Strategy');

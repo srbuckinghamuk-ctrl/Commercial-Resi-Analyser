@@ -2568,6 +2568,17 @@ describe('R15b cost plan in time (spec §24.6)', () => {
     expect(text).toContain('spec §4.2');
   });
 
+  it('omits the advance-cap sentence on a cash-funded deal, which draws no facility to cap', async () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureA = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'a-all-cash.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV14 };
+    const run = runAppraisal(fixtureA.inputs);
+    expect(run.inputs.finance.funding_source).toBe('cash');
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).not.toContain('Development advances are capped');
+  });
+
   it('never prints a per-package-programme, uniform-ratio or bare "No inflation" limitation', async () => {
     const run = runAppraisal(docZ());
     const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));

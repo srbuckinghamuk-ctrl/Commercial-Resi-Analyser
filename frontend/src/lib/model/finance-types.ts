@@ -51,9 +51,10 @@ export interface FacilityTerms {
   day_one_advance_pence: number | null;
   day_one_market_value_pence: number | null;
   /** Caps monthly development draws at this % of that month's eligible dev costs.
-   *  R14 spec §4.2(b): "eligible" is construction × the cost plan's
-   *  `lender_eligible_ratio`, plus professional and statutory in full — VAT is
-   *  deliberately excluded (§17.6). */
+   *  R14 spec §4.2(b): "eligible" is `uses[m].lender_eligible_construction_pence`
+   *  (spec §24.4 — the month's lender-eligible construction spend; R14's
+   *  uniform ratio until calc 2.16.0) plus professional and statutory in full —
+   *  VAT is deliberately excluded (§17.6). */
   development_cost_advance_pct: number;
   committed_net_facility_pence: number | null;
   /** null → derived as net + interest_reserve. */

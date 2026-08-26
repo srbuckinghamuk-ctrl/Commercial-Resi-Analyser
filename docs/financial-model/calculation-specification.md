@@ -4047,7 +4047,7 @@ cost_plan.qs: null | {
 ### 24.2 Package timing
 
 One pure function — `computePackageTiming` / `compute_package_timing`
-(`package-timing.ts` / mirrored in `cost_plan.py`) — runs before the cost
+(`package-timing.ts` / mirrored in `package_timing.py`) — runs before the cost
 plan and the schedule and is the **only** place a package's window is
 resolved; `computeCostPlan` and `buildSchedule` both read its output and
 neither re-derives it. `[]` in headline mode and whenever the plan has no
@@ -4267,7 +4267,7 @@ rounded once with the advance percentage, as before.
   main-window packages are structure 24,000,000, envelope 18,000,000, M&E
   12,000,000 (eligible) and externals 6,000,000 (ineligible), with the
   3,300,000 general contingency remainder. The old uniform ratio,
-  60,000,000 / 66,000,000 = 6/11, applied every month alike; the per-month
+  60,000,000 / 66,000,000 = 10/11, applied every month alike; the per-month
   share is **1** across the two strip-out months and **0.9** across the six
   main-window months (54,000,000 eligible of 60,000,000, a clean ratio by
   construction of the fixture — §24's own worked derivation,
@@ -4434,8 +4434,9 @@ factor or a share.
 **Warning:** `annual_pct > 15` — *"Tender-price inflation above 15% p.a. is
 unusual - check the rate."* No clamp; the figure is used as entered.
 
-**One flag**, raised in `deriveMetrics` / `derive_metrics` beside R15's four
-(§23.9), dated at the floored month of the latest package midpoint:
+**One flag**, raised in `dueDiligenceFlags` / `due_diligence_flags`, called
+from `deriveMetrics` / `derive_metrics` beside R15's four (§23.9), dated at
+the floored month of the latest package midpoint:
 
 | Flag | Severity | Fires when | Message |
 |---|---|---|---|

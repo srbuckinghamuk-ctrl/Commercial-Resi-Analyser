@@ -5679,10 +5679,10 @@ as eligible-base — the 3,300,000 sits inside the "all" denominator only.
 Contrast with the pre-R15b, R14 uniform-ratio rule: the gap there was the
 whole construction total taken at the single ratio
 `lender_eligible_base_pence / base_build_pence` = 60,000,000 / 66,000,000 =
-6/11, so `Σ construction × (1 − 6/11)` = 69,300,000 × 6/66 = **6,300,000** —
+10/11, so `Σ construction × (1 − 10/11)` = 69,300,000 × 6/66 = **6,300,000** —
 the number this release moves on from. The strip-out months are the
 discriminator: under the uniform ratio every month, strip-out included, was
-scaled by 6/11 (funding `round(3,000,000 × 10/11)` = 2,727,273, a 272,727
+scaled by 10/11 (funding `round(3,000,000 × 10/11)` = 2,727,273, a 272,727
 shortfall each month); under the per-month share the strip-out packages are
 themselves 100% eligible, so they fund in full and the whole gap concentrates
 in the six main-window months instead of eight. **New `funding_gap_pence` =
