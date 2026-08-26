@@ -6,6 +6,7 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
+  CalculatorInputsV14,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -1467,4 +1468,111 @@ export function migrateInputsToV13(
     };
   }
   return migrateV12toV13(migrateInputsToV12(snapshot, project));
+}
+
+// --- Release 15b (calc 2.15.0 -> 2.16.0): the cost plan in time, tender-price
+// inflation (spec §24.8) ------------------------------------------------
+
+/** Mirror of isV13: `inputs_version === 14` AND the `due_diligence` key AND
+ *  `cost_plan` is an object AND (its `qs` is null, or `qs` carries the
+ *  `inflation` key — present, not merely equal to null, since an absent key
+ *  and an explicit null read identically at runtime but only the explicit
+ *  key proves the v14 write happened). */
+export function isV14(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV14 {
+  return snapshot.inputs_version === 14 && 'due_diligence' in snapshot
+    && typeof snapshot.cost_plan === 'object' && snapshot.cost_plan != null
+    && (((snapshot.cost_plan as { qs?: unknown }).qs ?? null) === null
+      || 'inflation' in ((snapshot.cost_plan as { qs: object }).qs));
+}
+
+/**
+ * §24.8. One addition, and it is inert: `cost_plan.qs.inflation: null`,
+ * written only inside a non-null `qs` (a null `qs` stays null — there is
+ * nothing to write the key onto). `QsProvenance.inflation` already defaults
+ * to `null` on every engine read (`?? null`, cost-plan.ts), so this write
+ * changes no computed value — the numeric identity gate (`migrate.test.ts`)
+ * is what proves it, exactly as the v12→v13 gate proved `qs: null` and
+ * `price_basis: null` were inert one release earlier.
+ *
+ * Precondition: `v13` must not already be a v14 document — this guards
+ * against double-migration (idempotence), same as migrateV12toV13.
+ */
+export function migrateV13toV14(v13: CalculatorInputsV13): CalculatorInputsV14 {
+  if (isV14(v13 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV13toV14: input is already a v14 document');
+  }
+  return {
+    ...v13,
+    inputs_version: 14,
+    cost_plan: {
+      ...v13.cost_plan,
+      qs: v13.cost_plan.qs == null ? null : { ...v13.cost_plan.qs, inflation: null },
+    },
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V14: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+
+export function migrateInputsToV14(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV14 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V14.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV14: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V14.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 14 && !isV14(snapshot)) {
+    throw new Error(
+      'migrateInputsToV14: inputs_version is 14 but the document fails the v14 structural check '
+      + '(missing `due_diligence` or `qs.inflation`) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV14(snapshot)) {
+    const v12Chain = migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(migrateV7toV8(migrateV6toV7(
+      migrateV5toV6(migrateV4toV5(migrateV3toV4(migrateV2toV3(defaultCalculatorInputsV2(project))))),
+    ))))));
+    const defaults = migrateV13toV14(migrateV12toV13(v12Chain));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV14>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 14,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      monitoring: saved.monitoring ?? null,
+      unit_sales: saved.unit_sales ?? null,
+      due_diligence: saved.due_diligence ?? defaults.due_diligence,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV13toV14(migrateInputsToV13(snapshot, project));
 }

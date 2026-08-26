@@ -35,6 +35,10 @@ def uses(**partial) -> MonthUses:
         statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
     )
     base.update(partial)
+    # R15b spec Sec 24.4: lender_eligible_construction_pence defaults to the
+    # all-eligible value (construction_pence) so these hand-built schedules
+    # keep their pre-R15b meaning; a caller overriding it explicitly still wins.
+    base.setdefault("lender_eligible_construction_pence", base["construction_pence"])
     return MonthUses(**base)
 
 

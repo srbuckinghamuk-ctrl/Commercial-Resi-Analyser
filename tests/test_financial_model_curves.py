@@ -7,11 +7,13 @@ engines shows up here rather than three layers down in a golden fixture.
 import pytest
 
 from app.financial_model.curves import (
+    curve_weights,
     spread_back_loaded,
     spread_by_curve,
     spread_s_curve,
     spread_user_defined,
 )
+from app.financial_model.engine import money_round
 from app.financial_model.types import SimpleSpendCurve, SpendCurve, UserDefinedSpendCurve
 
 
@@ -101,6 +103,30 @@ class TestCurveMatrixExactSumAndLength:
         out = spread_by_curve(total, months, _curve_for_kind(kind, months))
         assert len(out) == months
         assert sum(out) == total
+
+
+class TestCurveWeights:
+    """Transliteration of curves.test.ts's `curveWeights (R15b spec §24.2)` block."""
+
+    def test_back_loaded_over_3_is_1_6_2_6_3_6(self):
+        assert curve_weights(3, SimpleSpendCurve(kind="back_loaded")) == [1 / 6, 2 / 6, 3 / 6]
+
+    def test_straight_line_over_4_is_four_quarters_user_defined_normalises(self):
+        assert curve_weights(4, SimpleSpendCurve(kind="straight_line")) == [0.25, 0.25, 0.25, 0.25]
+        assert curve_weights(
+            2, UserDefinedSpendCurve(kind="user_defined", weights=[1, 3]),
+        ) == pytest.approx([0.25, 0.75])
+
+    def test_agrees_with_spread_by_curve_on_every_non_final_month(self):
+        # the spread is money_round(total * w_k)
+        w = curve_weights(5, SimpleSpendCurve(kind="s_curve"))
+        s = spread_by_curve(1_000_003, 5, SimpleSpendCurve(kind="s_curve"))
+        for k in range(4):
+            assert s[k] == money_round(1_000_003 * w[k])
+        assert sum(s) == 1_000_003
+
+    def test_a_non_positive_duration_gives_empty(self):
+        assert curve_weights(0, SimpleSpendCurve(kind="back_loaded")) == []
 
 
 # Only s_curve/back_loaded promise a non-decreasing cumulative -- straight_line and

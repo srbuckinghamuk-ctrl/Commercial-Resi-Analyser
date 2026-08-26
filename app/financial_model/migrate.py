@@ -34,6 +34,7 @@ from .types import (
     CalculatorInputsV11,
     CalculatorInputsV12,
     CalculatorInputsV13,
+    CalculatorInputsV14,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -344,11 +345,15 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     # R15 Task 2: is_v13 belongs here for the same reason is_v12 did one
     # release earlier -- this is the SIXTH consecutive release to need this
     # exact fix: R13b for v12, R13 for v10, R12 for v9, R11 for v8, R10 for v7.
+    # R15b Task 6: is_v14 belongs here for the same reason is_v13 did one
+    # release earlier -- this is the SEVENTH consecutive release to need this
+    # exact fix: R15 for v13, R13b for v12, R13 for v10, R12 for v9, R11 for
+    # v8, R10 for v7.
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
         or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot) or is_v11(snapshot)
-        or is_v12(snapshot) or is_v13(snapshot)
+        or is_v12(snapshot) or is_v13(snapshot) or is_v14(snapshot)
     )
 
 
@@ -1990,3 +1995,121 @@ def migrate_inputs_to_v13(
             "due_diligence": snapshot.get("due_diligence"),
         })
     return migrate_v12_to_v13(migrate_inputs_to_v12(snapshot, project))
+
+
+# --- Release 15b (calc 2.15.0 -> 2.16.0): the cost plan in time, tender-price
+# inflation (spec Sec 24.8) --------------------------------------------------
+
+
+def _v14_cost_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Writes `inflation: None` inside a non-None `qs` (spec Sec 24.8) -- a
+    None `qs` stays None, there being nothing to write the key onto. Written,
+    not defaulted, so the identity gate exercises the written value, same as
+    `_v13_cost_plan`. Port of the `cost_plan` block inside migrateV13toV14."""
+    out = dict(plan or {})
+    qs = out.get("qs")
+    out["qs"] = None if qs is None else {**dict(qs), "inflation": None}
+    return out
+
+
+def is_v14(snapshot: dict[str, Any]) -> bool:
+    """A v14 document is discriminated by ``inputs_version == 14`` AND the
+    presence of the ``due_diligence`` key AND ``cost_plan`` is a dict AND
+    (its ``qs`` is None, or ``qs`` carries the ``inflation`` key). Port of
+    isV14."""
+    if snapshot.get("inputs_version") != 14 or "due_diligence" not in snapshot:
+        return False
+    cost_plan = snapshot.get("cost_plan")
+    if not isinstance(cost_plan, dict):
+        return False
+    qs = cost_plan.get("qs")
+    return qs is None or "inflation" in qs
+
+
+def migrate_v13_to_v14(v13: dict[str, Any] | CalculatorInputsV13) -> CalculatorInputsV14:
+    """Upgrades a v13 document to v14 by stamping ``inputs_version: 14`` and
+    writing one inert addition: ``cost_plan.qs.inflation: None`` inside a
+    non-None `qs` (spec Sec 24.8). Port of migrateV13toV14. Inert by
+    construction: `QsProvenance.inflation` already defaults to `None` on
+    every engine read, so this write changes no computed value --
+    test_migrate_v14.py proves it, exactly as test_migrate_v13.py proved
+    `qs: None` and `price_basis: None` were inert one release earlier.
+
+    Precondition: `v13` must not already be a v14 document (idempotence
+    guard), same as migrate_v12_to_v13.
+    """
+    if isinstance(v13, CalculatorInputsV14):
+        raise ValueError("migrate_v13_to_v14: input is already a v14 document")
+    if isinstance(v13, BaseModel):
+        doc = v13.model_dump(mode="json")
+    else:
+        if is_v14(v13):
+            raise ValueError("migrate_v13_to_v14: input is already a v14 document")
+        doc = dict(v13)
+
+    doc["cost_plan"] = _v14_cost_plan(doc.get("cost_plan"))
+    doc["inputs_version"] = 14
+    return CalculatorInputsV14.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V14 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+
+
+def migrate_inputs_to_v14(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV14:
+    """Normalises any stored snapshot (v1-v14) to v14. Port of
+    migrateInputsToV14, structurally identical to migrate_inputs_to_v13."""
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V14:
+        raise ValueError(
+            f"migrate_inputs_to_v14: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V14}, or absent for a v1 document)"
+        )
+    if version == 14 and not is_v14(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v14: inputs_version is 14 but the document fails "
+            "the v14 structural check (missing `due_diligence` or `qs.inflation`) "
+            "-- refusing to silently reinterpret it via the v1 fallback path"
+        )
+    if is_v14(snapshot):
+        defaults = migrate_v13_to_v14(
+            migrate_v12_to_v13(
+                migrate_v11_to_v12(
+                    migrate_v10_to_v11(
+                        migrate_v9_to_v10(
+                            migrate_v8_to_v9(
+                                migrate_v7_to_v8(
+                                    migrate_v6_to_v7(
+                                        migrate_v5_to_v6(
+                                            migrate_v4_to_v5(
+                                                migrate_v3_to_v4(migrate_v2_to_v3(default_calculator_inputs_v2(project))),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).model_dump(mode="json")
+        return CalculatorInputsV14.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 14,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            # Mirrors migrate_inputs_to_v13's own sextet of defensive lines --
+            # see that function's comment for why these are currently
+            # redundant but kept as a self-documenting mirror of the
+            # cost_plan/vat lines above.
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+            "monitoring": snapshot.get("monitoring"),
+            "unit_sales": snapshot.get("unit_sales"),
+            "due_diligence": snapshot.get("due_diligence"),
+        })
+    return migrate_v13_to_v14(migrate_inputs_to_v13(snapshot, project))

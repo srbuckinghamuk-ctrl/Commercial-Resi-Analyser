@@ -1,11 +1,12 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.15.0`.
+**Status:** Authoritative. Calculation version `2.16.0`.
 **Date:** 25 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
-- **2.15.0** — the due-diligence evidence schedule (§23, R15), with inputs v13 carrying a non-nullable top-level `due_diligence` block (a captured listing `source_record` and a fixed catalogue of evidenced items whose seed status is `unknown`), `cost_plan.qs` and `CostPackage.price_basis`. Five read-only **derived rows** grade the evidence the model already carried — QS provenance, facility terms, equity sources, the tax and VAT basis, the lender valuation — beside the entered ones. Two **source-conflict** rules compare the captured listing to the appraisal (§23.5), the cost plan publishes fixed-price coverage, provisional sums and the unclassified balance (§23.6), and four flags are added: `due_diligence_unknown`, `source_conflict`, `consent_expires_before_start`, `provisional_sums_present`. §13.3 gains a **seventh FINAL condition** — no entered item may be `unknown` — with its own banner. **It changes no existing computed value:** the v12 → v13 identity gate compares metrics, ledger and schedule, the new result block included, on both arms **with no exclusion**, because a pre-v13 document is computed as §23.10's migration seed. §16.9's QS-provenance limitation and §15.9's measured-survey limitation become historical notes; §22.10 limitation 7 narrows to its per-row residue; inflation and the per-package programme are scheduled as **R15b**.
+- **2.16.0** — the cost plan in time (§24, R15b), with inputs v14 adding one nested field, `cost_plan.qs.inflation: { annual_pct } | null`. Every detailed package gains a resolved-phase window, curve and curve-weighted spend midpoint (§24.2, `resolved_phase_id`, `midpoint_month`), a tender-price inflation allowance from `qs.base_date` to that midpoint (§24.3, `inflation_pence`, `inflation_total_pence` inside `construction_total_pence`), and a per-month lender-eligible draw share that §4.2(b)'s advance cap now reads in place of R14's single ratio (§24.4, `uses[m].lender_eligible_construction_pence`). One flag is added: `no_inflation_allowance`. **It changes `construction_total_pence` on any document carrying a recorded allowance (an additive line; `0` elsewhere) and moves `funding_gap_pence` and its dependent metrics on fixture S alone** — the corpus's one document with packages in more than one spend window and an ineligible package among them; every other document's per-month share recovers R14's uniform-ratio figure exactly (§24.4's recovery claim, asserted corpus-wide). The v13 → v14 identity gate compares metrics, ledger and schedule, the new fields included, on both arms **with no exclusion**, and the flag list is compared with strict equality, `no_inflation_allowance` asserted by name as the sole addition. §16.9 limitations 1 and 2, §16.9's inflation line, §20.5 limitation 3 and §23.11 limitation 6 become historical notes.
+- **2.15.0** — the due-diligence evidence schedule (§23, R15), with inputs v13 carrying a non-nullable top-level `due_diligence` block (a captured listing `source_record` and a fixed catalogue of evidenced items whose seed status is `unknown`), `cost_plan.qs` and `CostPackage.price_basis`. Five read-only **derived rows** grade the evidence the model already carried — QS provenance, facility terms, equity sources, the tax and VAT basis, the lender valuation — beside the entered ones. Two **source-conflict** rules compare the captured listing to the appraisal (§23.5), the cost plan publishes fixed-price coverage, provisional sums and the unclassified balance (§23.6), and four flags are added: `due_diligence_unknown`, `source_conflict`, `consent_expires_before_start`, `provisional_sums_present`. §13.3 gains a **seventh FINAL condition** — no entered item may be `unknown` — with its own banner. **It changes no existing computed value:** the v12 → v13 identity gate compares metrics, ledger and schedule, the new result block included, on both arms **with no exclusion**, because a pre-v13 document is computed as §23.10's migration seed. §16.9's QS-provenance limitation and §15.9's measured-survey limitation become historical notes; §22.10 limitation 7 narrows to its per-row residue; inflation and the per-package programme were scheduled as **R15b**, and are delivered by it (§24).
 - **2.14.0** — the unit-level sales ledger (§22, R13b): per-unit exchange/completion timing, deposits held or released, per-unit selling-cost overrides, pre-sales coverage, the `sales_slip` lever (§12.1's ninth). **One pre-existing computed value moves: §5.11's phased break-even now replays anchored tranches at their resolved months** (fixture S: 90,971,520 → 88,720,089); every unanchored document is unchanged. §5.12 gains the per-unit cost basis. Inputs v12.
 - **2.13.0** — cost-to-complete corrected (§5.10, C1), `lender_eligible` wired into §4.2(b), the monitoring statement (§20, R14). Inputs v11. [Bullet added by R13b; R14 recorded this release in §1.6 and §20 but omitted the changelog line.]
 - **R14b, 24 August 2026 — no calculation-version bump and no inputs-version bump.** Lender case governance (§21): the release that makes a FINAL document possible at all. A lender case is a **locked whole-document snapshot** of a stored appraisal — its `inputs_snapshot`, `calc_version`, `inputs_version` and all three provenance hashes, copied at creation and never rewritten — carrying governance state through the eight-status machine `report-provenance.ts` has declared since R7 and nothing has ever populated. §13.3's condition 5 (an approved case) therefore becomes reachable, and gains a sixth condition beside it: an approval is only good for the document it was given against, so a case whose locked `input_hash` no longer matches the live stored row is **stale** and defeats FINAL under a banner of its own (§21.3). The case gets its own hash, `case_hash` (§13.2.1), **chained onto** the locked `audit_hash` rather than folded into it — §13.2's twice-stated "the audit hash gains no new parts" ruling is restated, not repealed, because a case transition happens without an appraisal re-save and would otherwise silently invalidate every stored hash. §13.1's provenance panel gains the case rows, which are the case hash's own components rather than a readable selection of them, so the reviewer-recompute property §13.2 gives the audit hash holds for the case hash too. **No engine change, no input-schema change, no fixture pin moves**: the release is versioned by Alembic migration 006 (two new tables, `lender_cases` and `lender_case_events`) and by this specification's §21, and the corpus-walk tests passing unmodified is itself the no-arithmetic guard. Governance also stops being a one-language concern — `app/financial_model/provenance.py` is created as the Python twin of `report-provenance.ts`'s governance core, under the same porting contract as `monitoring.py`, because the API cannot enforce a state machine that exists only in the client.
@@ -59,7 +60,9 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22); `13` (**inputs v13**) = calc 2.15.0+ (adds the non-nullable top-level `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, §23). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22); `13` (**inputs v13**) = calc 2.15.0+ (adds the non-nullable top-level `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, §23); `14` (**inputs v14**) = calc 2.16.0+ (adds `cost_plan.qs.inflation`, §24). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+
+Calc 2.16.0 (R15b) adds §24's package timing, tender-price inflation and per-month lender-eligible construction share, and one flag. **It changes `construction_total_pence` on every document carrying a recorded inflation allowance** (a new additive line inside it; `0` on every document that does not) **and moves `funding_gap_pence` and its dependent metrics on fixture S**, the corpus's one document with packages in more than one spend window and an ineligible package among them — every other document's development-cost advance cap recovers R14's uniform-ratio figure exactly (the v13 → v14 identity gate, `migrate.test.ts` / `tests/test_migrate_v14.py`, compares metrics, ledger and schedule on both arms with no exclusion, and asserts `no_inflation_allowance` by name as the sole flag addition).
 
 Calc 2.15.0 (R15) adds §23's evidence schedule, four flags and §13.3's seventh condition. **It changes no existing computed value** (the v13 identity gate, `tests/test_migrate_v13.py`, compares the new result block on both arms with no exclusion).
 
@@ -296,9 +299,11 @@ Month 0 (acquisition):
 
 Months ≥ 1, for each month's uses:
 1. Remaining committed equity funds costs first, until exhausted.
-2. Senior development advances fund the remainder, capped by (a) `undrawn_net_facility`, (b) `development_cost_advance_pct` × (`lender_eligible_ratio` × construction + professional + statutory) [R14 — calc 2.13.0; before it the construction line was taken whole], and (c) gross facility headroom after projected interest.
+2. Senior development advances fund the remainder, capped by (a) `undrawn_net_facility`, (b) `development_cost_advance_pct` × (lender-eligible construction for the month + professional + statutory) [R14 — calc 2.13.0, a uniform ratio applied to the whole construction line; superseded by a per-month figure in R15b — calc 2.16.0, §24.4], and (c) gross facility headroom after projected interest.
 
-   The cap base of (b) is `round(uses.construction_pence × lender_eligible_ratio) + uses.professional_pence + uses.statutory_pence`, and the product with the percentage is rounded once. `lender_eligible_ratio` is the cost plan's own figure (§16.8): `1` in headline mode, `1` in detailed mode when `base_build_pence` is 0, and `lender_eligible_base_pence / base_build_pence` otherwise — an unrounded quotient in `[0, 1]` by construction, because both sums run over the same package set (§16.2). `uses.vat_pence` is not in the base and never has been (§17.6). The ratio is uniform across the whole construction line, so contingency and compliance follow it proportionally; that is a stated limitation (§16.9), not a per-package profile.
+   The cap base of (b) is `uses[m].lender_eligible_construction_pence + uses[m].professional_pence + uses[m].statutory_pence`, and the product with the percentage is rounded once. `uses[m].lender_eligible_construction_pence` is the schedule's own per-month figure (§24.4): the month's construction spend times that month's lender-eligible share, computed from the same package weights the spend curve uses, and falling back to `lender_eligible_ratio` in a month with no package spend at all. `lender_eligible_ratio` itself stays on the cost plan (§16.8) as the disclosure figure and that fallback: `1` in headline mode, `1` in detailed mode when `base_build_pence` is 0, and `lender_eligible_base_pence / base_build_pence` otherwise — an unrounded quotient in `[0, 1]` by construction, because both sums run over the same package set (§16.2). `uses.vat_pence` is not in the base and never has been (§17.6).
+
+   **[R14 — calc 2.13.0; superseded by §24.4 in calc 2.16.0]** The ratio was uniform across the whole construction line, so contingency and compliance followed it proportionally; that was a stated limitation (§16.9), not a per-package profile. §24.4 replaces it with a per-month share that recovers this exact figure on every document whose packages share one spend window, and departs from it only on fixture S.
 3. Any residual unfunded cost is a **funding gap**: it is *not* funded, it is recorded as `funding_gap` for the month, flagged red, and accumulates. Cost overruns never create facility.
 
 Legacy migrated appraisals may run with `equity_draw_rule = 'fund_as_required'` (equity absorbs any residual with no cap) — permitted only while the appraisal carries `requires_confirmation` status, so sources always balance but the case is visibly unconfirmed. `pari_passu` is defined (pro-rata to remaining commitments) but rejected with a validation error until implemented [R2].
@@ -521,6 +526,8 @@ Per-unit regime [R13b — calc 2.14.0]: the re-solved selling costs use the ledg
 ## 6. Spend profiles [R1 minimal]
 
 R1 supports `straight_line` over a window (construction: months 1..N−2 of the term, minimum 1 month; professional/statutory: first half of that window) — the v1 shape, now explicitly disclosed as an assumption on the cash-flow page and in reports. **Odd windows round up:** where an auto-derived window spans an odd number of months, its "first half" is `ceil(D/2)` months, `D` being the construction window's length — so a 7-month construction window gives a 4-month professional/statutory window, not 3. Rounding: each month rounds half-up; the final month of a window absorbs the cumulative rounding residue so the spread sums exactly to the total (invariant). The complete set of spend curves is defined in §6.1 (calc 2.2.0, [R3a]): `straight_line`, `s_curve`, `back_loaded`, and `user_defined`. An `upfront` curve was planned but removed before implementation — it is expressible via a 1-month window or user_defined weights concentrated in month 1.
+
+**[R15b — calc 2.16.0]** Every detailed-mode package on this auto path shares this one construction window — there is no per-package resolution below it — so every package here has the same spend midpoint (§24.2).
 
 **Note (calc 2.1.0):** §5.10 cost-to-complete is derived directly from the ledger, which follows this straight-line schedule when `programme` is null (remaining cost per month = totals less cumulative spend to date under this profile) and the dated programme (§6.1, calc 2.2.0, [R3a]) otherwise — the relationship is unchanged, not redefined, either way.
 
@@ -1600,12 +1607,15 @@ The migration gate is numeric **and** structural: all twelve golden fixtures rep
 
 ```
 mode
-packages[]                  id, code, label, amount_pence, contingency_class, lender_eligible
+packages[]                  id, code, label, amount_pence, contingency_class, lender_eligible,
+                            phase_id, resolved_phase_id, start_month, finish_month, midpoint_month,
+                            months_from_base, inflation_factor, inflation_pence   [phase/timing/inflation
+                                                                                   fields R15b — calc 2.16.0, §24.2/§24.3/§24.6]
 base_build_pence
 contingency[]               name, pct, basis, base_pence, amount_pence
 contingency_total_pence
 compliance_pence
-construction_total_pence    = base_build + contingency_total + compliance
+construction_total_pence    = base_build + inflation_total + contingency_total + compliance   [R15b]
 fees[]                      id, code, category, basis, base_pence, amount_pence
 professional_total_pence
 statutory_total_pence
@@ -1613,24 +1623,37 @@ conversion_total_pence      = construction_total + professional_total + statutor
 lender_eligible_base_pence
 lender_eligible_ratio       lender_eligible_base ÷ base_build; 1 in headline mode and when base_build is 0 [R14]
 implied_rate_pence_per_sqm  base_build ÷ developed_area_sqm; null when the area is 0
+inflation_total_pence       sum of the ROUNDED per-package inflation lines; 0 with no recorded allowance [R15b]
+inflation_pct_of_base_build pct(inflation_total_pence, base_build_pence); null when base build is 0 [R15b]
+latest_midpoint_month                  the latest package spend midpoint (float); null with no packages [R15b]
+latest_midpoint_months_from_base       the same, measured from qs.base_date; null with no calendar [R15b]
+latest_midpoint_whole_months_from_base Math.floor of the line above — the flag and the memo print THIS [R15b]
 ```
+
+§24.3/§24.6 give the full account of every R15b field above: `months_from_base` is published whenever `qs.base_date` is non-blank and `acquisition_date` is non-null, whether or not an allowance is recorded; `inflation_factor` and `inflation_pence` are the ones gated on the allowance itself.
 
 Every contingency and fee line reports **its base as well as its amount** — the audit's "show the base" discharged as data rather than prose. `implied_rate_pence_per_sqm` exists so the rate does not simply vanish from the appraisal when the mode changes: in headline mode it is the entered rate recovered by division (a check on the arithmetic, not an echo of the input); in detailed mode it is the figure a reader compares against a benchmark they hold themselves. It is display-only and enters no calculation. `conversion_total_pence` is the bottom-line figure the cost page and the memo both print — computed once here, purely additive, and moves no other figure.
 
 `Schedule.totals.construction_pence`, `professional_pence` and `statutory_pence` remain the single point the monthly ledger sees for **spend**, so sources-and-uses (§7) and reconciliation are structurally untouched by this release.
 
-**`lender_eligible_ratio` is wired in calc 2.13.0 (R14)** and is carried onto the `Schedule` beside those totals, because §4.2(b)'s advance cap is the one place the ledger needs it. It governs what the facility may *advance* against the construction line, never what the scheme *spends*: cost before finance is unchanged by the wiring. Its consequence is real and is recorded rather than smoothed over — a detailed-mode document carrying an ineligible package and `development_cost_advance_pct: 100` had a cap that could never bind before R14, and now has one that binds in every month whose construction is met from the facility. Both such fixtures in the corpus moved: `q-detailed-cost-plan` now reports `funding_gap_pence` 2,031,318 and `s-dated-programme` 6,300,000, and both are consequently **not report-safe** — a non-zero funding gap makes `reconciliation.funding_complete` false, which `report_safe` requires — where before the wiring both reconciled clean and printed no DRAFT banner on that ground. That is the engine reporting an advance cap the appraisal always implied, not a regression.
+**`lender_eligible_ratio` is wired in calc 2.13.0 (R14)** and is carried onto the `Schedule` beside those totals, because §4.2(b)'s advance cap is the one place the ledger needs it. It governs what the facility may *advance* against the construction line, never what the scheme *spends*: cost before finance is unchanged by the wiring. Its consequence is real and is recorded rather than smoothed over — a detailed-mode document carrying an ineligible package and `development_cost_advance_pct: 100` had a cap that could never bind before R14, and now has one that binds in every month whose construction is met from the facility. Both such fixtures in the corpus moved: `q-detailed-cost-plan` now reports `funding_gap_pence` 2,031,318 and `s-dated-programme` 6,300,000 [R14 figure; superseded by §24.4's per-month share — `s-dated-programme` reports 6,330,000 under calc 2.16.0, §24.4], and both are consequently **not report-safe** — a non-zero funding gap makes `reconciliation.funding_complete` false, which `report_safe` requires — where before the wiring both reconciled clean and printed no DRAFT banner on that ground. That is the engine reporting an advance cap the appraisal always implied, not a regression.
 
 ### 16.9 Stated limitations
 
 Recorded so they are not read as oversights.
 
-- **No per-package programme.** Every package spreads with the construction curve (§6); there is no per-package start offset, duration or curve. R12 (§18) shipped dated, dependent programme *phases* instead — phase-level, not package-level — so this remains open. **[R15 — calc 2.15.0]** It is no longer unowned: it is the first component of **R15b**, *the cost plan in time*, named in the limitation below and in §23.11 limitation 6. §20.5 limitation 3 depends on it.
-- **`lender_eligible` acts as a uniform ratio on the construction line, not a per-package draw profile.** Wired in calc 2.13.0 (R14): `lender_eligible_base_pence / base_build_pence` scales §4.2(b)'s cap base. Because it is one ratio applied to the whole monthly construction line, contingency and compliance follow it proportionally, and an ineligible package's own spend months are not distinguished from any other package's. A true per-package draw profile would have to know which package each pound of a month's construction spend belongs to; §18's per-line `phase_id` buckets spend by phase, not by package, so that information does not exist in the monthly uses the cap reads. Recorded again as §20.5 limitation 3.
+- **No per-package programme.** Every package spread with the construction curve (§6); there was no per-package start offset, duration or curve. R12 (§18) shipped dated, dependent programme *phases* instead — phase-level, not package-level — so this remained open.
+
+  **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24.2 gives every package its resolved phase's window, curve and a curve-weighted spend midpoint, and the Costs page gains the phase picker to write it. What is retained is the narrower §24.9 limitation 5: a package's programme is its phase, and there is no per-package offset inside one.
+- **`lender_eligible` acts as a uniform ratio on the construction line, not a per-package draw profile.** Wired in calc 2.13.0 (R14): `lender_eligible_base_pence / base_build_pence` scaled §4.2(b)'s cap base as one ratio applied to the whole monthly construction line, so contingency and compliance followed it proportionally, and an ineligible package's own spend months were not distinguished from any other package's. Recorded again as §20.5 limitation 3.
+
+  **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24.4 replaces the single ratio with a per-month share computed from each package's own resolved window and unrounded spend weights, and §4.2(b) reads the per-month figure. The share recovers this exact ratio, every month, on every document whose packages share one spend window (the auto path, the legacy arm, and any network where every package resolves to one phase); it departs only on fixture S. What survives is the narrower §24.9 limitation 3: the share is a ratio over per-package weights, not a per-package ledger, and contingency and compliance still follow the month's share rather than carrying an eligibility rule of their own (§24.9 limitation 4).
 - **No QS provenance.** A package or a percentage fee carries no source, date or status — no "priced by [firm], RIBA Stage 4, dated [x]" distinction in the record, unlike the acquisition jurisdiction's evidence status (§14.6). Deferred to R15, alongside fixed-price coverage, provisional sums and inflation (§7.5 of the second audit).
 
   **[R15 — calc 2.15.0] Resolved; kept as a historical note.** §23.6 gives the detailed plan a `cost_plan.qs` block (source, stage, issue date, status, pricing base date) and every package a `price_basis`, and the result publishes fixed-price coverage, provisional sums, estimates and the unclassified balance against base build. §13.4's "QS evidence is not recorded" sentence became conditional at the same release. What survives is narrower and is stated as §23.11 limitations 7 and 9: the provenance is one block for the whole plan rather than per package, and fee lines carry none.
-- **No inflation — R15b.** The cost plan is priced at one instant and spent over a programme, and nothing bridges the two: there is no tender-price inflation from `qs.base_date` to a package's spend midpoint, because a package has no spend midpoint until it has its own programme. **R15b, *the cost plan in time*, owns all three together** — the per-package programme (limitation 1 above), the inflation index from `qs.base_date`, and per-package draw eligibility (limitation 2 above, restated as §20.5 limitation 3). R15 records `qs.base_date` so R15b has its origin. Taking a flat percentage on base build here was rejected: it is indistinguishable from the general contingency class until packages have their own timing, and a second flat percentage on the same base reopens R10's double-count seam.
+- **No inflation.** The cost plan was priced at one instant and spent over a programme, and nothing bridged the two: there was no tender-price inflation from `qs.base_date` to a package's spend midpoint, because a package had no spend midpoint until it had its own programme.
+
+  **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24.3 gives every package a tender-price inflation line from `qs.base_date` to its own spend midpoint, one flat annual rate, compounded pro-rata. What survives is the narrower §24.9 limitation 1 (one rate, flat — no dated index table, no per-package rate) and limitation 2 (packages only — fee lines and contingency bases stay uninflated).
 - **Compliance's stress behaviour is mode-dependent, by necessity rather than oversight (§16.2).** A fixed unscaled allowance in headline mode; inside a scaled package in detailed mode. The two modes agree at rest and diverge under a cost stress once compliance is non-zero.
 
 Two limitations recorded in earlier printings of this section are resolved and have been removed rather than left standing, per this project's own rule that a disclosure outliving its feature is a defect (shipped and caught in R8, R9 and R10 alike):
@@ -2025,6 +2048,8 @@ resolved_phase(line) = line.phase_id  ??  programme.category_phase_ids[line.cate
 Bucketing is normative and load-bearing, not an implementation detail. Per-line spreading is **not** the pre-existing behaviour: the auto-window arm (§6) and the legacy three-package arm (§6.1) both spread the **category total** exactly once — `spreadByCurve(professionalTotal, …)`, never a per-line loop. Per-line spreading differs from that by rounding, because each line would absorb its own residue and `Σᵢ round(tᵢ · w) ≠ round((Σᵢ tᵢ) · w)` in general. The category total would be preserved; its **monthly distribution** would shift by pennies. §18.7's migration identity gate asserts every computed figure is penny-identical across the v8 → v9 boundary, and a v8 document's professional spend is one spread of the total while its migrated v9 twin's would be eight separate spreads of eight synthesised fee lines. The gate would fail on documents whose amounts do not divide evenly — and pass on those where they happen to, which is worse, because the defect would then depend on the fixture rather than on the rule. Bucketing restores identity **by construction**: when every line in a category resolves to the category default — exactly what migration produces, since it writes no per-line `phase_id` — the bucket total *is* the category total and the spread is bit-identical to the legacy arm's. Per-line overrides still work; a line tagged to a different phase simply joins a different bucket.
 
 **The prior-approval carve-out stays per line**, because it is a placement decision rather than a rounding one: an untagged `prior_approval` fee is pinned to month 0 and never enters a bucket, while a tagged one joins its phase's bucket like any other line. A single category-level lump could not tell those two cases apart.
+
+**[R15b — calc 2.16.0] Beside the construction bucket, a per-month lender-eligible SHARE — never a second spread.** §24.4 computes, from the same package weights this section's bucketing already uses, a ratio `share(m) = (eligible packages' unrounded spend that month) ÷ (all packages' unrounded spend that month)`, and applies it to the bucket's already-spread `uses[m].construction_pence` to publish `uses[m].lender_eligible_construction_pence`. It is deliberately a **share over unrounded per-package weights**, not a second per-package `spreadByCurve` run beside the bucket spread: two independent per-package spreads of the same pounds would round separately from the bucket total by the same `Σᵢ round(tᵢ·w) ≠ round((Σᵢ tᵢ)·w)` argument this section's own bucketing rule exists to avoid, and the uses would then carry two competing monthly figures for the same money. A ratio of two floats has no such rounding, and reduces exactly to `lender_eligible_ratio` on any month where every active package shares one window (§24.4's recovery claim). In the network arm, each package's own `inflation_pence` (§24.3) joins that package's resolved phase's bucket, so a package's inflation spreads with the package; the construction bucket's remainder — contingency and compliance — is never itself a package line and always resolves through the category default, exactly as an untagged line already does above.
 
 **The two month-0 anchors that survive.**
 
@@ -2869,7 +2894,7 @@ asserts exactly that.
 | Category | Original budget |
 |---|---|
 | `acquisition` | §3.3 acquisition cost — `Schedule.totals.acquisition_pence`, the same figure as `Σ uses.acquisition_pence` |
-| `construction` | `cost_plan.base_build_pence + compliance_pence` — construction **excluding** contingency |
+| `construction` | `cost_plan.base_build_pence + inflation_total_pence + compliance_pence` [R15b — calc 2.16.0, §24.5] — construction **excluding** contingency |
 | `professional` | `cost_plan.professional_total_pence` |
 | `statutory` | `cost_plan.statutory_total_pence` |
 | `contingency` | `cost_plan.contingency_total_pence` |
@@ -2885,8 +2910,11 @@ original(construction) + original(contingency) == Σ uses.construction_pence
 ```
 
 which holds by construction of §16.8's `construction_total_pence =
-base_build + contingency_total + compliance`, and is asserted on every corpus
-fixture rather than left as an argument.
+base_build + inflation_total + contingency_total + compliance` [R15b — calc
+2.16.0 adds the inflation term; the identity itself is unaffected, because
+`inflation_total_pence` sits on the `construction` side of the split on both
+sides of the equation], and is asserted on every corpus fixture — Z included
+— rather than left as an argument.
 
 **Migration v10 → v11** stamps `monitoring: null` on every stored document. A
 null block is today's inception-only path, bit-identical in every output; a
@@ -3068,15 +3096,27 @@ Recorded so they are not read as oversights.
 2. **Actuals are per category, not per package.** Five lines, and no QS source,
    date or status against any of them. Per-package actuals and their provenance
    are R15's, on the same reasoning §14.6, §15.9 and §16.9 already record.
-3. **`lender_eligible` acts as a uniform ratio on the construction line**
-   (§4.2(b), §16.9). Contingency and compliance follow it proportionally, and an
-   ineligible package's own spend months are not distinguished. A per-package
-   draw profile needs per-package spend in the monthly uses, which §18's
-   phase-level bucketing does not provide. The wiring's effect is real and is
-   recorded rather than smoothed over: `q-detailed-cost-plan` and
+3. **`lender_eligible` acted as a uniform ratio on the construction line**
+   (§4.2(b), §16.9). Contingency and compliance followed it proportionally, and
+   an ineligible package's own spend months were not distinguished. A
+   per-package draw profile needed per-package spend in the monthly uses, which
+   §18's phase-level bucketing did not provide. The wiring's effect was real and
+   was recorded rather than smoothed over: `q-detailed-cost-plan` and
    `s-dated-programme`, the two corpus fixtures carrying an ineligible package
-   alongside `development_cost_advance_pct: 100`, now report funding gaps of
-   2,031,318 and 6,300,000 respectively and are no longer report-safe.
+   alongside `development_cost_advance_pct: 100`, reported funding gaps of
+   2,031,318 and 6,300,000 respectively and were no longer report-safe.
+
+   **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24.4 replaces
+   the uniform ratio with a per-month lender-eligible share computed from each
+   package's own resolved window, and §4.2(b) reads that per-month figure. The
+   share recovers this exact ratio, every month, on every document whose
+   packages share one spend window — `q-detailed-cost-plan`'s funding gap of
+   2,031,318 is unmoved for exactly that reason. It departs only on fixture S,
+   whose eligible package spends in its own window: `funding_gap_pence` moves
+   from 6,300,000 to 6,330,000, because the strip-out months now fund in full
+   and the shortfall concentrates into fewer months rather than spreading
+   across all of them (§24.4). What survives is the narrower §24.9 limitation
+   3: the share is a ratio over per-package weights, not a per-package ledger.
 4. **The statement is a snapshot, not a re-simulation.** §5.10's "Known
    limitation" applies to it unchanged: it measures committed sources against
    forecast cost at one date; it does not replay the ledger's month-by-month
@@ -3766,6 +3806,7 @@ qs: the input block republished, or null
 - **No threshold on provisional sums.** `provisional_sums_present` (amber) fires on any non-zero total and carries the figure; the audit names no materiality and this release invents none.
 - **Package exclusions need no new field.** A provisional or estimated package's `notes` is its exclusions, and the memo prints it under the QS line.
 - Fee lines carry no provenance (§23.11 limitation 9). A fee line is an appointment, not priced works, and its fixed/percentage `basis` is already recorded (§16.4).
+- **[R15b — calc 2.16.0]** `qs` gains one nested field, `inflation: { annual_pct } | null` — the tender-price inflation allowance §24.3 applies from `qs.base_date` to each package's own spend midpoint. It is republished normalised (`qs.inflation ?? null`), so a raw pre-v14 document and its migrated v14 twin publish the identical shape (§24.8). See §24.1 for the schema and §24.3 for the arithmetic.
 
 ### 23.7 The draft gate
 
@@ -3886,7 +3927,9 @@ Recorded so they are not read as oversights.
 3. **Derived rows do not gate.** `facility_terms`, `equity_sources` and `lender_valuation` can show `unknown` without making the document DRAFT; each keeps the semantics its own release gave it (§10, R1, R2). `derived_unknown_count` is published and printed so the position is disclosed rather than implied.
 4. **No due-date or overdue logic.** `due_date` is recorded and printed; nothing compares it to a date, because the engine has no clock (§1.4).
 5. **Impacts are stated, not modelled.** `cost_impact_pence` and `programme_impact_months` enter no ledger and no lever. The memo says so in the same breath as it prints them.
-6. **No inflation — deferred to R15b**, *the cost plan in time*: a per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint, and per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3). R15 records `qs.base_date` so R15b has its origin.
+6. **No inflation — deferred to R15b.** *The cost plan in time*: a per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint, and per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3). R15 records `qs.base_date` so R15b has its origin.
+
+   **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24 delivers all three: package timing from the resolved phase (§24.2), the inflation allowance itself (§24.3), and the per-month lender-eligible share (§24.4). What survives is §24.9's own, narrower list — a flat single rate with no dated index, and packages only.
 7. **No per-package QS provenance.** One `qs` block covers the whole detailed plan; a plan priced by two firms records one.
 8. **Per-row sales evidence remains unmodelled.** §22.10 limitation 7 narrows to this: reservation and exchange evidence is scheme-level (`exit_route_evidence`), not per `unit_sales` row.
 9. **Fee lines carry no provenance.** A fee line is an appointment, and its evidence is the appointment letter — the `procurement_contractor` or `sponsor_entity` item, not QS evidence.
@@ -3922,3 +3965,618 @@ Recorded so they are not read as oversights.
 | Message drift | the cross-engine window covers §19.7, §22.7 and §23.9, each bounded and order-asserted; the three §22.7 Python messages the widened window showed to differ were aligned to the TS text verbatim |
 | Unit-sales identity | `unit_sales.totals.gross_pence == totals.gross_sales_pence` on fixture X and corpus-wide where non-null |
 | Entry points | both engines' entry-point guards pass only once every production call site names v13; the client default builder captures the source record from a project |
+
+---
+
+## 24. The cost plan in time [R15b — calc 2.16.0]
+
+Audit §7.5 asked for QS source/date/status, fixed-price coverage, provisional
+sums, package exclusions **and inflation**; R15 (§23) closed everything on
+that list except inflation, because inflation cannot be taken to a spend
+midpoint a package does not yet have. Three limitations recorded across four
+releases share that one missing mechanism: §16.9 limitation 1 (*"no
+per-package start offset, duration or curve"*, open since R10, unowned since
+R12), §16.9 limitation 2 / §20.5 limitation 3 (*"`lender_eligible` acts as a
+uniform ratio on the construction line, not a per-package draw profile"*),
+and §16.9's / §23.11 limitation 6's inflation deferral (*"a package has no
+spend midpoint until it has its own programme"*). §24 gives every detailed
+package an identity in time — its resolved phase's window, curve and a
+curve-weighted midpoint — and builds all three asks on it: tender-price
+inflation from `qs.base_date` to that midpoint, a per-month lender-eligible
+draw share in place of R14's single ratio, and the phase picker the Costs
+page has lacked since R12 gave `phase_id` its meaning.
+
+**One arithmetic change to a stored fixture, and one new additive line.**
+Calc 2.16.0 changes two computed things: a detailed plan carrying an
+inflation allowance gains an `inflation_total_pence` line inside
+`construction_total_pence` (every stored document migrates with
+`inflation: null`, so this is `0` everywhere until entered), and §4.2(b)'s
+development-cost advance cap reads lender-eligible construction spend **per
+month** rather than the whole construction line at one ratio. The per-month
+reading recovers R14's uniform-ratio figure exactly on every document whose
+packages share one spend window — the auto path, the legacy arm, and any
+network where every package resolves to the same phase (§24.4) — so it moves
+only fixture `s-dated-programme`, the corpus's one document with packages in
+different windows and an ineligible package among them. The v13 → v14
+identity gate compares metrics, ledger and schedule on both arms with **no
+exclusion** (§24.8).
+
+### 24.1 The schema (inputs v14)
+
+`inputs_version: 14`. One field added, inside the block R15 already gave the
+detailed plan:
+
+```
+cost_plan.qs: null | {
+  source, stage, date, status, base_date       -- R15, unchanged
+  inflation: null | {                          -- NEW; null = no allowance modelled
+    annual_pct: number                         -- tender-price inflation, % per annum
+  }
+}
+```
+
+- `inflation` is nullable and lives inside `qs`, so it cannot exist without a
+  pricing base date by construction; `qs` itself is hard-rejected in headline
+  mode (§23.1, §17.1's precedent), so inflation is detailed-mode-only by the
+  same rule. `null` is §1.5's "no allowance modelled" — not the same fact as
+  an allowance of `0`, which nobody has entered.
+- **`annual_pct`'s bound is asymmetric across the two engines — the same
+  class of boundary asymmetry §23.1 already records for `code`.** The
+  TypeScript type carries no lower bound at all: a JSON payload arrives
+  uncoerced, so a negative or non-finite value reaches §24.7 rule 1's
+  validation error directly, and the engine's own degrade — factor `null`,
+  pence `0`, rather than computing `Math.pow`/`(1+x)**y` on it (§24.3) — is
+  what catches whatever an unvalidated caller still manages to pass it. The
+  Python model bounds `InflationAllowance.annual_pct` with `Field(ge=0)` at
+  the persistence boundary, so a negative value — and a `NaN`, since
+  pydantic's `ge` comparison is false against one — is rejected as a 422
+  before `validate_inputs` or `compute_cost_plan` ever runs; only a positive
+  `inf` clears that bound and reaches rule 1 and the degrade in that engine.
+  The `>= 0` arm inside `compute_cost_plan`'s own read is kept regardless,
+  for parity with the TypeScript engine, which has no type-level bound to do
+  that work for it. There is no deflation by any path in either engine: a
+  base date on or after a package's midpoint clamps `months_from_base` to
+  `0` and the factor to `1`.
+- `CostPackage.phase_id` (R12, §18.5) is the per-package programme;
+  `CostPackage.lender_eligible` (R10, wired R14) is the per-package
+  eligibility. Neither's shape changes here — §24 is built entirely on
+  fields that already existed.
+- Migration v13 → v14 writes `inflation: null` inside every non-null `qs`
+  block, and touches nothing on a document whose `qs` is null (§24.8).
+
+### 24.2 Package timing
+
+One pure function — `computePackageTiming` / `compute_package_timing`
+(`package-timing.ts` / mirrored in `package_timing.py`) — runs before the cost
+plan and the schedule and is the **only** place a package's window is
+resolved; `computeCostPlan` and `buildSchedule` both read its output and
+neither re-derives it. `[]` in headline mode and whenever the plan has no
+packages.
+
+```
+PackageTiming:
+  id:               string
+  phase_id:         string | null     -- the RESOLVED phase; null on the auto and legacy arms
+  start_month:      integer
+  finish_month:     integer           -- half-open, §18.2
+  duration_months:  integer >= 1
+  curve:            SpendCurve
+  weights:          number[]          -- curveWeights(duration_months, curve); Σ = 1
+  midpoint_month:   number            -- see below
+```
+
+**Resolution, by spend path** — the three arms §18.5 already names:
+
+| Path | Window | Curve |
+|---|---|---|
+| network | `resolvedPhaseId(pkg.phase_id, 'construction', network)`'s derived `start_month`/`duration_months` | the phase's own |
+| auto (`programme = null`) | §6's construction window: months `1..max(1, term−2)`, or month 0 alone when `term = 1` | `straight_line` |
+| legacy three-package (raw v4–v8 only) | the construction package's `[start_offset, start_offset + duration)` | the construction package's own |
+
+**Every package on the auto path and on the legacy arm shares one window**,
+because both arms place every package against the single construction
+window or the single legacy construction package — there is no per-package
+resolution below the category on either arm (§6). Every package there
+therefore has the same `midpoint_month`. A package resolving to a milestone
+is a hard validation error before this function is ever reached (§18.8), so
+it is never asked to place one.
+
+**Weights, not spreads.** `curveWeights(durationMonths, curve)` (`curves.ts`
+/ `curves.py`) returns the ideal per-month fraction vector `w_k` of §6.1 —
+`straight_line` uniform, the raised-cosine `s_curve`, the linear-ramp
+`back_loaded`, or normalised `user_defined` weights — from which
+`spreadByCurve` is `round_half_up(total × w_k)` with the final month
+absorbing the residue, unchanged. The midpoint is computed from the weights,
+never from `spreadByCurve`'s rounded pence, so it is **independent of the
+amount**: doubling a package's `amount_pence` leaves its `midpoint_month`
+bit-identical, and the inflation computed from that midpoint cannot feed
+back into the timing that produced it.
+
+**The midpoint, and why its fractional part is rounded to 12 dp.**
+
+```
+midpoint_month = start_month + round12( Σ_k weights[k] × k )     -- k = 0 .. duration_months − 1
+
+round12(x) = round_half_up(x × 10^12) / 10^12
+```
+
+The sum is accumulated with `k` **not** folded into each term — `weights[k]
+× k`, not `weights[k] × (start_month + k)` — and the start is added back
+once, outside the accumulation, so a straight-line window's exact midpoint
+(e.g. month 5 for 6 months from month 2) is not perturbed by binary
+floating-point error accumulated once per term. `round12` then removes the
+residual ulp so a downstream `Math.floor` on a whole-month figure derived
+from the midpoint cannot be defeated by it (§24.3, §24.6). The midpoint is
+otherwise carried as a **float** — 4 dp when printed, unrounded in the
+engine — because a `back_loaded` package's midpoint sits later than its
+window's centre (more of its spend lands in the later months) and a
+`user_defined` package's midpoint is whatever its weights say; months and
+fractions of months both matter because the inflation index compounds
+pro-rata (§24.3).
+
+### 24.3 Tender-price inflation
+
+Detailed mode, `qs.inflation` non-null, `acquisition.acquisition_date`
+non-null (else a hard validation error, §24.7 rules 2–3). Per package:
+
+```
+months_from_base = max(0, monthsBetween(qs.base_date, acquisition_date) + midpoint_month)
+inflation_factor  = (1 + annual_pct / 100) ^ (months_from_base / 12)
+inflation_pence   = round_half_up(amount_pence × (inflation_factor − 1))
+```
+
+```
+inflation_total_pence     = Σ inflation_pence                     -- sum of ROUNDED lines, not a rounding of the sum
+construction_total_pence  = base_build_pence + inflation_total_pence
+                           + contingency_total_pence + compliance_pence
+```
+
+- `monthsBetween` is R15's §23.9 helper — whole months, floored on the day —
+  reused rather than re-implemented. `months_from_base` is a **float**: the
+  whole-month distance from `qs.base_date` to month 0 (the acquisition date,
+  the origin every other month offset in this model shares), plus the
+  package's fractional `midpoint_month`. The `max(0, …)` floor is the "no
+  deflation" rule: a base date on or after a package's midpoint means the
+  price already reflects that month, and the factor is exactly `1`.
+- **`months_from_base` is published whenever `qs.base_date` is non-blank and
+  `acquisition_date` is non-null — regardless of whether an allowance is
+  recorded.** `inflation_factor` and `inflation_pence` are the ones gated on
+  the allowance: `factor` is `null` and `pence` is `0` (never `null`, since
+  it always enters the additive total) whenever `inflation` itself is
+  `null`, or degrades to that pair when `annual_pct` is non-finite or
+  negative (§24.3's engine-side rule, §24.7's validation-side one). This
+  refines design §9's field list, which read `months_from_base` as gated on
+  the allowance the same way `factor` is: it is not, because the latest-
+  midpoint fields (§24.6) and `no_inflation_allowance`'s own skip condition
+  (§24.7) both need a calendar distance to exist on a document that carries
+  no allowance at all.
+- The one rounding is on the pence, per package, half-up (`money_round` —
+  never Python's builtin `round`, R9's lesson). The factor and the months
+  are never rounded; only `round12` touches the midpoint, and only to
+  remove an ulp, not to change its meaning.
+- **A non-finite or negative `annual_pct` degrades in the engine to no
+  allowance** — `factor: null`, `pence: 0`, the identical state an absent
+  `inflation` key produces — so `Math.pow`/`(1 + x) ** y` is never evaluated
+  on a `NaN` or an `Infinity`. §24.7 rule 1 owns raising the error; the
+  engine's job is to stay defined for an unvalidated caller, not to enforce
+  the rule a second time.
+- **What is and is not inflated.** Packages only. Contingency classes keep
+  their **uninflated** bases — `general` on the uninflated `base_build_pence`,
+  `existing_building` and `abnormal` on the uninflated packages they tag
+  (§16.3, unchanged): inflation is a disclosed line beside the priced sum,
+  not a rebasing of it, and folding it into the contingency base would make
+  the general class grow silently with the programme — R15's objection to a
+  flat percentage, in reverse. Compliance is `0` in detailed mode
+  (unchanged, §16.2). Fee lines follow their existing base definitions
+  exactly: a `pct_of_base_build` line excludes inflation because
+  `base_build_pence` excludes it; a `pct_of_construction_total` line
+  includes it because `construction_total_pence` now does.
+  `lender_eligible_base_pence` and `implied_rate_pence_per_sqm` are
+  base-date figures and stay uninflated; `price_basis` coverage (§23.6) is
+  against `base_build_pence` and is unchanged.
+- With `inflation: null` every figure above is `0` or `null` exactly as
+  §24.6 states, and `construction_total_pence` is calc 2.15.0's to the
+  penny.
+
+**Why a separate line, not a scaled package amount.** Scaling `amount_pence`
+in place would move the price-basis coverage, the contingency bases, the
+eligible base and the implied rate — every base-date figure — and would make
+the QS's priced sum unrecoverable from the result. The allowance is a dated,
+disclosed line beside the priced sum, the way a QS reports one.
+
+### 24.4 Per-package draw eligibility
+
+The uses are built exactly as §18.5 and §6 build them today — bucket-spread,
+byte-identical to calc 2.15.0. Beside them, from the same weights §24.2
+computed, each package's **unrounded** spend per month gives each month a
+lender-eligible share:
+
+```
+pkg_spend(p, m) = (amount_p + inflation_p) × weights_p[m − start_p]      -- a FLOAT; 0 outside the package's window
+                                                                          -- for the SHARE only; never added to uses
+
+share(m) = Σ_{p eligible} pkg_spend(p, m)  ÷  Σ_{all p} pkg_spend(p, m)
+         = lender_eligible_ratio                                        -- when the denominator is 0
+
+uses[m].lender_eligible_construction_pence = round_half_up(uses[m].construction_pence × share(m))
+```
+
+and §4.2(b)'s advance-cap base becomes, per month:
+
+```
+uses[m].lender_eligible_construction_pence + uses[m].professional_pence + uses[m].statutory_pence
+```
+
+rounded once with the advance percentage, as before.
+
+- **The share is computed from unrounded per-package spend, never from
+  `spreadByCurve`'s rounded pence.** This refines design §7's "per-package
+  spread" (decision 7) and design §24.4's own text: the design read the
+  share as built from a per-package *spread* — `spreadByCurve` applied per
+  package — which rounds each package's own monthly figure independently of
+  every other package's. What is built instead is a ratio of two **floats**,
+  `(amount + inflation) × w_k`, with no per-package rounding at all. The
+  reason is the recovery claim below: a ratio of unrounded per-package
+  floats reduces to the packages' own eligible fraction on any single-window
+  plan whatever the amounts are, because the shared denominator terms cancel
+  algebraically; a ratio built from independently-rounded per-package pence
+  would not cancel exactly, and would recover R14's uniform ratio only up to
+  rounding. §24.9 limitation 3 states the resulting narrower limitation: the
+  share is a ratio over per-package **weights**, not a per-package ledger.
+- **Headline mode:** no packages, so `share(m)` is `1` (`lender_eligible_ratio`'s
+  headline value) in every month — calc 2.15.0's figure, unchanged.
+- **The denominator-zero arm** is a month whose construction spend is only
+  remainder — contingency in a phase (or the default bucket) no package
+  resolves to. It falls back to `lender_eligible_ratio`, the uniform figure,
+  rather than to `0` (which would make that contingency un-advanceable in
+  exactly the months it is spent) or to `1` (which would advance an
+  ineligible plan's contingency in full).
+- **Contingency and compliance follow the month's share.** They sit inside
+  `uses[m].construction_pence` and in no `pkg_spend`, so the share computed
+  from the packages active that month is applied to them as it is to the
+  packages themselves — "proportionally", as §16.9 and §20.5 have said since
+  R14, now month by month rather than once for the whole line.
+- **In the network arm, each package's `inflation_pence` joins its own
+  resolved phase's bucket; the default-bucket remainder — contingency and
+  compliance — is never itself a package line and always resolves through
+  the category default.** A package's inflation spreads with the package,
+  not with whichever bucket happens to be spending in its window. This is a
+  no-op on every pre-R15b document, since `inflation_pence` is `0`
+  everywhere until an allowance is entered.
+- **The recovery claim, asserted not argued.** When every package shares one
+  window — the auto path, the legacy arm, and any network where every
+  package resolves to the same phase — `share(m)` equals `lender_eligible_ratio`
+  in every month exactly (not merely "up to rounding"), because the
+  unrounded per-package weights in the numerator and denominator are then
+  the same weight vector scaled by the same eligible/all totals, and
+  `lender_eligible_construction_pence(m) == round(construction(m) ×
+  lender_eligible_ratio)` — R14's formula, recovered by construction. When
+  every package is eligible the share is `1` and so is the ratio, whatever
+  the windows. This is asserted on every auto-path detailed fixture, for
+  every month, and a companion assertion proves that set of fixtures is
+  non-empty: `q-detailed-cost-plan` and `w-monitoring-on-site` (auto path,
+  one ineligible package each) and `x-unit-sales-ledger` and
+  `y-due-diligence` (network, every package eligible and untagged) all move
+  by nothing.
+- **Fixture S moves, by hand — Q, W, X and Y do not.** S is the corpus's
+  only document with packages in more than one spend window **and** an
+  ineligible package among them; every other detailed fixture fails one half
+  of that conjunction (a single window, or every package eligible), which is
+  exactly what the recovery claim covers. S's eligible enabling package
+  (6,000,000, tagged `strip_out`) sits in its own two-month window; its
+  main-window packages are structure 24,000,000, envelope 18,000,000, M&E
+  12,000,000 (eligible) and externals 6,000,000 (ineligible), with the
+  3,300,000 general contingency remainder. The old uniform ratio,
+  60,000,000 / 66,000,000 = 10/11, applied every month alike; the per-month
+  share is **1** across the two strip-out months and **0.9** across the six
+  main-window months (54,000,000 eligible of 60,000,000, a clean ratio by
+  construction of the fixture — §24's own worked derivation,
+  `test-cases.md` §24.2). `funding_gap_pence` moves from 6,300,000 to
+  **6,330,000** — 30,000 *more*, not less, because the strip-out months now
+  fund in full and the whole shortfall concentrates into the six
+  main-window months instead of spreading thin across all eight. Every
+  other debt-denominated metric on S is re-pinned from the two engines
+  agreeing, with 6,330,000 as the hand-derived anchor.
+- `lender_eligible_ratio` stays on `CostPlanResult` and on `Schedule` as the
+  disclosure figure and the denominator-zero fallback; the ledger's §4.2(b)
+  cap no longer reads it directly.
+
+### 24.5 Downstream consequences, each stated
+
+- **VAT (§17.6).** An overridden package's charge line is on `amount_pence +
+  inflation_pence`, and the construction category base is
+  `construction_total_pence − Σ (amount + inflation)` of overridden
+  packages. The inflation follows the package's own treatment. Every
+  existing document has `inflation_pence = 0` on every package, so the VAT
+  ledger is unchanged corpus-wide.
+- **Monitoring (§20.1).** `original(construction) = base_build_pence +
+  inflation_total_pence + compliance_pence`. The split identity
+  `original(construction) + original(contingency) == Σ uses.construction_pence`
+  keeps holding by construction of the new `construction_total_pence`, and
+  keeps being asserted corpus-wide, Z included.
+- **Cost-to-complete (§5.10)** reads the ledger; it moves where the ledger
+  moves (S) and nowhere else.
+- **Sensitivity (§12).** The cost lever scales `amount_pence` and therefore
+  `inflation_pence` (the midpoint is amount-independent, §24.2, so the
+  factor is unchanged and the pence scale linearly to within rounding).
+  `phase_slip` moves the tagged phase's window and every package resolving
+  to it, hence their midpoints and inflation. `timeline` moves the auto
+  window. No lever writes `qs`; §12.2's facility invariance is untouched.
+  Lever order-independence is re-asserted with the inflation and timing
+  fields present.
+- **The DD `cost_plan_qs` derived row (§23.3)** is unchanged; the allowance
+  is a cost-plan figure, not an evidence status.
+- **The lender case hash (§13.2.1)** is a hash over the inputs; `inflation`
+  is inside it because `qs` is. Editing the rate makes an approved case
+  stale, exactly as editing `base_date` already does.
+
+### 24.6 Outputs and reporting
+
+`CostPlanResult` (§16.8) gains, per package and in total; both engines
+mirror field for field. §16.8's own listing already states each field's true
+position in the shape — this section restates the same fields with their
+full account rather than repeating a position claim, so the two never have
+a chance to disagree.
+
+**Per package**, appended contiguously to the end of `CostPackageLine` (this
+sub-list's order is exact — every field here is new, so there is no
+pre-existing neighbour to state a position against):
+
+```
+packages[].phase_id                    the RAW input value, unchanged meaning; null on every migrated
+                                       and every untagged row
+packages[].resolved_phase_id           NEW — the RESOLVED phase; null on the auto and legacy arms
+packages[].start_month, finish_month   the package's window
+packages[].midpoint_month              float
+packages[].months_from_base            float | null  -- null only when there is no calendar to place it in
+                                       (qs.base_date blank, or acquisition_date unknown); published
+                                       whether or not an allowance is recorded
+packages[].inflation_factor            float | null  -- null exactly when there is no allowance
+packages[].inflation_pence             integer; 0 when there is no allowance (never null)
+```
+
+**In total**, five new fields, positioned exactly as §16.8's own listing has
+them — four sit together after `implied_rate_pence_per_sqm`, the fifth
+amends a field already there:
+
+```
+construction_total_pence               UNCHANGED position, straight after compliance_pence; formula
+                                       amended to base_build + inflation_total + contingency_total
+                                       + compliance
+                                       [ ... base_build_pence, contingency[], contingency_total_pence,
+                                         compliance_pence, fees[], professional_total_pence,
+                                         statutory_total_pence, conversion_total_pence,
+                                         lender_eligible_base_pence, lender_eligible_ratio and
+                                         implied_rate_pence_per_sqm are §16.8's own, unmoved and
+                                         unchanged, and sit between the line above and the four below ]
+inflation_total_pence                  NEW — integer; sum of the rounded per-package lines; 0 with
+                                       no recorded allowance
+inflation_pct_of_base_build            NEW — pct(inflation_total_pence, base_build_pence); null when
+                                       base build is 0
+latest_midpoint_month                  NEW — float | null; the latest package midpoint; null with no
+                                       packages
+latest_midpoint_months_from_base       NEW — float | null; null under the same calendar gate as
+                                       months_from_base
+latest_midpoint_whole_months_from_base NEW — integer | null; Math.floor of the line above; the flag
+                                       message and the memo sentence print THIS, never the float
+price_basis                            UNCHANGED position (R15, §23.6) — the second-to-last field
+qs                                     UNCHANGED position — the LAST field; now normalised so a raw
+                                       pre-v14 document publishes `inflation: qs.inflation ?? null`,
+                                       the same shape as its migrated twin (§24.8)
+```
+
+`Schedule.uses[m]` gains `lender_eligible_construction_pence` — the
+per-month figure §24.4 computes, read by the §4.2(b) advance cap and by
+nothing else in the ledger. `Schedule` gains `package_timing:
+PackageTiming[]` — §24.2's block, one per package, in package order (`[]`
+in headline mode) — so the Costs page and the memo print a window rather
+than derive one.
+
+`AppraisalResultV2.metrics.cost_plan` remains the only shape a surface may
+read cost from; no component and no report generator computes a midpoint, a
+factor or a share.
+
+**Surfaces.**
+
+- **Costs page** (`ConversionCostsPage`). The QS provenance card gains an
+  inflation control: a "No inflation allowance" checkbox (checked = `qs.inflation
+  === null`) and, when unchecked, a rate field; unchecking seeds
+  `{ annual_pct: 0 }`, never a value the user has not typed, and checking it
+  clears back to `null`. Each package row and each fee-line row gains a
+  **phase picker** — "Category default — *[that line's own category default
+  phase's label]*" (construction for a package; professional or statutory
+  for a fee line, by its own category) or any phase of at least one month's
+  duration, writing `phase_id` (`null` for the default) — disabled when the
+  programme is not a phase network, with a one-line hint above the package
+  grid naming why. Each package row gains three
+  read-only cells off the result: window (`start–finish`), midpoint
+  (`midpoint_month.toFixed(2)`), inflation (`inflation_pence` as an exact
+  amount). The coverage line beneath the package grid gains a fourth clause:
+  "inflation to spend midpoints £*x* (*y*% of base build)", both figures
+  read verbatim off `inflation_total_pence` and `inflation_pct_of_base_build`
+  — no division in JSX. No arithmetic anywhere on the page.
+- **Programme page.** No change. A package's window is its phase's bar.
+- **Memo.** The cost section's QS paragraph gains, when `inflation` is
+  recorded, its rate and base date inside the existing sentence; when it is
+  not, and there is a calendar to measure against
+  (`latest_midpoint_whole_months_from_base` non-null), a further sentence:
+  *"No tender-price inflation allowance recorded: priced at [base_date];
+  package spend midpoints fall up to [n] whole months later."* — the same
+  guard `no_inflation_allowance` itself is skipped by. A new row, "Tender-price
+  inflation to spend midpoints — *[rate]* p.a. from *[base_date]*", sits
+  between the package schedule and the contingency rows, printed only in
+  detailed mode with a recorded allowance (an unrecorded allowance is
+  already `0`, and a bare "£0" row explains nothing). Each package row in
+  the schedule table prints a suffix built from the facts that document
+  actually carries — "phase *[label]*" only when `resolved_phase_id` is
+  non-null, "midpoint *[x]*" always (every package resolves to some window),
+  "inflation £*[x]*" only when the plan carries a recorded allowance — never
+  a placeholder for a fact genuinely absent. The finance section's §4.2(b)
+  sentence, under "Senior Debt Position", is **new** (no equivalent existed
+  before this release): "Development advances are capped at *[x]*% of
+  lender-eligible construction spend month by month, plus professional and
+  statutory costs in full (spec §4.2(b))."
+- **Cash-flow page.** No change. It prints the ledger's `uses_total_pence`
+  only and has no per-category column to hang an eligibility figure on; the
+  per-month figure is published on the schedule for the ledger and the
+  tests, and a cash-flow column for it is out of scope (§24.9).
+
+### 24.7 Validation and flags
+
+**Hard errors** (detailed mode; a null `inflation` adds nothing to check):
+
+| Field | Message | Fires when |
+|---|---|---|
+| `cost_plan.qs.inflation.annual_pct` | *"Tender-price inflation rate must be a finite number of at least 0."* | `annual_pct` is non-finite or negative |
+| `cost_plan.qs.inflation` | *"Tender-price inflation needs a calendar: set the acquisition date, or record no allowance."* | `inflation` non-null and `acquisition.acquisition_date` is null |
+| `cost_plan.qs.inflation` | *"Tender-price inflation needs the QS base date."* | `inflation` non-null and `qs.base_date` is blank after trim |
+
+**Warning:** `annual_pct > 15` — *"Tender-price inflation above 15% p.a. is
+unusual - check the rate."* No clamp; the figure is used as entered.
+
+**One flag**, raised in `dueDiligenceFlags` / `due_diligence_flags`, called
+from `deriveMetrics` / `derive_metrics` beside R15's four (§23.9), dated at
+the floored month of the latest package midpoint:
+
+| Flag | Severity | Fires when | Message |
+|---|---|---|---|
+| `no_inflation_allowance` | amber | detailed mode, `qs` non-null, `inflation` null, `latest_midpoint_months_from_base` non-null and `> 0` | *"no tender-price inflation allowance recorded: priced at [base_date]; package spend midpoints fall up to [n] whole months later"* — `n` is `latest_midpoint_whole_months_from_base`, the same integer the memo prints, never a re-floored copy of the float |
+
+It is skipped when `acquisition_date` is null (there is no calendar to
+measure against — `latest_midpoint_months_from_base` is itself null there,
+so this is not a separate guard) and when no midpoint falls after the base
+date (`> 0`, not `>= 0`: a base date at or after every midpoint clamps the
+figure to exactly `0`, which reads as "nothing to inflate", not "record an
+allowance"). `inflation_pence` being non-zero is never itself a flag: an
+allowance is a line, not a warning.
+
+**Cross-engine message drift.** This section's four rules sit inside
+`validateDueDiligence`'s body, so §23.9's own window (§9.6 of
+`model-governance.md`) already compares their message text against
+`validation.py` verbatim. The guard (§9.6) additionally gains a **third,
+narrower window** nested inside that one — `// --- R15b §24.7 begin ---` /
+`... end ---` markers either side of this section's rules in `validation.ts`
+— which is a **bounded canary on the call count**, not a second content
+comparison: it asserts the marked block contains exactly four `err`/`warn`
+calls, so a rule silently added or removed inside the markers is caught even
+where §23.9's own `>= 25` bound alone would not notice a one-rule drift.
+
+### 24.8 Migration and the persistence boundary
+
+```
+v13 cost_plan.qs: null           →  v14 unchanged
+v13 cost_plan.qs: { ... }        →  v14 { ..., inflation: null }
+```
+
+`migrateV13toV14` / `migrate_v13_to_v14` mirror the v12 → v13 helper,
+including the already-v14 merge branch and the two refusals (an
+unrecognised `inputs_version`, and a document declaring 14 that fails the
+v14 structural check). `isV14` / `is_v14` discriminate on `inputs_version
+== 14` **and** the `due_diligence` key **and** either `qs` is null or `qs`
+carries the `inflation` key present — not merely equal to `null` — because
+an absent key and an explicit `null` read identically at runtime and only
+the explicit key proves the v14 write actually happened.
+
+**The identity gate compares metrics, ledger and schedule with no
+exclusion** — `package_timing`, `lender_eligible_construction_pence` and
+every new cost-plan field included — because both arms run the same calc
+2.16.0 code and the migration writes only a `null`. This is not the same
+claim as "the flag list is excluded and the rest is checked": the flag list
+is compared with **strict equality**, and `no_inflation_allowance` is
+asserted **by name** as the sole addition, proven to fire on at least one
+migrated fixture (Y carries a `qs` block dated before its construction) on
+**both** arms — the raw v13 document and its migrated v14 twin — so a named
+exclusion could never be used to hide a flag that had stopped working on
+one side only.
+
+**The TS engine republishes `qs` normalised.** `computeCostPlan` reads
+`plan.qs.inflation ?? null` and republishes that value on the result rather
+than the raw input, so a raw pre-v14 stored document (no `inflation` key at
+all) and its migrated v14 twin (`inflation: null` explicitly) publish the
+identical result shape — the same discipline every `?? null` read on a
+migration-added field in this codebase already follows (`phase_id`,
+`price_basis`, §16.9/§23.6). Python's `model_dump` does the same by the
+model's own default.
+
+**Pins that move under calc 2.16.0, all by hand:** fixture S's
+ledger-derived metrics (§24.4). Every other golden pin is asserted
+unchanged; the recovery claim of §24.4 is the reason, and its test is the
+proof.
+
+**Entry-point cutover.** `migrateInputsToV14` / `migrate_inputs_to_v14` at
+every production call site; the governance `inputs_version` stays derived
+from the document (R13's finding); the Costs page's `DEFAULT_QS` seeds
+`inflation: null` for a newly-recorded QS block, never an implicit zero.
+
+### 24.9 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **One rate, flat.** A single annual tender-price rate for the whole plan;
+   no dated index table, no per-package rate. A plan whose packages carry
+   different indices records one.
+2. **Inflation is on packages only.** Fee lines are not inflated (an
+   appointment is priced at appointment); contingency bases are uninflated
+   by design (§24.3). A `pct_of_construction_total` fee follows the
+   inflated base by its own pre-existing definition, not by a special case
+   written for inflation.
+3. **The per-month share is a ratio over per-package weights, not a
+   per-package ledger.** The uses remain bucket-spread (§18.5); the share is
+   computed beside them from each package's unrounded `weights` vector, and
+   the underlying spend those weights describe is never itself entered into
+   the monthly uses as a per-package figure. The recovery test bounds the
+   difference from a true per-package spread to exactly zero where every
+   package shares one window; elsewhere the per-month eligible construction
+   figure is the engine's own computed share, not a re-derivable per-package
+   breakdown.
+4. **Contingency and compliance follow the month's share.** No separate
+   eligibility rule for the contingency allowance.
+5. **A package's programme is its phase.** A package with its own timing
+   needs its own phase, which then participates in float, the critical path
+   and `phase_slip` like any other. There is no per-package offset inside a
+   phase.
+6. **The auto path has one window.** Every package under `programme = null`
+   shares §6's construction window and midpoint; per-package timing needs a
+   network, as §18.10 limitation 1 already says of slippage.
+7. **No calendar beyond month 0.** `months_from_base` bridges `base_date` to
+   month 0 through `acquisition_date`; every later month is a month offset,
+   not a calendar date. §18.10 limitation 3 stands.
+8. **The share is not re-simulated by the monitoring statement** (§20.5
+   limitation 4, unchanged).
+
+Three limitations recorded in earlier printings become historical notes
+rather than being deleted (this project's own rule, §16.9): §16.9
+limitations 1 and 2, §16.9's inflation line, §20.5 limitation 3 and §23.11
+limitation 6.
+
+### Guards this release must watch fail
+
+| Guard | What must fail first |
+|---|---|
+| Midpoint is curve-aware | fixture Z's `back_loaded` `mande_fitout` package: `midpoint_month` (12.333…) ≠ its window's centre (12); a straight-line twin equals its centre |
+| Midpoint is amount-independent | doubling a package's `amount_pence` leaves its `midpoint_month` bit-identical |
+| Floor at zero | a `base_date` after every package's midpoint → `months_from_base` 0, `inflation_factor` 1, `inflation_pence` 0 on every package; the unfloored value is negative on that twin, proving the floor is reached rather than coincidentally satisfied |
+| Rounded lines, not a rounded sum | Z's five packages: `inflation_total_pence` (5,496,722) equals the sum of the five independently-rounded lines, not `money_round` applied to their unrounded sum |
+| Per-month share on S, absolute | strip-out months (6, 7) at share 1, `lender_eligible_construction_pence` 3,000,000 each; main-window months (8–13) at share 0.9, `lender_eligible_construction_pence` 9,495,000 each |
+| Per-month share on Z, absolute | month 13's `lender_eligible_construction_pence` 14,653,411 against `uses.construction_pence` 15,775,964 — the unrounded-share figure, not the R14 contrast figure 14,341,785 pinned beside it for the difference to be visible |
+| R14 recovery | on every auto-path detailed fixture, every month: `lender_eligible_construction_pence == round(construction × lender_eligible_ratio)`; a companion asserts that set of fixtures is non-empty |
+| Denominator-zero arm | a network whose default construction phase carries only contingency: those months at the uniform ratio, not 0 and not 1 |
+| Inflation follows the override | Z's `pkg-externals` override: VAT line = `money_round((amount + inflation) × rate)` = 1,300,100; the construction category base net of the same 6,500,501; `irrecoverable_vat_pence` 1,300,100 by hand (S's is 0) |
+| Monitoring split identity | corpus-wide, Z included, with `inflation_total_pence` inside `original(construction)` |
+| Contingency uninflated | Z's `general` contingency base equals `base_build_pence` (66,000,000) exactly, unmoved by the 5,496,722 of inflation; a `pct_of_base_build` fee excludes inflation and a `pct_of_construction_total` fee (`fee-pm`, base 74,796,722) includes it — both pinned |
+| Migration identity, strict flag equality, no exclusion | v13 → v14 corpus-wide in both engines, flag lists compared with strict equality; `no_inflation_allowance` the named sole addition and proven to fire on fixture Y on **both** its raw v13 and migrated v14 arms |
+| S re-pinned, everything else still | S's `funding_gap_pence` 6,330,000 and its dependent metrics by hand (§24.4); every other golden pin unchanged |
+| Calendar rule | `inflation` non-null with `acquisition_date: null` errors naming both facts; a blank `base_date` errors and the engine never reaches `monthsBetween` on it (a spy/raise guard) |
+| Non-finite degrade | an unvalidated `annual_pct` of `NaN` or a negative value reaches `computeCostPlan` without throwing: `inflation_factor` null, `inflation_pence` 0 on every package — the validation rule is what is expected to reject it, not the engine |
+| Flag boundary | `no_inflation_allowance` skipped when the max midpoint is at or before the base date; fires at exactly one month after |
+| Memo suffix gating | a package with no resolved phase prints no "phase" clause; a plan with no recorded allowance prints no "inflation" clause; both print together only when both facts are recorded |
+| Lever order-independence | all five levers, in several orders, on Z: identical results, inflation and timing fields included |
+| Cost lever scales inflation | Z under `construction_cost_adjustment_pct: +10`: every `inflation_pence` within a penny of 1.1× its base-case figure; every `midpoint_month` unchanged |
+| Phase picker is live | tagging a package to another phase on the Costs page moves its `start_month` in the result; the picker is disabled on an auto-path document |
+| Message drift | §23.9's window already compares §24.7's four messages (they sit inside `validateDueDiligence`); the nested call-count canary fails first on a rule silently added or removed inside the markers |
+| Spec-versions pin | `CALC_VERSION` 2.16.0 and the §1.6 changelog and version list both name v14/2.16.0, in both engines; entry-point guards pass only once every production call site names v14 |
+
+**Guards deliberately not written:** that `finish == start + duration` (true
+by construction of `PackageTiming`); that `Σ weights == 1` (true by
+construction of every curve function — the *spread* invariant Σ = total is
+what is already asserted, as it has been since §6.1).

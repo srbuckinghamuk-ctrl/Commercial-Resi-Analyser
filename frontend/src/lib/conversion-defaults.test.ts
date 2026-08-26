@@ -4,12 +4,13 @@ import {
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
   defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
   defaultCalculatorInputsV11, defaultCalculatorInputsV12, defaultCalculatorInputsV13,
+  defaultCalculatorInputsV14,
   captureSourceRecord,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
-  migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13,
+  migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13, migrateV13toV14,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -508,5 +509,66 @@ describe('defaultCalculatorInputsV13 (R15 Task 2, spec §23.10)', () => {
 
   it('does not capture a source record when no project is given', () => {
     expect(defaultCalculatorInputsV13().due_diligence.source_record).toBeNull();
+  });
+});
+
+describe('defaultCalculatorInputsV14 (R15b Task 6, spec §24.8)', () => {
+  // Same guard as the V11/V12/V13 blocks above, and the one that matters
+  // most here: this is the document EVERY freshly opened calculator now
+  // starts on, and the one every stored appraisal is compared against after
+  // `migrateInputsToV14` merges onto it.
+  it('is exactly what migrateV13toV14 makes of the v13 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV14>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV14()))
+      .toEqual(stripIds(migrateV13toV14(defaultCalculatorInputsV13())));
+  });
+
+  // Non-vacuity for the equality above: v14 adds no new top-level field
+  // (`cost_plan.qs.inflation` already exists on `QsProvenance`), so the
+  // proof that this is not just "the v13 document with a bumped version
+  // number" is the version number itself plus the inert `qs: null` (the
+  // default document never enters a QS statement, so there is nothing for
+  // `inflation` to attach to).
+  it('starts with inputs_version 14 and null cost-plan provenance', () => {
+    const v14 = defaultCalculatorInputsV14();
+    expect(v14.inputs_version).toBe(14);
+    expect(v14.cost_plan.qs).toBeNull();
+    expect(v14.due_diligence.items.every((i) => i.status === 'unknown')).toBe(true);
+  });
+
+  it('hands every caller its own document, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV14();
+    const b = defaultCalculatorInputsV14();
+    a.due_diligence.items[0].status = 'green';
+    expect(b.due_diligence.items[0].status).toBe('unknown');
+  });
+
+  // R15 spec §23.5 (unchanged by this release): opening the calculator
+  // against a real listing still captures it into `due_diligence.
+  // source_record` -- v14 touches only `cost_plan.qs`, so this must still
+  // hold identically.
+  it('captures the listing into due_diligence.source_record when a project is given', () => {
+    const project = {
+      id: 'p', price_pence: 1, floor_area_sqm: 360,
+      is_vacant: false, tenure: 'freehold' as const, lease_years_remaining: null,
+      source_name: 'rightmove', source_url: null, use_class: 'office' as const, epc_rating: 'D',
+    };
+    const now = new Date('2026-08-25T09:00:00Z');
+    const v14 = defaultCalculatorInputsV14(project, now);
+    expect(v14.due_diligence.source_record).toEqual(captureSourceRecord(
+      {
+        source_name: 'rightmove', source_url: null, is_vacant: false, tenure: 'freehold',
+        lease_years_remaining: null, floor_area_sqm: 360, use_class: 'office', epc_rating: 'D',
+      },
+      '2026-08-25T09:00:00.000Z',
+    ));
+  });
+
+  it('does not capture a source record when no project is given', () => {
+    expect(defaultCalculatorInputsV14().due_diligence.source_record).toBeNull();
   });
 });

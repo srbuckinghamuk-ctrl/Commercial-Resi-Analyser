@@ -5,6 +5,8 @@
 
 import type { VatOverride } from './vat';
 import { pct } from './pct';
+import { computePackageTiming } from './package-timing';
+import { monthsBetween } from './due-diligence';
 
 export type CostPlanMode = 'headline' | 'detailed';
 
@@ -44,12 +46,14 @@ export interface CostPackage {
    *  mode has no packages, so every class there takes the whole base build
    *  regardless of tag -- see computeCostPlan's contingency resolution. */
   contingency_class: ContingencyClassName;
-  /** R10 records this; R14 (calc 2.13.0) WIRES it. The ledger's §4.2(b)
-   *  development-cost advance cap scales its construction line by the cost
-   *  plan's `lender_eligible_ratio` — the eligible share of base build — so
-   *  clearing this flag on a package shrinks every later month's advance cap
-   *  and widens the funding gap. Live in detailed mode only: headline mode has
-   *  no packages, and its ratio is pinned to 1. */
+  /** R10 records this; R14 (calc 2.13.0) WIRES it, R15b (spec §24.4) per-months
+   *  it: clearing this flag on a package removes that package's own spend
+   *  months from `uses[m].lender_eligible_construction_pence`, which shrinks
+   *  the ledger's §4.2(b) advance cap in exactly those months and widens the
+   *  funding gap. `lender_eligible_ratio` remains the disclosure figure and
+   *  the denominator-zero fallback — it no longer drives the cap itself. Live
+   *  in detailed mode only: headline mode has no packages, and its ratio is
+   *  pinned to 1. */
   lender_eligible: boolean;
   notes: string;
   /** R11 spec 17.1. Detailed mode only -- hard-rejected in headline mode
@@ -128,6 +132,13 @@ export type QsStage = 'order_of_cost' | 'riba_2' | 'riba_3' | 'riba_4' | 'tender
 export const QS_STAGES: readonly QsStage[] = ['order_of_cost', 'riba_2', 'riba_3', 'riba_4', 'tender', 'contract_sum'];
 export type QsStatus = 'draft' | 'issued' | 'reviewed';
 export const QS_STATUSES: readonly QsStatus[] = ['draft', 'issued', 'reviewed'];
+
+/** R15b spec §24.3. The QS's tender-price inflation allowance, applied per
+ *  package from `base_date` to that package's spend midpoint. */
+export interface InflationAllowance {
+  annual_pct: number;
+}
+
 /** R15 spec §23.6. Detailed mode only (validation rule 8). */
 export interface QsProvenance {
   source: string;
@@ -135,6 +146,11 @@ export interface QsProvenance {
   date: string;       // ISO yyyy-mm-dd
   status: QsStatus;
   base_date: string;  // ISO; R15b's inflation origin
+  /** R15b spec §24.3. null = no allowance recorded, including every raw
+   *  pre-v14 stored document (no key at all — the engine reads it as
+   *  `qsInput.inflation ?? null`, so an absent key and an explicit null are
+   *  the same "no allowance" fact). */
+  inflation: InflationAllowance | null;
 }
 
 export interface CostPlanInputs {
@@ -227,6 +243,20 @@ export interface CostPackageLine {
    *  re-deriving the cost plan a second time. null on every migrated row and
    *  on every line the user has not re-tagged. */
   phase_id: string | null;
+  /** R15b spec §24.2/§24.3. Fields appended, in order, from
+   *  `computePackageTiming`'s `PackageTiming` plus the per-package inflation
+   *  allowance. `resolved_phase_id` is the RESOLVED phase (network-aware);
+   *  `phase_id` above keeps its raw-input meaning. `months_from_base` and
+   *  `inflation_factor` are null when the QS has no `base_date`/allowance
+   *  (or `acquisition_date` is unknown); `inflation_pence` is 0 in that case,
+   *  never null — it always enters the additive construction total. */
+  resolved_phase_id: string | null;
+  start_month: number;
+  finish_month: number;
+  midpoint_month: number;
+  months_from_base: number | null;
+  inflation_factor: number | null;
+  inflation_pence: number;
 }
 
 export interface ContingencyLine {
@@ -297,6 +327,17 @@ export interface CostPlanResult {
   lender_eligible_ratio: number;
   /** Display only; enters no calculation. null when the area is 0. */
   implied_rate_pence_per_sqm: number | null;
+  /** R15b spec §24.3. Sum of ROUNDED package lines, not a rounding of the
+   *  sum; 0 in headline mode and whenever no package carries an allowance. */
+  inflation_total_pence: number;
+  /** pct(inflation_total_pence, base_build_pence) — the Costs page and memo
+   *  print it; null when base build is 0. */
+  inflation_pct_of_base_build: number | null;
+  latest_midpoint_month: number | null;
+  latest_midpoint_months_from_base: number | null;
+  /** Math.floor of the line above; the flag message and the memo sentence
+   *  print this integer, never the float. */
+  latest_midpoint_whole_months_from_base: number | null;
   /** R15 spec §23.6. LAST two fields, both null in headline mode. `qs` is the
    *  input block republished verbatim — the cost plan is the one place the
    *  memo reads it from, so it never re-derives provenance from the raw
@@ -331,17 +372,55 @@ export function computeCostPlan(
   const cc = inputs.conversion_costs;
   const detailed = plan.mode === 'detailed';
 
-  const packages: CostPackageLine[] = plan.packages.map((p) => ({
-    id: p.id, code: p.code, label: p.label, amount_pence: p.amount_pence,
-    contingency_class: p.contingency_class, lender_eligible: p.lender_eligible,
-    // `?? null`, not a bare passthrough: a raw pre-R12 stored document (run
-    // through the golden-fixture corpus's OWN inputs_version, unmigrated) has
-    // no `phase_id` key on this line at all, so `p.phase_id` reads
-    // `undefined` there -- and `undefined !== null` would make the v8->v9
-    // migration identity gate fail on a field this release added, not on
-    // anything the migration actually changed.
-    phase_id: p.phase_id ?? null,
-  }));
+  // R15b spec §24.3. Package timing, resolved once; the tender-price
+  // inflation origin (qs.base_date -> acquisition_date) and allowance.
+  // `qsInput` is gated on detailed mode: headline mode has no packages by
+  // validation, and a stray `qs` left on a headline document must not leak
+  // an allowance into a mode with nothing priced to inflate.
+  const timing = computePackageTiming(inputs);
+  const timingById = new Map(timing.map((t) => [t.id, t]));
+  const acqDate = ('acquisition_date' in inputs.acquisition ? inputs.acquisition.acquisition_date : null) ?? null;
+  const qsInput = detailed ? (plan.qs ?? null) : null;
+  const baseDate = qsInput != null && qsInput.base_date.trim() !== '' ? qsInput.base_date : null;
+  // `?? null`: a raw pre-v14 stored document has no `inflation` key at all.
+  const inflation = qsInput != null ? (qsInput.inflation ?? null) : null;
+  // spec §24.7 rule 1 owns the error; the engine degrades rather than
+  // overflowing. A non-finite or negative rate reads as `null` here — the
+  // same "no allowance" state an absent `inflation` key produces — so
+  // `factor`/`inflation_pence` fall to their null/0 defaults below instead of
+  // computing `Math.pow`/`Math.round` on a NaN or Infinity. `months_from_base`
+  // and the latest-midpoint fields do not read this value at all, so they are
+  // unaffected and still published.
+  const inflationRate = inflation != null && Number.isFinite(inflation.annual_pct) && inflation.annual_pct >= 0
+    ? inflation.annual_pct
+    : null;
+  const baseToMonth0 = baseDate != null && acqDate != null ? monthsBetween(baseDate, acqDate) : null;
+
+  const packages: CostPackageLine[] = plan.packages.map((p) => {
+    const t = timingById.get(p.id);
+    const start = t?.start_month ?? 0;
+    const finish = t?.finish_month ?? 0;
+    const midpoint = t?.midpoint_month ?? 0;
+    const monthsFromBase = baseToMonth0 == null ? null : Math.max(0, baseToMonth0 + midpoint);
+    const factor = inflationRate != null && monthsFromBase != null
+      ? Math.pow(1 + inflationRate / 100, monthsFromBase / 12)
+      : null;
+    const inflationPence = factor == null ? 0 : Math.round(p.amount_pence * (factor - 1));
+    return {
+      id: p.id, code: p.code, label: p.label, amount_pence: p.amount_pence,
+      contingency_class: p.contingency_class, lender_eligible: p.lender_eligible,
+      // `?? null`, not a bare passthrough: a raw pre-R12 stored document (run
+      // through the golden-fixture corpus's OWN inputs_version, unmigrated) has
+      // no `phase_id` key on this line at all, so `p.phase_id` reads
+      // `undefined` there -- and `undefined !== null` would make the v8->v9
+      // migration identity gate fail on a field this release added, not on
+      // anything the migration actually changed.
+      phase_id: p.phase_id ?? null,
+      resolved_phase_id: t?.phase_id ?? null,
+      start_month: start, finish_month: finish, midpoint_month: midpoint,
+      months_from_base: monthsFromBase, inflation_factor: factor, inflation_pence: inflationPence,
+    };
+  });
 
   // Spec §1.1: the fractional-area product rounds once, at source.
   const baseBuild = detailed
@@ -383,7 +462,13 @@ export function computeCostPlan(
   // Sum of ROUNDED figures. Three allowances at 5% are not one at 15%.
   const contingencyTotal = contingency.reduce((s, c) => s + c.amount_pence, 0);
 
-  const constructionTotal = baseBuild + contingencyTotal + compliance;
+  // R15b spec §24.3. Sum of ROUNDED package lines, not a rounding of the
+  // sum. 0 in headline mode -- there are no packages to inflate, and a stray
+  // headline package's own inflation_pence is already 0 (qsInput was forced
+  // to null above).
+  const inflationTotal = detailed ? packages.reduce((s, p) => s + p.inflation_pence, 0) : 0;
+
+  const constructionTotal = baseBuild + inflationTotal + contingencyTotal + compliance;
 
   // No fee basis includes fees, so this needs no ordering and no iteration.
   const fees: FeeLineResult[] = plan.fee_lines.map((f) => {
@@ -430,8 +515,18 @@ export function computeCostPlan(
       fixed_price_coverage_pct: pct(fixed, baseBuild),
       provisional_sums_pct: pct(provisional, baseBuild),
     };
-    qs = plan.qs ?? null;
+    // Normalised so a raw pre-v14 document publishes the same shape as its
+    // migrated twin (spec §24.8's no-exclusion gate; Python's model_dump does
+    // the same).
+    qs = plan.qs != null ? { ...plan.qs, inflation: plan.qs.inflation ?? null } : null;
   }
+
+  // R15b spec §24.3. The latest package spend midpoint and its distance from
+  // the QS base date -- printed by the flag/memo as a whole month.
+  const latestMidpoint = packages.length === 0 ? null : Math.max(...packages.map((p) => p.midpoint_month));
+  const latestFromBase = latestMidpoint == null || baseToMonth0 == null
+    ? null : Math.max(0, baseToMonth0 + latestMidpoint);
+  const latestWhole = latestFromBase == null ? null : Math.floor(latestFromBase);
 
   return {
     mode: plan.mode,
@@ -449,6 +544,11 @@ export function computeCostPlan(
     // R14 spec §5. Unrounded — the ONE rounding is on the product, in the ledger.
     lender_eligible_ratio: !detailed || baseBuild === 0 ? 1 : lenderEligibleBase / baseBuild,
     implied_rate_pence_per_sqm: areaSqm > 0 ? Math.round(baseBuild / areaSqm) : null,
+    inflation_total_pence: inflationTotal,
+    inflation_pct_of_base_build: pct(inflationTotal, baseBuild),
+    latest_midpoint_month: latestMidpoint,
+    latest_midpoint_months_from_base: latestFromBase,
+    latest_midpoint_whole_months_from_base: latestWhole,
     price_basis: priceBasis,
     qs,
   };

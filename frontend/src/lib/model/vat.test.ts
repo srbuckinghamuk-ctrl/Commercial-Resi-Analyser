@@ -11,6 +11,7 @@ import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
 import { developedAreaSqm } from './areas';
 import { defaultCalculatorInputsV7 } from '../conversion-defaults';
+import { docZ } from './__fixtures__/cost-plan-in-time-docs';
 import type { CalculatorInputsV8 } from './finance-types';
 import type { TogcTreatment } from './vat';
 
@@ -986,3 +987,24 @@ describe('vatBasisGate (spec §17.10, ruling R5)', () => {
     expect(vatBasisGate(vat).vatBasisConfirmed).toBe(true);
   });
 });
+
+describe('an overridden package is charged on amount + inflation (R15b spec §24.5)', () => {
+  it("charges Z's overridden externals line on amount + inflation, and nets the category base of the same", () => {
+    const run = runAppraisal(docZ());
+    const line = run.schedule.vat.charges.find((c) => c.id === 'package:pkg-externals')!;
+    expect(line).toBeDefined();
+    // pkg-externals: 6,000,000 amount + 500,501 inflation.
+    expect(line.net_base_pence).toBe(6_500_501);
+    expect(line.vat_pence).toBe(1_300_100);
+    expect(line.recoverable_pence).toBe(0);
+
+    const cat = run.schedule.vat.charges.find((c) => c.id === 'category:construction')!;
+    expect(cat).toBeDefined();
+    // Z's construction_total_pence (74,796,722) net of the overridden line's
+    // amount + inflation (6,500,501) — NOT net of the bare 6,000,000 amount alone.
+    expect(cat.net_base_pence).toBe(68_296_221);
+
+    expect(run.schedule.totals.irrecoverable_vat_pence).toBe(1_300_100);
+  });
+});
+

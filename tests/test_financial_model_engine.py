@@ -4,6 +4,7 @@ Both implementations must agree with the hand-computed ledger (spec Sec 8), not
 merely with each other. If Python disagrees with a fixture, the Python port is
 wrong -- never adjust these numbers to make peace.
 """
+import copy
 import json
 from pathlib import Path
 
@@ -50,6 +51,10 @@ def uses(**partial) -> MonthUses:
         statutory_pence=0, lender_ancillary_fees_pence=0, vat_pence=0,
     )
     base.update(partial)
+    # R15b spec Sec 24.4: lender_eligible_construction_pence defaults to the
+    # all-eligible value (construction_pence) so these hand-built schedules
+    # keep their pre-R15b meaning; a caller overriding it explicitly still wins.
+    base.setdefault("lender_eligible_construction_pence", base["construction_pence"])
     return MonthUses(**base)
 
 
@@ -1007,3 +1012,32 @@ class TestLenderEligibleScalesTheAdvanceCap:
         raw = json.loads((FIXTURE_DIR / "f-dev-finance-12mo.json").read_text(encoding="utf-8"))
         schedule = build_schedule(parse_calculator_inputs(raw["inputs"]))
         assert schedule.lender_eligible_ratio == 1
+
+    def test_the_cap_reads_the_per_month_figure(self) -> None:
+        """R15b spec Sec 24.4: two schedules identical except uses[8].
+        lender_eligible_construction_pence produce different month-8 draws --
+        the ledger must not recompute from the ratio."""
+        q = json.loads((FIXTURE_DIR / "q-detailed-cost-plan.json").read_text(encoding="utf-8"))["inputs"]
+        # Same starve as the ineligible-package test above: at 50% the scaled
+        # cap is the binding term in months 1-10, so month 8's draw is
+        # cap-bound.
+        doc = json.loads(json.dumps(q))
+        doc["finance"]["development_cost_advance_pct"] = 50
+        doc["equity_sources"][0]["amount_pence"] = 1
+        parsed = parse_calculator_inputs(doc)
+        base = build_schedule(parsed)
+        assert base.uses[8].lender_eligible_construction_pence > 0
+        # Copy the built schedule and overwrite ONLY month 8's per-month
+        # figure -- the ledger must read this, never recompute from
+        # lender_eligible_ratio (unchanged below, so a ledger that ignored
+        # the per-month field would produce identical month-8 draws on both
+        # twins).
+        less = copy.deepcopy(base)
+        less.uses[8].lender_eligible_construction_pence = (
+            base.uses[8].lender_eligible_construction_pence // 2
+        )
+        assert less.lender_eligible_ratio == base.lender_eligible_ratio
+
+        base_ledger = run_ledger(base, parsed.finance, parsed.equity_sources)
+        less_ledger = run_ledger(less, parsed.finance, parsed.equity_sources)
+        assert less_ledger.months[8].draw_pence < base_ledger.months[8].draw_pence

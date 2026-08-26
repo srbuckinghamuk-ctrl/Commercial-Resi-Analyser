@@ -34,6 +34,7 @@ from app.financial_model.vat import (
     vat_basis_confirmed,
     vat_return_periods,
 )
+from tests.fixtures_cost_plan_in_time import doc_z, parse
 
 
 def _registered_vat():
@@ -940,3 +941,21 @@ def test_vat_basis_does_not_gate_on_an_unconfirmed_row_that_charges_nothing():
     `vat_pence != 0` conjunct this returns False, since every migrated
     treatments row is `unconfirmed` and every fixture would gate."""
     assert vat_basis_confirmed(_vat_result([_charge("unconfirmed", 0)])) is True
+
+
+def test_charges_zs_overridden_externals_line_on_amount_plus_inflation():
+    """R15b spec Sec 24.5. Mirrors vat.test.ts's "an overridden package is charged
+    on amount + inflation" test for test."""
+    run = run_appraisal(parse(doc_z()))
+    line = next(c for c in run.schedule.vat.charges if c.id == "package:pkg-externals")
+    # pkg-externals: 6,000,000 amount + 500,501 inflation.
+    assert line.net_base_pence == 6_500_501
+    assert line.vat_pence == 1_300_100
+    assert line.recoverable_pence == 0
+
+    cat = next(c for c in run.schedule.vat.charges if c.id == "category:construction")
+    # Z's construction_total_pence (74,796,722) net of the overridden line's
+    # amount + inflation (6,500,501) -- NOT net of the bare 6,000,000 amount alone.
+    assert cat.net_base_pence == 68_296_221
+
+    assert run.schedule.totals.irrecoverable_vat_pence == 1_300_100

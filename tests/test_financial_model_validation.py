@@ -49,6 +49,7 @@ from app.financial_model.types import (
     Dependency,
     EquitySource,
     FeeLine,
+    InflationAllowance,
     LenderValuation,
     MONITORING_CATEGORIES,
     MonitoringCategory,
@@ -74,9 +75,11 @@ from app.financial_model.types import (
     UserDefinedSpendCurve,
     VatOverride,
 )
+from app.financial_model.cost_plan import compute_cost_plan
 from app.financial_model.validation import reconcile, validate_inputs
 from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_vat_treatments
 
+from .fixtures_cost_plan_in_time import doc_z, doc_z_no_allowance, parse
 from .fixtures_due_diligence import QS, dd_doc, raw_y_as_v12
 from .fixtures_investment_case import ic_doc
 from .fixtures_unit_sales import no_programme_doc, unit_sales_doc
@@ -2742,8 +2745,19 @@ def test_validation_messages_match_the_typescript_engine():
        actual (unescaped) string, so either spelling matches, where a text
        search over raw source only matches the one that happens not to need
        escaping.
+
+    R15b Task 5 adds a THIRD window, `// --- R15b §24.7 begin ---` .. `// ---
+    R15b §24.7 end ---`. Sec 24.7's four rules already sit inside
+    validateDueDiligence's body, so the second window above already compares
+    their messages -- this third window is a narrower, BOUNDED canary rather
+    than a message-content check: it asserts the marked block contains
+    EXACTLY four `err(`/`warn(` calls, so a rule silently added or deleted
+    inside the markers (without the block growing empty, which the R15
+    window-emptiness rule already guards against structurally) is caught even
+    though window 2's `>= 25` bound alone would not notice a +/-1 drift.
     """
     import ast
+    import re
     from pathlib import Path
 
     ts = Path("frontend/src/lib/model/validation.ts").read_text(encoding="utf-8")
@@ -2776,6 +2790,21 @@ def test_validation_messages_match_the_typescript_engine():
     assert len(unit_sales_msgs) >= 45, "the extractor stopped matching — fix it, do not lower the bound"
     assert len(due_diligence_msgs) >= 25, "the extractor stopped matching — fix it, do not lower the bound"
     ts_msgs = unit_sales_msgs + due_diligence_msgs
+
+    # R15b Task 5, third window (Sec 24.7). Both markers must be present and
+    # in the right order -- the same "cannot go vacuous by its own subject
+    # moving" rule the dd_start/dd_end assertion above enforces.
+    r15b_start = ts.index("// --- R15b §24.7 begin ---")
+    r15b_end = ts.index("// --- R15b §24.7 end ---")
+    assert r15b_start < r15b_end, (
+        "the R15b §24.7 begin/end markers must be in order in validation.ts -- "
+        "a reversed pair silently empties the bounded call-count window"
+    )
+    r15b_call_count = len(re.findall(r"\b(?:err|warn)\(", ts[r15b_start:r15b_end]))
+    assert r15b_call_count == 4, (
+        f"expected exactly 4 err()/warn() calls inside the R15b §24.7 markers, found {r15b_call_count} -- "
+        "a rule was added or removed without updating this bound"
+    )
 
     tree = ast.parse(py)
     py_strings: list[str] = []
@@ -3201,3 +3230,136 @@ class TestDueDiligenceValidation:
             CostPackage.model_validate({"id": "pkg-x", "code": "structure", "price_basis": "guess"})
         assert self._fields(dd_doc({"price_basis": {"pkg-mande": "estimate"}})) == []
         assert self._fields(dd_doc({"price_basis": {"pkg-mande": None}})) == []
+
+
+class TestTenderPriceInflationValidation:
+    """R15b spec Sec 24.7. Tender-price inflation's own validation, layered
+    onto Sec 23.6's QS provenance block. Twin of validation.test.ts's
+    '§24.7 tender-price inflation validation'.
+
+    Fixture Z (doc_z()) carries a real 6% allowance against a real calendar
+    and a real base date, so it is the "everything present and correct"
+    fixture these four rules are written against -- Z with one field broken
+    at a time is each negative case.
+
+    Controller ruling: a non-finite or negative `annual_pct` degrades to "no
+    allowance" inside `compute_cost_plan` itself (zero inflation, no
+    overflow) -- this class's rule 1 is what reports it as an error, not what
+    keeps the engine from crashing on it.
+    """
+
+    @staticmethod
+    def _issues(doc):
+        return validate_inputs(doc)
+
+    def _errors(self, doc):
+        return [i for i in self._issues(doc) if i.severity == "error"]
+
+    def _warnings(self, doc):
+        return [i for i in self._issues(doc) if i.severity == "warning"]
+
+    def _err_fields(self, doc):
+        return [i.field for i in self._errors(doc)]
+
+    def _has_err(self, doc, field_, message):
+        return any(i.field == field_ and i.message == message for i in self._errors(doc))
+
+    def _has_warn(self, doc, field_, message):
+        return any(i.field == field_ and i.message == message for i in self._warnings(doc))
+
+    def _inflation_warn_fields(self, doc):
+        # Z is registered for VAT and carries a genuine, unrelated Sec 17.9
+        # warning (the final VAT return period's reclaim falls outside the
+        # term) -- scoped to this rule's own field so that warning does not
+        # make every "no warning fires" assertion below vacuous.
+        return [i.field for i in self._warnings(doc) if i.field.startswith("cost_plan.qs.inflation")]
+
+    def test_z_is_accepted(self):
+        assert self._err_fields(parse(doc_z())) == []
+        assert self._inflation_warn_fields(parse(doc_z())) == []
+
+    def test_rule_1_annual_pct_must_be_finite_and_at_least_0(self):
+        # InflationAllowance.annual_pct is `Field(ge=0)` -- a negative value
+        # (and NaN, whose comparisons are always false) is already a Pydantic
+        # 422 in this engine and never reaches validate_inputs; the ISSUE arm
+        # for those is tested in TS. `inf >= 0` is True, so infinity DOES pass
+        # Pydantic and reach the rule below -- this engine's `math.isfinite`
+        # check is what catches it, matching validation.ts's `Number.isFinite`.
+        with pytest.raises(ValidationError):
+            InflationAllowance.model_validate({"annual_pct": -1})
+        with pytest.raises(ValidationError):
+            InflationAllowance.model_validate({"annual_pct": float("nan")})
+        field_ = "cost_plan.qs.inflation.annual_pct"
+        msg = "Tender-price inflation rate must be a finite number of at least 0."
+        non_finite = doc_z()
+        non_finite["cost_plan"]["qs"]["inflation"] = {"annual_pct": float("inf")}
+        assert self._has_err(parse(non_finite), field_, msg)
+        # Controller ruling: the engine degrades a non-finite rate to "no
+        # allowance" rather than overflowing (compute_cost_plan's
+        # `inflation_rate` gate) -- validation (above) owns the error,
+        # run_appraisal must not raise and must publish zero inflation.
+        run = run_appraisal(parse(non_finite))
+        assert run.metrics.cost_plan.inflation_total_pence == 0
+        zero = doc_z()
+        zero["cost_plan"]["qs"]["inflation"] = {"annual_pct": 0}
+        assert self._err_fields(parse(zero)) == []
+
+    def test_rule_2_an_allowance_needs_a_calendar(self):
+        d = doc_z()
+        d["acquisition"]["acquisition_date"] = None
+        assert self._has_err(
+            parse(d), "cost_plan.qs.inflation",
+            "Tender-price inflation needs a calendar: set the acquisition date, "
+            "or record no allowance.",
+        )
+
+    def test_rule_3_an_allowance_needs_the_qs_base_date(self):
+        d = doc_z()
+        d["cost_plan"]["qs"]["base_date"] = "  "
+        parsed = parse(d)
+        assert self._has_err(parsed, "cost_plan.qs.base_date", "QS base date must be recorded.")
+        assert self._has_err(parsed, "cost_plan.qs.inflation", "Tender-price inflation needs the QS base date.")
+
+    def test_rule_3_blank_base_date_means_no_months_from_base_anywhere(self):
+        d = doc_z()
+        d["cost_plan"]["qs"]["base_date"] = "  "
+        cp = compute_cost_plan(parse(d), 600.0, 4)
+        assert all(p.months_from_base is None for p in cp.packages)
+        assert cp.latest_midpoint_months_from_base is None
+
+    def test_rule_4_above_15pct_is_a_warning_not_an_error(self):
+        field_ = "cost_plan.qs.inflation.annual_pct"
+        msg = "Tender-price inflation above 15% p.a. is unusual - check the rate."
+        high = doc_z()
+        high["cost_plan"]["qs"]["inflation"] = {"annual_pct": 16}
+        parsed_high = parse(high)
+        assert self._has_warn(parsed_high, field_, msg)
+        assert self._err_fields(parsed_high) == []
+        at_fifteen = doc_z()
+        at_fifteen["cost_plan"]["qs"]["inflation"] = {"annual_pct": 15}
+        assert not any(i.field == field_ for i in self._warnings(parse(at_fifteen)))
+
+    def test_no_allowance_recorded_none_of_the_four_rules_apply(self):
+        assert self._err_fields(parse(doc_z_no_allowance())) == []
+        assert self._inflation_warn_fields(parse(doc_z_no_allowance())) == []
+
+    def test_headline_mode_the_four_rules_do_not_apply_even_to_a_document_that_would_otherwise_trip_two(self):
+        # The gate under test is `plan.mode == "detailed"` -- proving it needs
+        # a document that WOULD raise if the gate were deleted. `annual_pct:
+        # inf` (rule 1's finiteness arm -- a negative literal is already a
+        # Pydantic 422 at parse time in this engine, see rule 1's own test)
+        # and `acquisition_date: None` (rule 2) both fire on doc_z() in
+        # detailed mode (see the rule 1/rule 2 tests above); switching to
+        # headline mode is the only thing suppressing them here. (Headline
+        # mode with a non-None `qs` and with packages present each raise
+        # their own R15/R10 errors -- unrelated to this rule set -- so the
+        # assertion is scoped to the `cost_plan.qs.inflation` field prefix,
+        # not "no errors at all".)
+        d = doc_z()
+        d["cost_plan"]["mode"] = "headline"
+        d["cost_plan"]["qs"]["inflation"] = {"annual_pct": float("inf")}
+        d["acquisition"]["acquisition_date"] = None
+        parsed = parse(d)
+        our_fields = [i.field for i in self._errors(parsed) if i.field.startswith("cost_plan.qs.inflation")]
+        assert our_fields == []
+        assert self._inflation_warn_fields(parsed) == []

@@ -14,6 +14,7 @@ from app.financial_model.due_diligence import (
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import parse_calculator_inputs
 
+from .fixtures_cost_plan_in_time import doc_z, doc_z_no_allowance, parse
 from .fixtures_due_diligence import FIXTURE_DIR, QS, compute, dd_doc, raw_y_as_v12
 
 # The literal table BOTH test files carry (spec Sec 23.2). A relabelled or
@@ -196,7 +197,10 @@ def test_tax_basis_goes_unknown_through_the_vat_half_alone():
     assert confirmed.status == "green"
 
 
-def test_flag_table_on_fixture_y_is_exactly_five_flags():
+def test_flag_table_on_fixture_y_is_exactly_six_flags():
+    # R15b spec Sec 24.7 adds a sixth: fixture Y's QS record has no inflation
+    # key at all (fixtures/financial-model/y-due-diligence.json), so
+    # no_inflation_allowance fires alongside R15's original five.
     doc = dd_doc()
     run = run_appraisal(doc)
     flags = due_diligence_flags(compute(doc), run.metrics.cost_plan)
@@ -213,6 +217,9 @@ def test_flag_table_on_fixture_y_is_exactly_five_flags():
          "planning consent lapses at month 2, before construction starts at month 4"),
         ("provisional_sums_present", "amber", None, 8_000_000,
          "provisional sums are present in the cost plan: 8000000p"),
+        ("no_inflation_allowance", "amber", 7, None,
+         "no tender-price inflation allowance recorded: priced at 2026-07-01; package spend "
+         "midpoints fall up to 9 whole months later"),
     ]
 
 
@@ -253,6 +260,67 @@ def test_result_is_published_on_metrics_and_flags_fire():
     assert provisional.amount_pence == 8_000_000
     consent = next(f for f in r15 if f.code == "consent_expires_before_start")
     assert consent.month == 2
+
+
+class TestNoInflationAllowanceFlag:
+    """R15b spec Sec 24.7. `no_inflation_allowance` -- a QS record with no
+    allowance, a known calendar and at least one package spend midpoint
+    falling after the base date. Twin of due-diligence.test.ts's
+    '§24.7 no_inflation_allowance flag'."""
+
+    @staticmethod
+    def _flags(doc):
+        run = run_appraisal(doc)
+        return due_diligence_flags(compute(doc), run.metrics.cost_plan)
+
+    def test_z_with_the_allowance_cleared_fires(self):
+        doc = parse(doc_z_no_allowance())
+        flag = next(f for f in self._flags(doc) if f.code == "no_inflation_allowance")
+        assert (flag.severity, flag.month, flag.amount_pence) == ("amber", 12, None)
+        assert flag.message == (
+            "no tender-price inflation allowance recorded: priced at 2026-02-01; package "
+            "spend midpoints fall up to 18 whole months later"
+        )
+
+    def test_z_with_the_allowance_in_place_fires_nothing(self):
+        doc = parse(doc_z())
+        assert not any(f.code == "no_inflation_allowance" for f in self._flags(doc))
+
+    def test_fixture_y_no_inflation_key_at_all_fires(self):
+        doc = dd_doc()
+        flag = next(f for f in self._flags(doc) if f.code == "no_inflation_allowance")
+        assert (flag.severity, flag.month, flag.amount_pence) == ("amber", 7, None)
+        assert flag.message == (
+            "no tender-price inflation allowance recorded: priced at 2026-07-01; package "
+            "spend midpoints fall up to 9 whole months later"
+        )
+
+    def test_a_y_twin_with_the_base_date_moved_after_every_midpoint_does_not_fire(self):
+        doc = dd_doc({"qs": {**QS, "base_date": "2028-01-01"}})
+        assert not any(f.code == "no_inflation_allowance" for f in self._flags(doc))
+
+    def test_acquisition_date_none_twin_does_not_fire(self):
+        doc = dd_doc({"acquisition_date": None})
+        assert not any(f.code == "no_inflation_allowance" for f in self._flags(doc))
+
+    def test_boundary_exactly_0_does_not_fire_just_over_fires_with_0_whole_months(self):
+        # Z-no-allowance's latest midpoint is 12.333... months from
+        # acquisition. base_date = acquisition + 13 months clamps
+        # months_from_base to exactly 0 (compute_cost_plan's own floor) -- no
+        # fire. base_date = acquisition + 12 months leaves 0.333... months,
+        # whole-floored to 0 -- fires, printing "0 whole months".
+        exactly_zero = doc_z_no_allowance()
+        exactly_zero["cost_plan"]["qs"]["base_date"] = "2027-09-01"   # acquisition (2026-08-01) + 13 months
+        assert not any(f.code == "no_inflation_allowance" for f in self._flags(parse(exactly_zero)))
+
+        just_over = doc_z_no_allowance()
+        just_over["cost_plan"]["qs"]["base_date"] = "2027-08-01"   # acquisition + 12 months
+        flag = next(f for f in self._flags(parse(just_over)) if f.code == "no_inflation_allowance")
+        assert flag.month == 12
+        assert flag.message == (
+            "no tender-price inflation allowance recorded: priced at 2027-08-01; package "
+            "spend midpoints fall up to 0 whole months later"
+        )
 
 
 def test_money_is_inert():

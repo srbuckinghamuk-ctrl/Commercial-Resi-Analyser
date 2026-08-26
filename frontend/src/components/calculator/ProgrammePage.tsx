@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type {
   AppraisalRun, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
-  CalculatorInputsV12, CalculatorInputsV13,
+  CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14,
   ProgrammeInputs, ProgrammeNetwork, Phase,
 } from '../../lib/model';
 import { isProgrammeNetwork, isLegacyProgramme, PACKAGE_TO_PHASE } from '../../lib/model';
@@ -21,22 +21,23 @@ import ProgrammeGantt from './ProgrammeGantt';
  *
  * R12 Task 18b (spec §18.7) wired the app end-to-end to v9; R13 Task 18 (spec
  * §19.9) wired it to v10; R14 Task 14 wired it to v11; R13b Task 15 wired it
- * to v12; R15 Task 13 (the entry-point cutover) wires it to v13, so T now
- * resolves to CalculatorInputsV13 at the real call site
- * (ConversionCalculator.tsx) and the legacy `{ packages: {...} }` arm below
- * is reachable only from a caller still holding a v8 document -- the tests,
- * and any future one. `programme` is unchanged in shape from v9 through v13
- * (only `refinance`, `investment_case`, `monitoring`, `unit_sales` and
- * `due_diligence` differ across those versions), so widening the union costs
- * this page nothing. Props stays generic over every shape `programme` can
- * legally live on, and `onChange` stays typed to whichever one the caller
- * has, so all six compile against the SAME component. Keeping the v8 arm is
- * deliberate: it is what proves the legacy discriminator still works, and it
- * costs nothing at the v13 call site.
+ * to v12; R15 Task 13 wired it to v13; R15b Task 6 (the entry-point cutover)
+ * wires it to v14, so T now resolves to CalculatorInputsV14 at the real call
+ * site (ConversionCalculator.tsx) and the legacy `{ packages: {...} }` arm
+ * below is reachable only from a caller still holding a v8 document -- the
+ * tests, and any future one. `programme` is unchanged in shape from v9
+ * through v14 (only `refinance`, `investment_case`, `monitoring`,
+ * `unit_sales`, `due_diligence` and `cost_plan.qs.inflation` differ across
+ * those versions), so widening the union costs this page nothing. Props
+ * stays generic over every shape `programme` can legally live on, and
+ * `onChange` stays typed to whichever one the caller has, so all seven
+ * compile against the SAME component. Keeping the v8 arm is deliberate: it
+ * is what proves the legacy discriminator still works, and it costs nothing
+ * at the v14 call site.
  */
 type ProgrammeCarrier =
   CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11
-  | CalculatorInputsV12 | CalculatorInputsV13;
+  | CalculatorInputsV12 | CalculatorInputsV13 | CalculatorInputsV14;
 
 interface Props<T extends ProgrammeCarrier> {
   inputs: T;

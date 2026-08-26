@@ -216,6 +216,7 @@ Alembic revision the release shipped, where it moved the persistence schema at a
 | **R14b** | **2.13.0 — unchanged** | **v11 — unchanged** | **006** | **Lender case governance: `lender_cases` + `lender_case_events`, the state machine, `case_hash`, derived staleness, the Python governance twin. No engine change, no schema change, no fixture pin moved — the release is versioned by the migration and by the spec section alone** | **§21** |
 | R13b | 2.14.0 | v12 | — | The unit-level sales ledger: per-unit timing, deposits, cost overrides, pre-sales coverage, `sales_slip`; §5.11 replays anchored tranches at resolved months | §22 |
 | R15 | 2.15.0 | v13 | — | The due-diligence evidence schedule: 28-item catalogue, RAG/unknown, derived rows, source-conflict flags, QS provenance and price basis, the seventh FINAL condition | §23 |
+| R15b | 2.16.0 | v14 | — | The cost plan in time: per-package timing from the phase, tender-price inflation to the spend midpoint, per-month lender-eligible construction | §24 |
 
 **Why R14b bumps neither number.** Nothing inside `inputs_snapshot` moves and no arithmetic
 changes, so an inputs bump would be a lie and a calc bump would be worse than one: `calc_version`
@@ -565,6 +566,20 @@ the TypeScript text verbatim. That is a wording change with no behaviour change,
 so the identity gate is untouched, and it is recorded here rather than only in a
 commit message because "the two engines said the same thing in two ways" is
 exactly the class of asymmetry this section exists to surface.
+
+**[R15b — calc 2.16.0]** Spec §24.7's four rules sit inside
+`validateDueDiligence`'s body, so the second window above already compares
+their message text against `validation.py`. A **third, narrower window** is
+added nested inside that one — `// --- R15b §24.7 begin ---` / `... end ---`
+markers either side of them in `validation.ts` — as a **bounded canary on
+the call count**, not a second content comparison: it asserts the marked
+block contains exactly four `err`/`warn` calls, so a rule silently added or
+removed inside the markers is caught even where the second window's `>= 25`
+bound alone would not notice a one-rule drift. It found no message drift:
+the three §24.7 hard-error messages were written to match verbatim from the
+start (the one warning is counted by the canary but, like every other
+`warn()` call in this file, is not itself compared cross-engine by this
+guard).
 
 ---
 

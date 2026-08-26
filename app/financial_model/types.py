@@ -46,9 +46,10 @@ class FacilityTerms(Model):
     day_one_advance_pence: int | None = Field(default=None, ge=0)
     day_one_market_value_pence: int | None = Field(default=None, ge=0)
     # Caps monthly development draws at this % of that month's eligible dev costs.
-    # R14 spec Sec 4.2(b): "eligible" is construction * the cost plan's
-    # lender_eligible_ratio, plus professional and statutory in full -- VAT is
-    # deliberately excluded (Sec 17.6).
+    # R14 spec Sec 4.2(b): "eligible" is uses[m].lender_eligible_construction_pence
+    # (spec Sec 24.4 -- the month's lender-eligible construction spend; R14's
+    # uniform ratio until calc 2.16.0) plus professional and statutory in full --
+    # VAT is deliberately excluded (Sec 17.6).
     development_cost_advance_pct: float = Field(ge=0, le=100)
     committed_net_facility_pence: int | None = Field(default=None, ge=0)
     # None -> derived as net + interest_reserve.
@@ -739,12 +740,15 @@ class CostPackage(Model):
     # mode has no packages, so every class there takes the whole base build
     # regardless of tag -- see compute_cost_plan's contingency resolution.
     contingency_class: ContingencyClassName = "general"
-    # R10 records this; R14 (calc 2.13.0) wires it: the ledger's Sec 4.2(b) cap
-    # base scales the construction line by the cost plan's
-    # `lender_eligible_ratio`. Clearing this flag on a package therefore shrinks
-    # every later month's advance cap and widens the funding gap. Live in
-    # detailed mode only -- headline mode has no packages, and its ratio is
-    # pinned to 1. Mirrors CostPackage.lender_eligible in cost-plan.ts.
+    # R10 records this; R14 (calc 2.13.0) wires it, R15b (spec Sec 24.4)
+    # per-months it: clearing this flag on a package removes that package's
+    # own spend months from uses[m].lender_eligible_construction_pence, which
+    # shrinks the ledger's Sec 4.2(b) advance cap in exactly those months and
+    # widens the funding gap. `lender_eligible_ratio` remains the disclosure
+    # figure and the denominator-zero fallback -- it no longer drives the cap
+    # itself. Live in detailed mode only -- headline mode has no packages, and
+    # its ratio is pinned to 1. Mirrors CostPackage.lender_eligible in
+    # cost-plan.ts.
     lender_eligible: bool = True
     notes: str = ""
     # R11 spec Sec 17.1. Detailed mode only -- hard-rejected in headline mode
@@ -795,6 +799,14 @@ QsStage = Literal["order_of_cost", "riba_2", "riba_3", "riba_4", "tender", "cont
 QsStatus = Literal["draft", "issued", "reviewed"]
 
 
+# R15b spec Sec 24.3. Defined here, ahead of QsProvenance, which needs
+# `inflation: InflationAllowance | None` at class-definition time -- same
+# forward-ref reasoning as PriceBasis/VatOverride above. Mirrors
+# InflationAllowance in cost-plan.ts.
+class InflationAllowance(Model):
+    annual_pct: float = Field(default=0.0, ge=0)
+
+
 class QsProvenance(Model):
     """Spec Sec 23.6. Detailed mode only (validation rule 8)."""
 
@@ -803,6 +815,10 @@ class QsProvenance(Model):
     date: str = ""
     status: QsStatus = "draft"
     base_date: str = ""
+    # R15b spec Sec 24.3. None on every document with no allowance recorded
+    # (including every pre-v14 stored document, which has no key at all --
+    # pydantic's own default reads that the same as an explicit None).
+    inflation: InflationAllowance | None = None
 
 
 class CostPlanInputs(Model):
@@ -1105,11 +1121,26 @@ class CalculatorInputsV13(CalculatorInputsV12):
     due_diligence: DueDiligenceInputs = Field(default_factory=DueDiligenceInputs)
 
 
+# --- Release 15b (calc 2.15.0 -> 2.16.0): the cost plan in time, tender-price
+# inflation (spec Sec 24.8) --------------------------------------------------
+
+
+class CalculatorInputsV14(CalculatorInputsV13):
+    """Mirrors CalculatorInputsV13 with Sec 24.8's one addition:
+    `cost_plan.qs.inflation`, already declared on `QsProvenance` (Task 1) with
+    a `None` default -- so nothing new is declared HERE. Subclasses V13 for
+    the reason V13 subclasses V12: the engine dispatches on it, and a flat
+    re-declaration would make those isinstance checks silently False for v14
+    documents. Twin of CalculatorInputsV14 in finance-types.ts."""
+
+    inputs_version: Literal[14] = 14  # type: ignore[assignment]
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
     | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-    | CalculatorInputsV13
+    | CalculatorInputsV13 | CalculatorInputsV14
 )
 
 
@@ -1121,6 +1152,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R15b Task 6: without this branch a v14 document falls through to the
+    # CalculatorInputsV2 default, silently dropping the due-diligence block
+    # and every other post-v2 field.
+    if version == 14:
+        return CalculatorInputsV14.model_validate(doc)
     # R11 ruling R10, applied one version on: without this branch a v13 document
     # falls through to the CalculatorInputsV2 default, silently dropping the
     # due-diligence block and every other post-v2 field.
@@ -1209,6 +1245,11 @@ FlagCode = Literal[
     # R15 spec Sec 23.9. Fires when any cost-plan package carries a
     # provisional_sum or estimate price_basis.
     "provisional_sums_present",
+    # R15b spec Sec 24.7. Fires when the QS record has no tender-price
+    # inflation allowance (qs["inflation"] None) but the calendar is known (a
+    # resolved acquisition date) and at least one package spend midpoint
+    # falls after the QS base date (latest_midpoint_months_from_base > 0).
+    "no_inflation_allowance",
 ]
 
-CALC_VERSION = "2.15.0"
+CALC_VERSION = "2.16.0"

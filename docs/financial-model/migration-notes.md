@@ -1281,3 +1281,132 @@ jurisdiction is `migrated_default`/`unconfirmed` with a null acquisition date.
 Once its tax and VAT bases are confirmed the banner it shows becomes the
 due-diligence one rather than the tax-basis one — the same document, one
 condition further down spec §13.3's list.
+
+---
+
+## 17. v13 → v14 (Release 15b, calc `2.16.0`)
+
+**What's added.** `CalculatorInputsV14` is `CalculatorInputsV13` plus **one**
+new field, nested rather than top-level: `cost_plan.qs.inflation:
+InflationAllowance | None`, where `InflationAllowance` is `{ annual_pct:
+float }` (spec §24.1). `CalculatorInputsV14` subclasses `CalculatorInputsV13`,
+for the same reason every prior version extended rather than replaced: the
+engine dispatches on the class, and a flat re-declaration would make those
+`isinstance` checks silently false for v14 documents.
+
+| v13 field | v14 field | Behaviour |
+|---|---|---|
+| *(absent)* | `cost_plan.qs.inflation` | Written `null`, and **only inside a non-null `qs`** — a document whose `qs` is null stays `null`, since there is nothing to write the key onto. Spec §24.1's "no allowance modelled" state, which is what every stored appraisal has always been. |
+
+**One written addition, and it is inert.** No field is renamed, no field is
+narrowed, and the one new key's default is not a value the engine reads as a
+live figure. `QsProvenance.inflation` already defaults to `null` on every
+engine read (`qs.inflation ?? null` in `computeCostPlan` — Python's own
+default field does the same), so this migration changes what a stored
+document's JSON *contains*, never what the engine *computes* from it. Every
+other §24 field — `resolved_phase_id`, `months_from_base`, the per-package
+timing block, `uses[m].lender_eligible_construction_pence` — is a **result**
+field, computed fresh on every run from `cost_plan.packages`, `programme` and
+`qs.base_date`, none of which this migration touches; there is nothing for
+the migration to write onto any of them.
+
+**Implementation** (`migrateV13toV14` / `migrate_v13_to_v14`,
+`migrateInputsToV14` / `migrate_inputs_to_v14`, `isV14` / `is_v14`). The
+entry point mirrors `migrateInputsToV13`'s shape, including its version
+predicate (membership of the declared tuple, not a range check) and its two
+refusals — an unrecognised `inputs_version` throws, and a document declaring
+version 14 that fails the v14 structural check throws rather than falling
+through to a permissive earlier path. `migrate_v13_to_v14` refuses a document
+that is already v14, so double migration raises instead of silently
+re-stamping — the same idempotence guard every prior migration in this file
+carries. `isV14` / `is_v14` discriminate on `inputs_version == 14` **and**
+the `due_diligence` key **and** either `cost_plan.qs` is `null` or it carries
+the `inflation` key **present** — not merely equal to `null`. That distinction
+matters here in a way it did not for `qs`/`price_basis` at the v12 → v13
+boundary: an absent key and an explicit `null` are the same fact to every
+engine read, but only the explicit key is proof that *this* migration ran,
+which is what the structural check exists to certify.
+
+### 17.1 The identity claim, and why the flag is not an exclusion
+
+**Claim: the v13 → v14 migration moves no computed figure and adds no
+validation issue that is not a genuinely new rule. Every existing appraisal
+produces byte-identical output either side of it.**
+
+The gate lives in `migrate.test.ts` and `tests/test_migrate_v14.py`. It runs
+corpus-wide and filters on the *stored* `inputs_version`, not the runtime
+one, and a companion test names the one deliberately excluded document
+(`z-cost-plan-in-time`, v14-native with no v13 arm to compare against) so the
+gate cannot pass by silently running over nothing.
+
+The numeric arm compares the v13 run and the v14 run of the same raw document
+on all three outputs — metrics, ledger and schedule — **with no carve-out**:
+`package_timing`, `uses[m].lender_eligible_construction_pence` and every new
+cost-plan field are compared exactly like every pre-existing one. This holds
+because both arms execute the identical calc 2.16.0 code over documents that
+differ only by the presence of an inert `null` — §16's identity gate needed
+no exclusion for the same reason.
+
+**The flag list is compared with strict equality, not with a named
+exclusion.** This is the distinction worth stating plainly, because it is
+easy to write a gate that reads as strict but is not: a gate that excludes
+`no_inflation_allowance` from the comparison and then separately asserts it
+fires *somewhere* cannot tell a working flag from a broken one, because
+excluding it from the equality check is exactly what would let a silently
+broken flag pass. This gate instead compares the **whole** flag set for
+equality and then asserts, as an **addition** to that equal set,
+`no_inflation_allowance` on the v14 side alone — so the assertion fails if
+the flag is missing on v14, and the equality check fails if it is (wrongly)
+present on the v13 side too. It is proven to fire on **both** arms of
+fixture Y — the raw v13 document and its migrated v14 twin — because Y
+carries a `qs` block dated before its construction; asserting it on one arm
+only would leave the other arm's behaviour unchecked.
+
+### 17.2 S's re-pin is an engine change, not a migration effect
+
+**The one behaviour change under this boundary belongs to calc 2.16.0, not
+to the migration.** Fixture S's `funding_gap_pence` moves from 6,300,000 to
+6,330,000 (spec §24.4, `test-cases.md` §24.2), and every dependent
+debt-denominated metric moves with it. This is **not** part of the v13 → v14
+identity gate's claim, and is not asserted by it: S is stored at
+`inputs_version: 9` and is read **directly** by `runAppraisal` under calc
+2.16.0 without migrating first, exactly as every golden fixture in this
+corpus is (§16.7's precedent) — it is not a v13 document at all, so it
+cannot be an instance of this boundary's identity claim. The number moves
+because the **formula** §4.2(b) reads changed — a per-month lender-eligible
+share in place of R14's single ratio — not because any document was
+migrated. S carries the change whatever `inputs_version` it is stored at,
+because the engine computes calc 2.16.0 over any pre-v14 document via the
+same structural reads every prior version boundary has used
+(`costPlanFromLegacyCosts` and its like), not via a migration step.
+
+The distinction matters for a reader checking "did the migration lose or
+change money": it did not. `inflation: null` is unconditionally inert (§17
+above); the whole of the arithmetic movement recorded in this release
+belongs to §24.4's per-month share, and the migration boundary is the wrong
+place to look for it.
+
+### 17.3 The boundary round trip and the entry-point cutover
+
+The persistence-boundary test asserts the **presence and value** of
+`inflation: null` after a full save/load round trip on a document carrying a
+non-null `qs` block (the same `extra='ignore'` discipline §13's snapshot
+uses), and its absence — no key written — on a document whose `qs` is null.
+
+**Entry-point cutover.** `migrateInputsToV14` / `migrate_inputs_to_v14`
+replaces `migrateInputsToV13` / `migrate_inputs_to_v13` at every production
+call site (the appraisal read path, the report generators, the sensitivity
+suite, the lender-case snapshot builder); the governance `inputs_version`
+stays derived from the document itself, never asserted independently (R13's
+finding, carried forward again); and the Costs page's `DEFAULT_QS` — the
+record a user seeds by unchecking "No QS recorded" — carries `inflation:
+null` from the moment it is created, never an implicit zero.
+
+**The consequence a reader must not mistake for a defect** is the same one
+every inputs-version boundary carries (spec §13.2's disclosure, §16.2's
+statement of it for v13): **every stored appraisal's `input_hash` moves on
+its next save**, because the document genuinely gained a field even though
+that field is `null`, and an approved lender case therefore goes stale on
+that save (spec §21.3). There is no due-diligence-style re-grading
+consequence at this boundary — §24 adds no FINAL condition and no banner —
+so the only consequence to disclose is the hash move itself.

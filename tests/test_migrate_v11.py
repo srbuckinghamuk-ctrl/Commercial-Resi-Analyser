@@ -80,6 +80,10 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     v10, is INCLUDED by the `<= 10` filter above, not excluded); one (fixture
     K) is not an inputs document and one (fixture W) is v11-native, leaving 17
     in `FIXTURES`.
+
+    R15b Task 7: z-cost-plan-in-time.json is v14-native, also excluded by this
+    `<= 10` filter, so the exclusion bound moves from three to four.
+    `len(FIXTURES)` is unchanged -- Z was never inside this gate either.
     """
     assert len(FIXTURES) >= 17
     version_excluded = [
@@ -87,12 +91,13 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 10
     ]
-    assert len(version_excluded) == 3, (
+    assert len(version_excluded) == 4, (
         "the v11-native fixture count changed -- confirm the new fixture is meant "
         "to be outside the migration gate, then update this bound deliberately"
     )
     assert sorted(p.stem for p in version_excluded) == [
         "w-monitoring-on-site", "x-unit-sales-ledger", "y-due-diligence",
+        "z-cost-plan-in-time",
     ]
 
 

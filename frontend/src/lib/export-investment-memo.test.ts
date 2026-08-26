@@ -5,7 +5,7 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV13,
+  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV14,
   AreaBridgeInputs, MonitoringStatement,
 } from './model';
 import {
@@ -36,6 +36,16 @@ import {
 // R15 (spec §23.8). Aliased for the same reason as `unitSalesMemoText` above:
 // a third independent `memoText`, over fixture Y's v13 documents.
 import { ddDoc, memoText as ddMemoText } from './model/__fixtures__/due-diligence-docs';
+// R15b (Task 10, spec §24.6). Fixture Z's shared loader (Tasks 7-9's own
+// module) — `docZ()`/`docZNoAllowance()` are already the corpus's single
+// source for this fixture; a second JSON load here would risk drifting from
+// what the Costs page and cost-plan tests exercise.
+import { docZ, docZNoAllowance } from './model/__fixtures__/cost-plan-in-time-docs';
+// Controller ruling (spec §1.5, follow-up to Task 10): the auto-path
+// negative control for the package-timing suffix — a detailed-mode document
+// with no phase network at all, so `resolved_phase_id` is null on every
+// package and `phase` must not print.
+import { detailedCostPlanInputs } from './report-qa/memo-fixtures';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -2240,7 +2250,7 @@ describe('§23.8 due diligence on the memo', () => {
   /** Fixture Y with every entered item green-with-evidence or n/a-with-notes —
    *  the twin the §13 "fully evidenced" arm is written for. Built by mapping
    *  the loaded document's items, not by restating 24 override entries. */
-  function fullyEvidencedDoc(): CalculatorInputsV13 {
+  function fullyEvidencedDoc(): CalculatorInputsV14 {
     const doc = ddDoc();
     return {
       ...doc,
@@ -2391,7 +2401,13 @@ describe('§23.8 due diligence on the memo', () => {
       'Construction cost rests on a priced package schedule (a detailed cost plan) priced by '
       + 'Gardiner & Theobald (RIBA Stage 3, ',
     );
-    expect(p).toMatch(/\(RIBA Stage 3, \d{1,2} \w{3} \d{4}, issued\); fixed-price coverage 46\.15%\./);
+    // R15b (spec §24.6/§13.4): the sentence no longer ends at the coverage
+    // figure — it names the tender-price inflation position too. Fixture Y's
+    // QS record carries no `inflation` key at all (undefined, normalised to
+    // null by computeCostPlan), so this is the no-allowance arm.
+    expect(p).toMatch(
+      /\(RIBA Stage 3, \d{1,2} \w{3} \d{4}, issued\); fixed-price coverage 46\.15%; no tender-price inflation allowance is recorded\./,
+    );
 
     // Fix round 1 (I2): worded over ENTERED items, and the derived rows Y
     // leaves unknown (equity_sources, lender_valuation) are stated rather
@@ -2430,5 +2446,144 @@ describe('§23.8 due diligence on the memo', () => {
       + 'outstanding, and the cost and programme impacts stated against them are not in the '
       + 'appraisal; 2 derived rows remain unknown (see Section 9).',
     );
+  });
+});
+
+// R15b (Task 10, spec §24.6). Fixture Z's package timing, tender-price
+// inflation and the finance section's per-month advance cap sentence — every
+// figure below is a published field off run.metrics.cost_plan /
+// run.inputs.finance, checked through the raw-latin1 `pdfText()` helper this
+// whole file uses (see its own doc comment above). Fragments are kept short
+// and free of literal parentheses: jsPDF escapes "(" / ")" inside its PDF
+// text-show strings, and a wrapped bodyText sentence starts a fresh
+// text-show operation at each line break with no inserted space at the join
+// (see the fixture-I and fixture-J tests above for the same two caveats).
+describe('R15b cost plan in time (spec §24.6)', () => {
+  it('prints the tender-price inflation row between the package schedule and the contingency rows', async () => {
+    const run = runAppraisal(docZ());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('Tender-price inflation to spend midpoints');
+    expect(text).toContain('6% p.a. from 1 Feb 2026');
+    expect(text).toContain('£54,967.22');
+  });
+
+  it("carries the package's resolved phase, midpoint and inflation (M&E fit-out)", async () => {
+    const run = runAppraisal(docZ());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('M&E fit-out');
+    expect(text).toContain('12.33');
+    expect(text).toContain('£11,172.56');
+    // Controller ruling (spec §1.5): all three parts present together on the
+    // one package row that has a resolved phase and a recorded allowance —
+    // scoped to a window starting at the row's own text so this cannot be
+    // satisfied by the three fragments appearing anywhere else on the page.
+    const idx = text.indexOf('M&E and public health');
+    expect(idx).toBeGreaterThan(-1);
+    const row = text.slice(idx, idx + 250);
+    expect(row).toContain('phase M&E fit-out');
+    expect(row).toContain('midpoint 12.33');
+    expect(row).toContain('inflation');
+  });
+
+  it("omits the word \"inflation\" from a package row when no allowance is recorded, but keeps phase and midpoint", async () => {
+    // Controller ruling (spec §1.5): a plan with a QS record and no
+    // allowance has genuinely no inflation figure to show — `inflation_pence`
+    // is 0 on every package, and printing "inflation £0.00" would read as an
+    // ASSESSED nil rather than the unknown/not-applicable it actually is.
+    // `resolved_phase_id` and `midpoint_month` are unaffected by the
+    // allowance, so both still print.
+    const run = runAppraisal(docZNoAllowance());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    const idx = text.indexOf('M&E and public health');
+    expect(idx).toBeGreaterThan(-1);
+    // The row's own text object ends at the next "ET" (PDF's end-text-block
+    // operator) — bounding the window to just this row, not the whole page,
+    // is what lets the absence assertion below mean something (the word
+    // "inflation" DOES appear elsewhere on this page, in the no-allowance
+    // disclosure sentence — see the next test). A `) Tj` boundary alone is
+    // NOT enough: a wrapped cell (this one, when it had an inflation clause
+    // to wrap onto) draws its continuation line as a second `Tj` after a
+    // `T*` inside the SAME text object, so cutting at the first `) Tj` would
+    // silently miss a wrapped second line.
+    const rowEnd = text.indexOf('ET', idx);
+    const row = text.slice(idx, rowEnd);
+    expect(row).toContain('phase M&E fit-out');
+    expect(row).toContain('midpoint 12.33');
+    expect(row).not.toContain('inflation');
+  });
+
+  it('omits both phase and inflation from a package row on an auto-path document, but always prints midpoint', async () => {
+    // Controller ruling (spec §1.5): `detailedCostPlanInputs()` (a detailed
+    // cost plan with no `programme` phase network at all — every package's
+    // `resolved_phase_id` is null, and its `qs` is null too) is the negative
+    // control for BOTH the phase and inflation parts at once. midpoint_month
+    // is still a real, engine-computed figure for every package regardless
+    // of the network, so it always prints.
+    const run = runAppraisal(detailedCostPlanInputs());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    const idx = text.indexOf('Structural repairs');
+    expect(idx).toBeGreaterThan(-1);
+    // See the previous test's comment: `ET`, not `) Tj`, bounds the whole
+    // (possibly wrapped) cell rather than just its first line.
+    const rowEnd = text.indexOf('ET', idx);
+    const row = text.slice(idx, rowEnd);
+    expect(row).toContain('midpoint');
+    expect(row).not.toContain('phase');
+    expect(row).not.toContain('inflation');
+  });
+
+  it('discloses no allowance is recorded when the QS block carries none', async () => {
+    const run = runAppraisal(docZNoAllowance());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('No tender-price inflation allowance recorded');
+    expect(text).toContain('priced at 1 Feb 2026');
+    // `doc.splitTextToSize` wraps this sentence with the line break landing
+    // right after "18" (no inserted space at the join) — the two fragments
+    // below each live wholly within one wrapped line, per this describe
+    // block's own doc comment.
+    expect(text).toContain('up to 18');
+    expect(text).toContain('whole months later');
+  });
+
+  it('ends the §13.4 cost-basis sentence with the tender-price inflation rate and base date, or its absence', async () => {
+    const withAllowance = await pdfText(generateInvestmentMemo(mockProject, runAppraisal(docZ()), mockEligibility));
+    expect(withAllowance).toContain("tender-price inflation 6% p.a. to each package's spend midpoint");
+    expect(withAllowance).toContain('from 1 Feb 2026');
+
+    const noAllowance = await pdfText(
+      generateInvestmentMemo(mockProject, runAppraisal(docZNoAllowance()), mockEligibility),
+    );
+    expect(noAllowance).toContain('no tender-price inflation allowance is recorded');
+  });
+
+  it('caps development advances at the entered percentage of lender-eligible construction spend, month by month', async () => {
+    const run = runAppraisal(docZ());
+    expect(run.inputs.finance.development_cost_advance_pct).toBe(100);
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain('Development advances are capped at 100%');
+    expect(text).toContain('lender-eligible construction spend month by month');
+    expect(text).toContain('professional and statutory costs');
+    expect(text).toContain('in full');
+    // No literal parens (jsPDF escapes them) — the ASCII-safe text either side.
+    expect(text).toContain('spec §4.2');
+  });
+
+  it('omits the advance-cap sentence on a cash-funded deal, which draws no facility to cap', async () => {
+    const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
+    const fixtureA = JSON.parse(
+      readFileSync(join(FIXTURE_DIR, 'a-all-cash.json'), 'utf-8'),
+    ) as { inputs: CalculatorInputsV14 };
+    const run = runAppraisal(fixtureA.inputs);
+    expect(run.inputs.finance.funding_source).toBe('cash');
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).not.toContain('Development advances are capped');
+  });
+
+  it('never prints a per-package-programme, uniform-ratio or bare "No inflation" limitation', async () => {
+    const run = runAppraisal(docZ());
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).not.toContain('per-package programme');
+    expect(text).not.toContain('uniform ratio');
+    expect(text).not.toContain('No inflation');
   });
 });

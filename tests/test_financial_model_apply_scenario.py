@@ -14,6 +14,7 @@ import pytest
 
 from app.financial_model import compute_cost_plan, developed_area_sqm, run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
+from app.financial_model.engine import money_round
 from app.financial_model.migrate import migrate_inputs_to_v6, migrate_inputs_to_v7, migrate_inputs_to_v9
 from app.financial_model.types import (
     CalculatorInputsV6,
@@ -38,6 +39,7 @@ from app.financial_model.types import (
 )
 from .fixtures_investment_case import apply_levers_in_order, explicit_refinance_doc, ic_doc
 from .fixtures_unit_sales import unit_sales_doc
+from .fixtures_cost_plan_in_time import doc_z, parse
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model" / "f-dev-finance-12mo.json"
 
@@ -565,3 +567,98 @@ def test_keeps_all_nine_levers_order_independent_on_a_unit_sales_document():
     results = [apply_in(o) for o in orders]
     assert results[1] == results[0] and results[2] == results[0]
     assert apply_in(orders[0]).unit_sales["units"][3]["completion_month"] == 22  # 20 + 2, inside term 26
+
+
+# R15b Task 8 (spec Sec 24): the sensitivity levers reach the cost plan in time.
+# doc_z() (fixtures/financial-model/z-cost-plan-in-time.json via migrate_inputs_to_v14,
+# tests/fixtures_cost_plan_in_time.py) carries no investment_case and no unit_sales --
+# exit_yield/operating_cost/vacancy/sales_slip are no-ops on it, exactly as sales_slip
+# is inert on ic_doc() in test_keeps_all_nine_levers_order_independent above. Its
+# packages: pkg-enabling on strip_out (midpoint 6.5, months_from_base 12.5),
+# pkg-structure/pkg-envelope/pkg-externals on construction (midpoint 10.5,
+# months_from_base 16.5), pkg-mande on mande_fitout (SS off construction + 3 lag;
+# midpoint 12.333..., months_from_base 18.333...) -- the exact figures
+# test_cost_plan.py already pins. Mirror of the identically named describe block in
+# apply-scenario.test.ts.
+
+_NON_PHASE_SLIP_FIELD = {
+    "gdv": "gdv_adjustment_pct", "construction_cost": "construction_cost_adjustment_pct",
+    "timeline": "timeline_adjustment_months", "interest_rate": "interest_rate_adjustment_pct",
+    "exit_yield": "exit_yield_adjustment_pct", "operating_cost": "operating_cost_adjustment_pct",
+    "vacancy": "vacancy_adjustment_pct", "sales_slip": "sales_slip_months",
+}
+
+_LEVER_MAGNITUDE = {
+    "gdv": 5, "construction_cost": 5, "timeline": 2, "interest_rate": 1,
+    "exit_yield": 3, "operating_cost": 4, "vacancy": 2, "sales_slip": 2,
+}
+
+
+def _apply_lever_z(doc, lever: str):
+    if lever == "phase_slip":
+        return apply_scenario(doc, _slip(0).model_copy(update={
+            "phase_slip_phase_id": "construction", "phase_slip_months": 1,
+        }))
+    field = _NON_PHASE_SLIP_FIELD[lever]
+    return apply_scenario(doc, _slip(0).model_copy(update={field: _LEVER_MAGNITUDE[lever]}))
+
+
+def _apply_in_order_z(order):
+    d = parse(doc_z())
+    for lever in order:
+        d = _apply_lever_z(d, lever)
+    return d
+
+
+_Z_ORDERS = [
+    ["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+     "exit_yield", "operating_cost", "vacancy", "sales_slip"],
+    ["vacancy", "exit_yield", "phase_slip", "gdv", "operating_cost", "interest_rate",
+     "timeline", "construction_cost", "sales_slip"],
+    ["operating_cost", "timeline", "vacancy", "interest_rate", "gdv", "exit_yield",
+     "construction_cost", "phase_slip", "sales_slip"],
+]
+
+
+def test_keeps_all_nine_levers_order_independent_on_z_full_document_equality():
+    # Review fix (Task 8): the requirement is full-document equality under the
+    # nine-lever permutations -- the same shape test_sales_slip_is_a_no_op_on_the_
+    # null_path (and the TS "composes order-independently with the other four
+    # levers -- full document equality" test, "Fix round 1, Finding 4") already use
+    # (model_dump() equality on the APPLIED DOCUMENT) -- not a derived-output proxy
+    # like run_appraisal(...).metrics, which can pass while something the proxy did
+    # not look at silently diverges.
+    applied = [_apply_in_order_z(order) for order in _Z_ORDERS]
+    dumped = [d.model_dump(mode="json") for d in applied]
+    assert dumped[1] == dumped[0]
+    assert dumped[2] == dumped[0]
+
+    # Resolution (a): compute_cost_plan on Z under this non-trivial nine-lever
+    # combination must ALSO yield identical inflation_pence per package and
+    # inflation_total_pence regardless of the order the levers were applied in.
+    plans = [
+        compute_cost_plan(d, developed_area_sqm(d), len(d.unit_mix.units))
+        for d in applied
+    ]
+    pence = lambda cp: {p.id: p.inflation_pence for p in cp.packages}  # noqa: E731
+    assert pence(plans[1]) == pence(plans[0])
+    assert pence(plans[2]) == pence(plans[0])
+    assert plans[1].inflation_total_pence == plans[0].inflation_total_pence
+    assert plans[2].inflation_total_pence == plans[0].inflation_total_pence
+
+
+def test_construction_cost_plus_10_scales_inflation_pence_midpoint_and_factor_unchanged():
+    base = compute_cost_plan(parse(doc_z()), 600.0, 4)   # developed_area_sqm(doc_z()) is 600; unit count 4
+    stressed = apply_scenario(parse(doc_z()), _overrides(construction_cost_adjustment_pct=10))
+    cp = compute_cost_plan(stressed, 600.0, 4)
+    base_by_id = {p.id: p for p in base.packages}
+    assert len(cp.packages) == len(base.packages)
+    for p in cp.packages:
+        b = base_by_id[p.id]
+        # The inflation FACTOR depends only on months, which the cost lever
+        # never touches -- bit-identical, not merely close.
+        assert p.midpoint_month == b.midpoint_month
+        assert p.months_from_base == b.months_from_base
+        assert p.inflation_factor == b.inflation_factor
+        expected = money_round(1.1 * b.inflation_pence)
+        assert abs(p.inflation_pence - expected) <= 1

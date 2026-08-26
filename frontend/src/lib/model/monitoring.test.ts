@@ -7,6 +7,8 @@ import { runLedger } from './monthly-engine';
 import { computeCostPlan } from './cost-plan';
 import { developedAreaSqm } from './areas';
 import { migrateInputsToV11 } from './migrate';
+import { runAppraisal } from './index';
+import { docZ } from './__fixtures__/cost-plan-in-time-docs';
 import { MONITORING_CATEGORIES } from './finance-types';
 import type {
   AnyCalculatorInputs, CalculatorInputsV11, MonitoringCategory, MonitoringInputs,
@@ -208,9 +210,9 @@ describe('computeMonitoringStatement (R14 spec §20.2)', () => {
     expect(over.contingency_remaining_pence).toBe(0);
   });
 
-  it('splits construction and contingency without losing a penny, on every corpus fixture', () => {
+  it('splits construction and contingency without losing a penny, on every corpus fixture plus docZ()', () => {
     const stems = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json'));
-    let checked = 0;
+    const docs: Array<{ label: string; inputs: AnyCalculatorInputs }> = [];
     for (const file of stems) {
       const fx = JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as {
         kind: string; inputs?: AnyCalculatorInputs;
@@ -218,19 +220,29 @@ describe('computeMonitoringStatement (R14 spec §20.2)', () => {
       // Fixture K ('sensitivity') names a `base_fixture` and carries no `inputs`
       // (governance §2.1), so it has no schedule or cost plan of its own.
       if (fx.kind === 'sensitivity' || fx.inputs == null) continue;
-      const schedule = buildSchedule(fx.inputs);
+      docs.push({ label: file, inputs: fx.inputs });
+    }
+    // R15b spec §24.5: `docZ()` is the one document in the sweep whose
+    // `inflation_total_pence` is non-zero, so it is the document that would
+    // actually catch `originalBudgets` forgetting the allowance — every stored
+    // fixture above has `inflation_total_pence === 0` and would pass either way.
+    docs.push({ label: 'docZ() (R15b builder)', inputs: docZ() });
+
+    let checked = 0;
+    for (const { label, inputs } of docs) {
+      const schedule = buildSchedule(inputs);
       const costPlan = computeCostPlan(
-        fx.inputs, developedAreaSqm(fx.inputs), fx.inputs.unit_mix.units.length,
+        inputs, developedAreaSqm(inputs), inputs.unit_mix.units.length,
       );
       const originals = originalBudgets(schedule, costPlan);
       const usesConstruction = schedule.uses.reduce((a, u) => a + u.construction_pence, 0);
-      expect(originals.construction + originals.contingency, file).toBe(usesConstruction);
-      // The other three columns against their own inception source, same fixture sweep.
-      expect(originals.acquisition, file)
+      expect(originals.construction + originals.contingency, label).toBe(usesConstruction);
+      // The other three columns against their own inception source, same sweep.
+      expect(originals.acquisition, label)
         .toBe(schedule.uses.reduce((a, u) => a + u.acquisition_pence, 0));
-      expect(originals.professional, file)
+      expect(originals.professional, label)
         .toBe(schedule.uses.reduce((a, u) => a + u.professional_pence, 0));
-      expect(originals.statutory, file)
+      expect(originals.statutory, label)
         .toBe(schedule.uses.reduce((a, u) => a + u.statutory_pence, 0));
       checked += 1;
     }
@@ -373,5 +385,50 @@ describe('computeMonitoringStatement (R14 spec §20.2)', () => {
     }
     expect(statement.forecast_finance_pence).toBe(forecastFinance);
     expect(statement.reporting_month).toBe(m);
+  });
+});
+
+describe('originalBudgets carries the inflation allowance (R15b spec §24.5)', () => {
+  it('holds the split identity on Z, exactly, with a monitoring block attached at reporting_month 9', () => {
+    // Z's own builder carries no `monitoring` block; one is attached here, at the
+    // document level, exactly as a real caller would before running the appraisal —
+    // the brief's "via the builder document, run the appraisal" shape, not a direct
+    // `computeMonitoringStatement` call against a hand-built schedule/cost-plan pair.
+    const withMonitoring = {
+      ...docZ(),
+      monitoring: {
+        reporting_month: 9,
+        reporting_date: '2026-12-31',
+        lines: [
+          mkLine('acquisition', 100_000_000, 100_000_000, 100_000_000, 100_000_000, 0),
+          mkLine('construction', 71_496_722, 30_000_000, 28_000_000, 35_000_000, 40_000_000),
+          mkLine('professional', 8_500_000, 3_000_000, 2_500_000, 4_000_000, 4_500_000),
+          mkLine('statutory', 3_400_000, 1_000_000, 900_000, 1_200_000, 700_000),
+          mkLine('contingency', 3_300_000, 1_000_000, 1_000_000, 1_500_000, 2_000_000),
+        ],
+        // Below Z's committed net facility (100,000,000, spec §24.5's own S/Z figure).
+        debt_drawn_to_date_pence: 50_000_000,
+        cash_equity_injected_to_date_pence: 40_000_000,
+        author: 'A. Surveyor MRICS',
+        date: '2027-01-15',
+        note: null,
+      },
+    };
+    const run = runAppraisal(withMonitoring);
+    const statement = run.metrics.monitoring_statement;
+    expect(statement).not.toBeNull();
+    const construction = statement!.lines.find((l) => l.category === 'construction')!;
+    const contingency = statement!.lines.find((l) => l.category === 'contingency')!;
+    const usesConstruction = run.schedule.uses.reduce((a, u) => a + u.construction_pence, 0);
+
+    // The split identity: original(construction) + original(contingency) is exactly
+    // what the schedule spread across every month's construction use — inflation
+    // included, because `construction_total_pence` already folds it in (cost-plan.ts).
+    expect(construction.original_budget_pence + contingency.original_budget_pence)
+      .toBe(usesConstruction);
+    // The exact figure: base_build (66,000,000) + inflation_total (5,496,722) +
+    // compliance (0) — the RED value before Task 4's fix is the bare 66,000,000.
+    expect(construction.original_budget_pence).toBe(66_000_000 + 5_496_722 + 0);
+    expect(construction.original_budget_pence).toBe(71_496_722);
   });
 });

@@ -126,6 +126,11 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     20.2's hand-derived golden case). The filter here is `<= 9`, so it excludes
     every version ABOVE 9, v11 included, and the bound moves from three to
     four. `len(FIXTURES)` is unchanged at 14 -- W was never inside this gate.
+
+    R15b Task 7: z-cost-plan-in-time.json is stored at inputs v14 (spec Sec 24's
+    hand-derived golden case). The filter here is still `<= 9`, so it excludes
+    Z too, and the bound moves from six to seven. `len(FIXTURES)` is unchanged
+    -- Z was never inside this gate either.
     """
     assert len(FIXTURES) >= 14
     version_excluded = [
@@ -133,13 +138,14 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 9
     ]
-    assert len(version_excluded) == 6, (
+    assert len(version_excluded) == 7, (
         "the v10-native fixture count changed -- confirm the new fixture is meant "
         "to be outside the migration gate, then update this bound deliberately"
     )
     assert sorted(p.stem for p in version_excluded) == [
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
         "w-monitoring-on-site", "x-unit-sales-ledger", "y-due-diligence",
+        "z-cost-plan-in-time",
     ]
 
 

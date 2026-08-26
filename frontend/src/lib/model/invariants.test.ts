@@ -6,7 +6,7 @@ import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
 import {
   migrateInputsToV8, migrateInputsToV9, migrateInputsToV10, migrateInputsToV11, migrateInputsToV12,
-  migrateInputsToV13,
+  migrateInputsToV13, migrateInputsToV14,
 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
@@ -129,7 +129,37 @@ function variants(
   // further on (migrateInputsToV12 refuses a v13 document -- it would have to
   // drop `due_diligence`). The v13 arm needs the same anchor clearing as the
   // v12 one, since a v13 document carries every v12 block unchanged.
-  if (storedVersion >= 13) {
+  //
+  // R15b Task 7: and once more for v14 -- fixture Z (v14-native) cannot go
+  // through migrateInputsToV13 either, by the identical design one version
+  // further on (migrateInputsToV13 refuses a v14 document). v14 adds no new
+  // anchor-bearing field over v13, so the branch needs no extra orphaning
+  // beyond what the v13 arm already does.
+  if (storedVersion >= 14) {
+    const v14 = migrateInputsToV14(clone() as unknown as Record<string, unknown>);
+    v14.programme = networkForTerm(v14.finance.term_months);
+    if (v14.sales_phasing != null) {
+      v14.sales_phasing.tranches = v14.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v14.refinance != null) v14.refinance = { ...v14.refinance, anchor: null };
+    if (v14.investment_case != null) {
+      v14.investment_case = {
+        ...v14.investment_case,
+        stabilisation: { ...v14.investment_case.stabilisation, anchor: null },
+      };
+    }
+    if (v14.unit_sales != null) {
+      v14.unit_sales = {
+        ...v14.unit_sales,
+        units: v14.unit_sales.units.map((row) => ({
+          ...row,
+          exchange: row.exchange != null ? { ...row.exchange, anchor: null } : null,
+          completion: { ...row.completion, anchor: null },
+        })),
+      };
+    }
+    programmed = v14;
+  } else if (storedVersion >= 13) {
     const v13 = migrateInputsToV13(clone() as unknown as Record<string, unknown>);
     v13.programme = networkForTerm(v13.finance.term_months);
     if (v13.sales_phasing != null) {

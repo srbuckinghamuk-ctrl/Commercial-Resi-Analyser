@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { validateInputs, reconcile } from './validation';
+import { computeCostPlan } from './cost-plan';
+import * as dueDiligenceModule from './due-diligence';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { buildSchedule } from './schedule';
 import { runLedger } from './monthly-engine';
@@ -27,9 +29,10 @@ import type {
   CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
 } from './finance-types';
 import { unitSalesDoc, noProgrammeDoc } from './__fixtures__/unit-sales-docs';
-import type { CalculatorInputsV12, CalculatorInputsV13 } from './finance-types';
+import type { AnyCalculatorInputs, CalculatorInputsV12, CalculatorInputsV14 } from './finance-types';
 import { migrateInputsToV12, migrateInputsToV13 } from './migrate';
 import { QS, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
+import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
 import type { PriceBasis, QsStage, QsStatus } from './cost-plan';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
@@ -2649,9 +2652,14 @@ describe('§22.7 unit sales validation', () => {
  * of those is asserted here.
  */
 describe('§23.9 due diligence validation', () => {
-  const errs = (d: CalculatorInputsV13) => validateInputs(d).filter((i) => i.severity === 'error');
-  const errFields = (d: CalculatorInputsV13) => errs(d).map((i) => i.field);
-  const has = (d: CalculatorInputsV13, field: string, message: string) =>
+  // `AnyCalculatorInputs`, not `CalculatorInputsV14`: this block's "a migrated
+  // document raises no due-diligence issue" test deliberately feeds a v13
+  // result (`migrateInputsToV13(rawYAsV12())`) through the same helpers as
+  // `ddDoc()`'s v14 documents, proving the §23.9 rules read identically
+  // either side of the v13->v14 boundary (spec §24.8's migration is inert).
+  const errs = (d: AnyCalculatorInputs) => validateInputs(d).filter((i) => i.severity === 'error');
+  const errFields = (d: AnyCalculatorInputs) => errs(d).map((i) => i.field);
+  const has = (d: AnyCalculatorInputs, field: string, message: string) =>
     errs(d).some((i) => i.field === field && i.message === message);
 
   /** A complete raw due-diligence item — every field written, never left to a
@@ -2915,5 +2923,114 @@ describe('§23.9 due diligence validation', () => {
       'Package price basis must be fixed_price, provisional_sum, estimate or unset.')).toBe(true);
     expect(errFields(ddDoc({ priceBasis: { 'pkg-mande': 'estimate' } }))).toEqual([]);
     expect(errFields(ddDoc({ priceBasis: { 'pkg-mande': null } }))).toEqual([]);
+  });
+});
+
+// R15b spec §24.7. Tender-price inflation's own validation, layered onto
+// R15's §23.6 QS provenance block. Fixture Z (docZ()) carries a real 6%
+// allowance against a real calendar and a real base date, so it is the
+// "everything present and correct" fixture these four rules are written
+// against — Z with one field broken at a time is each negative case.
+// Twin of TestDueDiligenceValidation's "Sec 24.7" tests in
+// tests/test_financial_model_validation.py.
+describe('§24.7 tender-price inflation validation', () => {
+  const errs = (d: CalculatorInputsV14) => validateInputs(d).filter((i) => i.severity === 'error');
+  const warns = (d: CalculatorInputsV14) => validateInputs(d).filter((i) => i.severity === 'warning');
+  const errFields = (d: CalculatorInputsV14) => errs(d).map((i) => i.field);
+  const has = (d: CalculatorInputsV14, field: string, message: string) =>
+    errs(d).some((i) => i.field === field && i.message === message);
+  const warnHas = (d: CalculatorInputsV14, field: string, message: string) =>
+    warns(d).some((i) => i.field === field && i.message === message);
+  // Z is registered for VAT and carries a genuine, unrelated §17.9 warning
+  // (the final VAT return period's reclaim falls outside the term) — scoped
+  // to this rule's own field so that warning does not make every "no warning
+  // fires" assertion below vacuous.
+  const inflationWarnFields = (d: CalculatorInputsV14) =>
+    warns(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
+
+  it('Z is accepted: a real allowance, a real calendar, a real base date', () => {
+    expect(errFields(docZ())).toEqual([]);
+    expect(inflationWarnFields(docZ())).toEqual([]);
+  });
+
+  it('rule 1: annual_pct must be a finite number of at least 0', () => {
+    const field = 'cost_plan.qs.inflation.annual_pct';
+    const msg = 'Tender-price inflation rate must be a finite number of at least 0.';
+    const negative = docZ();
+    negative.cost_plan.qs!.inflation = { annual_pct: -1 };
+    expect(has(negative, field, msg)).toBe(true);
+    const nonFinite = docZ();
+    nonFinite.cost_plan.qs!.inflation = { annual_pct: Number.POSITIVE_INFINITY };
+    expect(has(nonFinite, field, msg)).toBe(true);
+    // Controller ruling: the engine degrades a non-finite rate to "no
+    // allowance" rather than overflowing — validation (above) owns the
+    // error, computeCostPlan must not throw and must publish zero inflation.
+    expect(() => runAppraisal(nonFinite)).not.toThrow();
+    expect(runAppraisal(nonFinite).metrics.cost_plan.inflation_total_pence).toBe(0);
+    const zero = docZ();
+    zero.cost_plan.qs!.inflation = { annual_pct: 0 };
+    expect(errFields(zero)).toEqual([]);
+  });
+
+  it('rule 2: an allowance needs a calendar — acquisition_date must be present', () => {
+    const d = docZ();
+    d.acquisition.acquisition_date = null;
+    expect(has(d, 'cost_plan.qs.inflation',
+      'Tender-price inflation needs a calendar: set the acquisition date, or record no allowance.')).toBe(true);
+  });
+
+  it("rule 3: an allowance needs the QS base date, beside R15's own base_date error", () => {
+    const d = docZ();
+    d.cost_plan.qs!.base_date = '  ';
+    expect(has(d, 'cost_plan.qs.base_date', 'QS base date must be recorded.')).toBe(true);
+    expect(has(d, 'cost_plan.qs.inflation', 'Tender-price inflation needs the QS base date.')).toBe(true);
+  });
+
+  it('rule 3: a blank base_date means computeCostPlan never calls monthsBetween', () => {
+    const spy = vi.spyOn(dueDiligenceModule, 'monthsBetween');
+    const d = docZ();
+    d.cost_plan.qs!.base_date = '  ';
+    const cp = computeCostPlan(d, 600, 4);
+    expect(spy).not.toHaveBeenCalled();
+    expect(cp.packages.every((p) => p.months_from_base === null)).toBe(true);
+    expect(cp.latest_midpoint_months_from_base).toBeNull();
+    spy.mockRestore();
+  });
+
+  it('rule 4: above 15% p.a. is a warning, not an error, and 15% itself does not fire', () => {
+    const field = 'cost_plan.qs.inflation.annual_pct';
+    const msg = 'Tender-price inflation above 15% p.a. is unusual - check the rate.';
+    const high = docZ();
+    high.cost_plan.qs!.inflation = { annual_pct: 16 };
+    expect(warnHas(high, field, msg)).toBe(true);
+    expect(errFields(high)).toEqual([]);
+    const atFifteen = docZ();
+    atFifteen.cost_plan.qs!.inflation = { annual_pct: 15 };
+    expect(warns(atFifteen).some((i) => i.field === field)).toBe(false);
+  });
+
+  it('no allowance recorded: none of the four rules apply', () => {
+    expect(errFields(docZNoAllowance())).toEqual([]);
+    expect(inflationWarnFields(docZNoAllowance())).toEqual([]);
+  });
+
+  it('headline mode: the four rules do not apply, even to a document that would '
+    + 'otherwise trip two of them', () => {
+    // The gate under test is `plan.mode === 'detailed'` — proving it needs a
+    // document that WOULD raise if the gate were deleted. `annual_pct: -1`
+    // (rule 1) and `acquisition_date: null` (rule 2) both fire on docZ() in
+    // detailed mode (see the rule 1/rule 2 tests above); switching to
+    // headline mode is the only thing suppressing them here. (Headline mode
+    // with a non-null `qs` and with packages present each raise their own
+    // R15/R10 errors — unrelated to this rule set — so the assertion is
+    // scoped to the `cost_plan.qs.inflation` field prefix, not "no errors at
+    // all".)
+    const d = docZ();
+    d.cost_plan.mode = 'headline';
+    d.cost_plan.qs!.inflation = { annual_pct: -1 };
+    d.acquisition.acquisition_date = null;
+    const ourFields = errs(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
+    expect(ourFields).toEqual([]);
+    expect(inflationWarnFields(d)).toEqual([]);
   });
 });

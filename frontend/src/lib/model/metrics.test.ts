@@ -27,9 +27,13 @@ const MONITORING_FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financia
 // --- helpers copied verbatim from monthly-engine.test.ts (tests must be self-contained) ---
 
 function uses(partial: Partial<MonthUses>): MonthUses {
+  // R15b spec §24.4: `lender_eligible_construction_pence` defaults to the
+  // all-eligible value (`construction_pence`) so these hand-built schedules
+  // keep their pre-R15b meaning; a caller overriding it explicitly still wins.
   return {
     acquisition_pence: 0, construction_pence: 0, professional_pence: 0,
-    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0, ...partial,
+    statutory_pence: 0, lender_ancillary_fees_pence: 0, vat_pence: 0,
+    lender_eligible_construction_pence: partial.construction_pence ?? 0, ...partial,
   };
 }
 function receipts(partial: Partial<MonthReceipts>): MonthReceipts {
@@ -79,6 +83,8 @@ function mkSchedule(u: MonthUses[], r: MonthReceipts[]): Schedule {
     // R14 spec §4.2(b). 1 is the all-eligible / headline value, so these
     // hand-built schedules keep the pre-R14 cap base exactly.
     lender_eligible_ratio: 1,
+    // R15b spec §24.2. No packages in these hand-built schedules.
+    package_timing: [],
   };
 }
 
@@ -485,8 +491,12 @@ describe('§5.11 correction — anchored tranches replay at their resolved month
     const run = runAppraisal(fixtureSInputs());
     expect(run.schedule.resolved_exit_months.tranches).toEqual([16, 19]);
     // Pre-fix (raw months 20/21) both engines printed 90,971,520 — the negative control.
+    // R15b spec §24.4: fixture S's ledger cap now reads the per-month eligible
+    // figure — strip-out months fully advanced, the main window at 54/60 — so
+    // this figure moved from the pre-R15b 88,720,089 (verified: both engines
+    // agree to the penny, TS and Python).
     expect(run.metrics.senior_breakeven_pence).not.toBe(90_971_520);
-    expect(run.metrics.senior_breakeven_pence).toBe(88_720_089);
+    expect(run.metrics.senior_breakeven_pence).toBe(88_711_322);
   });
 
   it('reading the resolved month changes which anchor disturbs the facility, not solvability', () => {
@@ -520,12 +530,14 @@ describe('§5.11 correction — anchored tranches replay at their resolved month
     // falls after all draws finish, so no such redraw occurs. Both are
     // genuinely solvable; the resolved month changes WHICH ledger-level flag
     // fires, not whether senior_breakeven_pence exists.
+    // R15b spec §24.4: these two figures moved from the pre-R15b 96,756,404 /
+    // 88,462,082 (verified: both engines agree to the penny, TS and Python).
     const early = runAppraisal(sWithFirstAnchor('strip_out')).metrics;
     const late = runAppraisal(sWithFirstAnchor('building_control')).metrics;
-    expect(early.senior_breakeven_pence).toBe(96_756_404);
+    expect(early.senior_breakeven_pence).toBe(96_289_098);
     expect(early.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(true);
     expect(early.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
-    expect(late.senior_breakeven_pence).toBe(88_462_082);
+    expect(late.senior_breakeven_pence).toBe(88_453_341);
     expect(late.flags.some((f) => f.code === 'facility_redrawn_after_redemption')).toBe(false);
     expect(late.flags.some((f) => f.code === 'senior_breakeven_unsolvable')).toBe(false);
   });

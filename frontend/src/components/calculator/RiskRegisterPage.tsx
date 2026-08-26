@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { RiskItem, Likelihood, Impact } from '../../lib/conversion-types';
-import type { CalculatorInputsV13 } from '../../lib/model';
+import type { CalculatorInputsV14 } from '../../lib/model';
 
 /**
  * R15 Task 9 (spec §23.8): no longer a page in its own right. It renders
@@ -8,13 +8,14 @@ import type { CalculatorInputsV13 } from '../../lib/model';
  * heading is an `<h4>` under `DueDiligencePage`'s `<h3>` rather than the
  * page's own numbered `<h3>`.
  *
- * R15 Task 13 (the entry-point cutover) narrows the union this Props type
- * carried to `CalculatorInputsV13` alone: the calculator's state is now a
- * native v13 document, so there is no v12 arm left to admit.
+ * R15 Task 13 (the entry-point cutover) narrowed the union this Props type
+ * carried to `CalculatorInputsV13` alone; R15b Task 6 moves it on again, to
+ * `CalculatorInputsV14`: the calculator's state is now a native v14
+ * document, so there is no v13 arm left to admit.
  */
 interface Props {
-  inputs: CalculatorInputsV13;
-  onChange: (partial: Partial<CalculatorInputsV13>) => void;
+  inputs: CalculatorInputsV14;
+  onChange: (partial: Partial<CalculatorInputsV14>) => void;
 }
 
 const LIKELIHOOD_OPTIONS: Likelihood[] = ['low', 'medium', 'high'];

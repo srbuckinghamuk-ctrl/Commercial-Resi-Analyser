@@ -19,6 +19,7 @@ import {
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
   detailedCostPlanInputs, investmentCaseInputs, monitoringOnSiteInputs,
   unitSalesLedgerInputs, dueDiligenceInputs, dueDiligenceFinalInputs,
+  costPlanInTimeInputs, costPlanInTimeNoAllowanceInputs,
 } from './memo-fixtures';
 import { humanise } from '../format';
 
@@ -120,6 +121,14 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   // twin none (the FINAL arm).
   ['due diligence (Y)', dueDiligenceInputs],
   ['due diligence, fully evidenced', dueDiligenceFinalInputs],
+  // R15b (Task 10, spec §24.6). Fixture Z: the first v14-native route, and
+  // the first carrying a QS tender-price inflation allowance — the new
+  // inflation table row, the package-timing suffix and the widened §13.4
+  // sentence all print for the first time under the page-bounds, sparse-page
+  // and orphan-heading gates here. Its no-allowance twin exercises the other
+  // arm of both the cost-section disclosure sentence and the §13.4 ending.
+  ['cost plan in time (Z)', costPlanInTimeInputs],
+  ['cost plan in time, no allowance', costPlanInTimeNoAllowanceInputs],
 ];
 
 describe('investment memorandum release gate', () => {

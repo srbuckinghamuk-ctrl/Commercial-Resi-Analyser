@@ -5,15 +5,16 @@ import {
   DEFAULT_SENSITIVITY_CONFIG, LEVER_ORDER, MAX_AXIS_STEPS, validateSensitivityConfig,
   InvalidSensitivityConfigError, InvalidBaseDocumentError,
 } from './sensitivity';
-import { runAppraisal } from './index';
+import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
 import { runSensitivity } from './sensitivity';
 import { applyScenario } from './apply-scenario';
-import { migrateInputsToV9 } from './migrate';
+import { migrateInputsToV9, migrateInputsToV14 } from './migrate';
 import { derivePhases } from './programme';
 import { icDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
 import { unitSalesDoc } from './__fixtures__/unit-sales-docs';
+import { docZ } from './__fixtures__/cost-plan-in-time-docs';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
-import type { AnyCalculatorInputs, SalesPhasingInputs, CalculatorInputsV9 } from './finance-types';
+import type { AnyCalculatorInputs, SalesPhasingInputs, CalculatorInputsV9, CalculatorInputsV14 } from './finance-types';
 import type { Phase } from './programme';
 import type { ScenarioOverrides } from '../conversion-types';
 
@@ -1073,6 +1074,75 @@ describe('phase_slip lever — §18.9', () => {
     });
     expect(out.finance).toEqual(doc.finance);
     expect(out.equity_sources).toEqual(doc.equity_sources);
+  });
+});
+
+// R15b Task 8 (spec §24): phase_slip and timeline reach the cost plan in time.
+// docZ() (fixtures/financial-model/z-cost-plan-in-time.json via migrateInputsToV14,
+// __fixtures__/cost-plan-in-time-docs.ts): pkg-enabling is on strip_out (a
+// predecessor of construction, window 6-8, midpoint 6.5, months_from_base 12.5);
+// pkg-structure/pkg-envelope/pkg-externals are on construction (window 8-14,
+// midpoint 10.5, months_from_base 16.5); pkg-mande is on mande_fitout (SS off
+// construction + 3 lag; window 11-14, back_loaded, midpoint 12.333...). Fixture Q
+// (q-detailed-cost-plan.json) is the auto path: every package shares the
+// construction window, months 1..term-2, so a straight-line midpoint of
+// (1 + (term - 1)) / 2 = (term - 1) / 2.
+describe('R15b spec §24 — phase_slip and timeline reach the cost plan in time (Task 8)', () => {
+  const Q_FIXTURE_PATH = resolve(__dirname, '../../../../fixtures/financial-model/q-detailed-cost-plan.json');
+  function docQ(): CalculatorInputsV14 {
+    return migrateInputsToV14(JSON.parse(readFileSync(Q_FIXTURE_PATH, 'utf-8')).inputs);
+  }
+
+  it('phase_slip +2 on construction moves pkg-structure and pkg-mande; pkg-enabling (a predecessor) is unchanged', () => {
+    const stressed = applyScenario(docZ(), {
+      ...ZERO_OVERRIDES, phase_slip_phase_id: 'construction', phase_slip_months: 2,
+    });
+    const cp = computeCostPlan(stressed, developedAreaSqm(stressed), stressed.unit_mix.units.length);
+    const byId = Object.fromEntries(cp.packages.map((p) => [p.id, p]));
+
+    // construction's own window shifts by the full +2 slip: 8-14 -> 10-16.
+    expect(byId['pkg-structure'].midpoint_month).toBe(12.5);
+    expect(byId['pkg-structure'].months_from_base).toBe(18.5);
+    expect(byId['pkg-structure'].finish_month).toBe(16);
+
+    // pkg-mande is SS off construction with a 3-month lag: its start tracks
+    // construction's new start (10 + 3 = 13), carrying the same back_loaded
+    // fractional offset (4/3) the unslipped case already has (test-cases.md
+    // §24.1 / cost-plan.test.ts's own 74/6 = 11 + 4/3 pin).
+    expect(byId['pkg-mande'].start_month).toBe(13);
+    expect(byId['pkg-mande'].midpoint_month).toBeCloseTo(13 + 4 / 3, 10);
+
+    // strip_out is a PREDECESSOR of construction, not a successor — a slip on
+    // construction does not reach backwards.
+    expect(byId['pkg-enabling'].midpoint_month).toBe(6.5);
+    expect(byId['pkg-enabling'].months_from_base).toBe(12.5);
+  });
+
+  it('the timeline lever on the auto-path document (Q) moves every package midpoint by exactly half the term change', () => {
+    const q = docQ();
+    const term = q.finance.term_months;
+    const before = computeCostPlan(q, developedAreaSqm(q), q.unit_mix.units.length);
+    const beforeMidpoints = new Set(before.packages.map((p) => p.midpoint_month));
+    expect(beforeMidpoints.size).toBe(1);
+    const beforeMidpoint = [...beforeMidpoints][0];
+    expect(beforeMidpoint).toBe((term - 1) / 2);
+
+    const stressed = applyScenario(q, { ...ZERO_OVERRIDES, timeline_adjustment_months: 2 });
+    const after = computeCostPlan(stressed, developedAreaSqm(stressed), stressed.unit_mix.units.length);
+    const afterMidpoints = new Set(after.packages.map((p) => p.midpoint_month));
+    expect(afterMidpoints.size).toBe(1);
+    const afterMidpoint = [...afterMidpoints][0];
+    expect(afterMidpoint).toBe((term + 1) / 2);
+    // +2 months of term -> +1 midpoint, pinned as an absolute value, not merely a direction.
+    expect(afterMidpoint - beforeMidpoint).toBe(1);
+  });
+
+  it('the timeline lever is inert on Z — a phase network is unmoved by the term (its windows are phase-derived)', () => {
+    const z = docZ();
+    const before = computeCostPlan(z, developedAreaSqm(z), z.unit_mix.units.length);
+    const stressed = applyScenario(z, { ...ZERO_OVERRIDES, timeline_adjustment_months: 5 });
+    const after = computeCostPlan(stressed, developedAreaSqm(stressed), stressed.unit_mix.units.length);
+    expect(after.packages.map((p) => p.midpoint_month)).toEqual(before.packages.map((p) => p.midpoint_month));
   });
 });
 

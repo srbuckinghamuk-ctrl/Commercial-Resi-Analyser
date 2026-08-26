@@ -96,6 +96,7 @@ const EXPECTED_FIXTURE_STEMS = [
   'w-monitoring-on-site',
   'x-unit-sales-ledger',
   'y-due-diligence',
+  'z-cost-plan-in-time',
 ];
 
 // Every fixture that carries its own `inputs` document, i.e. everything the
@@ -353,12 +354,17 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // document (spec §23) -- so every migrate-to-vN loop below excludes it by
   // the same design that excluded T/U/V/W/X from the earlier loops.
   const v13Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 13);
+  // R15b Task 7: fixture Z is BORN at v14 -- the corpus's first v14-native
+  // document (spec §24) -- so every migrate-to-vN loop below excludes it by
+  // the same design that excluded T/U/V/W/X/Y from the earlier loops.
+  const v14Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 14);
 
-  it('every fixture is v5 through v13, and each group is non-empty', () => {
+  it('every fixture is v5 through v14, and each group is non-empty', () => {
     expect(
       v5Fixtures.length + v6Fixtures.length + v7Fixtures.length
       + v8Fixtures.length + v9Fixtures.length + v10Fixtures.length
-      + v11Fixtures.length + v12Fixtures.length + v13Fixtures.length,
+      + v11Fixtures.length + v12Fixtures.length + v13Fixtures.length
+      + v14Fixtures.length,
     ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
@@ -388,6 +394,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
     ]);
     expect(v13Fixtures.map((f) => f.name)).toEqual([
       'Y — due-diligence evidence schedule, source record, price basis and QS provenance',
+    ]);
+    expect(v14Fixtures.map((f) => f.name)).toEqual([
+      'Z — cost plan in time, tender-price inflation allowance, curve-aware package timing, VAT-charged package',
     ]);
   });
 
@@ -461,7 +470,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV6
   // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
   // for the identical reason one version further on (`monitoring`).
-  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13].includes(versionOf(f)))) {
+  // R15b Task 7 widens it once more to v14, for the identical reason one
+  // version further on (fixture Z is v14-native).
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13, 14].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -481,7 +492,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // R13 Task 5b widens the exclusion once more to v10 -- migrateInputsToV7
   // refuses a v10 document identically. R14 Task 8 widens it once more to v11,
   // for the identical reason one version further on (`monitoring`).
-  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13].includes(versionOf(f)))) {
+  // R15b Task 7 widens it once more to v14, for the identical reason one
+  // version further on (fixture Z is v14-native).
+  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14].includes(versionOf(f)))) {
     // R10: the same identity guarantee one version further on, and the one that now
     // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
@@ -539,7 +552,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12, v13 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12, v13, v14 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
@@ -558,6 +571,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
       'W — monitoring statement on site, detailed cost plan, one ineligible package',
       'X — unit sales ledger, released deposits, per-unit costs, anchored completions',
       'Y — due-diligence evidence schedule, source record, price basis and QS provenance',
+      'Z — cost plan in time, tender-price inflation allowance, curve-aware package timing, VAT-charged package',
     ]);
     // Every exclusion is justified by one of the two stated reasons, not by silence.
     // R10 widens the second reason from "version === 6" to "version === 6 or 7", and
@@ -592,19 +606,24 @@ describe('golden fixtures (shared with the Python engine)', () => {
     // would additionally strip the R15 `due_diligence` block the fixture is
     // entirely about.
     //
+    // R15b Task 7 widens it once more to include 14: fixture Z is BORN at v14
+    // for the same reason — it did not exist before R8, and stamping it v3/v4
+    // would additionally strip the R15b `cost_plan.qs.inflation` allowance the
+    // fixture is entirely about.
+    //
     // Fix round 1, I3: this must enumerate the versions the exclusion is genuinely
     // about, NOT negate preR8Fixtures's own defining condition ("=== 5" flipped to
     // "!== 5") — that phrasing is the literal complement of how `excluded` was built,
     // so it is vacuously true for every member and can never fail. Enumerating
-    // 6/7/8/9/10/11/12/13 keeps the check able to fail: it catches a fixture excluded
-    // for a NINTH, unstated reason (e.g. a future non-v5..v13 fixture, or a change
+    // 6/7/8/9/10/11/12/13/14 keeps the check able to fail: it catches a fixture excluded
+    // for a TENTH, unstated reason (e.g. a future non-v5..v14 fixture, or a change
     // to preR8Fixtures's own filter that this assertion was never updated to match).
     for (const fx of excluded) {
       expect(
         jurisdictionOf(fx) !== 'england_ni'
           || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8
           || versionOf(fx) === 9 || versionOf(fx) === 10 || versionOf(fx) === 11
-          || versionOf(fx) === 12 || versionOf(fx) === 13,
+          || versionOf(fx) === 12 || versionOf(fx) === 13 || versionOf(fx) === 14,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -1013,7 +1032,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `vat`,
   // `programme`'s v9 shape, `refinance`'s v10 narrowing AND `investment_case`
   // to produce a v6 one). R14 Task 8 widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13, 14].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -1080,7 +1099,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `refinance`'s
   // v10 narrowing and `investment_case` to produce a v7 one). R14 Task 8
   // widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -1146,7 +1165,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // v10 narrowing and `investment_case` to produce a v8 one). R14 Task 8
   // widens it once more to v11 (`monitoring`); `preV8Fixtures` therefore stays
   // at 12, since fixture W was never inside this gate.
-  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13].includes(versionOf(f)));
+  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14].includes(versionOf(f)));
 
   it.each(preV8Fixtures.map((f) => f.name))(
     'migrating %s to v8 moves no computed figure, and writes the specified block',

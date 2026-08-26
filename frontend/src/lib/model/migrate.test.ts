@@ -13,12 +13,13 @@ import {
   migrateV10toV11, migrateInputsToV11,
   migrateV11toV12, migrateInputsToV12,
   migrateV12toV13, migrateInputsToV13,
+  isV14, migrateV13toV14, migrateInputsToV14,
 } from './migrate';
 import { ENTERED_CODES } from './due-diligence';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
-  CalculatorInputsV12,
+  CalculatorInputsV12, CalculatorInputsV13,
   MonitoringCategory, MonitoringLineInputs,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
@@ -1012,14 +1013,19 @@ describe('v10 migration -- spec §19.9', () => {
     // §20.2's hand-derived golden case). This filter is `<= 9`, so it excludes
     // every version ABOVE 9, v11 included, and the bound moves from three to
     // four. `fixtures.length` is unchanged -- W was never inside this gate.
+    //
+    // R15b Task 7: z-cost-plan-in-time.json is stored at inputs v14 (spec
+    // §24's hand-derived golden case). This filter is still `<= 9`, so it
+    // excludes Z too, and the bound moves from six to seven.
+    // `fixtures.length` is unchanged -- Z was never inside this gate either.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(6);
+    expect(versionExcluded.length).toBe(7);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       't-investment-case.json', 'u-investment-case-ltv-binds.json',
       'v-exhausted-reserve.json', 'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
-      'y-due-diligence.json',
+      'y-due-diligence.json', 'z-cost-plan-in-time.json',
     ]);
   });
 
@@ -1256,12 +1262,16 @@ describe('v11 migration -- spec §20.1', () => {
     // .json is `inputs_version: 11`, so the `<= 10` arm of `fixtures`'s filter
     // excludes it and it is covered by the golden suite instead. Mirrors how
     // the v10 block above records its own T/U/V/W exclusion bound growing.
+    //
+    // R15b Task 7: z-cost-plan-in-time.json is v14-native, also excluded by
+    // this `<= 10` filter, so the exclusion bound moves from three to four.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
     );
-    expect(versionExcluded.length).toBe(3);
+    expect(versionExcluded.length).toBe(4);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
       'w-monitoring-on-site.json', 'x-unit-sales-ledger.json', 'y-due-diligence.json',
+      'z-cost-plan-in-time.json',
     ]);
   });
 
@@ -1447,11 +1457,13 @@ describe('v12 migration -- spec §22.9', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(18);
     // R13b Task 2 adds the v12-native fixture X; R15 Task 3 adds the v13-native
     // fixture Y, above this gate's `<= 11` filter for the same reason X is.
+    // R15b Task 7 adds the v14-native fixture Z, above the same filter for
+    // the same reason.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 11,
     );
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
-      'x-unit-sales-ledger.json', 'y-due-diligence.json',
+      'x-unit-sales-ledger.json', 'y-due-diligence.json', 'z-cost-plan-in-time.json',
     ]);
   });
 
@@ -1591,11 +1603,15 @@ describe('v13 migration -- spec §23.10', () => {
 
   it('the migration corpus is not empty and did not silently shrink', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(19);
-    // R15 Task 3 adds the v13-native fixture Y.
+    // R15 Task 3 adds the v13-native fixture Y. R15b Task 7 adds the
+    // v14-native fixture Z, above this gate's `<= 12` filter for the same
+    // reason Y is.
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 12,
     );
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['y-due-diligence.json']);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'y-due-diligence.json', 'z-cost-plan-in-time.json',
+    ]);
   });
 
   // `calc_version` is constant for the whole engine run, not version-
@@ -1723,5 +1739,211 @@ describe('v13 migration -- spec §23.10', () => {
       fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
     );
     expect(() => migrateV12toV13(v13 as unknown as CalculatorInputsV12)).toThrow(/already a v13 document/);
+  });
+});
+
+// R15b Task 6 (spec §24.8). Ported wholesale from the v13 block above with
+// the v13→v14 substitutions.
+//
+// **Controller ruling (ledgered, superseding an earlier draft of this
+// block).** An earlier version of this gate carried a `⊆
+// {'no_inflation_allowance'}` subset bound on the flag list, with a
+// standalone non-vacuity test claiming fixture Y proved that bound live. It
+// did not: `no_inflation_allowance` is result-derived from `qs.inflation ??
+// null`, and `QsProvenance.inflation` already defaults to `null` on EVERY
+// engine read regardless of the document's `inputs_version` — R8's rule
+// (spec §2) is that the engine reads a raw document's absent key the same
+// way it reads an explicit `null` seed, so this migration's one write is
+// inert to EVERY output, flags included, on EVERY fixture, Y included. A
+// subset bound that is always satisfied by an empty set is a hole, not an
+// invariant, so it is gone: `metricsSansExcluded` below excludes only
+// `calc_version` (same as the v13 block above it), and `metrics` — flags
+// inside it, in order — is compared with NO exclusion whatsoever, exactly
+// as `model` and `schedule` already are. The Y-specific assertion below is
+// kept and reworded to what is actually true: `no_inflation_allowance`
+// fires on fixture Y on BOTH arms, by name — proof the flag is a genuine,
+// non-trivial one the equality above is not passing over vacuously.
+//
+// A second, related defect this ruling also closes: `computeCostPlan`
+// (`cost-plan.ts`) used to republish `cost_plan.qs` as a raw passthrough of
+// the input object, so a raw pre-v14 document's `qs` lacked the `inflation`
+// key its migrated v14 twin's `qs` carried explicitly — a real object-shape
+// difference with no Python equivalent (pydantic's `model_dump()` always
+// publishes every declared field). `computeCostPlan` now normalises the
+// republish (`{ ...plan.qs, inflation: plan.qs.inflation ?? null }`), so
+// both arms publish the identical shape and this gate needs no shape
+// exclusion at all, on either engine.
+describe('v14 migration -- spec §24.8', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+  interface FixtureFile {
+    name: string;
+    kind: string;
+    inputs?: Record<string, unknown>;
+  }
+
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file,
+    doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+
+  // Fixture K excluded the same way every other block in this file excludes
+  // it. Unlike the v13 block's `<= 12` filter (which excluded the v13-native
+  // fixture Y), this filter is `<= 13`: Y is a valid "before" document for
+  // the v13→v14 gate the same way every other corpus fixture is. R15b Task 7
+  // adds Z, the corpus's first v14-native fixture, so `versionExcluded` now
+  // names it — the same position Y held one release earlier for the
+  // v12→v13 gate.
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+
+  const fixtures = fixtureDocs.filter(
+    ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) <= 13,
+  );
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(20);
+    const versionExcluded = fixtureDocs.filter(
+      ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 13,
+    );
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['z-cost-plan-in-time.json']);
+  });
+
+  // `calc_version` only — no other exclusion. `metrics` (flags included, in
+  // order), `model` and `schedule` all compare with strict equality: this
+  // migration's one write is inert to every output (see the comment above
+  // this describe block for why).
+  const metricsSansExcluded = (metrics: object): Record<string, unknown> => {
+    const { calc_version: _cv, ...rest } = metrics as unknown as Record<string, unknown>;
+    return rest;
+  };
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v13 to v14`, () => {
+      const inputs = doc.inputs!;
+      const v13Run = runAppraisal(migrateInputsToV13(inputs));
+      const v14Run = runAppraisal(migrateInputsToV14(inputs));
+      expect(metricsSansExcluded(v14Run.metrics), `${file}: metrics moved`)
+        .toEqual(metricsSansExcluded(v13Run.metrics));
+      expect(v14Run.model, `${file}: a ledger figure moved`).toEqual(v13Run.model);
+      expect(v14Run.schedule, `${file}: a schedule figure moved`).toEqual(v13Run.schedule);
+    });
+  }
+
+  it('no_inflation_allowance fires on fixture Y on BOTH arms, by name (R8: an absent key reads the same as the seed)', () => {
+    // Non-vacuity for the strict equality above: proof the flag list is not
+    // matching merely because both arms raise nothing. Fixture Y's raw v13
+    // document has a real, non-null `qs` with no `inflation` key and a base
+    // date preceding a package midpoint (§24.7's firing condition) — the
+    // v13 arm reads that absence exactly as `?? null`, so the SAME amber
+    // flag fires on both arms, not just the migrated one.
+    const yRaw = fixtureDocs.find(({ file }) => file === 'y-due-diligence.json')!.doc.inputs as Record<string, unknown>;
+    const v13Flags = runAppraisal(migrateInputsToV13(yRaw)).metrics.flags.map((f) => f.code);
+    const v14Flags = runAppraisal(migrateInputsToV14(yRaw)).metrics.flags.map((f) => f.code);
+    expect(v13Flags, 'v13 (raw) arm').toContain('no_inflation_allowance');
+    expect(v14Flags, 'v14 (migrated) arm').toContain('no_inflation_allowance');
+  });
+
+  // Property 1 of three. No field renames this release.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v13 validation issue has a v14 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v13Issues = new Set(
+        validateInputs(migrateInputsToV13(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v14Issues = new Set(
+        validateInputs(migrateInputsToV14(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v14Issues).toEqual(v13Issues);
+    });
+  }
+
+  // Property 2 and Property 3. The §24.7 tender-price-inflation rules are
+  // gated on `inflation !== null`, and this migration writes `inflation:
+  // null` only — a migrated document has nothing for those four rules to
+  // fire on. Property 2 checks that stays true; property 3 (R12's §18.7
+  // non-vacuity lesson) proves the rules can actually fire once a real
+  // allowance is recorded by hand.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v14-only rule stays silent on a migrated document (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV14(inputs));
+      expect(issues.filter((i) => i.field.startsWith('cost_plan.qs.inflation'))).toEqual([]);
+    });
+  }
+
+  it('the v14-only rules can actually fire (property 3 of three)', () => {
+    // Control: a migrated document with a real (invalid) allowance recorded
+    // by hand — rule 1 (a non-finite/negative rate) fires with field
+    // `cost_plan.qs.inflation.annual_pct`. Fixture S is detailed-mode with
+    // dated packages, so `latest_midpoint_months_from_base` resolves and the
+    // calendar guard (rules 2/3) does not itself suppress rule 1.
+    const raw = migrateInputsToV14(
+      fixtureDocs.find(({ file }) => file === 's-dated-programme.json')!.doc.inputs as Record<string, unknown>,
+    ) as unknown as Record<string, unknown>;
+    (raw.cost_plan as { qs: unknown }).qs = {
+      source: 'Gleeds', stage: 'riba_3', date: '2026-02-15', status: 'issued',
+      base_date: '2026-02-01', inflation: { annual_pct: -1 },
+    };
+    const fields = new Set(validateInputs(migrateInputsToV14(raw)).map((i) => i.field));
+    expect(fields.has('cost_plan.qs.inflation.annual_pct')).toBe(true);
+  });
+
+  it('writes the seed inside a non-null qs: null qs stays null, non-null qs gains `inflation: null`', () => {
+    // j-blended-refinance is headline-mode with no qs — proves the
+    // null-stays-null arm.
+    const raw = fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>;
+    const v13 = migrateInputsToV13(raw);
+    const v14 = migrateV13toV14(v13);
+    expect(v14.inputs_version).toBe(14);
+    expect(v14.cost_plan.qs).toBeNull();
+    const { inputs_version: _a, cost_plan: _b, ...restV13 } = v13;
+    const { inputs_version: _c, cost_plan: _d, ...restV14 } = v14;
+    expect(restV14).toEqual(restV13);
+
+    // Fixture Y's RAW stored document has a real, non-null `qs` with NO
+    // `inflation` key at all (a genuine v13-native document) — the write
+    // must add the key.
+    const yRaw = fixtureDocs.find(({ file }) => file === 'y-due-diligence.json')!.doc.inputs as Record<string, unknown>;
+    expect((yRaw.cost_plan as { qs: object }).qs).not.toBeNull();
+    expect('inflation' in (yRaw.cost_plan as { qs: object }).qs).toBe(false);
+    const yV14 = migrateV13toV14(migrateInputsToV13(yRaw));
+    expect(yV14.cost_plan.qs!.inflation).toBeNull();
+  });
+
+  it('boundary round trip: qs present keeps inflation present; no qs has no inflation anywhere', () => {
+    const yRaw = fixtureDocs.find(({ file }) => file === 'y-due-diligence.json')!.doc.inputs as Record<string, unknown>;
+    const withQs = migrateInputsToV14(yRaw);
+    expect(withQs.cost_plan.qs).not.toBeNull();
+    expect('inflation' in withQs.cost_plan.qs!).toBe(true);
+    expect(withQs.cost_plan.qs!.inflation).toBeNull();
+
+    const noQsRaw = fixtureDocs.find(({ file }) => file === 'l-retain-all.json')!.doc.inputs as Record<string, unknown>;
+    const noQs = migrateInputsToV14(noQsRaw);
+    expect(noQs.cost_plan.qs).toBeNull();
+    expect(JSON.stringify(noQs)).not.toContain('inflation');
+  });
+
+  it('isV14 requires the inflation key on a non-null qs (rejects a spoofed relabel)', () => {
+    const base = { inputs_version: 14, due_diligence: {}, cost_plan: { qs: null } };
+    expect(isV14(base)).toBe(true);
+    expect(isV14({ ...base, cost_plan: { qs: { inflation: null } } })).toBe(true);
+    expect(isV14({ ...base, cost_plan: { qs: { source: 'x' } } })).toBe(false);
+    expect(isV14({ ...base, inputs_version: 13 })).toBe(false);
+    expect(isV14({ inputs_version: 14, cost_plan: { qs: null } })).toBe(false);
+  });
+
+  it('refuses double migration and unrecognised versions', () => {
+    expect(() => migrateInputsToV14({ inputs_version: 15 })).toThrow(/unrecognised inputs_version 15/);
+    expect(() => migrateInputsToV14({ inputs_version: 14 })).toThrow(/fails the v14 structural check/);
+    const v14 = migrateInputsToV14(
+      fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
+    );
+    expect(() => migrateV13toV14(v14 as unknown as CalculatorInputsV13)).toThrow(/already a v14 document/);
   });
 });

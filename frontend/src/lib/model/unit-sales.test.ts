@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { computeUnitSales } from './unit-sales';
-import { migrateInputsToV13 } from './migrate';
+import { migrateInputsToV14 } from './migrate';
 import { runAppraisal } from './index';
 import {
   anchorResolver, heldTwinDoc, noProgrammeDoc, pcEarlyDoc, residueDoc, soldGross, unitSalesDoc,
@@ -150,9 +150,10 @@ describe('the unit-sales gross identity (corpus-wide)', () => {
         kind?: string; inputs: Record<string, unknown>;
       };
       if (doc.kind === 'sensitivity') continue;
-      // Migrated to v13 so the identity is asserted on the document shape the
-      // engine actually receives today.
-      const appraisal = runAppraisal(migrateInputsToV13(doc.inputs));
+      // Migrated to v14 (R15b Task 7: fixture Z is v14-native) so the
+      // identity is asserted on the document shape the engine actually
+      // receives today.
+      const appraisal = runAppraisal(migrateInputsToV14(doc.inputs));
       const unitSales = appraisal.metrics.unit_sales;
       if (unitSales == null) continue;
       checked += 1;

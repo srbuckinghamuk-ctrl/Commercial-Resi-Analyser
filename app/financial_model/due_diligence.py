@@ -5,6 +5,7 @@ catalogue; Task 2 adds the seed builder; Task 3 adds the derivation. It never
 imports schedule or metrics (they import it)."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -435,5 +436,36 @@ def due_diligence_flags(result: DueDiligenceResult, cost_plan: CostPlanResult) -
             code="provisional_sums_present", severity="amber", month=None,
             amount_pence=pb.provisional_sums_pence,
             message=f"provisional sums are present in the cost plan: {pb.provisional_sums_pence}p",
+        ))
+    # R15b spec Sec 24.7. A QS record with no tender-price inflation
+    # allowance, where the calendar IS known (a resolved acquisition date, so
+    # latest_midpoint_months_from_base is not None) and at least one package
+    # spend midpoint falls after the base date.
+    # latest_midpoint_months_from_base is None whenever acquisition_date is
+    # None (Task 2) -- that is this flag's own "skipped" arm, not a separate
+    # guard. `> 0` (not `>= 0`): a base date at or after every midpoint clamps
+    # the figure to exactly 0 (compute_cost_plan's own floor), which reads as
+    # "nothing to inflate", not "record an allowance". `cost_plan.qs` is the
+    # republished dict (model_dump(mode="json")), so read through
+    # `.get("inflation")`, not attribute access.
+    qs = cost_plan.qs
+    if (
+        cost_plan.mode == "detailed"
+        and qs is not None
+        and qs.get("inflation") is None
+        and cost_plan.latest_midpoint_months_from_base is not None
+        and cost_plan.latest_midpoint_months_from_base > 0
+    ):
+        # Published in Task 2; no arithmetic here -- the flag prints the same
+        # whole-month figure the memo does, never a re-floored copy of the float.
+        months = cost_plan.latest_midpoint_whole_months_from_base
+        out.append(ModelFlag(
+            code="no_inflation_allowance", severity="amber",
+            month=math.floor(cost_plan.latest_midpoint_month),
+            amount_pence=None,
+            message=(
+                f"no tender-price inflation allowance recorded: priced at {qs['base_date']}; "
+                f"package spend midpoints fall up to {months} whole months later"
+            ),
         ))
     return out

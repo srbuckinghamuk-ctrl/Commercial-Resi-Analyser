@@ -16,6 +16,7 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
+  CalculatorInputsV14,
   EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
@@ -576,5 +577,26 @@ export function defaultCalculatorInputsV13(project?: DefaultDocumentProject, now
           epc_rating: project!.epc_rating ?? null,
         }, (now ?? new Date()).toISOString()) }
       : dd,
+  };
+}
+
+/**
+ * R15b Task 6 (spec §24.8, the entry-point cutover). `inputs_version` and
+ * `cost_plan.qs` are the only fields touched, mirroring `migrateV13toV14`
+ * exactly: a null `qs` stays null (every default document's), and a non-null
+ * one -- never produced by this builder itself, but possible on a caller-
+ * supplied `project` path through `defaultCalculatorInputsV13` -- gains the
+ * key explicitly. `conversion-defaults.test.ts` pins this against
+ * `defaultCalculatorInputsV13` field for field.
+ */
+export function defaultCalculatorInputsV14(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV14 {
+  const v13 = defaultCalculatorInputsV13(project, now);
+  return {
+    ...v13,
+    inputs_version: 14,
+    cost_plan: {
+      ...v13.cost_plan,
+      qs: v13.cost_plan.qs == null ? null : { ...v13.cost_plan.qs, inflation: null },
+    },
   };
 }

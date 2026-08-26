@@ -9,6 +9,9 @@ import type { AcquisitionTaxResult, Jurisdiction } from '../tax/acquisition-tax'
 import type { CostPlanInputs, CostPlanResult } from './cost-plan';
 import type { VatInputs, VatResult } from './vat';
 import type { ProgrammeNetwork, DerivedPhase } from './programme';
+// R15b Task 3: `PackageTiming` now exists (`computePackageTiming`'s return
+// type) and `Schedule.package_timing` republishes it below.
+import type { PackageTiming } from './package-timing';
 // Only what THIS file's own declarations reference — `npm run lint --max-warnings 0`
 // rejects an unused type import, and the re-exports below do not count as uses.
 // R13 Task 8: `InvestmentCaseResult` now exists (`computeInvestmentCase`'s
@@ -48,9 +51,10 @@ export interface FacilityTerms {
   day_one_advance_pence: number | null;
   day_one_market_value_pence: number | null;
   /** Caps monthly development draws at this % of that month's eligible dev costs.
-   *  R14 spec §4.2(b): "eligible" is construction × the cost plan's
-   *  `lender_eligible_ratio`, plus professional and statutory in full — VAT is
-   *  deliberately excluded (§17.6). */
+   *  R14 spec §4.2(b): "eligible" is `uses[m].lender_eligible_construction_pence`
+   *  (spec §24.4 — the month's lender-eligible construction spend; R14's
+   *  uniform ratio until calc 2.16.0) plus professional and statutory in full —
+   *  VAT is deliberately excluded (§17.6). */
   development_cost_advance_pct: number;
   committed_net_facility_pence: number | null;
   /** null → derived as net + interest_reserve. */
@@ -435,11 +439,24 @@ export interface CalculatorInputsV13 extends Omit<CalculatorInputsV12, 'inputs_v
   due_diligence: DueDiligenceInputs;
 }
 
+/**
+ * R15b spec §24.8. `cost_plan.qs.inflation` (already on `QsProvenance`, Task
+ * 1) is the only addition — there is no new top-level field, unlike every
+ * prior version bump. A v14 document is one where a non-null `qs` carries
+ * the key explicitly rather than by absence; `isV14`/`migrateV13toV14`
+ * enforce that shape, not this interface (TS erases the distinction at
+ * compile time, same as `due_diligence`'s non-nullability could not be
+ * enforced by the v12 interface either).
+ */
+export interface CalculatorInputsV14 extends Omit<CalculatorInputsV13, 'inputs_version'> {
+  inputs_version: 14;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
   | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-  | CalculatorInputsV13;
+  | CalculatorInputsV13 | CalculatorInputsV14;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -483,7 +500,12 @@ export type FlagCode =
   | 'consent_expires_before_start'
   /** R15 spec §23.9. Fires when any cost-plan package carries a
    *  `provisional_sum` or `estimate` `price_basis`. */
-  | 'provisional_sums_present';
+  | 'provisional_sums_present'
+  /** R15b spec §24.7. Fires when the QS record has no tender-price inflation
+   *  allowance (`qs.inflation` null) but the calendar is known (a resolved
+   *  acquisition date) and at least one package spend midpoint falls after
+   *  the QS base date (`latest_midpoint_months_from_base > 0`). */
+  | 'no_inflation_allowance';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -503,6 +525,12 @@ export interface MonthUses {
    *  after the uses/receipts arrays are fully built — never a source figure
    *  itself (§17.5's one-direction rule). */
   vat_pence: number;
+  /** R15b spec §24.4. The lender-eligible share of THIS month's
+   *  `construction_pence`, computed from the per-package unrounded spend
+   *  (never re-derived from the uniform `lender_eligible_ratio`, which stays
+   *  published for disclosure and the denominator-zero fallback only). Read
+   *  by the §4.2(b) advance cap in place of the R14 uniform ratio. */
+  lender_eligible_construction_pence: number;
 }
 
 export interface MonthReceipts {
@@ -584,9 +612,16 @@ export interface Schedule {
     tranches: number[];
     refinance: number | null;
   };
-  /** R14 spec §4.2(b). Computed once on the cost plan, republished here so the
-   *  ledger reads one figure and never re-derives it. */
+  /** R14 spec §4.2(b). Computed once on the cost plan, republished here for
+   *  disclosure and as the denominator-zero fallback (R15b spec §24.4) — the
+   *  §4.2(b) advance cap itself reads `uses[m].lender_eligible_construction_
+   *  pence` instead. */
   lender_eligible_ratio: number;
+  /** R15b spec §24.2/§24.4. `computePackageTiming(inputs)`'s full result,
+   *  computed once in `buildSchedule` and republished — never recomputed —
+   *  one entry per `cost_plan.packages[]`, in order. `[]` when the document
+   *  has no `cost_plan` or no packages. */
+  package_timing: PackageTiming[];
 }
 
 export interface LedgerMonth {
@@ -842,4 +877,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.15.0';
+export const CALC_VERSION = '2.16.0';

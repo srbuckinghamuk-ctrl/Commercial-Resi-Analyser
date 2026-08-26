@@ -44,25 +44,34 @@ def _spread_by_weights(total: int, ideal_weights: list[float]) -> list[int]:
     return out
 
 
-def spread_s_curve(total: int, months: int) -> list[int]:
-    """Raised-cosine S-curve: cumulative W(k) = (1 - cos(pi*k/D)) / 2."""
-    if months <= 0:
-        return []
+def _s_curve_weights(months: int) -> list[float]:
+    """Raised-cosine S-curve weight vector: cumulative W(k) = (1 - cos(pi*k/D)) / 2."""
     weights: list[float] = []
     prev = 0.0
     for k in range(1, months + 1):
         cum = (1 - math.cos((math.pi * k) / months)) / 2
         weights.append(cum - prev)
         prev = cum
-    return _spread_by_weights(total, weights)
+    return weights
+
+
+def spread_s_curve(total: int, months: int) -> list[int]:
+    """Raised-cosine S-curve: cumulative W(k) = (1 - cos(pi*k/D)) / 2."""
+    if months <= 0:
+        return []
+    return _spread_by_weights(total, _s_curve_weights(months))
+
+
+def _back_loaded_weights(months: int) -> list[float]:
+    """Linear-ramp weight vector: w_k = 2k / (D(D+1))."""
+    return [(2 * (i + 1)) / (months * (months + 1)) for i in range(months)]
 
 
 def spread_back_loaded(total: int, months: int) -> list[int]:
     """Linear ramp: w_k = 2k / (D(D+1))."""
     if months <= 0:
         return []
-    weights = [(2 * (i + 1)) / (months * (months + 1)) for i in range(months)]
-    return _spread_by_weights(total, weights)
+    return _spread_by_weights(total, _back_loaded_weights(months))
 
 
 def spread_user_defined(total: int, weights: list[float]) -> list[int]:
@@ -71,6 +80,24 @@ def spread_user_defined(total: int, weights: list[float]) -> list[int]:
     input, exactly as spreadUserDefined does."""
     s = sum(weights)
     return _spread_by_weights(total, [w / s for w in weights])
+
+
+def curve_weights(duration_months: int, curve: SpendCurve) -> list[float]:
+    """R15b spec Sec 24.2. The ideal per-month fractions w_k of Sec 6.1 for a
+    window of ``duration_months``, sum = 1. ``spread_by_curve`` is
+    ``money_round(total * w_k)`` with the final month absorbing the residue; a
+    midpoint computed from these weights is independent of the amount. ``[]``
+    for a non-positive duration. Mirrors curveWeights in curves.ts."""
+    if duration_months <= 0:
+        return []
+    if curve.kind == "straight_line":
+        return [1 / duration_months] * duration_months
+    if curve.kind == "s_curve":
+        return _s_curve_weights(duration_months)
+    if curve.kind == "back_loaded":
+        return _back_loaded_weights(duration_months)
+    s = sum(curve.weights)
+    return [w / s for w in curve.weights]
 
 
 def spread_by_curve(total: int, duration_months: int, curve: SpendCurve) -> list[int]:

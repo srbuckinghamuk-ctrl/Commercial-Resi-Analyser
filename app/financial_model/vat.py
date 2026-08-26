@@ -507,10 +507,15 @@ def compute_vat(inputs, cost_plan: CostPlanResult, schedule) -> VatResult:
         override = package_overrides.get(p.id)
         if override is None:
             continue
-        overridden_packages += p.amount_pence
+        # R15b spec Sec 24.5: the tender-price inflation allowance follows its
+        # package's own VAT treatment -- an overridden line is charged on
+        # amount + inflation, not on the bare amount, and the category base
+        # below is net of the SAME figure so nothing double counts.
+        net = p.amount_pence + p.inflation_pence
+        overridden_packages += net
         package_lines.append(_charge_line(
             f"package:{p.id}", "construction", p.label if p.label != "" else p.code,
-            resolve_vat_treatment(vat, "construction", override), p.amount_pence,
+            resolve_vat_treatment(vat, "construction", override), net,
         ))
 
     # --- fees: same subtraction, per fee CATEGORY ---

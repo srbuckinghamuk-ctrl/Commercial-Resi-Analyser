@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.financial_model import run_appraisal
 from app.financial_model.areas import developed_area_sqm
 from app.financial_model.cost_plan import CostPlanResult, compute_cost_plan
 from app.financial_model.engine import MonthlyModel, run_ledger
@@ -28,6 +29,7 @@ from app.financial_model.types import (
     MonitoringLineInputs,
     parse_calculator_inputs,
 )
+from tests.fixtures_cost_plan_in_time import doc_z, parse
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -239,25 +241,33 @@ class TestComputeMonitoringStatement:
         assert over.contingency_remaining_pence == 0
 
     def test_splits_construction_and_contingency_on_every_corpus_fixture(self) -> None:
-        checked = 0
+        docs: list[tuple[str, AnyCalculatorInputs]] = []
         for path in sorted(FIXTURE_DIR.glob("*.json")):
             doc = json.loads(path.read_text(encoding="utf-8"))
             # Fixture K ('sensitivity') names a `base_fixture` and carries no `inputs`
             # (governance Sec 2.1), so it has no schedule or cost plan of its own.
             if doc.get("kind") == "sensitivity" or doc.get("inputs") is None:
                 continue
-            inputs = parse_calculator_inputs(doc["inputs"])
+            docs.append((path.name, parse_calculator_inputs(doc["inputs"])))
+        # R15b spec Sec 24.5: doc_z() is the one document in the sweep whose
+        # inflation_total_pence is non-zero, so it is the document that would
+        # actually catch original_budgets forgetting the allowance -- every stored
+        # fixture above has inflation_total_pence == 0 and would pass either way.
+        docs.append(("doc_z() (R15b builder)", parse(doc_z())))
+
+        checked = 0
+        for label, inputs in docs:
             schedule = build_schedule(inputs)
             cost_plan = compute_cost_plan(
                 inputs, developed_area_sqm(inputs), len(inputs.unit_mix.units),
             )
             originals = original_budgets(schedule, cost_plan)
             uses_construction = sum(u.construction_pence for u in schedule.uses)
-            assert originals["construction"] + originals["contingency"] == uses_construction, path.name
+            assert originals["construction"] + originals["contingency"] == uses_construction, label
             # The other three columns against their own inception source, same sweep.
-            assert originals["acquisition"] == sum(u.acquisition_pence for u in schedule.uses), path.name
-            assert originals["professional"] == sum(u.professional_pence for u in schedule.uses), path.name
-            assert originals["statutory"] == sum(u.statutory_pence for u in schedule.uses), path.name
+            assert originals["acquisition"] == sum(u.acquisition_pence for u in schedule.uses), label
+            assert originals["professional"] == sum(u.professional_pence for u in schedule.uses), label
+            assert originals["statutory"] == sum(u.statutory_pence for u in schedule.uses), label
             checked += 1
         assert checked > 10
 
@@ -420,3 +430,62 @@ def _blank_date(statement):
     from dataclasses import replace
 
     return replace(statement, reporting_date="")
+
+
+class TestOriginalBudgetsCarriesTheInflationAllowance:
+    """R15b spec Sec 24.5. Mirrors monitoring.test.ts's "originalBudgets carries the
+    inflation allowance" describe block, test for test."""
+
+    def test_holds_the_split_identity_on_z_exactly_with_monitoring_at_reporting_month_9(
+        self,
+    ) -> None:
+        # Z's own builder carries no `monitoring` block; one is attached here, at the
+        # document level, exactly as a real caller would before running the appraisal --
+        # the brief's "via the builder document, run the appraisal" shape, not a direct
+        # compute_monitoring_statement call against a hand-built schedule/cost-plan pair.
+        doc = doc_z()
+        doc["monitoring"] = {
+            "reporting_month": 9,
+            "reporting_date": "2026-12-31",
+            "lines": [
+                {"category": "acquisition", "current_budget_pence": 100_000_000,
+                 "certified_to_date_pence": 100_000_000, "paid_to_date_pence": 100_000_000,
+                 "committed_to_date_pence": 100_000_000, "forecast_to_complete_pence": 0},
+                {"category": "construction", "current_budget_pence": 71_496_722,
+                 "certified_to_date_pence": 30_000_000, "paid_to_date_pence": 28_000_000,
+                 "committed_to_date_pence": 35_000_000, "forecast_to_complete_pence": 40_000_000},
+                {"category": "professional", "current_budget_pence": 8_500_000,
+                 "certified_to_date_pence": 3_000_000, "paid_to_date_pence": 2_500_000,
+                 "committed_to_date_pence": 4_000_000, "forecast_to_complete_pence": 4_500_000},
+                {"category": "statutory", "current_budget_pence": 3_400_000,
+                 "certified_to_date_pence": 1_000_000, "paid_to_date_pence": 900_000,
+                 "committed_to_date_pence": 1_200_000, "forecast_to_complete_pence": 700_000},
+                {"category": "contingency", "current_budget_pence": 3_300_000,
+                 "certified_to_date_pence": 1_000_000, "paid_to_date_pence": 1_000_000,
+                 "committed_to_date_pence": 1_500_000, "forecast_to_complete_pence": 2_000_000},
+            ],
+            # Below Z's committed net facility (100,000,000, spec Sec 24.5's own S/Z figure).
+            "debt_drawn_to_date_pence": 50_000_000,
+            "cash_equity_injected_to_date_pence": 40_000_000,
+            "author": "A. Surveyor MRICS",
+            "date": "2027-01-15",
+            "note": None,
+        }
+        run = run_appraisal(parse(doc))
+        statement = run.metrics.monitoring_statement
+        assert statement is not None
+        construction = next(l for l in statement.lines if l.category == "construction")
+        contingency = next(l for l in statement.lines if l.category == "contingency")
+        uses_construction = sum(u.construction_pence for u in run.schedule.uses)
+
+        # The split identity: original(construction) + original(contingency) is exactly
+        # what the schedule spread across every month's construction use -- inflation
+        # included, because construction_total_pence already folds it in (cost_plan.py).
+        assert (
+            construction.original_budget_pence + contingency.original_budget_pence
+            == uses_construction
+        )
+        # The exact figure: base_build (66,000,000) + inflation_total (5,496,722) +
+        # compliance (0) -- the RED value before Task 4's fix is the bare 66,000,000.
+        assert construction.original_budget_pence == 66_000_000 + 5_496_722 + 0
+        assert construction.original_budget_pence == 71_496_722
