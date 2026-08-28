@@ -167,6 +167,14 @@ class ScenarioOverrides(Model):
     # fixture keeps parsing; the v12 MIGRATION writes it explicitly anyway
     # (Sec 22.9), which is what the identity gate actually asserts.
     sales_slip_months: int = 0
+    # R16 spec Sec 25.1. Four levers for the standard lender stress pack.
+    # Defaulted so every existing construction site and fixture keeps
+    # parsing; the v15 MIGRATION writes them explicitly anyway (Sec 25.7),
+    # which is what the identity gate actually asserts.
+    saleable_area_adjustment_pct: float = 0.0
+    abnormal_cost_adjustment_pct: float = 0.0
+    programme_slip_months: int = 0
+    refi_ltv_adjustment_pct: float = 0.0
 
 
 class Scenarios(Model):

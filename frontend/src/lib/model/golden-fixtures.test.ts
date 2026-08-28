@@ -1914,6 +1914,10 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       });
       expect(levered.unit_mix.units.every((u) => u.estimated_value_pence === expected)).toBe(true);
     }
@@ -1928,6 +1932,10 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       });
       expect(levered.conversion_costs.construction_cost_per_sqm_pence).toBe(expected);
     }
@@ -1942,6 +1950,10 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       });
       expect(levered.finance.term_months).toBe(expected);
     }
@@ -1956,6 +1968,10 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       });
       expect(levered.finance.annual_interest_rate_pct).toBe(expected);
     }
@@ -2016,6 +2032,10 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
           operating_cost_adjustment_pct: 0,
           vacancy_adjustment_pct: 0,
           sales_slip_months: 0,
+          saleable_area_adjustment_pct: 0,
+          abnormal_cost_adjustment_pct: 0,
+          programme_slip_months: 0,
+          refi_ltv_adjustment_pct: 0,
         })).metrics;
         const cell = result.matrix[ri][ci];
         expect(cell.profit_pence).toBe(expected.profit_pence);

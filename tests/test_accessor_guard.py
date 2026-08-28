@@ -809,3 +809,33 @@ def test_the_flag_code_parity_guard_names_the_side_that_is_short():
     dropped_from_ts = _flag_code_drift(ts - {victim}, py)
     assert dropped_from_ts is not None
     assert f"finance-types.ts): ['{victim}']" in dropped_from_ts
+
+
+SENSITIVITY_TS = (
+    Path(__file__).resolve().parents[1]
+    / "frontend" / "src" / "lib" / "model" / "sensitivity.ts"
+)
+
+
+def _ts_lever_order() -> list[str]:
+    """The members of `LEVER_ORDER` in sensitivity.ts, in source order."""
+    source = SENSITIVITY_TS.read_text(encoding="utf-8")
+    start = source.index("export const LEVER_ORDER")
+    end = source.index("];", start)
+    body = re.sub(r"//[^\n]*", "", source[start:end])
+    return re.findall(r"'([a-z_]+)'", body)
+
+
+def test_the_lever_order_is_identical_in_both_engines():
+    """R16 spec Sec 25.1. LEVER_ORDER is the Sec 12.4 tie-break AND, from
+    R16, the order `_measure`/`measure` apply a cell's settings in -- so the
+    two engines must agree on it member for member and position for
+    position, not merely as sets."""
+    from app.financial_model.sensitivity import LEVER_ORDER
+    ts = _ts_lever_order()
+    assert ts, "parsed no members out of the TypeScript LEVER_ORDER"
+    assert list(LEVER_ORDER) == ts, (
+        "LEVER_ORDER has drifted between the engines:\n"
+        f"  Python: {list(LEVER_ORDER)}\n  TypeScript: {ts}"
+    )
+    assert len(LEVER_ORDER) == 13

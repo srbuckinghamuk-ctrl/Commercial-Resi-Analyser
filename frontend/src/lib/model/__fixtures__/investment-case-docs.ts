@@ -712,6 +712,13 @@ const LEVER_STEPS: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof Scenari
   // but this table's own order-independence test (extended to nine) still
   // covers its tie-break slot in LEVER_ORDER.
   sales_slip: 'sales_slip_months',
+  // R16 spec §25.1. The four stress-pack levers, never exercised by the
+  // nine-lever order-independence test above, but required so this generic
+  // table stays total over every non-phase_slip lever the type admits.
+  saleable_area: 'saleable_area_adjustment_pct',
+  abnormal_cost: 'abnormal_cost_adjustment_pct',
+  programme_slip: 'programme_slip_months',
+  refi_ltv: 'refi_ltv_adjustment_pct',
 };
 
 /**
@@ -731,6 +738,8 @@ export function applyLeversInOrder(
     phase_slip_phase_id: null, phase_slip_months: 0,
     exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0,
     sales_slip_months: 0,
+    saleable_area_adjustment_pct: 0, abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0, refi_ltv_adjustment_pct: 0,
   };
   return leverNames.reduce((acc, lever) => {
     if (lever === 'phase_slip') {

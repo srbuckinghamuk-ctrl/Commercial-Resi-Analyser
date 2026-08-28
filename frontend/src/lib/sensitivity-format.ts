@@ -29,6 +29,11 @@ export const LEVER_LABEL: Record<SensitivityLever, string> = {
   // R13b spec §22.8. The ninth lever; needs a unit_sales document to have
   // anything to write to (selectableLevers below).
   sales_slip: 'Sales slip',
+  // R16 spec §25.1. The four standard lender stress-pack levers.
+  saleable_area: 'Saleable area',
+  abnormal_cost: 'Abnormal cost',
+  programme_slip: 'Programme slip',
+  refi_ltv: 'Refinance LTV',
 };
 
 /**
@@ -47,6 +52,10 @@ export const LEVER_SHORT: Record<SensitivityLever, string> = {
   operating_cost: 'Opex',
   vacancy: 'Vacancy',
   sales_slip: 'Sales',
+  saleable_area: 'Area',
+  abnormal_cost: 'Abnormal',
+  programme_slip: 'Prog. slip',
+  refi_ltv: 'Refi LTV',
 };
 
 /**
@@ -80,34 +89,37 @@ export function selectableLevers(
 
 /** Decimal places each lever's unit is quoted to. Percentage-POINT levers are
  *  quoted to 0.1pp — R13 spec §19.8's `exit_yield` and `vacancy` join
- *  `interest_rate` in that unit, so they take the same precision. */
+ *  `interest_rate` in that unit, so they take the same precision. R16 spec
+ *  §25.1's `abnormal_cost` and `refi_ltv` are percentage-point levers too. */
 function decimalsFor(lever: SensitivityLever): number {
-  return lever === 'interest_rate' || lever === 'exit_yield' || lever === 'vacancy' ? 1 : 0;
+  return lever === 'interest_rate' || lever === 'exit_yield' || lever === 'vacancy'
+    || lever === 'abnormal_cost' || lever === 'refi_ltv' ? 1 : 0;
 }
 
 function signed(value: number, decimals: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(decimals)}`;
 }
 
+// R13 spec §19.8: operating_cost is a percent, same unit as gdv/construction_cost.
+// R16 spec §25.1: saleable_area is a percent too.
+const PERCENT_LEVERS: readonly SensitivityLever[] = ['gdv', 'construction_cost', 'operating_cost', 'saleable_area'];
+// R12 spec §18.9: phase_slip is months, same unit as timeline. R13b spec §22.8:
+// sales_slip is months too. R16 spec §25.1: programme_slip is months too.
+const MONTH_LEVERS: readonly SensitivityLever[] = ['timeline', 'phase_slip', 'sales_slip', 'programme_slip'];
+
 /** One lever position in its own unit (spec §12.1): "+5%", "-3 months", "+1.0 pp". */
 export function formatStepLabel(lever: SensitivityLever, step: number): string {
   const text = signed(step, decimalsFor(lever));
-  // R13 spec §19.8: operating_cost is a percent, same unit as gdv/construction_cost.
-  if (lever === 'gdv' || lever === 'construction_cost' || lever === 'operating_cost') return `${text}%`;
-  // R12 spec §18.9: phase_slip is months, same unit as timeline. R13b spec
-  // §22.8: sales_slip is months too.
-  if (lever === 'timeline' || lever === 'phase_slip' || lever === 'sales_slip') return `${text} months`;
-  // R13 spec §19.8: exit_yield and vacancy are percentage points, same unit as interest_rate.
+  if (PERCENT_LEVERS.includes(lever)) return `${text}%`;
+  if (MONTH_LEVERS.includes(lever)) return `${text} months`;
   return `${text} pp`;
 }
 
 /** A tornado range with the unit stated once: "-10% to +10%", "-3 to +3 months". */
 export function formatRangeLabel(lever: SensitivityLever, low: number, high: number): string {
   const d = decimalsFor(lever);
-  if (lever === 'gdv' || lever === 'construction_cost' || lever === 'operating_cost') {
-    return `${signed(low, d)}% to ${signed(high, d)}%`;
-  }
-  const unit = lever === 'timeline' || lever === 'phase_slip' || lever === 'sales_slip' ? 'months' : 'pp';
+  if (PERCENT_LEVERS.includes(lever)) return `${signed(low, d)}% to ${signed(high, d)}%`;
+  const unit = MONTH_LEVERS.includes(lever) ? 'months' : 'pp';
   return `${signed(low, d)} to ${signed(high, d)} ${unit}`;
 }
 

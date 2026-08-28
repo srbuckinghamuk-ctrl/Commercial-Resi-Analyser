@@ -23,6 +23,7 @@ from .validation import ValidationIssue, validate_inputs
 SensitivityLever = Literal[
     "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
     "exit_yield", "operating_cost", "vacancy", "sales_slip",
+    "saleable_area", "abnormal_cost", "programme_slip", "refi_ltv",
 ]
 
 # Spec Sec 12.4 tie-break order, making the tornado sort total and so deterministic
@@ -30,9 +31,13 @@ SensitivityLever = Literal[
 # is the newest and lowest-priority tie-break, not a reordering of the four Sec 12.1
 # levers. R13 spec Sec 19.8 appends the three investment-case levers the same way.
 # R13b spec Sec 22.8 appends the ninth lever, sales_slip, last again -- same rule.
+# R16 spec Sec 25.1 appends the four stress-pack levers, last again -- and
+# from R16 this order is ALSO the order _measure applies a cell's settings in
+# (Sec 12.1's composition rule for saleable_area -> gdv).
 LEVER_ORDER: tuple[SensitivityLever, ...] = (
     "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
     "exit_yield", "operating_cost", "vacancy", "sales_slip",
+    "saleable_area", "abnormal_cost", "programme_slip", "refi_ltv",
 )
 
 # Spec Sec 12.6: an axis is capped at nine steps, bounding the suite at 81 cells.

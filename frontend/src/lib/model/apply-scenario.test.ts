@@ -33,6 +33,10 @@ const BASE_OVERRIDES: ScenarioOverrides = {
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
   sales_slip_months: 0,
+  saleable_area_adjustment_pct: 0,
+  abnormal_cost_adjustment_pct: 0,
+  programme_slip_months: 0,
+  refi_ltv_adjustment_pct: 0,
 };
 
 function fixtureInputs(): CalculatorInputsV2 {
@@ -58,6 +62,10 @@ describe('applyScenario', () => {
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
       sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0,
+      abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0,
+      refi_ltv_adjustment_pct: 0,
     });
     expect(adjusted.unit_mix.units[0].estimated_value_pence).toBe(33_000_000);
     expect(adjusted.unit_mix.units[1].estimated_value_pence).toBe(22_000_000);
@@ -77,6 +85,10 @@ describe('applyScenario', () => {
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
       sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0,
+      abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0,
+      refi_ltv_adjustment_pct: 0,
     });
     expect(adjusted.conversion_costs.construction_cost_per_sqm_pence).toBe(
       Math.round(base.conversion_costs.construction_cost_per_sqm_pence * 1.15),
@@ -119,6 +131,10 @@ describe('applyScenario', () => {
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
       sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0,
+      abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0,
+      refi_ltv_adjustment_pct: 0,
     });
 
     const staged = applyScenario(
@@ -134,6 +150,10 @@ describe('applyScenario', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       }),
       {
         label: 'Test',
@@ -147,6 +167,10 @@ describe('applyScenario', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       },
     );
 
@@ -175,6 +199,10 @@ describe('applyScenario', () => {
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
       sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0,
+      abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0,
+      refi_ltv_adjustment_pct: 0,
     });
     expect(out.finance.committed_net_facility_pence).toBe(v2Inputs.finance.committed_net_facility_pence);
     expect(out.finance.committed_gross_facility_pence).toBe(v2Inputs.finance.committed_gross_facility_pence);
@@ -215,6 +243,10 @@ describe('applyScenario', () => {
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
       sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0,
+      abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0,
+      refi_ltv_adjustment_pct: 0,
     });
 
     // v3-only fields pass through identically — the generic's whole point:
@@ -267,6 +299,10 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       },
     );
 
@@ -290,6 +326,10 @@ describe('R9 — a GDV scenario stresses ancillary value too', () => {
         operating_cost_adjustment_pct: 0,
         vacancy_adjustment_pct: 0,
         sales_slip_months: 0,
+        saleable_area_adjustment_pct: 0,
+        abnormal_cost_adjustment_pct: 0,
+        programme_slip_months: 0,
+        refi_ltv_adjustment_pct: 0,
       },
     );
     expect(stressed.unit_mix.units[0].ancillary.balcony_terrace_sqm).toBe(8);
@@ -512,6 +552,10 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
   sales_slip_months: 0,
+  saleable_area_adjustment_pct: 0,
+  abnormal_cost_adjustment_pct: 0,
+  programme_slip_months: 0,
+  refi_ltv_adjustment_pct: 0,
 };
 
 /** Sets a phase's `slip_months` directly (not via `applyScenario`), so a test can
@@ -705,28 +749,36 @@ describe('sales_slip lever — spec §22.8', () => {
     expect(applyScenario(doc, SLIP(3))).toEqual(applyScenario(doc, SLIP(0)));
   });
 
-  const FIELD_OF: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof ScenarioOverrides> = {
+  // R16 Task 1: this test is pinned to the ORIGINAL nine levers (its name says
+  // so); the four stress-pack levers get their own order-independence coverage
+  // in a later task, so this local type stays narrowed rather than widening to
+  // the full SensitivityLever and silently folding them into this loop.
+  type NineLeverKey = Exclude<
+    SensitivityLever, 'phase_slip' | 'saleable_area' | 'abnormal_cost' | 'programme_slip' | 'refi_ltv'
+  >;
+
+  const FIELD_OF: Record<NineLeverKey, keyof ScenarioOverrides> = {
     gdv: 'gdv_adjustment_pct', construction_cost: 'construction_cost_adjustment_pct',
     timeline: 'timeline_adjustment_months', interest_rate: 'interest_rate_adjustment_pct',
     exit_yield: 'exit_yield_adjustment_pct', operating_cost: 'operating_cost_adjustment_pct',
     vacancy: 'vacancy_adjustment_pct', sales_slip: 'sales_slip_months',
   };
 
-  function overridesForLever(lever: Exclude<SensitivityLever, 'phase_slip'>, value: number): ScenarioOverrides {
+  function overridesForLever(lever: NineLeverKey, value: number): ScenarioOverrides {
     return { ...BASE_OVERRIDES, [FIELD_OF[lever]]: value };
   }
 
   it('keeps all nine levers order-independent on a unit-sales document', () => {
-    const levers: Record<Exclude<SensitivityLever, 'phase_slip'>, number> = {
+    const levers: Record<NineLeverKey, number> = {
       gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
       exit_yield: 0, operating_cost: 0, vacancy: 0, sales_slip: 2,
     };
-    const orders: Array<Exclude<SensitivityLever, 'phase_slip'>[]> = [
-      Object.keys(levers) as Exclude<SensitivityLever, 'phase_slip'>[],
-      (Object.keys(levers) as Exclude<SensitivityLever, 'phase_slip'>[]).slice().reverse(),
+    const orders: Array<NineLeverKey[]> = [
+      Object.keys(levers) as NineLeverKey[],
+      (Object.keys(levers) as NineLeverKey[]).slice().reverse(),
       ['sales_slip', 'timeline', 'gdv', 'interest_rate', 'construction_cost', 'vacancy', 'exit_yield', 'operating_cost'],
     ];
-    const applyIn = (order: Exclude<SensitivityLever, 'phase_slip'>[]) => {
+    const applyIn = (order: NineLeverKey[]) => {
       let doc = unitSalesDoc();
       for (const lever of order) {
         doc = applyScenario(doc, overridesForLever(lever, levers[lever]));
@@ -752,15 +804,22 @@ describe('sales_slip lever — spec §22.8', () => {
 // midpoint 12.333..., months_from_base 18.333...) — the exact figures cost-plan.test.ts
 // already pins.
 describe('R15b spec §24 — the levers reach the cost plan in time (Task 8)', () => {
+  // R16 Task 1: ORDERS below is a fixed nine-lever list — the four stress-pack
+  // levers are never present in it, so these two entries are unreachable dead
+  // weight, required only because Record<Exclude<..., 'phase_slip'>, ...> must
+  // now cover all twelve non-phase_slip levers.
   const NON_PHASE_SLIP_FIELD: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof ScenarioOverrides> = {
     gdv: 'gdv_adjustment_pct', construction_cost: 'construction_cost_adjustment_pct',
     timeline: 'timeline_adjustment_months', interest_rate: 'interest_rate_adjustment_pct',
     exit_yield: 'exit_yield_adjustment_pct', operating_cost: 'operating_cost_adjustment_pct',
     vacancy: 'vacancy_adjustment_pct', sales_slip: 'sales_slip_months',
+    saleable_area: 'saleable_area_adjustment_pct', abnormal_cost: 'abnormal_cost_adjustment_pct',
+    programme_slip: 'programme_slip_months', refi_ltv: 'refi_ltv_adjustment_pct',
   };
   const LEVER_MAGNITUDE: Record<Exclude<SensitivityLever, 'phase_slip'>, number> = {
     gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
     exit_yield: 3, operating_cost: 4, vacancy: 2, sales_slip: 2,
+    saleable_area: 0, abnormal_cost: 0, programme_slip: 0, refi_ltv: 0,
   };
 
   function applyLever(doc: CalculatorInputsV14, lever: SensitivityLever): CalculatorInputsV14 {

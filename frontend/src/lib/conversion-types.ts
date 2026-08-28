@@ -104,6 +104,18 @@ export interface ScenarioOverrides {
    *  completion (anchor.offset_months when anchored, else month_offset),
    *  ADDITIVELY. No-op by construction when unit_sales is null. */
   sales_slip_months: number;
+  /** R16 spec §25.1. Percent, scaling every unit's `floor_area_sqm` AND
+   *  `estimated_value_pence` (value at constant £/sqm). Composes with `gdv` on
+   *  the value: applied FIRST, then `gdv`, each rounding once. */
+  saleable_area_adjustment_pct: number;
+  /** Percentage POINTS added to the `abnormal` contingency class's `pct`. */
+  abnormal_cost_adjustment_pct: number;
+  /** Whole months added to `slip_months` of every phase with no predecessors
+   *  (the network's sources), so the delay cascades once. */
+  programme_slip_months: number;
+  /** Percentage POINTS SUBTRACTED from `investment_case.takeout.ltv_cap_pct`,
+   *  so a POSITIVE value is the adverse move (vacancy's convention). */
+  refi_ltv_adjustment_pct: number;
 }
 
 export interface DealSpiderInputs {

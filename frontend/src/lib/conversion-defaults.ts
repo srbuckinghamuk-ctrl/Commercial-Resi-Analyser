@@ -131,6 +131,10 @@ export const DEFAULT_SCENARIOS: {
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
     sales_slip_months: 0,
+    saleable_area_adjustment_pct: 0,
+    abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0,
+    refi_ltv_adjustment_pct: 0,
   },
   upside: {
     label: 'Upside',
@@ -144,6 +148,10 @@ export const DEFAULT_SCENARIOS: {
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
     sales_slip_months: 0,
+    saleable_area_adjustment_pct: 0,
+    abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0,
+    refi_ltv_adjustment_pct: 0,
   },
   downside: {
     label: 'Downside',
@@ -157,6 +165,10 @@ export const DEFAULT_SCENARIOS: {
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
     sales_slip_months: 0,
+    saleable_area_adjustment_pct: 0,
+    abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0,
+    refi_ltv_adjustment_pct: 0,
   },
   severe: {
     label: 'Severe',
@@ -170,6 +182,10 @@ export const DEFAULT_SCENARIOS: {
     operating_cost_adjustment_pct: 0,
     vacancy_adjustment_pct: 0,
     sales_slip_months: 0,
+    saleable_area_adjustment_pct: 0,
+    abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0,
+    refi_ltv_adjustment_pct: 0,
   },
 };
 

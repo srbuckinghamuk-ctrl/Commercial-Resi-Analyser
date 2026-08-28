@@ -45,6 +45,15 @@ describe('sensitivity-format', () => {
     expect(formatStepLabel('sales_slip', 3).endsWith('months')).toBe(true);
   });
 
+  it('R16: formats the four stress-pack levers in their own units (spec §25.1)', () => {
+    expect(formatStepLabel('saleable_area', -25)).toBe('-25%');
+    expect(formatStepLabel('abnormal_cost', 10)).toBe('+10.0 pp');
+    expect(formatStepLabel('programme_slip', 6)).toBe('+6 months');
+    expect(formatStepLabel('refi_ltv', 10)).toBe('+10.0 pp');
+    expect(formatRangeLabel('programme_slip', -3, 3)).toBe('-3 to +3 months');
+    expect(formatRangeLabel('saleable_area', -10, 0)).toBe('-10% to +0%');
+  });
+
   // The FE/FG/NR order is fixed, not the engine's flag order — the memo has
   // always printed them in this sequence and the §10 pin depends on it.
   it('emits flag short codes in the fixed FE, FG, NR order', () => {

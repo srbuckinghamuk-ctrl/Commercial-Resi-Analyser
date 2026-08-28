@@ -70,6 +70,7 @@ describe('sensitivity defaults (spec §12.3, §12.4)', () => {
     expect(LEVER_ORDER).toEqual([
       'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
       'exit_yield', 'operating_cost', 'vacancy', 'sales_slip',
+      'saleable_area', 'abnormal_cost', 'programme_slip', 'refi_ltv',
     ]);
   });
 
@@ -370,6 +371,10 @@ describe('runSensitivity (spec §12.3, §12.4, §12.5)', () => {
       operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0,
       sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0,
+      abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0,
+      refi_ltv_adjustment_pct: 0,
     });
     expect(levered.finance.committed_net_facility_pence).toBe(inputs.finance.committed_net_facility_pence);
     expect(levered.finance.committed_gross_facility_pence).toBe(inputs.finance.committed_gross_facility_pence);
@@ -706,6 +711,10 @@ const ZERO_OVERRIDES: ScenarioOverrides = {
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
   sales_slip_months: 0,
+  saleable_area_adjustment_pct: 0,
+  abnormal_cost_adjustment_pct: 0,
+  programme_slip_months: 0,
+  refi_ltv_adjustment_pct: 0,
 };
 
 /** Applies all five §12.1/§18.9 levers to `doc` via `applyScenario`, once per lever,
@@ -816,7 +825,9 @@ describe('phase_slip lever — §18.9', () => {
       gdv: 5, construction_cost: -3, timeline: 2, interest_rate: 1, phase_slip: 2,
       // Unused by this guard's `orders` below — R13's own eight-lever (now
       // nine, R13b) order-independence test lives in apply-scenario.test.ts.
+      // R16's four stress-pack levers are unused here too, same reason.
       exit_yield: 0, operating_cost: 0, vacancy: 0, sales_slip: 0,
+      saleable_area: 0, abnormal_cost: 0, programme_slip: 0, refi_ltv: 0,
     };
     const orders: SensitivityLever[][] = [
       ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip'],

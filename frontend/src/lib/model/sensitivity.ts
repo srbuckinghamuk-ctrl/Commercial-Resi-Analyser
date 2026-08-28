@@ -19,17 +19,22 @@ import { isProgrammeNetwork } from './programme';
 
 export type SensitivityLever =
   | 'gdv' | 'construction_cost' | 'timeline' | 'interest_rate' | 'phase_slip'
-  | 'exit_yield' | 'operating_cost' | 'vacancy' | 'sales_slip';
+  | 'exit_yield' | 'operating_cost' | 'vacancy' | 'sales_slip'
+  | 'saleable_area' | 'abnormal_cost' | 'programme_slip' | 'refi_ltv';
 
 /** Spec §12.4 tie-break order, making the tornado sort total and so deterministic (§1.4).
  *  R12 spec §18.9 appended the fifth lever, `phase_slip`, at the end — it is the newest
  *  and lowest-priority tie-break, not a reordering of the four §12.1 levers. R13 spec
  *  §19.8 appends the three investment-case levers the same way: newest and
  *  lowest-priority, not a reordering of what came before. R13b spec §22.8 appends the
- *  ninth lever, `sales_slip`, last again, same rule. */
+ *  ninth lever, `sales_slip`, last again, same rule. R16 spec §25.1 appends the four
+ *  stress-pack levers, last again — and from R16 this order is ALSO the order
+ *  `_measure`/`measure` apply a cell's settings in (§12.1's composition rule for
+ *  `saleable_area` -> `gdv`). */
 export const LEVER_ORDER: readonly SensitivityLever[] = [
   'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
   'exit_yield', 'operating_cost', 'vacancy', 'sales_slip',
+  'saleable_area', 'abnormal_cost', 'programme_slip', 'refi_ltv',
 ];
 
 /** Spec §12.6: an axis is capped at nine steps, bounding the suite at 81 cells. */
@@ -368,6 +373,10 @@ const ZERO_SCENARIO: ScenarioOverrides = {
   operating_cost_adjustment_pct: 0,
   vacancy_adjustment_pct: 0,
   sales_slip_months: 0,
+  saleable_area_adjustment_pct: 0,
+  abnormal_cost_adjustment_pct: 0,
+  programme_slip_months: 0,
+  refi_ltv_adjustment_pct: 0,
 };
 
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
@@ -387,6 +396,10 @@ function overridesFor(setting: LeverSetting): ScenarioOverrides {
     operating_cost_adjustment_pct: setting.lever === 'operating_cost' ? setting.value : 0,
     vacancy_adjustment_pct: setting.lever === 'vacancy' ? setting.value : 0,
     sales_slip_months: setting.lever === 'sales_slip' ? setting.value : 0,
+    saleable_area_adjustment_pct: 0,
+    abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0,
+    refi_ltv_adjustment_pct: 0,
   };
 }
 

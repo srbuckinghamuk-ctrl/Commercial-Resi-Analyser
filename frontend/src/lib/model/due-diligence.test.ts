@@ -470,6 +470,8 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
       phase_slip_phase_id: 'construction', phase_slip_months: 3,
       exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0,
       vacancy_adjustment_pct: 0, sales_slip_months: 0,
+      saleable_area_adjustment_pct: 0, abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0, refi_ltv_adjustment_pct: 0,
     });
     const slippedConsent = computeFor(slipped).consent_expiry!;
     expect([slippedConsent.construction_start_month, slippedConsent.expires_before_start])

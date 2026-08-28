@@ -87,6 +87,7 @@ def test_lever_order_matches_the_spec():
     assert list(LEVER_ORDER) == [
         "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
         "exit_yield", "operating_cost", "vacancy", "sales_slip",
+        "saleable_area", "abnormal_cost", "programme_slip", "refi_ltv",
     ]
 
 
