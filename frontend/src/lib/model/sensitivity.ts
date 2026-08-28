@@ -28,9 +28,10 @@ export type SensitivityLever =
  *  §19.8 appends the three investment-case levers the same way: newest and
  *  lowest-priority, not a reordering of what came before. R13b spec §22.8 appends the
  *  ninth lever, `sales_slip`, last again, same rule. R16 spec §25.1 appends the four
- *  stress-pack levers, last again — and from R16 this order is ALSO the order
+ *  stress-pack levers, last again — and from R16 this order ALSO drives the order
  *  `_measure`/`measure` apply a cell's settings in (§12.1's composition rule for
- *  `saleable_area` -> `gdv`). */
+ *  `saleable_area` -> `gdv`): `measure` applies settings in REVERSE of this order, so
+ *  `gdv` (index 0 here) is applied last — see `measure`'s own comment. */
 export const LEVER_ORDER: readonly SensitivityLever[] = [
   'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip',
   'exit_yield', 'operating_cost', 'vacancy', 'sales_slip',
@@ -219,7 +220,8 @@ export function validateSensitivityConfig(
     // `phase_slip`: `slip_months` is a whole month count too. R13b spec §22.8 extends
     // it again to `sales_slip`.
     if (
-      (axis.lever === 'timeline' || axis.lever === 'phase_slip' || axis.lever === 'sales_slip')
+      (axis.lever === 'timeline' || axis.lever === 'phase_slip' || axis.lever === 'sales_slip'
+        || axis.lever === 'programme_slip')
       && axis.steps.some((s) => !Number.isInteger(s))
     ) {
       // Fix round 1, Finding 5: worded per the actual offending lever, not a fixed
@@ -300,7 +302,8 @@ export function validateSensitivityConfig(
     // Spec §12.6, same whole-month rule as the axes above; §18.9 extends it to
     // phase_slip, and R13b spec §22.8 extends it again to sales_slip.
     if (
-      (range.lever === 'timeline' || range.lever === 'phase_slip' || range.lever === 'sales_slip')
+      (range.lever === 'timeline' || range.lever === 'phase_slip' || range.lever === 'sales_slip'
+        || range.lever === 'programme_slip')
       && (!Number.isInteger(range.low) || !Number.isInteger(range.high))
     ) {
       // Fix round 1, Finding 5: same rewording as the axis rule above.
@@ -345,7 +348,7 @@ export function validateSensitivityConfig(
  * phases, per §12.6's pair-keyed duplicate check above) needs to carry TWO simultaneous
  * `phase_slip` settings, and a single `phase_slip` key in a record can hold only one.
  */
-interface LeverSetting {
+export interface LeverSetting {
   lever: SensitivityLever;
   phaseId: string | null;
   value: number;
@@ -396,10 +399,10 @@ function overridesFor(setting: LeverSetting): ScenarioOverrides {
     operating_cost_adjustment_pct: setting.lever === 'operating_cost' ? setting.value : 0,
     vacancy_adjustment_pct: setting.lever === 'vacancy' ? setting.value : 0,
     sales_slip_months: setting.lever === 'sales_slip' ? setting.value : 0,
-    saleable_area_adjustment_pct: 0,
-    abnormal_cost_adjustment_pct: 0,
-    programme_slip_months: 0,
-    refi_ltv_adjustment_pct: 0,
+    saleable_area_adjustment_pct: setting.lever === 'saleable_area' ? setting.value : 0,
+    abnormal_cost_adjustment_pct: setting.lever === 'abnormal_cost' ? setting.value : 0,
+    programme_slip_months: setting.lever === 'programme_slip' ? setting.value : 0,
+    refi_ltv_adjustment_pct: setting.lever === 'refi_ltv' ? setting.value : 0,
   };
 }
 
@@ -431,9 +434,23 @@ function unmeasured(errors: ValidationIssue[]): SensitivityMetrics {
  * phase_slip targets besides. The leading zero pass means the base case (`settings ===
  * []`) still goes through `applyScenario` exactly once, the same as every levered
  * position — see `ZERO_SCENARIO`'s own comment.
+ *
+ * R16 spec §12.1: settings are applied in REVERSE `LEVER_ORDER`, not caller
+ * order — `gdv` is index 0 (`LEVER_ORDER`'s highest tie-break priority) and
+ * is therefore applied LAST here. `saleable_area` and `gdv` share
+ * `estimated_value_pence` and §12.1's stated composition is area first, then
+ * gdv (each rounding once, see `apply-scenario.ts`); applying in reverse
+ * `LEVER_ORDER` is what achieves that, since `saleable_area` (index 9) then
+ * sorts ahead of `gdv`. Sorting (stable) also makes a cell identical
+ * whichever axis is the row. For the nine disjoint levers — every pair other
+ * than (`gdv`, `saleable_area`) — the direction changes nothing, since each
+ * setting writes its own field: the v15 identity gate asserts exactly that.
  */
-function measure(inputs: AnyCalculatorInputs, settings: LeverSetting[]): SensitivityMetrics {
-  const levered = settings.reduce(
+export function measure(inputs: AnyCalculatorInputs, settings: LeverSetting[]): SensitivityMetrics {
+  const ordered = [...settings].sort(
+    (a, b) => LEVER_ORDER.indexOf(b.lever) - LEVER_ORDER.indexOf(a.lever),
+  );
+  const levered = ordered.reduce(
     (doc, s) => applyScenario(doc, overridesFor(s)),
     applyScenario(inputs, ZERO_SCENARIO),
   );

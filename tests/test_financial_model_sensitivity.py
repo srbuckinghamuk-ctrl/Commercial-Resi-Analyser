@@ -33,6 +33,7 @@ from app.financial_model.types import (
     SimpleSpendCurve,
     parse_calculator_inputs,
 )
+from .fixtures_due_diligence import dd_doc
 from .fixtures_investment_case import explicit_refinance_doc, ic_doc
 from .fixtures_unit_sales import unit_sales_doc
 from .fixtures_cost_plan_in_time import doc_z, parse
@@ -1183,3 +1184,55 @@ def test_sales_slip_steps_must_be_whole_months():
     issues = validate_sensitivity_config(SensitivityConfig(
         rows=SensitivityAxis(lever="sales_slip", steps=[0.5]), cols=SensitivityAxis(lever="gdv", steps=[0]), tornado=[]))
     assert any("sales_slip steps must be whole months." == i.message for i in issues)
+
+
+# R16 spec Sec 25.1. The four stress-pack levers: saleable_area, abnormal_cost,
+# programme_slip, refi_ltv. Mirror of the "R16 -- thirteen levers, sorted
+# application (spec Sec 25.1)" describe block in sensitivity.test.ts.
+
+def test_a_cell_composes_saleable_area_before_gdv_whichever_axis_is_the_row():
+    """Design decision 4 / guard 2. rows=gdv, cols=saleable_area and its
+    transpose must report the same cell figures: _measure sorts settings by
+    LEVER_ORDER, so the shared field is written in the stated order."""
+    doc = ic_doc()
+    doc.unit_mix.units[0].estimated_value_pence = 1_000_005
+    a = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[10]),
+        cols=SensitivityAxis(lever="saleable_area", steps=[-10]), tornado=[]))
+    b = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="saleable_area", steps=[-10]),
+        cols=SensitivityAxis(lever="gdv", steps=[10]), tornado=[]))
+    assert a.matrix[0][0].profit_pence == b.matrix[0][0].profit_pence
+    # And the figure is the AREA-FIRST one: the levered document the cell
+    # measured carries 990,006 on unit 0, not 990,005.
+    expected = run_appraisal(apply_scenario(doc, ScenarioOverrides(
+        label="", gdv_adjustment_pct=10, construction_cost_adjustment_pct=0,
+        timeline_adjustment_months=0, interest_rate_adjustment_pct=0,
+        saleable_area_adjustment_pct=-10))).metrics
+    assert a.matrix[0][0].profit_pence == expected.profit_pence
+
+
+def test_programme_slip_steps_must_be_whole_months():
+    issues = validate_sensitivity_config(SensitivityConfig(
+        rows=SensitivityAxis(lever="programme_slip", steps=[1.5]),
+        cols=SensitivityAxis(lever="gdv", steps=[0]),
+        tornado=[TornadoRange(lever="programme_slip", low=-1.5, high=1)]))
+    assert [i.message for i in issues] == [
+        "programme_slip steps must be whole months.",
+        "programme_slip bounds must be whole months.",
+    ]
+
+
+def test_the_four_new_levers_measure_as_tornado_bars_on_fixture_y():
+    doc = dd_doc()
+    result = run_sensitivity(doc, SensitivityConfig(
+        rows=SensitivityAxis(lever="gdv", steps=[0]), cols=SensitivityAxis(lever="construction_cost", steps=[0]),
+        tornado=[TornadoRange(lever="saleable_area", low=-10, high=0),
+                 TornadoRange(lever="abnormal_cost", low=0, high=10),
+                 TornadoRange(lever="programme_slip", low=0, high=6),
+                 TornadoRange(lever="refi_ltv", low=0, high=10)]))
+    spans = {b.lever: b.span_pence for b in result.tornado}
+    assert spans["saleable_area"] > 0
+    assert spans["programme_slip"] > 0
+    assert spans["abnormal_cost"] == 0   # Y: detailed, no abnormal package -- honest zero-width bar
+    assert spans["refi_ltv"] == 0        # Y: no investment case

@@ -32,8 +32,10 @@ SensitivityLever = Literal[
 # levers. R13 spec Sec 19.8 appends the three investment-case levers the same way.
 # R13b spec Sec 22.8 appends the ninth lever, sales_slip, last again -- same rule.
 # R16 spec Sec 25.1 appends the four stress-pack levers, last again -- and
-# from R16 this order is ALSO the order _measure applies a cell's settings in
-# (Sec 12.1's composition rule for saleable_area -> gdv).
+# from R16 this order ALSO drives the order _measure applies a cell's
+# settings in (Sec 12.1's composition rule for saleable_area -> gdv): _measure
+# applies settings in REVERSE of this order, so gdv (index 0 here) is applied
+# last -- see _measure's own comment.
 LEVER_ORDER: tuple[SensitivityLever, ...] = (
     "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
     "exit_yield", "operating_cost", "vacancy", "sales_slip",
@@ -199,7 +201,7 @@ def validate_sensitivity_config(
         # int() narrowing of timeline_adjustment_months safe. Sec 18.9 extends the same
         # rule to phase_slip: slip_months is a whole month count too. R13b spec Sec 22.8
         # extends it again to sales_slip.
-        if axis.lever in ("timeline", "phase_slip", "sales_slip") and any(
+        if axis.lever in ("timeline", "phase_slip", "sales_slip", "programme_slip") and any(
             not isfinite(s) or not float(s).is_integer() for s in axis.steps
         ):
             # Fix round 1, Finding 5: worded per the actual offending lever, not a
@@ -264,7 +266,7 @@ def validate_sensitivity_config(
                 message=f"Tornado range for {rng.lever} needs finite low < high."))
         # Spec Sec 12.6, same whole-month rule as the axes above; Sec 18.9 extends it
         # to phase_slip, and R13b spec Sec 22.8 extends it again to sales_slip.
-        if rng.lever in ("timeline", "phase_slip", "sales_slip") and not (
+        if rng.lever in ("timeline", "phase_slip", "sales_slip", "programme_slip") and not (
             float(rng.low).is_integer() and float(rng.high).is_integer()
         ):
             # Fix round 1, Finding 5: same rewording as the axis rule above.
@@ -326,6 +328,10 @@ def _zero_scenario() -> ScenarioOverrides:
         operating_cost_adjustment_pct=0,
         vacancy_adjustment_pct=0,
         sales_slip_months=0,
+        saleable_area_adjustment_pct=0,
+        abnormal_cost_adjustment_pct=0,
+        programme_slip_months=0,
+        refi_ltv_adjustment_pct=0,
     )
 
 
@@ -346,6 +352,10 @@ def _overrides_for(setting: _LeverSetting) -> ScenarioOverrides:
         operating_cost_adjustment_pct=setting.value if setting.lever == "operating_cost" else 0,
         vacancy_adjustment_pct=setting.value if setting.lever == "vacancy" else 0,
         sales_slip_months=int(setting.value) if setting.lever == "sales_slip" else 0,
+        saleable_area_adjustment_pct=setting.value if setting.lever == "saleable_area" else 0,
+        abnormal_cost_adjustment_pct=setting.value if setting.lever == "abnormal_cost" else 0,
+        programme_slip_months=int(setting.value) if setting.lever == "programme_slip" else 0,
+        refi_ltv_adjustment_pct=setting.value if setting.lever == "refi_ltv" else 0,
     )
 
 
@@ -380,7 +390,18 @@ def _measure(inputs: AnyCalculatorInputs, settings: list[_LeverSetting]) -> Sens
     from app.financial_model import run_appraisal  # local import: see module docstring
 
     levered = apply_scenario(inputs, _zero_scenario())
-    for setting in settings:
+    # R16 spec Sec 12.1: settings are applied in REVERSE LEVER_ORDER, not
+    # caller order -- gdv is index 0 (LEVER_ORDER's highest tie-break
+    # priority) and is therefore applied LAST here. saleable_area and gdv
+    # share estimated_value_pence and Sec 12.1's stated composition is area
+    # first, then gdv (each rounding once, see apply_scenario.py); applying
+    # in reverse LEVER_ORDER is what achieves that, since saleable_area (index
+    # 9) then sorts ahead of gdv. Sorting (stable) also makes a cell identical
+    # whichever axis is the row. For the nine disjoint levers -- every pair
+    # other than (gdv, saleable_area) -- the direction changes nothing, since
+    # each setting writes its own field: the v15 identity gate asserts exactly
+    # that.
+    for setting in sorted(settings, key=lambda s: LEVER_ORDER.index(s.lever), reverse=True):
         levered = apply_scenario(levered, _overrides_for(setting))
     errors = [i for i in validate_inputs(levered) if i.severity == "error"]
     if errors:

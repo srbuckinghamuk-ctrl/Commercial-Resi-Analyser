@@ -11,6 +11,7 @@ import { applyScenario } from './apply-scenario';
 import { migrateInputsToV9, migrateInputsToV14 } from './migrate';
 import { derivePhases } from './programme';
 import { icDoc, explicitRefinanceDoc } from './__fixtures__/investment-case-docs';
+import { ddDoc } from './__fixtures__/due-diligence-docs';
 import { unitSalesDoc } from './__fixtures__/unit-sales-docs';
 import { docZ } from './__fixtures__/cost-plan-in-time-docs';
 import type { SensitivityConfig, SensitivityLever } from './sensitivity';
@@ -1274,5 +1275,65 @@ describe('sales_slip lever — spec §22.8', () => {
       tornado: [],
     });
     expect(issues.some((i) => i.message === 'sales_slip steps must be whole months.')).toBe(true);
+  });
+});
+
+// R16 spec §25.1. The four stress-pack levers: saleable_area, abnormal_cost,
+// programme_slip, refi_ltv. Mirror of the Python "R16 spec Sec 25.1" tests.
+describe('R16 — thirteen levers, sorted application (spec §25.1)', () => {
+  it('composes saleable_area before gdv whichever axis is the row', () => {
+    // Design decision 4 / guard 2. rows=gdv, cols=saleable_area and its
+    // transpose must report the same cell figures: measure sorts settings by
+    // LEVER_ORDER, so the shared field is written in the stated order.
+    const doc = icDoc();
+    doc.unit_mix.units[0].estimated_value_pence = 1_000_005;
+    const a = runSensitivity(doc, {
+      rows: { lever: 'gdv', steps: [10] },
+      cols: { lever: 'saleable_area', steps: [-10] },
+      tornado: [],
+    });
+    const b = runSensitivity(doc, {
+      rows: { lever: 'saleable_area', steps: [-10] },
+      cols: { lever: 'gdv', steps: [10] },
+      tornado: [],
+    });
+    expect(a.matrix[0][0].profit_pence).toBe(b.matrix[0][0].profit_pence);
+    // And the figure is the AREA-FIRST one: the levered document the cell
+    // measured carries 990,006 on unit 0, not 990,005.
+    const expected = runAppraisal(applyScenario(doc, {
+      ...ZERO_OVERRIDES, gdv_adjustment_pct: 10, saleable_area_adjustment_pct: -10,
+    })).metrics;
+    expect(a.matrix[0][0].profit_pence).toBe(expected.profit_pence);
+  });
+
+  it('requires programme_slip steps and bounds to be whole months', () => {
+    const issues = validateSensitivityConfig({
+      rows: { lever: 'programme_slip', steps: [1.5] },
+      cols: { lever: 'gdv', steps: [0] },
+      tornado: [{ lever: 'programme_slip', low: -1.5, high: 1 }],
+    });
+    expect(issues.map((i) => i.message)).toEqual([
+      'programme_slip steps must be whole months.',
+      'programme_slip bounds must be whole months.',
+    ]);
+  });
+
+  it('measures the four new levers as tornado bars on fixture Y', () => {
+    const doc = ddDoc();
+    const result = runSensitivity(doc, {
+      rows: { lever: 'gdv', steps: [0] },
+      cols: { lever: 'construction_cost', steps: [0] },
+      tornado: [
+        { lever: 'saleable_area', low: -10, high: 0 },
+        { lever: 'abnormal_cost', low: 0, high: 10 },
+        { lever: 'programme_slip', low: 0, high: 6 },
+        { lever: 'refi_ltv', low: 0, high: 10 },
+      ],
+    });
+    const spans = Object.fromEntries(result.tornado.map((b) => [b.lever, b.span_pence]));
+    expect(spans.saleable_area).toBeGreaterThan(0);
+    expect(spans.programme_slip).toBeGreaterThan(0);
+    expect(spans.abnormal_cost).toBe(0); // Y: detailed, no abnormal package -- honest zero-width bar
+    expect(spans.refi_ltv).toBe(0);      // Y: no investment case
   });
 });
