@@ -803,11 +803,18 @@ describe('sales_slip lever — spec §22.8', () => {
     // saleable_area and gdv are kept in the same relative order (area before
     // gdv) in every list below — see the "keeps all THIRTEEN levers
     // order-independent" test above for why the pair is exempt from the
-    // general disjoint-fields argument.
+    // general disjoint-fields argument. abnormal_cost and refi_ltv are inert
+    // on this document at these NONZERO magnitudes (detailed-mode cost plan
+    // with no abnormal-tagged packages; no investment_case) — the subject
+    // here is composition order, and inert-at-a-real-magnitude is honest
+    // coverage, unlike testing at zero (R11: a test must be able to fail).
+    // programme_slip is NOT inert: `acquisition` is this document's sole
+    // network source, so slipping it cascades through every downstream
+    // anchor.
     const levers: Record<NonPhaseSlipLever, number> = {
-      saleable_area: 5, gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
+      saleable_area: -10, gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
       exit_yield: 0, operating_cost: 0, vacancy: 0, sales_slip: 2,
-      abnormal_cost: 0, programme_slip: 0, refi_ltv: 0,
+      abnormal_cost: 10, programme_slip: 6, refi_ltv: 10,
     };
     const orders: Array<NonPhaseSlipLever[]> = [
       Object.keys(levers) as NonPhaseSlipLever[],
@@ -833,7 +840,7 @@ describe('sales_slip lever — spec §22.8', () => {
 // docZ() (fixtures/financial-model/z-cost-plan-in-time.json via migrateInputsToV14,
 // see __fixtures__/cost-plan-in-time-docs.ts) carries no investment_case and no
 // unit_sales — exit_yield/operating_cost/vacancy/sales_slip are no-ops on it, exactly
-// as sales_slip is inert on icDoc() in the "keeps all NINE levers order-independent"
+// as sales_slip is inert on icDoc() in the "keeps all THIRTEEN levers order-independent"
 // test above. Its packages: pkg-enabling on strip_out (midpoint 6.5, months_from_base
 // 12.5), pkg-structure/pkg-envelope/pkg-externals on construction (midpoint 10.5,
 // months_from_base 16.5), pkg-mande on mande_fitout (SS off construction + 3 lag;

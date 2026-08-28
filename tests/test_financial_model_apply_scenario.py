@@ -504,8 +504,8 @@ def test_the_three_levers_are_a_no_op_by_construction_on_an_investment_case_none
 
 def test_keeps_all_thirteen_levers_order_independent():
     # sales_slip is inert on ic_doc() (no unit_sales) -- this test just needs
-    # its tie-break slot in LEVER_ORDER exercised; test_keeps_all_nine_levers_
-    # order_independent_on_a_unit_sales_document (below) is the live one.
+    # its tie-break slot in LEVER_ORDER exercised; test_keeps_all_thirteen_
+    # levers_order_independent_on_a_unit_sales_document (below) is the live one.
     # R16 spec Sec 25.1 appends the four stress-pack levers, extending nine to
     # thirteen. saleable_area and gdv are kept in the SAME relative order
     # (area before gdv) in every list below -- the pair is order-DEPENDENT by
@@ -580,6 +580,8 @@ _FIELD_OF = {
     "timeline": "timeline_adjustment_months", "interest_rate": "interest_rate_adjustment_pct",
     "exit_yield": "exit_yield_adjustment_pct", "operating_cost": "operating_cost_adjustment_pct",
     "vacancy": "vacancy_adjustment_pct", "sales_slip": "sales_slip_months",
+    "saleable_area": "saleable_area_adjustment_pct", "abnormal_cost": "abnormal_cost_adjustment_pct",
+    "programme_slip": "programme_slip_months", "refi_ltv": "refi_ltv_adjustment_pct",
 }
 
 
@@ -587,10 +589,29 @@ def _overrides_for_lever(lever: str, value: float) -> ScenarioOverrides:
     return _slip(0).model_copy(update={_FIELD_OF[lever]: value})
 
 
-def test_keeps_all_nine_levers_order_independent_on_a_unit_sales_document():
-    levers = {"gdv": 5, "construction_cost": 5, "timeline": 2, "interest_rate": 1,
-              "exit_yield": 0, "operating_cost": 0, "vacancy": 0, "sales_slip": 2}
-    orders = [list(levers), list(reversed(levers)), ["sales_slip", "timeline", "gdv", "interest_rate", "construction_cost", "vacancy", "exit_yield", "operating_cost"]]
+def test_keeps_all_thirteen_levers_order_independent_on_a_unit_sales_document():
+    # saleable_area and gdv are kept in the same relative order (area before
+    # gdv) in every list below -- see test_keeps_all_thirteen_levers_order_
+    # independent's comment for why the pair is exempt from the general
+    # disjoint-fields argument. abnormal_cost and refi_ltv are inert on this
+    # document at these NONZERO magnitudes (detailed-mode cost plan with no
+    # abnormal-tagged packages; no investment_case) -- the subject here is
+    # composition order, and inert-at-a-real-magnitude is honest coverage,
+    # unlike testing at zero (R11: a test must be able to fail). programme_slip
+    # is NOT inert: "acquisition" is this document's sole network source, so
+    # slipping it cascades through every downstream anchor.
+    levers = {
+        "saleable_area": -10, "gdv": 5, "construction_cost": 5, "timeline": 2, "interest_rate": 1,
+        "exit_yield": 0, "operating_cost": 0, "vacancy": 0, "sales_slip": 2,
+        "abnormal_cost": 10, "programme_slip": 6, "refi_ltv": 10,
+    }
+    orders = [
+        list(levers),
+        ["vacancy", "exit_yield", "saleable_area", "gdv", "operating_cost", "interest_rate",
+         "timeline", "construction_cost", "sales_slip", "refi_ltv", "abnormal_cost", "programme_slip"],
+        ["operating_cost", "timeline", "vacancy", "interest_rate", "saleable_area", "gdv", "exit_yield",
+         "construction_cost", "sales_slip", "programme_slip", "refi_ltv", "abnormal_cost"],
+    ]
     def apply_in(order):
         doc = unit_sales_doc()
         for lever in order:
@@ -605,7 +626,7 @@ def test_keeps_all_nine_levers_order_independent_on_a_unit_sales_document():
 # doc_z() (fixtures/financial-model/z-cost-plan-in-time.json via migrate_inputs_to_v14,
 # tests/fixtures_cost_plan_in_time.py) carries no investment_case and no unit_sales --
 # exit_yield/operating_cost/vacancy/sales_slip are no-ops on it, exactly as sales_slip
-# is inert on ic_doc() in test_keeps_all_nine_levers_order_independent above. Its
+# is inert on ic_doc() in test_keeps_all_thirteen_levers_order_independent above. Its
 # packages: pkg-enabling on strip_out (midpoint 6.5, months_from_base 12.5),
 # pkg-structure/pkg-envelope/pkg-externals on construction (midpoint 10.5,
 # months_from_base 16.5), pkg-mande on mande_fitout (SS off construction + 3 lag;
