@@ -30,23 +30,34 @@ export function applyScenario<T extends AnyCalculatorInputs>(
 ): T {
   const gdvMultiplier = 1 + overrides.gdv_adjustment_pct / 100;
   const costMultiplier = 1 + overrides.construction_cost_adjustment_pct / 100;
+  // R16 spec §25.1 — see the Python twin's comment. Area first, then gdv.
+  // `?? 0`: unlike the Python twin's Pydantic model, a TS object literal has
+  // no runtime default, and the golden-fixture corpus carries scenario blocks
+  // written before this field existed (o-ancillary-value.json's `downside`,
+  // among others) — `undefined` must behave as the identity, not poison every
+  // downstream Math.round with NaN.
+  const areaMultiplier = 1 + (overrides.saleable_area_adjustment_pct ?? 0) / 100;
   return {
     ...inputs,
     unit_mix: {
-      units: inputs.unit_mix.units.map((u) => ({
-        ...u,
-        estimated_value_pence: Math.round(u.estimated_value_pence * gdvMultiplier),
-        // R9 spec §15.5: ancillary is part of GDV, so a GDV stress moves it.
-        // Ancillary AREAS are deliberately untouched — a price stress is not an
-        // area stress; area reduction is its own R16 lever.
-        ...('ancillary' in u && u.ancillary != null ? {
-          ancillary: {
-            ...u.ancillary,
-            parking_value_pence: Math.round(u.ancillary.parking_value_pence * gdvMultiplier),
-            balcony_terrace_value_pence: Math.round(u.ancillary.balcony_terrace_value_pence * gdvMultiplier),
-          },
-        } : {}),
-      })),
+      units: inputs.unit_mix.units.map((u) => {
+        const afterArea = Math.round(u.estimated_value_pence * areaMultiplier);
+        return {
+          ...u,
+          floor_area_sqm: u.floor_area_sqm * areaMultiplier,
+          estimated_value_pence: Math.round(afterArea * gdvMultiplier),
+          // R9 spec §15.5: ancillary is part of GDV, so a GDV stress moves it.
+          // Ancillary AREAS are deliberately untouched — a price stress is not
+          // an area stress; area reduction is its own R16 lever.
+          ...('ancillary' in u && u.ancillary != null ? {
+            ancillary: {
+              ...u.ancillary,
+              parking_value_pence: Math.round(u.ancillary.parking_value_pence * gdvMultiplier),
+              balcony_terrace_value_pence: Math.round(u.ancillary.balcony_terrace_value_pence * gdvMultiplier),
+            },
+          } : {}),
+        };
+      }),
     },
     conversion_costs: {
       ...inputs.conversion_costs,
@@ -82,6 +93,19 @@ export function applyScenario<T extends AnyCalculatorInputs>(
           ...p,
           amount_pence: Math.round(p.amount_pence * costMultiplier),
         })),
+        // R16 spec §25.1. abnormal_cost adds percentage POINTS to the
+        // abnormal class only. Headline mode gives every class the whole
+        // base build (§16.3); detailed mode scopes it to the abnormal-
+        // tagged packages, so on a plan with none tagged this is a no-op by
+        // construction — the stress pack marks that (§25.4).
+        // `?? 0`: see the areaMultiplier comment above — a pre-R16 scenario
+        // literal in the golden-fixture corpus has no abnormal_cost_adjustment_pct
+        // key at runtime, and cost_plan (unlike investment_case/programme/
+        // unit_sales) is not itself new, so this arm is not otherwise gated on
+        // a block absent from every fixture written before the field existed.
+        contingency: inputs.cost_plan.contingency.map((c) => (
+          c.name === 'abnormal' ? { ...c, pct: c.pct + (overrides.abnormal_cost_adjustment_pct ?? 0) } : c
+        )),
       },
     } : {}),
     finance: {
@@ -102,11 +126,17 @@ export function applyScenario<T extends AnyCalculatorInputs>(
     ...(('programme' in inputs) && inputs.programme != null && 'phases' in inputs.programme ? {
       programme: {
         ...inputs.programme,
-        phases: inputs.programme.phases.map((p) => (
-          p.id === overrides.phase_slip_phase_id
-            ? { ...p, slip_months: p.slip_months + overrides.phase_slip_months }
-            : p
-        )),
+        // R16 spec §25.1. programme_slip slips every phase with no
+        // predecessors — the network's sources — so the delay cascades
+        // through the dependencies once rather than once per edge. Additive
+        // with phase_slip on the same field (§12.1).
+        phases: inputs.programme.phases.map((p) => ({
+          ...p,
+          // `?? 0`: see the areaMultiplier comment above.
+          slip_months: p.slip_months
+            + (p.id === overrides.phase_slip_phase_id ? overrides.phase_slip_months : 0)
+            + (p.predecessors.length === 0 ? (overrides.programme_slip_months ?? 0) : 0),
+        })),
       },
     } : {}),
     // R13 spec §19.8. Three levers stressing the investment case: `exit_yield`
@@ -147,6 +177,14 @@ export function applyScenario<T extends AnyCalculatorInputs>(
           ...inputs.investment_case.valuation,
           cap_yield_pct: inputs.investment_case.valuation.cap_yield_pct
             + overrides.exit_yield_adjustment_pct,
+        },
+        // R16 spec §25.1. refi_ltv SUBTRACTS percentage points from the
+        // take-out's LTV cap (§19.4 sizes on it), so a positive value is the
+        // adverse move — vacancy's convention.
+        // `?? 0`: see the areaMultiplier comment above.
+        takeout: {
+          ...inputs.investment_case.takeout,
+          ltv_cap_pct: inputs.investment_case.takeout.ltv_cap_pct - (overrides.refi_ltv_adjustment_pct ?? 0),
         },
       },
     } : {}),

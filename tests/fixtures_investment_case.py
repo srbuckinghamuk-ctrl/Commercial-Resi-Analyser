@@ -60,6 +60,7 @@ FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-mode
 SensitivityLever = Literal[
     "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
     "exit_yield", "operating_cost", "vacancy", "sales_slip",
+    "saleable_area", "abnormal_cost", "programme_slip", "refi_ltv",
 ]
 
 
@@ -513,6 +514,11 @@ _LEVER_FIELD: dict[str, str] = {
     # unit_sales), but this table's own order-independence test (extended to
     # nine below) still covers its tie-break slot in LEVER_ORDER.
     "sales_slip": "sales_slip_months",
+    # R16 spec Sec 25.1. The four stress-pack levers.
+    "saleable_area": "saleable_area_adjustment_pct",
+    "abnormal_cost": "abnormal_cost_adjustment_pct",
+    "programme_slip": "programme_slip_months",
+    "refi_ltv": "refi_ltv_adjustment_pct",
 }
 
 

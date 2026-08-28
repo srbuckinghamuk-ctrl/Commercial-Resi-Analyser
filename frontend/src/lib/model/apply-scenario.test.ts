@@ -7,6 +7,7 @@ import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
 import { icDoc, explicitRefinanceDoc, applyLeversInOrder } from './__fixtures__/investment-case-docs';
 import { unitSalesDoc } from './__fixtures__/unit-sales-docs';
 import { docZ } from './__fixtures__/cost-plan-in-time-docs';
+import { ddDoc } from './__fixtures__/due-diligence-docs';
 import {
   defaultCalculatorInputsV2, defaultCalculatorInputsV3, defaultCalculatorInputsV7, DEFAULT_SCENARIOS,
 } from '../conversion-defaults';
@@ -705,14 +706,20 @@ describe('§19.8 the three exit levers', () => {
     expect(out.investment_case).toBeNull();
   });
 
-  it('keeps all NINE levers order-independent', () => {
+  it('keeps all THIRTEEN levers order-independent', () => {
     // sales_slip is inert on icDoc() (no unit_sales) -- this test just needs
     // its tie-break slot in LEVER_ORDER exercised; the "sales_slip lever"
-    // describe block below is the live one.
+    // describe block below is the live one. R16 spec §25.1 appends the four
+    // stress-pack levers, extending nine to thirteen. saleable_area and gdv
+    // are kept in the SAME relative order (area before gdv) in every list
+    // below -- the pair is order-DEPENDENT by design (§12.1's composition
+    // rule), not disjoint like the rest, so this generic sweep must not
+    // reorder it; the dedicated pin for the pair itself is the composition
+    // test in the "R16" describe block below.
     const orders: SensitivityLever[][] = [
-      ['gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip', 'exit_yield', 'operating_cost', 'vacancy', 'sales_slip'],
-      ['vacancy', 'exit_yield', 'phase_slip', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost', 'sales_slip'],
-      ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip', 'sales_slip'],
+      ['saleable_area', 'gdv', 'construction_cost', 'timeline', 'interest_rate', 'phase_slip', 'exit_yield', 'operating_cost', 'vacancy', 'sales_slip', 'abnormal_cost', 'programme_slip', 'refi_ltv'],
+      ['vacancy', 'exit_yield', 'phase_slip', 'saleable_area', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost', 'sales_slip', 'refi_ltv', 'abnormal_cost', 'programme_slip'],
+      ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'saleable_area', 'gdv', 'exit_yield', 'construction_cost', 'phase_slip', 'sales_slip', 'programme_slip', 'refi_ltv', 'abnormal_cost'],
     ];
     // deriveMetrics takes (inputs, schedule, model), not a single document — the
     // brief's Step 1 text names it directly, but every other order-independence
@@ -722,6 +729,31 @@ describe('§19.8 the three exit levers', () => {
     const results = orders.map((o) => runAppraisal(applyLeversInOrder(icDoc(), o)).metrics);
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
+
+    // R11 rule: a test must be able to fail. applyLeversInOrder steps every
+    // lever by the SAME magnitude (5), so swapping saleable_area/gdv's
+    // POSITIONS in that harness cannot expose the pair's order-dependence --
+    // two equal multipliers compose identically regardless of which is
+    // labelled "first". The composition rule only becomes visible under
+    // ASYMMETRIC magnitudes (the same -10/+10 pair the dedicated pin uses),
+    // applied here as two chained single-lever applyScenario calls -- the
+    // only way to observe the reverse composition through the public API,
+    // since one call always composes area-before-gdv internally by design.
+    const doc = {
+      ...icDoc(),
+      unit_mix: {
+        units: icDoc().unit_mix.units.map((u, i) => (i === 0 ? { ...u, estimated_value_pence: 1_000_005 } : u)),
+      },
+    };
+    const areaThenGdv = applyScenario(doc, { ...BASE_OVERRIDES, saleable_area_adjustment_pct: -10, gdv_adjustment_pct: 10 });
+    const gdvThenArea = applyScenario(
+      applyScenario(doc, { ...BASE_OVERRIDES, gdv_adjustment_pct: 10 }),
+      { ...BASE_OVERRIDES, saleable_area_adjustment_pct: -10 },
+    );
+    expect(areaThenGdv.unit_mix.units[0].estimated_value_pence).toBe(990_006);
+    expect(gdvThenArea.unit_mix.units[0].estimated_value_pence).toBe(990_005);
+    expect(areaThenGdv.unit_mix.units[0].estimated_value_pence)
+      .not.toBe(gdvThenArea.unit_mix.units[0].estimated_value_pence);
   });
 });
 
@@ -749,36 +781,40 @@ describe('sales_slip lever — spec §22.8', () => {
     expect(applyScenario(doc, SLIP(3))).toEqual(applyScenario(doc, SLIP(0)));
   });
 
-  // R16 Task 1: this test is pinned to the ORIGINAL nine levers (its name says
-  // so); the four stress-pack levers get their own order-independence coverage
-  // in a later task, so this local type stays narrowed rather than widening to
-  // the full SensitivityLever and silently folding them into this loop.
-  type NineLeverKey = Exclude<
-    SensitivityLever, 'phase_slip' | 'saleable_area' | 'abnormal_cost' | 'programme_slip' | 'refi_ltv'
-  >;
+  // R16 spec §25.1 widens this from nine to thirteen (phase_slip still needs
+  // its own target-phase-id arm, so it stays excluded from this generic,
+  // single-field-per-lever table, exactly as it always has been).
+  type NonPhaseSlipLever = Exclude<SensitivityLever, 'phase_slip'>;
 
-  const FIELD_OF: Record<NineLeverKey, keyof ScenarioOverrides> = {
+  const FIELD_OF: Record<NonPhaseSlipLever, keyof ScenarioOverrides> = {
     gdv: 'gdv_adjustment_pct', construction_cost: 'construction_cost_adjustment_pct',
     timeline: 'timeline_adjustment_months', interest_rate: 'interest_rate_adjustment_pct',
     exit_yield: 'exit_yield_adjustment_pct', operating_cost: 'operating_cost_adjustment_pct',
     vacancy: 'vacancy_adjustment_pct', sales_slip: 'sales_slip_months',
+    saleable_area: 'saleable_area_adjustment_pct', abnormal_cost: 'abnormal_cost_adjustment_pct',
+    programme_slip: 'programme_slip_months', refi_ltv: 'refi_ltv_adjustment_pct',
   };
 
-  function overridesForLever(lever: NineLeverKey, value: number): ScenarioOverrides {
+  function overridesForLever(lever: NonPhaseSlipLever, value: number): ScenarioOverrides {
     return { ...BASE_OVERRIDES, [FIELD_OF[lever]]: value };
   }
 
-  it('keeps all nine levers order-independent on a unit-sales document', () => {
-    const levers: Record<NineLeverKey, number> = {
-      gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
+  it('keeps all thirteen levers order-independent on a unit-sales document', () => {
+    // saleable_area and gdv are kept in the same relative order (area before
+    // gdv) in every list below — see the "keeps all THIRTEEN levers
+    // order-independent" test above for why the pair is exempt from the
+    // general disjoint-fields argument.
+    const levers: Record<NonPhaseSlipLever, number> = {
+      saleable_area: 5, gdv: 5, construction_cost: 5, timeline: 2, interest_rate: 1,
       exit_yield: 0, operating_cost: 0, vacancy: 0, sales_slip: 2,
+      abnormal_cost: 0, programme_slip: 0, refi_ltv: 0,
     };
-    const orders: Array<NineLeverKey[]> = [
-      Object.keys(levers) as NineLeverKey[],
-      (Object.keys(levers) as NineLeverKey[]).slice().reverse(),
-      ['sales_slip', 'timeline', 'gdv', 'interest_rate', 'construction_cost', 'vacancy', 'exit_yield', 'operating_cost'],
+    const orders: Array<NonPhaseSlipLever[]> = [
+      Object.keys(levers) as NonPhaseSlipLever[],
+      ['vacancy', 'exit_yield', 'saleable_area', 'gdv', 'operating_cost', 'interest_rate', 'timeline', 'construction_cost', 'sales_slip', 'refi_ltv', 'abnormal_cost', 'programme_slip'],
+      ['operating_cost', 'timeline', 'vacancy', 'interest_rate', 'saleable_area', 'gdv', 'exit_yield', 'construction_cost', 'sales_slip', 'programme_slip', 'refi_ltv', 'abnormal_cost'],
     ];
-    const applyIn = (order: NineLeverKey[]) => {
+    const applyIn = (order: NonPhaseSlipLever[]) => {
       let doc = unitSalesDoc();
       for (const lever of order) {
         doc = applyScenario(doc, overridesForLever(lever, levers[lever]));
@@ -877,5 +913,82 @@ describe('R15b spec §24 — the levers reach the cost plan in time (Task 8)', (
       const expected = Math.round(1.1 * b.inflation_pence);
       expect(Math.abs(p.inflation_pence - expected)).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+// R16 spec §25.1: the four stress-pack lever arms. Mirror of the identically
+// named tests in test_financial_model_apply_scenario.py.
+describe('R16 — the four stress-pack levers (spec §25.1)', () => {
+  const R16 = (fields: Partial<ScenarioOverrides>): ScenarioOverrides => ({
+    ...BASE_OVERRIDES, label: 'r16', ...fields,
+  });
+
+  it('saleable_area scales area and value and leaves ancillary alone', () => {
+    const doc = ddDoc(); // fixture Y: u1 80 sqm / 25,000,000p ... (plan table "Base Y")
+    const out = applyScenario(doc, R16({ saleable_area_adjustment_pct: -25 }));
+    const areas = out.unit_mix.units.map((u) => u.floor_area_sqm);
+    const values = out.unit_mix.units.map((u) => u.estimated_value_pence);
+    expect(areas).toEqual([60, 71.25, 41.25, 56.25]);
+    expect(values).toEqual([18_750_000, 22_500_000, 13_125_000, 15_750_000]);
+    doc.unit_mix.units.forEach((before, i) => {
+      expect(out.unit_mix.units[i].ancillary).toEqual(before.ancillary);
+    });
+  });
+
+  it('saleable_area then gdv is the stated composition order', () => {
+    // Spec §12.1 / design decision 4. On 1,000,005p the two orders differ by
+    // a penny: area-first gives 990,006, gdv-first 990,005. The stated order
+    // is area first.
+    const base = icDoc();
+    const doc = {
+      ...base,
+      unit_mix: {
+        units: base.unit_mix.units.map((u, i) => (i === 0 ? { ...u, estimated_value_pence: 1_000_005 } : u)),
+      },
+    };
+    const out = applyScenario(doc, R16({ saleable_area_adjustment_pct: -10, gdv_adjustment_pct: 10 }));
+    expect(out.unit_mix.units[0].estimated_value_pence).toBe(990_006);
+  });
+
+  it('abnormal_cost adds points to the abnormal class only', () => {
+    const doc = ddDoc();
+    const out = applyScenario(doc, R16({ abnormal_cost_adjustment_pct: 10 }));
+    const byName = Object.fromEntries(out.cost_plan.contingency.map((c) => [c.name, c.pct]));
+    expect(byName).toEqual({ general: 5, existing_building: 0, abnormal: 10 });
+  });
+
+  it('programme_slip slips only the network sources', () => {
+    const doc = ddDoc(); // sole source: acquisition
+    const out = applyScenario(doc, R16({ programme_slip_months: 6 }));
+    const slips = Object.fromEntries(out.programme!.phases.map((p) => [p.id, p.slip_months]));
+    expect(slips.acquisition).toBe(6);
+    expect(Object.entries(slips).every(([id, v]) => id === 'acquisition' || v === 0)).toBe(true);
+  });
+
+  it('programme_slip is additive with phase_slip on a source', () => {
+    const doc = ddDoc();
+    const out = applyScenario(doc, R16({
+      programme_slip_months: 6, phase_slip_phase_id: 'acquisition', phase_slip_months: 2,
+    }));
+    const slips = Object.fromEntries(out.programme!.phases.map((p) => [p.id, p.slip_months]));
+    expect(slips.acquisition).toBe(8);
+  });
+
+  it('refi_ltv subtracts from the take-out cap', () => {
+    const doc = icDoc(); // the investment-case builder (__fixtures__/investment-case-docs)
+    const out = applyScenario(doc, R16({ refi_ltv_adjustment_pct: 10 }));
+    expect(out.investment_case!.takeout.ltv_cap_pct).toBe(doc.investment_case!.takeout.ltv_cap_pct - 10);
+  });
+
+  it('the four new levers are no-ops at zero and on absent blocks', () => {
+    const docs: AnyCalculatorInputs[] = [icDoc(), unitSalesDoc(), ddDoc(), docZ()];
+    for (const doc of docs) {
+      expect(applyScenario(doc, R16({}))).toEqual(doc);
+    }
+    // A document with no investment case, no network and a headline cost plan
+    // with no packages: the arms write nothing.
+    const doc = icDoc({ investmentCase: null });
+    const out = applyScenario(doc, R16({ refi_ltv_adjustment_pct: 10 }));
+    expect(out).toEqual(doc);
   });
 });

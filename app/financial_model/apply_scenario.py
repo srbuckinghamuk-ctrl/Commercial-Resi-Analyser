@@ -19,11 +19,17 @@ from .types import AnyCalculatorInputs, ScenarioOverrides
 def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) -> AnyCalculatorInputs:
     gdv_multiplier = 1 + overrides.gdv_adjustment_pct / 100
     cost_multiplier = 1 + overrides.construction_cost_adjustment_pct / 100
+    # R16 spec Sec 25.1. saleable_area scales AREA (exact, a float) and VALUE
+    # (rounded once); it composes with gdv on the value, and the stated order
+    # (Sec 12.1) is saleable_area FIRST, then gdv, each rounding once.
+    area_multiplier = 1 + overrides.saleable_area_adjustment_pct / 100
 
     out = inputs.model_copy(deep=True)
 
     for unit in out.unit_mix.units:
-        unit.estimated_value_pence = money_round(unit.estimated_value_pence * gdv_multiplier)
+        unit.floor_area_sqm = unit.floor_area_sqm * area_multiplier
+        after_area = money_round(unit.estimated_value_pence * area_multiplier)
+        unit.estimated_value_pence = money_round(after_area * gdv_multiplier)
         # R9 spec Sec 15.5: ancillary is part of GDV, so a GDV stress moves it.
         # Ancillary AREAS are deliberately untouched -- a price stress is not an
         # area stress; area reduction is its own R16 lever. A pre-v6 unit
@@ -67,6 +73,15 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
         for package in cost_plan.packages:
             package.amount_pence = money_round(package.amount_pence * cost_multiplier)
 
+        # R16 spec Sec 25.1. abnormal_cost adds percentage POINTS to the
+        # abnormal class only. Headline mode gives every class the whole
+        # base build (Sec 16.3); detailed mode scopes it to the abnormal-
+        # tagged packages, so on a plan with none tagged this is a no-op by
+        # construction -- the stress pack marks that (Sec 25.4).
+        for c in cost_plan.contingency:
+            if c.name == "abnormal":
+                c.pct += overrides.abnormal_cost_adjustment_pct
+
     # ScenarioOverrides types this float, but a term is a whole month count and spec Sec 12.6
     # rejects a fractional timeline step at input, so this cast only ever narrows a value that
     # is already integral. The TS twin adds directly — this cast is the one deliberate divergence,
@@ -88,6 +103,12 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
         for phase in programme.phases:
             if phase.id == overrides.phase_slip_phase_id:
                 phase.slip_months += overrides.phase_slip_months
+            # R16 spec Sec 25.1. programme_slip slips every phase with no
+            # predecessors -- the network's sources -- so the delay cascades
+            # through the dependencies once rather than once per edge.
+            # Additive with phase_slip on the same field (Sec 12.1).
+            if not phase.predecessors:
+                phase.slip_months += overrides.programme_slip_months
 
     # R13 spec Sec 19.8. Three levers stressing the investment case: exit_yield
     # ADDS percentage points to the capitalisation yield; operating_cost SCALES
@@ -109,6 +130,10 @@ def apply_scenario(inputs: AnyCalculatorInputs, overrides: ScenarioOverrides) ->
             # and stays exact.
             line.value = money_round(scaled) if line.basis == "fixed_pence_per_month" else scaled
         investment_case.valuation.cap_yield_pct += overrides.exit_yield_adjustment_pct
+        # R16 spec Sec 25.1. refi_ltv SUBTRACTS percentage points from the
+        # take-out's LTV cap (Sec 19.4 sizes on it), so a positive value is
+        # the adverse move -- vacancy's convention.
+        investment_case.takeout.ltv_cap_pct -= overrides.refi_ltv_adjustment_pct
 
     # R13b spec Sec 22.8. ADDITIVE, completion only: the anchor offset when
     # anchored, else month_offset. Exchange dates are marketing facts and do

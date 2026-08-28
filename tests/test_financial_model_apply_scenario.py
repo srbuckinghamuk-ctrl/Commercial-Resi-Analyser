@@ -37,6 +37,7 @@ from app.financial_model.types import (
     UnitMixInputsV6,
     parse_calculator_inputs,
 )
+from .fixtures_due_diligence import dd_doc
 from .fixtures_investment_case import apply_levers_in_order, explicit_refinance_doc, ic_doc
 from .fixtures_unit_sales import unit_sales_doc
 from .fixtures_cost_plan_in_time import doc_z, parse
@@ -501,21 +502,52 @@ def test_the_three_levers_are_a_no_op_by_construction_on_an_investment_case_none
     assert out.investment_case is None
 
 
-def test_keeps_all_nine_levers_order_independent():
+def test_keeps_all_thirteen_levers_order_independent():
     # sales_slip is inert on ic_doc() (no unit_sales) -- this test just needs
     # its tie-break slot in LEVER_ORDER exercised; test_keeps_all_nine_levers_
     # order_independent_on_a_unit_sales_document (below) is the live one.
+    # R16 spec Sec 25.1 appends the four stress-pack levers, extending nine to
+    # thirteen. saleable_area and gdv are kept in the SAME relative order
+    # (area before gdv) in every list below -- the pair is order-DEPENDENT by
+    # design (Sec 12.1's composition rule), not disjoint like the rest, so
+    # this generic order-independence sweep must not reorder it. The
+    # dedicated pin for the pair itself is
+    # test_saleable_area_then_gdv_is_the_stated_composition_order above.
     orders = [
-        ["gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
-         "exit_yield", "operating_cost", "vacancy", "sales_slip"],
-        ["vacancy", "exit_yield", "phase_slip", "gdv", "operating_cost", "interest_rate",
-         "timeline", "construction_cost", "sales_slip"],
-        ["operating_cost", "timeline", "vacancy", "interest_rate", "gdv", "exit_yield",
-         "construction_cost", "phase_slip", "sales_slip"],
+        ["saleable_area", "gdv", "construction_cost", "timeline", "interest_rate", "phase_slip",
+         "exit_yield", "operating_cost", "vacancy", "sales_slip", "abnormal_cost", "programme_slip",
+         "refi_ltv"],
+        ["vacancy", "exit_yield", "phase_slip", "saleable_area", "gdv", "operating_cost", "interest_rate",
+         "timeline", "construction_cost", "sales_slip", "refi_ltv", "abnormal_cost", "programme_slip"],
+        ["operating_cost", "timeline", "vacancy", "interest_rate", "saleable_area", "gdv", "exit_yield",
+         "construction_cost", "phase_slip", "sales_slip", "programme_slip", "refi_ltv", "abnormal_cost"],
     ]
     results = [run_appraisal(apply_levers_in_order(ic_doc(), order)).metrics for order in orders]
     assert results[1] == results[0]
     assert results[2] == results[0]
+
+    # R11 rule: a test must be able to fail. apply_levers_in_order steps every
+    # lever by the SAME magnitude (5), so swapping saleable_area/gdv's
+    # POSITIONS in that harness cannot expose the pair's order-dependence --
+    # two equal multipliers compose identically regardless of which is
+    # labelled "first". The composition rule only becomes visible under
+    # ASYMMETRIC magnitudes (the same -10/+10 pair the dedicated pin above
+    # uses), applied here as two chained single-lever apply_scenario calls --
+    # the only way to observe the reverse composition through the public API,
+    # since one call always composes area-before-gdv internally by design.
+    doc = ic_doc()
+    doc.unit_mix.units[0].estimated_value_pence = 1_000_005
+    area_then_gdv = apply_scenario(doc, _r16(saleable_area_adjustment_pct=-10, gdv_adjustment_pct=10))
+    gdv_then_area = apply_scenario(
+        apply_scenario(doc, _r16(gdv_adjustment_pct=10)),
+        _r16(saleable_area_adjustment_pct=-10),
+    )
+    assert area_then_gdv.unit_mix.units[0].estimated_value_pence == 990_006
+    assert gdv_then_area.unit_mix.units[0].estimated_value_pence == 990_005
+    assert (
+        area_then_gdv.unit_mix.units[0].estimated_value_pence
+        != gdv_then_area.unit_mix.units[0].estimated_value_pence
+    )
 
 
 # R13b spec Sec 22.8. The ninth lever: sales_slip. Fixture X's rows are u1
@@ -662,3 +694,69 @@ def test_construction_cost_plus_10_scales_inflation_pence_midpoint_and_factor_un
         assert p.inflation_factor == b.inflation_factor
         expected = money_round(1.1 * b.inflation_pence)
         assert abs(p.inflation_pence - expected) <= 1
+
+
+# --- R16 spec Sec 25.1: the four stress-pack lever arms --------------------
+
+def _r16(**fields) -> ScenarioOverrides:
+    base = ScenarioOverrides(label="r16", gdv_adjustment_pct=0, construction_cost_adjustment_pct=0,
+                             timeline_adjustment_months=0, interest_rate_adjustment_pct=0)
+    return base.model_copy(update=fields)
+
+
+def test_saleable_area_scales_area_and_value_and_leaves_ancillary_alone():
+    doc = dd_doc()  # fixture Y: u1 80 sqm / 25,000,000p ... (plan table "Base Y")
+    out = apply_scenario(doc, _r16(saleable_area_adjustment_pct=-25))
+    areas = [u.floor_area_sqm for u in out.unit_mix.units]
+    values = [u.estimated_value_pence for u in out.unit_mix.units]
+    assert areas == [60.0, 71.25, 41.25, 56.25]
+    assert values == [18_750_000, 22_500_000, 13_125_000, 15_750_000]
+    for before, after in zip(doc.unit_mix.units, out.unit_mix.units):
+        assert after.ancillary == before.ancillary
+
+
+def test_saleable_area_then_gdv_is_the_stated_composition_order():
+    """Spec Sec 12.1 / design decision 4. On 1,000,005p the two orders differ
+    by a penny: area-first gives 990,006, gdv-first 990,005. The stated order
+    is area first."""
+    doc = ic_doc()
+    doc.unit_mix.units[0].estimated_value_pence = 1_000_005
+    out = apply_scenario(doc, _r16(saleable_area_adjustment_pct=-10, gdv_adjustment_pct=10))
+    assert out.unit_mix.units[0].estimated_value_pence == 990_006
+
+
+def test_abnormal_cost_adds_points_to_the_abnormal_class_only():
+    doc = dd_doc()
+    out = apply_scenario(doc, _r16(abnormal_cost_adjustment_pct=10))
+    by_name = {c.name: c.pct for c in out.cost_plan.contingency}
+    assert by_name == {"general": 5.0, "existing_building": 0.0, "abnormal": 10.0}
+
+
+def test_programme_slip_slips_only_the_network_sources():
+    doc = dd_doc()  # sole source: acquisition
+    out = apply_scenario(doc, _r16(programme_slip_months=6))
+    slips = {p.id: p.slip_months for p in out.programme.phases}
+    assert slips["acquisition"] == 6
+    assert all(v == 0 for k, v in slips.items() if k != "acquisition")
+
+
+def test_programme_slip_is_additive_with_phase_slip_on_a_source():
+    doc = dd_doc()
+    out = apply_scenario(doc, _r16(programme_slip_months=6, phase_slip_phase_id="acquisition", phase_slip_months=2))
+    assert {p.id: p.slip_months for p in out.programme.phases}["acquisition"] == 8
+
+
+def test_refi_ltv_subtracts_from_the_take_out_cap():
+    doc = ic_doc()  # the investment-case builder (tests/fixtures_investment_case.py)
+    out = apply_scenario(doc, _r16(refi_ltv_adjustment_pct=10))
+    assert out.investment_case.takeout.ltv_cap_pct == doc.investment_case.takeout.ltv_cap_pct - 10
+
+
+def test_the_four_new_levers_are_no_ops_at_zero_and_on_absent_blocks():
+    for doc in (ic_doc(), unit_sales_doc(), dd_doc(), parse(doc_z())):
+        assert apply_scenario(doc, _r16()).model_dump() == doc.model_dump()
+    # A document with no investment case, no network and a headline cost plan
+    # with no packages: the arms write nothing.
+    doc = ic_doc({"investment_case": None})
+    out = apply_scenario(doc, _r16(refi_ltv_adjustment_pct=10))
+    assert out.model_dump() == doc.model_dump()
