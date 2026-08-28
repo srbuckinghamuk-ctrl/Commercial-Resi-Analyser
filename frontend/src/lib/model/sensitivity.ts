@@ -383,9 +383,13 @@ const ZERO_SCENARIO: ScenarioOverrides = {
 };
 
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
- *  setting's own lever does not own is left at its no-op value (§12.1: the five
- *  levers write to disjoint fields), so applying several settings in sequence via
- *  `applyScenario` composes correctly regardless of order (§18.9 guard 7). */
+ *  setting's own lever does not own is left at its no-op value. Of the thirteen
+ *  levers, twelve write disjoint fields, so applying those settings in sequence via
+ *  `applyScenario` composes correctly regardless of order (§18.9 guard 7).
+ *  `saleable_area` and `gdv` are the exception: both write through
+ *  `estimated_value_pence`, and §12.1 states they compose newest-lever-first —
+ *  which is why `measure` sorts settings in descending `LEVER_ORDER` before
+ *  applying them (R16). */
 function overridesFor(setting: LeverSetting): ScenarioOverrides {
   return {
     label: '',
@@ -428,12 +432,13 @@ function unmeasured(errors: ValidationIssue[]): SensitivityMetrics {
  * `settings` is applied via `applyScenario` once per setting, in order, ON TOP OF a
  * leading `ZERO_SCENARIO` pass — never combined into one `ScenarioOverrides` — precisely
  * because two settings can both be `phase_slip` (§18.9) and a single overrides object
- * cannot carry two simultaneous targets. Every setting's own lever is disjoint from
- * every other's field (§12.1), so the sequential application composes exactly as one
- * combined call would for the four scalar levers, and correctly for two different
- * phase_slip targets besides. The leading zero pass means the base case (`settings ===
- * []`) still goes through `applyScenario` exactly once, the same as every levered
- * position — see `ZERO_SCENARIO`'s own comment.
+ * cannot carry two simultaneous targets. Twelve of the thirteen levers write disjoint
+ * fields (§12.1), so the sequential application composes exactly as one combined call
+ * would for those, and correctly for two different phase_slip targets besides.
+ * `saleable_area` and `gdv` are the exception — see the sort below. The leading zero
+ * pass means the base case (`settings === []`) still goes through `applyScenario`
+ * exactly once, the same as every levered position — see `ZERO_SCENARIO`'s own
+ * comment.
  *
  * R16 spec §12.1: settings are applied in REVERSE `LEVER_ORDER`, not caller
  * order — `gdv` is index 0 (`LEVER_ORDER`'s highest tie-break priority) and
