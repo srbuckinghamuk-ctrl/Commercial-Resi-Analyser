@@ -1,6 +1,6 @@
 import type {
   AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
-  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14,
+  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14, CalculatorInputsV15,
   ModelFlag, MonthlyModel, Schedule, UnitSalesResult,
 } from './finance-types';
 import type { InvestmentCaseResult } from './investment-case';
@@ -233,12 +233,15 @@ function vatCarryInterestPence(
   // untouched by the unit-sales block too. R15: `CalculatorInputsV13` added on
   // the same basis again -- VAT is untouched by the due-diligence block too.
   // R15b: `CalculatorInputsV14` added on the same basis again -- VAT is
-  // untouched by the tender-price inflation allowance too.
+  // untouched by the tender-price inflation allowance too. R16:
+  // `CalculatorInputsV15` added on the same basis again -- VAT is untouched
+  // by the four stress-pack scenario fields too.
   if (!('vat' in inputs)) return 0;
   const vat = inputs.vat;
   if (!vat.registered) return 0;
   const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10
-    | CalculatorInputsV11 | CalculatorInputsV12 | CalculatorInputsV13 | CalculatorInputsV14 = {
+    | CalculatorInputsV11 | CalculatorInputsV12 | CalculatorInputsV13 | CalculatorInputsV14
+    | CalculatorInputsV15 = {
     ...inputs,
     vat: { ...vat, registered: false },
     // R33. `buildSchedule` charges acquisition tax through its own site

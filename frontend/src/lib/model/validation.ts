@@ -1320,6 +1320,16 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
     if (scenario.sales_slip_months != null && !Number.isInteger(scenario.sales_slip_months)) {
       err(`scenarios.${name}.sales_slip_months`, 'Sales slip must be a whole number of months.');
     }
+    // R16 spec §25.1 (slip rule). Unlike Python's `int` field, a JSON
+    // payload here parses `1.5` as a plain number with no coercion, so this
+    // branch is LIVE in TS even though its Python twin is structurally
+    // unreachable (Pydantic's `int` field refuses the fraction at parse
+    // time) — kept in both so the two engines' rule lists match line for
+    // line. The `!= null` guard mirrors `sales_slip_months`'s own, for the
+    // same reason: pre-v16 fixture casts that skip migration entirely.
+    if (scenario.programme_slip_months != null && !Number.isInteger(scenario.programme_slip_months)) {
+      err(`scenarios.${name}.programme_slip_months`, 'Programme slip must be a whole number of months.');
+    }
     if (scenario.phase_slip_phase_id == null) return;
     const field = `scenarios.${name}.phase_slip_phase_id`;
     if (!hasNetwork) {

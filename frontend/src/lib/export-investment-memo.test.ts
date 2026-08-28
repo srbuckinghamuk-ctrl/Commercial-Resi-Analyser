@@ -5,7 +5,7 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV14,
+  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV15,
   AreaBridgeInputs, MonitoringStatement,
 } from './model';
 import {
@@ -2250,7 +2250,7 @@ describe('§23.8 due diligence on the memo', () => {
   /** Fixture Y with every entered item green-with-evidence or n/a-with-notes —
    *  the twin the §13 "fully evidenced" arm is written for. Built by mapping
    *  the loaded document's items, not by restating 24 override entries. */
-  function fullyEvidencedDoc(): CalculatorInputsV14 {
+  function fullyEvidencedDoc(): CalculatorInputsV15 {
     const doc = ddDoc();
     return {
       ...doc,
@@ -2572,7 +2572,7 @@ describe('R15b cost plan in time (spec §24.6)', () => {
     const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
     const fixtureA = JSON.parse(
       readFileSync(join(FIXTURE_DIR, 'a-all-cash.json'), 'utf-8'),
-    ) as { inputs: CalculatorInputsV14 };
+    ) as { inputs: CalculatorInputsV15 };
     const run = runAppraisal(fixtureA.inputs);
     expect(run.inputs.finance.funding_source).toBe('cash');
     const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));

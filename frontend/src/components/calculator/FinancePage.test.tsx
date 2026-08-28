@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
 import FinancePage from './FinancePage';
 import { runAppraisal, MONITORING_CATEGORIES } from '../../lib/model';
-import type { CalculatorInputsV14, MonitoringInputs } from '../../lib/model';
-import { defaultCalculatorInputsV14 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV15, MonitoringInputs } from '../../lib/model';
+import { defaultCalculatorInputsV15 } from '../../lib/conversion-defaults';
 
 /** Matches `MonitoringEditor`'s own `emptyMonitoring()` shape, so the only
  *  input-validation issue this block can raise is the one under test. */
@@ -28,7 +28,7 @@ function mkMonitoring(overrides: Partial<MonitoringInputs> = {}): MonitoringInpu
   };
 }
 
-function setup(inputs: CalculatorInputsV14, onChange = vi.fn()) {
+function setup(inputs: CalculatorInputsV15, onChange = vi.fn()) {
   const run = runAppraisal(inputs);
   render(<FinancePage inputs={inputs} onChange={onChange} run={run} />);
   return { onChange, run };
@@ -36,13 +36,13 @@ function setup(inputs: CalculatorInputsV14, onChange = vi.fn()) {
 
 describe('FinancePage — lender valuation entry card wiring', () => {
   it('shows the "no lender valuation recorded" empty state when the block is absent', () => {
-    const inputs: CalculatorInputsV14 = { ...defaultCalculatorInputsV14(), lender_valuation: null };
+    const inputs: CalculatorInputsV15 = { ...defaultCalculatorInputsV15(), lender_valuation: null };
     setup(inputs);
     expect(screen.getByText(/no lender valuation recorded/i)).toBeInTheDocument();
   });
 
   it('adding a lender valuation from the card calls the page onChange with lender_valuation set', () => {
-    const inputs: CalculatorInputsV14 = { ...defaultCalculatorInputsV14(), lender_valuation: null };
+    const inputs: CalculatorInputsV15 = { ...defaultCalculatorInputsV15(), lender_valuation: null };
     const { onChange } = setup(inputs);
     fireEvent.click(screen.getByRole('button', { name: /add lender valuation/i }));
     expect(onChange).toHaveBeenCalledWith({
@@ -53,8 +53,8 @@ describe('FinancePage — lender valuation entry card wiring', () => {
   });
 
   it('surfaces lender_valuation validation errors from the live run on the entry card', () => {
-    const inputs: CalculatorInputsV14 = {
-      ...defaultCalculatorInputsV14(),
+    const inputs: CalculatorInputsV15 = {
+      ...defaultCalculatorInputsV15(),
       lender_valuation: {
         basis: 'global_pct', global_value: null, per_key_values: null, reason: '', author: '', date: '',
       },
@@ -68,9 +68,9 @@ describe('FinancePage — lender valuation entry card wiring', () => {
   });
 
   it('renders the enforcement cost assumption field with its current value', () => {
-    const inputs: CalculatorInputsV14 = {
-      ...defaultCalculatorInputsV14(),
-      finance: { ...defaultCalculatorInputsV14().finance, funding_source: 'development_finance', enforcement_cost_assumption_pence: 50_000 },
+    const inputs: CalculatorInputsV15 = {
+      ...defaultCalculatorInputsV15(),
+      finance: { ...defaultCalculatorInputsV15().finance, funding_source: 'development_finance', enforcement_cost_assumption_pence: 50_000 },
     };
     setup(inputs);
     expect(screen.getByText('Enforcement cost assumption (£)')).toBeInTheDocument();
@@ -79,16 +79,16 @@ describe('FinancePage — lender valuation entry card wiring', () => {
 });
 
 describe('FinancePage — MonitoringEditor mount wiring (R14 fix wave finding 3a)', () => {
-  // term_months defaults to 12 (see defaultCalculatorInputsV14's finance block),
+  // term_months defaults to 12 (see defaultCalculatorInputsV15's finance block),
   // so reporting_month 13 is out of range and raises exactly one monitoring
   // issue (`monitoring.reporting_month`). lender_valuation with a blank author
   // (reason and date filled, global_value populated so the "requires a
   // global_value" case doesn't also fire) raises exactly one unrelated issue
   // (`lender_valuation.author`) — the same validator FinancePage's own
   // "surfaces lender_valuation validation errors" test above exercises.
-  function inputsWithBothIssues(): CalculatorInputsV14 {
+  function inputsWithBothIssues(): CalculatorInputsV15 {
     return {
-      ...defaultCalculatorInputsV14(),
+      ...defaultCalculatorInputsV15(),
       monitoring: mkMonitoring({ reporting_month: 13 }),
       lender_valuation: {
         basis: 'fixed_amount', global_value: 100_000_000, per_key_values: null,

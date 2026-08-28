@@ -2,6 +2,7 @@ import type {
   CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
   CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
   CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14,
+  CalculatorInputsV15,
 } from './finance-types';
 
 /** Sq ft per sq m (spec §3.2 `global_per_sqft` basis). No shared constant existed
@@ -65,11 +66,15 @@ export interface LenderGdvResult {
 // V13, so a v14 document already carries a `lender_valuation` block untouched
 // by this task's changes, and lender-GDV is unrelated to the tender-price
 // inflation allowance.
+// R16: `CalculatorInputsV15` added for the same reason again -- it subclasses
+// V14, so a v15 document already carries a `lender_valuation` block untouched
+// by this task's changes, and lender-GDV is unrelated to the four stress-pack
+// scenario fields.
 export function computeLenderGdv(
   inputs: CalculatorInputsV3 | CalculatorInputsV4 | CalculatorInputsV5
     | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8 | CalculatorInputsV9
     | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12 | CalculatorInputsV13
-    | CalculatorInputsV14,
+    | CalculatorInputsV14 | CalculatorInputsV15,
 ): LenderGdvResult | null {
   const lv = inputs.lender_valuation;
   if (lv == null) return null;

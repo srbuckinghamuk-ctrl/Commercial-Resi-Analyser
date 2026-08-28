@@ -23,7 +23,7 @@ const { default: LenderCasePage } = await import('./LenderCasePage');
 const {
   getLenderCase, createLenderCase, listLenderCaseHistory, listLenderCaseEvents,
 } = await import('../../lib/api');
-const { defaultCalculatorInputsV14 } = await import('../../lib/conversion-defaults');
+const { defaultCalculatorInputsV15 } = await import('../../lib/conversion-defaults');
 
 const PROJECT: Project = {
   id: 'p1',
@@ -35,7 +35,7 @@ const PROJECT: Project = {
   stage: 'opportunity_identified',
 } as unknown as Project;
 
-const INPUTS = defaultCalculatorInputsV14({ id: PROJECT.id, price_pence: PROJECT.price_pence, floor_area_sqm: PROJECT.floor_area_sqm });
+const INPUTS = defaultCalculatorInputsV15({ id: PROJECT.id, price_pence: PROJECT.price_pence, floor_area_sqm: PROJECT.floor_area_sqm });
 
 function record(overrides: Partial<FinancialAppraisal> = {}): FinancialAppraisal {
   return {

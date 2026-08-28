@@ -1,9 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV14 } from '../lib/model';
+import { migrateInputsToV15 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV14 } from '../lib/model';
-import { defaultCalculatorInputsV14 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV15 } from '../lib/model';
+import { defaultCalculatorInputsV15 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
@@ -101,8 +101,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV14>(() =>
-    defaultCalculatorInputsV14(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV15>(() =>
+    defaultCalculatorInputsV15(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -112,7 +112,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV14(project));
+      setInputs(defaultCalculatorInputsV15(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -186,14 +186,15 @@ export default function ConversionCalculator({ project }: Props) {
             // so this component's state and every sub-page's props are the
             // same shape (R15 Task 13 moved that shared type to
             // CalculatorInputsV13, one version on from R13b Task 15; R15b
-            // Task 6 moves it on again, to CalculatorInputsV14).
+            // Task 6 moved it on again, to CalculatorInputsV14; R16 Task 4
+            // moves it on again, to CalculatorInputsV15).
             //
             // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
             // that used to sit here: the migration's return type is the
             // state's type, so no cast is needed to bridge them at this call
             // site.
             setInputs(
-              migrateInputsToV14(appraisal.inputs_snapshot as Record<string, unknown>, project),
+              migrateInputsToV15(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -222,20 +223,20 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV14 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV15 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
   // R15 Task 13 (R15b Task 6 moves the state on again, to v14 natively). The
-  // widened `Omit<CalculatorInputsV14, 'inputs_version'>` R15 Task 9
-  // introduced is no longer needed -- `Partial<CalculatorInputsV14>` says the same thing the
+  // widened `Omit<CalculatorInputsV15, 'inputs_version'>` R15 Task 9
+  // introduced is no longer needed -- `Partial<CalculatorInputsV15>` says the same thing the
   // simple way. `inputs_version` still cannot be restamped by a caller of
   // this callback in practice (every page only ever writes its own section),
   // but nothing here specially protects it any more; the cutover -- this
   // function -- was the one thing allowed to change the document's version,
   // and it already has.
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV14>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV15>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -296,9 +297,9 @@ export default function ConversionCalculator({ project }: Props) {
       // reconciles it. The migration runs outside the updater so the updater
       // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
-        let adopted: CalculatorInputsV14 | null = null;
+        let adopted: CalculatorInputsV15 | null = null;
         try {
-          adopted = migrateInputsToV14(result.inputs_snapshot, project);
+          adopted = migrateInputsToV15(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was

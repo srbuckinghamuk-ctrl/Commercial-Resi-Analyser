@@ -1,5 +1,5 @@
 import type {
-  CalculatorInputsV14, AppraisalRun, AreaBasis,
+  CalculatorInputsV15, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
   VatOverride, RecoveryBasis, QsProvenance, PriceBasis, ValidationIssue, ProgrammeNetwork,
 } from '../../lib/model';
@@ -12,10 +12,10 @@ import { penceToPounds, penceToPoundsExact, humanise, formatPct } from '../../li
 interface Props {
   /** R15 Task 13 (the entry-point cutover) narrowed the union `Task 10`
    *  introduced to `CalculatorInputsV13` alone; R15b Task 6 moves it on
-   *  again, to `CalculatorInputsV14`: the calculator's state is now a
+   *  again, to `CalculatorInputsV15`: the calculator's state is now a
    *  native v14 document. */
-  inputs: CalculatorInputsV14;
-  onChange: (partial: Partial<CalculatorInputsV14>) => void;
+  inputs: CalculatorInputsV15;
+  onChange: (partial: Partial<CalculatorInputsV15>) => void;
   run: AppraisalRun;
 }
 

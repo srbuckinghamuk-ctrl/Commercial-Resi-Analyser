@@ -6,7 +6,7 @@ import { generateProjectsExcel } from '../lib/export-excel';
 import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
-import { runAppraisal, migrateInputsToV14 } from '../lib/model';
+import { runAppraisal, migrateInputsToV15 } from '../lib/model';
 import { buildProvenance } from '../lib/report-provenance';
 
 interface ExportPageProps {
@@ -103,7 +103,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
         // throws on a v(N+1) document (spec §3.5's guard against the
         // v1-fallback corruption path), so this must track the server
         // boundary exactly or every export throws.
-        spider = computeSpider(migrateInputsToV14(normaliseUnitAreas(raw), selectedProject), eligibility);
+        spider = computeSpider(migrateInputsToV15(normaliseUnitAreas(raw), selectedProject), eligibility);
       }
 
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
@@ -137,7 +137,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       // programme first reached the memo's programme section (spec §18.10):
       // the migration turns it into a predecessor-free network on load,
       // which derives the identical windows.
-      const run = runAppraisal(migrateInputsToV14(normaliseUnitAreas(raw), selectedProject));
+      const run = runAppraisal(migrateInputsToV15(normaliseUnitAreas(raw), selectedProject));
 
       let eligibility: EligibilityAssessment | null = null;
       try {

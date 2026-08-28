@@ -242,3 +242,28 @@ def test_v14_no_qs_has_no_inflation_anywhere():
 def test_calc_version_is_2_16_0():
     from app.financial_model.types import CALC_VERSION
     assert CALC_VERSION == "2.16.0"
+
+
+def _minimal_v15_doc() -> dict:
+    """R16 spec Sec 25.7. A valid v15 document: a v14 document with the four
+    Sec 25.1 lever fields written on every scenario -- there is no new
+    top-level field, the fields living on `ScenarioOverrides`, already
+    declared in Task 1)."""
+    doc = _minimal_v14_doc()
+    doc["inputs_version"] = 15
+    lever_fields = {
+        "saleable_area_adjustment_pct": 0.0, "abnormal_cost_adjustment_pct": 0.0,
+        "programme_slip_months": 0, "refi_ltv_adjustment_pct": 0.0,
+    }
+    for name in ("base", "upside", "downside", "severe"):
+        doc["scenarios"][name] = {**doc["scenarios"][name], **lever_fields}
+    return doc
+
+
+def test_parse_dispatch_routes_v15_to_v15():
+    from app.financial_model.types import CalculatorInputsV15, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v15_doc())
+    assert isinstance(parsed, CalculatorInputsV15)
+    assert parsed.inputs_version == 15
+    assert parsed.due_diligence.items == []

@@ -14,18 +14,20 @@ import {
   migrateV11toV12, migrateInputsToV12,
   migrateV12toV13, migrateInputsToV13,
   isV14, migrateV13toV14, migrateInputsToV14,
+  isV15, migrateV14toV15, migrateInputsToV15,
 } from './migrate';
 import { ENTERED_CODES } from './due-diligence';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
-  CalculatorInputsV12, CalculatorInputsV13,
+  CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14,
   MonitoringCategory, MonitoringLineInputs,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
 import { runAppraisal } from './index';
 import { validateInputs } from './validation';
+import { runSensitivity } from './sensitivity';
 
 const V1_SNAPSHOT = {
   project_id: 'p1',
@@ -1945,5 +1947,156 @@ describe('v14 migration -- spec §24.8', () => {
       fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
     );
     expect(() => migrateV13toV14(v14 as unknown as CalculatorInputsV13)).toThrow(/already a v14 document/);
+  });
+});
+
+// R16 Task 4 (spec §25.7). Unlike the v14 migration (which carried an inert
+// flag-non-vacuity lesson about `no_inflation_allowance`), this migration's
+// one write -- the four §25.1 lever fields at their identity zero on every
+// scenario -- is inert for a much simpler reason: `ScenarioOverrides`
+// already defaults every one of them to the same zero (Task 1), so the
+// write changes nothing any flag or figure reads. There is no flag-shaped
+// non-vacuity lesson to port here; the non-vacuity this block needs instead
+// is that the whole default sensitivity suite -- now touching four disjoint
+// levers under the Task 3 sort change -- is unmoved (guard 5, new this
+// release).
+describe('v15 migration -- spec §25.7', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+
+  interface FixtureFile {
+    name: string;
+    kind: string;
+    inputs?: Record<string, unknown>;
+  }
+
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file,
+    doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+
+  // Filtered on `'inputs' in doc`, NOT `doc.kind !== 'sensitivity'` -- a
+  // later task adds a fixture with `kind: 'sensitivity'` and no `inputs` at
+  // all, which this filter must skip by content rather than by a `kind`
+  // label the older gates happen to also use. `<= 14`: every corpus fixture
+  // up to and including v14 is a valid "before" document for this gate; no
+  // v15-native fixture exists yet.
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+
+  const fixtures = fixtureDocs.filter(
+    ({ doc }) => 'inputs' in doc && versionOf(doc) <= 14,
+  );
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(20);
+    const versionExcluded = fixtureDocs.filter(
+      ({ doc }) => 'inputs' in doc && versionOf(doc) > 14,
+    );
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([]);
+  });
+
+  // `calc_version` only -- no other exclusion. This migration's one write is
+  // inert to every output.
+  const metricsSansExcluded = (metrics: object): Record<string, unknown> => {
+    const { calc_version: _cv, ...rest } = metrics as unknown as Record<string, unknown>;
+    return rest;
+  };
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v14 to v15`, () => {
+      const inputs = doc.inputs!;
+      const v14Run = runAppraisal(migrateInputsToV14(inputs));
+      const v15Run = runAppraisal(migrateInputsToV15(inputs));
+      expect(metricsSansExcluded(v15Run.metrics), `${file}: metrics moved`)
+        .toEqual(metricsSansExcluded(v14Run.metrics));
+      expect(v15Run.model, `${file}: a ledger figure moved`).toEqual(v14Run.model);
+      expect(v15Run.schedule, `${file}: a schedule figure moved`).toEqual(v14Run.schedule);
+    });
+  }
+
+  it('writes the four zeros on every scenario', () => {
+    const yRaw = fixtureDocs.find(({ file }) => file === 'y-due-diligence.json')!.doc.inputs as Record<string, unknown>;
+    const v14 = migrateInputsToV14(yRaw);
+    const v15 = migrateV14toV15(v14);
+    expect(v15.inputs_version).toBe(15);
+    expect(v15.scenarios.base.programme_slip_months).toBe(0); // WRITTEN, not defaulted
+    (['base', 'upside', 'downside', 'severe'] as const).forEach((name) => {
+      expect(v15.scenarios[name].saleable_area_adjustment_pct).toBe(0);
+      expect(v15.scenarios[name].abnormal_cost_adjustment_pct).toBe(0);
+      expect(v15.scenarios[name].programme_slip_months).toBe(0);
+      expect(v15.scenarios[name].refi_ltv_adjustment_pct).toBe(0);
+    });
+    const { inputs_version: _a, scenarios: _b, ...restV14 } = v14;
+    const { inputs_version: _c, scenarios: _d, ...restV15 } = v15;
+    expect(restV15).toEqual(restV14);
+  });
+
+  // Property 1 of three. No field renames this release.
+  const ALIAS: Record<string, string> = {};
+
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v14 validation issue has a v15 counterpart (property 1)`, () => {
+      const inputs = doc.inputs!;
+      const v14Issues = new Set(
+        validateInputs(migrateInputsToV14(inputs))
+          .map((i) => JSON.stringify([i.severity, ALIAS[i.field] ?? i.field, i.message])),
+      );
+      const v15Issues = new Set(
+        validateInputs(migrateInputsToV15(inputs))
+          .map((i) => JSON.stringify([i.severity, i.field, i.message])),
+      );
+      expect(v15Issues).toEqual(v14Issues);
+    });
+  }
+
+  // Property 2 and Property 3. The §25.1 programme-slip whole-months rule
+  // (validation.ts, immediately after the sales_slip_months rule) is silent
+  // on a migrated document, and can actually fire once a fractional value is
+  // recorded by hand -- unlike its Python twin, this branch is LIVE in TS (a
+  // JSON payload with 1.5 parses as a plain number with no int coercion).
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no migrated document raises a programme-slip issue (property 2 of three)`, () => {
+      const inputs = doc.inputs!;
+      const issues = validateInputs(migrateInputsToV15(inputs));
+      expect(issues.filter((i) => i.field.endsWith('.programme_slip_months'))).toEqual([]);
+    });
+  }
+
+  it('a fractional programme slip fires the whole-months message (property 3 of three)', () => {
+    const raw = migrateInputsToV15(
+      fixtureDocs.find(({ file }) => file === 's-dated-programme.json')!.doc.inputs as Record<string, unknown>,
+    ) as unknown as Record<string, unknown>;
+    (raw.scenarios as Record<string, Record<string, unknown>>).downside.programme_slip_months = 1.5;
+    const fields = new Set(validateInputs(migrateInputsToV15(raw)).map((i) => i.field));
+    expect(fields.has('scenarios.downside.programme_slip_months')).toBe(true);
+  });
+
+  for (const stem of ['f-dev-finance-12mo', 'u-investment-case-ltv-binds', 'y-due-diligence', 'z-cost-plan-in-time']) {
+    it(`${stem}: the default sensitivity suite is identical on both arms (guard 5)`, () => {
+      const raw = fixtureDocs.find(({ file }) => file === `${stem}.json`)!.doc.inputs!;
+      expect(runSensitivity(migrateInputsToV15(raw))).toEqual(runSensitivity(migrateInputsToV14(raw)));
+    });
+  }
+
+  it('isV15 requires all four lever fields on scenarios.base (rejects a spoofed relabel)', () => {
+    const leverFields = {
+      saleable_area_adjustment_pct: 0, abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0, refi_ltv_adjustment_pct: 0,
+    };
+    const base = { inputs_version: 15, due_diligence: {}, scenarios: { base: { ...leverFields } } };
+    expect(isV15(base)).toBe(true);
+    expect(isV15({ ...base, scenarios: { base: { saleable_area_adjustment_pct: 0 } } })).toBe(false);
+    expect(isV15({ ...base, inputs_version: 14 })).toBe(false);
+    expect(isV15({ inputs_version: 15, scenarios: { base: { ...leverFields } } })).toBe(false);
+  });
+
+  it('refuses double migration and unrecognised versions', () => {
+    expect(() => migrateInputsToV15({ inputs_version: 16 })).toThrow(/unrecognised inputs_version 16/);
+    expect(() => migrateInputsToV15({ inputs_version: 15 })).toThrow(/fails the v15 structural check/);
+    const v15 = migrateInputsToV15(
+      fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
+    );
+    expect(() => migrateV14toV15(v15 as unknown as CalculatorInputsV14)).toThrow(/already a v15 document/);
   });
 });

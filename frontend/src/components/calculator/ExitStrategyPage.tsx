@@ -2,7 +2,8 @@ import { useMemo, useCallback } from 'react';
 import type { ExitRoute } from '../../lib/conversion-types';
 import type {
   CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12,
-  CalculatorInputsV13, CalculatorInputsV14, AppraisalRun, SalesPhasingInputsV9, InvestmentCaseInputs,
+  CalculatorInputsV13, CalculatorInputsV14, CalculatorInputsV15,
+  AppraisalRun, SalesPhasingInputsV9, InvestmentCaseInputs,
 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import ExitAnchorControl from './ExitAnchorControl';
@@ -12,24 +13,25 @@ import UnitSalesEditor, { seedUnitSales, reconcileUnitSalesRows } from './UnitSa
 
 /**
  * R13 Task 15 (spec §19.1/§19.6), widened by R14 Task 14, R13b Task 15, R15
- * Task 13 and now R15b Task 6 to admit v14. `investment_case` exists on v10
- * through v14 alike (v11 only adds `monitoring` beside it, v12 adds
- * `unit_sales`, v13 adds `due_diligence` and two inert cost_plan additions,
- * v14 adds `cost_plan.qs.inflation` -- none of which this page touches) --
+ * Task 13, R15b Task 6 and now R16 Task 4 to admit v15. `investment_case`
+ * exists on v10 through v15 alike (v11 only adds `monitoring` beside it, v12
+ * adds `unit_sales`, v13 adds `due_diligence` and two inert cost_plan
+ * additions, v14 adds `cost_plan.qs.inflation`, v15 adds the four
+ * stress-pack scenario fields -- none of which this page touches) --
  * `ExitStrategyPage` is generic over the version carrier exactly as
  * `ProgrammePage` is over `CalculatorInputsV8 | CalculatorInputsV9 |
  * CalculatorInputsV10` for the same reason: the real call site
- * (`ConversionCalculator.tsx`) is now on v14, but this page must keep
+ * (`ConversionCalculator.tsx`) is now on v15, but this page must keep
  * compiling against a v9 document that has no `investment_case` key at all
  * (ExitStrategyPage.test.tsx's own regression coverage), while also
- * accepting v10 through v14 documents that do. `hasInvestmentCase` is the
+ * accepting v10 through v15 documents that do. `hasInvestmentCase` is the
  * sole discriminator; the investment-case section below simply does not
  * render for a v9 caller -- there is nothing to author yet, exactly as the
  * release note says.
  */
 export type ExitCarrier =
   CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-  | CalculatorInputsV13 | CalculatorInputsV14;
+  | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15;
 
 function hasInvestmentCase<T extends ExitCarrier>(
   x: T,

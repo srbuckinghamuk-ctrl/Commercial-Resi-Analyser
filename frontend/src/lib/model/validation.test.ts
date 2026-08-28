@@ -29,7 +29,7 @@ import type {
   CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
 } from './finance-types';
 import { unitSalesDoc, noProgrammeDoc } from './__fixtures__/unit-sales-docs';
-import type { AnyCalculatorInputs, CalculatorInputsV12, CalculatorInputsV14 } from './finance-types';
+import type { AnyCalculatorInputs, CalculatorInputsV12, CalculatorInputsV15 } from './finance-types';
 import { migrateInputsToV12, migrateInputsToV13 } from './migrate';
 import { QS, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
 import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
@@ -2934,18 +2934,18 @@ describe('§23.9 due diligence validation', () => {
 // Twin of TestDueDiligenceValidation's "Sec 24.7" tests in
 // tests/test_financial_model_validation.py.
 describe('§24.7 tender-price inflation validation', () => {
-  const errs = (d: CalculatorInputsV14) => validateInputs(d).filter((i) => i.severity === 'error');
-  const warns = (d: CalculatorInputsV14) => validateInputs(d).filter((i) => i.severity === 'warning');
-  const errFields = (d: CalculatorInputsV14) => errs(d).map((i) => i.field);
-  const has = (d: CalculatorInputsV14, field: string, message: string) =>
+  const errs = (d: CalculatorInputsV15) => validateInputs(d).filter((i) => i.severity === 'error');
+  const warns = (d: CalculatorInputsV15) => validateInputs(d).filter((i) => i.severity === 'warning');
+  const errFields = (d: CalculatorInputsV15) => errs(d).map((i) => i.field);
+  const has = (d: CalculatorInputsV15, field: string, message: string) =>
     errs(d).some((i) => i.field === field && i.message === message);
-  const warnHas = (d: CalculatorInputsV14, field: string, message: string) =>
+  const warnHas = (d: CalculatorInputsV15, field: string, message: string) =>
     warns(d).some((i) => i.field === field && i.message === message);
   // Z is registered for VAT and carries a genuine, unrelated §17.9 warning
   // (the final VAT return period's reclaim falls outside the term) — scoped
   // to this rule's own field so that warning does not make every "no warning
   // fires" assertion below vacuous.
-  const inflationWarnFields = (d: CalculatorInputsV14) =>
+  const inflationWarnFields = (d: CalculatorInputsV15) =>
     warns(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
 
   it('Z is accepted: a real allowance, a real calendar, a real base date', () => {

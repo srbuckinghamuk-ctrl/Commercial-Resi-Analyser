@@ -202,7 +202,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
         };
       };
 
-    expect(sentSnapshot.inputs_version).toBe(14);
+    expect(sentSnapshot.inputs_version).toBe(15);
     expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
     expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
@@ -228,14 +228,14 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     // from 7 to 8; R11 Task 10 moved it from 8 to 9; R12 Task 18b moved it
     // from 9 to 10; R13 Task 18 moved it from 10 to 11; R14 Task 14 moved it
     // from 11 to 12; R13b Task 15 moved it from 12 to 13; R15 Task 13 moved
-    // it from 13 to 14; R15b Task 6 moves it from 14 to 15. Each time for the
-    // same reason: the old stand-in became a version the client implements,
-    // so it stopped standing in for one it does not -- and, being
-    // structurally valid, it stopped throwing at all and this test went
-    // quietly green against nothing. Bumping it with the boundary is what
-    // keeps it honest.
+    // it from 13 to 14; R15b Task 6 moved it from 14 to 15; R16 Task 4 moves
+    // it from 15 to 16. Each time for the same reason: the old stand-in
+    // became a version the client implements, so it stopped standing in for
+    // one it does not -- and, being structurally valid, it stopped throwing
+    // at all and this test went quietly green against nothing. Bumping it
+    // with the boundary is what keeps it honest.
     const badAppraisal = storedV4Appraisal();
-    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 15 };
+    badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 16 };
     vi.mocked(getAppraisal).mockResolvedValueOnce(badAppraisal);
 
     render(<ConversionCalculator project={PROJECT} />);
@@ -263,7 +263,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
   // 10 moved both to v8 in ONE commit, which is what this test guards. R12
   // Task 18b moved both to v9; R13 Task 18 moved both to v10; R14 Task 14
   // moved both to v11; R13b Task 15 moved both to v12; R15 Task 13 moved both
-  // to v13; R15b Task 6 moves both to v14.
+  // to v13; R15b Task 6 moved both to v14; R16 Task 4 moves both to v15.
   it('loads the v12 snapshot the server now stores, rather than failing on it', async () => {
     const storedV11 = storedV4Appraisal();
     storedV11.inputs_snapshot = defaultCalculatorInputsV12(PROJECT) as unknown as Record<string, unknown>;
@@ -277,8 +277,8 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     ).toBeInTheDocument();
     expect(screen.queryByText(/failed to load the saved appraisal/i)).not.toBeInTheDocument();
 
-    // And the document held in state is now migrated on to v14, with its
-    // R9/R10/R11/R12/R13/R14/R13b/R15/R15b blocks intact -- proof the load
+    // And the document held in state is now migrated on to v15, with its
+    // R9/R10/R11/R12/R13/R14/R13b/R15/R15b/R16 blocks intact -- proof the load
     // merged rather than silently downgrading.
     fireEvent.click(screen.getByRole('button', { name: /update appraisal/i }));
     await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
@@ -293,9 +293,14 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
         monitoring: unknown;
         unit_sales: unknown;
         due_diligence: unknown;
-        scenarios: { base: { phase_slip_phase_id: string | null; phase_slip_months: number } };
+        scenarios: {
+          base: {
+            phase_slip_phase_id: string | null; phase_slip_months: number;
+            programme_slip_months: number;
+          };
+        };
       };
-    expect(sent.inputs_version).toBe(14);
+    expect(sent.inputs_version).toBe(15);
     expect(sent.areas.basis).toBe('manual');
     expect(sent.areas.existing_gia_sqm).toBe(0);
     expect(sent.cost_plan.mode).toBe('headline');
@@ -310,6 +315,10 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     expect(sent.programme).toBeNull();
     expect(sent.scenarios.base.phase_slip_phase_id).toBeNull();
     expect(sent.scenarios.base.phase_slip_months).toBe(0);
+    // R16 spec 25.7: a v14->v15 document round-trips with the four stress-pack
+    // scenario lever fields written at their identity zero. A client still on
+    // v14 would have thrown on this document instead.
+    expect(sent.scenarios.base.programme_slip_months).toBe(0);
     // R13 spec 19.9: a v10 document round-trips with its two-state
     // investment_case intact (null here -- the explicit path). A client
     // still on v9 would have thrown on this document instead.
@@ -331,7 +340,8 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
 
 
 // R15 Task 13 (spec 23.5). Source-record capture is a CLIENT act:
-// `defaultCalculatorInputsV14(project)` (R15b Task 6 moved this on from
+// `defaultCalculatorInputsV15(project)` (R16 Task 4 moved this on from
+// `defaultCalculatorInputsV14`, which R15b Task 6 itself moved on from
 // `defaultCalculatorInputsV13`) receives the full `Project`, so a
 // brand-new appraisal for a project that already has a listing captures it
 // into `due_diligence.source_record` on construction -- there is no separate
@@ -373,9 +383,9 @@ describe('ConversionCalculator captures the listing on a fresh document (R15 Tas
 
 // R8 Task 11 (defect B). The calculator posts the document it is holding, but
 // the server is authoritative over that document: it normalises the snapshot to
-// v14 (R15b Task 6; v13 through R15, v12 through R13b, v11 through R14, v10
-// through R13, v9 through R12, v8 through R11) and, on a project's first
-// appraisal, derives the tax jurisdiction from the postcode. Before
+// v15 (R16 Task 4; v14 through R15b, v13 through R15, v12 through R13b, v11
+// through R14, v10 through R13, v9 through R12, v8 through R11) and, on a
+// project's first appraisal, derives the tax jurisdiction from the postcode. Before
 // this, `handleSave` set
 // `appraisalRecord` and dropped the returned snapshot on the floor, so the
 // screen kept charging England/NI SDLT on a Welsh deal while the store held
@@ -402,9 +412,9 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
   }
 
   /** What app/api/app.py stores for a Welsh postcode on a first save. This
-   *  helper builds it from a v12 document deliberately -- `migrateInputsToV14`
+   *  helper builds it from a v12 document deliberately -- `migrateInputsToV15`
    *  (the adoption path below) must accept it and migrate it on, exactly as
-   *  the real server's `migrate_inputs_to_v14` would for a stored v12 result. */
+   *  the real server's `migrate_inputs_to_v15` would for a stored v12 result. */
   function serverDerivedWelshSnapshot(): Record<string, unknown> {
     const v12 = defaultCalculatorInputsV12(PROJECT);
     return {
@@ -413,7 +423,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     } as unknown as Record<string, unknown>;
   }
 
-  it('posts a v14 document whose jurisdiction the server is still free to derive', async () => {
+  it('posts a v15 document whose jurisdiction the server is still free to derive', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
     render(<ConversionCalculator project={PROJECT} />);
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
@@ -423,7 +433,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
       inputs_version: number;
       acquisition: { jurisdiction_source: string; acquisition_date: string | null };
     };
-    expect(sent.inputs_version).toBe(14);
+    expect(sent.inputs_version).toBe(15);
     expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sent.acquisition.acquisition_date).toBeNull();
   });

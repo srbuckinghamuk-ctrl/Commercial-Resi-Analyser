@@ -133,9 +133,9 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
   // R11 Task 10: once more, to v8. R12 Task 18b: once more, to v9. R13 Task
   // 18: once more, to v10. R14 Task 14: once more, to v11. R13b Task 15: once
   // more, to v12. R15 Task 13: once more, to v13. R15b Task 6: once more, to
-  // v14. The whole point of moving the server and both client halves in ONE
-  // commit is that this test can never be left pinned a version behind the
-  // boundary it guards.
+  // v14. R16 Task 4: once more, to v15. The whole point of moving the server
+  // and both client halves in ONE commit is that this test can never be left
+  // pinned a version behind the boundary it guards.
   it('exports from the v12 snapshot the server now stores, rather than failing on it', async () => {
     const storedV11 = storedV4Appraisal();
     storedV11.inputs_snapshot = defaultCalculatorInputsV12({
@@ -153,7 +153,7 @@ describe('ExportPage migrates a stored v4 snapshot to v6 (R8 Task 10, R9 Task 3)
     ).not.toBeInTheDocument();
 
     const run = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![1];
-    expect(run.inputs.inputs_version).toBe(14);
+    expect(run.inputs.inputs_version).toBe(15);
     // The block reached the engine, rather than being dropped somewhere on the
     // way through the export path. Narrowed with `in` rather than cast: `run.inputs`
     // is the AnyCalculatorInputs union and only v8 and later members declare

@@ -452,11 +452,19 @@ export interface CalculatorInputsV14 extends Omit<CalculatorInputsV13, 'inputs_v
   inputs_version: 14;
 }
 
+/**
+ * R16 spec §25.7. Four fields on every `ScenarioOverrides`, no new top-level
+ * field; `isV15`/`migrateV14toV15` enforce the written shape.
+ */
+export interface CalculatorInputsV15 extends Omit<CalculatorInputsV14, 'inputs_version'> {
+  inputs_version: 15;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
   | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-  | CalculatorInputsV13 | CalculatorInputsV14;
+  | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'

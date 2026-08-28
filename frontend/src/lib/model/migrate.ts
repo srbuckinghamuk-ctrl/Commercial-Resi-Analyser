@@ -6,7 +6,7 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
-  CalculatorInputsV14,
+  CalculatorInputsV14, CalculatorInputsV15,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -1575,4 +1575,113 @@ export function migrateInputsToV14(
     };
   }
   return migrateV13toV14(migrateInputsToV13(snapshot, project));
+}
+
+// --- Release 16 (calc 2.16.0 -> 2.17.0): the standard lender stress pack
+// (spec §25.7) -----------------------------------------------------------
+
+const V15_SCENARIO_FIELDS = [
+  'saleable_area_adjustment_pct', 'abnormal_cost_adjustment_pct', 'programme_slip_months', 'refi_ltv_adjustment_pct',
+] as const;
+
+/** Mirror of isV14: `inputs_version === 15` AND the `due_diligence` key AND
+ *  `scenarios.base` is an object carrying all four §25.1 keys. */
+export function isV15(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV15 {
+  if (snapshot.inputs_version !== 15 || !('due_diligence' in snapshot)) return false;
+  const scenarios = snapshot.scenarios as { base?: unknown } | undefined;
+  const base = scenarios != null && typeof scenarios === 'object' ? scenarios.base : undefined;
+  return base != null && typeof base === 'object' && V15_SCENARIO_FIELDS.every((k) => k in (base as object));
+}
+
+/**
+ * §25.7. Four additions, all inert: the Sec 25.1 lever fields written at
+ * their identity zero on every scenario. `ScenarioOverrides` already
+ * defaults every one of them to the same zero (Task 1), so this write
+ * changes no computed value -- the numeric identity gate (`migrate.test.ts`)
+ * is what proves it, exactly as the v13->v14 gate proved `qs.inflation: null`
+ * was inert one release earlier.
+ *
+ * Precondition: `v14` must not already be a v15 document -- this guards
+ * against double-migration (idempotence), same as migrateV13toV14.
+ */
+export function migrateV14toV15(v14: CalculatorInputsV14): CalculatorInputsV15 {
+  if (isV15(v14 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV14toV15: input is already a v15 document');
+  }
+  const withLevers = (s: ScenarioOverrides): ScenarioOverrides => ({
+    ...s,
+    saleable_area_adjustment_pct: 0, abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0, refi_ltv_adjustment_pct: 0,
+  });
+  return {
+    ...v14,
+    inputs_version: 15,
+    scenarios: {
+      base: withLevers(v14.scenarios.base), upside: withLevers(v14.scenarios.upside),
+      downside: withLevers(v14.scenarios.downside), severe: withLevers(v14.scenarios.severe),
+    },
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V15: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+export function migrateInputsToV15(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV15 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V15.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV15: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V15.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 15 && !isV15(snapshot)) {
+    throw new Error(
+      'migrateInputsToV15: inputs_version is 15 but the document fails the v15 structural check '
+      + '(missing `due_diligence` or the four scenario lever fields) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV15(snapshot)) {
+    const defaults = migrateV14toV15(migrateInputsToV14({}, project));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV15>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 15,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: { ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) },
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      monitoring: saved.monitoring ?? null,
+      unit_sales: saved.unit_sales ?? null,
+      due_diligence: saved.due_diligence ?? defaults.due_diligence,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV14toV15(migrateInputsToV14(snapshot, project));
 }

@@ -1144,11 +1144,24 @@ class CalculatorInputsV14(CalculatorInputsV13):
     inputs_version: Literal[14] = 14  # type: ignore[assignment]
 
 
+# --- Release 16 (calc 2.16.0 -> 2.17.0): the standard lender stress pack
+# (spec Sec 25.7) ----------------------------------------------------------
+
+
+class CalculatorInputsV15(CalculatorInputsV14):
+    """Mirrors CalculatorInputsV14 with Sec 25.7's four additions, all on
+    `ScenarioOverrides` (Task 1) with `0` defaults -- so nothing new is
+    declared HERE. Subclasses V14 for the reason V14 subclasses V13. Twin of
+    CalculatorInputsV15 in finance-types.ts."""
+
+    inputs_version: Literal[15] = 15  # type: ignore[assignment]
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
     | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-    | CalculatorInputsV13 | CalculatorInputsV14
+    | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15
 )
 
 
@@ -1160,6 +1173,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R16 Task 4: without this branch a v15 document falls through to the
+    # CalculatorInputsV2 default, silently dropping the four stress-pack
+    # scenario fields and every other post-v2 field.
+    if version == 15:
+        return CalculatorInputsV15.model_validate(doc)
     # R15b Task 6: without this branch a v14 document falls through to the
     # CalculatorInputsV2 default, silently dropping the due-diligence block
     # and every other post-v2 field.

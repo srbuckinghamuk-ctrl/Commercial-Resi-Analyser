@@ -35,6 +35,7 @@ from .types import (
     CalculatorInputsV12,
     CalculatorInputsV13,
     CalculatorInputsV14,
+    CalculatorInputsV15,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -349,11 +350,15 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     # release earlier -- this is the SEVENTH consecutive release to need this
     # exact fix: R15 for v13, R13b for v12, R13 for v10, R12 for v9, R11 for
     # v8, R10 for v7.
+    # R16 Task 4: is_v15 belongs here for the same reason is_v14 did one
+    # release earlier -- this is the EIGHTH consecutive release to need this
+    # exact fix: R15b for v14, R15 for v13, R13b for v12, R13 for v10, R12
+    # for v9, R11 for v8, R10 for v7.
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
         or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot) or is_v11(snapshot)
-        or is_v12(snapshot) or is_v13(snapshot) or is_v14(snapshot)
+        or is_v12(snapshot) or is_v13(snapshot) or is_v14(snapshot) or is_v15(snapshot)
     )
 
 
@@ -2113,3 +2118,102 @@ def migrate_inputs_to_v14(
             "due_diligence": snapshot.get("due_diligence"),
         })
     return migrate_v13_to_v14(migrate_inputs_to_v13(snapshot, project))
+
+
+# --- Release 16 (calc 2.16.0 -> 2.17.0): the standard lender stress pack
+# (spec Sec 25.7) ----------------------------------------------------------
+
+_V15_SCENARIO_FIELDS: dict[str, float | int] = {
+    "saleable_area_adjustment_pct": 0.0,
+    "abnormal_cost_adjustment_pct": 0.0,
+    "programme_slip_months": 0,
+    "refi_ltv_adjustment_pct": 0.0,
+}
+
+
+def _v15_scenarios(scenarios: dict[str, Any] | None) -> dict[str, Any]:
+    """The v14 -> v15 write: the four Sec 25.1 lever fields at their identity
+    on all four scenarios. Mirrors `_v12_scenarios`: `ScenarioOverrides`
+    already defaults every one of them, so only a WRITTEN value is what the
+    numeric identity gate exercises."""
+    out = dict(scenarios or {})
+    for key in ("base", "upside", "downside", "severe"):
+        s = dict(out.get(key) or {})
+        for field_name, zero in _V15_SCENARIO_FIELDS.items():
+            s[field_name] = zero
+        out[key] = s
+    return out
+
+
+def is_v15(snapshot: dict[str, Any]) -> bool:
+    """`inputs_version == 15` AND `due_diligence` present AND `scenarios.base`
+    is a dict carrying all four Sec 25.1 keys. Port of isV15."""
+    if snapshot.get("inputs_version") != 15 or "due_diligence" not in snapshot:
+        return False
+    scenarios = snapshot.get("scenarios")
+    base = scenarios.get("base") if isinstance(scenarios, dict) else None
+    return isinstance(base, dict) and all(k in base for k in _V15_SCENARIO_FIELDS)
+
+
+def migrate_v14_to_v15(v14: dict[str, Any] | CalculatorInputsV14) -> CalculatorInputsV15:
+    """Upgrades a v14 document to v15 by stamping ``inputs_version: 15`` and
+    writing the four Sec 25.1 lever fields at their identity zero on every
+    scenario (spec Sec 25.7). Port of migrateV14toV15. Purely additive by
+    construction: `ScenarioOverrides` already defaults every one of these
+    fields to the same zero (Task 1), so this write changes no computed
+    value -- test_migrate_v15.py proves it, exactly as test_migrate_v14.py
+    proved `qs.inflation: None` was inert one release earlier.
+
+    Precondition: `v14` must not already be a v15 document (idempotence
+    guard), same as migrate_v13_to_v14.
+    """
+    if isinstance(v14, CalculatorInputsV15):
+        raise ValueError("migrate_v14_to_v15: input is already a v15 document")
+    if isinstance(v14, BaseModel):
+        doc = v14.model_dump(mode="json")
+    else:
+        if is_v15(v14):
+            raise ValueError("migrate_v14_to_v15: input is already a v15 document")
+        doc = dict(v14)
+    doc["scenarios"] = _v15_scenarios(doc.get("scenarios"))
+    doc["inputs_version"] = 15
+    return CalculatorInputsV15.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V15 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+
+
+def migrate_inputs_to_v15(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV15:
+    """Normalises any stored snapshot (v1-v15) to v15. Port of
+    migrateInputsToV15, structurally identical to migrate_inputs_to_v14."""
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V15:
+        raise ValueError(
+            f"migrate_inputs_to_v15: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V15}, or absent for a v1 document)"
+        )
+    if version == 15 and not is_v15(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v15: inputs_version is 15 but the document fails "
+            "the v15 structural check (missing `due_diligence` or the four "
+            "scenario lever fields) -- refusing to silently reinterpret it via the v1 fallback path"
+        )
+    if is_v15(snapshot):
+        defaults = migrate_v14_to_v15(migrate_inputs_to_v14({}, project)).model_dump(mode="json")
+        return CalculatorInputsV15.model_validate({
+            **_merge_saved_onto_defaults(defaults, snapshot),
+            "inputs_version": 15,
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+            "monitoring": snapshot.get("monitoring"),
+            "unit_sales": snapshot.get("unit_sales"),
+            "due_diligence": snapshot.get("due_diligence"),
+        })
+    return migrate_v14_to_v15(migrate_inputs_to_v14(snapshot, project))

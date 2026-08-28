@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import type { Project } from '../../types';
 import type {
-  AppraisalRun, CalculatorInputsV14, ValidationIssue,
+  AppraisalRun, CalculatorInputsV15, ValidationIssue,
 } from '../../lib/model';
 import type {
   DdCategory, DdItem, DdRow, DdSourceConflict, DdStatus, DueDiligenceInputs, SourceRecord,
@@ -27,10 +27,10 @@ import RiskRegisterPage from './RiskRegisterPage';
  */
 interface Props {
   /** R15 Task 13 (the entry-point cutover): the calculator's state is a
-   *  native `CalculatorInputsV14` document, so `due_diligence` is always
+   *  native `CalculatorInputsV15` document, so `due_diligence` is always
    *  present and the schedule editor always renders alongside the register. */
-  inputs: CalculatorInputsV14;
-  onChange: (partial: Partial<CalculatorInputsV14>) => void;
+  inputs: CalculatorInputsV15;
+  onChange: (partial: Partial<CalculatorInputsV15>) => void;
   run: AppraisalRun;
   project: Project | null;
   /** Injected so the re-capture timestamp is reproducible in tests. */
@@ -355,7 +355,7 @@ function ListingProse({ project }: { project: Project }) {
 
 export default function DueDiligencePage({ inputs, onChange, run, project, now }: Props) {
   // R15 Task 13 (the entry-point cutover): `inputs` is always a native
-  // `CalculatorInputsV14`, so `due_diligence` is always present -- the
+  // `CalculatorInputsV15`, so `due_diligence` is always present -- the
   // `'due_diligence' in inputs` guard and every `dd == null` early return it
   // forced below are gone with the V12 arm of `Props['inputs']`.
   const dd: DueDiligenceInputs = inputs.due_diligence;

@@ -181,8 +181,11 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     # it to v13 (spec Sec 23.10): a v1 document seeds due_diligence unknown
     # (there is nothing to migrate from). R15b Task 6 extends it to v14 (spec
     # Sec 24.8): a v1 document has no cost_plan.qs either, so it stays null
-    # and nothing about the build cost changes from R15.
-    assert body["inputs_snapshot"]["inputs_version"] == 14
+    # and nothing about the build cost changes from R15. R16 Task 4 extends
+    # it to v15 (spec Sec 25.7): a v1 document's four scenario lever fields
+    # are written at the same zero `ScenarioOverrides` already defaults them
+    # to, so nothing about any figure changes from R15b.
+    assert body["inputs_snapshot"]["inputs_version"] == 15
     assert body["inputs_snapshot"]["vat"]["registered"] is False
     assert len(body["inputs_snapshot"]["vat"]["treatments"]) == 6
     assert body["inputs_snapshot"]["lender_valuation"] is None
@@ -230,7 +233,7 @@ async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, 
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 14
+    assert snapshot["inputs_version"] == 15
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
     # A v5 row is not a legacy v1 migration -- it must not be stamped as one.
@@ -613,7 +616,7 @@ async def test_nan_user_defined_weights_are_a_422_not_a_500(client, project):
 
 async def test_saved_appraisal_round_trips_as_v9(client, project):
     """POST then GET: the stored document, the returned document and the
-    governance column are all v14.
+    governance column are all v15.
 
     (Function name kept as `..._as_v9` from R12: it is the case that matters,
     not its name, and test_upsert_endpoints.py's `TestAppraisalV5Normalisation`
@@ -633,12 +636,12 @@ async def test_saved_appraisal_round_trips_as_v9(client, project):
     })
     assert resp.status_code == 201, resp.text
     created = resp.json()
-    assert created["inputs_version"] == 14
-    assert created["inputs_snapshot"]["inputs_version"] == 14
+    assert created["inputs_version"] == 15
+    assert created["inputs_snapshot"]["inputs_version"] == 15
 
     fetched = (await client.get(f"/api/v1/appraisals/{project['id']}")).json()
-    assert fetched["inputs_version"] == 14
-    assert fetched["inputs_snapshot"]["inputs_version"] == 14
+    assert fetched["inputs_version"] == 15
+    assert fetched["inputs_snapshot"]["inputs_version"] == 15
     # Fixture A carries no programme, so v9's two-state field stays null and
     # the Sec 6 auto windows still drive the schedule. Its investment_case is
     # also null, so it stays on the explicit investment_value_pence x ltv_pct
@@ -675,7 +678,7 @@ async def test_resaving_the_v9_document_the_server_returned_is_not_legacy(client
         "inputs_snapshot": first["inputs_snapshot"],
     })
     assert second.status_code == 201, second.text
-    assert second.json()["inputs_version"] == 14
+    assert second.json()["inputs_version"] == 15
     assert second.json()["status"] != "legacy_unreconciled"
 
 
@@ -712,7 +715,7 @@ async def test_stored_explicit_programme_becomes_a_network_without_moving_a_figu
     body = resp.json()
 
     programme = body["inputs_snapshot"]["programme"]
-    assert body["inputs_snapshot"]["inputs_version"] == 14
+    assert body["inputs_snapshot"]["inputs_version"] == 15
     # The v8 shape did not survive; the v9 one is what got stored.
     assert "packages" not in programme
     assert [p["id"] for p in programme["phases"]] == [
@@ -818,7 +821,7 @@ async def test_stored_explicit_programme_keeps_a_timing_sensitive_figure_across_
     })
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["inputs_snapshot"]["inputs_version"] == 14
+    assert body["inputs_snapshot"]["inputs_version"] == 15
     assert "packages" not in body["inputs_snapshot"]["programme"]
 
     metrics = body["outputs"]["metrics"]

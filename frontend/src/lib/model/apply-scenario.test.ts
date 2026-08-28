@@ -13,7 +13,7 @@ import {
 } from '../conversion-defaults';
 import type {
   AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6,
-  CalculatorInputsV7, CalculatorInputsV9, CalculatorInputsV14, LenderValuation,
+  CalculatorInputsV7, CalculatorInputsV9, CalculatorInputsV15, LenderValuation,
 } from './';
 import type { Phase } from './programme';
 import type { ScenarioOverrides } from '../conversion-types';
@@ -865,14 +865,14 @@ describe('R15b spec §24 — the levers reach the cost plan in time (Task 8)', (
     saleable_area: 0, abnormal_cost: 0, programme_slip: 0, refi_ltv: 0,
   };
 
-  function applyLever(doc: CalculatorInputsV14, lever: SensitivityLever): CalculatorInputsV14 {
+  function applyLever(doc: CalculatorInputsV15, lever: SensitivityLever): CalculatorInputsV15 {
     if (lever === 'phase_slip') {
       return applyScenario(doc, { ...BASE_OVERRIDES, phase_slip_phase_id: 'construction', phase_slip_months: 1 });
     }
     return applyScenario(doc, { ...BASE_OVERRIDES, [NON_PHASE_SLIP_FIELD[lever]]: LEVER_MAGNITUDE[lever] });
   }
 
-  function applyInOrder(order: SensitivityLever[]): CalculatorInputsV14 {
+  function applyInOrder(order: SensitivityLever[]): CalculatorInputsV15 {
     return order.reduce((d, lever) => applyLever(d, lever), docZ());
   }
 

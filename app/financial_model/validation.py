@@ -1502,6 +1502,23 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 f"scenarios.{name}.sales_slip_months",
                 "Sales slip must be a whole number of months.",
             )
+        # R16 spec Sec 25.1 (slip rule). Structurally unreachable in Python --
+        # `programme_slip_months: int` is a Pydantic field, so a fractional
+        # value never survives parsing to reach this check. Kept anyway (not
+        # deleted as dead code) so the two engines' rule lists match line for
+        # line -- validateInputs's TS twin CAN reach this branch (a JSON
+        # payload with 1.5 parses as a plain object with no int coercion),
+        # and a rule present in one engine but not the other is exactly the
+        # kind of silent asymmetry this release's dual-engine mirror rule
+        # exists to prevent. The `is not None` guard is likewise dead here
+        # (a Pydantic-parsed scenario always has a value) but is kept so this
+        # check's body is textually identical to validation.ts's -- see that
+        # file's comment on the guard for why TS actually needs it.
+        if scenario.programme_slip_months is not None and not isinstance(scenario.programme_slip_months, int):
+            err(
+                f"scenarios.{name}.programme_slip_months",
+                "Programme slip must be a whole number of months.",
+            )
         if scenario.phase_slip_phase_id is None:
             continue
         field_ = f"scenarios.{name}.phase_slip_phase_id"

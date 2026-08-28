@@ -4,13 +4,13 @@ import {
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
   defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
   defaultCalculatorInputsV11, defaultCalculatorInputsV12, defaultCalculatorInputsV13,
-  defaultCalculatorInputsV14,
+  defaultCalculatorInputsV14, defaultCalculatorInputsV15,
   captureSourceRecord,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
-  migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13, migrateV13toV14,
+  migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13, migrateV13toV14, migrateV14toV15,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -570,5 +570,70 @@ describe('defaultCalculatorInputsV14 (R15b Task 6, spec §24.8)', () => {
 
   it('does not capture a source record when no project is given', () => {
     expect(defaultCalculatorInputsV14().due_diligence.source_record).toBeNull();
+  });
+});
+
+describe('defaultCalculatorInputsV15 (R16 Task 4, spec §25.7)', () => {
+  // Same guard as the V12/V13/V14 blocks above, and the one that matters
+  // most here: this is the document EVERY freshly opened calculator now
+  // starts on, and the one every stored appraisal is compared against after
+  // `migrateInputsToV15` merges onto it.
+  it('is exactly what migrateV14toV15 makes of the v14 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV15>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV15()))
+      .toEqual(stripIds(migrateV14toV15(defaultCalculatorInputsV14())));
+  });
+
+  // Non-vacuity for the equality above: v15 adds no new top-level field (the
+  // four Sec 25.1 fields already exist on `ScenarioOverrides`), so the proof
+  // that this is not just "the v14 document with a bumped version number" is
+  // the version number itself plus the four fields' identity zero -- already
+  // `DEFAULT_SCENARIOS`'s own value (Task 1), so this is a rewrite of the
+  // same values, which is fine (the point is the identity, not the change).
+  it('starts with inputs_version 15 and the four stress-pack fields at zero on every scenario', () => {
+    const v15 = defaultCalculatorInputsV15();
+    expect(v15.inputs_version).toBe(15);
+    (['base', 'upside', 'downside', 'severe'] as const).forEach((name) => {
+      expect(v15.scenarios[name].saleable_area_adjustment_pct).toBe(0);
+      expect(v15.scenarios[name].abnormal_cost_adjustment_pct).toBe(0);
+      expect(v15.scenarios[name].programme_slip_months).toBe(0);
+      expect(v15.scenarios[name].refi_ltv_adjustment_pct).toBe(0);
+    });
+  });
+
+  it('hands every caller its own document, not one shared mutable default', () => {
+    const a = defaultCalculatorInputsV15();
+    const b = defaultCalculatorInputsV15();
+    a.due_diligence.items[0].status = 'green';
+    expect(b.due_diligence.items[0].status).toBe('unknown');
+  });
+
+  // R15 spec §23.5 (unchanged by this release): opening the calculator
+  // against a real listing still captures it into `due_diligence.
+  // source_record` -- v15 touches only the four scenario lever fields, so
+  // this must still hold identically.
+  it('captures the listing into due_diligence.source_record when a project is given', () => {
+    const project = {
+      id: 'p', price_pence: 1, floor_area_sqm: 360,
+      is_vacant: false, tenure: 'freehold' as const, lease_years_remaining: null,
+      source_name: 'rightmove', source_url: null, use_class: 'office' as const, epc_rating: 'D',
+    };
+    const now = new Date('2026-08-25T09:00:00Z');
+    const v15 = defaultCalculatorInputsV15(project, now);
+    expect(v15.due_diligence.source_record).toEqual(captureSourceRecord(
+      {
+        source_name: 'rightmove', source_url: null, is_vacant: false, tenure: 'freehold',
+        lease_years_remaining: null, floor_area_sqm: 360, use_class: 'office', epc_rating: 'D',
+      },
+      '2026-08-25T09:00:00.000Z',
+    ));
+  });
+
+  it('does not capture a source record when no project is given', () => {
+    expect(defaultCalculatorInputsV15().due_diligence.source_record).toBeNull();
   });
 });

@@ -16,7 +16,7 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
-  CalculatorInputsV14,
+  CalculatorInputsV14, CalculatorInputsV15,
   EquitySource, FacilityTerms,
 } from './model/finance-types';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
@@ -613,6 +613,36 @@ export function defaultCalculatorInputsV14(project?: DefaultDocumentProject, now
     cost_plan: {
       ...v13.cost_plan,
       qs: v13.cost_plan.qs == null ? null : { ...v13.cost_plan.qs, inflation: null },
+    },
+  };
+}
+
+/**
+ * R16 Task 4 (spec §25.7, the entry-point cutover). `inputs_version` and the
+ * four Sec 25.1 scenario lever fields are the only fields touched, mirroring
+ * `migrateV14toV15` exactly -- `DEFAULT_SCENARIOS` already carries the four
+ * zeros (Task 1), so this is a rewrite of the same values on every scenario,
+ * which is fine (the point is the identity, not the change).
+ *
+ * Built by hand (spread) rather than by calling `migrateV14toV15` --
+ * imported from `./model/migrate`, NOT used here, for the same cycle reason
+ * `defaultCalculatorInputsV2`'s own docstring above gives: `migrate.ts`
+ * imports THIS module, so importing `migrate.ts` back here would be
+ * circular.
+ */
+export function defaultCalculatorInputsV15(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV15 {
+  const v14 = defaultCalculatorInputsV14(project, now);
+  const withLevers = (s: typeof v14.scenarios.base) => ({
+    ...s,
+    saleable_area_adjustment_pct: 0, abnormal_cost_adjustment_pct: 0,
+    programme_slip_months: 0, refi_ltv_adjustment_pct: 0,
+  });
+  return {
+    ...v14,
+    inputs_version: 15,
+    scenarios: {
+      base: withLevers(v14.scenarios.base), upside: withLevers(v14.scenarios.upside),
+      downside: withLevers(v14.scenarios.downside), severe: withLevers(v14.scenarios.severe),
     },
   };
 }

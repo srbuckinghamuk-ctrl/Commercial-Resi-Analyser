@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, case_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v14
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v15
 from app.financial_model.provenance import ALLOWED_TRANSITIONS, is_stale
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
@@ -481,18 +481,19 @@ def calculate_authoritative(
         # when that block is absent (spec Sec 2) and falls back to the calc
         # 2.1.0 auto windows when `programme` is None (spec Sec 6). This is
         # also what gets persisted as inputs_snapshot. Like
-        # migrate_inputs_to_v6, migrate_inputs_to_v14 already returns a
+        # migrate_inputs_to_v6, migrate_inputs_to_v15 already returns a
         # validated model -- no separate .model_validate call is needed here.
-        inputs = migrate_inputs_to_v14(raw)
+        inputs = migrate_inputs_to_v15(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # A malformed or unsupported-version inputs_snapshot must 4xx, never
-        # 500 (Task 10 known item #1). migrate_inputs_to_v14 -- like
-        # migrate_inputs_to_v13, migrate_inputs_to_v12, migrate_inputs_to_v11,
-        # migrate_inputs_to_v10, migrate_inputs_to_v9, migrate_inputs_to_v8,
-        # migrate_inputs_to_v7, migrate_inputs_to_v6 and migrate_inputs_to_v5
-        # before it, and the merge helper all three delegate to -- raises
+        # 500 (Task 10 known item #1). migrate_inputs_to_v15 -- like
+        # migrate_inputs_to_v14, migrate_inputs_to_v13, migrate_inputs_to_v12,
+        # migrate_inputs_to_v11, migrate_inputs_to_v10, migrate_inputs_to_v9,
+        # migrate_inputs_to_v8, migrate_inputs_to_v7, migrate_inputs_to_v6 and
+        # migrate_inputs_to_v5 before it, and the merge helper all three
+        # delegate to -- raises
         # plain Python exceptions, not ValidationError, for
         # shapes it cannot interpret: e.g. a document already refused by an
         # inner guard (a raw ValueError), or a structurally wrong field (e.g.
@@ -561,11 +562,12 @@ def calculate_authoritative(
         # proof caught it. R14 Task 14 moved the call site on to
         # `migrate_inputs_to_v11`; R13b Task 15 moved it on again to
         # `migrate_inputs_to_v12`; R15 Task 13 moved it on again to
-        # `migrate_inputs_to_v13`; R15b Task 6 moves it on again to
-        # `migrate_inputs_to_v14`; this line needs no change at all either
+        # `migrate_inputs_to_v13`; R15b Task 6 moved it on again to
+        # `migrate_inputs_to_v14`; R16 Task 4 moves it on again to
+        # `migrate_inputs_to_v15`; this line needs no change at all either
         # time, which is the point of deriving it. `inputs` is already a
-        # `CalculatorInputsV14` here (the `migrate_inputs_to_v14(raw)` call
-        # above), whose `inputs_version` field is `Literal[14] = 14` -- the
+        # `CalculatorInputsV15` here (the `migrate_inputs_to_v15(raw)` call
+        # above), whose `inputs_version` field is `Literal[15] = 15` -- the
         # SAME value this dict's `inputs_snapshot` already carries, for the
         # same reason. Read off the document instead of restating it, so a
         # future version bump cannot leave this column behind again.

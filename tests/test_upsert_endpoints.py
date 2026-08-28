@@ -234,17 +234,20 @@ class TestAppraisalV5Normalisation:
         # R12 Task 18b (spec Sec 18.7): v9. R13 Task 18 (spec Sec 19.9): v10.
         # R14 Task 14 (spec Sec 20.1): v11. R13b Task 15 (spec Sec 22.9): v12.
         # R15 Task 13 (spec Sec 23.10): v13. R15b Task 6 (spec Sec 24.8): v14.
-        assert body["inputs_version"] == 14
+        # R16 Task 4 (spec Sec 25.7): v15.
+        assert body["inputs_version"] == 15
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 14
-        # The v9, v10, v11, v12, v13 and v14 steps are purely additive on a v4
-        # document with no programme (v10 adds `investment_case: null`, an
-        # unchanged `refinance: null`; v11 adds `monitoring: null`; v12 adds
-        # `unit_sales: null`; v13 adds `due_diligence` seeded and two inert
-        # cost_plan additions; v14 adds `cost_plan.qs.inflation`, inert
-        # because `cost_plan.qs` is already null on this document): a null
-        # programme stays null and keeps the Sec 6 auto windows.
+        assert snapshot["inputs_version"] == 15
+        # The v9, v10, v11, v12, v13, v14 and v15 steps are purely additive on
+        # a v4 document with no programme (v10 adds `investment_case: null`,
+        # an unchanged `refinance: null`; v11 adds `monitoring: null`; v12
+        # adds `unit_sales: null`; v13 adds `due_diligence` seeded and two
+        # inert cost_plan additions; v14 adds `cost_plan.qs.inflation`, inert
+        # because `cost_plan.qs` is already null on this document; v15 adds
+        # the four Sec 25.1 lever fields, zeroed on every scenario, inert
+        # because `ScenarioOverrides` already defaults them to the same
+        # zero): a null programme stays null and keeps the Sec 6 auto windows.
         assert snapshot["programme"] is None
         assert snapshot["investment_case"] is None
         assert snapshot["monitoring"] is None
@@ -358,10 +361,10 @@ class TestAppraisalV5Normalisation:
         self, client, monkeypatch,
     ):
         """R9 Task 3, extended by R10 Task 6, R11 Task 10, R12 Task 18b, R13
-        Task 18, R14 Task 14, R13b Task 15, R15 Task 13 and R15b Task 6. R8's
-        silent-corruption bug, guarded forward: an inputs_version this server
-        does not implement must be refused, never rebuilt from the v1 LTV
-        heuristic and returned as 201.
+        Task 18, R14 Task 14, R13b Task 15, R15 Task 13, R15b Task 6 and R16
+        Task 4. R8's silent-corruption bug, guarded forward: an
+        inputs_version this server does not implement must be refused, never
+        rebuilt from the v1 LTV heuristic and returned as 201.
 
         Distinct from the case above: this one carries nothing but the version
         tag, and pins that the migration's own refusal *message* reaches the
@@ -369,19 +372,19 @@ class TestAppraisalV5Normalisation:
         needs to know it was the version that was rejected.
 
         R14 Task 14 moved the stand-in from 11 to 12; R13b Task 15 moved it
-        from 12 to 13; R15 Task 13 moved it from 13 to 14; R15b Task 6 moves
-        it from 14 to 15, for the same reason each time: the previous
-        stand-in became a version this server implements (it just fails ITS
-        OWN structural check on a bare `{"inputs_version": N}` document,
-        missing the newest block), so it no longer stands in for a version
-        the server does not recognise at all."""
+        from 12 to 13; R15 Task 13 moved it from 13 to 14; R15b Task 6 moved
+        it from 14 to 15; R16 Task 4 moves it from 15 to 16, for the same
+        reason each time: the previous stand-in became a version this server
+        implements (it just fails ITS OWN structural check on a bare
+        `{"inputs_version": N}` document, missing the newest block), so it no
+        longer stands in for a version the server does not recognise at all."""
         monkeypatch.setattr("app.api.app.lookup_postcode", _no_postcode_match)
         project_id = await _create_project(client)
 
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
             "name": "Future version appraisal",
-            "inputs_snapshot": {"inputs_version": 15},
+            "inputs_snapshot": {"inputs_version": 16},
         })
         assert resp.status_code == 422, resp.text
         assert "unrecognised inputs_version" in resp.text
@@ -425,11 +428,12 @@ class TestAppraisalV13DueDiligence:
     structurally invalid `due_diligence` block is refused as a 422 rather
     than crashing the endpoint as a 500.
 
-    R15b Task 6 (spec Sec 24.8) moves the server boundary one version
-    further, to v14: this v13-native fixture is migrated one step past its
-    own version on save, exactly as the round trip below still proves. Class
-    name kept (the same standing instruction test_saved_appraisal_round_
-    trips_as_v9's docstring gives): the case that matters, not its name."""
+    R15b Task 6 (spec Sec 24.8) moved the server boundary one version
+    further, to v14; R16 Task 4 (spec Sec 25.7) moves it on again, to v15:
+    this v13-native fixture is migrated two steps past its own version on
+    save, exactly as the round trip below still proves. Class name kept (the
+    same standing instruction test_saved_appraisal_round_trips_as_v9's
+    docstring gives): the case that matters, not its name."""
 
     @pytest.mark.asyncio
     async def test_saved_v13_document_round_trips_with_due_diligence_intact(
@@ -446,8 +450,8 @@ class TestAppraisalV13DueDiligence:
         assert resp.status_code == 201, resp.text
         body = resp.json()
 
-        assert body["inputs_version"] == 14
-        assert body["inputs_snapshot"]["inputs_version"] == 14
+        assert body["inputs_version"] == 15
+        assert body["inputs_snapshot"]["inputs_version"] == 15
         assert body["inputs_snapshot"]["due_diligence"]["source_record"] \
             == FIXTURE_Y_INPUTS["due_diligence"]["source_record"]
         assert body["inputs_snapshot"]["due_diligence"]["items"] \

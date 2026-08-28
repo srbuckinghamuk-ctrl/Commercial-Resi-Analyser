@@ -53,6 +53,7 @@ export {
   migrateV11toV12, migrateInputsToV12,
   isV13, migrateV12toV13, migrateInputsToV13, defaultDueDiligence,
   isV14, migrateV13toV14, migrateInputsToV14,
+  isV15, migrateV14toV15, migrateInputsToV15,
 } from './migrate';
 export { areaBridge, developedAreaSqm, unitNiaSqm, DEFAULT_AREA_BRIDGE } from './areas';
 export type { AreaBasis, AreaBridgeInputs, AreaBridgeResult } from './areas';
