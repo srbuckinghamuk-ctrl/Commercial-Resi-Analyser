@@ -9,8 +9,9 @@ import type { CalculatorInputsV15 } from '../../lib/model';
  * page's own numbered `<h3>`.
  *
  * R15 Task 13 (the entry-point cutover) narrowed the union this Props type
- * carried to `CalculatorInputsV13` alone; R15b Task 6 moves it on again, to
- * `CalculatorInputsV15`: the calculator's state is now a native v14
+ * carried to `CalculatorInputsV13` alone; R15b Task 6 moved it on again, to
+ * `CalculatorInputsV14`; R16 Task 4 moves it on again, to
+ * `CalculatorInputsV15`: the calculator's state is now a native v15
  * document, so there is no v13 arm left to admit.
  */
 interface Props {

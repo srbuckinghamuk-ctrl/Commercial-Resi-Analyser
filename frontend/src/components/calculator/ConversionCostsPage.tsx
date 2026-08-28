@@ -11,9 +11,10 @@ import { penceToPounds, penceToPoundsExact, humanise, formatPct } from '../../li
 
 interface Props {
   /** R15 Task 13 (the entry-point cutover) narrowed the union `Task 10`
-   *  introduced to `CalculatorInputsV13` alone; R15b Task 6 moves it on
-   *  again, to `CalculatorInputsV15`: the calculator's state is now a
-   *  native v14 document. */
+   *  introduced to `CalculatorInputsV13` alone; R15b Task 6 moved it on
+   *  again, to `CalculatorInputsV14`; R16 Task 4 moves it on again, to
+   *  `CalculatorInputsV15`: the calculator's state is now a
+   *  native v15 document. */
   inputs: CalculatorInputsV15;
   onChange: (partial: Partial<CalculatorInputsV15>) => void;
   run: AppraisalRun;

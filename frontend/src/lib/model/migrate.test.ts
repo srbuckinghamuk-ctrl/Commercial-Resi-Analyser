@@ -2064,12 +2064,18 @@ describe('v15 migration -- spec §25.7', () => {
   }
 
   it('a fractional programme slip fires the whole-months message (property 3 of three)', () => {
+    // TS is the only engine that can prove the wording here: Python's twin
+    // asserts the pydantic ValidationError instead (its `int` field refuses
+    // the fraction at parse time, so validateInputs never sees it there).
     const raw = migrateInputsToV15(
       fixtureDocs.find(({ file }) => file === 's-dated-programme.json')!.doc.inputs as Record<string, unknown>,
     ) as unknown as Record<string, unknown>;
     (raw.scenarios as Record<string, Record<string, unknown>>).downside.programme_slip_months = 1.5;
-    const fields = new Set(validateInputs(migrateInputsToV15(raw)).map((i) => i.field));
-    expect(fields.has('scenarios.downside.programme_slip_months')).toBe(true);
+    const matches = validateInputs(migrateInputsToV15(raw))
+      .filter((i) => i.field === 'scenarios.downside.programme_slip_months');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].severity).toBe('error');
+    expect(matches[0].message).toBe('Programme slip must be a whole number of months.');
   });
 
   for (const stem of ['f-dev-finance-12mo', 'u-investment-case-ltv-binds', 'y-due-diligence', 'z-cost-plan-in-time']) {
