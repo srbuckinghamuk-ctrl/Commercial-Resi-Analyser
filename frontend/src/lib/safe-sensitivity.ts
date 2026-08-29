@@ -1,12 +1,46 @@
 import {
   runSensitivity, InvalidBaseDocumentError, InvalidSensitivityConfigError,
 } from './model/sensitivity';
-import type { SensitivityConfig, SensitivityResult } from './model/sensitivity';
+import type { SensitivityConfig, SensitivityLever, SensitivityResult } from './model/sensitivity';
+import { runStressPack } from './model/stress-pack';
+import type { StressPackResult } from './model/stress-pack';
 import type { AnyCalculatorInputs } from './model';
+import type { ScenarioOverrides } from './conversion-types';
 
 export type SafeSensitivityResult =
   | { ok: true; result: SensitivityResult }
   | { ok: false; error: Error };
+
+export type SafeStressPackResult =
+  | { ok: true; result: StressPackResult }
+  | { ok: false; error: Error };
+
+/**
+ * The lever -> `ScenarioOverrides` field map, shared by the Scenarios page and
+ * the investment memo (R16 spec §25). `phase_slip` is excluded: it carries a
+ * target phase id alongside its magnitude (`phase_slip_phase_id` /
+ * `phase_slip_months`), so a single `keyof ScenarioOverrides` cannot name its
+ * field the way it can every other lever's.
+ *
+ * Typed as a `Record` over `Exclude<SensitivityLever, 'phase_slip'>` rather than
+ * a partial map, so adding a fourteenth lever to `SensitivityLever` without
+ * adding it here is a compile error, not a silent gap a caller discovers at
+ * runtime.
+ */
+export const SCENARIO_FIELD: Record<Exclude<SensitivityLever, 'phase_slip'>, keyof ScenarioOverrides> = {
+  gdv: 'gdv_adjustment_pct',
+  construction_cost: 'construction_cost_adjustment_pct',
+  timeline: 'timeline_adjustment_months',
+  interest_rate: 'interest_rate_adjustment_pct',
+  exit_yield: 'exit_yield_adjustment_pct',
+  operating_cost: 'operating_cost_adjustment_pct',
+  vacancy: 'vacancy_adjustment_pct',
+  sales_slip: 'sales_slip_months',
+  saleable_area: 'saleable_area_adjustment_pct',
+  abnormal_cost: 'abnormal_cost_adjustment_pct',
+  programme_slip: 'programme_slip_months',
+  refi_ltv: 'refi_ltv_adjustment_pct',
+};
 
 /**
  * `runSensitivity` wrapped so a thrown call becomes a value — the same pattern,
@@ -57,6 +91,29 @@ export function safeRunSensitivity(
       error instanceof InvalidSensitivityConfigError
       || error instanceof InvalidBaseDocumentError
     ) {
+      return { ok: false, error };
+    }
+    throw error;
+  }
+}
+
+/**
+ * `runStressPack` wrapped the same way `safeRunSensitivity` wraps
+ * `runSensitivity`, and for the same reason: the Sensitivity page needs a
+ * value it can render a panel from, not an unmount. The stress pack has no
+ * config of its own (spec §25.2's nine cells are fixed and normative), so the
+ * only documented failure is `InvalidBaseDocumentError` (§12.7, via
+ * `sensitivity.measure`) -- there is no `InvalidSensitivityConfigError`
+ * counterpart to catch. Anything else thrown is a defect and is rethrown, not
+ * absorbed, for the same reason `safeRunSensitivity` rethrows: a panel that
+ * says "could not be calculated" must not assert a cause this wrapper has not
+ * established.
+ */
+export function safeRunStressPack(inputs: AnyCalculatorInputs): SafeStressPackResult {
+  try {
+    return { ok: true, result: runStressPack(inputs) };
+  } catch (error) {
+    if (error instanceof InvalidBaseDocumentError) {
       return { ok: false, error };
     }
     throw error;

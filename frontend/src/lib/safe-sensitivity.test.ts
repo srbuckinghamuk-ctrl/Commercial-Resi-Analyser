@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { safeRunSensitivity } from './safe-sensitivity';
+import { safeRunSensitivity, safeRunStressPack } from './safe-sensitivity';
 import { migrateInputsToV5 } from './model';
 import * as sensitivityModule from './model/sensitivity';
 import {
   defaultSensitivityConfig, InvalidBaseDocumentError, InvalidSensitivityConfigError,
 } from './model/sensitivity';
+import { ddDoc } from './model/__fixtures__/due-diligence-docs';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -109,5 +110,24 @@ describe('safeRunSensitivity', () => {
     const result = safeRunSensitivity(baseInputs(), config);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBeInstanceOf(InvalidSensitivityConfigError);
+  });
+});
+
+// R16 Task 7 (spec §25). `safeRunStressPack` wraps `runStressPack` the same way
+// `safeRunSensitivity` wraps `runSensitivity` -- only §12.7's `InvalidBaseDocumentError`
+// is a documented failure of the stress pack (there is no config to be invalid).
+describe('safeRunStressPack', () => {
+  it('returns the nine-stress pack for a computable document', () => {
+    const outcome = safeRunStressPack(ddDoc());
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.result.stresses).toHaveLength(9);
+  });
+
+  it('returns the invalid-base-document failure as a value (§12.7)', () => {
+    const doc = ddDoc();
+    doc.finance.term_months = 0;
+    const outcome = safeRunStressPack(doc);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(InvalidBaseDocumentError);
   });
 });

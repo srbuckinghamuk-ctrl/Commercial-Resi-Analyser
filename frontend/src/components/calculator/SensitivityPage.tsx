@@ -7,11 +7,11 @@ import {
 import type {
   SensitivityCell, SensitivityConfig, SensitivityLever, SensitivityMetrics,
 } from '../../lib/model/sensitivity';
-import { safeRunSensitivity } from '../../lib/safe-sensitivity';
+import { safeRunSensitivity, safeRunStressPack } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, selectableLevers, SENSITIVITY_METRICS,
-  formatStepLabel, formatRangeLabel, flagShortCodes, isMeasuredBar, omittedTornadoNotes,
-  unmeasuredCellNotes, unmeasuredCellNote,
+  formatStepLabel, formatRangeLabel, formatStressSetting, flagShortCodes, isMeasuredBar,
+  omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct } from '../../lib/format';
@@ -30,6 +30,21 @@ const BORDER = '#1e3a5f';
 const PANEL = '#0f172a';
 const RED = '#f87171';
 const AMBER = '#fbbf24';
+
+/**
+ * `penceToPounds` with an explicit sign on a positive or zero amount too
+ * ("+£12,345" / "-£12,345"), for the stress pack's "Delta vs base" column —
+ * `penceToPounds` alone only ever prefixes a *negative* amount with a
+ * minus, leaving a positive delta looking identical to an absolute figure.
+ * Formatting only: the same pence-to-pounds division `penceToPounds` itself
+ * performs, not a calculation over model values (spec §11.9) — the value
+ * printed is `delta_profit_pence` exactly as the engine returned it.
+ */
+function signedPounds(pence: number): string {
+  return (pence / 100).toLocaleString('en-GB', {
+    style: 'currency', currency: 'GBP', maximumFractionDigits: 0, signDisplay: 'exceptZero',
+  });
+}
 
 function metricText(cell: SensitivityMetrics, key: SensitivityMetricKey): string {
   const metric = SENSITIVITY_METRICS.find((m) => m.key === key)!;
@@ -164,6 +179,11 @@ export default function SensitivityPage({ inputs }: Props) {
     () => (issues.length > 0 ? null : safeRunSensitivity(inputs, config)),
     [inputs, config, issues],
   );
+
+  // R16 (spec §25): the fixed nine-entry lender stress pack. Independent of the
+  // row/col axis editor above -- it has no config of its own -- so it is computed
+  // unconditionally, unlike `outcome`.
+  const pack = useMemo(() => safeRunStressPack(inputs), [inputs]);
 
   const editor = (
     <div style={{
@@ -330,6 +350,72 @@ export default function SensitivityPage({ inputs }: Props) {
     <div>
       {heading}
       {editor}
+
+      {/* ── Region 0: standard lender stress pack (spec §25) ── */}
+      <h4 style={{ color: MUTED, fontSize: 14, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
+        Standard Lender Stresses
+      </h4>
+      {!pack.ok && (
+        <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
+          Standard lender stresses could not be calculated: {pack.error.message}
+        </p>
+      )}
+      {pack.ok && (
+        <table
+          aria-label="Standard lender stresses"
+          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 28 }}
+        >
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Stress</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Setting</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Profit</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Delta vs base</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Peak debt</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Flags</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pack.result.stresses.map((s) => {
+              // §12.7: the levered document failed validation, exactly the
+              // matrix's own unmeasured-cell criterion (`s.delta_profit_pence`
+              // is null on precisely this condition — stress-pack.ts).
+              const unmeasured = s.metrics.validation_errors.length > 0;
+              const codes = flagShortCodes(s.metrics.flags);
+              return (
+                <tr key={s.key} style={{ borderBottom: `1px solid ${PANEL}` }}>
+                  <td style={{ padding: '8px 12px', color: TEXT }}>{s.label}</td>
+                  <td style={{ padding: '8px 12px', color: TEXT }}>
+                    {s.settings.map(formatStressSetting).join(', ')}
+                    {s.note != null && (
+                      <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
+                        {s.note}
+                      </div>
+                    )}
+                    {unmeasured && (
+                      <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
+                        {unmeasuredCellNote(s.metrics.validation_errors[0].message)}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
+                    {unmeasured ? '—' : penceToPounds(s.metrics.profit_pence as number)}
+                  </td>
+                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
+                    {unmeasured || s.delta_profit_pence === null ? '—' : signedPounds(s.delta_profit_pence)}
+                  </td>
+                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
+                    {unmeasured ? '—' : penceToPounds(s.metrics.peak_debt_pence as number)}
+                  </td>
+                  <td style={{ padding: '8px 12px' }}>
+                    {codes && <span style={{ color: RED, fontSize: 11 }}>[{codes}]</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
 
       {/* ── Region 1: tornado ── */}
       <h4 style={{ color: MUTED, fontSize: 14, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>

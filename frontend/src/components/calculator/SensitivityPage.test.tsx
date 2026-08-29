@@ -6,6 +6,8 @@ import SensitivityPage from './SensitivityPage';
 import { runAppraisal, migrateInputsToV8, migrateV8toV9 } from '../../lib/model';
 import type { CalculatorInputsV8, CalculatorInputsV9, ProgrammeNetwork } from '../../lib/model';
 import { unitSalesDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
+import { ddDoc } from '../../lib/model/__fixtures__/due-diligence-docs';
+import { STRESS_PACK } from '../../lib/model/stress-pack';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -471,5 +473,42 @@ describe('SensitivityPage — the sales_slip lever', () => {
     const rowLeverOptions = within(screen.getByLabelText(/row lever/i)).getAllByRole('option')
       .map((o) => o.textContent);
     expect(rowLeverOptions).toContain('Sales slip');
+  });
+});
+
+// R16 Task 7 (spec §25). Region 0: the standard lender stress pack, printed above
+// the tornado/matrix regions -- `safeRunStressPack` handed straight to the table,
+// no arithmetic in the component (spec §11.9).
+describe('SensitivityPage — Region 0: standard lender stresses', () => {
+  it('shows a table with the nine stresses in the pack\'s own order', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    const table = screen.getByRole('table', { name: /standard lender stresses/i });
+    const rows = within(table).getAllByRole('row');
+    // 1 header row + 9 stress rows.
+    expect(rows).toHaveLength(10);
+    const stressCellTexts = rows.slice(1).map((r) => within(r).getAllByRole('cell')[0]?.textContent
+      ?? within(r).getAllByRole('rowheader')[0]?.textContent);
+    expect(stressCellTexts).toEqual(STRESS_PACK.map((d) => d.label));
+    expect(stressCellTexts[0]).toBe('One unit lost');
+  });
+
+  it('prints the abnormal-cost inapplicability note in its own row (ddDoc has no abnormal package)', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    const table = screen.getByRole('table', { name: /standard lender stresses/i });
+    const rows = within(table).getAllByRole('row');
+    const abnormalRow = rows.find((r) => /Abnormal cost \+10%/.test(r.textContent ?? ''));
+    expect(abnormalRow).toBeDefined();
+    expect(within(abnormalRow as HTMLElement).getByText(
+      /No package carries the abnormal contingency class/i,
+    )).toBeInTheDocument();
+  });
+
+  it('offers the four R16 stress-pack levers in the row-lever picker', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    const rowLeverOptions = within(screen.getByLabelText(/row lever/i)).getAllByRole('option')
+      .map((o) => o.textContent);
+    for (const label of ['Saleable area', 'Abnormal cost', 'Programme slip', 'Refinance LTV']) {
+      expect(rowLeverOptions).toContain(label);
+    }
   });
 });

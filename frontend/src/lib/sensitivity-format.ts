@@ -115,6 +115,31 @@ export function formatStepLabel(lever: SensitivityLever, step: number): string {
   return `${text} pp`;
 }
 
+/**
+ * One stress-pack setting, in its own lever's label and unit: "Abnormal cost
+ * +10.0 pp" (R16 spec §25). Same convention as `formatStepLabel`, with the
+ * lever's full name in front rather than an axis caption's abbreviation --
+ * a stress-pack row lists several settings in one cell (`s.settings.map(...)`
+ * in SensitivityPage.tsx), so each one has to name its own lever.
+ *
+ * `decimals`, when given, overrides `formatStepLabel`'s own per-lever
+ * precision (`decimalsFor`) rather than replacing its sign/unit conventions --
+ * task 9's entry 9 (`risks_crystallise`) derives a cost percentage from the
+ * document at full precision and needs more than the fixed 0dp `PERCENT_LEVERS`
+ * quote everywhere else. Kept minimal and local to this function: it does not
+ * feed back into `formatStepLabel` or `decimalsFor`, which stay the single
+ * source for every other caller's precision.
+ */
+export function formatStressSetting(
+  s: { lever: SensitivityLever; value: number },
+  decimals?: number,
+): string {
+  if (decimals === undefined) return `${LEVER_LABEL[s.lever]} ${formatStepLabel(s.lever, s.value)}`;
+  const text = signed(s.value, decimals);
+  const unit = PERCENT_LEVERS.includes(s.lever) ? '%' : MONTH_LEVERS.includes(s.lever) ? ' months' : ' pp';
+  return `${LEVER_LABEL[s.lever]} ${text}${unit}`;
+}
+
 /** A tornado range with the unit stated once: "-10% to +10%", "-3 to +3 months". */
 export function formatRangeLabel(lever: SensitivityLever, low: number, high: number): string {
   const d = decimalsFor(lever);
