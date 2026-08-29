@@ -1,9 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { Project, EligibilityAssessment, LenderCase } from '../types';
 import { getEligibility, getAppraisal, getLenderCase, isNotFound } from '../lib/api';
-import { generateEligibilityPdf, generateAppraisalPdf } from '../lib/export-pdf';
-import { generateProjectsExcel } from '../lib/export-excel';
-import { generateInvestmentMemo } from '../lib/export-investment-memo';
 import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
 import { runAppraisal, migrateInputsToV16 } from '../lib/model';
@@ -62,6 +59,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     setLoading('eligibility');
     setError(null);
     try {
+      const { generateEligibilityPdf } = await import('../lib/export-pdf');
       const assessment = await getEligibility(selectedProject.id);
       const blob = generateEligibilityPdf(selectedProject, assessment);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
@@ -78,6 +76,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     setLoading('appraisal');
     setError(null);
     try {
+      const { generateAppraisalPdf } = await import('../lib/export-pdf');
       const appraisal = await getAppraisal(selectedProject.id);
 
       // Deal Spider section — computed from the saved snapshot when it holds
@@ -123,6 +122,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     setLoading('memo');
     setError(null);
     try {
+      const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
       const appraisal = await getAppraisal(selectedProject.id);
       const raw = appraisal.inputs_snapshot as Record<string, unknown> | null;
       if (!raw || typeof raw !== 'object' || !('unit_mix' in raw) || !('acquisition' in raw)) {
@@ -192,11 +192,12 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     }
   }, [selectedProject]);
 
-  const handleExcel = useCallback(() => {
+  const handleExcel = useCallback(async () => {
     if (projects.length === 0) return;
     setLoading('excel');
     setError(null);
     try {
+      const { generateProjectsExcel } = await import('../lib/export-excel');
       const blob = generateProjectsExcel(projects);
       downloadBlob(blob, `projects-export-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch {

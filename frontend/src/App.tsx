@@ -1,14 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Routes, Route, NavLink, Link, Navigate, useParams, useNavigate } from 'react-router-dom';
 import type { Project } from './types';
 import { listProjects } from './lib/api';
 
 import Pipeline from './components/Pipeline';
 import NewProject from './components/NewProject';
-import ConversionCalculator from './components/ConversionCalculator';
-import PropertyMap from './components/PropertyMap';
 import ExportPage from './components/ExportPage';
 import ProjectDetail from './components/ProjectDetail';
+
+const ConversionCalculator = lazy(() => import('./components/ConversionCalculator'));
+const PropertyMap = lazy(() => import('./components/PropertyMap'));
 
 const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
   { to: '/', label: 'Pipeline', end: true },
@@ -196,28 +197,30 @@ export default function App() {
 
       {/* Routes */}
       <main>
-        <Routes>
-          <Route
-            path="/"
-            element={<Pipeline projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} />}
-          />
-          <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
-          <Route
-            path="/projects/:id"
-            element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="overview" />}
-          />
-          <Route
-            path="/projects/:id/eligibility"
-            element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="eligibility" />}
-          />
-          <Route
-            path="/projects/:id/calculator/:page?"
-            element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="calculator" />}
-          />
-          <Route path="/map" element={<PropertyMap projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
-          <Route path="/export" element={<ExportPage projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<p style={{ padding: 24, color: '#94a3b8' }}>Loading…</p>}>
+          <Routes>
+            <Route
+              path="/"
+              element={<Pipeline projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} />}
+            />
+            <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
+            <Route
+              path="/projects/:id"
+              element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="overview" />}
+            />
+            <Route
+              path="/projects/:id/eligibility"
+              element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="eligibility" />}
+            />
+            <Route
+              path="/projects/:id/calculator/:page?"
+              element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="calculator" />}
+            />
+            <Route path="/map" element={<PropertyMap projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
+            <Route path="/export" element={<ExportPage projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: { manifest: true },
   server: {
     host: true,
     // File-change events don't cross the Windows -> Docker volume mount,
