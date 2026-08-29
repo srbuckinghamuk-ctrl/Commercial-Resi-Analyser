@@ -170,19 +170,25 @@ export function resolveStress(inputs: AnyCalculatorInputs, definition: StressDef
       applicable = false;
       notes.push(NOTE_NO_ABNORMAL_PACKAGE);
     }
-    settings = [{ lever: 'abnormal_cost', value: 10, phase_id: null }];
+    settings = definition.settings.map(([lever, value]) => ({
+      lever, value: value as number, phase_id: null,
+    }));
   } else if (key === 'slower_absorption') {
     if (!f.has_ledger) {
       applicable = false;
       notes.push(NOTE_NO_LEDGER);
     }
-    settings = [{ lever: 'sales_slip', value: 6, phase_id: null }];
+    settings = definition.settings.map(([lever, value]) => ({
+      lever, value: value as number, phase_id: null,
+    }));
   } else if (key === 'delayed_start') {
     if (f.network === null) {
       applicable = false;
       notes.push(NOTE_NO_NETWORK);
     }
-    settings = [{ lever: 'programme_slip', value: 6, phase_id: null }];
+    settings = definition.settings.map(([lever, value]) => ({
+      lever, value: value as number, phase_id: null,
+    }));
   } else if (key === 'yield_expansion' || key === 'lower_refi_ltv' || key === 'opex_vacancy') {
     if (!f.has_investment_case) {
       applicable = false;

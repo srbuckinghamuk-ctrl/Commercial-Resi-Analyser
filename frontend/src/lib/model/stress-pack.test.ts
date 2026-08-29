@@ -8,7 +8,7 @@ import { InvalidBaseDocumentError } from './sensitivity';
 import { STRESS_PACK, resolveStress, runStressPack } from './stress-pack';
 import { ddDoc } from './__fixtures__/due-diligence-docs';
 import { icDoc } from './__fixtures__/investment-case-docs';
-import type { StressKey } from './stress-pack';
+import type { StressDefinition } from './stress-pack';
 import type { SensitivityLever } from './sensitivity';
 import type { AnyCalculatorInputs, CalculatorInputsV15 } from './finance-types';
 import type { ScenarioOverrides } from '../conversion-types';
@@ -48,9 +48,25 @@ function single(lever: SensitivityLever, value: number): ScenarioOverrides {
 
 describe('the standard lender stress pack', () => {
   it('is nine entries in the normative order', () => {
-    expect(STRESS_PACK.map((d) => d.key)).toEqual<StressKey[]>([
-      'unit_loss', 'area_reduction', 'abnormal_cost', 'slower_absorption', 'delayed_start',
-      'yield_expansion', 'lower_refi_ltv', 'opex_vacancy', 'risks_crystallise',
+    // Fix round 1, Finding 2: pins every key, label AND settings tuple, not
+    // just the key order -- so a magnitude or label drift (e.g. sales_slip 6
+    // -> 5) fails here rather than passing the whole suite silently.
+    expect(STRESS_PACK).toEqual<StressDefinition[]>([
+      { key: 'unit_loss', label: 'One unit lost', settings: [['saleable_area', null]] },
+      { key: 'area_reduction', label: 'Saleable area -5%', settings: [['saleable_area', -5]] },
+      { key: 'abnormal_cost', label: 'Abnormal cost +10%', settings: [['abnormal_cost', 10]] },
+      { key: 'slower_absorption', label: 'Sales six months slower', settings: [['sales_slip', 6]] },
+      { key: 'delayed_start', label: 'Start / PC six months late', settings: [['programme_slip', 6]] },
+      { key: 'yield_expansion', label: 'Exit yield +100 bp', settings: [['exit_yield', 1]] },
+      { key: 'lower_refi_ltv', label: 'Refinance LTV -10 pp', settings: [['refi_ltv', 10]] },
+      {
+        key: 'opex_vacancy', label: 'Opex +10%, vacancy +5 pp',
+        settings: [['operating_cost', 10], ['vacancy', 5]],
+      },
+      {
+        key: 'risks_crystallise', label: 'Recorded risks crystallise',
+        settings: [['construction_cost', null], ['programme_slip', null]],
+      },
     ]);
   });
 
@@ -146,6 +162,12 @@ describe('the standard lender stress pack', () => {
   it('an inapplicable stress equals the base, corpus-wide (design decision 11 / guard 3)', () => {
     // The identity every measured stress is defined by (§25.2): a stress
     // cell IS runAppraisal(applyScenario(base, its settings)).
+    //
+    // Fix round 1, Finding 3: the corpus stems whose base document fails
+    // validation are collected and asserted against the known set (currently
+    // empty), not skipped one-by-one -- a fixture newly going invalid now
+    // fails this test instead of quietly dropping out of coverage.
+    const invalidBaseStems = new Set<string>();
     for (const filename of readdirSync(FIXTURE_DIR)) {
       if (!filename.endsWith('.json')) continue;
       const stem = filename.slice(0, -'.json'.length);
@@ -158,7 +180,10 @@ describe('the standard lender stress pack', () => {
       try {
         result = runStressPack(inputs);
       } catch (e) {
-        if (e instanceof InvalidBaseDocumentError) continue; // base document fails validation
+        if (e instanceof InvalidBaseDocumentError) {
+          invalidBaseStems.add(stem);
+          continue;
+        }
         throw e;
       }
       for (const s of result.stresses) {
@@ -167,9 +192,16 @@ describe('the standard lender stress pack', () => {
         }
       }
     }
+    expect(invalidBaseStems).toEqual(new Set());
   });
 
   it('every stress is the levered appraisal, on Y and U', () => {
+    // Fix round 1, Finding 3: the (stem, key) pairs skipped because the
+    // levered position is unmeasured are collected and asserted against the
+    // known set, rather than `continue`d unconditionally -- a widening of
+    // that set now fails this test instead of silently reducing its
+    // assertion count.
+    const skipped = new Set<string>();
     for (const stem of ['y-due-diligence', 'u-investment-case-ltv-binds']) {
       const inputs = load(stem);
       const result = runStressPack(inputs);
@@ -187,6 +219,7 @@ describe('the standard lender stress pack', () => {
           // does not (it silently computes on the out-of-range month) --
           // same as sensitivity.test.ts's "sales_slip cells go invalid, not
           // clamped" case.
+          skipped.add(`${stem}:${s.key}`);
           continue;
         }
         const expected = runAppraisal(levered).metrics;
@@ -195,6 +228,10 @@ describe('the standard lender stress pack', () => {
         expect(s.delta_profit_pence).toBe((expected.profit_pence as number) - result.base.profit_pence);
       }
     }
+    expect(skipped).toEqual(new Set([
+      'y-due-diligence:slower_absorption',
+      'u-investment-case-ltv-binds:delayed_start',
+    ]));
   });
 
   it('matches Base U by hand: abnormal cost and refi LTV', () => {

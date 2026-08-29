@@ -154,15 +154,15 @@ def resolve_stress(inputs: AnyCalculatorInputs, definition: StressDefinition) ->
             applicable, notes = False, [NOTE_NO_COST_PLAN]
         elif not f["has_abnormal_base"]:
             applicable, notes = False, [NOTE_NO_ABNORMAL_PACKAGE]
-        settings = [StressSetting("abnormal_cost", 10.0)]
+        settings = [StressSetting(lever, value) for lever, value in definition.settings]  # type: ignore[arg-type]
     elif key == "slower_absorption":
         if not f["has_ledger"]:
             applicable, notes = False, [NOTE_NO_LEDGER]
-        settings = [StressSetting("sales_slip", 6.0)]
+        settings = [StressSetting(lever, value) for lever, value in definition.settings]  # type: ignore[arg-type]
     elif key == "delayed_start":
         if f["network"] is None:
             applicable, notes = False, [NOTE_NO_NETWORK]
-        settings = [StressSetting("programme_slip", 6.0)]
+        settings = [StressSetting(lever, value) for lever, value in definition.settings]  # type: ignore[arg-type]
     elif key in ("yield_expansion", "lower_refi_ltv", "opex_vacancy"):
         if not f["has_investment_case"]:
             applicable, notes = False, [NOTE_NO_INVESTMENT_CASE]

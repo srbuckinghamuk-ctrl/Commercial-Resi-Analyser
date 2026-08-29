@@ -8,7 +8,7 @@ from app.financial_model import run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
 from app.financial_model.migrate import migrate_inputs_to_v15
 from app.financial_model.sensitivity import InvalidBaseDocumentError
-from app.financial_model.stress_pack import STRESS_PACK, resolve_stress, run_stress_pack
+from app.financial_model.stress_pack import STRESS_PACK, StressDefinition, resolve_stress, run_stress_pack
 from app.financial_model.types import ScenarioOverrides
 
 from .fixtures_due_diligence import dd_doc
@@ -22,10 +22,21 @@ def _load(stem):
 
 
 def test_the_pack_is_nine_entries_in_the_normative_order():
-    assert [d.key for d in STRESS_PACK] == [
-        "unit_loss", "area_reduction", "abnormal_cost", "slower_absorption", "delayed_start",
-        "yield_expansion", "lower_refi_ltv", "opex_vacancy", "risks_crystallise",
-    ]
+    """Fix round 1, Finding 2: pins every key, label AND settings tuple, not
+    just the key order -- so a magnitude or label drift (e.g. sales_slip 6 ->
+    5) fails here rather than passing the whole suite silently."""
+    assert STRESS_PACK == (
+        StressDefinition("unit_loss", "One unit lost", (("saleable_area", None),)),
+        StressDefinition("area_reduction", "Saleable area -5%", (("saleable_area", -5.0),)),
+        StressDefinition("abnormal_cost", "Abnormal cost +10%", (("abnormal_cost", 10.0),)),
+        StressDefinition("slower_absorption", "Sales six months slower", (("sales_slip", 6.0),)),
+        StressDefinition("delayed_start", "Start / PC six months late", (("programme_slip", 6.0),)),
+        StressDefinition("yield_expansion", "Exit yield +100 bp", (("exit_yield", 1.0),)),
+        StressDefinition("lower_refi_ltv", "Refinance LTV -10 pp", (("refi_ltv", 10.0),)),
+        StressDefinition("opex_vacancy", "Opex +10%, vacancy +5 pp", (("operating_cost", 10.0), ("vacancy", 5.0))),
+        StressDefinition("risks_crystallise", "Recorded risks crystallise",
+                         (("construction_cost", None), ("programme_slip", None))),
+    )
 
 
 def test_fixture_y_derivations_and_applicability():
@@ -98,24 +109,38 @@ def test_risks_crystallise_headline_bound():
     assert abs(after - (before + 2_000_000)) <= math.ceil(area / 2) + 1
 
 
-@pytest.mark.parametrize("stem", sorted(p.stem for p in FIXTURE_DIR.glob("*.json")))
-def test_inapplicable_implies_equal_to_base_corpus_wide(stem):
+def test_inapplicable_implies_equal_to_base_corpus_wide():
     """Design decision 11 / guard 3, and the identity every measured stress
-    is defined by (Sec 25.2): a stress cell IS run_appraisal(apply_scenario(base, its settings))."""
-    doc = json.loads((FIXTURE_DIR / f"{stem}.json").read_text(encoding="utf-8"))
-    if "inputs" not in doc:
-        pytest.skip("suite fixture, no inputs of its own")
-    inputs = migrate_inputs_to_v15(doc["inputs"], None)
-    try:
-        result = run_stress_pack(inputs)
-    except InvalidBaseDocumentError:
-        pytest.skip("base document fails validation")
-    for s in result.stresses:
-        if not s.applicable:
-            assert asdict(s.metrics) == asdict(result.base), (stem, s.key)
+    is defined by (Sec 25.2): a stress cell IS run_appraisal(apply_scenario(base, its settings)).
+
+    Fix round 1, Finding 3: the corpus stems whose base document fails
+    validation are collected and asserted against the known set (currently
+    empty), not skipped one-by-one -- a fixture newly going invalid now fails
+    this test instead of quietly dropping out of coverage."""
+    invalid_base_stems: set[str] = set()
+    for path in sorted(FIXTURE_DIR.glob("*.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if "inputs" not in doc:
+            continue  # suite fixture, no inputs of its own
+        inputs = migrate_inputs_to_v15(doc["inputs"], None)
+        try:
+            result = run_stress_pack(inputs)
+        except InvalidBaseDocumentError:
+            invalid_base_stems.add(path.stem)
+            continue
+        for s in result.stresses:
+            if not s.applicable:
+                assert asdict(s.metrics) == asdict(result.base), (path.stem, s.key)
+    assert invalid_base_stems == set()
 
 
 def test_every_stress_is_the_levered_appraisal_on_y_and_u():
+    """Fix round 1, Finding 3: the (stem, key) pairs skipped because the
+    levered position is unmeasured are collected and asserted against the
+    known set, rather than `continue`d unconditionally -- a widening of that
+    set now fails this test instead of silently reducing its assertion
+    count."""
+    skipped: set[tuple[str, str]] = set()
     for stem in ("y-due-diligence", "u-investment-case-ltv-binds"):
         inputs = _load(stem)
         result = run_stress_pack(inputs)
@@ -133,11 +158,16 @@ def test_every_stress_is_the_levered_appraisal_on_y_and_u():
                 # row 3's completion to month 26 against a 24-month term,
                 # which validate_inputs rejects but a raw run_appraisal call
                 # does not (it silently computes on the out-of-range month).
+                skipped.add((stem, s.key))
                 continue
             expected = run_appraisal(levered).metrics
             assert s.metrics.profit_pence == expected.profit_pence, (stem, s.key)
             assert s.metrics.peak_debt_pence == expected.peak_debt_pence, (stem, s.key)
             assert s.delta_profit_pence == expected.profit_pence - result.base.profit_pence
+    assert skipped == {
+        ("y-due-diligence", "slower_absorption"),
+        ("u-investment-case-ltv-binds", "delayed_start"),
+    }
 
 
 def _single(lever, value):
