@@ -211,7 +211,7 @@ export default function App() {
             element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="eligibility" />}
           />
           <Route
-            path="/projects/:id/calculator"
+            path="/projects/:id/calculator/:page?"
             element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="calculator" />}
           />
           <Route path="/map" element={<PropertyMap projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />

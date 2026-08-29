@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useParams, useNavigate, NavLink, Navigate } from 'react-router-dom';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
 import { migrateInputsToV16 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
@@ -7,6 +8,8 @@ import { defaultCalculatorInputsV16 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
+import { PAGES, pageForSlug, calculatorPath, FIRST_PAGE } from './calculator/pages';
+import type { CalcPage } from './calculator/pages';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
 import AreasPage from './calculator/AreasPage';
@@ -24,53 +27,6 @@ import DueDiligencePage from './calculator/DueDiligencePage';
 import DealSpiderPage from './calculator/DealSpiderPage';
 import InvestorSummaryPage from './calculator/InvestorSummaryPage';
 import LenderCasePage from './calculator/LenderCasePage';
-
-type CalcPage =
-  | 'acquisition'
-  | 'areas'
-  | 'unit_mix'
-  | 'conversion_costs'
-  | 'vat'
-  | 'finance'
-  | 'programme'
-  | 'cashflow'
-  | 'appraisal'
-  | 'scenarios'
-  | 'sensitivity'
-  | 'exit_strategy'
-  | 'risk_register'
-  | 'deal_spider'
-  | 'investor_summary'
-  | 'lender_case';
-
-// R9 Task 10: 'areas' is inserted second — the building's areas are known
-// before its unit schedule is drawn — pushing every following page's number
-// up by one (Unit Mix 2->3, ... Investor 13->14).
-// R11 Task 14 (spec §17): 'vat' is inserted after Costs — the VAT block reads
-// the cost plan (§17.5) so it belongs immediately downstream of it, and ahead
-// of Finance, whose ledger carries the VAT cash cycle (§17.6) — pushing every
-// following page's number up by one again (Finance 5->6, ... Investor 14->15).
-// R14b Task 9 (spec §21): 'lender_case' is appended last, at 16 — it governs
-// an already-saved appraisal rather than feeding its calculation, so it has
-// no upstream position to slot into and no following page to renumber.
-const PAGES: { key: CalcPage; label: string; num: number }[] = [
-  { key: 'acquisition', label: 'Acquisition', num: 1 },
-  { key: 'areas', label: 'Areas', num: 2 },
-  { key: 'unit_mix', label: 'Unit Mix', num: 3 },
-  { key: 'conversion_costs', label: 'Costs', num: 4 },
-  { key: 'vat', label: 'VAT', num: 5 },
-  { key: 'finance', label: 'Finance', num: 6 },
-  { key: 'programme', label: 'Programme', num: 7 },
-  { key: 'cashflow', label: 'Cashflow', num: 8 },
-  { key: 'appraisal', label: 'Appraisal', num: 9 },
-  { key: 'scenarios', label: 'Scenarios', num: 10 },
-  { key: 'sensitivity', label: 'Sensitivity', num: 11 },
-  { key: 'exit_strategy', label: 'Exit', num: 12 },
-  { key: 'risk_register', label: 'Due Diligence', num: 13 },
-  { key: 'deal_spider', label: 'Deal Spider', num: 14 },
-  { key: 'investor_summary', label: 'Investor', num: 15 },
-  { key: 'lender_case', label: 'Lender Case', num: 16 },
-];
 
 interface Props {
   project: Project | null;
@@ -100,7 +56,13 @@ const STATUS_BANNER: Record<
 };
 
 export default function ConversionCalculator({ project }: Props) {
-  const [activePage, setActivePage] = useState<CalcPage>('acquisition');
+  // R16b spec §26.5: the page is the URL. One route element, so a `:page`
+  // change re-renders rather than remounts and unsaved inputs survive it
+  // (asserted in ConversionCalculator.test.tsx, "keeps unsaved edits").
+  const { page: pageSlug } = useParams<{ page?: string }>();
+  const navigate = useNavigate();
+  const resolvedPage = pageForSlug(pageSlug);
+  const activePage: CalcPage = resolvedPage ?? FIRST_PAGE;
   const [inputs, setInputs] = useState<CalculatorInputsV16>(() =>
     defaultCalculatorInputsV16(project ?? undefined),
   );
@@ -332,12 +294,11 @@ export default function ConversionCalculator({ project }: Props) {
   const pageIndex = PAGES.findIndex((p) => p.key === activePage);
 
   const goNext = useCallback(() => {
-    if (pageIndex < PAGES.length - 1) setActivePage(PAGES[pageIndex + 1].key);
-  }, [pageIndex]);
-
+    if (project && pageIndex < PAGES.length - 1) navigate(calculatorPath(project.id, PAGES[pageIndex + 1].key));
+  }, [project, pageIndex, navigate]);
   const goPrev = useCallback(() => {
-    if (pageIndex > 0) setActivePage(PAGES[pageIndex - 1].key);
-  }, [pageIndex]);
+    if (project && pageIndex > 0) navigate(calculatorPath(project.id, PAGES[pageIndex - 1].key));
+  }, [project, pageIndex, navigate]);
 
   if (!project) {
     return (
@@ -346,6 +307,10 @@ export default function ConversionCalculator({ project }: Props) {
         <p style={{ color: '#94a3b8' }}>Select a project from the Pipeline tab to start a financial appraisal.</p>
       </div>
     );
+  }
+
+  if (resolvedPage === null) {
+    return <Navigate replace to={calculatorPath(project.id, FIRST_PAGE)} />;
   }
 
   return (
@@ -362,23 +327,22 @@ export default function ConversionCalculator({ project }: Props) {
         }}
       >
         {PAGES.map((page) => (
-          <button
+          <NavLink
             key={page.key}
-            onClick={() => setActivePage(page.key)}
-            style={{
+            to={calculatorPath(project.id, page.key)}
+            end
+            style={({ isActive }) => ({
               padding: '8px 14px',
-              border: 'none',
-              borderBottom: activePage === page.key ? '2px solid #2563eb' : '2px solid transparent',
-              background: 'transparent',
-              color: activePage === page.key ? '#e2e8f0' : '#64748b',
-              cursor: 'pointer',
+              borderBottom: isActive ? '2px solid #2563eb' : '2px solid transparent',
+              color: isActive ? '#e2e8f0' : '#64748b',
               fontSize: 13,
-              fontWeight: activePage === page.key ? 600 : 400,
+              fontWeight: isActive ? 600 : 400,
               whiteSpace: 'nowrap',
-            }}
+              textDecoration: 'none',
+            })}
           >
             {page.num}. {page.label}
-          </button>
+          </NavLink>
         ))}
       </div>
 

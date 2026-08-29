@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import type { Project, FinancialAppraisal } from '../types';
 
 // Only the network boundary is stubbed. The engine is the real one: the tests
@@ -35,11 +36,24 @@ const PROJECT: Project = {
   stage: 'opportunity_identified',
 } as unknown as Project;
 
+/** Mounts the calculator under its real route so `:page` drives it. No slug
+ *  = the bare `/calculator` address, which must redirect to Acquisition. */
+function renderCalculator(slug?: string) {
+  const path = `/projects/${PROJECT.id}/calculator${slug ? `/${slug}` : ''}`;
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/projects/:id/calculator/:page?" element={<ConversionCalculator project={PROJECT} />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 /** Sets the Finance page's facility term. 1e21 months makes the real engine
  * throw a RangeError building the schedule (`Array.from({length: 1e21})`) —
  * the class of failure that used to unmount the whole calculator. */
 function setFacilityTerm(value: string): void {
-  fireEvent.click(screen.getByRole('button', { name: /6\. Finance/ }));
+  fireEvent.click(screen.getByRole('link', { name: /6\. Finance/ }));
   fireEvent.change(screen.getByDisplayValue('12'), { target: { value } });
 }
 
@@ -51,19 +65,19 @@ describe('ConversionCalculator when the engine cannot compute', () => {
   afterEach(() => consoleErrorSpy.mockClear());
 
   it('keeps the calculator mounted and shows a recovery panel instead of unmounting', () => {
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
 
     setFacilityTerm('1e21');
 
     // The chrome survives: the nav is still there, so the component did not
     // unmount and its unsaved state is intact.
-    expect(screen.getByRole('button', { name: /7\. Programme/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /7\. Programme/ })).toBeInTheDocument();
     expect(screen.getByText(/appraisal could not be calculated/i)).toBeInTheDocument();
   });
 
   it('disables saving while the appraisal cannot be calculated', () => {
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     const saveButton = screen.getByRole('button', { name: /save appraisal|update appraisal/i });
     expect(saveButton).toBeEnabled();
 
@@ -73,7 +87,7 @@ describe('ConversionCalculator when the engine cannot compute', () => {
   });
 
   it('restores the last inputs that calculated when the user undoes the change', () => {
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     setFacilityTerm('1e21');
     expect(screen.getByText(/appraisal could not be calculated/i)).toBeInTheDocument();
 
@@ -87,8 +101,8 @@ describe('ConversionCalculator when the engine cannot compute', () => {
   });
 
   it('never shows a stale calculation alongside the failure (spec §2)', () => {
-    render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: /9\. Appraisal/ }));
+    renderCalculator();
+    fireEvent.click(screen.getByRole('link', { name: /9\. Appraisal/ }));
     // A computable document shows real metric cards.
     expect(screen.getByText('Developer GDV')).toBeInTheDocument();
 
@@ -101,19 +115,19 @@ describe('ConversionCalculator when the engine cannot compute', () => {
 
 describe('ConversionCalculator — Sensitivity is page 11', () => {
   it('offers fifteen numbered pages with Sensitivity eleventh', () => {
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     for (const label of [
       // R15 Task 9 (spec §23.8): page 13 is now the due-diligence schedule,
       // with the free-form risk register below it as the project log.
       '11. Sensitivity', '12. Exit', '13. Due Diligence', '14. Deal Spider', '15. Investor',
     ]) {
-      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
     }
   });
 
   it('renders the Sensitivity page when its tab is selected', () => {
-    render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: '11. Sensitivity' }));
+    renderCalculator();
+    fireEvent.click(screen.getByRole('link', { name: '11. Sensitivity' }));
     expect(screen.getByRole('heading', { name: /11\. Sensitivity/ })).toBeInTheDocument();
   });
 });
@@ -122,8 +136,8 @@ describe('ConversionCalculator — Sensitivity is page 11', () => {
 // unmounted -- this is that test for page 16.
 describe('ConversionCalculator — Lender Case is page 16 (R14b)', () => {
   it('mounts the Lender Case page on its tab', async () => {
-    render(<ConversionCalculator project={PROJECT} />);
-    fireEvent.click(screen.getByRole('button', { name: '16. Lender Case' }));
+    renderCalculator();
+    fireEvent.click(screen.getByRole('link', { name: '16. Lender Case' }));
     expect(await screen.findByText('No lender case')).toBeInTheDocument();
   });
 });
@@ -151,7 +165,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
   it('migrates the snapshot to v12 and renders it without an error, not a load failure', async () => {
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
 
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
 
     // savedId is only set inside the .then() branch, after setInputs(migrateInputsToV12(...))
     // succeeds -- if that call threw (as it would on a snapshot with an
@@ -169,7 +183,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV4Appraisal());
     vi.mocked(saveAppraisal).mockResolvedValueOnce(storedV4Appraisal());
 
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     await screen.findByRole('button', { name: /update appraisal/i });
 
     // handleSave spreads the current `inputs` state as-is into inputs_snapshot
@@ -231,13 +245,13 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     badAppraisal.inputs_snapshot = { ...badAppraisal.inputs_snapshot, inputs_version: 16 };
     vi.mocked(getAppraisal).mockResolvedValueOnce(badAppraisal);
 
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
 
     expect(await screen.findByText(/failed to load saved appraisal/i)).toBeInTheDocument();
     // Not a blank screen: the calculator chrome is fully present and usable
     // on the default document the effect seeded before the failed load.
     expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /9\. Appraisal/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /9\. Appraisal/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save appraisal/i })).toBeEnabled();
   });
 
@@ -263,7 +277,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     vi.mocked(getAppraisal).mockResolvedValueOnce(storedV11);
     vi.mocked(saveAppraisal).mockResolvedValueOnce(storedV11);
 
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
 
     expect(
       await screen.findByRole('button', { name: /update appraisal/i }),
@@ -355,7 +369,13 @@ describe('ConversionCalculator captures the listing on a fresh document (R15 Tas
     const vacantlyOccupiedProject = { ...PROJECT, is_vacant: false };
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal({}));
 
-    render(<ConversionCalculator project={vacantlyOccupiedProject} />);
+    render(
+      <MemoryRouter initialEntries={[`/projects/${PROJECT.id}/calculator`]}>
+        <Routes>
+          <Route path="/projects/:id/calculator/:page?" element={<ConversionCalculator project={vacantlyOccupiedProject} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
     await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
 
@@ -404,7 +424,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
 
   it('posts a v15 document whose jurisdiction the server is still free to derive', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
     await waitFor(() => expect(saveAppraisal).toHaveBeenCalled());
 
@@ -419,7 +439,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
 
   it('re-renders on the jurisdiction the server derived instead of the one it posted', async () => {
     vi.mocked(saveAppraisal).mockResolvedValueOnce(savedAppraisal(serverDerivedWelshSnapshot()));
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
 
     // Before the save: the client-side default document is England/NI.
     expect(screen.getByRole('heading', { name: 'SDLT Breakdown' })).toBeInTheDocument();
@@ -445,7 +465,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     vi.mocked(saveAppraisal).mockReturnValueOnce(
       new Promise<FinancialAppraisal>((resolve) => { resolveSave = resolve; }),
     );
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
 
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
     // £400,000 -> £500,000 while the request is still open.
@@ -466,12 +486,46 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
     vi.mocked(saveAppraisal).mockResolvedValueOnce(
       savedAppraisal({ ...serverDerivedWelshSnapshot(), inputs_version: 99 }),
     );
-    render(<ConversionCalculator project={PROJECT} />);
+    renderCalculator();
     fireEvent.click(screen.getByRole('button', { name: /save appraisal/i }));
 
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /update appraisal/i })).toBeInTheDocument());
     expect(screen.queryByText(/save failed/i)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'SDLT Breakdown' })).toBeInTheDocument();
+  });
+});
+
+describe('ConversionCalculator — addresses (spec §26.5)', () => {
+  it('redirects the bare calculator address to Acquisition', () => {
+    renderCalculator();
+    expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
+  });
+
+  it('redirects an unknown slug to Acquisition', () => {
+    renderCalculator('nonsense');
+    expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
+  });
+
+  it('opens the page a deep link names', () => {
+    renderCalculator('sensitivity');
+    // /Sensitivity/ alone is ambiguous -- the page also carries an h4
+    // "Single-Lever Sensitivity" subheading; the page's own h3 is "11.
+    // Sensitivity", so anchoring on the number disambiguates it.
+    expect(screen.getByRole('heading', { name: /11\. Sensitivity/ })).toBeInTheDocument();
+  });
+
+  it('keeps unsaved edits when the page changes through the URL (decision 3)', () => {
+    renderCalculator('finance');
+    fireEvent.change(screen.getByDisplayValue('12'), { target: { value: '18' } });
+    fireEvent.click(screen.getByRole('link', { name: /Appraisal/ }));
+    expect(screen.getByRole('heading', { name: /Appraisal Summary/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: /6\. Finance/ }));
+    expect(screen.getByDisplayValue('18')).toBeInTheDocument();
+  });
+
+  it('the active tab is a link whose href is the page address', () => {
+    renderCalculator('vat');
+    expect(screen.getByRole('link', { name: '5. VAT' })).toHaveAttribute('href', '/projects/p1/calculator/vat');
   });
 });
