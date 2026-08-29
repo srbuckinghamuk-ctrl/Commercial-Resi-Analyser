@@ -137,10 +137,6 @@ class AppraisalResultV2:
     # TOGC does not apply. Disclosed rather than left implicit, so the tax base
     # is visible in the result instead of buried inside a tax figure.
     chargeable_consideration_pence: int
-    # DEPRECATED (R8): a jurisdiction-neutral figure under an England/NI-only
-    # name. Carries the identical value to acquisition_tax_pence; retained only
-    # so pre-R8 report and export readers keep working. Removed in R16.
-    sdlt_pence: int
     # R9 spec Sec 15.8 -- the full area reconciliation: every entered line,
     # every derived line, every efficiency. The UI and the report read areas
     # from here and never recompute one.
@@ -824,8 +820,6 @@ def derive_metrics(
         acquisition_tax_pence=sdlt,
         acquisition_tax=acquisition_tax,
         chargeable_consideration_pence=chargeable_consideration_pence(inputs),
-        # DEPRECATED (R8) -- use acquisition_tax_pence. Removed in R16.
-        sdlt_pence=sdlt,
         area_bridge=bridge,
         developed_area_sqm=bridge.developed_area_sqm,
         cost_plan=cost_plan,

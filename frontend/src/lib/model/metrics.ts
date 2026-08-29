@@ -592,8 +592,6 @@ export function deriveMetrics(
     // report and the API serialise, not a value anything may feed back into a
     // tax call without going through the accessor again.
     chargeable_consideration_pence: Number(chargeableConsideration),
-    /** @deprecated R8 — use acquisition_tax_pence. Removed in R16. */
-    sdlt_pence: sdlt,
     area_bridge: bridge,
     developed_area_sqm: bridge.developed_area_sqm,
     cost_plan: costPlan,

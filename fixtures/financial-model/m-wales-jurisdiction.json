@@ -68,7 +68,6 @@
   "expected_metrics": {
     "gdv_pence": 165000000,
     "acquisition_tax_pence": 2542410,
-    "sdlt_pence": 2542410,
     "acquisition_cost_pence": 79444092,
     "construction_cost_pence": 41580000,
     "professional_fees_pence": 3400000,

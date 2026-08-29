@@ -766,12 +766,6 @@ export interface AppraisalResultV2 {
    *  TOGC does not apply. Disclosed rather than left implicit, so the tax base
    *  is visible in the result instead of buried inside a tax figure. */
   chargeable_consideration_pence: number;
-  /**
-   * @deprecated R8 — a jurisdiction-neutral figure under an England/NI-only
-   * name. Carries the identical value to `acquisition_tax_pence`; retained only
-   * so pre-R8 report and export readers keep working. Removed in R16.
-   */
-  sdlt_pence: number;
   /** R9 spec §15.8 — the full area reconciliation: every entered line, every
    *  derived line, every efficiency. The UI and the report read areas from here
    *  and never recompute one. */
@@ -885,4 +879,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.17.0';
+export const CALC_VERSION = '2.18.0';

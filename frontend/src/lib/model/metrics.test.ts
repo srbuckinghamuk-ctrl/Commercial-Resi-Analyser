@@ -683,8 +683,9 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
   it('taxes an English appraisal identically to the pre-R8 engine', () => {
     const m = runAppraisal(englishBase()).metrics;
     expect(m.acquisition_tax_pence).toBe(2_717_410);
-    // The deprecated alias must carry the same value until R16 removes it.
-    expect(m.sdlt_pence).toBe(m.acquisition_tax_pence);
+    // R16b spec §26.2: the R8 alias is gone. Asserted on the object, not the
+    // type, so a stray `sdlt_pence: sdlt,` line in deriveMetrics fails here.
+    expect('sdlt_pence' in m).toBe(false);
     expect(m.acquisition_tax.regime).toBe('SDLT');
     expect(m.acquisition_tax.jurisdiction).toBe('england_ni');
     expect(m.acquisition_tax.basis).toBe('non_residential');
@@ -696,7 +697,6 @@ describe('acquisition tax is jurisdiction-aware (R8)', () => {
     inputs.acquisition.acquisition_date = '2026-08-17';
     const m = runAppraisal(inputs).metrics;
     expect(m.acquisition_tax_pence).toBe(2_542_410);
-    expect(m.sdlt_pence).toBe(2_542_410);
     expect(m.acquisition_tax.regime).toBe('LTT');
     expect(m.acquisition_tax.date_basis).toBe('transaction_date');
   });

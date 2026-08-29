@@ -92,7 +92,6 @@
     "area_bridge.saleable_to_developed_pct": null,
     "developed_area_sqm": 150,
     "acquisition_tax_pence": 100000,
-    "sdlt_pence": 100000,
     "acquisition_cost_pence": 20800000,
     "construction_cost_pence": 19800000,
     "professional_fees_pence": 1500000,

@@ -96,7 +96,7 @@ describe('York (9 & 9A Stonegate) — the audit\'s independently reconciled case
     // Audit §6.1's stated inputs, which the reconstruction has to hit before
     // any output assertion below means anything.
     expect(metrics.acquisition_cost_pence).toBe(44_800_000);       // £448,000
-    expect(metrics.sdlt_pence).toBe(1_075_000);                    // £10,750
+    expect(metrics.acquisition_tax_pence).toBe(1_075_000);         // £10,750
     expect(metrics.gdv_pence).toBe(125_000_000);                   // £1,250,000
     expect(inputs.unit_mix.units.reduce((s, u) => s + u.floor_area_sqm, 0)).toBe(252);
     expect(inputs.finance.term_months).toBe(12);

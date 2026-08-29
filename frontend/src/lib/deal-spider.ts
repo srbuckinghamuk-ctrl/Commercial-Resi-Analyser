@@ -288,7 +288,7 @@ export function computeSpider(
   // pays the vendor, stripped out of TDC so the residual is compared against a
   // bid. §17.7 moves the tax BASE, not the price a bid is measured against.
   const price = acq.purchase_price_pence;
-  const totalCostExLand = metrics.total_development_cost_pence - price - metrics.sdlt_pence;
+  const totalCostExLand = metrics.total_development_cost_pence - price - metrics.acquisition_tax_pence;
   const maxBid = calculateRlv(totalCostExLand, metrics.gdv_pence, spider.target_profit_on_cost_pct);
   const headroomPct = maxBid > 0 ? ((maxBid - price) / maxBid) * 100 : -100;
 

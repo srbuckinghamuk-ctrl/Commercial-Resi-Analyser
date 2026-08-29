@@ -662,8 +662,8 @@ class TestAcquisitionTaxIsJurisdictionAware:
     def test_taxes_an_english_appraisal_identically_to_the_pre_r8_engine(self):
         m = run_appraisal(_english_base()).metrics
         assert m.acquisition_tax_pence == 2_717_410
-        # The deprecated alias must carry the same value until R16 removes it.
-        assert m.sdlt_pence == m.acquisition_tax_pence
+        # R16b spec §26.2: the R8 alias is gone.
+        assert not hasattr(m, "sdlt_pence")
         assert m.acquisition_tax.regime == "SDLT"
         assert m.acquisition_tax.jurisdiction == "england_ni"
         assert m.acquisition_tax.basis == "non_residential"
@@ -674,7 +674,6 @@ class TestAcquisitionTaxIsJurisdictionAware:
         inputs.acquisition.acquisition_date = "2026-08-17"
         m = run_appraisal(inputs).metrics
         assert m.acquisition_tax_pence == 2_542_410
-        assert m.sdlt_pence == 2_542_410
         assert m.acquisition_tax.regime == "LTT"
         assert m.acquisition_tax.date_basis == "transaction_date"
 

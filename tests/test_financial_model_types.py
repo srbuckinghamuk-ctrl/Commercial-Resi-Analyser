@@ -239,9 +239,9 @@ def test_v14_no_qs_has_no_inflation_anywhere():
     assert dumped["cost_plan"]["qs"] is None
 
 
-def test_calc_version_is_2_17_0():
+def test_calc_version_is_2_18_0():
     from app.financial_model.types import CALC_VERSION
-    assert CALC_VERSION == "2.17.0"
+    assert CALC_VERSION == "2.18.0"
 
 
 def _minimal_v15_doc() -> dict:

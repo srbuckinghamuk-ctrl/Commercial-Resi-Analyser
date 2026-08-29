@@ -81,7 +81,7 @@ class TestYorkAuditCase:
         run = york_run()
         m, inputs = run.metrics, run.inputs
         assert m.acquisition_cost_pence == 44_800_000      # 448,000 pounds
-        assert m.sdlt_pence == 1_075_000                   # 10,750 pounds
+        assert m.acquisition_tax_pence == 1_075_000        # 10,750 pounds
         assert m.gdv_pence == 125_000_000                  # 1,250,000 pounds
         assert sum(u.floor_area_sqm for u in inputs.unit_mix.units) == 252
         assert inputs.finance.term_months == 12
