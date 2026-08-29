@@ -25,6 +25,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v12,
     migrate_inputs_to_v13,
     migrate_inputs_to_v14,
+    migrate_inputs_to_v15,
 )
 from app.financial_model.due_diligence import DD_CATALOGUE
 from app.financial_model.schedule import build_schedule
@@ -64,6 +65,7 @@ FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 # adding a golden fixture means adding its stem here (and there) too.
 EXPECTED_FIXTURE_STEMS = [
     "a-all-cash",
+    "aa-stress-pack",
     "f-dev-finance-12mo",
     "g-lender-valuation",
     "h-programme-scurve",
@@ -2591,3 +2593,165 @@ def test_odd_construction_window_derives_a_4_month_professional_statutory_window
     # at the spread that starts at month 1 -- the same 4-month window as professional.
     statutory_window_months = sum(1 for m in schedule.uses[1:] if m.statutory_pence > 0)
     assert statutory_window_months == 4
+
+
+# ---------------------------------------------------------------------------
+# Fixture AA -- the standard lender stress pack (spec Sec 25, R16, calc 2.17.0)
+#
+# Mirror of golden-fixtures.test.ts's `describe('Fixture AA - the standard lender
+# stress pack (spec Sec 25)')` block: the same four tests, in the same order,
+# reading the same hand-derived expectations out of the same JSON document.
+#
+# Fixture AA carries no `inputs` of its own -- like Fixture K it names base
+# documents instead (here two: `y-due-diligence` and
+# `u-investment-case-ltv-binds`), and its `kind` is "sensitivity" (refinement (a)
+# of design Sec 12, docs/financial-model/test-cases.md Sec 25.1), so it is
+# excluded from APPRAISAL_FIXTURES above and asserted here instead.
+#
+# WHICH ASSERTIONS ARE WHICH (see test-cases.md Sec 25.5). Every entry's derived
+# settings, entry 9's derivation block, the derived-input fields and Base U's two
+# closed-form metrics are HAND-DERIVED on the worksheet in test-cases.md Sec 25.2
+# and 25.3, independently of both engines. The full appraisal metrics of every
+# stress are IDENTITY-ASSERTED, not snapshotted: Sec 25.2 *defines* a stress cell
+# as run_appraisal(apply_scenario(base, its settings)), so asserting that
+# equality is asserting the contract itself.
+# ---------------------------------------------------------------------------
+
+AA_DOC = _load_fixture(FIXTURE_DIR / "aa-stress-pack.json")
+
+# Mirrors test_financial_model_stress_pack.py's `_single`: a ScenarioOverrides
+# with every lever explicit and one lever set from a (lever, value) pair, so
+# a stress's `settings` list can be replayed one entry at a time to
+# reconstruct the levered document apply_scenario would build.
+_LEVER_TO_FIELD = {
+    "saleable_area": "saleable_area_adjustment_pct", "abnormal_cost": "abnormal_cost_adjustment_pct",
+    "programme_slip": "programme_slip_months", "refi_ltv": "refi_ltv_adjustment_pct",
+    "sales_slip": "sales_slip_months", "exit_yield": "exit_yield_adjustment_pct",
+    "operating_cost": "operating_cost_adjustment_pct", "vacancy": "vacancy_adjustment_pct",
+    "construction_cost": "construction_cost_adjustment_pct",
+}
+
+
+def _aa_single(lever, value):
+    field = _LEVER_TO_FIELD[lever]
+    # Built as a dict-merge, not literal kwargs: a literal-kwargs form would raise
+    # "got multiple values for keyword argument" whenever lever == "construction_cost"
+    # (the risks_crystallise stress), because that field is also one of the four
+    # hardcoded base kwargs. Same values, no duplicate -- see
+    # test_financial_model_stress_pack.py's `_single` for the same fix.
+    kwargs = dict(label="", gdv_adjustment_pct=0, construction_cost_adjustment_pct=0,
+                  timeline_adjustment_months=0, interest_rate_adjustment_pct=0)
+    kwargs[field] = int(value) if field.endswith("_months") else value
+    return ScenarioOverrides(**kwargs)
+
+
+def _aa_base(stem: str) -> AnyCalculatorInputs:
+    return migrate_inputs_to_v15(_load_fixture(FIXTURE_DIR / f"{stem}.json")["inputs"], None)
+
+
+class TestFixtureAAStressPack:
+    @pytest.mark.parametrize("stem", sorted(AA_DOC["bases"]))
+    def test_hand_derived_settings_applicability_and_derivation(self, stem):
+        from app.financial_model.stress_pack import STRESS_PACK, resolve_stress
+        base = _aa_base(stem)
+        pins = AA_DOC["bases"][stem]
+        resolved = {d.key: resolve_stress(base, d) for d in STRESS_PACK}
+        assert [d.key for d in STRESS_PACK] == AA_DOC["bases"]["y-due-diligence"]["expected_order"]
+        assert {k: r.applicable for k, r in resolved.items()} == pins["expected_applicable"]
+        for key, note in pins.get("expected_notes", {}).items():
+            assert resolved[key].note == note, key
+        for key, settings in pins["expected_settings"].items():
+            assert [[s.lever, s.value] for s in resolved[key].settings] == settings, key
+        if "expected_derivation" in pins:
+            assert asdict(resolved["risks_crystallise"].derivation) == pins["expected_derivation"]
+
+    @pytest.mark.parametrize("stem", sorted(AA_DOC["bases"]))
+    def test_hand_derived_levered_inputs(self, stem):
+        """For each key in expected_derived_inputs, lever the base with the
+        resolved settings and compare the named input fields: floor_area_sqm /
+        estimated_value_pence lists over unit_mix.units; slip_months per phase
+        id; package_amount_pence over cost_plan.packages; contingency_pct by
+        class name; ltv_cap_pct on investment_case.takeout."""
+        from app.financial_model.stress_pack import STRESS_PACK, resolve_stress
+        base = _aa_base(stem)
+        pins = AA_DOC["bases"][stem]
+        resolved = {d.key: resolve_stress(base, d) for d in STRESS_PACK}
+        for key, fields in pins.get("expected_derived_inputs", {}).items():
+            levered = base
+            for setting in resolved[key].settings:
+                levered = apply_scenario(levered, _aa_single(setting.lever, setting.value))
+            for field, expected in fields.items():
+                if field == "floor_area_sqm":
+                    assert [u.floor_area_sqm for u in levered.unit_mix.units] == expected, (stem, key, field)
+                elif field == "estimated_value_pence":
+                    assert [u.estimated_value_pence for u in levered.unit_mix.units] == expected, (stem, key, field)
+                elif field == "slip_months":
+                    by_id = {p.id: p.slip_months for p in levered.programme.phases}
+                    for phase_id, expected_slip in expected.items():
+                        assert by_id[phase_id] == expected_slip, (stem, key, phase_id)
+                elif field == "package_amount_pence":
+                    assert [p.amount_pence for p in levered.cost_plan.packages] == expected, (stem, key, field)
+                elif field == "contingency_pct":
+                    by_name = {c.name: c.pct for c in levered.cost_plan.contingency}
+                    for name, expected_pct in expected.items():
+                        assert by_name[name] == expected_pct, (stem, key, name)
+                elif field == "ltv_cap_pct":
+                    assert levered.investment_case.takeout.ltv_cap_pct == expected, (stem, key, field)
+                else:
+                    raise AssertionError(f"unknown derived-input field {field!r}")
+
+    @pytest.mark.parametrize("stem", sorted(AA_DOC["bases"]))
+    def test_every_stress_is_the_levered_appraisal(self, stem):
+        """Identity (spec Sec 25.2): run_stress_pack(base).stresses[i].metrics
+        equals the six fields of run_appraisal(apply_scenario chain).metrics, and
+        delta_profit_pence is the difference against the base case. Two (stem,
+        key) pairs are unmeasured -- the levered position fails validation, so
+        _measure never calls run_appraisal for it (Sec 12.7) -- and are collected
+        and asserted against the known set for this stem, rather than skipped
+        unconditionally, mirroring
+        test_every_stress_is_the_levered_appraisal_on_y_and_u in
+        test_financial_model_stress_pack.py."""
+        from app.financial_model.stress_pack import run_stress_pack
+        inputs = _aa_base(stem)
+        result = run_stress_pack(inputs)
+        skipped: set[tuple[str, str]] = set()
+        for s in result.stresses:
+            levered = inputs
+            for setting in s.settings:
+                levered = apply_scenario(levered, _aa_single(setting.lever, setting.value))
+            if s.metrics.validation_errors:
+                skipped.add((stem, s.key))
+                continue
+            expected = run_appraisal(levered).metrics
+            assert s.metrics.profit_pence == expected.profit_pence, (stem, s.key)
+            assert s.metrics.profit_on_cost_pct == expected.profit_on_cost_pct, (stem, s.key)
+            assert s.metrics.profit_on_gdv_pct == expected.profit_on_gdv_pct, (stem, s.key)
+            assert s.metrics.irr_annual_pct == expected.irr_annual_pct, (stem, s.key)
+            assert s.metrics.ltgdv_developer_pct == expected.ltgdv_developer_pct, (stem, s.key)
+            assert s.metrics.peak_debt_pence == expected.peak_debt_pence, (stem, s.key)
+            assert s.delta_profit_pence == expected.profit_pence - result.base.profit_pence, (stem, s.key)
+        known_skipped_for_stem = {
+            pair for pair in (
+                ("y-due-diligence", "slower_absorption"),
+                ("u-investment-case-ltv-binds", "delayed_start"),
+            )
+            if pair[0] == stem
+        }
+        assert skipped == known_skipped_for_stem
+
+    def test_u_hand_metrics(self):
+        """expected_hand_metrics (test-cases.md Sec 25.3): abnormal_cost moves
+        profit by exactly -3,500,000; lower_refi_ltv's take-out quantum is
+        14,583,186 pence and the take-out is still ltv-bound."""
+        from app.financial_model.stress_pack import run_stress_pack
+        u = _aa_base("u-investment-case-ltv-binds")
+        pins = AA_DOC["bases"]["u-investment-case-ltv-binds"]["expected_hand_metrics"]
+        result = run_stress_pack(u)
+        by_key = {s.key: s for s in result.stresses}
+        assert by_key["abnormal_cost"].delta_profit_pence == pins["abnormal_cost"]["delta_profit_pence"]
+
+        lower_refi_ltv_setting = by_key["lower_refi_ltv"].settings[0]
+        levered = apply_scenario(u, _aa_single(lower_refi_ltv_setting.lever, lower_refi_ltv_setting.value))
+        ic = run_appraisal(levered).metrics.investment_case
+        assert ic["takeout"]["quantum_pence"] == pins["lower_refi_ltv"]["takeout_quantum_pence"]
+        assert ic["takeout"]["binding_constraint"] == pins["lower_refi_ltv"]["binding_constraint"]

@@ -1,0 +1,159 @@
+{
+  "name": "AA - the standard lender stress pack over fixtures Y and U",
+  "kind": "sensitivity",
+  "suite": "stress_pack",
+  "note": "The standard lender stress pack (spec §25) over two base documents. kind is \"sensitivity\" (a plain \"suite over a base fixture, no inputs of its own\" marker roughly thirty corpus loops in both engines already skip on) rather than a new kind, refinement (a) of design §12 — see test-cases.md §25.1. expected_derived_inputs for the four new levers live here rather than on fixture K, whose base (Fixture F) has no cost plan, network or investment case for most of them to move — refinement (b). expected_order, expected_applicable, expected_notes, expected_settings, expected_derivation, expected_derived_inputs and expected_hand_metrics are all hand-derived on test-cases.md §25.2/25.3, before either engine runs. Every stress's full appraisal metrics are identity-asserted, never pinned as numbers — fixture K's rule (§12, model-governance.md §2.1): spec §25.2 defines a cell as run_appraisal(apply_scenario(base, its settings)), so the test asserting that equality is asserting the contract itself.",
+  "bases": {
+    "y-due-diligence": {
+      "expected_order": [
+        "unit_loss",
+        "area_reduction",
+        "abnormal_cost",
+        "slower_absorption",
+        "delayed_start",
+        "yield_expansion",
+        "lower_refi_ltv",
+        "opex_vacancy",
+        "risks_crystallise"
+      ],
+      "expected_applicable": {
+        "unit_loss": true,
+        "area_reduction": true,
+        "abnormal_cost": false,
+        "slower_absorption": true,
+        "delayed_start": true,
+        "yield_expansion": false,
+        "lower_refi_ltv": false,
+        "opex_vacancy": false,
+        "risks_crystallise": true
+      },
+      "expected_notes": {
+        "abnormal_cost": "No package carries the abnormal contingency class, so the stress has nothing to attach to.",
+        "yield_expansion": "No investment case is modelled, so there is no take-out to stress."
+      },
+      "expected_settings": {
+        "unit_loss": [
+          [
+            "saleable_area",
+            -25
+          ]
+        ],
+        "risks_crystallise": [
+          [
+            "construction_cost",
+            9.807692307692
+          ],
+          [
+            "programme_slip",
+            7
+          ]
+        ]
+      },
+      "expected_derivation": {
+        "cost_impact_pence": 2550000,
+        "base_build_pence": 26000000,
+        "cost_pct": 9.807692307692,
+        "programme_impact_months": 7,
+        "programme_impact_max_months": 3,
+        "stated_item_count": 4
+      },
+      "expected_derived_inputs": {
+        "unit_loss": {
+          "floor_area_sqm": [
+            60,
+            71.25,
+            41.25,
+            56.25
+          ],
+          "estimated_value_pence": [
+            18750000,
+            22500000,
+            13125000,
+            15750000
+          ]
+        },
+        "area_reduction": {
+          "floor_area_sqm": [
+            76,
+            90.25,
+            52.25,
+            71.25
+          ],
+          "estimated_value_pence": [
+            23750000,
+            28500000,
+            16625000,
+            19950000
+          ]
+        },
+        "delayed_start": {
+          "slip_months": {
+            "acquisition": 6
+          }
+        },
+        "risks_crystallise": {
+          "package_amount_pence": [
+            13176923,
+            8784615,
+            6588462
+          ],
+          "slip_months": {
+            "acquisition": 7
+          }
+        }
+      }
+    },
+    "u-investment-case-ltv-binds": {
+      "expected_applicable": {
+        "unit_loss": true,
+        "area_reduction": true,
+        "abnormal_cost": true,
+        "slower_absorption": false,
+        "delayed_start": true,
+        "yield_expansion": true,
+        "lower_refi_ltv": true,
+        "opex_vacancy": true,
+        "risks_crystallise": false
+      },
+      "expected_settings": {
+        "unit_loss": [
+          [
+            "saleable_area",
+            -20
+          ]
+        ],
+        "risks_crystallise": [
+          [
+            "construction_cost",
+            0
+          ],
+          [
+            "programme_slip",
+            0
+          ]
+        ]
+      },
+      "expected_derived_inputs": {
+        "abnormal_cost": {
+          "contingency_pct": {
+            "general": 10,
+            "existing_building": 0,
+            "abnormal": 10
+          }
+        },
+        "lower_refi_ltv": {
+          "ltv_cap_pct": 45
+        }
+      },
+      "expected_hand_metrics": {
+        "abnormal_cost": {
+          "delta_profit_pence": -3500000
+        },
+        "lower_refi_ltv": {
+          "takeout_quantum_pence": 14583186,
+          "binding_constraint": "ltv"
+        }
+      }
+    }
+  }
+}

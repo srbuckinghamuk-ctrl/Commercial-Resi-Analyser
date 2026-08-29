@@ -13,10 +13,13 @@ import { areaBridge } from './areas';
 import { VAT_CHARGE_CATEGORIES } from './vat';
 import { DD_CATALOGUE } from './due-diligence';
 import { runSensitivity } from './sensitivity';
-import type { SensitivityConfig } from './sensitivity';
+import type { SensitivityConfig, SensitivityLever } from './sensitivity';
 import { applyScenario } from './apply-scenario';
 import type { AppraisalRun } from './index';
-import type { AnyCalculatorInputs, AppraisalResultV2 } from './finance-types';
+import type { AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV15 } from './finance-types';
+import { migrateInputsToV15 } from './migrate';
+import { STRESS_PACK, resolveStress, runStressPack } from './stress-pack';
+import type { ScenarioOverrides } from '../conversion-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
@@ -76,6 +79,7 @@ const fixtures: Fixture[] = fixtureFiles
 // is the "fixture list": adding a golden fixture means adding its stem here too.
 const EXPECTED_FIXTURE_STEMS = [
   'a-all-cash',
+  'aa-stress-pack',
   'f-dev-finance-12mo',
   'g-lender-valuation',
   'h-programme-scurve',
@@ -2075,5 +2079,202 @@ describe('Fixture K — sensitivity suite (spec §12)', () => {
         expect(cell.profit_pence, `row ${step} profit`).not.toBeNull();
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fixture AA — the standard lender stress pack (spec §25, R16, calc 2.17.0)
+//
+// Mirrors test_financial_model_fixtures.py's `TestFixtureAAStressPack`: the same
+// four tests, in the same order, reading the same hand-derived expectations out
+// of the same JSON document.
+//
+// Fixture AA carries no `inputs` of its own — like Fixture K it names base
+// documents instead (here two: `y-due-diligence` and
+// `u-investment-case-ltv-binds`), and its `kind` is 'sensitivity' (refinement
+// (a) of design §12, docs/financial-model/test-cases.md §25.1), so it is
+// excluded from `appraisalFixtures` above and asserted here instead.
+//
+// WHICH ASSERTIONS ARE WHICH (see test-cases.md §25.5). Every entry's derived
+// settings, entry 9's derivation block, the derived-input fields and Base U's
+// two closed-form metrics are HAND-DERIVED on the worksheet in test-cases.md
+// §25.2 and §25.3, independently of both engines. The full appraisal metrics of
+// every stress are IDENTITY-ASSERTED, not snapshotted: §25.2 *defines* a stress
+// cell as runAppraisal(applyScenario(base, its settings)), so asserting that
+// equality is asserting the contract itself.
+// ---------------------------------------------------------------------------
+
+describe('Fixture AA — the standard lender stress pack (spec §25)', () => {
+  interface StressPackFixture {
+    name: string;
+    kind: 'sensitivity';
+    suite: string;
+    note: string;
+    bases: Record<string, {
+      expected_order?: string[];
+      expected_applicable: Record<string, boolean>;
+      expected_notes?: Record<string, string>;
+      expected_settings: Record<string, Array<[SensitivityLever, number]>>;
+      expected_derivation?: Record<string, number | null>;
+      expected_derived_inputs?: Record<string, Record<string, unknown>>;
+      expected_hand_metrics?: Record<string, Record<string, unknown>>;
+    }>;
+  }
+
+  const aa = JSON.parse(
+    readFileSync(join(FIXTURE_DIR, 'aa-stress-pack.json'), 'utf-8'),
+  ) as StressPackFixture;
+
+  function aaBase(stem: string): CalculatorInputsV15 {
+    const doc = JSON.parse(readFileSync(join(FIXTURE_DIR, `${stem}.json`), 'utf-8')) as {
+      inputs: Record<string, unknown>;
+    };
+    return migrateInputsToV15(doc.inputs);
+  }
+
+  // Mirrors stress-pack.test.ts's `single`: a ScenarioOverrides with every
+  // lever explicit and one lever set from a (lever, value) pair, so a
+  // stress's `settings` list can be replayed one entry at a time to
+  // reconstruct the levered document applyScenario would build.
+  const LEVER_TO_FIELD: Record<string, keyof ScenarioOverrides> = {
+    saleable_area: 'saleable_area_adjustment_pct', abnormal_cost: 'abnormal_cost_adjustment_pct',
+    programme_slip: 'programme_slip_months', refi_ltv: 'refi_ltv_adjustment_pct',
+    sales_slip: 'sales_slip_months', exit_yield: 'exit_yield_adjustment_pct',
+    operating_cost: 'operating_cost_adjustment_pct', vacancy: 'vacancy_adjustment_pct',
+    construction_cost: 'construction_cost_adjustment_pct',
+  };
+
+  function aaSingle(lever: SensitivityLever, value: number): ScenarioOverrides {
+    const field = LEVER_TO_FIELD[lever];
+    // Every field explicit: a TS object literal has no runtime default for a
+    // field this test doesn't set, and applyScenario reads several of them in
+    // a way that treats `undefined` as truthy, not as zero.
+    const base: ScenarioOverrides = {
+      label: '', gdv_adjustment_pct: 0, construction_cost_adjustment_pct: 0,
+      timeline_adjustment_months: 0, interest_rate_adjustment_pct: 0,
+      phase_slip_phase_id: null, phase_slip_months: 0,
+      exit_yield_adjustment_pct: 0, operating_cost_adjustment_pct: 0, vacancy_adjustment_pct: 0,
+      sales_slip_months: 0, saleable_area_adjustment_pct: 0, abnormal_cost_adjustment_pct: 0,
+      programme_slip_months: 0, refi_ltv_adjustment_pct: 0,
+    };
+    return { ...base, [field]: value };
+  }
+
+  it('derives the hand-derived settings, applicability and derivation for each base', () => {
+    for (const stem of Object.keys(aa.bases).sort()) {
+      const base = aaBase(stem);
+      const pins = aa.bases[stem];
+      const resolved = Object.fromEntries(STRESS_PACK.map((d) => [d.key, resolveStress(base, d)]));
+      expect(STRESS_PACK.map((d) => d.key)).toEqual(aa.bases['y-due-diligence'].expected_order);
+      expect(Object.fromEntries(Object.entries(resolved).map(([k, r]) => [k, r.applicable])))
+        .toEqual(pins.expected_applicable);
+      for (const [key, note] of Object.entries(pins.expected_notes ?? {})) {
+        expect(resolved[key].note, key).toBe(note);
+      }
+      for (const [key, settings] of Object.entries(pins.expected_settings)) {
+        expect(resolved[key].settings.map((s) => [s.lever, s.value]), key).toEqual(settings);
+      }
+      if (pins.expected_derivation) {
+        expect(resolved.risks_crystallise.derivation).toEqual(pins.expected_derivation);
+      }
+    }
+  });
+
+  it('derives the hand-derived levered inputs for each base', () => {
+    // For each key in expected_derived_inputs, lever the base with the
+    // resolved settings and compare the named input fields: floor_area_sqm /
+    // estimated_value_pence lists over unit_mix.units; slip_months per phase
+    // id; package_amount_pence over cost_plan.packages; contingency_pct by
+    // class name; ltv_cap_pct on investment_case.takeout.
+    for (const stem of Object.keys(aa.bases).sort()) {
+      const base = aaBase(stem);
+      const pins = aa.bases[stem];
+      const resolved = Object.fromEntries(STRESS_PACK.map((d) => [d.key, resolveStress(base, d)]));
+      for (const [key, fields] of Object.entries(pins.expected_derived_inputs ?? {})) {
+        let levered: AnyCalculatorInputs = base;
+        for (const setting of resolved[key].settings) {
+          levered = applyScenario(levered, aaSingle(setting.lever, setting.value));
+        }
+        for (const [field, expected] of Object.entries(fields)) {
+          if (field === 'floor_area_sqm') {
+            expect(levered.unit_mix.units.map((u) => u.floor_area_sqm), `${stem} ${key} ${field}`).toEqual(expected);
+          } else if (field === 'estimated_value_pence') {
+            expect(levered.unit_mix.units.map((u) => u.estimated_value_pence), `${stem} ${key} ${field}`).toEqual(expected);
+          } else if (field === 'slip_months') {
+            const byId = Object.fromEntries(levered.programme!.phases.map((p) => [p.id, p.slip_months]));
+            for (const [phaseId, expectedSlip] of Object.entries(expected as Record<string, number>)) {
+              expect(byId[phaseId], `${stem} ${key} ${phaseId}`).toBe(expectedSlip);
+            }
+          } else if (field === 'package_amount_pence') {
+            expect(levered.cost_plan.packages.map((p) => p.amount_pence), `${stem} ${key} ${field}`).toEqual(expected);
+          } else if (field === 'contingency_pct') {
+            const byName = Object.fromEntries(levered.cost_plan.contingency.map((c) => [c.name, c.pct]));
+            for (const [name, expectedPct] of Object.entries(expected as Record<string, number>)) {
+              expect(byName[name], `${stem} ${key} ${name}`).toBe(expectedPct);
+            }
+          } else if (field === 'ltv_cap_pct') {
+            expect(levered.investment_case!.takeout.ltv_cap_pct, `${stem} ${key} ${field}`).toBe(expected);
+          } else {
+            throw new Error(`unknown derived-input field ${field}`);
+          }
+        }
+      }
+    }
+  });
+
+  it('is the levered appraisal for every stress, on each base', () => {
+    // Identity (spec §25.2): runStressPack(base).stresses[i].metrics equals the
+    // six fields of runAppraisal(applyScenario chain).metrics, and
+    // delta_profit_pence is the difference against the base case. Two (stem,
+    // key) pairs are unmeasured — the levered position fails validation, so
+    // `measure` never calls `runAppraisal` for it (§12.7) — and are collected
+    // and asserted against the known set for this stem, rather than skipped
+    // unconditionally, mirroring stress-pack.test.ts's "every stress is the
+    // levered appraisal, on Y and U".
+    for (const stem of Object.keys(aa.bases).sort()) {
+      const inputs = aaBase(stem);
+      const result = runStressPack(inputs);
+      const skipped = new Set<string>();
+      for (const s of result.stresses) {
+        let levered: AnyCalculatorInputs = inputs;
+        for (const setting of s.settings) {
+          levered = applyScenario(levered, aaSingle(setting.lever, setting.value));
+        }
+        if (s.metrics.validation_errors.length > 0) {
+          skipped.add(`${stem}:${s.key}`);
+          continue;
+        }
+        const expected = runAppraisal(levered).metrics;
+        expect(s.metrics.profit_pence, `${stem} ${s.key}`).toBe(expected.profit_pence);
+        expect(s.metrics.profit_on_cost_pct, `${stem} ${s.key}`).toBe(expected.profit_on_cost_pct);
+        expect(s.metrics.profit_on_gdv_pct, `${stem} ${s.key}`).toBe(expected.profit_on_gdv_pct);
+        expect(s.metrics.irr_annual_pct, `${stem} ${s.key}`).toBe(expected.irr_annual_pct);
+        expect(s.metrics.ltgdv_developer_pct, `${stem} ${s.key}`).toBe(expected.ltgdv_developer_pct);
+        expect(s.metrics.peak_debt_pence, `${stem} ${s.key}`).toBe(expected.peak_debt_pence);
+        expect(s.delta_profit_pence, `${stem} ${s.key}`).toBe((expected.profit_pence as number) - result.base.profit_pence);
+      }
+      const knownSkippedForStem = new Set(
+        ['y-due-diligence:slower_absorption', 'u-investment-case-ltv-binds:delayed_start']
+          .filter((pair) => pair.startsWith(`${stem}:`)),
+      );
+      expect(skipped).toEqual(knownSkippedForStem);
+    }
+  });
+
+  it('matches Base U by hand: abnormal cost and refi LTV', () => {
+    // expected_hand_metrics (test-cases.md §25.3): abnormal_cost moves profit
+    // by exactly -3,500,000; lower_refi_ltv's take-out quantum is 14,583,186
+    // pence and the take-out is still ltv-bound.
+    const u = aaBase('u-investment-case-ltv-binds');
+    const pins = aa.bases['u-investment-case-ltv-binds'].expected_hand_metrics!;
+    const result = runStressPack(u);
+    const byKey = Object.fromEntries(result.stresses.map((s) => [s.key, s]));
+    expect(byKey.abnormal_cost.delta_profit_pence).toBe(pins.abnormal_cost.delta_profit_pence);
+
+    const lowerRefiLtvSetting = byKey.lower_refi_ltv.settings[0];
+    const levered = applyScenario(u, aaSingle(lowerRefiLtvSetting.lever, lowerRefiLtvSetting.value));
+    const ic = runAppraisal(levered).metrics.investment_case;
+    expect(ic?.takeout.quantum_pence).toBe(pins.lower_refi_ltv.takeout_quantum_pence);
+    expect(ic?.takeout.binding_constraint).toBe(pins.lower_refi_ltv.binding_constraint);
   });
 });

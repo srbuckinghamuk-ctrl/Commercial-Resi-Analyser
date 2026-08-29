@@ -5718,3 +5718,251 @@ the funding gap is a financing-side shortfall, not a cost. These are the
 figures now stored in `s-dated-programme.json`'s `expected_metrics`,
 superseding the R14 (calc 2.13.0) pins the fixture's own `note` field
 records for contrast.
+
+## 25. The standard lender stress pack [R16 — calc 2.17.0]
+
+### 25.1 Fixture AA — the standard lender stress pack (`fixtures/financial-model/aa-stress-pack.json`)
+
+**Purpose:** the release's golden case for spec §25 — the nine-entry standard lender
+stress pack (`STRESS_PACK` / `resolve_stress` / `run_stress_pack` in `stress_pack.py`,
+their TS twins in `stress-pack.ts`). Each entry is one named cell of the base document,
+built the same way a sensitivity-suite cell is (`run_appraisal(apply_scenario(base,
+overrides))`, spec §12.3), but the pack's settings are either fixed lender conventions
+(area −5%, abnormal cost +10%, sales six months slower, start/PC six months late, exit
+yield +100 bp, refi LTV −10 pp, opex +10%/vacancy +5 pp) or *derived from the document
+itself* (entry 1's "one unit lost" percentage, and entry 9's "recorded risks
+crystallise" cost/programme impact, read off the due-diligence evidence schedule — spec
+§25.3). Fixture AA carries two base documents rather than one, because no single
+existing fixture exercises every one of the nine entries' applicability rules:
+
+- **Base Y** (`y-due-diligence`, migrated to v15): a detailed cost plan with no
+  abnormal-tagged package, a precedence-network programme, a unit-sales ledger, no
+  investment case, and a due-diligence schedule with real cost and programme impacts —
+  it exercises entries 1, 2, 4, 5 and 9 as *applicable* and 3, 6, 7, 8 as *inapplicable*.
+- **Base U** (`u-investment-case-ltv-binds`, migrated to v15): a headline cost plan
+  (so the abnormal class has no package to fail to attach to), a precedence-network
+  programme, no unit-sales ledger (`retain_all`), an investment case whose take-out is
+  LTV-bound, and a due-diligence schedule that migrates with every item `unknown` (§23.10
+  seed, zero cost and zero months) — it exercises entries 3, 6, 7, 8 as *applicable*
+  (plus 1, 2, 5) and 4, 9 as *inapplicable*, and gives entry 7 ("lower_refi_ltv") a
+  binding constraint to move.
+
+**Two deliberate refinements to the design** (both recorded in full, normative form in
+calc spec §25 — Task 11 of this release; noted here so the fixture's shape does not
+look like a typo against the design document it was planned from):
+
+**(a) `kind` is `"sensitivity"`, not a new `"stress_pack"` kind.** A `kind` value marks
+a fixture as "a suite over a base fixture, no `inputs` of its own" to roughly thirty
+corpus loops across both engines (every place that iterates every fixture file and
+must skip the ones that are not themselves a runnable document — the golden-fixture
+parity loop, the invariant matrix, the migration-identity gates, `stress_pack.py`'s own
+`test_inapplicable_implies_equal_to_base_corpus_wide`, and their TS mirrors). Fixture K
+(spec §12) already established `kind: "sensitivity"` as that marker. Giving AA a new
+`kind` would have meant adding a second value to every one of those loops' exclusion
+checks for no behavioural gain; reusing `"sensitivity"` means AA is excluded by the
+existing `f.kind !== 'sensitivity'` / `.get("kind") != "sensitivity"` filters with no
+code change at all. `suite: "stress_pack"` is carried as a plain discriminator field
+for a human (or a future loop that needs to tell K and AA apart) to read, not one any
+existing loop inspects.
+
+**(b) The four new levers' derived-input pins live in fixture AA, not fixture K.**
+Fixture K's base document is Fixture F (`f-dev-finance-12mo`), which has no cost plan
+with an abnormal-tagged class, no precedence-network programme, no unit-sales ledger and
+no investment case — so `abnormal_cost`, `slower_absorption`, `delayed_start`,
+`yield_expansion`, `lower_refi_ltv` and `opex_vacancy` would all be *inapplicable* on it,
+and there would be nothing for their derived-input pins to move. `unit_loss`,
+`area_reduction` and `risks_crystallise` are the only three of the nine entries Fixture
+K's base could exercise meaningfully, and `risks_crystallise` needs a due-diligence
+schedule with real impacts (§25.3), which Fixture F, a pre-§23 document, migrates with
+every item `unknown` — so even that third entry has nothing to derive. `expected_derived_inputs`
+for the four new levers therefore live on fixture AA's two bases (§25.2 below), the
+first fixtures with the mix of blocks the levers actually touch.
+
+### 25.2 Base Y — hand-derivation
+
+Base Y is `y-due-diligence.json`, migrated to `inputs_version: 15`. The facts the
+derivation below relies on:
+
+| Fact | Value | Source |
+|---|---|---|
+| Proposed units | 4: `u1` 80 sqm / 25,000,000p; `u2` 95 / 30,000,000; `u3` 55 / 17,500,000; `u4` 75 / 21,000,000 | `inputs.unit_mix.units` |
+| Cost plan | `detailed`; packages `pkg-structure` 12,000,000, `pkg-envelope` 8,000,000, `pkg-mande` 6,000,000, all `contingency_class: general`, all `lender_eligible: true`; classes general 5% / existing_building 0% / abnormal 0%; two fixed fee lines | `inputs.cost_plan` |
+| `base_build_pence` | 12,000,000 + 8,000,000 + 6,000,000 = **26,000,000** | §16.3 |
+| Programme | a precedence network of 7 phases (`acquisition`, `conditions`, `design`, `construction`, `marketing`, `practical_completion`, `unit_completions`); the only phase with `predecessors: []` is `acquisition` | `inputs.programme.phases` |
+| Unit-sales ledger | 4 rows, exchange/completion anchored to `marketing`/`practical_completion`/`unit_completions` | `inputs.unit_sales.units` |
+| Investment case | `null` | |
+| Assessed due-diligence items (status `red` or `amber`) | `dd-planning_conditions` amber, 250,000p / 1 month; `dd-title_report` red, 1,500,000p / 3 months; `dd-structural_survey` amber, cost and months both `null`; `dd-procurement_contractor` amber, 0p / 2 months; `dd-custom-basement` amber, 800,000p / 1 month | `inputs.due_diligence.items` |
+
+**Entry 9 (`risks_crystallise`) derivation, spec §25.3.** Only items with a *non-null*
+`cost_impact_pence` contribute to the cost sum, and only items with a non-null
+`programme_impact_months` contribute to the programme sum — `dd-structural_survey`
+states neither, so it drops out of both, but the other four assessed items all state a
+cost (including `dd-procurement_contractor`'s explicit **0**, which counts towards
+`stated_item_count` precisely because it is stated, not absent):
+
+```
+Σcost   = 250,000 + 1,500,000 + 0 + 800,000        = 2,550,000
+Σmonths = 1 + 3 + 2 + 1                             = 7          (max 3)
+stated_item_count = 4                               (structural_survey excluded — null cost)
+cost_pct = round12(2,550,000 / 26,000,000 × 100)    = round12(9.807692307692307…) = 9.807692307692
+```
+
+So `resolve_stress(y, risks_crystallise)` derives `settings = [(construction_cost,
+9.807692307692), (programme_slip, 7)]` and `derivation = {cost_impact_pence: 2550000,
+base_build_pence: 26000000, cost_pct: 9.807692307692, programme_impact_months: 7,
+programme_impact_max_months: 3, stated_item_count: 4}`. Both the cost half (`Σcost > 0`
+and `base_build > 0`) and the programme half (`Σmonths > 0` and a network exists) hold,
+so the entry is applicable with no note.
+
+**Entry 1 (`unit_loss`) derivation.** Four units, so the derived `saleable_area`
+percentage is `round12(-100 / 4)` = **−25**. Applying it (§16.2's area lever, before any
+rounded value is applied to GDV) scales every unit's `floor_area_sqm` and
+`estimated_value_pence` by 0.75, exactly (all four values divide evenly):
+
+| Unit | `floor_area_sqm` × 0.75 | `estimated_value_pence` × 0.75 |
+|---|---|---|
+| u1 | 80 → **60** | 25,000,000 → **18,750,000** |
+| u2 | 95 → **71.25** | 30,000,000 → **22,500,000** |
+| u3 | 55 → **41.25** | 17,500,000 → **13,125,000** |
+| u4 | 75 → **56.25** | 21,000,000 → **15,750,000** |
+
+**Entry 2 (`area_reduction`) derivation.** Fixed at −5% (`× 0.95`), exact on every unit:
+
+| Unit | `floor_area_sqm` × 0.95 | `estimated_value_pence` × 0.95 |
+|---|---|---|
+| u1 | 80 → **76** | 25,000,000 → **23,750,000** |
+| u2 | 95 → **90.25** | 30,000,000 → **28,500,000** |
+| u3 | 55 → **52.25** | 17,500,000 → **16,625,000** |
+| u4 | 75 → **71.25** | 21,000,000 → **19,950,000** |
+
+**Entry 5 (`delayed_start`) derivation.** Fixed at `programme_slip = 6`; the lever adds
+its value to `slip_months` of every phase with no predecessors (§18.2/§18.9), and
+`acquisition` is the only such phase on Y — so `acquisition.slip_months` moves **0 → 6**
+and every other phase's `slip_months` is unchanged.
+
+**Entry 9's levered build.** Applying `construction_cost = 9.807692307692` scales each
+package's `amount_pence` by `1.09807692307692`, rounded independently (half-up):
+
+```
+12,000,000 × 1.09807692307692 = 13,176,923.076… → 13,176,923
+ 8,000,000 × 1.09807692307692 =  8,784,615.384… →  8,784,615
+ 6,000,000 × 1.09807692307692 =  6,588,461.538… →  6,588,462 (residue)
+                                                    ─────────
+                                                    28,550,000
+```
+
+`28,550,000` equals `26,000,000 + 2,550,000` **exactly** — the three packages' rounding
+residues cancel here, so the §25.3 detailed-mode bound (`|levered − (base + Σcost)| ≤
+number of packages`, 3 pence) is met with 0. Entry 9 also carries `programme_slip = 7`,
+which — same rule as entry 5 — moves `acquisition.slip_months` **0 → 7**.
+
+**Applicability, Base Y.** 1, 2, 4, 5, 9 applicable; **3** (`abnormal_cost`) inapplicable
+— the cost plan is detailed and no package carries `contingency_class: abnormal`; **6,
+7, 8** (`yield_expansion`, `lower_refi_ltv`, `opex_vacancy`) inapplicable — no investment
+case is modelled.
+
+### 25.3 Base U — hand-derivation
+
+Base U is `u-investment-case-ltv-binds.json`, migrated to `inputs_version: 15`. The
+facts the derivation below relies on:
+
+| Fact | Value | Source |
+|---|---|---|
+| Cost plan | `headline`; classes general 10% / existing_building 0% / abnormal 0%; no packages, no fee lines; `base_build_pence` **35,000,000** | `inputs.cost_plan` |
+| Finance | `funding_source: cash`, no committed facility — unlevered | `inputs.finance` |
+| Programme | a precedence network of 12 phases; the sole phase with `predecessors: []` is `acquisition` | `inputs.programme.phases` |
+| Unit sales | `unit_sales: null`; 5 units, `retain_all` exit | `inputs.unit_sales`, `inputs.unit_mix.units` |
+| Investment case | `takeout.ltv_cap_pct` 55, `dscr_floor` 1.3, `icr_floor` 1.3; `valuation.cap_yield_pct` 7.5, `purchasers_costs_pct` 6.75; `stabilised_occupancy_pct` 96; four operating lines | `inputs.investment_case` |
+| U's pinned take-out (`expected_metrics`) | `investment_value_pence` 32,407,082; `ltv_cap_pence` 17,823,895; `dscr_cap_pence` 25,814,005; `icr_cap_pence` 33,264,000; `quantum_pence` 17,823,895; `binding_constraint: "ltv"` | `expected_metrics` |
+| Due diligence | pre-§23 document — migrates with every item `unknown` (§23.10 seed) → `Σcost` 0, `Σmonths` 0 | |
+
+**Entry 3 (`abnormal_cost`) derivation.** Fixed at `abnormal_cost = +10` (percentage
+points added to the `abnormal` contingency class's `pct`). U's headline mode means the
+class's base is the whole build (§16.3), so the class's `amount_pence` rises by
+`35,000,000 × 10 / 100` = **3,500,000** exactly, and so does
+`contingency_total_pence`. With no fee line keyed off contingency, no facility to
+re-cost (U is cash-funded, `peak_debt_pence` 0), and no VAT registration on this
+document, that 3,500,000 passes straight through `cost_before_finance_pence` and
+`total_development_cost_pence`, and **`profit_pence` falls by exactly 3,500,000** from
+U's pinned base profit — the same figure `run_stress_pack(u).stresses` reports as
+`abnormal_cost`'s `delta_profit_pence`.
+
+**Entry 7 (`lower_refi_ltv`) derivation.** Fixed at `refi_ltv = 10` (percentage points
+*subtracted* from `investment_case.takeout.ltv_cap_pct`, §19.4/§19.8), moving it
+**55 → 45**. The investment value itself does not move (the lever touches only the cap,
+not the valuation), so:
+
+```
+ltv_cap_pence = floor(32,407,082 × 45 / 100) = floor(14,583,186.9) = 14,583,186
+```
+
+DSCR cap (25,814,005) and ICR cap (33,264,000) are both unchanged and both still exceed
+14,583,186, so **`quantum_pence` = 14,583,186** and the take-out is **still `ltv`-bound**
+— the stress moves the number without moving *which* constraint binds.
+
+**Applicability, Base U.** 1, 2 applicable (5 units — entry 1's derived percentage is
+`round12(-100 / 5)` = **−20**); **3** applicable (headline mode gives the abnormal class
+a base to scale even though no package is tagged); **4** (`slower_absorption`)
+inapplicable — no unit-sales ledger; **5** applicable — the programme is a network; **6,
+7, 8** applicable — an investment case is modelled; **9** (`risks_crystallise`)
+inapplicable **on both halves** — `Σcost` and `Σmonths` are both 0, so its note names
+both the missing cost impact and the missing programme impact.
+
+### 25.4 The composition-pair arithmetic (Task 2)
+
+Two of the nine entries' settings are the levers Task 2 built to share a field with an
+existing lever (`saleable_area` shares the unit-value field `gdv_adjustment_pct`
+already scales; `programme_slip` shares the phase-slip machinery `phase_slip_months`
+already drives). The design-time check that composing them in either order does not
+silently drop a rounding step, on a unit value of **1,000,005 pence** with
+`saleable_area = −10` and `gdv = +10`:
+
+```
+area first:  round(1,000,005 × 0.9)  = round(900,004.5)   = 900,005
+             round(900,005 × 1.1)    = round(990,005.5)    = 990,006
+
+gdv first:   round(1,000,005 × 1.1)  = round(1,100,005.5)  = 1,100,006
+             round(1,100,006 × 0.9)  = round(990,005.4)    = 990,005
+```
+
+The two orders disagree by one pence (990,006 vs 990,005) — half-up rounding is not
+commutative across two sequential percentage applications on a value that lands exactly
+on a `.5` boundary. Design decision 4 fixes the order as **area first**, so
+**990,006** is the correct composed value; no stress pack entry composes these two
+levers on the same document (each of AA's nine entries touches at most one saleable-area
+setting and at most one programme-slip setting), so the pair does not recur inside
+fixture AA itself, but the ordering rule is exercised by fixture AA's `unit_loss` and
+`area_reduction` entries individually, and is why the identity test below reconstructs a
+stress's levered document by applying that stress's `settings` list *in the order it
+resolves them*, not by composing every lever in one call. Both engines' rounding was
+checked on this value at design time: `floor(x + 0.5)` (Python) and `Math.round` (TS)
+agree on both intermediate products (`990005.5000000001` and `990005.4` in IEEE double,
+in both runtimes), so this is a rounding-boundary fact about the value, not a
+cross-engine discrepancy.
+
+### 25.5 What is hand-derived and what is identity-asserted
+
+Every figure in §25.2 and §25.3 above — each entry's derived `settings`, entry 9's
+`derivation` block, the derived-input fields (unit areas and values, phase
+`slip_months`, package `amount_pence`, contingency `pct`, `ltv_cap_pct`) and Base U's
+two closed-form metrics (`abnormal_cost`'s `delta_profit_pence`, `lower_refi_ltv`'s
+`quantum_pence` and `binding_constraint`) — is worked out **by hand, on this page,
+before either engine runs**, from the migrated document's own JSON and the spec's
+arithmetic, and is what fixture AA's `expected_order`, `expected_applicable`,
+`expected_notes`, `expected_settings`, `expected_derivation`, `expected_derived_inputs`
+and `expected_hand_metrics` pin.
+
+Every stress's *full* appraisal metrics (`profit_pence`, `peak_debt_pence`, and every
+other field `SensitivityMetrics` carries) are, by contrast, never pinned as numbers at
+all — exactly fixture K's rule (§12, model-governance.md §2.1). Spec §25.2 *defines* a
+stress cell as `run_appraisal(apply_scenario(base, its settings))`, so asserting that
+equality (`test_every_stress_is_the_levered_appraisal`) is asserting the contract
+itself, not a snapshot of what the engine happened to print. Two of the eighteen
+(stem, entry) cells this identity test enumerates are unmeasured rather than compared:
+Base Y's `slower_absorption` (a sales slip of +6 months pushes a unit-sales row's
+completion past Y's 24-month term) and Base U's `delayed_start` (a programme slip of +6
+months pushes U's 20-month network past its own 24-month term) — both rejected by
+`validate_inputs`/`validateInputs` under spec §12.7's "unmeasured, not clamped" rule.
+The test collects exactly these two `(stem, key)` pairs and asserts the set against
+them by name, so a future change that widens (or narrows) which cells go unmeasured
+fails this test rather than silently changing how much of the pack is covered.
