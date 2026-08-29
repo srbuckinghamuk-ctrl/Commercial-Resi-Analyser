@@ -628,6 +628,18 @@ describe('R15b spec §24.3 inflation', () => {
     expect(cp.inflation_total_pence).not.toBe(roundedSumOfRawProducts);
   });
 
+  // R16 minor: a raw stored document may have a `qs` object with no
+  // `base_date` key at all (not merely blank), e.g. hand-edited or from a
+  // future schema this document predates. The read must not assume the key
+  // exists.
+  it('missing base_date key entirely: computeCostPlan does not throw and treats the ' +
+    'base date as absent', () => {
+    const d = docZ();
+    delete (d.cost_plan.qs as unknown as Record<string, unknown>).base_date;
+    const cp = computeCostPlan(d, 600, 4);
+    expect(cp.packages[0].months_from_base).toBeNull();
+  });
+
   it('acquisition_date null: no months, no inflation — computeCostPlan does not throw ' +
     '(validation owns the error)', () => {
     const d = docZ();

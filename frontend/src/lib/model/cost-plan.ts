@@ -381,7 +381,12 @@ export function computeCostPlan(
   const timingById = new Map(timing.map((t) => [t.id, t]));
   const acqDate = ('acquisition_date' in inputs.acquisition ? inputs.acquisition.acquisition_date : null) ?? null;
   const qsInput = detailed ? (plan.qs ?? null) : null;
-  const baseDate = qsInput != null && qsInput.base_date.trim() !== '' ? qsInput.base_date : null;
+  // R16 minor: a raw stored document's `qs` object may have no `base_date`
+  // key at all (not merely blank) -- the read must not assume the key
+  // exists.
+  const baseDate = qsInput != null && typeof qsInput.base_date === 'string' && qsInput.base_date.trim() !== ''
+    ? qsInput.base_date
+    : null;
   // `?? null`: a raw pre-v14 stored document has no `inflation` key at all.
   const inflation = qsInput != null ? (qsInput.inflation ?? null) : null;
   // spec §24.7 rule 1 owns the error; the engine degrades rather than

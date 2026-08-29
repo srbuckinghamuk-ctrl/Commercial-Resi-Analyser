@@ -54,6 +54,11 @@ class TestSpreadUserDefined:
     def test_zero_weight_months_get_zero_pence_final_month_absorbs_residue(self):
         assert spread_user_defined(100, [0, 1, 2]) == [0, 33, 67]
 
+    # R16 minor: a zero weight sum used to raise ZeroDivisionError; it must
+    # instead degrade to a uniform spread, mirroring curve_weights.
+    def test_zero_weight_sum_degrades_to_uniform_spread_no_zero_division(self):
+        assert spread_user_defined(90, [0, 0, 0]) == [30, 30, 30]
+
 
 class TestSpreadByCurve:
     def test_dispatches_straight_line_to_the_existing_spread_straight_line(self):
@@ -127,6 +132,18 @@ class TestCurveWeights:
 
     def test_a_non_positive_duration_gives_empty(self):
         assert curve_weights(0, SimpleSpendCurve(kind="back_loaded")) == []
+
+    # R16 minor: a zero (or non-finite) weight sum must degrade to uniform
+    # weights rather than dividing by zero / propagating NaN.
+    def test_zero_weight_sum_degrades_to_uniform(self):
+        assert curve_weights(
+            3, UserDefinedSpendCurve(kind="user_defined", weights=[0, 0, 0]),
+        ) == [1 / 3, 1 / 3, 1 / 3]
+
+    def test_non_finite_weight_sum_degrades_to_uniform(self):
+        assert curve_weights(
+            2, UserDefinedSpendCurve(kind="user_defined", weights=[1, float("nan")]),
+        ) == [0.5, 0.5]
 
 
 # Only s_curve/back_loaded promise a non-decreasing cumulative -- straight_line and

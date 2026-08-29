@@ -41,6 +41,12 @@ describe('spreadUserDefined', () => {
   it('zero-weight months get zero pence; final month still absorbs residue', () => {
     expect(spreadUserDefined(100, [0, 1, 2])).toEqual([0, 33, 67]);
   });
+
+  // R16 minor: a zero weight sum used to divide by zero (NaN weights); it
+  // must instead degrade to a uniform spread.
+  it('a zero weight sum degrades to a uniform spread instead of dividing by zero', () => {
+    expect(spreadUserDefined(90, [0, 0, 0])).toEqual([30, 30, 30]);
+  });
 });
 
 describe('spreadByCurve', () => {
@@ -82,4 +88,14 @@ describe('curveWeights (R15b spec §24.2)', () => {
     expect(s.reduce((a, b) => a + b, 0)).toBe(1_000_003);
   });
   it('a non-positive duration gives []', () => { expect(curveWeights(0, { kind: 'back_loaded' })).toEqual([]); });
+
+  // R16 minor: a zero (or non-finite) weight sum must degrade to uniform
+  // weights rather than dividing by zero / propagating NaN.
+  it('a zero weight sum degrades to uniform weights', () => {
+    expect(curveWeights(3, { kind: 'user_defined', weights: [0, 0, 0] })).toEqual([1 / 3, 1 / 3, 1 / 3]);
+  });
+
+  it('a non-finite weight sum degrades to uniform weights', () => {
+    expect(curveWeights(2, { kind: 'user_defined', weights: [1, NaN] })).toEqual([0.5, 0.5]);
+  });
 });

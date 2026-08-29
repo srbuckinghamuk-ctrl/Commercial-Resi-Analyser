@@ -77,9 +77,18 @@ def spread_back_loaded(total: int, months: int) -> list[int]:
 def spread_user_defined(total: int, weights: list[float]) -> list[int]:
     """Normalised explicit weights. Callers validate
     length/non-negativity/sum (validation.py) -- this function assumes valid
-    input, exactly as spreadUserDefined does."""
+    input, exactly as spreadUserDefined does.
+
+    R16 minor: a zero (or non-finite) weight sum degrades to a uniform 1/n
+    spread instead of dividing by zero, mirroring curve_weights below."""
     s = sum(weights)
-    return _spread_by_weights(total, [w / s for w in weights])
+    n = len(weights)
+    uniform = (
+        [w / s for w in weights]
+        if math.isfinite(s) and s > 0
+        else [1 / n] * n
+    )
+    return _spread_by_weights(total, uniform)
 
 
 def curve_weights(duration_months: int, curve: SpendCurve) -> list[float]:
@@ -96,8 +105,13 @@ def curve_weights(duration_months: int, curve: SpendCurve) -> list[float]:
         return _s_curve_weights(duration_months)
     if curve.kind == "back_loaded":
         return _back_loaded_weights(duration_months)
+    # R16 minor: a zero (or non-finite) weight sum degrades to a uniform 1/n
+    # spread instead of dividing by zero, mirroring spread_user_defined above.
     s = sum(curve.weights)
-    return [w / s for w in curve.weights]
+    n = len(curve.weights)
+    if math.isfinite(s) and s > 0:
+        return [w / s for w in curve.weights]
+    return [1 / n] * n
 
 
 def spread_by_curve(total: int, duration_months: int, curve: SpendCurve) -> list[int]:

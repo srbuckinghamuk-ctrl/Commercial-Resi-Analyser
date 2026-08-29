@@ -629,6 +629,21 @@ document with no `due_diligence` key at all is not re-graded, on R8's rule, and
 every production entry point migrates to v13 before running, so every *stored*
 document is graded.]
 
+[R15b. `MOVE_WHOLE_MAX_MM` (export-investment-memo.ts) rose from 110 to 130.
+Fixture Z's Basis-of-Preparation and Limitations table measured 110.6 mm, a
+hair over the old cutoff, which pushed it into the "long, may split" branch
+that only reserves `TABLE_MIN_BLOCK_MM` before starting a table; on Z that
+stranded the table's last two rows and its foot alone on an otherwise-blank
+final page — the release gate's own near-blank-page defect, reproduced by a
+table that would in fact have fit whole on one fresh page. The cutoff is
+global to every memo table, not to the Limitations table alone: raising it
+protects any table of similar height, present or future, from the same
+stranding, whereas a per-table override sized to the Limitations table's own
+110.6 mm was the alternative not taken — it would have closed this one
+fixture's finding without moving the general trade-off, leaving the next
+table that lands just past 110 mm to reproduce the same defect under a
+different name.]
+
 ### 12.3 The audit hash
 
 Computed once, server-side, in `calculate_authoritative` alongside the other two

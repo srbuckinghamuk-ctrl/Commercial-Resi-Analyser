@@ -54,7 +54,11 @@ export function spreadBackLoaded(total: number, months: number): number[] {
  * (validation.ts, Task 5) — this function assumes valid input. */
 export function spreadUserDefined(total: number, weights: number[]): number[] {
   const sum = weights.reduce((a, b) => a + b, 0);
-  return spreadByWeights(total, weights.map((w) => w / sum));
+  const n = weights.length;
+  const uniform = Number.isFinite(sum) && sum > 0
+    ? weights.map((w) => w / sum)
+    : Array.from({ length: n }, () => 1 / n);
+  return spreadByWeights(total, uniform);
 }
 
 /** R15b spec §24.2. The ideal per-month fractions w_k of §6.1 for a window of
@@ -68,7 +72,13 @@ export function curveWeights(durationMonths: number, curve: SpendCurve): number[
     case 'straight_line': return Array.from({ length: months }, () => 1 / months);
     case 's_curve': return sCurveWeights(months);
     case 'back_loaded': return backLoadedWeights(months);
-    case 'user_defined': { const sum = curve.weights.reduce((a, b) => a + b, 0); return curve.weights.map((w) => w / sum); }
+    case 'user_defined': {
+      const sum = curve.weights.reduce((a, b) => a + b, 0);
+      const n = curve.weights.length;
+      return Number.isFinite(sum) && sum > 0
+        ? curve.weights.map((w) => w / sum)
+        : Array.from({ length: n }, () => 1 / n);
+    }
   }
 }
 
