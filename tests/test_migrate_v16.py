@@ -1,11 +1,13 @@
 """R16b spec Sec 26.7. The v15 -> v16 shape tests (Task 2); the corpus-wide
 gate follows in Task 3 in this same file."""
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from app.financial_model import run_appraisal
 from app.financial_model.migrate import (
     _V16_REMOVED_COST_FIELDS,
     is_v16,
@@ -14,6 +16,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v16,
     migrate_v15_to_v16,
 )
+from app.financial_model.validation import validate_inputs
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "financial-model"
 
@@ -104,3 +107,76 @@ def test_a_negative_legacy_fee_on_a_raw_v6_document_is_refused_at_the_model_boun
     spiked = {**raw_n, "conversion_costs": {**raw_n["conversion_costs"], "architect_pence": -1}}
     with pytest.raises(ValidationError):
         migrate_inputs_to_v16(spiked, None)
+
+
+# --- Task 3: v16 identity gate, corpus-wide ---
+
+ALL_FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
+_FIXTURE_DOCS: dict[Path, dict] = {p: _load_fixture(p) for p in ALL_FIXTURES}
+FIXTURES = [
+    p for p in ALL_FIXTURES
+    if "inputs" in _FIXTURE_DOCS[p]
+    and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) <= 15
+]
+
+
+def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
+    assert len(FIXTURES) >= 20
+    assert [p.stem for p in ALL_FIXTURES
+            if "inputs" in _FIXTURE_DOCS[p] and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 15] == []
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_numeric_identity_corpus_wide(path):
+    """Sec 26.7: NO exclusion -- not even calc_version, the same constant on
+    both arms."""
+    raw = _FIXTURE_DOCS[path]["inputs"]
+    v15_run = run_appraisal(migrate_inputs_to_v15(raw, None))
+    v16_run = run_appraisal(migrate_inputs_to_v16(raw, None))
+    assert asdict(v15_run.metrics) == asdict(v16_run.metrics), f"{path.stem}: metrics moved"
+    assert asdict(v15_run.model) == asdict(v16_run.model), f"{path.stem}: a ledger figure moved"
+    assert asdict(v15_run.schedule) == asdict(v16_run.schedule), f"{path.stem}: a schedule figure moved"
+
+
+@pytest.mark.parametrize("stem", ["f-dev-finance-12mo", "u-investment-case-ltv-binds", "y-due-diligence", "z-cost-plan-in-time"])
+def test_the_default_sensitivity_suite_is_identical_on_both_arms(stem):
+    from app.financial_model.sensitivity import run_sensitivity
+    raw = _load_fixture(FIXTURE_DIR / f"{stem}.json")["inputs"]
+    assert asdict(run_sensitivity(migrate_inputs_to_v15(raw, None))) == asdict(run_sensitivity(migrate_inputs_to_v16(raw, None)))
+
+
+V15_ONLY_RULES = [
+    "conversion_costs.contingency_pct",
+    "conversion_costs.prior_approval_fee_per_dwelling_pence", "conversion_costs.cil_s106_pence",
+    "conversion_costs.architect_pence", "conversion_costs.structural_engineer_pence",
+    "conversion_costs.mande_pence", "conversion_costs.planning_consultant_pence",
+    "conversion_costs.building_control_pence", "conversion_costs.other_professional_fees_pence",
+]
+V16_ONLY_RULES: list[str] = []
+
+
+def test_the_exception_lists_are_exactly_nine_and_exactly_zero():
+    assert len(V15_ONLY_RULES) == 9
+    assert len(V16_ONLY_RULES) == 0
+
+
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
+def test_validation_properties_1_to_3(path):
+    raw = _FIXTURE_DOCS[path]["inputs"]
+    v15_issues = validate_inputs(migrate_inputs_to_v15(raw, None))
+    v16_issues = validate_inputs(migrate_inputs_to_v16(raw, None))
+    v15_kept = {(i.severity, i.field, i.message) for i in v15_issues if i.field not in V15_ONLY_RULES}
+    assert {(i.severity, i.field, i.message) for i in v16_issues} == v15_kept
+    assert [i for i in v16_issues if i.field in V15_ONLY_RULES] == []
+    assert [i for i in v16_issues if i.field in V16_ONLY_RULES] == []
+
+
+def test_the_removed_fields_were_unread():
+    """A v15 document with absurd values in the removed fields computes the
+    same figures -- the assertion that fails if any v7+ path still reads one.
+    (Python's Field(ge=0) forbids a NEGATIVE value at parse time, which is why
+    the spike is a huge positive one.)"""
+    raw = _raw_q()
+    v15 = migrate_inputs_to_v15(raw, None).model_dump(mode="json")
+    spiked = {**v15, "conversion_costs": {**v15["conversion_costs"], "architect_pence": 999_999_999, "contingency_pct": 99.0}}
+    assert asdict(run_appraisal(migrate_inputs_to_v15(spiked, None)).metrics) == asdict(run_appraisal(migrate_inputs_to_v15(raw, None)).metrics)

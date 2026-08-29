@@ -2174,3 +2174,76 @@ describe('v16 migration -- shape (spec §26.7)', () => {
     expect(issues.some((i) => i.severity === 'error' && i.field.startsWith('cost_plan.contingency['))).toBe(true);
   });
 });
+
+describe('v16 migration -- the identity gate (spec §26.7)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+  interface FixtureFile { name: string; kind: string; inputs?: Record<string, unknown> }
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file, doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+  const fixtures = fixtureDocs.filter(({ doc }) => 'inputs' in doc && versionOf(doc) <= 15);
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(20);
+    expect(fixtureDocs.filter(({ doc }) => 'inputs' in doc && versionOf(doc) > 15).map(({ file }) => file)).toEqual([]);
+  });
+
+  // NO exclusion at all -- not even calc_version, which is the same constant on
+  // both arms. sdlt_pence is absent on both arms since Task 1.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v15 to v16`, () => {
+      const v15Run = runAppraisal(migrateInputsToV15(doc.inputs!));
+      const v16Run = runAppraisal(migrateInputsToV16(doc.inputs!));
+      expect(v16Run.metrics, `${file}: metrics moved`).toEqual(v15Run.metrics);
+      expect(v16Run.model, `${file}: a ledger figure moved`).toEqual(v15Run.model);
+      expect(v16Run.schedule, `${file}: a schedule figure moved`).toEqual(v15Run.schedule);
+    });
+  }
+
+  for (const stem of ['f-dev-finance-12mo', 'u-investment-case-ltv-binds', 'y-due-diligence', 'z-cost-plan-in-time']) {
+    it(`${stem}: the default sensitivity suite is identical on both arms`, () => {
+      const raw = fixtureDocs.find(({ file }) => file === `${stem}.json`)!.doc.inputs!;
+      expect(runSensitivity(migrateInputsToV16(raw))).toEqual(runSensitivity(migrateInputsToV15(raw)));
+    });
+  }
+
+  // The three validation properties (R12's form). The nine v15-only rules --
+  // the non-negativity rows on the removed fields -- are the ONLY exception,
+  // listed as exactly nine. They guarded fields the v7+ engine never read.
+  const V15_ONLY_RULES = [
+    'conversion_costs.contingency_pct',
+    'conversion_costs.prior_approval_fee_per_dwelling_pence', 'conversion_costs.cil_s106_pence',
+    'conversion_costs.architect_pence', 'conversion_costs.structural_engineer_pence',
+    'conversion_costs.mande_pence', 'conversion_costs.planning_consultant_pence',
+    'conversion_costs.building_control_pence', 'conversion_costs.other_professional_fees_pence',
+  ];
+  const V16_ONLY_RULES: string[] = [];
+
+  it('the exception lists are exactly nine and exactly zero', () => {
+    expect(V15_ONLY_RULES).toHaveLength(9);
+    expect(V16_ONLY_RULES).toHaveLength(0);
+  });
+
+  const key = (i: { severity: string; field: string; message: string }) => JSON.stringify([i.severity, i.field, i.message]);
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v15 issue outside the nine has a v16 counterpart, and no v16 issue is new (properties 1-3)`, () => {
+      const v15Issues = validateInputs(migrateInputsToV15(doc.inputs!));
+      const v16Issues = validateInputs(migrateInputsToV16(doc.inputs!));
+      const v15Kept = new Set(v15Issues.filter((i) => !V15_ONLY_RULES.includes(i.field)).map(key));
+      const v16Set = new Set(v16Issues.map(key));
+      expect(v16Set).toEqual(v15Kept);
+      expect(v16Issues.filter((i) => V15_ONLY_RULES.includes(i.field))).toEqual([]);
+      expect(v16Issues.filter((i) => V16_ONLY_RULES.includes(i.field))).toEqual([]);
+    });
+  }
+
+  it('the removed fields were unread: a v15 document with an absurd architect_pence computes the same figures', () => {
+    const rawQ = fixtureDocs.find(({ file }) => file === 'q-detailed-cost-plan.json')!.doc.inputs!;
+    const v15 = migrateInputsToV15(rawQ) as unknown as Record<string, unknown>;
+    const spiked = { ...v15, conversion_costs: { ...(v15.conversion_costs as object), architect_pence: 999_999_999, contingency_pct: 99 } };
+    expect(runAppraisal(migrateInputsToV15(spiked)).metrics).toEqual(runAppraisal(migrateInputsToV15(rawQ)).metrics);
+  });
+});
