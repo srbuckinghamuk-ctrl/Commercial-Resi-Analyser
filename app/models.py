@@ -351,8 +351,8 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v15, not by this schema) -- may be any of v1 through
-    # v15 (a v13 document adds the R15 top-level `due_diligence` block and
+    # migrate_inputs_to_v16, not by this schema) -- may be any of v1 through
+    # v16 (a v13 document adds the R15 top-level `due_diligence` block and
     # `cost_plan.qs`/`price_basis`, defined on `DueDiligenceInputs` /
     # `CalculatorInputsV13`; a v14 document (R15b, spec Sec 24.8) adds
     # `cost_plan.qs.inflation`, defined on `QsProvenance` / `CalculatorInputsV14`
@@ -388,8 +388,11 @@ class FinancialAppraisalCreate(BaseModel):
     # `MonitoringInputs` / `CalculatorInputsV11`; a v12 document (R13b, spec
     # Sec 22) adds the top-level nullable `unit_sales` block -- a per-unit
     # sales ledger recording each unit's disposal month and price, defined on
-    # `UnitSalesInputs` / `CalculatorInputsV12` in the same module. Those are
-    # the typed schemas the fields are actually enforced against.
+    # `UnitSalesInputs` / `CalculatorInputsV12` in the same module; a v16
+    # document (R16b, spec Sec 26.1) REMOVES conversion_costs.contingency_pct
+    # and the eight legacy fee fields, defined on `ConversionCostInputsV16` /
+    # `CalculatorInputsV16` in the same module. Those are the typed schemas
+    # the fields are actually enforced against.
     inputs_snapshot: dict
     # optional client-computed values, used ONLY for mismatch recording -- the
     # server always recalculates and never trusts these for persistence:

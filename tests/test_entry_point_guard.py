@@ -267,6 +267,13 @@ async def test_the_server_migrates_a_stored_v10_document_to_v13_as_reconciled(_g
     assert saved["inputs_snapshot"]["monitoring"] is None
     assert saved["inputs_snapshot"]["unit_sales"] is None
     assert saved["inputs_snapshot"]["due_diligence"] is not None
+    # R16b Task 6 (spec Sec 26.7): the stored snapshot carries exactly the
+    # five v16 cost keys -- asserted on the JSON the server stored, because
+    # Model ignores extras and a parsed model could not show a key's absence.
+    assert sorted(saved["inputs_snapshot"]["conversion_costs"]) == [
+        "construction_cost_per_sqm_pence", "fire_safety_pence", "part_l_compliance_pence",
+        "sound_insulation_pence", "total_construction_sqm",
+    ]
     # Fix round 1 (spec Sec 19.9 review, carried forward). The GOVERNANCE
     # `inputs_version` column -- distinct from `inputs_snapshot`'s own field,
     # written by a separate line in app.py's response builder and the value
@@ -454,6 +461,13 @@ async def test_the_server_round_trips_a_native_v14_document_as_reconciled(_guard
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["due_diligence"]["source_record"] == posted_inputs["due_diligence"]["source_record"]
     assert saved["inputs_snapshot"]["due_diligence"]["items"] == posted_inputs["due_diligence"]["items"]
+    # R16b Task 6 (spec Sec 26.7): the stored snapshot carries exactly the
+    # five v16 cost keys -- asserted on the JSON the server stored, because
+    # Model ignores extras and a parsed model could not show a key's absence.
+    assert sorted(saved["inputs_snapshot"]["conversion_costs"]) == [
+        "construction_cost_per_sqm_pence", "fire_safety_pence", "part_l_compliance_pence",
+        "sound_insulation_pence", "total_construction_sqm",
+    ]
     # Fix wave FI3. migration-notes.md Sec 18.3 states this test asserts "the
     # presence and value of all four keys on all four scenarios" after the
     # round trip; it asserted one key on one scenario. The claim is the right

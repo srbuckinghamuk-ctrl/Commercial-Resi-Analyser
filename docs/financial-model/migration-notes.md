@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v15)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v16)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -1550,3 +1550,86 @@ approved lender case therefore goes stale on that save (spec §21.3). §25 adds
 no FINAL condition and no banner, so the hash move is the only consequence to
 disclose — and, unlike R15b's boundary, there is no accompanying engine
 change: **no fixture pin moves at this release at all**.
+
+## 19. v15 → v16 (Release 16b, calc `2.18.0`)
+
+**What's removed.** `CalculatorInputsV16` is `CalculatorInputsV15` with
+`conversion_costs` narrowed to five fields. Nine keys are removed:
+`contingency_pct` and the eight legacy fee fields (`prior_approval_fee_per_dwelling_pence`,
+`cil_s106_pence`, `architect_pence`, `structural_engineer_pence`, `mande_pence`,
+`planning_consultant_pence`, `building_control_pence`,
+`other_professional_fees_pence`). Nothing is added and nothing is renamed.
+
+| v15 field | v16 field | Behaviour |
+|---|---|---|
+| `conversion_costs.contingency_pct` | *(removed)* | Dead since v7 copied it into `cost_plan.contingency.general` (§16.7) |
+| the eight fee fields | *(removed)* | Dead since v7 copied them into `cost_plan.fee_lines[]` (§16.7) |
+| the five kept fields | unchanged | `construction_cost_per_sqm_pence`, `total_construction_sqm` and the three compliance fields are live in headline mode |
+
+**Why removal is inert.** From v7 on, both engines read cost only through
+`cost_plan`; the nine fields were read by exactly three things, all of which
+take the **pre-v7** shape and still do: the v6 → v7 seed
+(`costPlanFromLegacyCosts` / `cost_plan_from_legacy_costs`), the engine's
+fallback for a document with no `cost_plan` block, and the v1 facility
+bootstrap. `conversion_costs` is **rebuilt** from the five kept fields rather
+than copied minus nine keys, so an unexpected tenth legacy key cannot ride
+through.
+
+**Implementation** (`migrateV15toV16` / `migrate_v15_to_v16`,
+`migrateInputsToV16` / `migrate_inputs_to_v16`, `isV16` / `is_v16`). The
+entry point mirrors `migrateInputsToV15`'s shape, its version predicate and
+its two refusals. `isV16` / `is_v16` discriminate on `inputs_version == 16`
+**and** the `due_diligence` key **and** the **absence** of `contingency_pct`
+on `conversion_costs` — absence, because a document relabelled 16 without
+the rebuild is exactly the spoof the check exists to refuse.
+
+### 19.1 The identity claim, and where it is tested
+
+`migrate.test.ts` ("v16 migration -- the identity gate") and
+`tests/test_migrate_v16.py`: corpus-wide, raw v15 through the 2.18.0 engine
+against migrated v16 through the same engine — metrics, ledger and schedule
+identical with **no exclusion at all** (`sdlt_pence` is absent on both arms;
+`calc_version` is the same constant), and the default `SensitivityResult`
+identical on F/U/Y/Z. The validation gate keeps R12's three properties with
+one named, inverted exception: **nine v15-only rules** — the non-negativity
+rows on the removed fields — listed as exactly nine; the v16-only list is
+empty and asserted empty. A further test spikes a v15 document's removed
+fields with absurd values and asserts the metrics do not move: the assertion
+that fails if any v7+ path still reads one.
+
+**The pre-v7 fallback keeps checking what the deleted rows checked.** Deleting
+the nine `NON_NEGATIVE_MONEY` / `contingency_pct` rows from the raw-field
+validation left a document with no `cost_plan` block (a pre-v7 document,
+which never reaches the block above) with nothing to catch a negative fee or
+a negative contingency percentage on its own -- so the Task 2 fix round ported
+both checks to run against the **seeded** plan
+(`costPlanFromLegacyCosts` / `cost_plan_from_legacy_costs`) in that fallback,
+in both validators, with the same messages the v7+ branch already uses. No
+pre-v7 document is left less validated than it was before the nine rows were
+removed.
+
+### 19.2 The one-arm proof, on the stored JSON
+
+Fixture Q (`q-detailed-cost-plan`, a v7 document) carries all nine keys
+before migration and none after, with the five kept fields byte-equal — asserted
+on `model_dump(mode="json")` in Python and on the stored snapshot after a
+live POST, because the pydantic `Model` base ignores unknown keys and a
+parsed model cannot show a key's absence.
+
+### 19.3 The boundary round trip and the entry-point cutover
+
+`ConversionCalculator.tsx`, `ExportPage.tsx` and `app/api/app.py` move to
+the v16 entry point in one commit; both guards pin `NEWEST == 16`. The R13
+live-server proof extends: the v10 fixture posted through the real boundary
+comes back at `inputs_version: 16`, not legacy, and its stored
+`conversion_costs` carries exactly the five v16 keys. The governance
+`inputs_version` stays derived from the document.
+
+**The consequence a reader must not mistake for a defect.** Every stored
+appraisal's `input_hash` moves on its next save (nine fields left the
+document), and — new at this boundary — every stored appraisal's
+`outputs_hash` and `audit_hash` move on its next save too, because
+`sdlt_pence` left the result (§26.2). That is why this release is calc
+2.18.0 and not a silent removal. An approved lender case goes stale on that
+save (§21.3), as at every boundary. No fixture pin's **value** moves; fifteen
+fixtures lose one pinned **key**.
