@@ -321,7 +321,7 @@ export default function ExitStrategyPage<T extends ExitCarrier>({ inputs, onChan
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>12. Exit Strategy</h3>
+      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>9. Exit Strategy</h3>
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
         {(['sell_all', 'retain_all', 'blended'] as ExitRoute[]).map((route) => (

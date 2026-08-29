@@ -8,7 +8,7 @@ import { defaultCalculatorInputsV16 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
-import { PAGES, pageForSlug, calculatorPath, FIRST_PAGE } from './calculator/pages';
+import { PAGES, STAGES, pageForSlug, calculatorPath, FIRST_PAGE } from './calculator/pages';
 import type { CalcPage } from './calculator/pages';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
@@ -326,23 +326,33 @@ export default function ConversionCalculator({ project }: Props) {
           flexShrink: 0,
         }}
       >
-        {PAGES.map((page) => (
-          <NavLink
-            key={page.key}
-            to={calculatorPath(project.id, page.key)}
-            end
-            style={({ isActive }) => ({
-              padding: '8px 14px',
-              borderBottom: isActive ? '2px solid #2563eb' : '2px solid transparent',
-              color: isActive ? '#e2e8f0' : '#64748b',
-              fontSize: 13,
-              fontWeight: isActive ? 600 : 400,
-              whiteSpace: 'nowrap',
-              textDecoration: 'none',
-            })}
-          >
-            {page.num}. {page.label}
-          </NavLink>
+        {STAGES.map((stage) => (
+          <div key={stage} role="group" aria-label={stage} style={{ display: 'flex', alignItems: 'stretch' }}>
+            <span
+              aria-hidden
+              style={{ alignSelf: 'center', padding: '0 6px 0 14px', fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: '#475569', whiteSpace: 'nowrap' }}
+            >
+              {stage}
+            </span>
+            {PAGES.filter((page) => page.stage === stage).map((page) => (
+              <NavLink
+                key={page.key}
+                to={calculatorPath(project.id, page.key)}
+                end
+                style={({ isActive }) => ({
+                  padding: '8px 14px',
+                  borderBottom: isActive ? '2px solid #2563eb' : '2px solid transparent',
+                  color: isActive ? '#e2e8f0' : '#64748b',
+                  fontSize: 13,
+                  fontWeight: isActive ? 600 : 400,
+                  whiteSpace: 'nowrap',
+                  textDecoration: 'none',
+                })}
+              >
+                {page.num}. {page.label}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </div>
 

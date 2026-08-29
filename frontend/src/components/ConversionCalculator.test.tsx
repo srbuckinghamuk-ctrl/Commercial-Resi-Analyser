@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import type { Project, FinancialAppraisal } from '../types';
 
@@ -102,7 +102,7 @@ describe('ConversionCalculator when the engine cannot compute', () => {
 
   it('never shows a stale calculation alongside the failure (spec §2)', () => {
     renderCalculator();
-    fireEvent.click(screen.getByRole('link', { name: /9\. Appraisal/ }));
+    fireEvent.click(screen.getByRole('link', { name: /10\. Appraisal/ }));
     // A computable document shows real metric cards.
     expect(screen.getByText('Developer GDV')).toBeInTheDocument();
 
@@ -113,22 +113,24 @@ describe('ConversionCalculator when the engine cannot compute', () => {
   });
 });
 
-describe('ConversionCalculator — Sensitivity is page 11', () => {
-  it('offers fifteen numbered pages with Sensitivity eleventh', () => {
+const STAGE_NAMES = ['Inputs', 'Funding', 'Exit', 'Underwriting', 'Output'];
+
+describe('ConversionCalculator — five stages (spec §26.5)', () => {
+  it('groups the sixteen links under the five stage labels, in order', () => {
     renderCalculator();
-    for (const label of [
-      // R15 Task 9 (spec §23.8): page 13 is now the due-diligence schedule,
-      // with the free-form risk register below it as the project log.
-      '11. Sensitivity', '12. Exit', '13. Due Diligence', '14. Deal Spider', '15. Investor',
-    ]) {
-      expect(screen.getByRole('link', { name: label })).toBeInTheDocument();
-    }
+    // Filter by the five stage names: fieldsets elsewhere on the page also carry the group role.
+    const groups = screen.getAllByRole('group').filter((g) => STAGE_NAMES.includes(g.getAttribute('aria-label') ?? ''));
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(STAGE_NAMES);
+    expect(within(groups[2]).getAllByRole('link').map((l) => l.textContent)).toEqual(['9. Exit']);
+    expect(within(groups[3]).getAllByRole('link').map((l) => l.textContent)).toEqual([
+      '10. Appraisal', '11. Scenarios', '12. Sensitivity', '13. Due Diligence',
+    ]);
   });
 
   it('renders the Sensitivity page when its tab is selected', () => {
     renderCalculator();
-    fireEvent.click(screen.getByRole('link', { name: '11. Sensitivity' }));
-    expect(screen.getByRole('heading', { name: /11\. Sensitivity/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: '12. Sensitivity' }));
+    expect(screen.getByRole('heading', { name: /12\. Sensitivity/ })).toBeInTheDocument();
   });
 });
 
@@ -251,7 +253,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
     // Not a blank screen: the calculator chrome is fully present and usable
     // on the default document the effect seeded before the failed load.
     expect(screen.getByText('1. Acquisition Inputs')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /9\. Appraisal/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /10\. Appraisal/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save appraisal/i })).toBeEnabled();
   });
 
@@ -510,9 +512,9 @@ describe('ConversionCalculator — addresses (spec §26.5)', () => {
   it('opens the page a deep link names', () => {
     renderCalculator('sensitivity');
     // /Sensitivity/ alone is ambiguous -- the page also carries an h4
-    // "Single-Lever Sensitivity" subheading; the page's own h3 is "11.
+    // "Single-Lever Sensitivity" subheading; the page's own h3 is "12.
     // Sensitivity", so anchoring on the number disambiguates it.
-    expect(screen.getByRole('heading', { name: /11\. Sensitivity/ })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /12\. Sensitivity/ })).toBeInTheDocument();
   });
 
   it('keeps unsaved edits when the page changes through the URL (decision 3)', () => {

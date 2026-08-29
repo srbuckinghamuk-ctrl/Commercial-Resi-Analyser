@@ -5,6 +5,7 @@ import { PIPELINE_STAGES, USE_CLASS_OPTIONS, TENURE_OPTIONS } from '../types';
 import { changeStage, getEligibility, getAppraisal, updateProject, listTransitions } from '../lib/api';
 import { formatUseClass, humanise } from '../lib/format';
 import { activeDeadline, todayIso } from '../lib/deadlines';
+import { calculatorPath, FIRST_PAGE } from './calculator/pages';
 import EligibilityWizard from './EligibilityWizard';
 
 interface ProjectDetailProps {
@@ -414,7 +415,7 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
           status={appraisal ? 'Saved' : 'Not Started'}
           statusColor={appraisal ? '#22c55e' : '#94a3b8'}
           buttonLabel={appraisal ? 'Review appraisal' : 'Start appraisal'}
-          onClick={() => navigate(`/projects/${project.id}/calculator`)}
+          onClick={() => navigate(calculatorPath(project.id, FIRST_PAGE))}
           highlighted={project.stage === 'eligibility_assessed' || project.stage === 'financial_appraisal'}
         />
       </div>
