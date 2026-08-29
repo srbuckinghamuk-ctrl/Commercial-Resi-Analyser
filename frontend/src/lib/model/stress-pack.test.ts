@@ -218,7 +218,13 @@ describe('the standard lender stress pack', () => {
           // term, which validateInputs rejects but a raw runAppraisal call
           // does not (it silently computes on the out-of-range month) --
           // same as sensitivity.test.ts's "sales_slip cells go invalid, not
-          // clamped" case.
+          // clamped" case. The set below has TWO members, and the second has
+          // its own cause: fixture U's delayed_start slip (programme_slip +6)
+          // adds six months to every predecessor-free phase, pushing U's
+          // programme finish from month 21 to month 27 against the same
+          // 24-month term -- so the levered network no longer fits the
+          // facility financing it ("Phase 'Maturity' ends 3 months after
+          // maturity"), and validateInputs rejects that document too.
           skipped.add(`${stem}:${s.key}`);
           continue;
         }

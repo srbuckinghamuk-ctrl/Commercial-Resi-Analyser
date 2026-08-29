@@ -454,7 +454,26 @@ async def test_the_server_round_trips_a_native_v14_document_as_reconciled(_guard
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["due_diligence"]["source_record"] == posted_inputs["due_diligence"]["source_record"]
     assert saved["inputs_snapshot"]["due_diligence"]["items"] == posted_inputs["due_diligence"]["items"]
-    assert saved["inputs_snapshot"]["scenarios"]["base"]["programme_slip_months"] == 0
+    # Fix wave FI3. migration-notes.md Sec 18.3 states this test asserts "the
+    # presence and value of all four keys on all four scenarios" after the
+    # round trip; it asserted one key on one scenario. The claim is the right
+    # one -- `extra='ignore'` at the persistence boundary drops an unmodelled
+    # key silently, so a key missing on `severe` alone would have survived the
+    # single-scenario assertion -- so the test is widened to match, rather than
+    # the sentence narrowed to match the test. Presence is checked separately
+    # from value: `saved_base.get(key) == 0` alone cannot tell a written zero
+    # from a dropped key.
+    saved_scenarios = saved["inputs_snapshot"]["scenarios"]
+    for scenario in ("base", "upside", "downside", "severe"):
+        overrides = saved_scenarios[scenario]
+        for key in (
+            "saleable_area_adjustment_pct",
+            "abnormal_cost_adjustment_pct",
+            "programme_slip_months",
+            "refi_ltv_adjustment_pct",
+        ):
+            assert key in overrides, (scenario, key)
+            assert overrides[key] == 0, (scenario, key)
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
     assert saved["inputs_version"] == 15
 

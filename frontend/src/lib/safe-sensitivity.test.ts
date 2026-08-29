@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { safeRunSensitivity, safeRunStressPack } from './safe-sensitivity';
+import { safeRunSensitivity, safeRunStressPack, SCENARIO_FIELD } from './safe-sensitivity';
 import { migrateInputsToV5 } from './model';
 import * as sensitivityModule from './model/sensitivity';
 import {
   defaultSensitivityConfig, InvalidBaseDocumentError, InvalidSensitivityConfigError,
+  LEVER_ORDER, overridesFor,
 } from './model/sensitivity';
 import { ddDoc } from './model/__fixtures__/due-diligence-docs';
 
@@ -129,5 +130,57 @@ describe('safeRunStressPack', () => {
     const outcome = safeRunStressPack(doc);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBeInstanceOf(InvalidBaseDocumentError);
+  });
+});
+
+// Fix wave M8. `SCENARIO_FIELD` and `overridesFor` (model/sensitivity.ts) are
+// two hand-written thirteen-row maps of the SAME relation -- lever to
+// `ScenarioOverrides` field -- kept in two files, and until this test nothing
+// compared them. Both are `Record`s over the lever union, so a SWAP between two
+// rows (say `abnormal_cost` <-> `saleable_area`, whose fields are adjacent in
+// both literals and differ by one word) typechecks perfectly and is caught by
+// no existing assertion: `SCENARIO_FIELD` feeds the Scenarios page's inputs and
+// the memo's per-lever comparison columns, so a swap there silently labels one
+// lever's magnitude with another lever's name while the engine goes on applying
+// the right field. Comparing the two maps directly is what makes that a test
+// failure rather than a misprinted report.
+//
+// `phase_slip` is excluded because `SCENARIO_FIELD` excludes it by type: it
+// carries a target (`phase_slip_phase_id`) alongside its magnitude, so a single
+// `keyof ScenarioOverrides` cannot name its field. `overridesFor` writes both of
+// its fields and is exercised by the §18.9 order-independence guards instead.
+describe('SCENARIO_FIELD names the field overridesFor actually writes', () => {
+  // Every numeric field of `ScenarioOverrides`; `label` is a string and
+  // `phase_slip_phase_id` is a nullable id, so neither is part of this check.
+  const NUMERIC_FIELDS = [
+    'gdv_adjustment_pct', 'construction_cost_adjustment_pct', 'timeline_adjustment_months',
+    'interest_rate_adjustment_pct', 'phase_slip_months', 'exit_yield_adjustment_pct',
+    'operating_cost_adjustment_pct', 'vacancy_adjustment_pct', 'sales_slip_months',
+    'saleable_area_adjustment_pct', 'abnormal_cost_adjustment_pct', 'programme_slip_months',
+    'refi_ltv_adjustment_pct',
+  ] as const;
+
+  for (const lever of LEVER_ORDER) {
+    if (lever === 'phase_slip') continue;
+    it(`writes 1 to ${lever}'s field and 0 to every other`, () => {
+      const overrides = overridesFor({ lever, phaseId: null, value: 1 }) as unknown as
+        Record<string, number>;
+      const owned = SCENARIO_FIELD[lever];
+      expect(overrides[owned], `${lever} -> ${owned}`).toBe(1);
+      for (const field of NUMERIC_FIELDS) {
+        if (field === owned) continue;
+        expect(overrides[field], `${lever} leaked into ${field}`).toBe(0);
+      }
+    });
+  }
+
+  // The map must stay total over the levers it claims: a fourteenth lever added
+  // to LEVER_ORDER without a row here is a compile error by `SCENARIO_FIELD`'s
+  // own `Record<Exclude<SensitivityLever, 'phase_slip'>, ...>` type, and this
+  // asserts the count the loop above actually ran.
+  it('covers every lever but phase_slip, with no two levers sharing a field', () => {
+    const fields = LEVER_ORDER.filter((l) => l !== 'phase_slip').map((l) => SCENARIO_FIELD[l]);
+    expect(fields).toHaveLength(LEVER_ORDER.length - 1);
+    expect(new Set(fields).size).toBe(fields.length);
   });
 });

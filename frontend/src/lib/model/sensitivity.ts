@@ -389,8 +389,19 @@ const ZERO_SCENARIO: ScenarioOverrides = {
  *  `saleable_area` and `gdv` are the exception: both write through
  *  `estimated_value_pence`, and §12.1 states they compose newest-lever-first —
  *  which is why `measure` sorts settings in descending `LEVER_ORDER` before
- *  applying them (R16). */
-function overridesFor(setting: LeverSetting): ScenarioOverrides {
+ *  applying them (R16).
+ *
+ *  Exported for one purpose only (fix wave M8): safe-sensitivity.test.ts pins
+ *  that `SCENARIO_FIELD[lever]` names the SAME `ScenarioOverrides` field this
+ *  function writes for that lever. Those are two hand-written thirteen-row maps
+ *  of the same relation in two files, and nothing else compares them — a swap
+ *  between, say, `abnormal_cost` and `saleable_area` in one of them typechecks
+ *  cleanly and silently mislabels the Scenarios page and the memo's comparison
+ *  columns. Python's counterpart `_overrides_for` (sensitivity.py) is already
+ *  importable at module scope, so this changes nothing about the mirror. Not
+ *  part of the engine's public contract: no production caller outside this
+ *  module uses it. */
+export function overridesFor(setting: LeverSetting): ScenarioOverrides {
   return {
     label: '',
     gdv_adjustment_pct: setting.lever === 'gdv' ? setting.value : 0,

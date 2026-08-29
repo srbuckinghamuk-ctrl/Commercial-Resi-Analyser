@@ -158,6 +158,13 @@ def test_every_stress_is_the_levered_appraisal_on_y_and_u():
                 # row 3's completion to month 26 against a 24-month term,
                 # which validate_inputs rejects but a raw run_appraisal call
                 # does not (it silently computes on the out-of-range month).
+                # The set below has TWO members, and the second has its own
+                # cause: fixture U's delayed_start slip (programme_slip +6)
+                # adds six months to every predecessor-free phase, pushing U's
+                # programme finish from month 21 to month 27 against the same
+                # 24-month term -- so the levered network no longer fits the
+                # facility financing it ("Phase 'Maturity' ends 3 months after
+                # maturity"), and validate_inputs rejects that document too.
                 skipped.add((stem, s.key))
                 continue
             expected = run_appraisal(levered).metrics
