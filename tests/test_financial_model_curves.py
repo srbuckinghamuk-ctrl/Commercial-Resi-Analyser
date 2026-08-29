@@ -59,6 +59,14 @@ class TestSpreadUserDefined:
     def test_zero_weight_sum_degrades_to_uniform_spread_no_zero_division(self):
         assert spread_user_defined(90, [0, 0, 0]) == [30, 30, 30]
 
+    # R16 fix round 1: an EMPTY weights list is n = 0, the degenerate case of
+    # the zero-sum fallback. `[1 / n] * n` still evaluates `1 / n` once before
+    # repeating it zero times, raising ZeroDivisionError for n = 0 -- the
+    # fallback must use a form that never evaluates `1 / n` when n is 0, so
+    # this returns `[]` exactly as the pre-R16 code and the TS twin do.
+    def test_empty_weights_returns_empty_not_zero_division_error(self):
+        assert spread_user_defined(100, []) == []
+
 
 class TestSpreadByCurve:
     def test_dispatches_straight_line_to_the_existing_spread_straight_line(self):
@@ -144,6 +152,15 @@ class TestCurveWeights:
         assert curve_weights(
             2, UserDefinedSpendCurve(kind="user_defined", weights=[1, float("nan")]),
         ) == [0.5, 0.5]
+
+    # R16 fix round 1: an EMPTY weights list on a positive duration bypasses
+    # curve_weights' own duration_months <= 0 guard (duration_months is 3
+    # here, not 0) and reaches the user_defined branch with n = 0 -- the
+    # degenerate case of the zero-sum fallback. Must return [], not raise.
+    def test_empty_weights_on_a_positive_duration_returns_empty(self):
+        assert curve_weights(
+            3, UserDefinedSpendCurve(kind="user_defined", weights=[]),
+        ) == []
 
 
 # Only s_curve/back_loaded promise a non-decreasing cumulative -- straight_line and

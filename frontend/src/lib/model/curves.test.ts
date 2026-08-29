@@ -47,6 +47,16 @@ describe('spreadUserDefined', () => {
   it('a zero weight sum degrades to a uniform spread instead of dividing by zero', () => {
     expect(spreadUserDefined(90, [0, 0, 0])).toEqual([30, 30, 30]);
   });
+
+  // R16 fix round 1: an empty weights array is n = 0, the degenerate case of
+  // the zero-sum fallback — pinned here to hold the engines' parity that the
+  // Python side's `[1 / n] * n` broke (it evaluates `1 / n` once for n = 0
+  // before repeating it zero times, raising ZeroDivisionError). This
+  // Array.from-based fallback never invokes its callback for length 0, so it
+  // has always returned [] here; the test exists to keep it that way.
+  it('an empty weights array returns [] rather than dividing by zero', () => {
+    expect(spreadUserDefined(100, [])).toEqual([]);
+  });
 });
 
 describe('spreadByCurve', () => {
@@ -97,5 +107,13 @@ describe('curveWeights (R15b spec §24.2)', () => {
 
   it('a non-finite weight sum degrades to uniform weights', () => {
     expect(curveWeights(2, { kind: 'user_defined', weights: [1, NaN] })).toEqual([0.5, 0.5]);
+  });
+
+  // R16 fix round 1: an empty weights array on a positive duration bypasses
+  // curveWeights' own months <= 0 guard (durationMonths is 3 here, not 0)
+  // and reaches the user_defined case with n = 0 — the degenerate case of
+  // the zero-sum fallback. Pinned to hold parity with the Python fix.
+  it('an empty weights array on a positive duration gives []', () => {
+    expect(curveWeights(3, { kind: 'user_defined', weights: [] })).toEqual([]);
   });
 });

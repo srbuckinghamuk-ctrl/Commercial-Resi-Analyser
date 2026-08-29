@@ -80,13 +80,19 @@ def spread_user_defined(total: int, weights: list[float]) -> list[int]:
     input, exactly as spreadUserDefined does.
 
     R16 minor: a zero (or non-finite) weight sum degrades to a uniform 1/n
-    spread instead of dividing by zero, mirroring curve_weights below."""
+    spread instead of dividing by zero, mirroring curve_weights below. The
+    fallback is a list comprehension, not ``[1 / n] * n``: for n = 0 (an
+    empty ``weights`` list) ``[1 / n] * n`` still evaluates ``1 / n`` once
+    before repeating it zero times, raising ZeroDivisionError; the
+    comprehension never evaluates the body when the range is empty, matching
+    curveWeights' Array.from and returning ``[]``, exactly as the pre-R16
+    ``[w / s for w in weights]`` did for empty input."""
     s = sum(weights)
     n = len(weights)
     uniform = (
         [w / s for w in weights]
         if math.isfinite(s) and s > 0
-        else [1 / n] * n
+        else [1 / n for _ in range(n)]
     )
     return _spread_by_weights(total, uniform)
 
@@ -107,11 +113,14 @@ def curve_weights(duration_months: int, curve: SpendCurve) -> list[float]:
         return _back_loaded_weights(duration_months)
     # R16 minor: a zero (or non-finite) weight sum degrades to a uniform 1/n
     # spread instead of dividing by zero, mirroring spread_user_defined above.
+    # `[1 / n for _ in range(n)]`, not `[1 / n] * n`: the latter still
+    # evaluates `1 / n` once for n = 0, raising ZeroDivisionError on an empty
+    # weights list; the comprehension's body never runs for an empty range.
     s = sum(curve.weights)
     n = len(curve.weights)
     if math.isfinite(s) and s > 0:
         return [w / s for w in curve.weights]
-    return [1 / n] * n
+    return [1 / n for _ in range(n)]
 
 
 def spread_by_curve(total: int, duration_months: int, curve: SpendCurve) -> list[int]:
