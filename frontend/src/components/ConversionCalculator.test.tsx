@@ -122,15 +122,29 @@ describe('ConversionCalculator — five stages (spec §26.5)', () => {
     const groups = screen.getAllByRole('group').filter((g) => STAGE_NAMES.includes(g.getAttribute('aria-label') ?? ''));
     expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(STAGE_NAMES);
     expect(within(groups[2]).getAllByRole('link').map((l) => l.textContent)).toEqual(['9. Exit']);
-    expect(within(groups[3]).getAllByRole('link').map((l) => l.textContent)).toEqual([
-      '10. Appraisal', '11. Scenarios', '12. Sensitivity', '13. Due Diligence',
-    ]);
+    // R16b Task 9: Due Diligence always carries its "assessed/entered" evidence
+    // count (spec §26.5), so its own link's textContent is asserted separately
+    // with a pattern rather than by exact equality with the other three.
+    const underwritingLinks = within(groups[3]).getAllByRole('link').map((l) => l.textContent);
+    expect(underwritingLinks.slice(0, 3)).toEqual(['10. Appraisal', '11. Scenarios', '12. Sensitivity']);
+    expect(underwritingLinks[3]).toMatch(/^13\. Due Diligence\d+\/\d+ assessed$/);
   });
 
   it('renders the Sensitivity page when its tab is selected', () => {
     renderCalculator();
     fireEvent.click(screen.getByRole('link', { name: '12. Sensitivity' }));
     expect(screen.getByRole('heading', { name: /12\. Sensitivity/ })).toBeInTheDocument();
+  });
+
+  it('shows an error badge on the page that owns the failing field, and the evidence count on Due Diligence', () => {
+    renderCalculator('finance');
+    // 0 months fails finance.term_months (validation.ts: "!Number.isInteger(f.term_months) ||
+    // f.term_months < 1") and, on the default document, nothing else -- every other block
+    // that reads term_months (programme, sales_phasing, refinance, monitoring, investment_case,
+    // unit_sales) is null on a fresh document, so this is the ONE finance-owned error it fires.
+    fireEvent.change(screen.getByDisplayValue('12'), { target: { value: '0' } });
+    expect(screen.getByRole('link', { name: /6\. Finance/ })).toHaveTextContent(/6\. Finance\s*1/);
+    expect(screen.getByRole('link', { name: /13\. Due Diligence/ })).toHaveTextContent(/\d+\/\d+ assessed/);
   });
 });
 

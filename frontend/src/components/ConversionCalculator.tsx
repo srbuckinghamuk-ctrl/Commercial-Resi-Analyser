@@ -10,6 +10,7 @@ import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
 import { PAGES, STAGES, pageForSlug, calculatorPath, FIRST_PAGE } from './calculator/pages';
 import type { CalcPage } from './calculator/pages';
+import { pageStatus } from './calculator/page-status';
 
 import AcquisitionPage from './calculator/AcquisitionPage';
 import AreasPage from './calculator/AreasPage';
@@ -192,6 +193,10 @@ export default function ConversionCalculator({ project }: Props) {
   const runResult = useMemo(() => safeRunAppraisal(inputs), [inputs]);
   const run: AppraisalRun | null = runResult.ok ? runResult.run : null;
 
+  // R16b Task 9 (spec §26.5). Computed once per render, from `run.validation`
+  // only — no recomputation of the rules validation.ts already ran.
+  const status = run == null ? null : pageStatus(run);
+
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
   const lastComputableInputs = useRef<CalculatorInputsV16 | null>(null);
@@ -350,6 +355,19 @@ export default function ConversionCalculator({ project }: Props) {
                 })}
               >
                 {page.num}. {page.label}
+                {status !== null && status[page.key].errors > 0 && (
+                  <span
+                    aria-label={`${status[page.key].errors} error${status[page.key].errors === 1 ? '' : 's'}`}
+                    style={{ marginLeft: 6, padding: '0 6px', borderRadius: 8, fontSize: 10, fontWeight: 700, color: '#fff', background: '#ef4444' }}
+                  >
+                    {status[page.key].errors}
+                  </span>
+                )}
+                {status !== null && status[page.key].evidence !== null && (
+                  <span style={{ marginLeft: 6, fontSize: 10, color: '#94a3b8' }}>
+                    {status[page.key].evidence!.assessed}/{status[page.key].evidence!.total} assessed
+                  </span>
+                )}
               </NavLink>
             ))}
           </div>
