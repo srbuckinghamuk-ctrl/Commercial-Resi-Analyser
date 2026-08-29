@@ -23,10 +23,15 @@ import { migrateV15toV16 } from './model/migrate';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
 import type { SourceRecord } from './model/due-diligence';
-// Imported from due-diligence.ts, NOT migrate.ts, for the same cycle reason
-// defaultCalculatorInputsV11's own docstring gives: migrate.ts imports THIS
-// module (defaultCalculatorInputsV2), so importing migrate.ts back here
-// would be circular. due-diligence.ts imports neither.
+// Imported from due-diligence.ts rather than via migrate.ts's re-export --
+// the more direct source, not because a migrate.ts import would break
+// anything: migrate.ts already imports `defaultCalculatorInputsV2` from THIS
+// module, and R16b Task 2's `defaultCalculatorInputsV16` (below) imports
+// `migrateV15toV16` from `./model/migrate` right back, proving that cycle is
+// safe -- both edges are hoisted function references, resolved only when the
+// function is CALLED, never when either module is first evaluated.
+// due-diligence.ts imports neither this module nor migrate.ts, so there is
+// no cycle to reason about here at all.
 import { defaultDueDiligence } from './model/due-diligence';
 import type { Project, Tenure, UseClass } from '../types';
 
@@ -467,8 +472,13 @@ export function defaultCalculatorInputsV8(project?: {
  *
  * Spelled out literally rather than calling `migrateV8toV9` for the same
  * reason `defaultCalculatorInputsV5` is: `model/migrate.ts` imports this
- * module, so importing it back would be a cycle. `conversion-defaults.test.ts`
- * pins the two against each other field for field so they cannot drift.
+ * module, so importing it back is a cycle. (R16b Task 2's
+ * `defaultCalculatorInputsV16`, near the bottom of this file, shows a cycle
+ * here is not actually a problem -- both edges are hoisted function
+ * references, resolved only when the function is CALLED, never when either
+ * module is first evaluated -- but this function predates that and is left
+ * as written.) `conversion-defaults.test.ts` pins the two against each other
+ * field for field so they cannot drift.
  */
 export function defaultCalculatorInputsV9(project?: {
   id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
@@ -491,8 +501,11 @@ export function defaultCalculatorInputsV9(project?: {
  *
  * Spelled out literally rather than calling `migrateV9toV10` for the same
  * reason `defaultCalculatorInputsV9` is: `model/migrate.ts` imports this
- * module, so importing it back would be a cycle. `conversion-defaults.test.ts`
- * pins the two against each other field for field so they cannot drift.
+ * module, so importing it back is a cycle -- safe, per
+ * `defaultCalculatorInputsV9`'s own note above (R16b Task 2's
+ * `defaultCalculatorInputsV16` proves it); this function predates that and
+ * is left as written. `conversion-defaults.test.ts` pins the two against
+ * each other field for field so they cannot drift.
  */
 export function defaultCalculatorInputsV10(project?: {
   id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
@@ -518,8 +531,11 @@ export function defaultCalculatorInputsV10(project?: {
  *
  * Spelled out literally rather than calling `migrateV10toV11` for the same
  * reason `defaultCalculatorInputsV10` is: `model/migrate.ts` imports this
- * module, so importing it back would be a cycle. `conversion-defaults.test.ts`
- * pins the two against each other field for field so they cannot drift.
+ * module, so importing it back is a cycle -- safe, per
+ * `defaultCalculatorInputsV9`'s own note above (R16b Task 2's
+ * `defaultCalculatorInputsV16` proves it); this function predates that and
+ * is left as written. `conversion-defaults.test.ts` pins the two against
+ * each other field for field so they cannot drift.
  */
 export function defaultCalculatorInputsV11(project?: {
   id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null;
@@ -535,7 +551,9 @@ export function defaultCalculatorInputsV11(project?: {
  * R13b Task 15 (spec §22.1, the entry-point cutover): the client's persistence
  * boundary moves on again. `unit_sales: null` and `sales_slip_months: 0` (already
  * in DEFAULT_SCENARIOS since Task 1) are the only additions. Spelled out rather
- * than calling `migrateV11toV12` for the cycle reason `defaultCalculatorInputsV11` gives;
+ * than calling `migrateV11toV12` for the cycle reason `defaultCalculatorInputsV11`
+ * gives (safe, per R16b Task 2's `defaultCalculatorInputsV16` below; this
+ * function predates that and is left as written);
  * `conversion-defaults.test.ts` pins the two against each other field for field.
  */
 export function defaultCalculatorInputsV12(project?: {
@@ -626,10 +644,11 @@ export function defaultCalculatorInputsV14(project?: DefaultDocumentProject, now
  * which is fine (the point is the identity, not the change).
  *
  * Built by hand (spread) rather than by calling `migrateV14toV15` --
- * imported from `./model/migrate`, NOT used here, for the same cycle reason
- * `defaultCalculatorInputsV2`'s own docstring above gives: `migrate.ts`
- * imports THIS module, so importing `migrate.ts` back here would be
- * circular.
+ * `migrate.ts` imports THIS module (`defaultCalculatorInputsV2`), so
+ * importing `migrate.ts` back here is a cycle, for the same reason
+ * `defaultCalculatorInputsV5`'s own docstring gives; this function predates
+ * R16b Task 2's finding that the cycle is safe (see `defaultCalculatorInputsV16`
+ * immediately below) and is left as written.
  */
 export function defaultCalculatorInputsV15(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV15 {
   const v14 = defaultCalculatorInputsV14(project, now);
@@ -650,7 +669,20 @@ export function defaultCalculatorInputsV15(project?: DefaultDocumentProject, now
 
 /** R16b spec §26.1. Exactly what `migrateV15toV16` makes of the v15 default —
  *  the construction every default since v7 has used, pinned in
- *  `conversion-defaults.test.ts` against the migration itself. */
+ *  `conversion-defaults.test.ts` against the migration itself.
+ *
+ *  Deliberately CALLS `migrateV15toV16` rather than hand-building the way
+ *  every earlier default in this file does (see `defaultCalculatorInputsV9`'s
+ *  docstring above for why those stay hand-built): `migrate.ts` already
+ *  imports `defaultCalculatorInputsV2` from this module, so importing
+ *  `migrateV15toV16` from `./model/migrate` back here closes a cycle in the
+ *  module graph -- and that cycle is safe. Both edges are hoisted function
+ *  references: `import { migrateV15toV16 } from './model/migrate'` and
+ *  `import { defaultCalculatorInputsV2 } from '../conversion-defaults'` are
+ *  each resolved only when the imported name is actually CALLED, never when
+ *  either module is first evaluated, so neither side ever needs the other's
+ *  module-init to have finished. `vitest`, `tsc` and the production `vite
+ *  build` all confirm it at runtime, not just in principle. */
 export function defaultCalculatorInputsV16(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV16 {
   return migrateV15toV16(defaultCalculatorInputsV15(project, now));
 }

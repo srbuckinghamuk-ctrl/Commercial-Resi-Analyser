@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.financial_model.migrate import (
     _V16_REMOVED_COST_FIELDS,
@@ -53,10 +54,15 @@ def test_is_v16_refuses_a_spoofed_relabel_that_still_carries_contingency_pct():
 
 
 def test_the_is_v16_merge_branch_rebuilds_conversion_costs():
+    """Review fix: spikes a key OUTSIDE the nine removed ones
+    (`demolition_pence`, not a real ConversionCostInputs field at all) --
+    `architect_pence` is one of the nine, so a naive delete-nine-keys
+    implementation would ALSO pass with it spiked, leaving the "an
+    unexpected tenth legacy key cannot ride through" property untested."""
     v16 = migrate_inputs_to_v16(_raw_q(), None).model_dump(mode="json")
-    spiked = {**v16, "conversion_costs": {**v16["conversion_costs"], "architect_pence": 1}}
+    spiked = {**v16, "conversion_costs": {**v16["conversion_costs"], "demolition_pence": 1}}
     assert is_v16(spiked) is True
-    assert "architect_pence" not in migrate_inputs_to_v16(spiked, None).model_dump(mode="json")["conversion_costs"]
+    assert "demolition_pence" not in migrate_inputs_to_v16(spiked, None).model_dump(mode="json")["conversion_costs"]
 
 
 def test_is_v2_or_later_recognises_v16():
@@ -77,3 +83,24 @@ def test_migrate_v15_to_v16_refuses_double_migration():
     v16 = migrate_inputs_to_v16(_raw_q(), None)
     with pytest.raises(ValueError, match="already a v16 document"):
         migrate_v15_to_v16(v16)
+
+
+def test_a_negative_legacy_fee_on_a_raw_v6_document_is_refused_at_the_model_boundary():
+    """TS twin: migrate.test.ts's "a negative legacy fee on a raw v6 document
+    is still reported, through the seeded fee line" (Step 11's pre-v7 hole
+    check, spec Sec 26.7). Python's `ConversionCostInputs` (the v1 shape
+    every pre-v16 document's `conversion_costs` uses) declares
+    `architect_pence: int = Field(ge=0)`, so a negative value never survives
+    parsing to reach `validate_inputs`'s new `else` branch at all -- it is
+    refused earlier, at the `CalculatorInputsV6` model boundary, as a
+    pydantic `ValidationError`. Kept as a test of THAT boundary (not of
+    `validate_inputs`), the same pattern
+    `test_migrate_v15.py::test_property_3_a_fractional_programme_slip_is_structurally_unreachable_in_python`
+    uses: the TS engine's `else` branch CAN reach its own version of this
+    check (TS has no field-level `ge=0` constraint), and its test asserts
+    the `ValidationIssue` there; Python asserts the `ValidationError`
+    instead."""
+    raw_n = _load_fixture(FIXTURE_DIR / "n-area-bridge.json")["inputs"]
+    spiked = {**raw_n, "conversion_costs": {**raw_n["conversion_costs"], "architect_pence": -1}}
+    with pytest.raises(ValidationError):
+        migrate_inputs_to_v16(spiked, None)

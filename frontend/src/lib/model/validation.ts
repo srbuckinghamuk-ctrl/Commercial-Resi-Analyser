@@ -383,14 +383,20 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   } else {
     // R16b Task 2 (spec §26.7's pre-v7 hole check): a pre-v7 document has no
     // raw `cost_plan` block, so the block above never runs for it and never
-    // sees its SEEDED fee lines (`costPlanFromLegacyCosts`, the same
-    // derivation `costPlanOf` gives the engine). Before this release a
-    // negative legacy fee on such a document was still caught, by the now-
-    // deleted `NON_NEGATIVE_MONEY` row on the raw `conversion_costs` field.
-    // This replaces that cover for the one case the block above cannot
-    // reach, with the identical message the v7+ branch already uses.
-    costPlanFromLegacyCosts(inputs.conversion_costs as ConversionCostInputs).fee_lines.forEach((fl, idx) => {
+    // sees its SEEDED plan (`costPlanFromLegacyCosts`, the same derivation
+    // `costPlanOf` gives the engine). Before this release two of that
+    // block's negativity checks still caught a bad value on such a document:
+    // the fee-line one by the now-deleted `NON_NEGATIVE_MONEY` row on the raw
+    // `conversion_costs.architect_pence` (etc.) fields, the contingency-class
+    // one by the now-deleted `conversion_costs.contingency_pct` row. This
+    // replaces both, against the seeded plan, with the identical messages
+    // the v7+ branch above already uses.
+    const seeded = costPlanFromLegacyCosts(inputs.conversion_costs as ConversionCostInputs);
+    seeded.fee_lines.forEach((fl, idx) => {
       if (fl.amount_pence < 0) err(`cost_plan.fee_lines[${idx}].amount_pence`, 'Fee line amount cannot be negative.');
+    });
+    seeded.contingency.forEach((c, idx) => {
+      if (c.pct < 0) err(`cost_plan.contingency[${idx}].pct`, 'Contingency percentage cannot be negative.');
     });
   }
 

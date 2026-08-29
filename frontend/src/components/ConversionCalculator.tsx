@@ -200,7 +200,7 @@ export default function ConversionCalculator({ project }: Props) {
             // that used to sit here: the migration's return type is the
             // state's type, so no cast is needed to bridge them at this call
             // site.
-            // R16b Task 6 (spec 26.7): the server boundary moved to v16
+            // R16b Task 2 (spec 26.7): the server boundary moved to v16
             // (app/api/app.py) and this moved WITH IT, in the same commit.
             setInputs(
               migrateInputsToV16(appraisal.inputs_snapshot as Record<string, unknown>, project),

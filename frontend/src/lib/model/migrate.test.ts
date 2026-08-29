@@ -2142,10 +2142,15 @@ describe('v16 migration -- shape (spec §26.7)', () => {
   });
 
   it('the isV16 merge branch rebuilds conversion_costs, so a stray legacy key does not ride through', () => {
+    // Review fix: spikes a key OUTSIDE the nine removed ones (`demolition_pence`,
+    // not a real ConversionCostInputs field at all) -- `architect_pence` is one
+    // of the nine, so a naive delete-nine-keys implementation would ALSO pass
+    // with it spiked, leaving "an unexpected tenth legacy key cannot ride
+    // through" untested.
     const v16 = migrateInputsToV16(rawQ) as unknown as Record<string, unknown>;
-    const spiked = { ...v16, conversion_costs: { ...(v16.conversion_costs as object), architect_pence: 1 } };
+    const spiked = { ...v16, conversion_costs: { ...(v16.conversion_costs as object), demolition_pence: 1 } };
     expect(isV16(spiked)).toBe(true); // the structural check looks at contingency_pct only
-    expect('architect_pence' in migrateInputsToV16(spiked).conversion_costs).toBe(false);
+    expect('demolition_pence' in migrateInputsToV16(spiked).conversion_costs).toBe(false);
   });
 
   it('refuses double migration and unrecognised versions', () => {
@@ -2160,5 +2165,12 @@ describe('v16 migration -- shape (spec §26.7)', () => {
     const spiked = { ...rawN, conversion_costs: { ...(rawN.conversion_costs as object), architect_pence: -1 } };
     const issues = validateInputs(spiked as unknown as AnyCalculatorInputs);
     expect(issues.some((i) => i.severity === 'error' && i.field.startsWith('cost_plan.fee_lines['))).toBe(true);
+  });
+
+  it('a negative legacy contingency_pct on a raw v6 document is still reported, through the seeded contingency class', () => {
+    const rawN = JSON.parse(readFileSync(join(FIXTURE_DIR, 'n-area-bridge.json'), 'utf-8')).inputs as Record<string, unknown>;
+    const spiked = { ...rawN, conversion_costs: { ...(rawN.conversion_costs as object), contingency_pct: -5 } };
+    const issues = validateInputs(spiked as unknown as AnyCalculatorInputs);
+    expect(issues.some((i) => i.severity === 'error' && i.field.startsWith('cost_plan.contingency['))).toBe(true);
   });
 });

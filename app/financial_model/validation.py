@@ -24,6 +24,7 @@ from .types import (
     PriceBasis,
     QsStage,
     QsStatus,
+    cost_plan_from_legacy_costs,
 )
 from .vat import VAT_CHARGE_CATEGORIES, is_purchase_vat_chargeable, vat_return_periods
 
@@ -427,6 +428,33 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                     f"cost_plan.fee_lines[{idx}].basis",
                     "This fee line resolves against a zero base and will compute to zero.",
                 )
+    else:
+        # R16b Task 2 (spec Sec 26.7's pre-v7 hole check). Port of validation.ts's
+        # matching `else` branch. A pre-v7 document has no raw `cost_plan`
+        # attribute, so the block above never runs for it and never sees its
+        # SEEDED plan (`cost_plan_from_legacy_costs`, the same derivation
+        # `compute_cost_plan`'s own fallback gives the engine). Before this
+        # release two of that block's negativity checks still caught a bad
+        # value on such a document: the fee-line one by the now-deleted
+        # `NON_NEGATIVE_MONEY` row on the raw `conversion_costs.architect_pence`
+        # (etc.) fields, the contingency-class one by the now-deleted
+        # `conversion_costs.contingency_pct` row. This ports both, against the
+        # seeded plan, with the identical messages the v7+ branch above uses --
+        # structurally DEAD in practice (FeeLine.amount_pence and
+        # ContingencyClass.pct are themselves `Field(ge=0)`, so a negative
+        # value on any pre-v16 `conversion_costs` field is refused earlier, at
+        # the pydantic model boundary, before `cost_plan_from_legacy_costs`
+        # could even construct the seeded plan -- see
+        # tests/test_migrate_v16.py's twin of migrate.test.ts's "raw v6
+        # document" test), but kept so the two engines' rule sets stay
+        # structurally identical rather than silently diverging.
+        seeded = cost_plan_from_legacy_costs(inputs.conversion_costs)
+        for idx, fl in enumerate(seeded.fee_lines):
+            if fl.amount_pence < 0:
+                err(f"cost_plan.fee_lines[{idx}].amount_pence", "Fee line amount cannot be negative.")
+        for idx, c in enumerate(seeded.contingency):
+            if c.pct < 0:
+                err(f"cost_plan.contingency[{idx}].pct", "Contingency percentage cannot be negative.")
 
     # R11 spec Sec 17.7 / Sec 17.9 (ruling R27). Chargeability is a fact about
     # the VENDOR; recovery is a fact about the BUYER. vat.registered: false is

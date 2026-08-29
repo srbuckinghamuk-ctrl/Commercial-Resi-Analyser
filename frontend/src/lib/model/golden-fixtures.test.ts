@@ -19,7 +19,7 @@ import type { AppraisalRun } from './index';
 import type { AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV15 } from './finance-types';
 import { migrateInputsToV15 } from './migrate';
 import { STRESS_PACK, resolveStress, runStressPack } from './stress-pack';
-import type { ScenarioOverrides, ConversionCostInputs } from '../conversion-types';
+import type { ScenarioOverrides } from '../conversion-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
@@ -1137,9 +1137,16 @@ describe('golden fixtures (shared with the Python engine)', () => {
       } else {
         // R16b: this branch is reached only by a pre-v7 fixture (the filter above
         // excludes v8-14, and no fixture here is v15/v16 either), which is the only
-        // shape `costPlanFromLegacyCosts` reads — the cast is needed because `tsc`
-        // sees the full `AnyCalculatorInputs` union on `fx.inputs.conversion_costs`.
-        expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs as ConversionCostInputs));
+        // shape `costPlanFromLegacyCosts` reads. Narrowed via `'cost_plan' in`,
+        // not a cast: every V7+ member of `AnyCalculatorInputs` declares
+        // `cost_plan` as a real (if nullable) property, so the negative branch of
+        // a bare `in` check excludes them all structurally, leaving exactly the
+        // pre-v7 union `costPlanFromLegacyCosts` expects.
+        const inputs = fx.inputs;
+        if ('cost_plan' in inputs) {
+          throw new Error(`${name}: expected a pre-v7 fixture here (versionOf !== 7)`);
+        }
+        expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(inputs.conversion_costs));
       }
 
       expect(after.metrics).toEqual(before.metrics);
