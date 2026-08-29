@@ -46,8 +46,6 @@ const savedRecord: FinancialAppraisal = {
   input_hash: 'a'.repeat(64),
   outputs_hash: 'b'.repeat(64),
   audit_hash: 'c'.repeat(64),
-  gdv_pence: null, total_cost_pence: null, profit_on_cost_pct: null,
-  profit_on_gdv_pct: null, return_on_equity_pct: null, irr: null, rlv_pence: null,
   created_at: '2026-08-16T10:00:00Z',
   updated_at: '2026-08-16T10:00:00Z',
 };

@@ -17,7 +17,7 @@ const CONTENT_W = 210 - MARGIN_L - 15;
 const CONTENT_BOTTOM = 275;
 const TOP = 20;
 
-function formatPence(pence: number): string {
+export function formatPence(pence: number): string {
   return `£${(pence / 100).toLocaleString('en-GB', { minimumFractionDigits: 0 })}`;
 }
 
@@ -63,13 +63,17 @@ export function buildAppraisalContent(project: Project, appraisal: FinancialAppr
   lines.push(`Appraisal: ${appraisal.name}`);
   lines.push('');
   lines.push('KEY METRICS:');
-  lines.push(`  GDV: ${appraisal.gdv_pence ? formatPence(appraisal.gdv_pence) : 'N/A'}`);
-  lines.push(`  Total Cost: ${appraisal.total_cost_pence ? formatPence(appraisal.total_cost_pence) : 'N/A'}`);
-  lines.push(`  Profit on Cost: ${appraisal.profit_on_cost_pct != null ? formatPct(appraisal.profit_on_cost_pct) : 'N/A'}`);
-  lines.push(`  Profit on GDV: ${appraisal.profit_on_gdv_pct != null ? formatPct(appraisal.profit_on_gdv_pct) : 'N/A'}`);
-  lines.push(`  Return on Equity: ${appraisal.return_on_equity_pct != null ? formatPct(appraisal.return_on_equity_pct) : 'N/A'}`);
-  lines.push(`  IRR: ${appraisal.irr != null ? formatPct(appraisal.irr) : 'N/A'}`);
-  lines.push(`  Residual Land Value: ${appraisal.rlv_pence ? formatPence(appraisal.rlv_pence) : 'N/A'}`);
+  // R16b spec §26.3: outputs.metrics is the only stored copy of a headline
+  // figure. A row saved before server-side recalculation has no outputs and
+  // prints N/A per line, exactly as a null column did.
+  const m = appraisal.outputs?.metrics ?? null;
+  lines.push(`  GDV: ${m?.gdv_pence ? formatPence(m.gdv_pence) : 'N/A'}`);
+  lines.push(`  Total Cost: ${m?.total_development_cost_pence ? formatPence(m.total_development_cost_pence) : 'N/A'}`);
+  lines.push(`  Profit on Cost: ${m?.profit_on_cost_pct != null ? formatPct(m.profit_on_cost_pct) : 'N/A'}`);
+  lines.push(`  Profit on GDV: ${m?.profit_on_gdv_pct != null ? formatPct(m.profit_on_gdv_pct) : 'N/A'}`);
+  lines.push(`  Return on Equity: ${m?.return_on_equity_pct != null ? formatPct(m.return_on_equity_pct) : 'N/A'}`);
+  lines.push(`  IRR: ${m?.irr_annual_pct != null ? formatPct(m.irr_annual_pct) : 'N/A'}`);
+  lines.push(`  Residual Land Value: ${m?.rlv_pence ? formatPence(m.rlv_pence) : 'N/A'}`);
   lines.push('');
   lines.push(`Report generated: ${new Date().toLocaleDateString('en-GB')}`);
   return lines;

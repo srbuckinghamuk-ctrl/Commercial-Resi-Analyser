@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildEligibilityContent, buildAppraisalContent, generateAppraisalPdf } from './export-pdf';
+import { buildEligibilityContent, buildAppraisalContent, generateAppraisalPdf, formatPence } from './export-pdf';
 import type { Project, EligibilityAssessment, FinancialAppraisal } from '../types';
 
 async function pdfText(blob: Blob): Promise<string> {
@@ -60,13 +60,14 @@ const mockAppraisal: FinancialAppraisal = {
   project_id: 'test-id',
   name: 'Base Case',
   inputs_snapshot: {},
-  gdv_pence: 120000000,
-  total_cost_pence: 85000000,
-  profit_on_cost_pct: 41.2,
-  profit_on_gdv_pct: 29.2,
-  return_on_equity_pct: 62.5,
-  irr: 0.28,
-  rlv_pence: 38000000,
+  outputs: {
+    metrics: {
+      gdv_pence: 120000000, total_development_cost_pence: 85000000,
+      profit_on_cost_pct: 41.2, profit_on_gdv_pct: 29.2, return_on_equity_pct: 62.5,
+      irr_annual_pct: 28, rlv_pence: 38000000,
+    },
+    reconciliation: { report_safe: true },
+  } as unknown as FinancialAppraisal['outputs'],
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 };
@@ -103,7 +104,7 @@ describe('buildAppraisalContent', () => {
   it('includes key financial metrics', () => {
     const lines = buildAppraisalContent(mockProject, mockAppraisal);
     const text = lines.join('\n');
-    expect(text).toContain('GDV');
+    expect(text).toContain(`GDV: ${formatPence(120000000)}`);
     expect(text).toContain('Profit on Cost');
     expect(text).toContain('IRR');
   });
@@ -111,6 +112,11 @@ describe('buildAppraisalContent', () => {
   it('includes appraisal name', () => {
     const lines = buildAppraisalContent(mockProject, mockAppraisal);
     expect(lines.some((l) => l.includes('Base Case'))).toBe(true);
+  });
+
+  it('prints N/A for every metric when the record has no outputs', () => {
+    const lines = buildAppraisalContent(mockProject, { ...mockAppraisal, outputs: null });
+    expect(lines.filter((l) => l.endsWith(': N/A'))).toHaveLength(7);
   });
 });
 

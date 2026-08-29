@@ -33,13 +33,6 @@ const savedAppraisal: FinancialAppraisal = {
   calc_version: '2.11.0',
   inputs_version: 4,
   status: 'legacy_unreconciled',
-  gdv_pence: 137_000_000,
-  total_cost_pence: 114_369_000,
-  profit_on_cost_pct: 19.8,
-  profit_on_gdv_pct: 16.5,
-  return_on_equity_pct: 56.7,
-  irr: null,
-  rlv_pence: 51_761_600,
   created_at: '2026-08-16T10:00:00Z',
   updated_at: '2026-08-16T10:00:00Z',
 };

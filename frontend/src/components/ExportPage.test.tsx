@@ -54,13 +54,6 @@ function storedV4Appraisal(): FinancialAppraisal {
     project_id: 'p1',
     name: 'Stored appraisal',
     inputs_snapshot: v4Snapshot as unknown as Record<string, unknown>,
-    gdv_pence: null,
-    total_cost_pence: null,
-    profit_on_cost_pct: null,
-    profit_on_gdv_pct: null,
-    return_on_equity_pct: null,
-    irr: null,
-    rlv_pence: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   };

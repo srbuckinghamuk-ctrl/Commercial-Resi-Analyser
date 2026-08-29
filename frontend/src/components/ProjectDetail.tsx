@@ -421,28 +421,10 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
 
       {/* Key metrics (if appraisal exists) */}
       {appraisal && (() => {
-        // Server-authoritative outputs (Task 12) are the preferred source;
-        // the legacy flat columns are shown only when a record predates
-        // recalculation (outputs is null), flagged as such below.
+        // R16b spec §26.3: outputs.metrics is the only stored copy. A row
+        // saved before server-side recalculation has no outputs and says so,
+        // rather than showing a second, older set of figures.
         const metrics = appraisal.outputs?.metrics ?? null;
-        const display = metrics
-          ? {
-              gdv: metrics.gdv_pence,
-              totalCost: metrics.total_development_cost_pence,
-              profitOnCost: metrics.profit_on_cost_pct,
-              profitOnGdv: metrics.profit_on_gdv_pct,
-              returnOnEquity: metrics.return_on_equity_pct,
-              irr: metrics.irr_annual_pct,
-            }
-          : {
-              gdv: appraisal.gdv_pence,
-              totalCost: appraisal.total_cost_pence,
-              profitOnCost: appraisal.profit_on_cost_pct,
-              profitOnGdv: appraisal.profit_on_gdv_pct,
-              returnOnEquity: appraisal.return_on_equity_pct,
-              irr: appraisal.irr,
-            };
-        const isLegacy = metrics == null;
         return (
           <div
             style={{
@@ -454,7 +436,7 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
               <h3 style={{ color: '#e2e8f0', fontSize: 16, margin: 0 }}>Key Metrics</h3>
-              {isLegacy && (
+              {metrics == null && (
                 <span
                   style={{
                     fontSize: 11,
@@ -469,26 +451,30 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
                 </span>
               )}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16 }}>
-              {display.gdv != null && (
-                <MetricTile label="GDV" value={`£${(display.gdv / 100).toLocaleString()}`} />
-              )}
-              {display.totalCost != null && (
-                <MetricTile label="Total Cost" value={`£${(display.totalCost / 100).toLocaleString()}`} />
-              )}
-              {display.profitOnCost != null && (
-                <MetricTile label="Profit on Cost" value={`${display.profitOnCost.toFixed(1)}%`} />
-              )}
-              {display.profitOnGdv != null && (
-                <MetricTile label="Profit on GDV" value={`${display.profitOnGdv.toFixed(1)}%`} />
-              )}
-              {display.returnOnEquity != null && (
-                <MetricTile label="Return on Equity" value={`${display.returnOnEquity.toFixed(1)}%`} />
-              )}
-              {display.irr != null && (
-                <MetricTile label="IRR" value={`${display.irr.toFixed(1)}%`} />
-              )}
-            </div>
+            {metrics ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16 }}>
+                {metrics.gdv_pence != null && (
+                  <MetricTile label="GDV" value={`£${(metrics.gdv_pence / 100).toLocaleString()}`} />
+                )}
+                {metrics.total_development_cost_pence != null && (
+                  <MetricTile label="Total Cost" value={`£${(metrics.total_development_cost_pence / 100).toLocaleString()}`} />
+                )}
+                {metrics.profit_on_cost_pct != null && (
+                  <MetricTile label="Profit on Cost" value={`${metrics.profit_on_cost_pct.toFixed(1)}%`} />
+                )}
+                {metrics.profit_on_gdv_pct != null && (
+                  <MetricTile label="Profit on GDV" value={`${metrics.profit_on_gdv_pct.toFixed(1)}%`} />
+                )}
+                {metrics.return_on_equity_pct != null && (
+                  <MetricTile label="Return on Equity" value={`${metrics.return_on_equity_pct.toFixed(1)}%`} />
+                )}
+                {metrics.irr_annual_pct != null && (
+                  <MetricTile label="IRR" value={`${metrics.irr_annual_pct.toFixed(1)}%`} />
+                )}
+              </div>
+            ) : (
+              <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>Not yet recalculated — open and save the appraisal to compute its figures.</p>
+            )}
           </div>
         );
       })()}

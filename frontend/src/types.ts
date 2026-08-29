@@ -194,15 +194,6 @@ export interface FinancialAppraisal {
   /** Spec Sec 13.2 -- binds the stored result to its inputs, model version and
    *  governance status. Null on rows saved before the field existed. */
   audit_hash?: string | null;
-  // legacy columns retained for backward-compat; server-computed even when
-  // `outputs` is present -- prefer `outputs.metrics` for display:
-  gdv_pence: number | null;
-  total_cost_pence: number | null;
-  profit_on_cost_pct: number | null;
-  profit_on_gdv_pct: number | null;
-  return_on_equity_pct: number | null;
-  irr: number | null;
-  rlv_pence: number | null;
   created_at: string;
   updated_at: string;
 }
