@@ -7,15 +7,91 @@ import { PAGES } from './pages';
 import { PAGE_OWNERSHIP, fieldRoot, pageStatus } from './page-status';
 
 describe('page ownership (spec §26.5)', () => {
+  const src = readFileSync(resolve(__dirname, '../../lib/model/validation.ts'), 'utf-8');
+
   it('every root validation.ts can emit is owned by exactly one page', () => {
-    const src = readFileSync(resolve(__dirname, '../../lib/model/validation.ts'), 'utf-8');
-    // err('acquisition.x', ...) / warn(`cost_plan.packages[${i}]...`, ...): the
-    // root is the leading identifier of the first argument, whichever quote.
-    const roots = new Set([...src.matchAll(/\b(?:err|warn)\(\s*['`]([a-z_]+)/g)].map((m) => m[1]));
+    // Review finding (fix round 2): a call site can pass a COMPUTED field, not
+    // a literal -- e.g. `err(field, 'Monetary values cannot be negative.')` in
+    // the NON_NEGATIVE_MONEY loop. Harvest 1 alone (below) contributes nothing
+    // for that call, and the test used to pass only because its nine field
+    // roots (acquisition x4, conversion_costs x4, exit_strategy x1) also
+    // happen to appear as SOME OTHER literal err()/warn() call's first
+    // argument elsewhere in the file -- coincidental redundancy, not a real
+    // guarantee. Harvest 2 removes the coincidence: it reads the field-path
+    // literal directly, wherever it sits in the source.
+    //
+    // 1) err('literal...' / warn(`literal...`: the direct-literal-argument
+    //    call sites.
+    const literalCallRoots = new Set(
+      [...src.matchAll(/\b(?:err|warn)\(\s*['`]([a-z_]+)/g)].map((m) => m[1]),
+    );
+
+    // 2) Every path-shaped string literal in the file: single- or
+    //    back-quoted, starting with a lowercase identifier immediately
+    //    followed by `.` or `[`. This catches NON_NEGATIVE_MONEY's array
+    //    entries (`'acquisition.purchase_price_pence'`, ...) and every
+    //    `field = '...'` / `field = \`...\`` template literal that feeds a
+    //    dynamic err()/warn() call (e.g. `` `programme.phases.${id}` ``)
+    //    directly, without needing to trace which call it eventually reaches.
+    const pathLiteralMatches = [...src.matchAll(/['`]([a-z][a-z_]*)[.[]/g)].map((m) => m[1]);
+
+    // The wider harvest over-catches: a handful of comment/JSDoc references
+    // and one wrapped-message tail also match the shape and are NOT
+    // validation field roots. Each is inspected and named here, per the
+    // review ruling, rather than filtered by a cleverer regex that would hide
+    // a future false positive (or a future genuine field) the same way the
+    // old, narrower regex hid the NON_NEGATIVE_MONEY gap.
+    const NOT_FIELD_ROOTS: Record<string, string> = {
+      category_phase_ids: 'message text quoting the `field` variable\'s VALUE ("category_phase_ids.${cat} references phase..."); the field literal itself is `programme.category_phase_ids.${cat}`, already harvested under `programme`',
+      consideration: 'the tail of a wrapped message string ("...VAT-inclusive consideration.") that happens to start with a quote immediately before "consideration." at its own line-continuation boundary',
+      datetime: 'JSDoc comment referencing Python\'s `datetime.date(y, m, d)`',
+      qs: 'JSDoc comment: `` `qs.inflation ?? null` non-null ``',
+      run: 'JSDoc comment: `` `run.validation` (this function\'s return) ``',
+      seen: 'JSDoc comment: `` `seen.add(l.id)` used to run unconditionally ``',
+      sensitivity: 'JSDoc comment naming the test file `sensitivity.test.ts:157-171`',
+    };
+    // Pin the exclusion list itself: every named false positive must still be
+    // present in the wider harvest, or the source moved and the entry is
+    // stale (in which case it must be removed, not left as dead cover).
+    for (const fp of Object.keys(NOT_FIELD_ROOTS)) {
+      expect(pathLiteralMatches).toContain(fp);
+    }
+
+    const roots = new Set([...literalCallRoots, ...pathLiteralMatches]);
+    for (const fp of Object.keys(NOT_FIELD_ROOTS)) roots.delete(fp);
+
     expect(roots.size).toBeGreaterThan(10); // non-vacuity: the regex matches the file
     const owners = (root: string) => PAGES.filter((p) => (PAGE_OWNERSHIP[p.key] as readonly string[]).includes(root)).map((p) => p.key);
     const problems = [...roots].map((r) => [r, owners(r)] as const).filter(([, o]) => o.length !== 1);
     expect(problems).toEqual([]);
+  });
+
+  it('pins the count of err()/warn() calls whose field is computed, not a literal', () => {
+    // Every one of these resolves to a field root already reachable through
+    // harvest 2 above (via its own `field = ...` literal, or NON_NEGATIVE_MONEY's
+    // array literal) -- named here so a NEW dynamic call site fails this pin
+    // until its root is confirmed reachable, rather than silently relying on
+    // some unrelated literal call elsewhere in the file to cover it by
+    // coincidence (the defect this pin exists to catch):
+    //   - NON_NEGATIVE_MONEY loop (1 call; the 9 literal field paths sit in the
+    //     array above it)
+    //   - the v9 phase network's `phaseField(id)` -> `programme.phases.${id}`
+    //     (17 calls: the phase loop's structural/dependency/user_defined-weight
+    //     checks, plus the derivation loop's start/overrun/sale-tail checks)
+    //   - the `category_phase_ids` loop -> `programme.category_phase_ids.${cat}`
+    //     (2 calls)
+    //   - the cost_plan packages/fee_lines `phase_id` tagging loop ->
+    //     `cost_plan.packages[idx].phase_id` / `cost_plan.fee_lines[idx].phase_id`
+    //     (4 calls)
+    //   - the legacy (v4-v8) programme packages loop ->
+    //     `programme.packages.${name}` (9 calls)
+    //   - the sales_phasing tranches loop -> `sales_phasing.tranches[${i}]`
+    //     (3 calls)
+    //   - the unit_sales.units loop and its checkEvent helper ->
+    //     `unit_sales.units[${i}]` (6 calls)
+    //   - the scenarios loop -> `scenarios.${name}.phase_slip_phase_id` (2 calls)
+    const dynamicCallCount = [...src.matchAll(/\b(?:err|warn)\(\s*[A-Za-z_]/g)].length;
+    expect(dynamicCallCount).toBe(44);
   });
 
   it('no root is owned twice, even one validation.ts does not emit yet', () => {
