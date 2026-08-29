@@ -8,6 +8,7 @@ import type { CalculatorInputsV8, CalculatorInputsV9, ProgrammeNetwork } from '.
 import { unitSalesDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
 import { ddDoc } from '../../lib/model/__fixtures__/due-diligence-docs';
 import { STRESS_PACK } from '../../lib/model/stress-pack';
+import { formatStressSetting } from '../../lib/sensitivity-format';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -510,5 +511,49 @@ describe('SensitivityPage — Region 0: standard lender stresses', () => {
     for (const label of ['Saleable area', 'Abnormal cost', 'Programme slip', 'Refinance LTV']) {
       expect(rowLeverOptions).toContain(label);
     }
+  });
+
+  // Fix round 1, Finding 1: `s.settings.map(formatStressSetting)` passed
+  // Array.prototype.map's (element, index, array) straight through, binding
+  // `formatStressSetting`'s optional `decimals` parameter to the array index on
+  // every call -- so the `decimals === undefined` guard in sensitivity-format.ts
+  // was never true and every setting was quoted at the WRONG precision
+  // (abnormal_cost's pp levers lost their 1dp; risks_crystallise's second
+  // setting, programme_slip, gained a bogus ".0" from index 1). Pinning the
+  // literal rendered text is what makes that regression impossible to
+  // reintroduce silently.
+  it('quotes each Setting cell at formatStressSetting\'s own precision, not the array index', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    const table = screen.getByRole('table', { name: /standard lender stresses/i });
+    const rows = within(table).getAllByRole('row');
+
+    const abnormalRow = rows.find((r) => /Abnormal cost \+10%/.test(r.textContent ?? '')) as HTMLElement;
+    const abnormalSettingCell = within(abnormalRow).getAllByRole('cell')[1];
+    // The setting text is the cell's first text node; a sibling <div> (the
+    // applicability note) follows it, so this is not the whole cell content.
+    expect(abnormalSettingCell.childNodes[0].textContent).toBe(
+      formatStressSetting({ lever: 'abnormal_cost', value: 10 }),
+    );
+
+    const risksRow = rows.find((r) => /Recorded risks crystallise/.test(r.textContent ?? '')) as HTMLElement;
+    const risksSettingCell = within(risksRow).getAllByRole('cell')[1];
+    // Both of this stress's settings (construction_cost, programme_slip) are
+    // 0dp levers -- neither should ever carry a ".0", index-bound or not.
+    expect(risksSettingCell.textContent).not.toMatch(/\.0/);
+  });
+});
+
+// Fix round 1, Finding 2. Region 0 has no config of its own -- it must render
+// even when the row/col axis editor's OWN config is invalid, since the two are
+// independent failure surfaces.
+describe('SensitivityPage — Region 0 renders on the axis-editor failure panel too', () => {
+  it('still shows the standard-lender-stresses table when the axis config is invalid', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    // Force the §12.6 "different levers" config error by pointing both axes at
+    // the same default row lever.
+    const rowLeverValue = (screen.getByLabelText(/row lever/i) as HTMLSelectElement).value;
+    fireEvent.change(screen.getByLabelText(/column lever/i), { target: { value: rowLeverValue } });
+    expect(screen.getByText(/do not describe a valid grid/i)).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: /standard lender stresses/i })).toBeInTheDocument();
   });
 });

@@ -289,11 +289,88 @@ export default function SensitivityPage({ inputs }: Props) {
     </>
   );
 
+  // Fix round 1, Finding 2. The stress pack (Region 0) has no config of its own --
+  // it does not depend on the row/col axis editor at all -- so it renders on every
+  // branch below, including the two axis-editor failure panels, rather than only
+  // on the matrix's own success path. Built once here, ahead of every return, so
+  // "after the heading/editor and before Region 1" holds regardless of which
+  // branch a given render takes.
+  const region0 = (
+    <>
+      {/* ── Region 0: standard lender stress pack (spec §25) ── */}
+      <h4 style={{ color: MUTED, fontSize: 14, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
+        Standard Lender Stresses
+      </h4>
+      {!pack.ok && (
+        <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
+          Standard lender stresses could not be calculated: {pack.error.message}
+        </p>
+      )}
+      {pack.ok && (
+        <table
+          aria-label="Standard lender stresses"
+          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 28 }}
+        >
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Stress</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Setting</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Profit</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Delta vs base</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Peak debt</th>
+              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Flags</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pack.result.stresses.map((s) => {
+              // §12.7: the levered document failed validation, exactly the
+              // matrix's own unmeasured-cell criterion (`s.delta_profit_pence`
+              // is null on precisely this condition — stress-pack.ts).
+              const unmeasured = s.metrics.validation_errors.length > 0;
+              const codes = flagShortCodes(s.metrics.flags);
+              return (
+                <tr key={s.key} style={{ borderBottom: `1px solid ${PANEL}` }}>
+                  <td style={{ padding: '8px 12px', color: TEXT }}>{s.label}</td>
+                  <td style={{ padding: '8px 12px', color: TEXT }}>
+                    {s.settings.map((setting) => formatStressSetting(setting)).join(', ')}
+                    {s.note != null && (
+                      <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
+                        {s.note}
+                      </div>
+                    )}
+                    {unmeasured && (
+                      <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
+                        {unmeasuredCellNote(s.metrics.validation_errors[0].message)}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
+                    {unmeasured ? '—' : penceToPounds(s.metrics.profit_pence as number)}
+                  </td>
+                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
+                    {unmeasured || s.delta_profit_pence === null ? '—' : signedPounds(s.delta_profit_pence)}
+                  </td>
+                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
+                    {unmeasured ? '—' : penceToPounds(s.metrics.peak_debt_pence as number)}
+                  </td>
+                  <td style={{ padding: '8px 12px' }}>
+                    {codes && <span style={{ color: RED, fontSize: 11 }}>[{codes}]</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+
   if (issues.length > 0) {
     return (
       <div>
         {heading}
         {editor}
+        {region0}
         <CalculatorFailurePanel title="These axes do not describe a valid grid">
           {issues.join(' ')}
         </CalculatorFailurePanel>
@@ -306,6 +383,7 @@ export default function SensitivityPage({ inputs }: Props) {
       <div>
         {heading}
         {editor}
+        {region0}
         <CalculatorFailurePanel title="The sensitivity suite could not be calculated">
           {outcome ? outcome.error.message : 'No result was produced for these axes.'}
         </CalculatorFailurePanel>
@@ -350,72 +428,7 @@ export default function SensitivityPage({ inputs }: Props) {
     <div>
       {heading}
       {editor}
-
-      {/* ── Region 0: standard lender stress pack (spec §25) ── */}
-      <h4 style={{ color: MUTED, fontSize: 14, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
-        Standard Lender Stresses
-      </h4>
-      {!pack.ok && (
-        <p style={{ color: MUTED, fontSize: 13, marginBottom: 28 }}>
-          Standard lender stresses could not be calculated: {pack.error.message}
-        </p>
-      )}
-      {pack.ok && (
-        <table
-          aria-label="Standard lender stresses"
-          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 28 }}
-        >
-          <thead>
-            <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
-              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Stress</th>
-              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Setting</th>
-              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Profit</th>
-              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Delta vs base</th>
-              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'right' }}>Peak debt</th>
-              <th style={{ padding: '8px 12px', color: MUTED, textAlign: 'left' }}>Flags</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pack.result.stresses.map((s) => {
-              // §12.7: the levered document failed validation, exactly the
-              // matrix's own unmeasured-cell criterion (`s.delta_profit_pence`
-              // is null on precisely this condition — stress-pack.ts).
-              const unmeasured = s.metrics.validation_errors.length > 0;
-              const codes = flagShortCodes(s.metrics.flags);
-              return (
-                <tr key={s.key} style={{ borderBottom: `1px solid ${PANEL}` }}>
-                  <td style={{ padding: '8px 12px', color: TEXT }}>{s.label}</td>
-                  <td style={{ padding: '8px 12px', color: TEXT }}>
-                    {s.settings.map(formatStressSetting).join(', ')}
-                    {s.note != null && (
-                      <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
-                        {s.note}
-                      </div>
-                    )}
-                    {unmeasured && (
-                      <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
-                        {unmeasuredCellNote(s.metrics.validation_errors[0].message)}
-                      </div>
-                    )}
-                  </td>
-                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
-                    {unmeasured ? '—' : penceToPounds(s.metrics.profit_pence as number)}
-                  </td>
-                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
-                    {unmeasured || s.delta_profit_pence === null ? '—' : signedPounds(s.delta_profit_pence)}
-                  </td>
-                  <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
-                    {unmeasured ? '—' : penceToPounds(s.metrics.peak_debt_pence as number)}
-                  </td>
-                  <td style={{ padding: '8px 12px' }}>
-                    {codes && <span style={{ color: RED, fontSize: 11 }}>[{codes}]</span>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
+      {region0}
 
       {/* ── Region 1: tornado ── */}
       <h4 style={{ color: MUTED, fontSize: 14, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
