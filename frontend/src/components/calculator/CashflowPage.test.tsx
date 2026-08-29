@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { render, screen, within } from '@testing-library/react';
 import CashflowPage from './CashflowPage';
-import { runAppraisal } from '../../lib/model';
+import { runAppraisal, migrateInputsToV16 } from '../../lib/model';
 import type { AppraisalRun, CalculatorInputsV16 } from '../../lib/model';
 import { defaultCalculatorInputsV16 } from '../../lib/conversion-defaults';
+import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import { anchoredSlippedDoc } from '../../lib/model/__fixtures__/investment-case-docs';
 import { unitSalesDoc, heldTwinDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
@@ -284,5 +285,57 @@ describe('CashflowPage — deposits released column (R13b spec §22.6)', () => {
       expect(screen.queryByRole('columnheader', { name: 'Deposits released' })).toBeNull();
       unmount();
     }
+  });
+});
+
+// R16b spec §26.4. `schedule.uses[i].lender_eligible_construction_pence` (R14
+// spec §4.2(b), MonthUses in finance-types.ts) diverges from
+// `.construction_pence` only when the document carries an ineligible
+// package -- the corpus-wide pin below fixes exactly which fixtures do.
+describe('CashflowPage — the lender-eligible build column (spec §26.4)', () => {
+  const corpus = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort()
+    .map((f) => ({ f, doc: JSON.parse(readFileSync(join(FIXTURE_DIR, f), 'utf-8')) as { inputs?: Record<string, unknown> } }))
+    .filter(({ doc }) => 'inputs' in doc);
+  const runs = corpus.map(({ f, doc }) => ({ f, run: runAppraisal(migrateInputsToV16(doc.inputs!)) }));
+  const ineligible = ({ schedule }: AppraisalRun) =>
+    schedule.uses.some((u) => u.lender_eligible_construction_pence !== u.construction_pence);
+
+  it('the corpus documents that carry an ineligible package are exactly these (the pin)', () => {
+    // Fill from the first run; the LIST is the pin -- a later fixture that adds
+    // or loses an ineligible package must edit it deliberately. Printed list
+    // (R16b implementation run) differs from the brief's placeholder single
+    // entry -- Q (q-detailed-cost-plan.json) is itself ineligible, so the
+    // "fully-eligible" role below is played by a-all-cash.json instead.
+    expect(runs.filter(({ run }) => ineligible(run)).map(({ f }) => f)).toEqual([
+      'q-detailed-cost-plan.json',
+      's-dated-programme.json',
+      'w-monitoring-on-site.json',
+      'z-cost-plan-in-time.json',
+    ]);
+  });
+
+  it('uses[] and months[] are the same length on every document (alignment)', () => {
+    for (const { f, run } of runs) expect(run.schedule.uses.length, f).toBe(run.model.months.length);
+  });
+
+  it('shows the column on S, with each cell reading the same-index uses entry, and the disclosure line', () => {
+    const { run } = runs.find(({ f }) => f === 's-dated-programme.json')!;
+    render(<CashflowPage inputs={run.inputs as CalculatorInputsV16} onChange={vi.fn()} run={run} />);
+    expect(screen.getByText('Eligible build')).toBeInTheDocument();
+    const i = run.schedule.uses.findIndex((u) => u.lender_eligible_construction_pence !== u.construction_pence);
+    const rows = screen.getAllByRole('row');
+    // header row is index 0; body rows follow in month order
+    const cells = within(rows[1 + i]).getAllByRole('cell').map((c) => c.textContent);
+    expect(cells[2]).toBe(penceToPounds(run.schedule.uses[i].lender_eligible_construction_pence));
+    const eligibleTotal = run.schedule.uses.reduce((s, u) => s + u.lender_eligible_construction_pence, 0);
+    const constructionTotal = run.schedule.uses.reduce((s, u) => s + u.construction_pence, 0);
+    expect(screen.getByText(`Lender-eligible build: ${penceToPounds(eligibleTotal)} of ${penceToPounds(constructionTotal)}`, { exact: false })).toBeInTheDocument();
+  });
+
+  it('does not show the column or the line on a fully-eligible document (a-all-cash, not in the pin list above)', () => {
+    const { run } = runs.find(({ f }) => f === 'a-all-cash.json')!;
+    render(<CashflowPage inputs={run.inputs as CalculatorInputsV16} onChange={vi.fn()} run={run} />);
+    expect(screen.queryByText('Eligible build')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Lender-eligible build:/)).not.toBeInTheDocument();
   });
 });

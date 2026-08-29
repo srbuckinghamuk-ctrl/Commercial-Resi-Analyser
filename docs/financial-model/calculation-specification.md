@@ -4677,7 +4677,9 @@ Recorded so they are not read as oversights.
    difference from a true per-package spread to exactly zero where every
    package shares one window; elsewhere the per-month eligible construction
    figure is the engine's own computed share, not a re-derivable per-package
-   breakdown.
+   breakdown. [R16b — calc 2.18.0] The cash-flow page now prints the
+   per-month figure and its total (§26.4); the limitation — a share, not a
+   per-package ledger — stands.
 4. **Contingency and compliance follow the month's share.** No separate
    eligibility rule for the contingency allowance.
 5. **A package's programme is its phase.** A package with its own timing

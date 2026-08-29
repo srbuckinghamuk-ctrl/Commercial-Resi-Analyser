@@ -99,6 +99,14 @@ export default function CashflowPage({ run }: Props) {
   // or an absolute value. Read from `model.months[]`, never recomputed here.
   const hasNoi = model.months.some((m) => m.net_operating_income_pence !== 0);
   const noiTotal = model.months.reduce((s, m) => s + m.net_operating_income_pence, 0);
+  // R16b spec §26.4. The per-month lender-eligible share R15b built (§24.4),
+  // read from `schedule.uses[i]` beside `model.months[i]` -- the two arrays
+  // are the same length and order (CashflowPage.test.tsx asserts it corpus-
+  // wide). Shown only when a month's eligible figure differs from its
+  // construction figure, i.e. the document carries an ineligible package.
+  const hasIneligible = schedule.uses.some((u) => u.lender_eligible_construction_pence !== u.construction_pence);
+  const eligibleTotal = schedule.uses.reduce((s, u) => s + u.lender_eligible_construction_pence, 0);
+  const constructionTotal = schedule.uses.reduce((s, u) => s + u.construction_pence, 0);
   // R13b spec §22.6: "deposits released" reads `run.metrics.unit_sales`
   // (null when the document carries no per-unit ledger) -- never summed or
   // recomputed here. `hasDeposits` is false on the held twin (deposit_release
@@ -124,6 +132,13 @@ export default function CashflowPage({ run }: Props) {
         </p>
       )}
 
+      {hasIneligible && (
+        <p style={{ color: '#64748b', fontSize: 12, marginBottom: 20 }}>
+          Lender-eligible build: {penceToPounds(eligibleTotal)} of {penceToPounds(constructionTotal)} (spec §24.4) —
+          the §4.2(b) development-cost advance cap scales by each month&apos;s eligible share.
+        </p>
+      )}
+
       <div style={{ display: 'flex', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
         <div style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f', flex: 1, minWidth: 160 }}>
           <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 4 }}>Peak Debt</div>
@@ -145,7 +160,7 @@ export default function CashflowPage({ run }: Props) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f' }}>
-              {['Month', 'Costs (VAT-incl.)', 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
+              {['Month', 'Costs (VAT-incl.)', ...(hasIneligible ? ['Eligible build'] : []), 'Equity in', 'Draw', 'Cap. fees', 'Interest', 'Opening', 'Closing',
                 'Undrawn net', 'Headroom', ...(hasNoi ? ['NOI'] : []), 'Receipts (net)',
                 ...(hasDeposits ? ['Deposits released'] : []),
                 ...(hasRefi ? ['Refi proceeds'] : []),
@@ -155,10 +170,11 @@ export default function CashflowPage({ run }: Props) {
             </tr>
           </thead>
           <tbody>
-            {model.months.map((m) => (
+            {model.months.map((m, i) => (
               <tr key={m.month} style={{ borderBottom: '1px solid #0f172a' }}>
                 <td style={{ ...td, color: '#94a3b8' }}>{formatProgrammeMonth(anchor, m.month)}</td>
                 <td style={td}>{penceToPounds(m.uses_total_pence)}</td>
+                {hasIneligible && <td style={td}>{penceToPounds(schedule.uses[i].lender_eligible_construction_pence)}</td>}
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.equity_contribution_pence + m.additional_equity_pence)}</td>
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.draw_pence)}</td>
                 <td style={{ ...td, color: '#94a3b8' }}>{penceToPounds(m.capitalised_fees_pence)}</td>
@@ -191,6 +207,7 @@ export default function CashflowPage({ run }: Props) {
             <tr style={{ borderTop: '2px solid #1e3a5f' }}>
               <td style={{ ...td, fontWeight: 700, color: '#e2e8f0' }}>Total</td>
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(costsTotal)}</td>
+              {hasIneligible && <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(eligibleTotal)}</td>}
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(equityInTotal)}</td>
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.draws_pence)}</td>
               <td style={{ ...td, fontWeight: 700 }}>{penceToPounds(model.totals.capitalised_fees_pence)}</td>
