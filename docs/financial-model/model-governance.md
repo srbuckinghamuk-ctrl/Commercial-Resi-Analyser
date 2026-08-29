@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.13.0`, inputs `v11`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.17.0`, inputs `v15`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -217,6 +217,7 @@ Alembic revision the release shipped, where it moved the persistence schema at a
 | R13b | 2.14.0 | v12 | — | The unit-level sales ledger: per-unit timing, deposits, cost overrides, pre-sales coverage, `sales_slip`; §5.11 replays anchored tranches at resolved months | §22 |
 | R15 | 2.15.0 | v13 | — | The due-diligence evidence schedule: 28-item catalogue, RAG/unknown, derived rows, source-conflict flags, QS provenance and price basis, the seventh FINAL condition | §23 |
 | R15b | 2.16.0 | v14 | — | The cost plan in time: per-package timing from the phase, tender-price inflation to the spend midpoint, per-month lender-eligible construction | §24 |
+| R16 | 2.17.0 | v15 | — | The standard lender stress pack: nine closed stresses run as §12.5 cells, four new levers (`saleable_area`, `abnormal_cost`, `programme_slip`, `refi_ltv`), Scenarios page and memo adopt §12.7 | §25 |
 
 **Why R14b bumps neither number.** Nothing inside `inputs_snapshot` moves and no arithmetic
 changes, so an inputs bump would be a lie and a calc bump would be worse than one: `calc_version`

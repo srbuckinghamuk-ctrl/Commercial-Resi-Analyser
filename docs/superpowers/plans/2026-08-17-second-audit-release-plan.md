@@ -21,9 +21,10 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R14b** — **DONE, shipped** | Lender case governance: locked lender snapshot, reviewer, approval state, stale detection, change log (audit §7.3, §7.10) | P1 | two new tables + API (migration 006), Python governance twin; no calc bump, no inputs bump — and `audit_hash` is **not** extended, see the status paragraph |
 | **R15** — **DONE, shipped** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v13, calc 2.15.0 |
 | **R15b** — **DONE, shipped** | The cost plan in time: per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint (§7.5's inflation ask), per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3) | P1 | inputs v14, calc 2.16.0 |
-| **R16** | Sensitivity presets, UX stage grouping, bundle split, legacy column deprecation | P1/P2 | none |
+| **R16** — **DONE, shipped** | The standard lender stress pack: a closed, spec-numbered pack of nine standard stresses run as §12.5 cells in both engines and printed in memo §10 and on the Sensitivity page; the four levers it needs (`saleable_area`, `abnormal_cost`, `programme_slip`, `refi_ltv`); every remaining `ScenarioOverrides` field gets a Scenarios-page input; the R15/R15b review minors | P1 | inputs v15, calc 2.17.0 |
+| **R16b** | Platform: UX stage grouping and URL-routed calculator pages, the bundle split, legacy stored columns / `sdlt_pence` / `conversion_costs.contingency_pct` / the eight legacy fee fields, the cash-flow page's eligibility column (§24.9 deferred it as page work) | P2 | inputs v16, Alembic 007, no calc bump expected |
 
-**R16 UX debt recorded by R13b:** the R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) have no ScenariosPage input; `sales_slip_months` got one in R13b.
+**R16 UX debt recorded by R13b — paid.** The R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) had no ScenariosPage input; `sales_slip_months` got one in R13b, and R16 gave every remaining field one — including its own four — with a `Record<keyof ScenarioOverrides, true>` exhaustiveness test so a fourteenth lever cannot ship UI-less.
 
 **R10 status (calc 2.9.0, inputs v7):** shipped. It gave the appraisal a mutually
 exclusive headline/detailed cost-plan mode, the audit's own package schedule and
@@ -205,6 +206,65 @@ place of the per-month share (the uses stay bucket-spread, §18.5's rounding
 argument, unchanged since R12); a per-month lender-eligible column on the
 Cash-flow page (which has no per-category column to hang one on today). See
 spec §24, `migration-notes.md` §17 and `test-cases.md` §24.
+
+**R16 status (calc 2.17.0, inputs v15):** shipped. It gave every appraisal a
+**standard lender stress pack** — a closed, spec-numbered set of nine stresses
+(spec §25.2) computed and printed whether or not anyone pressed anything: one
+unit lost, saleable area −5%, abnormal cost +10%, sales six months slower,
+start/PC six months late, exit yield +100 bp, refinance LTV −10 pp, opex
++10%/vacancy +5 pp, and the recorded due-diligence risks crystallising. Each
+entry is one §12.5 cell run through §12.7's validity rule, so the pack adds no
+formula; two entries derive their settings from the base document (an average
+unit's share of area and value, and Σ cost / Σ programme impact off the §23
+evidence schedule), and an entry this scheme cannot answer is **measured,
+marked inapplicable and printed with the fact it lacks** rather than silently
+omitted. That closes the audit's §7.9 finding — *"standard lender buttons
+should include unit loss, saleable-area reduction, abnormal cost, slower sales
+absorption, delayed planning/PC, refinance yield expansion, lower refinance LTV
+and operating-cost/vacancy stress"* — and §23.9's recorded "risks crystallise"
+gap in one release. §12.1's lever table went from nine rows to thirteen
+(`saleable_area`, `abnormal_cost`, `programme_slip`, `refi_ltv`), the Scenarios
+page gained an input for every remaining `ScenarioOverrides` field, and both the
+scenario cards and the memo's Scenario Comparison stopped appraising an
+unvalidated levered document and adopted §12.7. See spec §25,
+`migration-notes.md` §18 and `test-cases.md` §25.
+
+**Nothing moved, and the gate says so.** No existing computed value changes on
+any document: every new scenario field migrates as `0`, every new lever is the
+identity at `0`, and no fixture pin moves at this release at all. The one change
+the numeric gate could not have seen — a cell now applies its settings sorted
+newest-lever-first rather than in caller order, which is what keeps the first
+pair of levers sharing a field (`saleable_area` and `gdv`, composing area then
+value) order-independent — is covered by the v14 → v15 gate's new arm: on four
+named fixtures it compares the whole default `SensitivityResult` on both arms,
+beside metrics (flags strictly), ledger and schedule, with no exclusion and no
+tolerance.
+
+**The R16 row in the table above was wrong on both halves, and is corrected
+here.** It read *"Sensitivity presets, UX stage grouping, bundle split, legacy
+column deprecation — P1/P2 — **none**"*. Scoping at design time found that row
+to be **two releases**, and its "no schema move" to be wrong on **each** of
+them: a new lever needs a `ScenarioOverrides` field, so the pack is an inputs
+bump (v15) whatever else it does; and removing `conversion_costs.contingency_pct`
+and the legacy columns is an inputs bump of its own (v16) plus an Alembic
+migration. R16 is therefore the model half and R16b the platform half, as the
+two rows now say. Spec §16.3's deprecation note, which said `contingency_pct`
+was "removed in R16", is corrected to R16b by the same split.
+
+**What is deferred, named rather than left implicit.** A **named-unit** removal
+lever (entry 1 stresses an *average* unit's share of area and value; a named
+unit would have to cascade through `unit_sales.units[]`, `retained_units[]` and
+two validation rules, and choose which unit) — recorded, unowned. A
+**configurable** pack: a lender with a house stress set uses the tornado and
+matrix, which remain configurable, and "standard" would stop meaning standard.
+A **DSCR/ICR floor** stress: `refi_ltv` moves the LTV cap only, so a scheme
+already bound by DSCR shows no movement under it — visible through §19.4's
+published binding constraint, and stated as §25.8 limitation 3. A
+due-diligence **lever** on the tornado, which would need a magnitude nobody has
+defined; entry 9 is the audit's actual ask. And an **API endpoint** for the
+pack or the suite: neither is published, and a consumer wanting either re-runs
+the library. Everything in the R16b row above is out of scope here by
+construction.
 
 **Inflation is R15b, scheduled rather than dropped or bolted on.** §7.5's
 inflation ask is not an evidence question, it is a **timing** question: you

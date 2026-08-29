@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v10)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v15)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -1410,3 +1410,142 @@ that field is `null`, and an approved lender case therefore goes stale on
 that save (spec §21.3). There is no due-diligence-style re-grading
 consequence at this boundary — §24 adds no FINAL condition and no banner —
 so the only consequence to disclose is the hash move itself.
+---
+
+## 18. v14 → v15 (Release 16, calc `2.17.0`)
+
+**What's added.** `CalculatorInputsV15` is `CalculatorInputsV14` plus **four**
+fields, none of them top-level: `saleable_area_adjustment_pct`,
+`abnormal_cost_adjustment_pct`, `programme_slip_months` and
+`refi_ltv_adjustment_pct` on `ScenarioOverrides`, which is the shape stored
+at `scenarios.{base, upside, downside, severe}` (spec §25.1). They are the
+four levers spec §25's standard lender stress pack needs and the Scenarios
+page now writes. `CalculatorInputsV15` subclasses `CalculatorInputsV14`, for
+the reason every prior version extended rather than replaced: the engine
+dispatches on the class, and a flat re-declaration would make those
+`isinstance` checks silently false for v15 documents.
+
+| v14 field | v15 field | Behaviour |
+|---|---|---|
+| *(absent)* | `scenarios.<name>.saleable_area_adjustment_pct` | Written `0.0` on all four named scenarios — §25.1's identity for a percent lever |
+| *(absent)* | `scenarios.<name>.abnormal_cost_adjustment_pct` | Written `0.0` on all four — identity for a percentage-point lever |
+| *(absent)* | `scenarios.<name>.programme_slip_months` | Written `0` (an integer, matching `phase_slip_months`) on all four |
+| *(absent)* | `scenarios.<name>.refi_ltv_adjustment_pct` | Written `0.0` on all four |
+
+**Four written additions, and all four are inert.** No field is renamed, no
+field is narrowed, and none of the four defaults is a value the engine reads
+as a live figure: each new lever arm in `apply_scenario` / `applyScenario`
+multiplies by `(1 + 0/100)` or adds `0`, which is the identity on the field
+it writes. The write is nevertheless **explicit**, on every one of the four
+scenarios, exactly as v12 wrote `sales_slip_months`: `ScenarioOverrides`
+already defaults all four to the same zero, so a migration that relied on the
+default would leave the identity gate testing nothing — a written value is
+what makes "the migrated document computes what the raw one computes" a
+claim that could fail.
+
+Nothing else in §25 is a document field. `StressPackResult`, `StressResult`
+and the `derivation` block are **result** shapes, computed fresh on every run
+from `unit_mix`, `cost_plan`, `programme`, `unit_sales`, `investment_case`
+and `due_diligence` — none of which this migration touches — so there is
+nothing for the migration to write onto any of them, and no stored appraisal
+gains a stress-pack figure at rest.
+
+**Implementation** (`migrateV14toV15` / `migrate_v14_to_v15`,
+`migrateInputsToV15` / `migrate_inputs_to_v15`, `isV15` / `is_v15`). The
+entry point mirrors `migrateInputsToV14`'s shape, including its version
+predicate (membership of the declared tuple, not a range check) and its two
+refusals — an unrecognised `inputs_version` throws, and a document declaring
+version 15 that fails the v15 structural check throws rather than falling
+through to a permissive earlier path. `migrate_v14_to_v15` refuses a document
+that is already v15, so double migration raises instead of silently
+re-stamping — the idempotence guard every prior migration in this file
+carries. `isV15` / `is_v15` discriminate on `inputs_version == 15` **and**
+the `due_diligence` key **and** all four new keys being **present** on
+`scenarios.base`. Presence, not value: every one of the four is `0` on a
+correctly migrated document *and* on a document whose author has simply not
+stressed anything, so only the key itself is proof that this migration ran.
+
+### 18.1 The identity claim, and why it grew a sensitivity arm
+
+**Claim: the v14 → v15 migration moves no computed figure, raises no new
+validation issue on any existing document, and changes no sensitivity
+result. Every existing appraisal produces byte-identical output either side
+of it.**
+
+The gate lives in `migrate.test.ts` and `tests/test_migrate_v15.py`. It runs
+corpus-wide over every fixture carrying its own `inputs` — the filter is
+`"inputs" in doc`, not `kind != "sensitivity"`, because fixture AA (spec §25)
+is a `kind: sensitivity` fixture with no `inputs` of its own and the older
+filter would have excluded it for the wrong reason — and a companion test
+asserts the corpus it walks is non-empty and has not silently shrunk, so the
+gate cannot pass by running over nothing.
+
+The numeric arm compares the v14 run and the v15 run of the same raw document
+on all three outputs — metrics, ledger and schedule — **with no carve-out
+and no tolerance**, and the **flag list with strict equality**. Unlike R15b's
+boundary there is no new flag to name as an addition: §25 adds no flag at
+all, so strict equality on the whole set is the entire claim.
+
+**The arm that is new to this gate: the default sensitivity suite.** On four
+named fixtures — `f-dev-finance-12mo`, `u-investment-case-ltv-binds`,
+`y-due-diligence` and `z-cost-plan-in-time` — the gate additionally compares
+the whole default-config `SensitivityResult` on both arms. It is here rather
+than in the numeric arm because this release changes something the numeric
+arm cannot see: `_measure` / `measure` now applies a cell's settings sorted
+into descending `LEVER_ORDER` rather than in caller order (spec §25.1), and
+an appraisal of an unlevered document exercises none of it. The four
+fixtures are named rather than run corpus-wide because a default suite is
+eighty-one appraisals per fixture; between them they carry a cost plan, a
+network programme, a unit-sales ledger, an investment case and an inflation
+allowance, which is every block a lever can reach.
+
+The validation side is three separately falsifiable properties, §18.7's
+corrected shape as every boundary since has used: every issue a v14 document
+raises has a v15 counterpart; no migrated document raises the one genuinely
+new rule (§12.6's `programme_slip` whole-months check); and a control
+document that *does* trip it raises it, so the second property is not
+vacuously true.
+
+### 18.2 An absent key is not a distinct state
+
+The migration writes the four fields, but **nothing depends on their having
+been written**. Both engines read them defensively — `?? 0` in TypeScript,
+the pydantic field default in Python — because a raw pre-v15 document can
+reach `applyScenario` unmigrated on paths that genuinely exist: `runAppraisal`
+echoes the inputs document it was handed, the memo's scenario comparison
+reads `overrides` off whatever document it was given, and golden fixture O is
+applied unmigrated in a test on purpose.
+
+This is R8's rule (spec §1.5's absent-versus-zero distinction, as applied to
+scenario fields from v9 on) restated for these four: an absent key reads as
+its **seed** — the same zero the migration writes — so a document behaves
+identically before and after migration. That is what makes §18.1's identity
+claim a statement about the migration rather than about a code path only new
+documents reach, and it is why the numeric arm can compare a *raw* v14 arm
+against a *migrated* v15 arm at all.
+
+### 18.3 The boundary round trip and the entry-point cutover
+
+The persistence-boundary test asserts the **presence and value** of all four
+keys on all four scenarios after a full save/load round trip (the same
+`extra='ignore'` discipline §13's snapshot uses), and the API test posts
+fixture Z through `POST /appraisals` to prove the boundary is exercised by a
+real request rather than by a unit test alone.
+
+**Entry-point cutover.** `migrateInputsToV15` / `migrate_inputs_to_v15`
+replaces `migrateInputsToV14` / `migrate_inputs_to_v14` at every production
+call site (the appraisal read path, the report generators, the sensitivity
+suite and the stress pack, the lender-case snapshot builder), in **one
+commit** with the migration itself, and the entry-point guards' `EXEMPT` sets
+and `spec-versions.test.ts` move with it; the governance `inputs_version`
+stays derived from the document itself, never asserted independently (R13's
+finding, carried forward again).
+
+**The consequence a reader must not mistake for a defect** is the same one
+every inputs-version boundary carries (spec §13.2's disclosure): **every
+stored appraisal's `input_hash` moves on its next save**, because the
+document genuinely gained four fields even though all four are zero, and an
+approved lender case therefore goes stale on that save (spec §21.3). §25 adds
+no FINAL condition and no banner, so the hash move is the only consequence to
+disclose — and, unlike R15b's boundary, there is no accompanying engine
+change: **no fixture pin moves at this release at all**.

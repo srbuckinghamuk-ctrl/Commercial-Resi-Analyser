@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.16.0`.
-**Date:** 25 August 2026
+**Status:** Authoritative. Calculation version `2.17.0`.
+**Date:** 29 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.17.0** — the standard lender stress pack (§25, R16), with inputs v15 adding four `ScenarioOverrides` fields, all written at their identity zero: `saleable_area_adjustment_pct`, `abnormal_cost_adjustment_pct`, `programme_slip_months` and `refi_ltv_adjustment_pct`. §12.1's lever table goes from nine rows to thirteen — `saleable_area` (unit areas **and** values, §25.1), `abnormal_cost` (the `abnormal` contingency class, §16.3), `programme_slip` (every predecessor-free phase of the network, §18.9) and `refi_ltv` (the take-out's LTV cap, §19.8) — and gains its first two pairs of levers writing a **shared** field: `saleable_area` with `gdv` (`estimated_value_pence`) and `programme_slip` with `phase_slip` (`slip_months`). Both composition orders are stated there — immaterial for the additive pair, and **area first, then `gdv`, each rounding once** for the other, which is why a cell now applies its settings newest lever first rather than in caller order. `STRESS_PACK` is a closed, normative list of nine stresses (§25.2), each run as one §12.5 cell through §12.7's validity rule, two of them carrying settings derived from the base document (§25.3) — one average unit's share of area and value, and the recorded due-diligence risks crystallising, which is §23.9's note built. An inapplicable stress is measured, marked and printed with the fact it lacks (§25.4). Memo §10 and the Sensitivity page print the nine rows; the Scenarios page gains an input for every remaining `ScenarioOverrides` field, and both the scenario cards and the memo's comparison adopt §12.7 in place of appraising an unvalidated levered document (§25.6). Calc 2.17.0 (R16) adds §25's stress pack and four levers. **It changes no existing computed value** — the v15 identity gate compares metrics (flags strictly), ledger, schedule and, on four named fixtures, the default sensitivity suite, with no exclusion. §23.9's "recorded for R16's presets" note becomes a historical note.
 - **2.16.0** — the cost plan in time (§24, R15b), with inputs v14 adding one nested field, `cost_plan.qs.inflation: { annual_pct } | null`. Every detailed package gains a resolved-phase window, curve and curve-weighted spend midpoint (§24.2, `resolved_phase_id`, `midpoint_month`), a tender-price inflation allowance from `qs.base_date` to that midpoint (§24.3, `inflation_pence`, `inflation_total_pence` inside `construction_total_pence`), and a per-month lender-eligible draw share that §4.2(b)'s advance cap now reads in place of R14's single ratio (§24.4, `uses[m].lender_eligible_construction_pence`). One flag is added: `no_inflation_allowance`. **It changes `construction_total_pence` on any document carrying a recorded allowance (an additive line; `0` elsewhere) and moves `funding_gap_pence` and its dependent metrics on fixture S alone** — the corpus's one document with packages in more than one spend window and an ineligible package among them; every other document's per-month share recovers R14's uniform-ratio figure exactly (§24.4's recovery claim, asserted corpus-wide). The v13 → v14 identity gate compares metrics, ledger and schedule, the new fields included, on both arms **with no exclusion**, and the flag list is compared with strict equality, `no_inflation_allowance` asserted by name as the sole addition. §16.9 limitations 1 and 2, §16.9's inflation line, §20.5 limitation 3 and §23.11 limitation 6 become historical notes.
 - **2.15.0** — the due-diligence evidence schedule (§23, R15), with inputs v13 carrying a non-nullable top-level `due_diligence` block (a captured listing `source_record` and a fixed catalogue of evidenced items whose seed status is `unknown`), `cost_plan.qs` and `CostPackage.price_basis`. Five read-only **derived rows** grade the evidence the model already carried — QS provenance, facility terms, equity sources, the tax and VAT basis, the lender valuation — beside the entered ones. Two **source-conflict** rules compare the captured listing to the appraisal (§23.5), the cost plan publishes fixed-price coverage, provisional sums and the unclassified balance (§23.6), and four flags are added: `due_diligence_unknown`, `source_conflict`, `consent_expires_before_start`, `provisional_sums_present`. §13.3 gains a **seventh FINAL condition** — no entered item may be `unknown` — with its own banner. **It changes no existing computed value:** the v12 → v13 identity gate compares metrics, ledger and schedule, the new result block included, on both arms **with no exclusion**, because a pre-v13 document is computed as §23.10's migration seed. §16.9's QS-provenance limitation and §15.9's measured-survey limitation become historical notes; §22.10 limitation 7 narrows to its per-row residue; inflation and the per-package programme were scheduled as **R15b**, and are delivered by it (§24).
 - **2.14.0** — the unit-level sales ledger (§22, R13b): per-unit exchange/completion timing, deposits held or released, per-unit selling-cost overrides, pre-sales coverage, the `sales_slip` lever (§12.1's ninth). **One pre-existing computed value moves: §5.11's phased break-even now replays anchored tranches at their resolved months** (fixture S: 90,971,520 → 88,720,089); every unanchored document is unchanged. §5.12 gains the per-unit cost basis. Inputs v12.
@@ -61,6 +62,15 @@ All calculations are pure functions of the input document. No wall-clock time, r
 ### 1.6 Versioning
 
 Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22); `13` (**inputs v13**) = calc 2.15.0+ (adds the non-nullable top-level `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, §23); `14` (**inputs v14**) = calc 2.16.0+ (adds `cost_plan.qs.inflation`, §24); `15` (**inputs v15**) = calc 2.17.0+ (adds the four stress-pack scenario fields, §25). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+
+Calc 2.17.0 (R16) adds §25's standard lender stress pack, four sensitivity levers and the four
+inputs-v15 scenario fields they are written through. **It changes no existing computed value** —
+every new field migrates as `0`, every new lever is the identity at `0`, and the v14 → v15 identity
+gate (`migrate.test.ts` / `tests/test_migrate_v15.py`) compares metrics **including flags,
+strictly**, the ledger, the schedule and — on four named fixtures — the whole default-config
+`SensitivityResult`, **with no exclusion and no tolerance**. The sensitivity arm is new to this
+gate and is what proves §25.1's change to how a cell composes its settings (newest lever first,
+not caller order) moved nothing.
 
 Calc 2.16.0 (R15b) adds §24's package timing, tender-price inflation and per-month lender-eligible construction share, and one flag. **It changes `construction_total_pence` on every document carrying a recorded inflation allowance** (a new additive line inside it; `0` on every document that does not) **and moves `funding_gap_pence` and its dependent metrics on fixture S**, the corpus's one document with packages in more than one spend window and an ineligible package among them — every other document's development-cost advance cap recovers R14's uniform-ratio figure exactly (the v13 → v14 identity gate, `migrate.test.ts` / `tests/test_migrate_v14.py`, compares metrics, ledger and schedule on both arms with no exclusion, and asserts `no_inflation_allowance` by name as the sole flag addition).
 
@@ -641,7 +651,7 @@ the three named scenarios (`base`, `upside`, `downside`), which share its lever 
 
 ### 12.1 Levers
 
-A **lever** is one named adjustment applied to an inputs document. There are nine:
+A **lever** is one named adjustment applied to an inputs document. There are thirteen:
 
 | Lever | Unit | Effect on the inputs document |
 |---|---|---|
@@ -654,17 +664,66 @@ A **lever** is one named adjustment applied to an inputs document. There are nin
 | `operating_cost` [R13 — calc 2.12.0] | percent | scales every `investment_case.operating_lines[].value` (§19.8) |
 | `vacancy` [R13 — calc 2.12.0] | percentage points | **subtracts** from `investment_case.stabilisation.stabilised_occupancy_pct` (§19.8) |
 | `sales_slip` [R13b — calc 2.14.0] | months (signed) | adds to every `unit_sales.units[].completion` — `anchor.offset_months` when anchored, else `month_offset` (§22.8) |
+| `saleable_area` [R16 — calc 2.17.0] | percent | scales every `unit_mix.units[].floor_area_sqm` **and** `estimated_value_pence`; area exact, value rounded once; ancillary untouched (§25.1) |
+| `abnormal_cost` [R16 — calc 2.17.0] | percentage points | adds to the `abnormal` contingency class's `pct` (§16.3, §25.1) |
+| `programme_slip` [R16 — calc 2.17.0] | months | adds to `programme.phases[i].slip_months` for **every** phase with `predecessors = []` — the network's sources (§18.9) |
+| `refi_ltv` [R16 — calc 2.17.0] | percentage points | **subtracts** from `investment_case.takeout.ltv_cap_pct` (§19.8) |
 
 A percent lever of `p` multiplies its target by `(1 + p/100)` and rounds half-up to
 integer pence (§1.1). A months or percentage-point lever adds its value directly.
 `vacancy` is the one exception to "adds": it subtracts, because a vacancy stress
 lowers occupancy — a positive `vacancy` value is a worse position, matching the sign
 convention every other stress lever already carries (a positive `interest_rate` or
-`construction_cost` value is also the adverse direction).
+`construction_cost` value is also the adverse direction). **[R16 — calc 2.17.0]**
+`refi_ltv` is the second exception: it subtracts from the take-out's LTV cap, so a
+positive value is again the adverse direction.
 
-The nine levers write to **disjoint input fields**, so applying several to one document
-is order-independent. Any lever added in a later release that shares a field with an
-existing lever must define its composition order in this section at the same time.
+Nine of the thirteen levers write to **disjoint input fields** — each to a field no
+other lever touches — so applying several of those to one document is order-independent.
+**[R16 — calc 2.17.0]** Two pairs share a field: `saleable_area` with `gdv`
+(`estimated_value_pence`), and `programme_slip` with `phase_slip` (`slip_months`). Each
+pair's composition rule is stated below, as this section requires. Any lever added in a
+later release that shares a field with an existing lever must define its composition
+order in this section at the same time — a standing requirement that R16 is the first
+release to discharge rather than to satisfy vacuously, and that remains in force for
+every lever after it.
+
+**[R16 — calc 2.17.0] `saleable_area` and `gdv`'s composition order, and the
+application order it fixes for every cell.** The two share
+`unit_mix.units[].estimated_value_pence` — the first pair of levers in this
+specification whose order of application is **not** immaterial. The order is
+**`saleable_area` first, then
+`gdv`**, each rounding half-up to pence once:
+`v₂ = round(round(v × (1 + a/100)) × (1 + g/100))`. `apply_scenario` / `applyScenario`
+applies its two arms in exactly that order within one call: `saleable_area` scales the
+unit's `floor_area_sqm` (exactly, as a float) and its `estimated_value_pence` (rounded
+once), and `gdv` then scales the already-rounded value. Half-up rounding is not
+commutative across two sequential percentage applications, so the order is load-bearing:
+at `(saleable_area = −10, gdv = +10)` a unit value of `1,000,005p` composes to
+**990,006** in the stated order and to 990,005 in the other, in both engines
+(`test-cases.md` §25.4).
+
+To make that same order hold when the two arrive as two *separate* cell settings,
+`_measure` / `measure` applies a cell's settings **newest lever first** — sorted into
+**descending `LEVER_ORDER`**, so `saleable_area` (index 9) is applied before `gdv`
+(index 0) — rather than in caller order. The sort is stable and total, so a
+`(gdv, saleable_area)` matrix and its transpose measure the identical cell, and the
+several-orders property is kept by construction rather than by luck. For every pair but
+`saleable_area`/`gdv` the sort direction changes nothing — nine levers each write their
+own field, and `phase_slip`/`programme_slip` are additive integers whose order is
+immaterial; the v14 → v15 identity gate asserts exactly that by comparing the whole
+default sensitivity suite on both arms (§25.7).
+
+**[R16 — calc 2.17.0] `programme_slip` and `phase_slip` share `slip_months`.** Both are
+additive integers, so their order is immaterial — stated here as this section requires,
+and covered by the several-orders test on fixture S. `abnormal_cost` and `refi_ltv`
+share no field with any other lever.
+
+**[R16 — calc 2.17.0] An absent key reads as its seed.** Both engines read the four v15
+`ScenarioOverrides` fields defensively (`?? 0` in TypeScript, the pydantic default in
+Python), because a raw pre-v15 document can reach `applyScenario` unmigrated: an absent
+key is not an error and is not a distinct state, but reads as the seed value the
+migration would have written (§25.1, §25.7).
 
 **`exit_yield`, `operating_cost` and `vacancy`'s composition order, stated at the time
 they are added, as this section requires.** The three write
@@ -760,7 +819,7 @@ this is the `(construction_cost = 0, gdv = 0)` cell.
 
 The following are input errors, not flags:
 
-- an axis or a tornado bar naming a lever that is not one of the nine §12.1 levers;
+- an axis or a tornado bar naming a lever that is not one of the thirteen §12.1 levers;
 - an axis with an empty step list, or any non-finite step;
 - an axis with more than nine steps (the suite is bounded at 81 cells);
 - a row axis and a column axis naming the same **`(lever, phase_id)` pair**;
@@ -770,8 +829,9 @@ The following are input errors, not flags:
 - **[R12 — calc 2.11.0]** an axis or tornado range with `lever === 'phase_slip'` and `phase_id` null, or with any other lever and `phase_id` set;
 - **[R12 — calc 2.11.0]** a step, or a tornado bound, for the `phase_slip` lever that is not a whole number of months.
 - **[R13b — calc 2.14.0]** a step, or a tornado bound, for the `sales_slip` lever that is not a whole number of months.
+- **[R16 — calc 2.17.0]** a step, or a tornado bound, for the `programme_slip` lever that is not a whole number of months.
 
-The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline`, `phase_slip` and `sales_slip` levers are therefore constrained to whole months at the point of input rather than rounded later.
+The engine is month-indexed throughout (§1.3), so a fractional term has no meaning in the ledger; the `timeline`, `phase_slip`, `sales_slip` and `programme_slip` levers are therefore constrained to whole months at the point of input rather than rounded later. **[R16 — calc 2.17.0]** No other new configuration rule is needed for the four v15 levers: a `saleable_area` step of −100 or below, a `refi_ltv` that takes the cap to zero or below, and an `abnormal_cost` that takes a class negative all reach §12.7's existing mechanism instead — the levered document fails validation (§15.6's area rules, §19.7 rule 8's `0 < ltv_cap_pct ≤ 100`, §16.5's non-negative class percentage) and the position is unmeasured, never clamped (§25.6).
 
 The duplicate checks key the **pair** rather than the lever alone because two `phase_slip` axes targeting different phases are a legitimate matrix, and a tornado may carry one bar per slipped phase. The lever name itself stays a closed set: encoding the target into the lever string (`'phase_slip:planning'`) would have forced the membership check that stops a misspelled lever reaching the engine to be loosened into a prefix match.
 
@@ -804,6 +864,15 @@ the two by the error the suite raises (`InvalidBaseDocumentError`,
 
 An unmeasured position is never appraised: the suite validates the levered document and
 does not run the ledger for it at all.
+
+**[R16 — calc 2.17.0] A stress-pack entry is a cell.** Each of §25.2's nine standard
+stresses is measured through this same rule, without exception or amendment: its settings
+are applied to the base document, the levered document is validated, and only a passing
+document is appraised. An entry whose levered document fails validation is unmeasured and
+prints as such (§25.5); a base document that fails raises `InvalidBaseDocumentError`,
+exactly as the suite's does. The Scenarios page and the memo's Scenario Comparison, which
+until R16 appraised a levered scenario card **without** validating it, adopt this section
+too (§25.6).
 
 ---
 
@@ -1540,9 +1609,20 @@ Each class rounds **half-up independently** (§1.1); the contingency total is th
 - **Headline mode:** every class's base is the whole base build. There are no packages, so scoping by tag is not expressible — you cannot scope what you have not scheduled. This reproduces headline behaviour exactly: `ConversionCostsPage.tsx` renders all three percentages as editable in both modes, and a rule of "tagged packages only, in all modes" would silently zero a live, shipped headline-mode input.
 - **Detailed mode:** `general` takes the whole base build; `existing_building` and `abnormal` each take the sum of packages whose own `contingency_class` tag matches that class name, as an **additional** allowance on top of general. A package tagged `existing_building` therefore carries both general and existing-building contingency — the second is an addition for elevated risk, not a substitution.
 
+**[R16 — calc 2.17.0] The `abnormal` class is a sensitivity lever's target.** §12.1's
+`abnormal_cost` lever adds percentage points to this class's `pct`, and the base it
+resolves against is the base defined above: the whole build in headline mode, the
+abnormal-tagged packages alone in detailed mode. That is the whole of why the lever's
+applicability is a **document** fact rather than a measured one (§25.4) — in detailed
+mode with nothing tagged `abnormal` the class's base is zero and the lever has nothing
+to move, which the pack reports as an inapplicable row naming the missing tag rather
+than as a zero-width movement. Scaling the whole build instead would be
+`construction_cost` under another name; this class exists to price the elevated risk
+separately, and the lever stresses it separately (§25.1, §25.8 limitation 2).
+
 **The result shape is unchanged.** `ContingencyLine.basis` survives on the *result* as `'all_packages' | 'selected_packages'`, now **derived** from mode and class rather than read from an input field of the same name — so a report reading `cost_plan.contingency[].basis` needs no change (§16.8). Only the input fields `basis` and `package_ids` are gone.
 
-**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: retained so pre-R10 readers keep working, removed in R16, and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail. [R11 — calc 2.10.0. The v7 → v8 boundary re-tests the same claim one version on: the pre-existing fixture whose `contingency_class` tags and (pre-migration) `package_ids` agreed exactly — the two mechanisms could not be told apart by a re-pin alone — is joined by a **planted-divergence** document whose tags and id-list disagree, asserting the resolved base follows the tag. Without it, deleting `basis`/`package_ids` would be indistinguishable from a no-op (§17 "Guards this release must watch fail").]
+**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: retained so pre-R10 readers keep working, removed in R16b (R16 was split at design time and the removal went with the platform half — see the release plan), and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail. [R11 — calc 2.10.0. The v7 → v8 boundary re-tests the same claim one version on: the pre-existing fixture whose `contingency_class` tags and (pre-migration) `package_ids` agreed exactly — the two mechanisms could not be told apart by a re-pin alone — is joined by a **planted-divergence** document whose tags and id-list disagree, asserting the resolved base follows the tag. Without it, deleting `basis`/`package_ids` would be indistinguishable from a no-op (§17 "Guards this release must watch fail").]
 
 ### 16.4 Fee bases, and why double counting is impossible by construction
 
@@ -2192,6 +2272,31 @@ phase.slip_months += (overrides.phase_slip_phase_id === phase.id)
 
 §12.2's facility invariance is untouched; `phase_slip` writes nothing under `finance` or `equity_sources`.
 
+**[R16 — calc 2.17.0] `programme_slip`, beside it.** §12.1's twelfth lever writes the
+same field, `slip_months`, but carries **no target**: it adds its months to **every
+phase with `predecessors = []`** — the network's sources. That is the rule a *standard*
+stress needs, because a pack that cannot know a document's phase ids cannot name one
+(§25.2), and it is the rule that delays the network exactly once: this section's own
+derivation already moves a successor with its predecessor, so adding the months to
+every phase would count the slip once per dependency edge, and adding them to the
+sources lets §18.2's cascade carry the delay through the network unaided. Slipping the
+facility term instead is `timeline`, which moves maturity and not the works.
+
+```
+phase.slip_months += (phase.predecessors == []) ? overrides.programme_slip_months : 0
+```
+
+**Additive, like `phase_slip`, and composing with it in either order**: both are
+integers added to the same field, so their composition order is immaterial, which
+§12.1 states as that section requires. `programme_slip` needs no `phase_id` on
+`SensitivityAxis` or `TornadoRange`, so its duplicate checks key on `lever` alone; it
+is constrained to whole months by §12.6, the `timeline`/`phase_slip`/`sales_slip` rule
+extended; and on a document whose `programme` is not a network, or is a network with
+no phases, it is a **no-op by construction** — a zero-width tornado bar, and an
+inapplicable stress-pack row naming the missing network (§25.4). A slip that pushes
+the derived finish past maturity raises `programme.overrun` and §12.7 makes the
+position **unmeasured, never clamped**, exactly as for `phase_slip`.
+
 **The lever is signed**, matching `slip_months` (§18.2), so a tornado endpoint pair of −2 / +2 months is expressible and symmetric. A cell whose slip pushes the derived finish past maturity raises `programme.overrun`; a cell whose acceleration drives a start below month 0 raises the over-acceleration error. §12.7's cell-validity machinery already turns a hard input error into an **invalid cell** rather than a plausible wrong number, so no new mechanism is needed.
 
 ### 18.10 Outputs, reporting and stated limitations
@@ -2719,7 +2824,7 @@ A ramp running past maturity is **not** an error: refinancing mid-lease-up is
 a real structure. It is flagged because the valuation reads the stabilised
 figure regardless, and that gap should be visible rather than inferred.
 
-### 19.8 Sensitivity: three levers, and the §12.2 carve-out
+### 19.8 Sensitivity: three levers, a fourth in R16, and the §12.2 carve-out
 
 §12.1's table goes from five rows to eight (§12.1). The three new rows —
 `exit_yield`, `operating_cost`, `vacancy` — write fields no other lever
@@ -2738,6 +2843,22 @@ deliberately. Without it, §12.2's opening sentence reads as though all debt —
 take-out included — is held at base, which would make `exit_yield`,
 `operating_cost` and `vacancy` measure nothing.
 
+**[R16 — calc 2.17.0] A fourth lever on this section's block: `refi_ltv`.** §12.1's
+thirteenth lever **subtracts** percentage points from
+`investment_case.takeout.ltv_cap_pct` — §19.4's LTV cap, the field the take-out is sized
+on — so a positive value is the adverse direction, `vacancy`'s convention. It writes that
+field and nothing else, so it composes with every other lever in any order. `refinance.ltv_pct`
+was rejected as the target: §19.1 narrowed it to nullable and inert from R13 on, and a
+lever writing an inert field would look live while measuring nothing.
+
+**The carve-out above is what makes `refi_ltv` measure anything at all.** The cap it
+lowers is only consulted by a take-out that is re-solved in the cell; held at its base
+value, the quantum would not move and the lever would be inert for the same reason the
+other three would have been. What `refi_ltv` does **not** stress is the DSCR and ICR
+floors, so on a scheme already bound by DSCR below the lowered cap it moves nothing —
+applicable and inert, which §19.4's published `binding_constraint` makes legible and
+§25.8 limitation 3 states.
+
 **Cell validity (§12.7) is existing validation, not new sensitivity logic.**
 The design intent behind this release was to give `sensitivity.ts`/
 `sensitivity.py` three new degenerate-cell rules — `cap_yield_pct <= 0`,
@@ -2749,7 +2870,11 @@ appraising, and an error-severity issue yields an unmeasured, invalid
 position, never a clamp) already routes every levered `investment_case`
 document through them. The three degenerate cases are therefore cell-invalid
 by the same path every other invalid cell already takes — a case of the
-mechanism doing the work a new rule would otherwise have had to.
+mechanism doing the work a new rule would otherwise have had to. **[R16 — calc 2.17.0]**
+`refi_ltv` is the fourth instance of the same finding: a value that drives
+`ltv_cap_pct` to zero or below needs no sensitivity-side rule, because rule 8's
+`0 < ltv_cap_pct <= 100` already rejects the levered document and §12.7 makes the
+position unmeasured (§25.6).
 
 ### 19.9 Migration and the persistence boundary
 
@@ -3896,7 +4021,7 @@ A negative result is a lapse before acquisition and always fires. The two helper
 
 **`construction_start_month`** has three arms, in this order: the resolved start of the phase named by `programme.category_phase_ids.construction` when `programme` is a network (§18.2); otherwise `programme.packages.construction.start_offset` when a curve programme is present (§6.1); otherwise `0`, because §6's default profile starts the construction spend at month 0. The middle arm is reachable **only from a raw pre-v9 document**: `migrate_v8_to_v9` turns a package programme into a network, so no migrated document takes it.
 
-**The schedule is §12.2-invariant; two of its flags are not.** No lever writes to `due_diligence`, so every sensitivity cell carries the identical schedule and the identical derived rows as the base cell, and with them the identical `due_diligence_unknown` and `source_conflict` flags — both read the document alone. Two flags **can** move between cells, and neither is a defect: `consent_expires_before_start` compares the lapse month against `construction_start_month`, which the **`phase_slip` lever moves** (any lever that moves the construction start moves this comparison with it), so a consent that clears the base start can lapse before a slipped one; and `provisional_sums_present`'s **amount** moves under the cost lever, which scales the packages it is summed from. There is no due-diligence lever: a "risks crystallise" stress (Σ cost impact onto construction, Σ programme impact onto the timeline) is recorded for R16's presets, not built here.
+**The schedule is §12.2-invariant; two of its flags are not.** No lever writes to `due_diligence`, so every sensitivity cell carries the identical schedule and the identical derived rows as the base cell, and with them the identical `due_diligence_unknown` and `source_conflict` flags — both read the document alone. Two flags **can** move between cells, and neither is a defect: `consent_expires_before_start` compares the lapse month against `construction_start_month`, which the **`phase_slip` lever moves** (any lever that moves the construction start moves this comparison with it), so a consent that clears the base start can lapse before a slipped one; and `provisional_sums_present`'s **amount** moves under the cost lever, which scales the packages it is summed from. There is still no due-diligence *lever*: no lever writes `due_diligence`, and none is planned. **[R16 — calc 2.17.0] The "risks crystallise" stress this note recorded is built, as §25's ninth pack entry** — Σ cost impact run onto construction as a percent of base build, Σ programme impact run onto the network's source phases — reading `inputs.due_diligence.items` directly rather than this section's derived result, so the pack does not depend on §23 having been run first (§25.3). The note is kept as a historical one rather than deleted, this project's rule (§16.9).
 
 ### 23.10 Migration and the persistence boundary
 
@@ -4434,6 +4559,19 @@ factor or a share.
 **Warning:** `annual_pct > 15` — *"Tender-price inflation above 15% p.a. is
 unusual - check the rate."* No clamp; the figure is used as entered.
 
+**[R16 — calc 2.17.0] The third row duplicates §23.9 rule 8, and is kept deliberately.**
+Rule 8 already requires a non-empty `base_date` on any non-null `qs`, so this row is
+reachable **only by a caller that skips rule 8** — a caller validating the inflation
+block alone, or one reaching `computeCostPlan` / `compute_cost_plan` on an
+externally-supplied document. It is kept for the two engines' parity on exactly such a
+caller: a rule present in one engine and absent from the other is the silent asymmetry
+the dual-engine mirror exists to prevent, and this row costs nothing on every caller
+that does run rule 8. The **engine's** read of `base_date` is correspondingly
+defensive rather than trusting: a missing key, a non-string value or a blank-after-trim
+string is treated as **absent** (no base date, so no allowance and `months_from_base`
+null), never as an error thrown from inside the cost-plan computation — validation owns
+the error, the engine owns the degradation.
+
 **One flag**, raised in `dueDiligenceFlags` / `due_diligence_flags`, called
 from `deriveMetrics` / `derive_metrics` beside R15's four (§23.9), dated at
 the floored month of the latest package midpoint:
@@ -4580,3 +4718,494 @@ limitation 6.
 by construction of `PackageTiming`); that `Σ weights == 1` (true by
 construction of every curve function — the *spread* invariant Σ = total is
 what is already asserted, as it has been since §6.1).
+
+---
+
+## 25. The standard lender stress pack [R16 — calc 2.17.0]
+
+A credit committee asks the same questions of every scheme regardless of who
+entered it: *what if a unit is lost, the saleable area shrinks, the existing
+building throws up an abnormal, sales run six months slow, planning or
+practical completion slips, the exit yield moves out, the refinance lender
+lends less, opex and voids run over, or the risks the evidence schedule
+already records actually crystallise?* §12 answers only the questions a user
+configures, and §12.3/§12.4's normative defaults cover four levers — GDV,
+cost, term and rate. This section defines a **closed, normative pack of nine
+stresses**, each one §12.5 cell, computed and printed whether or not anyone
+pressed anything, and the four levers three of them need.
+
+The pack composes existing machinery: it adds no formula. Every entry is
+`run_appraisal(apply_scenario(base, its settings))` routed through §12.7's
+cell-validity rule, exactly as a matrix cell is. **Calc 2.17.0 changes no
+existing computed value** — every new scenario field migrates as `0`, every
+new lever is the identity at `0`, and the change to how a cell composes its
+settings (§25.1) is a no-op for every lever pair but `saleable_area`/`gdv`,
+which is new in this release.
+
+### 25.1 Four new levers (inputs v15)
+
+§12.1's table gains four rows, in this order after `sales_slip`:
+
+| Lever | Unit | Effect on the inputs document | No-op when |
+|---|---|---|---|
+| `saleable_area` | percent | scales every `unit_mix.units[].floor_area_sqm` **and** `estimated_value_pence` by `(1 + p/100)`; area exact, value rounded half-up once; ancillary areas and values untouched | `unit_mix.units` is empty |
+| `abnormal_cost` | percentage points | adds to the `abnormal` contingency class's `pct` (`cost_plan.contingency[name = 'abnormal'].pct`, §16.3) | `cost_plan` is null, or the class's resolved base is 0 |
+| `programme_slip` | months | adds to `programme.phases[i].slip_months` for **every phase with `predecessors = []`** — the network's sources | `programme` is not a network, or carries no phases |
+| `refi_ltv` | percentage points | **subtracts** from `investment_case.takeout.ltv_cap_pct` (§19.4, §19.8) | `investment_case` is null |
+
+**Sign convention, restated per lever.** `saleable_area` follows `gdv`
+(negative is the reduction; the pack runs it negative) because it composes
+with `gdv` on the same field. `abnormal_cost` and `programme_slip` follow
+`construction_cost` and `timeline`: positive is adverse. `refi_ltv` follows
+`vacancy` — it subtracts, so a positive value is adverse.
+
+**Why the sources, not every phase.** `programme_slip` adds its months to
+every predecessor-free phase only. §18.2's derivation already moves a
+successor with its predecessor, so slipping every phase would count the
+delay once per dependency edge; slipping the sources delays the network
+once, and the cascade is §18's own.
+
+**`ScenarioOverrides` gains four fields**, in this order after
+`sales_slip_months`: `saleable_area_adjustment_pct: float = 0`,
+`abnormal_cost_adjustment_pct: float = 0`, `programme_slip_months: int = 0`,
+`refi_ltv_adjustment_pct: float = 0`. `SensitivityLever` and `LEVER_ORDER`
+grow to thirteen in both engines, and the cross-engine lever-parity gate
+(beside the `FlagCode` gate in `tests/test_accessor_guard.py`) asserts the
+two orders are identical, member for member.
+
+**An absent key reads as its seed.** Both engines read the four fields
+defensively — `?? 0` in TypeScript (`?? null` where a field is nullable),
+the pydantic field default in Python — because a **raw pre-v15 document can
+reach `applyScenario` unmigrated**: `runAppraisal` echoes the inputs
+document it was handed, the memo's scenario comparison reads `overrides` off
+whatever document it was given, and golden fixture O is deliberately applied
+unmigrated in a test. This is R8's rule restated for these four fields: an
+absent key is not an error and is not a distinct state — it reads as the
+seed value the migration would have written, so a pre-v15 document behaves
+identically before and after migration (§25.7). The identity gate is what
+proves it.
+
+**Composition, stated as §12.1 requires.**
+
+- **`saleable_area` and `gdv` share `estimated_value_pence`.** The order is
+  **`saleable_area` first, then `gdv`**, each rounding half-up to pence once:
+  `v₂ = round(round(v × (1 + a/100)) × (1 + g/100))`. `apply_scenario` /
+  `applyScenario` applies its two arms in that order within one call — area
+  scales area (exactly, as a float) and value (rounded once), then `gdv`
+  scales the already-rounded value. Half-up rounding is not commutative
+  across two sequential percentage applications, so the order is load-bearing
+  rather than decorative: at `(saleable_area = −10, gdv = +10)` a unit value
+  of `1,000,005p` composes to **990,006** in the stated order and to 990,005
+  in the other. The all-levers-in-several-orders test carries the four new
+  levers and asserts that figure by name (`test-cases.md` §25.4).
+- **`programme_slip` and `phase_slip` share `slip_months`.** Both are
+  additive integers, so their order is immaterial; stated here as this
+  section requires, and covered by the several-orders test on fixture S.
+- **`abnormal_cost` and `refi_ltv` share nothing** with any other lever.
+
+**A cell applies its settings newest lever first, not in caller order.**
+`_measure` / `measure` sorts a cell's settings into **descending
+`LEVER_ORDER`** — the newest lever applied first, `gdv` (index 0) applied
+last — before applying them one at a time on top of the zero scenario. That
+descending order is exactly the arm order inside `apply_scenario` /
+`applyScenario` for the one shared field: `saleable_area` (index 9) sorts
+ahead of `gdv` (index 0), so a cell composes area then value, matching the
+single-call rule stated above. Sorting is stable and total, so a
+`(gdv, saleable_area)` matrix and its transpose measure the identical cell —
+the several-orders property is kept by construction rather than by luck. For
+every pair but `saleable_area`/`gdv` the sort direction changes nothing: nine
+of the thirteen levers each write a field no other lever touches, and
+`phase_slip`/`programme_slip` are additive integers whose order is
+immaterial. The v15 identity gate asserts exactly that, by comparing the
+whole default sensitivity suite on both arms (§25.7).
+
+§12.1's standing requirement is unchanged and is restated here rather than
+discharged: **any future lever that shares a written field with an existing
+lever must state its composition rule in §12.1 at the time it is added.**
+`saleable_area`/`gdv` is the first such pair; it is not the last permitted.
+
+§12.2 is untouched — none of the four writes a facility field. §19.8's
+carve-out (the take-out is re-solved in every cell) is what makes `refi_ltv`
+measure anything at all.
+
+### 25.2 The pack
+
+`STRESS_PACK` is a **closed list of nine**, in this normative order. Each
+entry is a key, a label and a list of lever settings; two entries carry a
+setting **derived** from the base document (§25.3).
+
+| # | Key | Label | Settings |
+|---|---|---|---|
+| 1 | `unit_loss` | One unit lost | `saleable_area` = −(100 / N), N = `unit_mix.units.length` |
+| 2 | `area_reduction` | Saleable area -5% | `saleable_area` = −5 |
+| 3 | `abnormal_cost` | Abnormal cost +10% | `abnormal_cost` = +10 |
+| 4 | `slower_absorption` | Sales six months slower | `sales_slip` = +6 |
+| 5 | `delayed_start` | Start / PC six months late | `programme_slip` = +6 |
+| 6 | `yield_expansion` | Exit yield +100 bp | `exit_yield` = +1.0 |
+| 7 | `lower_refi_ltv` | Refinance LTV -10 pp | `refi_ltv` = +10 |
+| 8 | `opex_vacancy` | Opex +10%, vacancy +5 pp | `operating_cost` = +10 **and** `vacancy` = +5 |
+| 9 | `risks_crystallise` | Recorded risks crystallise | `construction_cost` = p (derived), `programme_slip` = M (derived) |
+
+**`STRESS_PACK` is the single normative table.** Both engines read every
+entry's key, label, lever and magnitude **from it** — `resolve_stress` /
+`resolveStress` duplicates no literal, and derives only the two settings
+§25.3 defines as derived. A test in each engine pins the full
+`(key, label, settings)` list of all nine entries, so a magnitude cannot
+drift in one engine alone and a tenth entry cannot appear unannounced.
+
+**Every stress is one §12.5 cell.** Its settings are applied to the base
+document on top of the zero scenario (§25.1's sorted application), the
+levered document is validated, and only a passing document is appraised —
+§12.7 without exception or amendment. Entry 8 is the one entry with two
+fixed settings; entry 9 has two when both halves are applicable.
+`run_stress_pack` / `runStressPack` runs ten appraisals (the nine plus the
+base) and raises `InvalidBaseDocumentError` on a base document that fails
+validation, exactly as `run_sensitivity` / `runSensitivity` does (§12.7).
+
+**Why these magnitudes.** They are the round figures a UK
+development-finance credit paper habitually tables — 5% on area, 10% on
+abnormal cost, six months on sales and on programme, 100 bp on yield, 10
+points on LTV, 10% and 5 points on opex and voids. They are **normative**,
+exactly as §12.3's and §12.4's default grid and ranges are, and are printed
+beside each row (§25.5) so a reader never has to guess what was moved. The
+pack is deliberately not configurable (§25.8 limitation 5): a configurable
+pack is a second config object, and "standard" would stop meaning standard.
+
+### 25.3 Derived settings
+
+Two of the nine entries carry a setting computed from the base document.
+
+**Entry 1 — one unit lost.** `N` is the proposed unit count
+(`unit_mix.units.length`). The setting is `−100/N`, rounded to **12 decimal
+places** (the `round12` rule §24.2 already uses for the spend midpoint), so
+both engines apply and print the identical float: −25 on four units,
+−16.666666666667 on six. `N = 0` makes the entry inapplicable (§25.4).
+
+Unit loss is modelled as an **average** unit's share of NIA and of value,
+not the removal of a named unit — §25.8 limitation 1 states what that costs.
+
+**Entry 9 — recorded risks crystallise.** Read from
+`inputs.due_diligence.items` **directly** — the document, not
+`DueDiligenceResult`, which is a derivation of the same rows and would make
+the pack depend on §23 having been run first:
+
+- `assessed` = items with `status ∈ {red, amber}` (§23.4's rule).
+- `Σcost` = Σ `cost_impact_pence` over assessed items with a non-null value.
+- `Σmonths` = Σ `programme_impact_months` over assessed items with a non-null
+  value.
+- `base_build` = the base document's `cost_plan.base_build_pence` (§16.3:
+  Σ packages in detailed mode, `round(rate × area)` in headline mode).
+- **Cost half:** `p = round12(Σcost ÷ base_build × 100)`, run as
+  `construction_cost = p`. Applicable when `Σcost > 0` **and**
+  `base_build > 0`.
+- **Programme half:** `M = Σmonths`, run as `programme_slip = M`. Applicable
+  when `Σmonths > 0` **and** the programme is a network with at least one
+  phase.
+- The entry is applicable when **either** half is; its note names the half
+  that is not, in the words §25.4 fixes.
+
+The entry publishes a `derivation` block — `cost_impact_pence`,
+`base_build_pence`, `cost_pct` (`p`, or null when the cost half is
+inapplicable), `programme_impact_months` (the Σ),
+`programme_impact_max_months` and `stated_item_count` — so a reader sees the
+percent applied **and** the pence it stands for. `derivation` is null on
+every other entry.
+
+**The rounding bound, stated.** `construction_cost` is a percent lever that
+rounds per costed line, so the levered build is **not** `base_build + Σcost`
+to the penny. In detailed mode each package rounds once, so
+`|levered_base_build − (base_build + Σcost)| ≤ (number of packages)` pence.
+In headline mode the lever rounds the **rate** and
+`base_build = round(rate′ × area)`, so the bound is `⌈area_sqm / 2⌉ + 1`
+pence — on a 1,000 sqm scheme, £5. The detailed-mode bound is asserted on
+fixture Y as a golden pin; the headline bound in a unit test in each engine,
+on a headline document whose due-diligence items are given impacts for the
+purpose. A pence-additive construction input was rejected: it would be a v15
+field only a lever would ever write, with a migration and twenty-two fixture
+edits, for an exactness a stress does not need.
+
+**Σ, not max.** `DdTotals.programme_impact_max_months` (§23) is the
+schedule's statement of the single largest recorded delay — the critical
+exposure, and the memo already prints it as such. This stress asks what
+happens if the recorded delays land **in series**, which is Σ, and §23.9's
+note said Σ. The two figures are named together wherever entry 9 is printed
+("+7 months (Σ of 3 items; largest 3)") so neither is mistaken for the
+other.
+
+**Worked example — fixture Y.** Five assessed items; `Σcost = 2,550,000p`;
+`base_build = 26,000,000p`; `p = 9.807692307692`; `Σmonths = 7` against a
+max of 3; one predecessor-free phase, `acquisition`, so `programme_slip = 7`
+slips it and the six dependants follow. N = 4, so entry 1 runs
+`saleable_area = −25`. The full derivation is `test-cases.md` §25.2.
+
+### 25.4 Applicability
+
+Applicability is decided **from the base document**, per entry — never from
+"the metrics equal the base", because a coincidental equality is not
+inapplicability (the §18.7 lesson: an identity is true of whatever it is
+true by construction of):
+
+| # | Applicable when |
+|---|---|
+| 1, 2 | `unit_mix.units.length > 0` |
+| 3 | `cost_plan` non-null carrying an `abnormal` class, **and** either `mode = headline` (§16.3 gives every class the whole build there) or detailed with ≥ 1 package tagged `contingency_class = abnormal` |
+| 4 | `unit_sales` non-null with ≥ 1 row |
+| 5 | `programme` is a precedence network with ≥ 1 phase |
+| 6, 7, 8 | `investment_case` non-null |
+| 9 | either half, per §25.3 |
+
+**An inapplicable entry is still measured, marked and printed** — §12.4's
+zero-width-bar precedent. It carries `applicable: false` and a
+one-sentence `note` naming the missing fact, and its settings resolve to
+values that are no-ops by construction on that document (a fixed magnitude
+that has no field to write, or a derived setting resolved to `0`), so its
+metrics equal the base. Omitting it was rejected: a lender reading nine
+standard rows must see **which** questions this scheme cannot answer, not
+count to eight and wonder.
+
+A corpus-wide test in each engine asserts, on every golden fixture, the
+implication **`applicable = false ⇒ metrics = base`** in every field. The
+converse is deliberately **not** asserted: an applicable lever may
+legitimately move nothing — a `refi_ltv` cut on a take-out whose DSCR floor
+already binds below the new cap is applicable and inert, and that is the
+honest answer, not a defect.
+
+### 25.5 Outputs and reporting
+
+**The result.**
+
+```
+StressPackResult {
+  base:      SensitivityMetrics          -- §12.5, always measured
+  stresses:  StressResult[9]             -- §25.2's normative order
+}
+StressResult {
+  key, label
+  settings:    { lever, value, phase_id: null }[]   -- RESOLVED values, as applied
+  derivation:  null | {                             -- entry 9 only (§25.3)
+                 cost_impact_pence, base_build_pence, cost_pct,
+                 programme_impact_months, programme_impact_max_months,
+                 stated_item_count }
+  applicable:  boolean
+  note:        string | null    -- non-null iff inapplicable, or one half of entry 9 is
+  metrics:     SensitivityMetrics   -- nullable fields, flags, validation_errors (§12.7)
+  delta_profit_pence: number | null  -- metrics.profit − base.profit; null when unmeasured
+}
+```
+
+`settings` carries the **resolved** values actually applied, not the
+definition's placeholders, so entries 1 and 9 publish their derived figures
+rather than a reader having to recompute them. `phase_id` is always null: no
+pack lever carries a target (`programme_slip` deliberately needs no phase
+picker, §25.1).
+
+It lives in `stress_pack.py` / `stress-pack.ts`, siblings of the sensitivity
+modules, importing `_measure` / `measure` (exported for the purpose, never
+duplicated). It is **not** part of `AppraisalResultV2` and has **no API
+endpoint** — nesting it in the appraisal result would make every appraisal
+run ten more appraisals (§25.8 limitation 6).
+
+**Presentation is ASCII, and the column list is normative.** Wherever the
+pack is tabled — memo §10 and the Sensitivity page — the columns are:
+
+```
+Stress | Setting | Profit | Delta vs base | Peak debt | Flags
+```
+
+The delta column's header is the ASCII **`Delta vs base`**, not `Δ vs base`:
+§13's ASCII-only rule for generated strings applies, and jsPDF's standard
+fonts cannot encode `Δ` at all. The two surfaces carry the identical header
+so a reader moving between them sees the same table.
+
+**Reporting rules.**
+
+- **Memo §10** gains a sub-heading before the tornado, *"Standard Lender
+  Stresses (spec §25)"*, one sentence of method, then the nine rows in
+  §25.2's order. An **inapplicable** row prints its base-equal figures with
+  its note in the Setting cell; an **unmeasured** row prints "not measured"
+  and its first validation message, §12.7's wording. The table is built
+  inside `sensitivityTables()` beside the tornado so the memo runs the pack
+  exactly once, and `InvalidBaseDocumentError` is caught to the same message
+  the tornado uses. §13.1's provenance disclosure is unchanged: the pack is
+  derived at print time, as the suite is.
+- **Entry 9's Setting cell prints its construction-cost percent to 2
+  decimal places**, not the 0 dp every other percent lever prints. This is
+  normative, not cosmetic: `p` is a full-precision derived figure
+  (9.807692307692 on fixture Y), the 0-dp form would print "+10%", and the
+  parenthetical immediately after it states the recorded Σ in pence — so the
+  default form would **contradict** the derivation printed beside it. The
+  cell reads, from `derivation`: the percent at 2 dp, then the recorded Σ
+  pence, the stated item count and the largest single recorded delay in
+  parentheses — *"Construction cost +9.81%, Programme slip +7 months
+  (£25,500 recorded; 3 items, largest 3 months)"*. The 2-dp override applies
+  to the derived `construction_cost` setting alone, identified by the entry
+  carrying a `derivation`; every fixed magnitude keeps `formatStepLabel`'s
+  usual precision.
+- **Memo §10's Scenario Comparison** prints one settings row per **non-zero**
+  lever across the three scenarios, instead of R4's fixed two (GDV and cost),
+  so a card stressed on `refi_ltv` or `programme_slip` says so. It also
+  **adopts §12.7**: a scenario whose levered document fails validation prints
+  "not measured" and the first error rather than an appraisal of an invalid
+  document (§25.6).
+- **The Sensitivity page** gains a read-only "Standard lender stresses"
+  panel above the tornado, the same nine rows, via `safeRunStressPack` in
+  `safe-sensitivity.ts`'s existing pattern; a base document that cannot be
+  measured yields one line naming the reason, never an empty table.
+  `LEVER_LABEL`, `LEVER_SHORT` and `selectableLevers` gain the four levers,
+  so each is independently pickable as a tornado bar or a matrix axis.
+- **The Scenarios page** gains an input for every `ScenarioOverrides` field
+  that lacked one — a phase picker plus months for `phase_slip`, and number
+  inputs for `exit_yield`, `operating_cost`, `vacancy`, `saleable_area`,
+  `abnormal_cost`, `programme_slip` and `refi_ltv` — all through the existing
+  `updateScenario`. Exhaustiveness is pinned by a
+  `Record<keyof ScenarioOverrides, true>` of rendered labels, so a fourteenth
+  lever cannot ship UI-less; an array length would have pinned nothing (the
+  R9 lesson).
+- The Costs, Programme and Exit pages are unchanged, and no page or
+  generator recomputes any of it: `delta_profit_pence` and every figure in
+  the table are the engine's own (§11's prohibition 9).
+
+### 25.6 Validation
+
+**No new document rule.** The four levers are reached only through
+`ScenarioOverrides` and the sensitivity suite, and a value that produces an
+invalid levered document is caught by §12.7's existing mechanism — the
+position is **unmeasured, never clamped**. A `saleable_area` step of −100 or
+below, a `refi_ltv` that takes the cap to zero or below, and an
+`abnormal_cost` that takes a class negative all reach it: the levered
+document fails §15.6's area rules, §19.7 rule 8's `0 < ltv_cap_pct ≤ 100`
+and §16.5's non-negative class percentage respectively. No sensitivity-side
+degenerate-cell rule is written for any of them (§19.8's finding, applied
+again).
+
+**One new configuration rule, in §12.6:** a step, or a tornado bound, for
+the `programme_slip` lever that is **not a whole number of months** is an
+input error — the `timeline` / `phase_slip` / `sales_slip` rule extended to
+the fourth month-denominated lever, for §1.3's reason (the engine is
+month-indexed; a fractional term has no meaning in the ledger).
+
+**Pydantic and TypeScript bounds: none** on the four fields. Sign and range
+are spec rules owned by validation, exactly as every scenario field already
+is.
+
+**The Scenarios page and the memo's Scenario Comparison adopt §12.7.** Both
+previously appraised a levered card **without validating it**
+(`runAppraisal(applyScenario(...))`, in both surfaces). With four more
+levers on the card — `refi_ltv = 100`, `saleable_area = −100` — an invalid
+levered document becomes easy to write, and appraising one is precisely the
+clamp §12.7 exists to forbid. Both surfaces now validate the levered
+document, show "not measured" with the first error-severity message on
+failure, and appraise only a passing document. The `base` card is the base
+document itself and is never unmeasured on a document the calculator
+accepts.
+
+**Unmeasured pack cells are pinned by name, not skipped.** On the corpus as
+it stands, exactly two of fixture AA's eighteen (base, entry) cells go
+unmeasured — `(y-due-diligence, slower_absorption)`, where a +6-month sales
+slip pushes a ledger completion past Y's 24-month term, and
+`(u-investment-case-ltv-binds, delayed_start)`, where a +6-month programme
+slip pushes U's 20-month network past its own 24-month term. The identity
+test collects the unmeasured `(base, key)` pairs and asserts that **set**
+against those two by name, so a change that widens or narrows which cells go
+unmeasured fails rather than silently changing how much of the pack is
+covered (`test-cases.md` §25.5).
+
+### 25.7 Migration and the persistence boundary
+
+```
+v14 scenarios.{base, upside, downside, severe}  →  v15 same, each plus
+                                                     saleable_area_adjustment_pct:   0
+                                                     abnormal_cost_adjustment_pct:   0
+                                                     programme_slip_months:          0
+                                                     refi_ltv_adjustment_pct:        0
+```
+
+The four fields are **written, not defaulted**, on each of the four named
+scenarios, and `inputs_version` is stamped `15` — as v12 wrote
+`sales_slip_months`, and for the same reason: only a written value exercises
+the numeric identity gate, since `ScenarioOverrides` already defaults every
+one of them to the same zero. `is_v15` / `isV15` is **structural**: version
+15, `due_diligence` present, and all four keys present on `scenarios.base`.
+
+**An absent key is not a distinct state.** §25.1's `?? 0` reads mean a raw
+pre-v15 document computes exactly as its migrated twin does, which is what
+makes the identity gate a claim about the migration rather than about a code
+path only new documents reach.
+
+**The entry-point cutover** (`ConversionCalculator`, `ExportPage`,
+`memo-fixtures`, `__fixtures__`, `app/api/app.py`) lands in one commit, and
+the entry-point guards' `EXEMPT` sets and `spec-versions.test.ts` move with
+it, so no production call site is left on `migrateInputsToV14`.
+
+**The identity gate.** `tests/test_migrate_v15.py` and `migrate.test.ts`
+compare, on every golden fixture carrying its own `inputs`, the raw-v14 arm
+and the migrated-v15 arm: **metrics including flags, compared strictly**;
+the ledger; the schedule; **and, on four named fixtures —
+`f-dev-finance-12mo`, `u-investment-case-ltv-binds`, `y-due-diligence` and
+`z-cost-plan-in-time` — the whole default-config `SensitivityResult`**. The
+sensitivity arm is new to this gate and is what proves §25.1's sorted
+application moved nothing. The four fixtures are named rather than run
+corpus-wide because a default suite is eighty-one appraisals per fixture,
+and these four between them carry a cost plan, a network programme, a
+unit-sales ledger, an investment case and an inflation allowance — every
+block a lever can reach. **No exclusion and no tolerance:** no flag, field
+or figure differs on one arm only. R15b's rule holds — nothing fires on one
+arm alone, so the gate needs no carve-out.
+
+**The consequence to disclose** is the one every inputs boundary carries
+(§13.2, §21.3): every stored appraisal's `input_hash` moves on its next
+save, because the document genuinely gained four fields even though all four
+are zero, and an approved lender case therefore goes stale on that save.
+§25 adds no FINAL condition and no banner, so the hash move is the only
+consequence.
+
+### 25.8 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **Unit loss is an average unit.** Entry 1 removes −100/N of *every* unit's
+   area and value, not a named unit; a scheme whose value is concentrated in
+   one penthouse understates the loss of **that** unit. A named-unit removal
+   lever — which would have to cascade through `unit_sales.units[]`,
+   `retained_units[]` and two validation rules, and choose which unit — is
+   recorded here, unowned.
+2. **`abnormal_cost` has nothing to attach to in a detailed plan with no
+   abnormal-tagged package.** The row says so (§25.4). Tagging is the user's
+   statement that a package carries abnormal risk; the pack does not invent
+   one.
+3. **`refi_ltv` moves the cap only.** The DSCR and ICR floors are not
+   stressed by the pack, so a scheme bound by DSCR shows no movement under
+   entry 7 — which §19.4's published binding-constraint name and the cell's
+   own flags already make visible.
+4. **Entry 9's cost half is a percent of base build**, exact to §25.3's
+   stated bounds rather than a pence-additive line. Contingency is therefore
+   taken on the crystallised cost too, because the lever scales the base —
+   conservative, and stated rather than smoothed over.
+5. **The pack is not configurable.** A lender with a house stress set uses
+   the tornado and the matrix, which remain configurable (§12.3, §12.4). A
+   per-lender pack is not built and is not scheduled.
+6. **No API endpoint publishes the pack** — nor the suite. A consumer
+   wanting either re-runs the library.
+7. **No FINAL gate on the pack.** A stress that cannot be measured, or a
+   scheme on which most entries are inapplicable, is a fact about the
+   document, not an omission by its author; §13.3's conditions are
+   unchanged. (This is minor 7 of the R15/R15b review, declined with its
+   reason: `report-provenance.ts`'s existing reasoning for derived rows
+   applies here unchanged.)
+
+### Guards this release must watch fail
+
+| Guard | What must fail first |
+|---|---|
+| The shared-field pair | the several-orders test with `saleable_area = −10` and `gdv = +10` on a unit value of `1,000,005p`: the stated order gives 990,006, the other 990,005. Watch it fail with the two arms swapped in `apply_scenario` |
+| Sorted application in `measure` | a matrix with rows `gdv` and columns `saleable_area`, and the same matrix transposed, report identical cell figures. Watch it fail with caller-order application restored |
+| `inapplicable ⇒ metrics = base` | corpus-wide, every golden fixture. Watch it fail by making entry 3's applicability rule ignore the cost-plan mode — a headline document would then be marked inapplicable while its metrics move |
+| Entry 9's rounding bound | both modes, §25.3's two bounds. Watch it fail by using `round(p, 2)` in place of `round12` |
+| The v15 identity gate, sensitivity included | metrics (flags strictly), ledger, schedule and the default suite on the four named fixtures, no exclusion. Watch it fail by planting a `+1` in the `saleable_area` arm's identity value |
+| Lever-order parity across engines | `LEVER_ORDER` member for member. Watch it fail by reordering the TypeScript tail |
+| Scenarios exhaustiveness | the `Record<keyof ScenarioOverrides, true>` of rendered labels. Watch it fail by deleting one input |
+| The memo prints nine rows | on the Y-based memo fixture, with the inapplicable notes present. Watch it fail by filtering on `applicable` |
+| Entry-point guard | fixture Z posted through `POST /appraisals` — `inflation.annual_pct = 3` returns 200 with the allowance surviving in `inputs_snapshot`, `= −1` returns 422. Watch the 422 fail by removing `ge=0` |
+| An unmeasured scenario card | a `downside` card with `refi_ltv = 100` on fixture U renders "not measured" on the Scenarios page and in the memo's comparison, carrying §19.7 rule 8's message. Watch it fail by restoring the unvalidated `runAppraisal(applyScenario(...))` |
+| Unmeasured pack cells, by name | fixture AA's unmeasured set is exactly `(y-due-diligence, slower_absorption)` and `(u-investment-case-ltv-binds, delayed_start)`. Watch it fail by widening either fixture's term |
+| Spec-versions pin | `CALC_VERSION` 2.17.0, and §1.6's changelog and version list both naming v15 / 2.17.0, in both engines; the entry-point guards pass only once every production call site names v15 |
