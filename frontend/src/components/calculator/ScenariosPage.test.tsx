@@ -47,6 +47,8 @@ describe('ScenariosPage (R16 spec §25)', () => {
     const doc = { ...base, scenarios: { ...base.scenarios, downside: { ...base.scenarios.downside, refi_ltv_adjustment_pct: 100 } } };
     render(<ScenariosPage inputs={doc} onChange={() => {}} />);
     expect(screen.getAllByText('not measured').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Not measured — the levered document fails validation/)).toBeTruthy();
+    // Pinned in both surfaces (beneath the grid AND the Flags panel) for the one
+    // failing card -- fix round 1, Finding 1.
+    expect(screen.getAllByText(/Not measured — the levered document fails validation/).length).toBeGreaterThanOrEqual(2);
   });
 });

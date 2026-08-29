@@ -16,31 +16,47 @@ type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';
 const scenarioKeys: ScenarioKey[] = ['base', 'upside', 'downside', 'severe'];
 
 /**
- * Every numeric `ScenarioOverrides` field, declaratively (spec §25). Typed
- * over `Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>` so
- * a future field added to the interface without an entry here is a compile
- * error, not a silent gap a caller discovers at runtime — `phase_slip_phase_id`
- * is excluded because it is not a number; it gets its own picker below.
+ * Every numeric `ScenarioOverrides` field, declaratively (spec §25) — labels
+ * and steps only; `phase_slip_phase_id` is excluded because it is not a
+ * number, and gets its own picker below.
+ *
+ * The `satisfies Record<Exclude<keyof ScenarioOverrides, 'label' |
+ * 'phase_slip_phase_id'>, ...>` below is what makes this exhaustive: TS
+ * excess/missing-property checking on a `satisfies` object literal requires
+ * every one of those keys to be present and rejects any key that is not one
+ * of them, so a future field added to `ScenarioOverrides` without an entry
+ * here — or a stale entry for a field since removed — is a compile error, not
+ * a silent gap a caller discovers at runtime. A bare `ReadonlyArray<{ field:
+ * Union }>` (this file's previous shape) cannot make that guarantee: it
+ * constrains each entry's `field` to a valid member but has no way to notice
+ * a member with NO entry, since nothing forces the array's length to track
+ * the union's size.
  */
+const SCENARIO_INPUT_META = {
+  gdv_adjustment_pct: { label: 'GDV adjustment (%)', step: '1' },
+  construction_cost_adjustment_pct: { label: 'Construction cost adjustment (%)', step: '1' },
+  timeline_adjustment_months: { label: 'Timeline adjustment (months)', step: '1' },
+  interest_rate_adjustment_pct: { label: 'Interest rate adjustment (%)', step: '0.1' },
+  sales_slip_months: { label: 'Sales slip (months)', step: '1' },
+  exit_yield_adjustment_pct: { label: 'Exit yield adjustment (pp)', step: '0.1' },
+  operating_cost_adjustment_pct: { label: 'Operating cost adjustment (%)', step: '1' },
+  vacancy_adjustment_pct: { label: 'Vacancy adjustment (pp)', step: '0.1' },
+  phase_slip_months: { label: 'Phase slip (months)', step: '1' },
+  saleable_area_adjustment_pct: { label: 'Saleable area adjustment (%)', step: '1' },
+  abnormal_cost_adjustment_pct: { label: 'Abnormal cost (pp)', step: '0.1' },
+  programme_slip_months: { label: 'Programme slip (months)', step: '1' },
+  refi_ltv_adjustment_pct: { label: 'Refinance LTV reduction (pp)', step: '0.1' },
+} satisfies Record<Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>, { label: string; step: string }>;
+
+/** `SCENARIO_INPUT_META`, as the ordered array the cards render — object key
+ *  order for these string keys is insertion order, so this reproduces the
+ *  literal's own field order above. */
 const SCENARIO_INPUTS: ReadonlyArray<{
-  field: Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>;
+  field: keyof typeof SCENARIO_INPUT_META;
   label: string;
   step: string;
-}> = [
-  { field: 'gdv_adjustment_pct', label: 'GDV adjustment (%)', step: '1' },
-  { field: 'construction_cost_adjustment_pct', label: 'Construction cost adjustment (%)', step: '1' },
-  { field: 'timeline_adjustment_months', label: 'Timeline adjustment (months)', step: '1' },
-  { field: 'interest_rate_adjustment_pct', label: 'Interest rate adjustment (%)', step: '0.1' },
-  { field: 'sales_slip_months', label: 'Sales slip (months)', step: '1' },
-  { field: 'exit_yield_adjustment_pct', label: 'Exit yield adjustment (pp)', step: '0.1' },
-  { field: 'operating_cost_adjustment_pct', label: 'Operating cost adjustment (%)', step: '1' },
-  { field: 'vacancy_adjustment_pct', label: 'Vacancy adjustment (pp)', step: '0.1' },
-  { field: 'phase_slip_months', label: 'Phase slip (months)', step: '1' },
-  { field: 'saleable_area_adjustment_pct', label: 'Saleable area adjustment (%)', step: '1' },
-  { field: 'abnormal_cost_adjustment_pct', label: 'Abnormal cost (pp)', step: '0.1' },
-  { field: 'programme_slip_months', label: 'Programme slip (months)', step: '1' },
-  { field: 'refi_ltv_adjustment_pct', label: 'Refinance LTV reduction (pp)', step: '0.1' },
-];
+}> = (Object.keys(SCENARIO_INPUT_META) as Array<keyof typeof SCENARIO_INPUT_META>)
+  .map((field) => ({ field, ...SCENARIO_INPUT_META[field] }));
 
 function pctOrNa(v: number | null): string {
   return v == null ? 'n/a' : `${v.toFixed(1)}%`;
@@ -169,9 +185,9 @@ export default function ScenariosPage({ inputs, onChange }: Props) {
 
       {failedCards.length > 0 && (
         <div style={{ marginBottom: 24 }}>
-          {failedCards.map(({ key }) => (
+          {failedCards.map(({ key, outcome }) => (
             <p key={key} style={{ color: '#94a3b8', fontSize: 13, margin: '4px 0' }}>
-              {inputs.scenarios[key].label}: not measured - see Flags by Scenario below.
+              {inputs.scenarios[key].label}: {unmeasuredCellNote(outcome.errors[0].message)}
             </p>
           ))}
         </div>
