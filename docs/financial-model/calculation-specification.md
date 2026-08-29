@@ -4895,6 +4895,10 @@ the pack depend on §23 having been run first:
   value.
 - `base_build` = the base document's `cost_plan.base_build_pence` (§16.3:
   Σ packages in detailed mode, `round(rate × area)` in headline mode).
+- `stated_item_count` = the number of assessed items **stating a cost
+  impact** — the items `Σcost` is summed over, not the assessed total and not
+  the count of items stating a programme impact, which the two halves reach
+  independently.
 - **Cost half:** `p = round12(Σcost ÷ base_build × 100)`, run as
   `construction_cost = p`. Applicable when `Σcost > 0` **and**
   `base_build > 0`.
@@ -4928,9 +4932,13 @@ edits, for an exactness a stress does not need.
 schedule's statement of the single largest recorded delay — the critical
 exposure, and the memo already prints it as such. This stress asks what
 happens if the recorded delays land **in series**, which is Σ, and §23.9's
-note said Σ. The two figures are named together wherever entry 9 is printed
-("+7 months (Σ of 3 items; largest 3)") so neither is mistaken for the
-other.
+note said Σ. The two figures are named together wherever entry 9 is printed —
+on fixture Y, the applied slip of `+7 months` beside a largest single recorded
+delay of `3 months` — so neither is mistaken for the other. The item count
+printed beside them is `stated_item_count`, which belongs to the **cost** Σ
+(the items `Σcost` is drawn from, 4 on fixture Y), not to the months: the two
+halves are summed over independently-qualifying sets, and only the cost half's
+count is published.
 
 **Worked example — fixture Y.** Five assessed items; `Σcost = 2,550,000p`;
 `base_build = 26,000,000p`; `p = 9.807692307692`; `Σmonths = 7` against a
@@ -5037,7 +5045,7 @@ so a reader moving between them sees the same table.
   cell reads, from `derivation`: the percent at 2 dp, then the recorded Σ
   pence, the stated item count and the largest single recorded delay in
   parentheses — *"Construction cost +9.81%, Programme slip +7 months
-  (£25,500 recorded; 3 items, largest 3 months)"*. The 2-dp override applies
+  (£25,500 recorded; 4 items, largest 3 months)"*. The 2-dp override applies
   to the derived `construction_cost` setting alone, identified by the entry
   carrying a `derivation`; every fixed magnitude keeps `formatStepLabel`'s
   usual precision.
@@ -5057,10 +5065,19 @@ so a reader moving between them sees the same table.
   that lacked one — a phase picker plus months for `phase_slip`, and number
   inputs for `exit_yield`, `operating_cost`, `vacancy`, `saleable_area`,
   `abnormal_cost`, `programme_slip` and `refi_ltv` — all through the existing
-  `updateScenario`. Exhaustiveness is pinned by a
-  `Record<keyof ScenarioOverrides, true>` of rendered labels, so a fourteenth
-  lever cannot ship UI-less; an array length would have pinned nothing (the
-  R9 lesson).
+  `updateScenario`. Exhaustiveness is pinned **twice over the same key set**,
+  in the page and in its test: `SCENARIO_INPUT_META` in `ScenariosPage.tsx`
+  closes with
+  `satisfies Record<Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>, { label: string; step: string }>`,
+  so a new field that gets no entry fails `tsc`; and `RENDERED_LABEL` in
+  `ScenariosPage.test.tsx` is a
+  `Record<Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>, string>`
+  whose every label the test asserts is rendered, so an entry that exists but
+  reaches no input fails the test. The two exclusions are the two fields that
+  are not numeric lever inputs — the scenario's own `label`, and
+  `phase_slip_phase_id`, which the phase **picker** writes rather than a number
+  box. A fourteenth lever therefore cannot ship UI-less; an array length would
+  have pinned nothing (the R9 lesson).
 - The Costs, Programme and Exit pages are unchanged, and no page or
   generator recomputes any of it: `delta_profit_pence` and every figure in
   the table are the engine's own (§11's prohibition 9).
@@ -5203,7 +5220,7 @@ Recorded so they are not read as oversights.
 | Entry 9's rounding bound | both modes, §25.3's two bounds. Watch it fail by using `round(p, 2)` in place of `round12` |
 | The v15 identity gate, sensitivity included | metrics (flags strictly), ledger, schedule and the default suite on the four named fixtures, no exclusion. Watch it fail by planting a `+1` in the `saleable_area` arm's identity value |
 | Lever-order parity across engines | `LEVER_ORDER` member for member. Watch it fail by reordering the TypeScript tail |
-| Scenarios exhaustiveness | the `Record<keyof ScenarioOverrides, true>` of rendered labels. Watch it fail by deleting one input |
+| Scenarios exhaustiveness | `SCENARIO_INPUT_META`'s `satisfies Record<Exclude<keyof ScenarioOverrides, 'label' \| 'phase_slip_phase_id'>, …>` in `ScenariosPage.tsx` (a `tsc` failure) and `RENDERED_LABEL` over the same key set in `ScenariosPage.test.tsx` (a test failure). Watch the second fail by deleting one input while leaving its meta entry |
 | The memo prints nine rows | on the Y-based memo fixture, with the inapplicable notes present. Watch it fail by filtering on `applicable` |
 | Entry-point guard | fixture Z posted through `POST /appraisals` — `inflation.annual_pct = 3` returns 200 with the allowance surviving in `inputs_snapshot`, `= −1` returns 422. Watch the 422 fail by removing `ge=0` |
 | An unmeasured scenario card | a `downside` card with `refi_ltv = 100` on fixture U renders "not measured" on the Scenarios page and in the memo's comparison, carrying §19.7 rule 8's message. Watch it fail by restoring the unvalidated `runAppraisal(applyScenario(...))` |

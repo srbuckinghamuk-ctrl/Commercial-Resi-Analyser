@@ -1410,6 +1410,7 @@ that field is `null`, and an approved lender case therefore goes stale on
 that save (spec §21.3). There is no due-diligence-style re-grading
 consequence at this boundary — §24 adds no FINAL condition and no banner —
 so the only consequence to disclose is the hash move itself.
+
 ---
 
 ## 18. v14 → v15 (Release 16, calc `2.17.0`)
