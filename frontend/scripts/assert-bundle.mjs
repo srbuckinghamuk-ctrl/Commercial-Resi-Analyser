@@ -52,4 +52,13 @@ function main(argv) {
   process.exit(result.ok ? 0 : 1);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main(process.argv.slice(2));
+// R16b spec §26 minor 2. On win32, `resolve(process.argv[1])`'s drive letter
+// follows the invoking shell's cwd casing (often lowercase), while
+// `fileURLToPath(import.meta.url)`'s comes from the OS and is typically
+// uppercase -- a strict `===` would then miss the match and this guard
+// would silently exit 0 instead of running main(), on Windows only.
+const invoked = process.argv[1] ? resolve(process.argv[1]) : null;
+const self = fileURLToPath(import.meta.url);
+const isMain = invoked !== null
+  && (process.platform === 'win32' ? invoked.toLowerCase() === self.toLowerCase() : invoked === self);
+if (isMain) main(process.argv.slice(2));

@@ -254,8 +254,14 @@ carries an ineligible package (§24.4). Beside the totals, when shown, a
 disclosure line prints *"Lender-eligible build: £X of £Y"* where X = Σ
 `lender_eligible_construction_pence` and Y = Σ `construction_pence` over
 `uses[]`, sums of engine figures with no derivation of its own. Fixture S is
-the document that shows it; fixture Q (detailed plan, every package eligible)
-asserts the column's absence.
+the document that shows it. Exactly four corpus fixtures carry an ineligible
+package — `q-detailed-cost-plan`, `s-dated-programme`, `w-monitoring-on-site`,
+`z-cost-plan-in-time` — asserted by name; **Q is one of the four**, not the
+fully-eligible witness, so the column's absence is asserted on fixture A
+(`a-all-cash`, no ineligible package) instead. [Corrected in
+Task 12: this section originally named Q as the absence witness, which
+contradicts Q's own measured membership in the ineligible-package set — Q's
+own detailed cost plan is not, in fact, every package eligible.]
 
 ---
 
@@ -466,7 +472,7 @@ and the test still asserts it.
 | Ownership `satisfies Record<CalcPage, readonly string[]>` | A page with no ownership row |
 | Source-scan root test (exactly-one-owner) | A validation rule on an unowned block, or a root owned twice |
 | `uses.length === months.length` | A column printed against the wrong month |
-| Column-absent-on-Q test | The column becoming unconditional, silently widening a wide table on every document |
+| Column-absent-on-A test | The column becoming unconditional, silently widening a wide table on every document |
 | `assert-bundle.mjs` closure + banner | A static `import { jsPDF }` reappearing anywhere reachable from the entry |
 | One-arm key-presence proof on Q, stored JSON | A migration that relabels without removing (extras ignored would hide it) |
 | Exactly-nine v15-only list | The list becoming a tolerance that swallows a real regression |
@@ -482,10 +488,17 @@ and the test still asserts it.
 ## 13. Fixtures
 
 No new golden fixture. Fixture **Q** (`q-detailed-cost-plan`) is the one-arm
-migration witness and the column-absent witness; fixture **S**
-(`s-dated-programme`) shows the column; **F/U/Y/Z** carry the sensitivity
-arm as in R16. Fifteen fixtures lose the `sdlt_pence` key from their pinned
-metrics; no pinned value changes.
+migration witness; fixture **S** (`s-dated-programme`) shows the eligibility
+column. The corpus documents carrying an ineligible package are pinned by
+name as exactly four: **Q** (`q-detailed-cost-plan`), **S**
+(`s-dated-programme`), **W** (`w-monitoring-on-site`) and **Z**
+(`z-cost-plan-in-time`) — so the column-absent witness is fixture **A**
+(`a-all-cash`), not Q, since Q is itself one of the four. [Corrected in
+Task 12: this section originally named Q as the column-absent witness too,
+which double-books it against its own membership in the ineligible-package
+pin list.] **F/U/Y/Z** carry the sensitivity arm as in R16. Fifteen fixtures
+lose the `sdlt_pence` key from their pinned metrics; no pinned value
+changes.
 
 ---
 

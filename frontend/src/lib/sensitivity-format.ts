@@ -187,17 +187,20 @@ export const STRESS_SIGN_CONVENTION =
  *    usual 0dp for a percent lever would print "+10%", silently rounding away
  *    the derivation the parenthetical right after it then states in pounds.
  *
- * 2. **The parenthetical states only what the document knows** (spec §1.5:
- *    null means unknown, 0 means known zero). Fix wave M6: a document whose
- *    assessed due-diligence items state no programme impact carries
- *    `programme_impact_max_months = null`, and printing `?? 0` there read as
- *    "largest 0 months" — a known zero asserted where the document says
- *    nothing. That clause is now omitted entirely on a null. The parenthetical
- *    as a whole is suppressed on an INAPPLICABLE entry 9 (§25.4): neither half
- *    of the derivation applies there, every published figure in it is a zero or
- *    a null that no item put there, and the entry already prints the engine's
- *    own note saying which fact it lacks — a "(£0 recorded; 0 items)" beside
- *    that note would be the same §1.5 mistake one level up.
+ * 2. **The parenthetical is per-half, on what is STATED, not on whether the
+ *    entry is applicable** (R16b spec §25.5, R16 finding 1). Spec §1.5: null
+ *    means unknown, 0 means known zero. The cost clause ("£X recorded; n
+ *    items") prints whenever `derivation.stated_item_count > 0`; the months
+ *    clause ("largest m months") prints whenever
+ *    `programme_impact_max_months !== null`; the two are independent of each
+ *    other and of `applicable`. The whole parenthetical is omitted only when
+ *    NEITHER half is stated. Fix wave M6's null-months fix (never printing
+ *    `?? 0` for an unstated months figure) still holds, now as one arm of
+ *    this rule rather than a special case. The pre-R16b rule suppressed the
+ *    whole parenthetical whenever `!applicable`, which silently dropped a
+ *    stated half on an inapplicable entry (e.g. recorded cost items exist
+ *    but the scheme has no abnormal-tagged package for the lever to move).
+ *    Applicability stays the `note`'s job, never the parenthetical's.
  *
  * The caller keeps ownership of `stress.note`: the memo appends it to this
  * string, the page renders it as its own `<div>` beneath the settings, and
@@ -210,15 +213,19 @@ export function stressSettingText(stress: StressResult): string {
       ? formatStressSetting(setting, 2)
       : formatStressSetting(setting)
   )).join(', ');
-  if (stress.derivation === null || !stress.applicable) return text;
-  // Whole item counts and whole months only — never a float interpolated raw;
-  // the pence figure goes through `penceToPounds` (the memo's own `fmt`).
+  if (stress.derivation === null) return text;
+  // R16b spec §25.5 (per-half): each half prints when it is STATED, whether
+  // or not it is applicable -- applicability is the note's job. Whole item
+  // counts and whole months only; the pence figure goes through penceToPounds.
   const { cost_impact_pence, stated_item_count, programme_impact_max_months } = stress.derivation;
-  const items = `${stated_item_count} item${stated_item_count === 1 ? '' : 's'}`;
-  const largest = programme_impact_max_months === null
-    ? ''
-    : `, largest ${programme_impact_max_months} month${programme_impact_max_months === 1 ? '' : 's'}`;
-  return `${text} (${penceToPounds(cost_impact_pence)} recorded; ${items}${largest})`;
+  const clauses: string[] = [];
+  if (stated_item_count > 0) {
+    clauses.push(`${penceToPounds(cost_impact_pence)} recorded; ${stated_item_count} item${stated_item_count === 1 ? '' : 's'}`);
+  }
+  if (programme_impact_max_months !== null) {
+    clauses.push(`largest ${programme_impact_max_months} month${programme_impact_max_months === 1 ? '' : 's'}`);
+  }
+  return clauses.length === 0 ? text : `${text} (${clauses.join(', ')})`;
 }
 
 /** A tornado range with the unit stated once: "-10% to +10%", "-3 to +3 months". */

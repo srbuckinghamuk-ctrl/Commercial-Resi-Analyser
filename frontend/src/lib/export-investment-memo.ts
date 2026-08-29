@@ -2953,6 +2953,11 @@ export function generateInvestmentMemo(
         margin: { left: MARGIN_L, right: MARGIN_R },
         head: [['Stress', 'Setting', 'Profit', 'Delta vs base', 'Peak debt', 'Flags']],
         body: sens.stressRows,
+        // R16b spec §26 minor 5 (R16 finding 5). One stress row must never be
+        // split across a page break with the table's own header re-drawn in
+        // between it and its continuation -- the same class of defect fix
+        // round 1 (R16 Task 9) found for a wrapped label torn in two.
+        rowPageBreak: 'avoid',
         styles: { fontSize: 8, cellPadding: 1.5 },
         headStyles: { fillColor: [30, 58, 95], textColor: 255 },
         bodyStyles: { textColor: [51, 65, 85] },

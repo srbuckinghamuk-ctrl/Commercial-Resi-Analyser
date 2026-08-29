@@ -36,7 +36,19 @@ describe('spec §1.6 versioning', () => {
     expect(section).toMatch(new RegExp(`\\bv${newestInputsVersion()}\\b`));
   });
 
-  it('names the current calc version', () => {
-    expect(SPEC).toContain(CALC_VERSION);
+  it('pairs the newest inputs version with the current calc version on §1.6\'s status line', () => {
+    const section = SPEC.split('### 1.6 Versioning')[1].split('\n## ')[0];
+    const escaped = CALC_VERSION.replace(/\./g, '\\.');
+    expect(section).toMatch(new RegExp(`\\(\\*\\*inputs v${newestInputsVersion()}\\*\\*\\) = calc ${escaped}\\+`));
+  });
+
+  // R16 finding 4 (this task's addendum). "The status line" is the document's
+  // own opening `**Status:** Authoritative. Calculation version \`X\`.` sentence
+  // near the top of the file, distinct from the §1.6 versioning-list pairing
+  // above -- a whole-file substring check (the old assertion) would pass even
+  // if THIS line went stale beside a fresh changelog entry.
+  it('names the current calc version on the document\'s own status line', () => {
+    const escaped = CALC_VERSION.replace(/\./g, '\\.');
+    expect(SPEC).toMatch(new RegExp(`\\*\\*Status:\\*\\* Authoritative\\. Calculation version \`${escaped}\`\\.`));
   });
 });

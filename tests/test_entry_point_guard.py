@@ -207,14 +207,14 @@ async def test_the_server_migrates_a_stored_v10_document_to_v13_as_reconciled(_g
     than replace it) -- the fixture genuinely is a v10 document, and posting
     it proves a document saved five releases ago still loads and re-saves
     cleanly once the server migrates every payload five versions further. The
-    posted document must come back at inputs_version 15 AND not be tagged
+    posted document must come back at inputs_version 16 AND not be tagged
     legacy, with its investment_case intact, monitoring still absent (this
     fixture never entered a QS statement), unit_sales null (this fixture
     never entered a per-unit ledger) and due_diligence seeded (every
     catalogue item unknown -- this fixture never entered an evidence
     schedule). A v9 document run through the identical assertions would also
     come back reconciled at whatever version the server currently writes --
-    it is the combination of "reached inputs_version 15" AND "not legacy" AND
+    it is the combination of "reached inputs_version 16" AND "not legacy" AND
     "investment_case survived" on a document that STARTED at v10 that a
     v9-only regression cannot pass by accident. The test's own name is kept
     at "to_v13" (the release that introduced this arm) rather than renamed

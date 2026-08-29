@@ -384,12 +384,14 @@ const ZERO_SCENARIO: ScenarioOverrides = {
 
 /** Builds the single-lever `ScenarioOverrides` for one setting. Every field the
  *  setting's own lever does not own is left at its no-op value. Of the thirteen
- *  levers, twelve write disjoint fields, so applying those settings in sequence via
- *  `applyScenario` composes correctly regardless of order (§18.9 guard 7).
- *  `saleable_area` and `gdv` are the exception: both write through
- *  `estimated_value_pence`, and §12.1 states they compose newest-lever-first —
- *  which is why `measure` sorts settings in descending `LEVER_ORDER` before
- *  applying them (R16).
+ *  levers, nine write disjoint fields; two pairs share one — `saleable_area`/`gdv`
+ *  through `estimated_value_pence`, and `programme_slip`/`phase_slip` through
+ *  `slip_months` — so applying those settings in sequence via `applyScenario`
+ *  composes correctly regardless of order for the nine disjoint levers (§18.9
+ *  guard 7). `saleable_area` and `gdv` are the exception addressed here: both
+ *  write through `estimated_value_pence`, and §12.1 states they compose
+ *  newest-lever-first — which is why `measure` sorts settings in descending
+ *  `LEVER_ORDER` before applying them (R16).
  *
  *  Exported for one purpose only (fix wave M8): safe-sensitivity.test.ts pins
  *  that `SCENARIO_FIELD[lever]` names the SAME `ScenarioOverrides` field this
@@ -443,9 +445,11 @@ function unmeasured(errors: ValidationIssue[]): SensitivityMetrics {
  * `settings` is applied via `applyScenario` once per setting, in order, ON TOP OF a
  * leading `ZERO_SCENARIO` pass — never combined into one `ScenarioOverrides` — precisely
  * because two settings can both be `phase_slip` (§18.9) and a single overrides object
- * cannot carry two simultaneous targets. Twelve of the thirteen levers write disjoint
- * fields (§12.1), so the sequential application composes exactly as one combined call
- * would for those, and correctly for two different phase_slip targets besides.
+ * cannot carry two simultaneous targets. Of the thirteen levers, nine write disjoint
+ * fields; two pairs share one — `saleable_area`/`gdv` through `estimated_value_pence`,
+ * and `programme_slip`/`phase_slip` through `slip_months` — so the sequential
+ * application composes exactly as one combined call would for the nine disjoint levers
+ * (§12.1), and correctly for two different phase_slip targets besides.
  * `saleable_area` and `gdv` are the exception — see the sort below. The leading zero
  * pass means the base case (`settings === []`) still goes through `applyScenario`
  * exactly once, the same as every levered position — see `ZERO_SCENARIO`'s own

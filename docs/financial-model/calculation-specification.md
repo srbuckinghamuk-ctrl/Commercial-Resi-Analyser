@@ -1032,6 +1032,10 @@ joined by the literal `|`, over UTF-8, lower-case hex.
   fixed, because fixing it would mean either hashing a version the row was never
   actually computed under (false binding) or re-hashing every stored row on every
   migration release (defeats the point of a hash — see "Absent rows" above).
+- [R16b — calc 2.18.0] A stored row's `outputs_hash` is likewise recomputable
+  only within its `calc_version`: 2.18.0 removed `sdlt_pence` from the result,
+  so every row saved under 2.17.0 carries an `audit_hash` this version cannot
+  reproduce, with no figure having moved.
 
 ### 13.2.1 The case hash [R14b]
 
@@ -1633,7 +1637,7 @@ separately, and the lever stresses it separately (§25.1, §25.8 limitation 2).
 
 **The result shape is unchanged.** `ContingencyLine.basis` survives on the *result* as `'all_packages' | 'selected_packages'`, now **derived** from mode and class rather than read from an input field of the same name — so a report reading `cost_plan.contingency[].basis` needs no change (§16.8). Only the input fields `basis` and `package_ids` are gone.
 
-**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: retained so pre-R10 readers keep working, removed in R16b (R16 was split at design time and the removal went with the platform half — see the release plan), and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail. [R11 — calc 2.10.0. The v7 → v8 boundary re-tests the same claim one version on: the pre-existing fixture whose `contingency_class` tags and (pre-migration) `package_ids` agreed exactly — the two mechanisms could not be told apart by a re-pin alone — is joined by a **planted-divergence** document whose tags and id-list disagree, asserting the resolved base follows the tag. Without it, deleting `basis`/`package_ids` would be indistinguishable from a no-op (§17 "Guards this release must watch fail").]
+**`cost_plan.contingency` is the only contingency input from v7 onward, in both modes.** `conversion_costs.contingency_pct` is deprecated exactly as `sdlt_pence` was in R8: removed at inputs v16 (§26.1), and placed behind the same single-accessor guard `total_construction_sqm` sits behind. Both modes route through the same engine rather than headline mode keeping the old field live — the easy alternative would have made the migration identity gate provably blind, because the old code path would still be the one running for every existing (headline) document and "all twelve golden fixtures penny-identical" would pass whether or not the new engine was even wired in. Routing both modes through one engine means migration copies `contingency_pct` into `general.pct` on the `all_packages` basis (§16.7) and the new code computes every existing appraisal's contingency, so "identical to the penny" is an assertion that could actually fail. [R11 — calc 2.10.0. The v7 → v8 boundary re-tests the same claim one version on: the pre-existing fixture whose `contingency_class` tags and (pre-migration) `package_ids` agreed exactly — the two mechanisms could not be told apart by a re-pin alone — is joined by a **planted-divergence** document whose tags and id-list disagree, asserting the resolved base follows the tag. Without it, deleting `basis`/`package_ids` would be indistinguishable from a no-op (§17 "Guards this release must watch fail").]
 
 ### 16.4 Fee bases, and why double counting is impossible by construction
 
@@ -5062,6 +5066,18 @@ so a reader moving between them sees the same table.
   to the derived `construction_cost` setting alone, identified by the entry
   carrying a `derivation`; every fixed magnitude keeps `formatStepLabel`'s
   usual precision.
+- **[R16b — calc 2.18.0] The parenthetical is per-half, on what is stated,
+  not on whether entry 9 is applicable.** The recorded-Σ clause (*"£X
+  recorded; n items"*) prints whenever `derivation.stated_item_count > 0`;
+  the largest-months clause (*"largest m months"*) prints whenever
+  `programme_impact_max_months !== null`; the two are independent of each
+  other. The whole parenthetical is omitted only when **neither** half is
+  stated. Applicability stays `note`'s job: an inapplicable entry with a
+  stated half (e.g. recorded cost items on a scheme with no
+  abnormal-tagged package) prints that half beside its note rather than
+  having the whole parenthetical suppressed, which is what the pre-2.18.0
+  rule did (R16 finding 1). Both surfaces share the one function
+  (`stressSettingText`), so one test covers both.
 - **Memo §10's Scenario Comparison** prints one settings row per **non-zero**
   lever across the three scenarios, instead of R4's fixed two (GDV and cost),
   so a card stressed on `refi_ltv` or `programme_slip` says so. It also
@@ -5239,3 +5255,353 @@ Recorded so they are not read as oversights.
 | An unmeasured scenario card | a `downside` card with `refi_ltv = 100` on fixture U renders "not measured" on the Scenarios page and in the memo's comparison, carrying §19.7 rule 8's message. Watch it fail by restoring the unvalidated `runAppraisal(applyScenario(...))` |
 | Unmeasured pack cells, by name | fixture AA's unmeasured set is exactly `(y-due-diligence, slower_absorption)` and `(u-investment-case-ltv-binds, delayed_start)`. Watch it fail by widening either fixture's term |
 | Spec-versions pin | `CALC_VERSION` 2.17.0, and §1.6's changelog and version list both naming v15 / 2.17.0, in both engines; the entry-point guards pass only once every production call site names v15 |
+
+---
+
+## 26. The platform half [R16b — calc 2.18.0]
+
+The second half of R16, split at design time from the model half (§25):
+audit §6.4's *"stale legacy columns should be removed, clearly deprecated or
+backfilled"*, §11's three P2 rows on the thirteen-tab workflow, the main
+bundle and the legacy stored columns, and §10 item 2's stage grouping. Two
+groups of fields once carried figures the `outputs` JSON already carried —
+nine dead `conversion_costs` keys and seven duplicated `financial_appraisals`
+summary columns — and the calculator's sixteen tabs had no address, no
+grouping and no completion signal. §26 removes both duplications, gives
+every calculator page a URL and a stage, splits the production bundle
+behind three dynamic seams, and shows the per-month lender-eligible
+construction share §24.4 computed but never printed.
+
+**One calc bump, for one reason.** Removing `sdlt_pence` from the result is
+a contract change under §1.6's comparability rule: an unchanged
+`calc_version` whose `outputs_hash` moved for identical inputs would
+falsify §13.2. Nothing computed moves — the v15 → v16 identity gate asserts
+that corpus-wide, with no exclusion — only the field list shrinks.
+
+### 26.1 Inputs v16
+
+```
+conversion_costs (v16):
+  construction_cost_per_sqm_pence  int   -- headline mode's rate; the construction_cost lever's target
+  total_construction_sqm           float -- the manual-basis area, behind §15.4's accessor
+  fire_safety_pence                int   -- headline mode's compliance line (§16.4)
+  sound_insulation_pence           int
+  part_l_compliance_pence          int
+```
+
+Removed: `contingency_pct`, `prior_approval_fee_per_dwelling_pence`,
+`cil_s106_pence`, `architect_pence`, `structural_engineer_pence`,
+`mande_pence`, `planning_consultant_pence`, `building_control_pence`,
+`other_professional_fees_pence` — nine fields, dead in both engines since v7
+copied them into `cost_plan.contingency` and `cost_plan.fee_lines[]` (§16.3,
+§16.4).
+
+**Types.** `ConversionCostInputsV16` carries the five kept fields and is
+**not** a subclass of the v1 `ConversionCostInputs` (a subclass cannot
+remove fields). `CalculatorInputsV16` extends `CalculatorInputsV15`,
+narrowing `conversion_costs` to it — `Omit<CalculatorInputsV15,
+'inputs_version' | 'conversion_costs'>` in TypeScript, a field override on
+the Pydantic subclass in Python so `isinstance` dispatch keeps working.
+`AnyCalculatorInputs` gains V16 in both engines.
+
+**The three legitimate readers keep the v1 shape.** `costPlanFromLegacyCosts`
+/ `cost_plan_from_legacy_costs` (the v6 → v7 seed and the engine's
+no-`cost_plan` fallback) and the v1 facility bootstrap
+(`conversion-calc-engine.ts`, `legacy_costs.py`) take `ConversionCostInputs`
+(v1) unchanged; `costPlanOf` narrows to the pre-v7 union members before the
+fallback, so a v16 document cannot reach it and `tsc` proves it statically.
+
+**Defaults.** `defaultCalculatorInputsV16()` = `migrateV15toV16(defaultCalculatorInputsV15(...))`
+— the construction every default since v7 has used — pinned field-for-field
+against the migration of the v15 default.
+
+**Validation.** The nine `NON_NEGATIVE_MONEY` rows on the removed fields and
+the standalone `contingency_pct` non-negativity rule are deleted from both
+engines. The pre-v7 fallback (a document with no `cost_plan` block) still
+runs the seeded plan's fee-line and contingency non-negativity checks, now
+against the seeded plan rather than the raw fields, so no pre-v7 document is
+left less validated than before the nine rows were removed. The detailed-mode
+rule that `fire_safety_pence` must be zero stays — its field stays.
+
+**Guards.** The eslint and Python single-accessor selectors on
+`contingency_pct` and their allowlists are unchanged: the field still exists
+on the v1 shape and its allowlisted readers still run.
+
+### 26.2 The result shape
+
+`AppraisalResultV2` loses `sdlt_pence` in both engines. `acquisition_tax_pence`
+has carried the identical value since R8; `deal-spider.ts`'s cost-ex-land
+figure reads it in `sdlt_pence`'s place. Fifteen golden fixtures under
+`fixtures/financial-model/` lose the pinned key, with no pinned value
+changed — a shape re-pin, proved inert by the identity gate (§26.7).
+`CALC_VERSION` is `2.18.0` in both engines; `spec-versions.test.ts` and
+`test_financial_model_types.py` follow it.
+
+### 26.3 One canonical persistence contract
+
+`financial_appraisals` loses its seven summary columns — `gdv_pence`,
+`total_cost_pence`, `profit_on_cost_pct`, `profit_on_gdv_pct`,
+`return_on_equity_pct`, `irr`, `rlv_pence` — names that were never the
+result's own (`total_cost_pence` for `total_development_cost_pence`, `irr`
+for `irr_annual_pct`). `outputs.metrics` is now the only stored copy of a
+headline figure, under its own names.
+
+**Alembic 007** drops the seven columns inside `op.batch_alter_table`, so
+the SQLite smoke tests and Postgres both run it; `downgrade` re-adds them
+nullable and leaves them null — they were derived, never entered, and a
+downgraded consumer who needs them re-saves the appraisal. `test_alembic_migrations`
+pins the chain `["007", "006", …, "001"]`; the health endpoint's head
+comparison follows it.
+
+**Server.** `FinancialAppraisalORM`, `repositories.py`'s row → model
+mapping, the `FinancialAppraisal` response model and
+`calculate_authoritative`'s returned dict lose the seven keys.
+`FinancialAppraisalCreate`'s optional client-computed fields, `CLIENT_METRIC_MAP`
+and the `validation.client_mismatches` recording are unchanged: they are
+diffed, never persisted, and stay the production cross-engine parity
+detector under their existing names.
+
+**Client.** `types.ts`'s `FinancialAppraisal` loses the seven fields.
+`ProjectDetail`'s key-metrics block reads `outputs.metrics` or, when
+`outputs` is null, prints *"Not yet recalculated — open and save the
+appraisal to compute its figures"* in place of the figures — it has no
+second source to fall back to. `export-pdf.ts`'s appraisal PDF reads
+`appraisal.outputs.metrics` and prints "N/A" per line when `outputs` is
+null, exactly as it did for a null column.
+
+### 26.4 The cash-flow page's eligibility column
+
+The Cashflow page gains an **Eligible build** column after *Costs
+(VAT-incl.)*, reading `schedule.uses[i].lender_eligible_construction_pence`
+for the ledger row `model.months[i]`. `Schedule.uses` is built over `term`
+and the ledger over the same term, so the two arrays are the same length and
+in the same order — asserted (`uses.length === months.length` on the
+corpus) rather than assumed, because a misaligned column would print a real
+figure against the wrong month.
+
+The column is conditional, like NOI and refinance: it is shown only when
+some month's `lender_eligible_construction_pence !== construction_pence` —
+the document carries an ineligible package (§24.4). Beside the totals, when
+shown, a disclosure line prints *"Lender-eligible build: £X of £Y"* where X
+= Σ `lender_eligible_construction_pence` and Y = Σ `construction_pence` over
+`uses[]` — sums of the engine's own figures, with no derivation of its own.
+
+**The corpus pin.** Exactly four fixtures carry an ineligible package —
+`q-detailed-cost-plan.json`, `s-dated-programme.json`,
+`w-monitoring-on-site.json`, `z-cost-plan-in-time.json` — asserted by name
+so a change that widens or narrows the set fails rather than silently
+changing what the column covers. Fixture `s-dated-programme` is the document
+the column and disclosure line are shown against; fixture Q is itself in the
+pin list (it is not the fully-eligible witness), so the column's *absence*
+is asserted instead on `a-all-cash`, the corpus's fully-eligible document.
+
+### 26.5 The calculator's stages, addresses and status
+
+**The address.** Route `/projects/:id/calculator/:page?`, one `<Route>`
+element. `page` is a slug from the table below; absent or unrecognised
+redirects, via `<Navigate replace>`, to `acquisition`. A `:page` change
+re-renders the calculator rather than remounting it, so unsaved inputs
+survive navigation by construction — asserted directly
+(`ConversionCalculator.test.tsx`, "keeps unsaved edits when the page changes
+through the URL"), not assumed from the single-route-element design.
+`ProjectDetail`'s existing link to `/projects/:id/calculator` keeps working
+through the redirect.
+
+| # | Stage | `CalcPage` key | Slug | Label |
+|---|---|---|---|---|
+| 1 | Inputs | `acquisition` | `acquisition` | Acquisition |
+| 2 | Inputs | `areas` | `areas` | Areas |
+| 3 | Inputs | `unit_mix` | `unit-mix` | Unit Mix |
+| 4 | Inputs | `conversion_costs` | `costs` | Costs |
+| 5 | Inputs | `vat` | `vat` | VAT |
+| 6 | Funding | `finance` | `finance` | Finance |
+| 7 | Funding | `programme` | `programme` | Programme |
+| 8 | Funding | `cashflow` | `cashflow` | Cashflow |
+| 9 | Exit | `exit_strategy` | `exit` | Exit |
+| 10 | Underwriting | `appraisal` | `appraisal` | Appraisal |
+| 11 | Underwriting | `scenarios` | `scenarios` | Scenarios |
+| 12 | Underwriting | `sensitivity` | `sensitivity` | Sensitivity |
+| 13 | Underwriting | `risk_register` | `due-diligence` | Due Diligence |
+| 14 | Output | `deal_spider` | `deal-spider` | Deal Spider |
+| 15 | Output | `investor_summary` | `investor` | Investor |
+| 16 | Output | `lender_case` | `lender-case` | Lender Case |
+
+`PAGE_SLUG` is pinned `satisfies Record<CalcPage, string>` in `pages.ts`;
+slugs are asserted unique. `CalcPage` keys are unchanged from R14b; only
+`PAGES`' order and numbers move — Exit's inputs (route, retained units,
+phasing, refinance, investment case, unit-sales ledger) feed the appraisal,
+so Exit moves ahead of it, from 12 to 9, pushing Appraisal, Scenarios,
+Sensitivity and Due Diligence from 9–11, 13 to 10–13.
+
+**The stages.** The sub-nav renders five labelled groups, `STAGES`, in the
+order above; each page's tab reads "N. Label" and carries its badge. A stage
+label is presentation only — no stage has behaviour of its own.
+
+**The badges.** `pageStatus(run): Record<CalcPage, PageStatus>` in
+`components/calculator/page-status.ts` — beside the page table it keys on,
+since `lib/` must not import from `components/` — where `PageStatus =
+{ errors: number; evidence: { assessed: number; total: number } | null }`.
+`errors` is the count of `run.validation` issues with `severity === 'error'`
+whose `field`'s **root** (`fieldRoot`: the segment before the first `.` or
+`[`) is in the page's owned set. `evidence` is non-null on Due Diligence
+only: `run.metrics.due_diligence.totals.assessed_count` of
+`.totals.entered_total`, read from the engine's totals, never a literal. A
+tab with `errors > 0` shows a red pill with the count; Due Diligence shows
+*n/total assessed* beside it.
+
+**Ownership, normative and pinned `satisfies Record<CalcPage, readonly string[]>`**
+(`PAGE_OWNERSHIP`, `page-status.ts`) — ownership follows the editor that
+writes the block, not the block's name: Finance edits `lender_valuation` and
+`monitoring` as well as `finance` and `equity_sources`; Appraisal edits
+`deal_spider`:
+
+| Page | Owned roots |
+|---|---|
+| Acquisition | `acquisition` |
+| Areas | `areas` |
+| Unit Mix | `unit_mix` |
+| Costs | `conversion_costs`, `cost_plan` |
+| VAT | `vat` |
+| Finance | `finance`, `equity_sources`, `lender_valuation`, `monitoring` |
+| Programme | `programme` |
+| Cashflow | — |
+| Exit | `exit_strategy`, `sales_phasing`, `refinance`, `investment_case`, `unit_sales` |
+| Appraisal | `deal_spider` |
+| Scenarios | `scenarios` |
+| Sensitivity | — |
+| Due Diligence | `due_diligence` |
+| Deal Spider | — |
+| Investor | — |
+| Lender Case | — |
+
+**Exhaustiveness, at both ends.** A source-scan test reads `validation.ts`
+and unions two harvests: every literal-first-argument `err('…` / `warn(`…`
+call's root, and every path-shaped string literal in the file (single- or
+back-quoted, `[a-z_]+` followed by `.` or `[`) minus a named seven-entry
+exclusion list of non-field strings (comment and message-tail false
+positives, each named and each pinned present in the wider harvest so a
+stale entry is caught rather than left as dead cover). The union is
+asserted owned by **exactly one** page — a validation rule on an unowned
+block, or a root owned twice, fails the suite. Every `err`/`warn` call whose
+first argument is computed rather than literal is additionally pinned by
+count — **44** dynamic call sites today — so a new one fails the test until
+its root is confirmed reachable by the harvest above, rather than passing by
+the coincidence that some unrelated literal call happens to cover the same
+root elsewhere in the file.
+
+### 26.6 The bundle
+
+**Seams.** `ExportPage`'s four handlers `await import()` their generator
+module at the call (`export-pdf`, `export-excel`, `export-investment-memo`),
+so `jspdf`, `jspdf-autotable` and `xlsx` leave the entry. `PropertyMap`
+(`leaflet`, `react-leaflet`) and `ConversionCalculator` are `React.lazy`
+route elements under one `Suspense` fallback in `App.tsx`.
+`report-layout.ts`'s `import type { jsPDF }` is a type and costs nothing.
+
+**Gate.** `vite.config.ts` sets `build.manifest: true`. `package.json`'s
+`build` script is `tsc -b && vite build && node scripts/assert-bundle.mjs`.
+The script (`frontend/scripts/assert-bundle.mjs`) reads
+`dist/.vite/manifest.json`, takes the entry (`isEntry`), walks its
+**static** `imports` transitively (not `dynamicImports`), and fails the
+build if the closure's total file size on disk exceeds the ceiling, or any
+file in it contains one of the banners `jsPDF`, `SheetJS`,
+`leaflet-container`. A test cannot run the build, so the gate is the build;
+`npm run build` is already a release gate.
+
+**The ceiling.** Pre-split, the production entry chunk measured 1,646 kB
+(491 kB gzip) on 29 August 2026. Post-split, the entry's static closure
+measures 448.7 kB over 6 files. The ceiling is that figure rounded up to the
+next 50 kB (450 kB) plus 50 kB headroom: **512,000 bytes** (`CEILING_BYTES`),
+recorded beside both measurements in the script and here rather than left
+implicit.
+
+### 26.7 Migration and the persistence boundary
+
+`migrateV15toV16` / `migrate_v15_to_v16` refuse a document that is already
+v16 (idempotence, as every predecessor) and return the document with
+`inputs_version: 16` and `conversion_costs` **rebuilt** from the five kept
+fields — a rebuild, not a delete of nine keys from a copy, so an unexpected
+tenth legacy key cannot ride through. `migrateInputsToV16` /
+`migrate_inputs_to_v16` chain from `…ToV15`, refusing an unrecognised
+version and a version-16 document that fails `isV16`.
+
+`isV16` / `is_v16` is **structural**: `inputs_version === 16` **and**
+`conversion_costs` is an object **and** `'contingency_pct' in
+conversion_costs` is false — absence, not the tag alone, because a document
+relabelled 16 without the rebuild is exactly the spoof the check exists to
+refuse. Python's `is_v2_or_later` gains `is_v16`, the trap R12's cutover
+found; the TS chain has no such helper, and its recognition of a v16
+document was verified by reading `migrateInputsToV16`'s source rather than
+assumed.
+
+**The one-arm proof.** On fixture `q-detailed-cost-plan` (a v7 document
+whose raw JSON carries all nine keys): before migration
+`'contingency_pct' in raw.conversion_costs` is true and every fee key is
+present; after, none of the nine is present and the five kept fields are
+byte-equal. In Python the assertion is on `model_dump(mode="json")` of the
+migrated document **and** on the stored snapshot after a live POST, because
+the Pydantic `Model` base ignores unknown keys and a parsed model cannot
+show a key's absence.
+
+**The numeric identity gate.** Corpus-wide over `fixtures/financial-model/*`
+(the same ≥ 20 corpus, not-silently-shrunk assertion), raw v15 through the
+2.18.0 engine versus migrated v16 through the same engine: `metrics`
+identical with **no exclusion** (`sdlt_pence` is absent on both arms), the
+ledger and the schedule identical, and on F/U/Y/Z the default
+`SensitivityResult` identical. A further test spikes a v15 document's
+removed fields with absurd values and asserts the metrics do not move — the
+assertion that fails if any v7+ code path still reads one.
+
+**The validation gate.** R12's three properties hold: every v15 issue has a
+v16 counterpart except the nine listed — the nine non-negativity rules on
+the removed fields, asserted as **exactly nine** entries, because they
+guarded fields the v7+ engine never read and their issues were vacuous on
+every document this release migrates; no invalid document becomes valid,
+for every rule not in the list, unconditionally; and no v16-only rule
+exists — the v16 list is **empty**, asserted empty, because this release
+adds no rule.
+
+**The entry-point cutover.** `ConversionCalculator.tsx`, `ExportPage.tsx`
+and `app/api/app.py` move to `…ToV16`; `entry-point-guard.test.ts` and
+`test_entry_point_guard.py` pin `NEWEST == 16`. The R13 live-server proof
+extends: the v10 fixture posted through the real boundary comes back at
+`inputs_version: 16`, not legacy, its `investment_case` intact, `monitoring`
+absent, `unit_sales` null, `due_diligence` seeded, **and** its stored
+`conversion_costs` carrying exactly the five v16 keys.
+`FinancialAppraisalCreate`'s docstring gains the v16 sentence. The
+governance `inputs_version` column is already `inputs.inputs_version`
+(R13's fix), so it moves with the cutover and the test still asserts it.
+
+**The consequence to disclose.** Every stored appraisal's `input_hash`
+moves on its next save (nine fields left the document), and — new at this
+boundary — every stored appraisal's `outputs_hash` and `audit_hash` move on
+its next save too, because `sdlt_pence` left the result (§26.2, §13.2). An
+approved lender case goes stale on that save, as at every boundary. No
+fixture pin's **value** moves; fifteen fixtures lose one pinned **key**.
+
+### 26.8 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **Stage labels are presentation.** A stage has no completion state of its
+   own; the badge is per page, and "complete" means "no owned error", which
+   a page with no owned roots satisfies vacuously.
+2. **Badges count errors only.** Warnings and `requires_confirmation` fields
+   are visible on their pages, not in the nav.
+3. **Ownership is by root.** A rule whose `field` is a nested path is owned
+   by its root's page; a block edited on two pages would need a deeper rule
+   and none exists today.
+4. **The downgrade of 007 is lossy by construction.** Re-added columns are
+   null; a consumer that needs them after a downgrade re-saves the
+   appraisal.
+5. **The bundle ceiling is a number, not a policy.** It bounds the static
+   closure of the entry; dynamic chunks are unbounded, and a seam that
+   stops being dynamic is caught by the banner scan only for the three
+   named libraries.
+6. **The eligibility column is a per-month share, not a per-package
+   ledger** (§24.9 limitation 3), and it is hidden on a fully-eligible
+   document by design — a reader wanting the figure on such a document
+   reads the memo's §24.6 line.
+7. **`total_construction_sqm` stays behind §15.4's accessor.** It is a live
+   manual-basis input, not a legacy field, and this release does not touch
+   it.

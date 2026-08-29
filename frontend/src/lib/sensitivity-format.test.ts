@@ -399,10 +399,14 @@ describe('stressSettingText (spec §25.5)', () => {
     expect(text).toBe('Construction cost +13.46%, Programme slip +0 months (£35,000 recorded; 1 item)');
   });
 
-  // The whole parenthetical goes when neither half of the derivation applies
-  // (§25.4): every figure in it would then be a zero or a null no item put
-  // there, and the entry already prints the engine's own note saying so.
-  it('suppresses the derivation parenthetical entirely on an inapplicable entry 9', () => {
+  // R16b spec §25.5 (per-half). The whole parenthetical goes only when
+  // NEITHER half is stated; each half prints on its own STATED test,
+  // independently of `applicable` -- applicability is the note's job, not
+  // the parenthetical's. This replaces the pre-R16b behaviour (fix-wave FI1)
+  // where `!applicable` alone suppressed the whole parenthetical, which
+  // dropped stated figures whenever `base_build == 0` or `network == null`
+  // made an entry inapplicable (R16 finding 1).
+  it('suppresses the derivation parenthetical entirely on an inapplicable entry 9 with nothing stated', () => {
     const text = stressSettingText(stress({
       applicable: false,
       settings: [
@@ -423,6 +427,35 @@ describe('stressSettingText (spec §25.5)', () => {
     // The note is the caller's to place (the memo appends it, the page renders
     // it in its own <div>), so it is not part of this string either way.
     expect(text).not.toContain(NOTE_NO_COST_IMPACT);
+  });
+
+  // R16b spec §25.5 (per-half), R16 finding 1. An inapplicable entry can
+  // still have a stated half -- e.g. the recorded cost items exist even
+  // though the scheme has no abnormal-tagged package for the lever to move
+  // -- and the per-half rule prints exactly the stated half rather than
+  // suppressing the whole parenthetical because `applicable` is false.
+  it('prints the cost clause alone when months are unstated, and the months clause alone when no cost is stated', () => {
+    const costOnly = stressSettingText(stress({
+      settings: [{ lever: 'construction_cost', value: 9.807692307692, phase_id: null }],
+      derivation: { ...derivation(), programme_impact_max_months: null, programme_impact_months: 0 },
+      applicable: false,
+    }));
+    expect(costOnly).toBe('Construction cost +9.81% (£25,500 recorded; 4 items)');
+    const monthsOnly = stressSettingText(stress({
+      settings: [{ lever: 'programme_slip', value: 7, phase_id: null }],
+      derivation: { ...derivation(), cost_impact_pence: 0, cost_pct: null, stated_item_count: 0 },
+      applicable: false,
+    }));
+    expect(monthsOnly).toBe('Programme slip +7 months (largest 3 months)');
+  });
+
+  it('omits the parenthetical only when neither half is stated', () => {
+    const none = stressSettingText(stress({
+      settings: [],
+      derivation: { ...derivation(), cost_impact_pence: 0, cost_pct: null, stated_item_count: 0, programme_impact_max_months: null, programme_impact_months: 0 },
+      applicable: false,
+    }));
+    expect(none).toBe('');
   });
 });
 

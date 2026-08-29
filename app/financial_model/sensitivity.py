@@ -338,12 +338,14 @@ def _zero_scenario() -> ScenarioOverrides:
 def _overrides_for(setting: _LeverSetting) -> ScenarioOverrides:
     """Builds the single-lever ScenarioOverrides for one setting. Every field the
     setting's own lever does not own is left at its no-op value. Of the thirteen
-    levers, twelve write disjoint fields, so applying those settings in sequence via
-    apply_scenario composes correctly regardless of order (Sec 18.9 guard 7).
-    saleable_area and gdv are the exception: both write through
-    estimated_value_pence, and Sec 12.1 states they compose newest-lever-first --
-    which is why _measure sorts settings in descending LEVER_ORDER before applying
-    them (R16)."""
+    levers, nine write disjoint fields; two pairs share one -- saleable_area/gdv
+    through estimated_value_pence, and programme_slip/phase_slip through
+    slip_months -- so applying those settings in sequence via apply_scenario
+    composes correctly regardless of order for the nine disjoint levers (Sec 18.9
+    guard 7). saleable_area and gdv are the exception addressed here: both write
+    through estimated_value_pence, and Sec 12.1 states they compose
+    newest-lever-first -- which is why _measure sorts settings in descending
+    LEVER_ORDER before applying them (R16)."""
     return ScenarioOverrides(
         label="",
         gdv_adjustment_pct=setting.value if setting.lever == "gdv" else 0,
@@ -384,10 +386,12 @@ def _measure(inputs: AnyCalculatorInputs, settings: list[_LeverSetting]) -> Sens
     `settings` is applied via apply_scenario once per setting, in order, ON TOP OF a
     leading _zero_scenario() pass -- never combined into one ScenarioOverrides --
     precisely because two settings can both be phase_slip (Sec 18.9) and a single
-    overrides object cannot carry two simultaneous targets. Twelve of the thirteen
-    levers write disjoint fields (Sec 12.1), so the sequential application composes
-    exactly as one combined call would for those, and correctly for two different
-    phase_slip targets besides. saleable_area and gdv are the exception -- see the
+    overrides object cannot carry two simultaneous targets. Of the thirteen levers,
+    nine write disjoint fields; two pairs share one -- saleable_area/gdv through
+    estimated_value_pence, and programme_slip/phase_slip through slip_months -- so
+    the sequential application composes exactly as one combined call would for the
+    nine disjoint levers (Sec 12.1), and correctly for two different phase_slip
+    targets besides. saleable_area and gdv are the exception -- see the
     sort below. The leading zero pass means the base case (settings == []) still
     goes through apply_scenario exactly once, the same as every levered position.
     """

@@ -22,7 +22,7 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R15** — **DONE, shipped** | Scheme/title/technical DD schedule, evidence RAG+unknown, source-conflict flags **+ the §7.5 items R10 deliberately left unaddressed: QS source/date/status, fixed-price coverage, provisional sums, inflation (see note below the table)** | P1 | inputs v13, calc 2.15.0 |
 | **R15b** — **DONE, shipped** | The cost plan in time: per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint (§7.5's inflation ask), per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3) | P1 | inputs v14, calc 2.16.0 |
 | **R16** — **DONE, shipped** | The standard lender stress pack: a closed, spec-numbered pack of nine standard stresses run as §12.5 cells in both engines and printed in memo §10 and on the Sensitivity page; the four levers it needs (`saleable_area`, `abnormal_cost`, `programme_slip`, `refi_ltv`); every remaining `ScenarioOverrides` field gets a Scenarios-page input; the R15/R15b review minors | P1 | inputs v15, calc 2.17.0 |
-| **R16b** | Platform: UX stage grouping and URL-routed calculator pages, the bundle split, legacy stored columns / `sdlt_pence` / `conversion_costs.contingency_pct` / the eight legacy fee fields, the cash-flow page's eligibility column (§24.9 deferred it as page work) | P2 | inputs v16, Alembic 007, no calc bump expected |
+| **R16b** — **DONE, shipped** | Platform: UX stage grouping and URL-routed calculator pages, the bundle split, legacy stored columns / `sdlt_pence` / `conversion_costs.contingency_pct` / the eight legacy fee fields, the cash-flow page's eligibility column (§24.9 deferred it as page work) | P2 | inputs v16, Alembic 007, **calc 2.18.0** (the row's "no calc bump expected" was wrong: `sdlt_pence` leaving the result changes `outputs_hash` — see the R16b design) |
 
 **R16 UX debt recorded by R13b — paid.** The R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) had no ScenariosPage input; `sales_slip_months` got one in R13b, and R16 gave every remaining field one — including its own four — pinned exhaustively at both ends: `SCENARIO_INPUT_META` in `ScenariosPage.tsx` closes with `satisfies Record<Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>, { label: string; step: string }>` (a missing field fails `tsc`), and `RENDERED_LABEL` in `ScenariosPage.test.tsx` asserts every label over the same key set is rendered. A fourteenth lever cannot ship UI-less.
 
@@ -250,6 +250,23 @@ and the legacy columns is an inputs bump of its own (v16) plus an Alembic
 migration. R16 is therefore the model half and R16b the platform half, as the
 two rows now say. Spec §16.3's deprecation note, which said `contingency_pct`
 was "removed in R16", is corrected to R16b by the same split.
+
+**R16b status (calc 2.18.0, inputs v16):** shipped. It removed the last two
+"stale legacy columns" the audit's §6.4 named: the seven duplicated
+`financial_appraisals` summary columns (Alembic 007, `outputs.metrics` now
+the sole stored copy) and the nine `conversion_costs` fields dead since v7
+(`contingency_pct` and the eight legacy fee fields). It gave the sixteen-tab
+calculator a URL per page (`/projects/:id/calculator/:page?`), five labelled
+stages, and validation-derived error badges pinned exhaustively at both ends
+against `validation.ts`. It split the production entry chunk from 1,646 kB
+(491 kB gzip) to a 448.7 kB static closure under a measured 512,000-byte
+gate (`assert-bundle.mjs`), and showed the R15b cash-flow eligibility column
+R15b had computed but never printed. One ruling overrode an R16 finding
+rather than adopting it: R16 finding 3 asked
+`test_the_server_migrates_a_stored_v10_document_to_v13_as_reconciled` to be
+renamed at each cutover; the file's own standing instruction — the function
+name is not the proof, the assertions are — was upheld as won't-fix, and
+only the assertions' version number moved.
 
 **What is deferred, named rather than left implicit.** A **named-unit** removal
 lever (entry 1 stresses an *average* unit's share of area and value; a named
