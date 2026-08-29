@@ -8,6 +8,7 @@ import { LEVER_ORDER } from './model/sensitivity';
 import type { SensitivityCell, TornadoBar } from './model/sensitivity';
 import { NOTE_NO_COST_IMPACT } from './model/stress-pack';
 import type { StressDerivation, StressResult } from './model/stress-pack';
+import { penceToPounds } from './format';
 
 describe('sensitivity-format', () => {
   // The short labels are load-bearing: they reproduce the memo's historical
@@ -447,6 +448,57 @@ describe('stressSettingText (spec §25.5)', () => {
       applicable: false,
     }));
     expect(monthsOnly).toBe('Programme slip +7 months (largest 3 months)');
+  });
+
+  // Review round 1: every case above pairs `stated_item_count > 0` with
+  // `cost_impact_pence > 0` and every zero-clause case zeroes both together,
+  // so a mutant that gates the cost clause on `cost_impact_pence > 0`
+  // (ignoring `stated_item_count`, the field the rule is actually specified
+  // on) would pass the whole describe block undetected. These two cases pull
+  // the pair apart in each direction.
+  it('penceToPounds(0) prints "£0" (pinned so the next test\'s expected string is not guessed)', () => {
+    expect(penceToPounds(0)).toBe('£0');
+  });
+
+  it('prints the cost clause on a stated item count even when the recorded pence is zero', () => {
+    // Kills a mutant that gates the cost clause on `cost_impact_pence > 0`:
+    // here the pence is 0 but two items are stated, so the clause must still
+    // print "£0 recorded; 2 items" rather than being suppressed.
+    const text = stressSettingText(stress({
+      settings: [{ lever: 'construction_cost', value: 0, phase_id: null }],
+      derivation: {
+        ...derivation(),
+        cost_impact_pence: 0,
+        cost_pct: null,
+        stated_item_count: 2,
+        programme_impact_max_months: null,
+        programme_impact_months: 0,
+      },
+      applicable: false,
+    }));
+    expect(text).toBe('Construction cost +0.00% (£0 recorded; 2 items)');
+  });
+
+  it('omits the cost clause on a zero item count even when the recorded pence is positive', () => {
+    // The converse: kills a mutant that gates the cost clause on
+    // `cost_impact_pence > 0` from the other side -- here the pence is
+    // positive (the fixture Y figure) but `stated_item_count` is 0, so the
+    // clause -- and, with months also unstated, the whole parenthetical --
+    // must not print.
+    const text = stressSettingText(stress({
+      settings: [{ lever: 'construction_cost', value: 0, phase_id: null }],
+      derivation: {
+        ...derivation(),
+        cost_impact_pence: 25_500_00,
+        cost_pct: null,
+        stated_item_count: 0,
+        programme_impact_max_months: null,
+        programme_impact_months: 0,
+      },
+      applicable: false,
+    }));
+    expect(text).toBe('Construction cost +0.00%');
+    expect(text).not.toContain('recorded');
   });
 
   it('omits the parenthetical only when neither half is stated', () => {

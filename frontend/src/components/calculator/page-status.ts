@@ -4,18 +4,19 @@ import type { CalcPage } from './pages';
 /**
  * R16b spec §26.5. Which validation-field ROOTS each page owns. Ownership
  * follows the editor that writes the block, not the block's name: Finance
- * edits `lender_valuation`, `monitoring` and `equity_sources`; Appraisal
- * edits `deal_spider`. Pinned exhaustively at both ends — `satisfies` here,
- * and the source-scan test that reads validation.ts. That scan harvests two
- * things and unions them: every `err('literal'` / `warn(\`literal\`` call's
- * literal first argument, AND every path-shaped string literal in the file
- * (single- or back-quoted, `[a-z_]+` followed by `.` or `[`) — the second
- * harvest is what actually closes the gap, because a call site like
- * `err(field, msg)` (field computed, not literal) contributes nothing to the
- * first one; its root is only ever caught via the `field = '...'` /
- * `field = \`...\`` literal that defines it. Every dynamic (non-literal-first-
- * argument) `err`/`warn` call site is additionally pinned by count, so a new
- * one fails the test until its root is confirmed reachable by the harvest.
+ * edits `finance`, `equity_sources`, `lender_valuation` and `monitoring`;
+ * Appraisal edits `deal_spider`. Pinned exhaustively at both ends —
+ * `satisfies` here, and the source-scan test that reads validation.ts. That
+ * scan harvests two things and unions them: every `err('literal'` /
+ * `warn(\`literal\`` call's literal first argument, AND every path-shaped
+ * string literal in the file (single- or back-quoted, `[a-z_]+` followed by
+ * `.` or `[`) — the second harvest is what actually closes the gap, because
+ * a call site like `err(field, msg)` (field computed, not literal)
+ * contributes nothing to the first one; its root is only ever caught via
+ * the `field = '...'` / `field = \`...\`` literal that defines it. Every
+ * dynamic (non-literal-first-argument) `err`/`warn` call site is
+ * additionally pinned by count, so a new one fails the test until its root
+ * is confirmed reachable by the harvest.
  */
 export const PAGE_OWNERSHIP = {
   acquisition: ['acquisition'],

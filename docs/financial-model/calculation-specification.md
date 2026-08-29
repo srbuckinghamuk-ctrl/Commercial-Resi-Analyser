@@ -5315,10 +5315,11 @@ fallback, so a v16 document cannot reach it and `tsc` proves it statically.
 — the construction every default since v7 has used — pinned field-for-field
 against the migration of the v15 default.
 
-**Validation.** The nine `NON_NEGATIVE_MONEY` rows on the removed fields and
-the standalone `contingency_pct` non-negativity rule are deleted from both
-engines. The pre-v7 fallback (a document with no `cost_plan` block) still
-runs the seeded plan's fee-line and contingency non-negativity checks, now
+**Validation.** The **eight** `NON_NEGATIVE_MONEY` rows on the removed fee
+fields and the standalone `contingency_pct` non-negativity rule — nine
+rules in all (§26.7) — are deleted from both engines. The pre-v7 fallback
+(a document with no `cost_plan` block) still runs the seeded plan's
+fee-line and contingency non-negativity checks, now
 against the seeded plan rather than the raw fields, so no pre-v7 document is
 left less validated than before the nine rows were removed. The detailed-mode
 rule that `fire_safety_pence` must be zero stays — its field stays.
@@ -5402,8 +5403,9 @@ element. `page` is a slug from the table below; absent or unrecognised
 redirects, via `<Navigate replace>`, to `acquisition`. A `:page` change
 re-renders the calculator rather than remounting it, so unsaved inputs
 survive navigation by construction — asserted directly
-(`ConversionCalculator.test.tsx`, "keeps unsaved edits when the page changes
-through the URL"), not assumed from the single-route-element design.
+(`ConversionCalculator.test.tsx`, "keeps unsaved edits when the page
+changes through the URL (decision 3)"), not assumed from the
+single-route-element design.
 `ProjectDetail`'s existing link to `/projects/:id/calculator` keeps working
 through the redirect.
 
@@ -5451,8 +5453,8 @@ tab with `errors > 0` shows a red pill with the count; Due Diligence shows
 
 **Ownership, normative and pinned `satisfies Record<CalcPage, readonly string[]>`**
 (`PAGE_OWNERSHIP`, `page-status.ts`) — ownership follows the editor that
-writes the block, not the block's name: Finance edits `lender_valuation` and
-`monitoring` as well as `finance` and `equity_sources`; Appraisal edits
+writes the block, not the block's name: Finance edits `finance`,
+`equity_sources`, `lender_valuation` and `monitoring`; Appraisal edits
 `deal_spider`:
 
 | Page | Owned roots |
