@@ -302,7 +302,9 @@ only — no stage has behaviour.
 
 ### The badges
 
-`pageStatus(run): Record<CalcPage, PageStatus>` in `lib/page-status.ts`,
+`pageStatus(run): Record<CalcPage, PageStatus>` in
+`components/calculator/page-status.ts` (beside the page table it keys on —
+`lib/` must not import from `components/`),
 where `PageStatus = { errors: number; evidence: { assessed: number; total: number } | null }`.
 
 `errors` = the count of `run.validation.issues` with `severity === 'error'`
@@ -322,7 +324,7 @@ with `errors > 0` shows a red pill with the count; Due Diligence shows
 | Unit Mix | `unit_mix` |
 | Costs | `conversion_costs`, `cost_plan` |
 | VAT | `vat` |
-| Finance | `finance`, `lender_valuation`, `monitoring` |
+| Finance | `finance`, `equity_sources`, `lender_valuation`, `monitoring` |
 | Programme | `programme` |
 | Cashflow | — |
 | Exit | `exit_strategy`, `sales_phasing`, `refinance`, `investment_case`, `unit_sales` |
@@ -338,9 +340,10 @@ with `errors > 0` shows a red pill with the count; Due Diligence shows
 extracts the first argument of every `err('…` / `warn('…` call (template
 literals included — the root precedes any `${`), takes its root, and asserts
 each root is owned by **exactly one** page. A new validation rule on an
-unowned block fails the suite; a root owned twice fails it too. The `scenarios`
-root has no rule today and is owned anyway, so the first rule on it lands
-owned.
+unowned block fails the suite; a root owned twice fails it too. The
+`scenarios` root carries two rules today (the whole-months rules) and is
+owned by Scenarios; `equity_sources` is owned by Finance, whose editor writes
+it.
 
 ---
 
@@ -490,9 +493,9 @@ metrics; no pinned value changes.
 
 | # | R16 finding | Ruling |
 |---|---|---|
-| 1 | `stressSettingText` suppresses the whole entry-9 parenthetical when `!applicable`, dropping stated figures when `base_build == 0` or `network == null` | **Per-half.** The cost clause (*"£X recorded; n items"*) prints whenever `derivation.cost_pct !== null`; the months clause (*"largest m months"*) prints whenever `programme_impact_max_months !== null`; the parenthetical is omitted only when both halves are inapplicable. §25.5's wording follows. Both surfaces (page and memo) share the one function, so one test covers both. |
+| 1 | `stressSettingText` suppresses the whole entry-9 parenthetical when `!applicable`, dropping stated figures when `base_build == 0` or `network == null` | **Per-half, on what is stated.** The cost clause (*"£X recorded; n items"*) prints whenever `derivation.stated_item_count > 0`; the months clause (*"largest m months"*) prints whenever `programme_impact_max_months !== null`; the parenthetical is omitted only when neither is stated. Applicability stays the `note`'s job. §25.5's wording follows. Both surfaces (page and memo) share the one function, so one test covers both. |
 | 2 | `sensitivity.ts` / `.py` comments say "twelve of thirteen levers disjoint" | **Nine of thirteen**; the two sharing pairs named: `saleable_area`/`gdv` (unit value) and `programme_slip`/`phase_slip` (`slip_months`). |
-| 3 | `test_entry_point_guard.py` test named for v14 asserts v15 | Renamed to the version it asserts, and this release moves it to 16 in the same edit. |
+| 3 | `test_entry_point_guard.py` test named for v14 asserts v15 | **Won't fix, by the file's own standing instruction.** Each round-trip test's docstring says it is *"kept at its R15b name rather than renamed each cutover — the function name is not the proof; the assertions below are"*. The R16 finding contradicted that ruling without engaging it; the ruling stands, and the cutover (Task 6) moves the assertions to 16 without renaming. |
 | 4 | `spec-versions.test.ts` asserts `CALC_VERSION` as a whole-file substring | Asserts the **§1.6 status line** — the sentence that names the current calc version — so a stale line beside a fresh changelog entry fails. |
 | 5 | Memo stress table can split across a page | `rowPageBreak: 'avoid'` on that `autoTable`; the release-gate layout test already asserts no orphan headings. |
 
@@ -546,7 +549,7 @@ review after each; gates at every task: pytest, vitest, `tsc -b`, eslint,
 8. Stages and reorder: `stage` on `PAGES`, the grouped nav, numbers 9–13,
    page-comment renumbers, the "offers sixteen numbered pages" test rewritten
    to the new order.
-9. Badges: `lib/page-status.ts`, ownership table, source-scan pin, the DD
+9. Badges: `components/calculator/page-status.ts`, ownership table, source-scan pin, the DD
    evidence count, nav rendering.
 10. Bundle: the three seams, `build.manifest`, `scripts/assert-bundle.mjs`,
     the ceiling measured and written into the script and §26.6.
