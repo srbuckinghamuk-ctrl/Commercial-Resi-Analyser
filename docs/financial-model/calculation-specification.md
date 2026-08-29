@@ -5350,7 +5350,12 @@ headline figure, under its own names.
 **Alembic 007** drops the seven columns inside `op.batch_alter_table`, so
 the SQLite smoke tests and Postgres both run it; `downgrade` re-adds them
 nullable and leaves them null — they were derived, never entered, and a
-downgraded consumer who needs them re-saves the appraisal. `test_alembic_migrations`
+downgraded consumer who needs them re-saves the appraisal. That holds for
+every post-R1 row, where the same server run that wrote `outputs` also wrote
+the seven columns. For a pre-R1 `legacy_unreconciled` row whose `outputs` is
+null, the dropped columns held the superseded client-computed figures — the
+only stored copy of them; they are not recoverable after 007 and were never
+authoritative. `test_alembic_migrations`
 pins the chain `["007", "006", …, "001"]`; the health endpoint's head
 comparison follows it.
 
@@ -5406,8 +5411,10 @@ survive navigation by construction — asserted directly
 (`ConversionCalculator.test.tsx`, "keeps unsaved edits when the page
 changes through the URL (decision 3)"), not assumed from the
 single-route-element design.
-`ProjectDetail`'s existing link to `/projects/:id/calculator` keeps working
-through the redirect.
+The bare address (no `:page`) redirects to Acquisition — tested
+(`ConversionCalculator.test.tsx`, "redirects the bare calculator address to
+Acquisition"). `ProjectDetail` links to the first page's address,
+`calculatorPath(project.id, FIRST_PAGE)`, rather than the bare address.
 
 | # | Stage | `CalcPage` key | Slug | Label |
 |---|---|---|---|---|
@@ -5506,16 +5513,23 @@ The script (`frontend/scripts/assert-bundle.mjs`) reads
 `dist/.vite/manifest.json`, takes the entry (`isEntry`), walks its
 **static** `imports` transitively (not `dynamicImports`), and fails the
 build if the closure's total file size on disk exceeds the ceiling, or any
-file in it contains one of the banners `jsPDF`, `SheetJS`,
-`leaflet-container`. A test cannot run the build, so the gate is the build;
-`npm run build` is already a release gate.
+`.js` file in it contains one of the banners `jsPDF`, `SheetJS`,
+`leaflet-container`. The byte sum covers both `.js` and `.css` files in the
+closure (a vendor library can ship its own stylesheet, reachable from a
+manifest node's `css` array rather than `imports`); the marker scan stays
+`.js`-only, since the three banners are JS identifiers. A test cannot run
+the build, so the gate is the build; `npm run build` is already a release
+gate.
 
 **The ceiling.** Pre-split, the production entry chunk measured 1,646 kB
 (491 kB gzip) on 29 August 2026. Post-split, the entry's static closure
-measures 448.7 kB over 6 files. The ceiling is that figure rounded up to the
-next 50 kB (450 kB) plus 50 kB headroom: **512,000 bytes** (`CEILING_BYTES`),
-recorded beside both measurements in the script and here rather than left
-implicit.
+measured 448.7 kB over 6 `.js` files. The ceiling is that figure rounded up
+to the next 50 kB (450 kB) plus 50 kB headroom: **512,000 bytes**
+(`CEILING_BYTES`), recorded beside both measurements in the script and here
+rather than left implicit. Review round 2 (spec §26 minor 6) widened the sum
+to include `.css`; re-measured the same day at 460.6 kB / 471,629 bytes over
+7 files (`.js` + `.css`) — still under the ceiling, which is therefore
+unchanged.
 
 ### 26.7 Migration and the persistence boundary
 
@@ -5528,8 +5542,8 @@ tenth legacy key cannot ride through. `migrateInputsToV16` /
 version and a version-16 document that fails `isV16`.
 
 `isV16` / `is_v16` is **structural**: `inputs_version === 16` **and**
-`conversion_costs` is an object **and** `'contingency_pct' in
-conversion_costs` is false — absence, not the tag alone, because a document
+`due_diligence` is present **and** `conversion_costs` is an object **and**
+`'contingency_pct' in conversion_costs` is false — absence, not the tag alone, because a document
 relabelled 16 without the rebuild is exactly the spoof the check exists to
 refuse. Python's `is_v2_or_later` gains `is_v16`, the trap R12's cutover
 found; the TS chain has no such helper, and its recognition of a v16
@@ -5578,7 +5592,11 @@ governance `inputs_version` column is already `inputs.inputs_version`
 moves on its next save (nine fields left the document), and — new at this
 boundary — every stored appraisal's `outputs_hash` and `audit_hash` move on
 its next save too, because `sdlt_pence` left the result (§26.2, §13.2). An
-approved lender case goes stale on that save, as at every boundary. No
+approved lender case goes stale on that save, as at every boundary. A lender
+case locked at v15 therefore shows `LenderCasePage`'s "unsaved edits differ
+from the locked snapshot" banner from the first load after this release
+until the next save — the live document is v16 and the locked snapshot v15.
+This is accurate, not a defect, and the same at every version boundary. No
 fixture pin's **value** moves; fifteen fixtures lose one pinned **key**.
 
 ### 26.8 Stated limitations
@@ -5595,7 +5613,9 @@ Recorded so they are not read as oversights.
    and none exists today.
 4. **The downgrade of 007 is lossy by construction.** Re-added columns are
    null; a consumer that needs them after a downgrade re-saves the
-   appraisal.
+   appraisal. For a pre-R1 row with null `outputs`, the dropped columns held
+   the superseded client-computed figures; they are not recoverable after
+   007 and were never authoritative.
 5. **The bundle ceiling is a number, not a policy.** It bounds the static
    closure of the entry; dynamic chunks are unbounded, and a seam that
    stops being dynamic is caught by the banner scan only for the three

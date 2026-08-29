@@ -1631,5 +1631,9 @@ document), and — new at this boundary — every stored appraisal's
 `outputs_hash` and `audit_hash` move on its next save too, because
 `sdlt_pence` left the result (§26.2). That is why this release is calc
 2.18.0 and not a silent removal. An approved lender case goes stale on that
-save (§21.3), as at every boundary. No fixture pin's **value** moves; fifteen
+save (§21.3), as at every boundary — concretely, a case locked at v15 shows
+`LenderCasePage`'s "unsaved edits differ from the locked snapshot" banner
+from the first load after this release until the next save, because the
+live document is v16 and the locked snapshot v15. Accurate, and the same at
+every boundary. No fixture pin's **value** moves; fifteen
 fixtures lose one pinned **key**.

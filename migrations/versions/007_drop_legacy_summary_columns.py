@@ -9,7 +9,10 @@ version it was reading (audit Sec 6.4). `outputs.metrics` is now the only
 stored copy. Batch mode so SQLite (the test target) and Postgres both run it.
 Downgrade re-adds the columns nullable and leaves them null: they were never
 entered, only derived, and the next save through the API would not refill
-them anyway.
+them anyway. That holds for every post-R1 row. For a pre-R1
+`legacy_unreconciled` row whose `outputs` is null, the dropped columns held
+the superseded client-computed figures -- the only stored copy of them; they
+are not recoverable after this migration and were never authoritative.
 """
 from alembic import op
 import sqlalchemy as sa

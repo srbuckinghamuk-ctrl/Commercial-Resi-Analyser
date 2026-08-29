@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { Project, FinancialAppraisal, LenderCase } from '../types';
 
@@ -237,5 +237,58 @@ describe('ExportPage feeds the lender case into the memo provenance (R14b Task 9
     ).not.toBeInTheDocument();
     const provenance = vi.mocked(generateInvestmentMemo).mock.calls.at(-1)![3]!;
     expect(provenance.lenderCase).toBeNull();
+  });
+});
+
+// R16b review round 2 (Important 2a): every handler's `await import(...)`
+// used to sit inside the same try/catch as the data fetch, so a failed
+// chunk load (a stale deploy, a flaky network) reported the data-fetch
+// message ("Ensure a financial appraisal has been saved...") instead of its
+// own cause. The chunk load is now hoisted above the data fetch, in its own
+// try/catch. This test forces the dynamic import of the memo generator to
+// reject and asserts the distinct reload message is shown instead of the
+// data-fetch message -- at minimum for the investment-memo handler, per the
+// review finding.
+//
+// Placed last in the file and self-contained: it is the only test that
+// needs `vi.resetModules()` + `vi.doMock()` to make the dynamic import
+// itself reject (a normally-mocked module resolves fine, so its export
+// function throwing is a different, already-covered error path). The
+// afterEach restores a working mock rather than unmocking to the real
+// module (which would pull in jsPDF/xlsx), so a later test run in the same
+// process is never affected.
+describe('ExportPage: chunk-load failure reports its own cause (R16b review round 2)', () => {
+  beforeEach(() => {
+    URL.createObjectURL = vi.fn(() => 'blob:mock');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.doMock('../lib/export-investment-memo', () => ({
+      generateInvestmentMemo: vi.fn(() => new Blob()),
+    }));
+    vi.resetModules();
+  });
+
+  it('shows the reload message, not the data-fetch message, when the memo chunk fails to load', async () => {
+    vi.resetModules();
+    vi.doMock('../lib/export-investment-memo', () => {
+      throw new Error('Failed to fetch dynamically imported module: export-investment-memo');
+    });
+
+    const { default: FreshExportPage } = await import('./ExportPage');
+    const { getAppraisal: freshGetAppraisal } = await import('../lib/api');
+    vi.mocked(freshGetAppraisal).mockResolvedValue(storedV4Appraisal());
+
+    render(<FreshExportPage projects={[PROJECT]} projectsLoading={false} backendOffline={false} />);
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'p1' } });
+    fireEvent.click(screen.getByRole('button', { name: /download investment memorandum/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/could not load the export module — reload the page and try again/i)).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText(/ensure a financial appraisal has been saved/i),
+    ).not.toBeInTheDocument();
   });
 });

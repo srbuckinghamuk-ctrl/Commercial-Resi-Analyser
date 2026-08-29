@@ -59,6 +59,17 @@ def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):
         assert GOVERNANCE_COLUMNS <= cols
         assert cols.isdisjoint(LEGACY_SUMMARY_COLUMNS)
 
+        # Review round 2 recommendation: batch_alter_table (Alembic 007's
+        # column drop, spec §26.3) rebuilds the SQLite table under the hood --
+        # a real, if unlikely, way for a table's indexes to silently not
+        # survive a batch operation. Pin that they do: both the plain lookup
+        # index and the uniqueness constraint on `project_id` are present on
+        # `head`, and the latter is still unique.
+        indexes = {row[1]: row[2] for row in conn.execute("PRAGMA index_list(financial_appraisals)")}
+        assert "ix_appraisal_project_id" in indexes
+        assert "uq_appraisal_project_id" in indexes
+        assert indexes["uq_appraisal_project_id"] == 1  # PRAGMA index_list's `unique` column
+
         from app.persistence.database import Base
 
         tables = {

@@ -251,6 +251,13 @@ migration. R16 is therefore the model half and R16b the platform half, as the
 two rows now say. Spec §16.3's deprecation note, which said `contingency_pct`
 was "removed in R16", is corrected to R16b by the same split.
 
+**R16b deploy note.** Alembic 007 drops the seven legacy summary columns.
+For every post-R1 row that is inert (`outputs.metrics` already holds the
+same figures under its own names); for a pre-R1 `legacy_unreconciled` row
+with null `outputs`, those columns are the only stored copy of the
+superseded client-computed figures and are not recoverable once dropped —
+snapshot the database before running `alembic upgrade head`.
+
 **R16b status (calc 2.18.0, inputs v16):** shipped. It removed the last two
 "stale legacy columns" the audit's §6.4 named: the seven duplicated
 `financial_appraisals` summary columns (Alembic 007, `outputs.metrics` now

@@ -20,10 +20,22 @@ describe('page ownership (spec §26.5)', () => {
     // guarantee. Harvest 2 removes the coincidence: it reads the field-path
     // literal directly, wherever it sits in the source.
     //
+    // Fix round 3 (final review, minor 4): both harvests used to capture only
+    // the ROOT (`[a-z_]+`, stopping at the first `.`/`[`), and the exclusion
+    // list below matched by that same bare root. That meant a future real
+    // validation field whose root happened to be `sensitivity`, `run`, `qs`,
+    // `seen`, `datetime`, `consideration` or `category_phase_ids` would be
+    // silently absorbed into the exclusion list instead of failing the test.
+    // Both harvests now capture the FULL matched literal -- the root plus one
+    // more segment after the `.`/`[`, up to the next non-identifier
+    // character (e.g. `sensitivity.test`, `run.validation`) -- and the
+    // exclusion list is keyed by that full literal. Roots are derived from
+    // the SURVIVING literals only, via `fieldRoot`.
+    //
     // 1) err('literal...' / warn(`literal...`: the direct-literal-argument
     //    call sites.
-    const literalCallRoots = new Set(
-      [...src.matchAll(/\b(?:err|warn)\(\s*['`]([a-z_]+)/g)].map((m) => m[1]),
+    const literalCallLiterals = new Set(
+      [...src.matchAll(/\b(?:err|warn)\(\s*['`]([a-z_]+(?:[.[][a-z0-9_]*)?)/g)].map((m) => m[1]),
     );
 
     // 2) Every path-shaped string literal in the file: single- or
@@ -33,22 +45,24 @@ describe('page ownership (spec §26.5)', () => {
     //    `field = '...'` / `field = \`...\`` template literal that feeds a
     //    dynamic err()/warn() call (e.g. `` `programme.phases.${id}` ``)
     //    directly, without needing to trace which call it eventually reaches.
-    const pathLiteralMatches = [...src.matchAll(/['`]([a-z][a-z_]*)[.[]/g)].map((m) => m[1]);
+    const pathLiteralMatches = [...src.matchAll(/['`]([a-z][a-z_]*[.[][a-z0-9_]*)/g)].map((m) => m[1]);
 
     // The wider harvest over-catches: a handful of comment/JSDoc references
     // and one wrapped-message tail also match the shape and are NOT
     // validation field roots. Each is inspected and named here, per the
     // review ruling, rather than filtered by a cleverer regex that would hide
     // a future false positive (or a future genuine field) the same way the
-    // old, narrower regex hid the NON_NEGATIVE_MONEY gap.
+    // old, narrower regex hid the NON_NEGATIVE_MONEY gap. Keyed by the FULL
+    // literal (not the bare root) so a future genuine field sharing one of
+    // these roots under a DIFFERENT literal is not silently swallowed too.
     const NOT_FIELD_ROOTS: Record<string, string> = {
-      category_phase_ids: 'message text quoting the `field` variable\'s VALUE ("category_phase_ids.${cat} references phase..."); the field literal itself is `programme.category_phase_ids.${cat}`, already harvested under `programme`',
-      consideration: 'the tail of a wrapped message string ("...VAT-inclusive consideration.") that happens to start with a quote immediately before "consideration." at its own line-continuation boundary',
-      datetime: 'JSDoc comment referencing Python\'s `datetime.date(y, m, d)`',
-      qs: 'JSDoc comment: `` `qs.inflation ?? null` non-null ``',
-      run: 'JSDoc comment: `` `run.validation` (this function\'s return) ``',
-      seen: 'JSDoc comment: `` `seen.add(l.id)` used to run unconditionally ``',
-      sensitivity: 'JSDoc comment naming the test file `sensitivity.test.ts:157-171`',
+      'category_phase_ids.': 'message text quoting the `field` variable\'s VALUE ("category_phase_ids.${cat} references phase..."), truncated at the `$` of the interpolation; the field literal itself is `programme.category_phase_ids.${cat}`, already harvested under `programme`',
+      'consideration.': 'the tail of a wrapped message string ("...VAT-inclusive consideration.") that happens to start with a quote immediately before "consideration." at its own line-continuation boundary',
+      'datetime.date': 'JSDoc comment referencing Python\'s `datetime.date(y, m, d)`',
+      'qs.inflation': 'JSDoc comment: `` `qs.inflation ?? null` non-null ``',
+      'run.validation': 'JSDoc comment: `` `run.validation` (this function\'s return) ``',
+      'seen.add': 'JSDoc comment: `` `seen.add(l.id)` used to run unconditionally ``',
+      'sensitivity.test': 'JSDoc comment naming the test file `sensitivity.test.ts:157-171`, truncated at the second `.`',
     };
     // Pin the exclusion list itself: every named false positive must still be
     // present in the wider harvest, or the source moved and the entry is
@@ -57,8 +71,9 @@ describe('page ownership (spec §26.5)', () => {
       expect(pathLiteralMatches).toContain(fp);
     }
 
-    const roots = new Set([...literalCallRoots, ...pathLiteralMatches]);
-    for (const fp of Object.keys(NOT_FIELD_ROOTS)) roots.delete(fp);
+    const literals = new Set([...literalCallLiterals, ...pathLiteralMatches]);
+    for (const fp of Object.keys(NOT_FIELD_ROOTS)) literals.delete(fp);
+    const roots = new Set([...literals].map(fieldRoot));
 
     expect(roots.size).toBeGreaterThan(10); // non-vacuity: the regex matches the file
     const owners = (root: string) => PAGES.filter((p) => (PAGE_OWNERSHIP[p.key] as readonly string[]).includes(root)).map((p) => p.key);

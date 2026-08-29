@@ -370,7 +370,7 @@ build if:
 
 1. the sum of the closure's file sizes on disk exceeds **the ceiling**, or
 2. any file in the closure contains one of the banners `jsPDF`, `SheetJS`,
-   `Leaflet`.
+   `leaflet-container`.
 
 The ceiling is a number in the script and in §26.6: the measured post-split
 closure size rounded up to the next 50 kB, plus 50 kB. The pre-split
@@ -390,8 +390,9 @@ legacy key cannot ride through. `migrateInputsToV16` / `migrate_inputs_to_v16`
 chain from `…ToV15` with `RECOGNISED_INPUTS_VERSIONS_V16 = [1..16]`, refuse
 an unrecognised version and a version-16 document that fails `isV16`.
 
-**`isV16`**: `inputs_version === 16` **and** `conversion_costs` is an object
-**and** `'contingency_pct' in conversion_costs` is false. Python's
+**`isV16`**: `inputs_version === 16` **and** `due_diligence` is present
+**and** `conversion_costs` is an object **and** `'contingency_pct' in
+conversion_costs` is false. Python's
 `is_v2_or_later` gains `is_v16` — the trap R12's cutover found; the TS chain
 has no such helper, and the plan verifies `migrateInputsToV16`'s recognition
 of a v16 document by reading the source rather than assuming the arm exists.

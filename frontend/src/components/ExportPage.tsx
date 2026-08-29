@@ -58,8 +58,22 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     if (!selectedProject) return;
     setLoading('eligibility');
     setError(null);
+    // R16b review round 2 (Important 2a): the chunk load used to share the
+    // data-fetch try/catch below, so a failed dynamic import (a stale
+    // deploy, a flaky network) printed "Has an eligibility assessment been
+    // run for this project?" -- a misdiagnosis pointing the user at data
+    // that was never the problem. Hoisted into its own try/catch with a
+    // distinct message.
+    let generateEligibilityPdf: typeof import('../lib/export-pdf')['generateEligibilityPdf'];
     try {
-      const { generateEligibilityPdf } = await import('../lib/export-pdf');
+      ({ generateEligibilityPdf } = await import('../lib/export-pdf'));
+    } catch (err) {
+      console.error('Failed to load the export module (eligibility PDF)', err);
+      setError('Could not load the export module — reload the page and try again.');
+      setLoading(null);
+      return;
+    }
+    try {
       const assessment = await getEligibility(selectedProject.id);
       const blob = generateEligibilityPdf(selectedProject, assessment);
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
@@ -75,8 +89,18 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     if (!selectedProject) return;
     setLoading('appraisal');
     setError(null);
+    // See handleEligibilityPdf above: the chunk load is hoisted out of the
+    // data-fetch try/catch so a failed dynamic import reports its own cause.
+    let generateAppraisalPdf: typeof import('../lib/export-pdf')['generateAppraisalPdf'];
     try {
-      const { generateAppraisalPdf } = await import('../lib/export-pdf');
+      ({ generateAppraisalPdf } = await import('../lib/export-pdf'));
+    } catch (err) {
+      console.error('Failed to load the export module (appraisal PDF)', err);
+      setError('Could not load the export module — reload the page and try again.');
+      setLoading(null);
+      return;
+    }
+    try {
       const appraisal = await getAppraisal(selectedProject.id);
 
       // Deal Spider section — computed from the saved snapshot when it holds
@@ -121,8 +145,19 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     if (!selectedProject) return;
     setLoading('memo');
     setError(null);
+    // See handleEligibilityPdf above: the chunk load is hoisted out of the
+    // data-fetch try/catch so a failed dynamic import reports its own cause,
+    // distinct from SnapshotMissingError / isNotFound below.
+    let generateInvestmentMemo: typeof import('../lib/export-investment-memo')['generateInvestmentMemo'];
     try {
-      const { generateInvestmentMemo } = await import('../lib/export-investment-memo');
+      ({ generateInvestmentMemo } = await import('../lib/export-investment-memo'));
+    } catch (err) {
+      console.error('Failed to load the export module (investment memorandum)', err);
+      setError('Could not load the export module — reload the page and try again.');
+      setLoading(null);
+      return;
+    }
+    try {
       const appraisal = await getAppraisal(selectedProject.id);
       const raw = appraisal.inputs_snapshot as Record<string, unknown> | null;
       if (!raw || typeof raw !== 'object' || !('unit_mix' in raw) || !('acquisition' in raw)) {
@@ -196,8 +231,18 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     if (projects.length === 0) return;
     setLoading('excel');
     setError(null);
+    // See handleEligibilityPdf above: the chunk load is hoisted out of its
+    // own try/catch so a failed dynamic import reports its own cause.
+    let generateProjectsExcel: typeof import('../lib/export-excel')['generateProjectsExcel'];
     try {
-      const { generateProjectsExcel } = await import('../lib/export-excel');
+      ({ generateProjectsExcel } = await import('../lib/export-excel'));
+    } catch (err) {
+      console.error('Failed to load the export module (Excel)', err);
+      setError('Could not load the export module — reload the page and try again.');
+      setLoading(null);
+      return;
+    }
+    try {
       const blob = generateProjectsExcel(projects);
       downloadBlob(blob, `projects-export-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch {

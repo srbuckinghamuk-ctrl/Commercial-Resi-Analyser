@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense, Component, type ReactNode } from 'react';
 import { Routes, Route, NavLink, Link, Navigate, useParams, useNavigate } from 'react-router-dom';
 import type { Project } from './types';
 import { listProjects } from './lib/api';
@@ -10,6 +10,48 @@ import ProjectDetail from './components/ProjectDetail';
 
 const ConversionCalculator = lazy(() => import('./components/ConversionCalculator'));
 const PropertyMap = lazy(() => import('./components/PropertyMap'));
+
+// R16b review round 2 (Important 2b): PropertyMap and ConversionCalculator
+// are React.lazy route elements, so a failed chunk load throws during render
+// and falls through to main.tsx's root ErrorBoundary -- which replaces the
+// WHOLE app, including the header and nav, with "Something went wrong". This
+// boundary sits just inside <Suspense> so the header/nav above it (rendered
+// by App, outside this boundary) stay mounted, and only the routed content
+// area is replaced.
+interface LazyLoadBoundaryState {
+  error: Error | null;
+}
+
+class LazyLoadBoundary extends Component<{ children: ReactNode }, LazyLoadBoundaryState> {
+  state: LazyLoadBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): LazyLoadBoundaryState {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, maxWidth: 480, margin: '0 auto', textAlign: 'center' }}>
+          <h2 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 8 }}>
+            This part of the app could not be loaded — reload the page.
+          </h2>
+          <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 16 }}>
+            The rest of the app still works — use the navigation above, or
+            reload to try this page again.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ padding: '10px 24px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14 }}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
   { to: '/', label: 'Pipeline', end: true },
@@ -197,30 +239,32 @@ export default function App() {
 
       {/* Routes */}
       <main>
-        <Suspense fallback={<p style={{ padding: 24, color: '#94a3b8' }}>Loading…</p>}>
-          <Routes>
-            <Route
-              path="/"
-              element={<Pipeline projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} />}
-            />
-            <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
-            <Route
-              path="/projects/:id"
-              element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="overview" />}
-            />
-            <Route
-              path="/projects/:id/eligibility"
-              element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="eligibility" />}
-            />
-            <Route
-              path="/projects/:id/calculator/:page?"
-              element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="calculator" />}
-            />
-            <Route path="/map" element={<PropertyMap projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
-            <Route path="/export" element={<ExportPage projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+        <LazyLoadBoundary>
+          <Suspense fallback={<p style={{ padding: 24, color: '#94a3b8' }}>Loading…</p>}>
+            <Routes>
+              <Route
+                path="/"
+                element={<Pipeline projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} />}
+              />
+              <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
+              <Route
+                path="/projects/:id"
+                element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="overview" />}
+              />
+              <Route
+                path="/projects/:id/eligibility"
+                element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="eligibility" />}
+              />
+              <Route
+                path="/projects/:id/calculator/:page?"
+                element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="calculator" />}
+              />
+              <Route path="/map" element={<PropertyMap projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
+              <Route path="/export" element={<ExportPage projects={projects} projectsLoading={loading} backendOffline={backendOffline} />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </LazyLoadBoundary>
       </main>
     </div>
   );
