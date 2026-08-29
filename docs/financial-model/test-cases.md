@@ -5929,12 +5929,18 @@ The two orders disagree by one pence (990,006 vs 990,005) — half-up rounding i
 commutative across two sequential percentage applications on a value that lands exactly
 on a `.5` boundary. Design decision 4 fixes the order as **area first**, so
 **990,006** is the correct composed value; no stress pack entry composes these two
-levers on the same document (each of AA's nine entries touches at most one saleable-area
-setting and at most one programme-slip setting), so the pair does not recur inside
-fixture AA itself, but the ordering rule is exercised by fixture AA's `unit_loss` and
-`area_reduction` entries individually, and is why the identity test below reconstructs a
-stress's levered document by applying that stress's `settings` list *in the order it
-resolves them*, not by composing every lever in one call. Both engines' rounding was
+levers on the same document, for the simplest possible reason — **no entry in
+`STRESS_PACK` carries a `gdv` setting at all** (§25.2's nine entries between them use
+`saleable_area`, `abnormal_cost`, `sales_slip`, `programme_slip`, `exit_yield`,
+`refi_ltv`, `operating_cost`, `vacancy` and `construction_cost`, and none of them
+`gdv`), so the (`saleable_area`, `gdv`) pair cannot arise inside fixture AA however its
+entries are composed. Fixture AA's `unit_loss` and `area_reduction` entries exercise the
+`saleable_area` lever, but each carries a single setting and therefore composes nothing:
+the ordering rule itself is pinned by the apply-scenario composition test that asserts
+**990,006** (`apply-scenario.test.ts` / `test_financial_model_apply_scenario.py`), not by
+those two entries. What AA's entries do establish is why the identity test below
+reconstructs a stress's levered document by applying that stress's `settings` list *in
+the order it resolves them*, not by composing every lever in one call. Both engines' rounding was
 checked on this value at design time: `floor(x + 0.5)` (Python) and `Math.round` (TS)
 agree on both intermediate products (`990005.5000000001` and `990005.4` in IEEE double,
 in both runtimes), so this is a rounding-boundary fact about the value, not a

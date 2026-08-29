@@ -351,12 +351,17 @@ class FinancialAppraisalCreate(BaseModel):
     project_id: uuid.UUID
     name: str
     # Deliberately untyped here (validated/migrated in the endpoint via
-    # migrate_inputs_to_v14, not by this schema) -- may be any of v1 through
-    # v14 (a v13 document adds the R15 top-level `due_diligence` block and
+    # migrate_inputs_to_v15, not by this schema) -- may be any of v1 through
+    # v15 (a v13 document adds the R15 top-level `due_diligence` block and
     # `cost_plan.qs`/`price_basis`, defined on `DueDiligenceInputs` /
     # `CalculatorInputsV13`; a v14 document (R15b, spec Sec 24.8) adds
     # `cost_plan.qs.inflation`, defined on `QsProvenance` / `CalculatorInputsV14`
-    # in the same module). A v5+ document's `acquisition` block carries the R8 fields
+    # in the same module; a v15 document (R16, spec Sec 25.1) adds the four
+    # stress-pack lever fields to every `ScenarioOverrides` --
+    # `saleable_area_adjustment_pct`, `abnormal_cost_adjustment_pct`,
+    # `programme_slip_months`, `refi_ltv_adjustment_pct` -- all written at their
+    # identity zero, defined on `ScenarioOverrides` / `CalculatorInputsV15` in
+    # the same module). A v5+ document's `acquisition` block carries the R8 fields
     # (`jurisdiction`, `jurisdiction_source`, `jurisdiction_evidence_status`,
     # `acquisition_date`, `acquisition_tax_override_pence`,
     # `acquisition_tax_override_reason`) defined on

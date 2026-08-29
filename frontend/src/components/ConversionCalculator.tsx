@@ -138,9 +138,16 @@ export default function ConversionCalculator({ project }: Props) {
             // R15b Task 6 (spec 24.8): the server boundary moved to v14
             // (app/api/app.py) and this moved WITH IT, in the same commit --
             // this is the move that makes R15b's tender-price inflation
-            // allowance reachable at all. Every arm the release builds is
+            // allowance reachable at all. Every arm that release built is
             // only ever exercised by a v14 document, and until this line
             // named the v14 entry point no user could hold one.
+            // R16 Task 4 (spec 25.1): the server boundary moved to v15
+            // (app/api/app.py) and this moved WITH IT, in the same commit --
+            // this is the move that makes R16's four stress-pack lever fields
+            // reachable at all. Every arm the release builds (the four levers,
+            // the standard stress pack, and the Scenarios page's new inputs) is
+            // only ever exercised by a v15 document, and until this line
+            // named the v15 entry point no user could hold one.
             // R14 Task 14 (spec 20.1): the server boundary moved to v11
             // (app/api/app.py) and this moved WITH IT, in the same commit --
             // this is the move that makes R14's monitoring statement
@@ -228,7 +235,8 @@ export default function ConversionCalculator({ project }: Props) {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
-  // R15 Task 13 (R15b Task 6 moves the state on again, to v14 natively). The
+  // R15 Task 13 (R15b Task 6 moved the state on again, to v14 natively; R16
+  // Task 4 moves it to v15). The
   // widened `Omit<CalculatorInputsV15, 'inputs_version'>` R15 Task 9
   // introduced is no longer needed -- `Partial<CalculatorInputsV15>` says the same thing the
   // simple way. `inputs_version` still cannot be restamped by a caller of
@@ -270,8 +278,9 @@ export default function ConversionCalculator({ project }: Props) {
 
       // R8 Task 11 (defect B). The server is authoritative over the document,
       // not just over the metrics: `calculate_authoritative` normalises the
-      // snapshot to v14 (R15b Task 6; v13 through R15, v12 through R13b, v11
-      // through R14, v10 through R13) and, on a project's first appraisal,
+      // snapshot to v15 (R16 Task 4; v14 through R15b, v13 through R15, v12
+      // through R13b, v11 through R14, v10 through R13) and, on a project's
+      // first appraisal,
       // derives the tax jurisdiction from the postcode (app/api/app.py).
       // Before this, the screen kept the england_ni document it posted while
       // the store held the derived one -- measured on a Welsh fixture as
@@ -280,7 +289,7 @@ export default function ConversionCalculator({ project }: Props) {
       // and the divergence surviving until the component remounted. Adopting
       // what came back makes the save the point at which the two agree.
       //
-      // Routed through the v14 migration rather than cast, for the same reason
+      // Routed through the v15 migration rather than cast, for the same reason
       // the load path is: the response is JSON of unknown provenance to this
       // component, and the migration is the one place that knows how to put a
       // stored snapshot onto the current shape.

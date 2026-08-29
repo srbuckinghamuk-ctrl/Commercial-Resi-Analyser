@@ -739,12 +739,22 @@ checks key on `lever` alone. On a document with `investment_case = null` all thr
 zero-width tornado bar is the honest report of a lever with nothing to move.
 
 **`phase_slip`'s composition order, stated at the time it is added, as this section
-requires.** `phase_slip` writes `programme.phases[<id>].slip_months` and nothing else.
-No other lever touches that field — `gdv` writes unit values, `construction_cost` the
-construction rate, `timeline` `finance.term_months`, `interest_rate` the interest rate
-— so the five levers remain disjoint and their application remains
-**order-independent**. That is asserted rather than merely stated: a test applies all
-five levers to one document in several orders and requires identical results (§18.9).
+requires.** **[R12 — calc 2.11.0; superseded by R16 — see §12.1's lever table and
+§18.9's R16 paragraph]** `phase_slip` writes `programme.phases[<id>].slip_months` and
+nothing else. No other lever touches that field — `gdv` writes unit values,
+`construction_cost` the construction rate, `timeline` `finance.term_months`,
+`interest_rate` the interest rate — so the five levers remain disjoint and their
+application remains **order-independent**. That is asserted rather than merely stated: a
+test applies all five levers to one document in several orders and requires identical
+results (§18.9). **What R16 changed:** the paragraph above is true of the five levers of
+its own release and false as a general claim. §12.1's table now has thirteen rows and
+**two pairs sharing a field** — `programme_slip` writes the same `slip_months`
+`phase_slip` does (on every predecessor-free phase, §18.9), and `saleable_area` shares
+`estimated_value_pence` with `gdv`. Each pair carries a stated composition order in
+§12.1: immaterial for the additive `slip_months` pair, and **area first, then `gdv`,
+each rounding once** for the other — which is why a cell applies its settings in reverse
+`LEVER_ORDER` rather than caller order. Order-independence is asserted over the levers
+that do write disjoint fields, not over all thirteen (§18.9's R16 paragraph).
 `phase_slip` is the first lever that carries a **target** as well as a magnitude, so
 `SensitivityAxis` and `TornadoRange` carry `phase_id` alongside `lever` (§12.6), and
 the duplicate checks key the pair `(lever, phase_id)` rather than `lever` alone.
@@ -2268,7 +2278,7 @@ phase.slip_months += (overrides.phase_slip_phase_id === phase.id)
 
 **Additive, not assignment**, so a base-case slip already recorded on the document is stressed **from** its recorded position rather than overwritten by it. An override naming a `phase_id` no phase carries, or naming one while `programme` is `null`, is a hard validation error (§18.8) — not a silent no-op, which is what would make the lever look live while doing nothing. `phase_slip` on a `programme = null` document has no field to write and is rejected as a lever misconfiguration.
 
-**Composition order** is stated in §12.1 as that section requires: `phase_slip` writes a field no other lever touches, so the five levers remain disjoint and application remains order-independent — asserted by applying all five in several orders to one document and requiring identical results, not merely stated.
+**Composition order** is stated in §12.1 as that section requires: **[R12 — calc 2.11.0; superseded by R16 — see §12.1's R16 paragraphs and the `programme_slip` paragraph immediately below]** `phase_slip` writes a field no other lever touches, so the five levers remain disjoint and application remains order-independent — asserted by applying all five in several orders to one document and requiring identical results, not merely stated. That was true of the five levers of R12; it is not a general claim, and R16 falsifies it — `programme_slip` writes the same `slip_months` field (see below), and `saleable_area` shares `estimated_value_pence` with `gdv` (§12.1). Both pairs have a stated composition order in §12.1, and order-independence is asserted over the levers that do write disjoint fields.
 
 §12.2's facility invariance is untouched; `phase_slip` writes nothing under `finance` or `equity_sources`.
 
