@@ -171,14 +171,6 @@ class FinancialAppraisalORM(Base):
     outputs_hash: Mapped[str | None] = mapped_column(String(64))
     # Spec Sec 13.2 -- printed in the report provenance panel.
     audit_hash: Mapped[str | None] = mapped_column(String(64))
-    # --- legacy metric columns, now always server-computed -----------------
-    gdv_pence: Mapped[int | None] = mapped_column(BigInteger)
-    total_cost_pence: Mapped[int | None] = mapped_column(BigInteger)
-    profit_on_cost_pct: Mapped[float | None] = mapped_column(Float)
-    profit_on_gdv_pct: Mapped[float | None] = mapped_column(Float)
-    return_on_equity_pct: Mapped[float | None] = mapped_column(Float)
-    irr: Mapped[float | None] = mapped_column(Float)
-    rlv_pence: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

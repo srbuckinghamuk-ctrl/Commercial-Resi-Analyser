@@ -84,7 +84,6 @@ async def test_save_recalculates_outputs_server_side(client, project):
     assert resp.status_code == 201, resp.text
     body = resp.json()
 
-    assert body["gdv_pence"] == 120_000_000
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
 
     mismatches = body["validation"]["client_mismatches"]
@@ -92,6 +91,25 @@ async def test_save_recalculates_outputs_server_side(client, project):
         m["field"] == "gdv_pence" and m["client"] == 1 and m["server"] == 120_000_000
         for m in mismatches
     ), mismatches
+
+
+async def test_the_response_carries_no_legacy_summary_columns(client, project):
+    """R16b spec Sec 26.3: outputs.metrics is the only place a headline
+    figure is stored or returned. The client mismatch check still records."""
+    payload = {
+        "project_id": project["id"],
+        "name": "Fixture A appraisal",
+        "inputs_snapshot": fixture_a_inputs(),
+        "gdv_pence": 1,
+    }
+    resp = await client.post("/api/v1/appraisals", json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    for col in ("gdv_pence", "total_cost_pence", "profit_on_cost_pct", "profit_on_gdv_pct",
+                "return_on_equity_pct", "irr", "rlv_pence"):
+        assert col not in body, col
+    assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
+    assert any(m["field"] == "gdv_pence" and m["client"] == 1 for m in body["validation"]["client_mismatches"])
 
 
 async def test_negative_costs_rejected(client, project):
@@ -483,7 +501,6 @@ async def test_get_returns_authoritative_outputs(client, project):
     body = resp.json()
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
-    assert body["gdv_pence"] == 120_000_000
     assert body["calc_version"] == "2.18.0"
 
 
@@ -751,9 +768,12 @@ async def test_stored_explicit_programme_becomes_a_network_without_moving_a_figu
         assert phase["slip_months"] == 0, phase
 
     # Not a figure moved.
-    assert body["gdv_pence"] == before.metrics.gdv_pence
-    assert body["total_cost_pence"] == before.metrics.total_development_cost_pence
-    assert body["rlv_pence"] == before.metrics.rlv_pence
+    assert body["outputs"]["metrics"]["gdv_pence"] == before.metrics.gdv_pence
+    assert (
+        body["outputs"]["metrics"]["total_development_cost_pence"]
+        == before.metrics.total_development_cost_pence
+    )
+    assert body["outputs"]["metrics"]["rlv_pence"] == before.metrics.rlv_pence
     # What this next pair does and does NOT establish, stated exactly, because
     # the first version of it overclaimed. BOTH runs below are the v8
     # in-process arm, so this compares an explicit v8 programme against the
@@ -830,7 +850,7 @@ async def test_stored_explicit_programme_keeps_a_timing_sensitive_figure_across_
     metrics = body["outputs"]["metrics"]
     assert metrics["peak_debt_pence"] == before.metrics.peak_debt_pence
     assert metrics["peak_debt_month"] == before.metrics.peak_debt_month
-    assert body["total_cost_pence"] == before.metrics.total_development_cost_pence
+    assert metrics["total_development_cost_pence"] == before.metrics.total_development_cost_pence
 
     # Non-vacuity, and this time it bites: the SAME fixture on the Sec 6 auto
     # windows produces a DIFFERENT peak debt and a different total cost, so

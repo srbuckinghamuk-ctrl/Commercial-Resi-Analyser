@@ -589,14 +589,6 @@ def calculate_authoritative(
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),
         ),
-        # legacy columns from the server calculation, never from the client:
-        "gdv_pence": run.metrics.gdv_pence,
-        "total_cost_pence": run.metrics.total_development_cost_pence,
-        "profit_on_cost_pct": run.metrics.profit_on_cost_pct,
-        "profit_on_gdv_pct": run.metrics.profit_on_gdv_pct,
-        "return_on_equity_pct": run.metrics.return_on_equity_pct,
-        "irr": run.metrics.irr_annual_pct,
-        "rlv_pence": run.metrics.rlv_pence,
     }
 
 

@@ -423,14 +423,6 @@ class FinancialAppraisal(BaseModel):
     input_hash: str | None = None
     outputs_hash: str | None = None
     audit_hash: str | None = None          # spec Sec 13.2
-    # legacy columns retained for backward-compat, now always server-computed:
-    gdv_pence: int | None = None
-    total_cost_pence: int | None = None
-    profit_on_cost_pct: float | None = None
-    profit_on_gdv_pct: float | None = None
-    return_on_equity_pct: float | None = None
-    irr: float | None = None
-    rlv_pence: int | None = None
     created_at: datetime
     updated_at: datetime
 

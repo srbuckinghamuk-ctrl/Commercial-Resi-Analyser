@@ -63,13 +63,14 @@ class TestFinancialAppraisalORM:
         }
         assert required.issubset(col_names)
 
-    def test_has_metric_columns(self):
+    def test_has_no_legacy_metric_columns(self):
+        """R16b spec Sec 26.3: outputs.metrics is the only stored copy."""
         col_names = {c.name for c in FinancialAppraisalORM.__table__.columns}
         metrics = {
             "gdv_pence", "total_cost_pence", "profit_on_cost_pct",
             "profit_on_gdv_pct", "return_on_equity_pct", "irr", "rlv_pence",
         }
-        assert metrics.issubset(col_names)
+        assert metrics.isdisjoint(col_names)
 
 
 class TestStageTransitionORM:

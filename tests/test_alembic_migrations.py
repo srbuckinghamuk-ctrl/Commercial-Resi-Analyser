@@ -23,6 +23,11 @@ GOVERNANCE_COLUMNS = {
     "outputs_hash",
 }
 
+LEGACY_SUMMARY_COLUMNS = {
+    "gdv_pence", "total_cost_pence", "profit_on_cost_pct", "profit_on_gdv_pct",
+    "return_on_equity_pct", "irr", "rlv_pence",
+}
+
 
 def make_config(db_url: str) -> Config:
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
@@ -37,7 +42,7 @@ def test_alembic_discovers_migration_chain():
     # walk_revisions yields head-first. 003/004 arrived with the R4
     # reconciliation merge and were renumbered to sit after 002, which the
     # financial-model line had already claimed.
-    assert [s.revision for s in script.walk_revisions()] == ["006", "005", "004", "003", "002", "001"]
+    assert [s.revision for s in script.walk_revisions()] == ["007", "006", "005", "004", "003", "002", "001"]
 
 
 def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):
@@ -52,6 +57,7 @@ def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):
             for row in conn.execute("PRAGMA table_info(financial_appraisals)")
         }
         assert GOVERNANCE_COLUMNS <= cols
+        assert cols.isdisjoint(LEGACY_SUMMARY_COLUMNS)
 
         from app.persistence.database import Base
 
@@ -62,6 +68,21 @@ def test_alembic_upgrade_head_on_empty_sqlite(tmp_path):
             )
         }
         assert set(Base.metadata.tables) <= tables
+    finally:
+        conn.close()
+
+
+def test_alembic_007_downgrade_restores_the_seven_columns_nullable(tmp_path):
+    """R16b spec Sec 26.3. Lossy by construction: the columns come back, null."""
+    db = tmp_path / "alembic_007.sqlite"
+    cfg = make_config(f"sqlite+aiosqlite:///{db}")
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "006")
+    conn = sqlite3.connect(db)
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(financial_appraisals)")}
+        assert LEGACY_SUMMARY_COLUMNS <= cols
+        assert GOVERNANCE_COLUMNS <= cols
     finally:
         conn.close()
 
