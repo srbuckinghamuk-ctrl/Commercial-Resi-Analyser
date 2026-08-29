@@ -14,7 +14,7 @@ import {
   omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
-import { penceToPounds, formatPct } from '../../lib/format';
+import { penceToPounds, formatPct, signedPenceToPounds } from '../../lib/format';
 import CalculatorFailurePanel from '../CalculatorFailurePanel';
 
 interface Props {
@@ -30,21 +30,6 @@ const BORDER = '#1e3a5f';
 const PANEL = '#0f172a';
 const RED = '#f87171';
 const AMBER = '#fbbf24';
-
-/**
- * `penceToPounds` with an explicit sign on a positive or zero amount too
- * ("+£12,345" / "-£12,345"), for the stress pack's "Delta vs base" column —
- * `penceToPounds` alone only ever prefixes a *negative* amount with a
- * minus, leaving a positive delta looking identical to an absolute figure.
- * Formatting only: the same pence-to-pounds division `penceToPounds` itself
- * performs, not a calculation over model values (spec §11.9) — the value
- * printed is `delta_profit_pence` exactly as the engine returned it.
- */
-function signedPounds(pence: number): string {
-  return (pence / 100).toLocaleString('en-GB', {
-    style: 'currency', currency: 'GBP', maximumFractionDigits: 0, signDisplay: 'exceptZero',
-  });
-}
 
 function metricText(cell: SensitivityMetrics, key: SensitivityMetricKey): string {
   const metric = SENSITIVITY_METRICS.find((m) => m.key === key)!;
@@ -348,7 +333,7 @@ export default function SensitivityPage({ inputs }: Props) {
                     {unmeasured ? '—' : penceToPounds(s.metrics.profit_pence as number)}
                   </td>
                   <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
-                    {unmeasured || s.delta_profit_pence === null ? '—' : signedPounds(s.delta_profit_pence)}
+                    {unmeasured || s.delta_profit_pence === null ? '—' : signedPenceToPounds(s.delta_profit_pence)}
                   </td>
                   <td style={{ padding: '8px 12px', color: unmeasured ? MUTED : TEXT, textAlign: 'right' }}>
                     {unmeasured ? '—' : penceToPounds(s.metrics.peak_debt_pence as number)}

@@ -2,16 +2,19 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, EligibilityAssessment } from '../types';
 import type { AnyCalculatorInputs, AppraisalRun, ModelFlag } from './model';
-import { runAppraisal, isProgrammeNetwork, isLegacyProgramme } from './model';
+import { runAppraisal, isProgrammeNetwork, isLegacyProgramme, validateInputs } from './model';
 import { applyScenario } from './model/apply-scenario';
-import { runSensitivity, InvalidBaseDocumentError } from './model/sensitivity';
+import { runSensitivity, InvalidBaseDocumentError, LEVER_ORDER } from './model/sensitivity';
 import type { SensitivityCell, SensitivityConfig, SensitivityLever } from './model/sensitivity';
+import { runStressPack } from './model/stress-pack';
+import type { StressResult } from './model/stress-pack';
+import { SCENARIO_FIELD } from './safe-sensitivity';
 import {
-  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, flagShortCodes,
+  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, formatStressSetting, flagShortCodes,
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
 } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
-import { repairGluedDescription, humanise, penceToPoundsExact } from './format';
+import { repairGluedDescription, humanise, penceToPoundsExact, signedPenceToPounds } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
 import {
@@ -182,6 +185,24 @@ const QS_STAGE_LABEL: Record<QsStage, string> = {
   contract_sum: 'Contract sum',
 };
 
+/**
+ * R16 Task 9 fix round 1 (minor 6). A derived due-diligence row's `source`
+ * field (`due-diligence.ts`'s `derivedStatus`) is an internal field path —
+ * `cost_plan.qs`, `finance.requires_confirmation` — meant for a developer
+ * reading the model, not the sentence a lender reads on the schedule. Kept
+ * beside the memo's other label tables (`DD_CATEGORY_LABEL` etc.) for the
+ * same reason: a sixth derived code added to `DdDerivedCode` without an entry
+ * here falls back to the raw key (`?? r.source` at the call site) rather than
+ * crashing, but is meant to be caught in review, not relied on in production.
+ */
+const DD_DERIVED_SOURCE_LABEL: Record<string, string> = {
+  'cost_plan.qs': "the cost plan's QS record",
+  'finance.requires_confirmation': "the facility's confirmation state",
+  'equity_sources[].evidence_status': "the equity sources' evidence status",
+  'acquisition.jurisdiction_evidence_status + vat': 'the jurisdiction and VAT evidence',
+  lender_valuation: 'the lender valuation',
+};
+
 /** Spec §14. The reader is told which country's regime was applied, not the
  *  internal key. Kept beside the memo's other label tables so a new
  *  jurisdiction cannot be added without a printed name for it. */
@@ -259,6 +280,12 @@ function fmt(pence: number): string {
     maximumFractionDigits: 0,
   });
 }
+
+/** `fmt` with an explicit sign on a positive or zero amount too — the stress
+ *  pack's "Delta vs base" column (spec §25). Hoisted `signedPenceToPounds`
+ *  (format.ts), the same function SensitivityPage.tsx's own stress table now
+ *  uses, so the two surfaces cannot drift on this one figure. */
+const fmtSigned = signedPenceToPounds;
 
 function fmtPct(pct: number): string {
   return `${pct.toFixed(1)}%`;
@@ -404,6 +431,23 @@ export interface MemoSensitivityTables {
    *  rationale reconstructed here. Built by the shared module the Sensitivity page
    *  reads too. */
   unmeasuredCellNotes: readonly string[];
+  /** R16 spec §25. One row per stress in the fixed nine-entry pack:
+   *  [label, setting-with-note, profit, delta vs base, peak debt, flags] — the
+   *  same six fields the Sensitivity page's own stress table prints
+   *  (SensitivityPage.tsx), read off `runStressPack`'s published result and
+   *  never recomputed here. Empty when the pack could not be run at all — see
+   *  `stressFailureMessage`. */
+  stressRows: string[][];
+  /**
+   * The reason the standard lender stress pack could not be run — a base
+   * document that fails validation (spec §12.7), exactly the one documented
+   * failure `runStressPack` raises (`InvalidBaseDocumentError`). Null whenever
+   * `stressRows` was built. Kept separate from `sensitivityFailureMessage`
+   * (generateInvestmentMemo's own local) because the two suites are measured
+   * independently here, even though in practice both fail on the same
+   * condition — the base document, not a levered one.
+   */
+  stressFailureMessage: string | null;
 }
 
 export function sensitivityTables(
@@ -458,6 +502,53 @@ export function sensitivityTables(
 
   const cellNotes = unmeasuredCellNotes(result.matrix);
 
+  // R16 spec §25. `risks_crystallise` (the pack's ninth entry) is the one stress
+  // whose settings are DERIVED from the document rather than fixed magnitudes
+  // (§25.3) — its `construction_cost` setting is a percentage computed to full
+  // precision (e.g. 9.807692307692), not one of the fixed-step levers'
+  // round numbers, so it is quoted to 2dp here rather than `formatStepLabel`'s
+  // usual 0dp for a percent lever (that would print "+10%", silently rounding
+  // away the derivation the parenthetical right after it then states in pence).
+  // The recorded-Σ/item-count parenthetical is only ever non-null for this one
+  // stress (`derivation` is null on every other entry, §25.3), and prints the
+  // real published fields — never a float interpolated raw (whole item counts
+  // and whole months only; the pence figure goes through `fmt`).
+  const settingCell = (s: StressResult): string => {
+    const parts = s.settings.map((setting) => (
+      s.derivation !== null && setting.lever === 'construction_cost'
+        ? formatStressSetting(setting, 2)
+        : formatStressSetting(setting)
+    ));
+    let text = parts.join(', ');
+    if (s.derivation !== null) {
+      const { cost_impact_pence, stated_item_count, programme_impact_max_months } = s.derivation;
+      const months = programme_impact_max_months ?? 0;
+      text += ` (${fmt(cost_impact_pence)} recorded; ${stated_item_count} `
+        + `item${stated_item_count === 1 ? '' : 's'}, largest ${months} month${months === 1 ? '' : 's'})`;
+    }
+    if (s.note !== null) text += ` ${s.note}`;
+    return text;
+  };
+
+  let stressRows: string[][] = [];
+  let stressFailureMessage: string | null = null;
+  try {
+    const pack = runStressPack(inputs);
+    stressRows = pack.stresses.map((s) => [
+      s.label,
+      settingCell(s),
+      s.metrics.profit_pence === null ? 'not measured' : fmt(s.metrics.profit_pence),
+      s.delta_profit_pence === null ? '-' : fmtSigned(s.delta_profit_pence),
+      s.metrics.peak_debt_pence === null ? '-' : fmt(s.metrics.peak_debt_pence),
+      s.metrics.validation_errors.length > 0
+        ? unmeasuredCellNote(s.metrics.validation_errors[0].message)
+        : flagShortCodes(s.metrics.flags) || '-',
+    ]);
+  } catch (err) {
+    if (!(err instanceof InvalidBaseDocumentError)) throw err;
+    stressFailureMessage = err.message;
+  }
+
   return {
     head: ['', ...cols.steps.map((step) => axisCaption(cols.lever, step))],
     pocRows: bodyFor('profit_on_cost_pct'),
@@ -465,6 +556,8 @@ export function sensitivityTables(
     tornadoRows,
     omittedTornadoNotes: tornadoNotes,
     unmeasuredCellNotes: cellNotes.notes,
+    stressRows,
+    stressFailureMessage,
   };
 }
 
@@ -1728,7 +1821,7 @@ export function generateInvestmentMemo(
       ? [[
           '  Tender-price inflation to spend midpoints — '
           + `${fmtPctExact(cp.qs.inflation.annual_pct)} p.a. from ${fmtPlainDate(cp.qs.base_date)}`,
-          penceToPoundsExact(cp.inflation_total_pence),
+          fmt(cp.inflation_total_pence),
           '',
         ]]
       : [];
@@ -2564,10 +2657,21 @@ export function generateInvestmentMemo(
       r.kind === 'derived' ? `${r.label} (derived)` : r.label,
       DD_STATUS_LABEL[r.status],
       r.evidence === null
-        ? (r.source === null ? '-' : `derived from ${r.source}`)
-        : [r.evidence.source, r.evidence.reference, fmtPlainDate(r.evidence.date || null)]
-            .filter((part) => part !== '' && part !== '-')
-            .join(' · '),
+        ? (r.source === null ? '-' : `derived from ${DD_DERIVED_SOURCE_LABEL[r.source] ?? r.source}`)
+        // R16 Task 9 fix round 1 (minor 6). The QS derived row's `evidence.reference`
+        // is the engine's own `${qs.stage} / ${qs.status}` (due-diligence.ts) — raw
+        // enum keys ("riba_3 / issued") rather than the words a lender reads
+        // everywhere else this stage prints (QS_STAGE_LABEL, §23.6). `cp.qs` is
+        // checked rather than asserted non-null: `derivedStatus`'s `cost_plan_qs`
+        // arm only ever sets `evidence` when `costPlan.mode === 'detailed' && qs !=
+        // null` (due-diligence.ts), so this row carries evidence only when `cp.qs`
+        // is the very QS record that produced it — but a defensive check, not a
+        // non-null assertion, is what actually proves that here rather than merely
+        // asserting it.
+        : (r.kind === 'derived' && r.code === 'cost_plan_qs' && cp.qs !== null
+            ? [r.evidence.source, `${QS_STAGE_LABEL[cp.qs.stage]} / ${humanise(cp.qs.status)}`, fmtPlainDate(r.evidence.date || null)]
+            : [r.evidence.source, r.evidence.reference, fmtPlainDate(r.evidence.date || null)]
+          ).filter((part) => part !== '' && part !== '-').join(' · '),
       fmtPlainDate(r.expiry_date),
       r.owner || '-',
       fmtPlainDate(r.due_date),
@@ -2697,26 +2801,76 @@ export function generateInvestmentMemo(
 
   y = subHeading(y, 'Scenario Comparison');
   const scenarioKeys = ['base', 'upside', 'downside'] as const;
+  // R16 Task 9 (spec §12.7, the same gate ScenariosPage.tsx's own
+  // `measureScenario` applies): the levered document is validated before it is
+  // appraised, and a document that fails validation is never appraised — its
+  // card is reported as not measured, with the engine's own reason, rather
+  // than the whole export failing or a stale figure being shown (spec §2).
   const scenarioRuns = scenarioKeys.map((key) => {
     const overrides = inputs.scenarios[key];
-    return { label: overrides.label, overrides, run: runAppraisal(applyScenario(inputs, overrides)) };
+    const levered = applyScenario(inputs, overrides);
+    const errors = validateInputs(levered).filter((i) => i.severity === 'error');
+    return {
+      label: overrides.label,
+      overrides,
+      outcome: errors.length > 0
+        ? { ok: false as const, errors }
+        : { ok: true as const, run: runAppraisal(levered) },
+    };
   });
+
+  // Every lever with a non-zero value on at least one card, in the suite's own
+  // tie-break order (LEVER_ORDER) — not just GDV/cost — printed in the lever's
+  // own unit via `formatStepLabel`, the same formatter the tornado and stress
+  // table above use. `phase_slip` is excluded here because it carries a target
+  // phase alongside its magnitude (`phase_slip_phase_id`/`phase_slip_months`),
+  // so it gets its own row below rather than a bare number.
+  const scenarioLevers = LEVER_ORDER.filter(
+    (l): l is Exclude<SensitivityLever, 'phase_slip'> => l !== 'phase_slip',
+  );
+  // `?? 0`/`?? null`: a pre-v15 document's raw `ScenarioOverrides` — reachable
+  // here whenever a caller hands `generateInvestmentMemo` a document that was
+  // never run through `migrateInputsToV15` — carries none of the newer lever
+  // fields at all (spec §25.7's four; R12's `phase_slip_*` before that), not a
+  // stored zero. Read as absent-means-not-applied, the same tolerance every
+  // other pre-vN block read in this file gets (e.g. `vatInputs` above), rather
+  // than `s.overrides[...]` reading `undefined` and crashing `formatStepLabel`.
+  const settingsRows: string[][] = scenarioLevers
+    .filter((l) => scenarioRuns.some((s) => ((s.overrides[SCENARIO_FIELD[l]] as number | undefined) ?? 0) !== 0))
+    .map((l) => [
+      LEVER_LABEL[l],
+      ...scenarioRuns.map((s) => formatStepLabel(l, (s.overrides[SCENARIO_FIELD[l]] as number | undefined) ?? 0)),
+    ]);
+  if (scenarioRuns.some((s) => (s.overrides.phase_slip_phase_id ?? null) !== null)) {
+    settingsRows.push([
+      'Phase slip',
+      ...scenarioRuns.map((s) => (
+        (s.overrides.phase_slip_phase_id ?? null) === null
+          ? '-'
+          : `${s.overrides.phase_slip_months ?? 0} months on ${s.overrides.phase_slip_phase_id}`
+      )),
+    ]);
+  }
+
+  const metricRow = (label: string, accessor: (run: AppraisalRun) => string): string[] => [
+    label,
+    ...scenarioRuns.map((s) => (s.outcome.ok ? accessor(s.outcome.run) : 'not measured')),
+  ];
 
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
     head: [['Metric', ...scenarioRuns.map((s) => s.label)]],
     body: [
-      ['GDV adjustment', ...scenarioRuns.map((s) => `${s.overrides.gdv_adjustment_pct >= 0 ? '+' : ''}${s.overrides.gdv_adjustment_pct}%`)],
-      ['Cost adjustment', ...scenarioRuns.map((s) => `${s.overrides.construction_cost_adjustment_pct >= 0 ? '+' : ''}${s.overrides.construction_cost_adjustment_pct}%`)],
-      ['GDV', ...scenarioRuns.map((s) => fmt(s.run.metrics.gdv_pence))],
-      ['Total Development Cost', ...scenarioRuns.map((s) => fmt(s.run.metrics.total_development_cost_pence))],
-      ['Profit', ...scenarioRuns.map((s) => fmt(s.run.metrics.profit_pence))],
-      ['Profit on Cost', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.profit_on_cost_pct))],
-      ['Profit on GDV', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.profit_on_gdv_pct))],
-      ['IRR (Annual)', ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.irr_annual_pct))],
-      [roeLabel, ...scenarioRuns.map((s) => fmtPctSafe(s.run.metrics.return_on_equity_pct))],
-      ['Flags', ...scenarioRuns.map((s) => flagSummary(s.run.metrics.flags))],
+      ...settingsRows,
+      metricRow('GDV', (r) => fmt(r.metrics.gdv_pence)),
+      metricRow('Total Development Cost', (r) => fmt(r.metrics.total_development_cost_pence)),
+      metricRow('Profit', (r) => fmt(r.metrics.profit_pence)),
+      metricRow('Profit on Cost', (r) => fmtPctSafe(r.metrics.profit_on_cost_pct)),
+      metricRow('Profit on GDV', (r) => fmtPctSafe(r.metrics.profit_on_gdv_pct)),
+      metricRow('IRR (Annual)', (r) => fmtPctSafe(r.metrics.irr_annual_pct)),
+      metricRow(roeLabel, (r) => fmtPctSafe(r.metrics.return_on_equity_pct)),
+      metricRow('Flags', (r) => flagSummary(r.metrics.flags)),
     ],
     styles: { fontSize: 9, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255 },
@@ -2730,6 +2884,15 @@ export function generateInvestmentMemo(
     },
   });
   y = lastAutoTableFinalY(doc) + 8;
+
+  // §12.7: one line per card the engine could not appraise at all, beneath the
+  // table rather than silently inside it — the same `unmeasuredCellNote`
+  // sentence ScenariosPage.tsx prints for the identical condition.
+  for (const s of scenarioRuns) {
+    if (!s.outcome.ok) {
+      y = bodyText(y, `${s.label}: ${unmeasuredCellNote(s.outcome.errors[0].message)}`);
+    }
+  }
 
   // §12.7/§12.5: runSensitivity throws when the *base* document itself fails validation
   // — a saved appraisal can reach this function in that state (e.g.
@@ -2755,6 +2918,51 @@ export function generateInvestmentMemo(
   }
 
   if (sens) {
+    // R16 spec §25. The fixed nine-entry standard lender stress pack, printed
+    // ahead of the tornado — every entry is a full re-run, not a bar endpoint,
+    // and an inapplicable stress is printed with the reason it cannot move
+    // this scheme (spec §25.4) rather than silently omitted, exactly as
+    // SensitivityPage.tsx's own Region 0 does.
+    y = subHeading(y, 'Standard Lender Stresses (spec §25)');
+    y = bodyText(
+      y,
+      'Nine standard stresses, each a full re-run of the appraisal with the committed facility held fixed. An inapplicable stress is printed with the reason it cannot move this scheme rather than omitted (spec §25.4).',
+    );
+    if (sens.stressRows.length > 0) {
+      table({
+        startY: y,
+        margin: { left: MARGIN_L, right: MARGIN_R },
+        head: [['Stress', 'Setting', 'Profit', 'Delta vs base', 'Peak debt', 'Flags']],
+        body: sens.stressRows,
+        styles: { fontSize: 8, cellPadding: 1.5 },
+        headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+        bodyStyles: { textColor: [51, 65, 85] },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        // R16 Task 9 fix round 1. Column 0's own longest label ("Opex +10%,
+        // vacancy +5 pp", "Recorded risks crystallise") measures ~36mm at 8pt
+        // bold — wider than autoTable's own auto-computed width once the
+        // 70mm Setting column and the four numeric columns claimed their
+        // share, which wrapped it onto two lines. That wrap, landing exactly
+        // at a page boundary, split the SAME row's label across two physical
+        // pages with the table's own header re-drawn in between ("Recorded"
+        // / "risks crystallise") — not a wrapped cell (harmless, every other
+        // table in this file wraps a cell without incident) but a label torn
+        // in two. A width wide enough that no Stress label ever wraps removes
+        // the coincidence entirely.
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 40 },
+          1: { cellWidth: 62 },
+          2: { halign: 'right' },
+          3: { halign: 'right' },
+          4: { halign: 'right' },
+        },
+      });
+      y = lastAutoTableFinalY(doc) + 4;
+    } else if (sens.stressFailureMessage !== null) {
+      y = bodyText(y, sens.stressFailureMessage);
+    }
+    y += 2;
+
     y = subHeading(y, 'Single-Lever Sensitivity (Tornado)');
     y = bodyText(
       y,

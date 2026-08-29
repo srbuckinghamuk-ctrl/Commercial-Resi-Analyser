@@ -17,6 +17,22 @@ export function penceToPoundsExact(pence: number): string {
   );
 }
 
+/**
+ * `penceToPounds` with an explicit sign on a positive or zero amount too
+ * ("+£12,345" / "-£12,345"). R16 Task 9: hoisted here from a component-local
+ * `signedPounds` in SensitivityPage.tsx (the stress pack's "Delta vs base"
+ * column) so the investment memo's identical need (spec §25's stress table)
+ * does not grow a third copy of the same `toLocaleString` call. Formatting
+ * only: the same pence-to-pounds division `penceToPounds` itself performs,
+ * not a calculation over model values (spec §11.9) — the value printed is
+ * whatever pence figure the caller already computed or read off the engine.
+ */
+export function signedPenceToPounds(pence: number): string {
+  return (pence / 100).toLocaleString('en-GB', {
+    style: 'currency', currency: 'GBP', maximumFractionDigits: 0, signDisplay: 'exceptZero',
+  });
+}
+
 /** Format a percentage that may be null/non-finite (e.g. IRR on a loss-making deal). */
 export function formatPct(value: number | null | undefined, decimals = 1): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';

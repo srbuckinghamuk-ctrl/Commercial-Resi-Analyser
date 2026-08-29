@@ -1079,3 +1079,85 @@ describe('R15 — the due-diligence gate on the memo (spec §23.7/§23.8)', () =
     expect(prose).toContain('Risk register (project log)');
   });
 });
+
+/**
+ * R16 Task 9 (spec §25, §12.7 and fix round 1 minors 1 and 6).
+ *
+ * §10's new stress table, the Scenario Comparison's generic settings rows and
+ * the two review minors — the DD table's Amount column and its derived-row
+ * labels. Each assertion targets the exact field the fix changed, read off
+ * the run's own result block rather than restated as a second copy of the
+ * arithmetic (the same discipline every other release-gate test in this file
+ * follows).
+ */
+describe('R16 Task 9 — the standard lender stresses and the scenario/DD fixes (spec §25/§12.7)', () => {
+  it('prints the standard lender stress pack heading and the ninth entry\'s label', async () => {
+    const prose = documentProse((await report(dueDiligenceInputs())).info);
+    expect(prose).toContain('Standard Lender Stresses');
+    expect(prose).toContain('Recorded risks crystallise');
+  });
+
+  it('prints a settings row for a scenario lever with no dedicated column, in the lever\'s own unit', async () => {
+    const inputs = dueDiligenceInputs();
+    inputs.scenarios.downside.programme_slip_months = 6;
+    const { info } = await report(inputs);
+    const prose = documentProse(info);
+
+    // Bounded to the Scenario Comparison table itself: "Programme slip" also
+    // names the stress pack's own "Start / PC six months late" setting cell
+    // further down the same page (spec §25.2), so an unbounded substring
+    // check would pass whether or not this task's generic settings row exists.
+    const start = prose.indexOf('Scenario Comparison');
+    const end = prose.indexOf('Standard Lender Stresses');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const section = prose.slice(start, end);
+    expect(section).toContain('Programme slip');
+    expect(section).toContain('+6 months');
+  });
+
+  it('never prints a ".00" figure on the cost stack\'s inflation row (minor 1: whole pounds throughout)', async () => {
+    const { info, run } = await report(costPlanInTimeInputs());
+    const cp = run.metrics.cost_plan;
+    expect(cp.inflation_total_pence).toBeGreaterThan(0); // fixture sanity check
+    const text = documentText(info);
+    const idx = text.indexOf('Tender-price inflation to spend midpoints');
+    expect(idx).toBeGreaterThan(-1);
+    // Bounded to the row's own neighbourhood, not `.not.toContain` over the
+    // whole document — the document's provenance panel prints real
+    // two-decimal figures elsewhere (hashes, percentages), so only the
+    // window right after this row's own label is where the fix applies.
+    const window = text.slice(idx, idx + 200);
+    expect(window).toContain(fmtGBP(cp.inflation_total_pence));
+    expect(window).not.toContain('.00');
+    // The exact two-decimal figure `penceToPoundsExact` used to print here —
+    // absent from the whole document now that this row reads `fmt` instead.
+    const oldStyleExact = (cp.inflation_total_pence / 100).toLocaleString(
+      'en-GB',
+      { style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2 },
+    );
+    expect(text).not.toContain(oldStyleExact);
+  });
+
+  it('names a derived due-diligence row\'s source in words, not its internal field path (minor 6, part 1)', async () => {
+    // sellAllInputs() is headline-mode with no cost_plan.qs recorded at all, so
+    // its "QS cost plan" row is unknown with no evidence — the row this
+    // label swap actually changes (dueDiligenceInputs()' own QS row is
+    // evidenced/green — see the next test for what that row's fix looks
+    // like instead).
+    const { info, run } = await report(sellAllInputs());
+    expect(run.metrics.cost_plan.mode).toBe('headline'); // fixture sanity check
+    const prose = documentProse(info);
+    expect(prose).toContain("derived from the cost plan's QS record");
+    expect(prose).not.toContain('derived from cost_plan.qs');
+  });
+
+  it('shows the QS row\'s evidence as the stage label, not the raw riba_3/status keys (minor 6, part 2)', async () => {
+    const { info, run } = await report(dueDiligenceInputs());
+    expect(run.metrics.cost_plan.mode).toBe('detailed'); // fixture sanity check
+    expect(run.metrics.cost_plan.qs).not.toBeNull(); // fixture sanity check
+    const prose = documentProse(info);
+    expect(prose).toContain('RIBA Stage 3 / Issued');
+    expect(prose).not.toContain('riba_3 / issued');
+  });
+});

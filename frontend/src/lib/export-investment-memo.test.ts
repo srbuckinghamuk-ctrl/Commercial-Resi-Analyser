@@ -45,7 +45,7 @@ import { docZ, docZNoAllowance } from './model/__fixtures__/cost-plan-in-time-do
 // negative control for the package-timing suffix — a detailed-mode document
 // with no phase network at all, so `resolved_phase_id` is null on every
 // package and `phase` must not print.
-import { detailedCostPlanInputs } from './report-qa/memo-fixtures';
+import { detailedCostPlanInputs, dueDiligenceInputs } from './report-qa/memo-fixtures';
 
 // generateInvestmentMemo now takes the finished AppraisalRun directly (Task
 // 10) and performs zero recalculation — every fixture below is put through
@@ -1166,6 +1166,55 @@ describe('generateInvestmentMemo — base document fails validation (spec §12.7
     const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
     expect(text).toContain('sensitivity analysis was not produced');
     expect(text).toContain('Senior Debt Position');
+  });
+});
+
+// R16 Task 9 (spec §25). The memo's §10 now prints the fixed nine-entry
+// standard lender stress pack ahead of the tornado — every figure read off
+// `runStressPack`'s own published result (`sensitivityTables()`'s new
+// `stressRows`), never recomputed here (file header's no-recalculation rule).
+describe('generateInvestmentMemo — standard lender stresses (spec §25)', () => {
+  it('prints the section heading, all nine stress labels in order, and the inapplicable-stress note', async () => {
+    const run = runAppraisal(dueDiligenceInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const prose = documentProse(await inspectPdf(blob));
+
+    expect(prose).toContain('Standard Lender Stresses');
+    const rest = prose.slice(prose.indexOf('Standard Lender Stresses'));
+    // STRESS_PACK's own normative order (stress-pack.ts) — pinned here as
+    // labels, not keys, because the labels are what the reader actually sees.
+    const labels = [
+      'One unit lost', 'Saleable area -5%', 'Abnormal cost +10%', 'Sales six months slower',
+      'Start / PC six months late', 'Exit yield +100 bp', 'Refinance LTV -10 pp',
+      'Opex +10%, vacancy +5 pp', 'Recorded risks crystallise',
+    ];
+    const indices = labels.map((label) => rest.indexOf(label));
+    for (const [i, at] of indices.entries()) expect(at, `"${labels[i]}" not printed`).toBeGreaterThan(-1);
+    for (let i = 1; i < indices.length; i++) expect(indices[i]).toBeGreaterThan(indices[i - 1]);
+
+    // Fixture Y has no investment case, so the three investment-case stresses
+    // are inapplicable and print the engine's own reason rather than being
+    // silently omitted (spec §25.4).
+    expect(prose).toContain('No package carries the abnormal contingency class');
+  });
+
+  it("derives entry 9 (recorded risks crystallise) to 2dp, with the recorded pound figure and item counts from the document's own due-diligence schedule", async () => {
+    const run = runAppraisal(dueDiligenceInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const prose = documentProse(await inspectPdf(blob));
+
+    // Fixture Y (dueDiligenceInputs(), memo-fixtures.ts): stress-pack.test.ts
+    // pins this same document's derivation as cost_impact_pence 2,550,000,
+    // base_build_pence 26,000,000, cost_pct 9.807692307692, sum_months 7,
+    // programme_impact_max_months 3, stated_item_count 4. `signed(9.807692307692,
+    // 0)` (sensitivity-format.ts) would print "+10%", silently rounding away the
+    // derivation the parenthetical states in pounds right after it — so this one
+    // cell is quoted to 2dp (`formatStressSetting(setting, 2)`), giving
+    // "+9.81%" (`(9.807692307692).toFixed(2)`), not the fixed-step lever's
+    // usual 0dp.
+    expect(prose).toContain('Construction cost +9.81%');
+    expect(prose).toContain('Programme slip +7 months');
+    expect(prose).toContain('£25,500 recorded; 4 items, largest 3 months');
   });
 });
 
@@ -2464,7 +2513,13 @@ describe('R15b cost plan in time (spec §24.6)', () => {
     const text = await pdfText(generateInvestmentMemo(mockProject, run, mockEligibility));
     expect(text).toContain('Tender-price inflation to spend midpoints');
     expect(text).toContain('6% p.a. from 1 Feb 2026');
-    expect(text).toContain('£54,967.22');
+    // R16 Task 9 fix round 1 (minor 1): the Amount column is whole pounds
+    // throughout the cost stack, like every other row — this row alone used
+    // to print exact pence (`penceToPoundsExact`). 5,496,722p rounds to
+    // £54,967 (not £54,967.22), and the release gate's own new assertion pins
+    // the general rule via `fmt(inflation_total_pence)`.
+    expect(text).toContain('£54,967');
+    expect(text).not.toContain('£54,967.22');
   });
 
   it("carries the package's resolved phase, midpoint and inflation (M&E fit-out)", async () => {
