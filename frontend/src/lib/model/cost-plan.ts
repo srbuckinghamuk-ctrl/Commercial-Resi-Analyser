@@ -358,9 +358,13 @@ export interface CostPlanResult {
  *  so this is the difference between the identity gate passing and all twelve
  *  fixtures failing. */
 function costPlanOf(inputs: AnyCalculatorInputs): CostPlanInputs {
-  return 'cost_plan' in inputs && inputs.cost_plan != null
-    ? inputs.cost_plan
-    : costPlanFromLegacyCosts(inputs.conversion_costs);
+  if ('cost_plan' in inputs && inputs.cost_plan != null) return inputs.cost_plan;
+  // R16b: only a pre-v7 document reaches here, and only a pre-v7 document
+  // carries the flat fee fields the seed reads. The cast is needed because
+  // the `in`-narrowing leaves the V7+ members with a non-null `cost_plan` in
+  // the else branch's type, so `tsc` still sees the V16 member here even
+  // though it can never actually occur.
+  return costPlanFromLegacyCosts(inputs.conversion_costs as ConversionCostInputs);
 }
 
 export function computeCostPlan(

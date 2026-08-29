@@ -306,15 +306,17 @@ describe('single-accessor guard configuration', () => {
     expect(CONFIG).not.toContain('src/lib/model/validation.ts');
   });
 
-  it("exempts validation.ts's selectBandSet use and its contingency_pct check at the call sites, never file-wide", () => {
+  it("exempts validation.ts's selectBandSet use at the call sites, never file-wide", () => {
     // R9 fix wave. validation.ts legitimately calls selectBandSet — to report
     // an unplaceable acquisition date as a ValidationIssue, never to compute
     // tax. eslint's file allowlist is all-or-nothing per rule, so putting
     // validation.ts on it would also switch off the cost-area selectors for
     // the one module most likely to grow a raw read. Two line-scoped disables
-    // for that (the import and the call), plus a third (R10 Task 9) for the
-    // raw contingency_pct negative-value check, which is real user input
-    // until Task 12 rebuilds the cost page around cost_plan.
+    // for that (the import and the call). R10 Task 9 added a third, for the
+    // raw contingency_pct negative-value check, which was real user input
+    // until Task 12 rebuilt the cost page around cost_plan — R16b Task 2
+    // (spec §26.1) removed that check along with `contingency_pct` itself,
+    // so the count drops back to five.
     //
     // R11 Task 9 adds three more, for the VAT §17.9 validation block: one
     // structural read of `vat.treatments` (shape/bounds checks only — never
@@ -327,7 +329,7 @@ describe('single-accessor guard configuration', () => {
       resolve(FRONTEND_ROOT, 'src/lib/model/validation.ts'), 'utf-8',
     );
     const scoped = source.match(/eslint-disable-next-line no-restricted-syntax/g) ?? [];
-    expect(scoped).toHaveLength(6);
+    expect(scoped).toHaveLength(5);
     // A file-wide `/* eslint-disable no-restricted-syntax */` would satisfy the
     // linter and defeat the guard silently.
     expect(source).not.toMatch(/eslint-disable\s+no-restricted-syntax/);

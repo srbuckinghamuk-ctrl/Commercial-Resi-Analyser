@@ -1,12 +1,12 @@
 import { useCallback } from 'react';
 import type { ProposedUnitV6, UnitType } from '../../lib/conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
-import type { CalculatorInputsV15, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV16, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV15;
-  onChange: (partial: Partial<CalculatorInputsV15>) => void;
+  inputs: CalculatorInputsV16;
+  onChange: (partial: Partial<CalculatorInputsV16>) => void;
   run: AppraisalRun;
 }
 

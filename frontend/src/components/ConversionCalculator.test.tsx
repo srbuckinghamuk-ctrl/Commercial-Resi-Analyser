@@ -202,7 +202,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
         };
       };
 
-    expect(sentSnapshot.inputs_version).toBe(15);
+    expect(sentSnapshot.inputs_version).toBe(16);
     expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
     expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
@@ -300,7 +300,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
           };
         };
       };
-    expect(sent.inputs_version).toBe(15);
+    expect(sent.inputs_version).toBe(16);
     expect(sent.areas.basis).toBe('manual');
     expect(sent.areas.existing_gia_sqm).toBe(0);
     expect(sent.cost_plan.mode).toBe('headline');
@@ -433,7 +433,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
       inputs_version: number;
       acquisition: { jurisdiction_source: string; acquisition_date: string | null };
     };
-    expect(sent.inputs_version).toBe(15);
+    expect(sent.inputs_version).toBe(16);
     expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sent.acquisition.acquisition_date).toBeNull();
   });

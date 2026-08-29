@@ -20,10 +20,10 @@ import type {
 } from '../model';
 import {
   migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV11, migrateInputsToV12,
-  migrateInputsToV15,
+  migrateInputsToV16,
 } from '../model';
 import type {
-  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV15,
+  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV16,
 } from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
@@ -599,16 +599,19 @@ export function unitSalesLedgerInputs(): CalculatorInputsV12 {
  * fixture left pinned at v13 would exercise a shape no production path
  * still produces. `cost_plan.qs.inflation` is inert on this fixture (its
  * QS record has no allowance either way), so the ROUTES sweep's rendered
- * output is unchanged by the move. R16 Task 4 moves it on again to v15
+ * output is unchanged by the move. R16 Task 4 moved it on again to v15
  * (spec §25.7) for the identical reason -- the four Sec 25.1 lever fields
  * are inert on every fixture in this file, so the sweep's rendered output is
- * unchanged by this move too.
+ * unchanged by this move too. R16b Task 2 moves it on again to v16 (spec
+ * §26.1) for the identical reason -- the nine legacy cost fields removed
+ * from `conversion_costs` are dead on every fixture in this file, so the
+ * sweep's rendered output is unchanged by this move too.
  */
-export function dueDiligenceInputs(): CalculatorInputsV15 {
+export function dueDiligenceInputs(): CalculatorInputsV16 {
   const raw = JSON.parse(
     readFileSync(resolve(FIXTURE_DIR, 'y-due-diligence.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
-  return migrateInputsToV15(raw.inputs);
+  return migrateInputsToV16(raw.inputs);
 }
 
 /**
@@ -624,7 +627,7 @@ export function dueDiligenceInputs(): CalculatorInputsV15 {
  * second JSON fixture, so the two twins cannot drift apart on any field
  * except the ones named here.
  */
-export function dueDiligenceFinalInputs(): CalculatorInputsV15 {
+export function dueDiligenceFinalInputs(): CalculatorInputsV16 {
   const doc = dueDiligenceInputs();
   const record = doc.due_diligence.source_record;
   return {
@@ -682,11 +685,11 @@ export function dueDiligenceFinalInputs(): CalculatorInputsV15 {
  * `dueDiligenceInputs` immediately above gives for reading fixture Y's JSON a
  * second time rather than importing `ddDoc()`.
  */
-export function costPlanInTimeInputs(): CalculatorInputsV15 {
+export function costPlanInTimeInputs(): CalculatorInputsV16 {
   const raw = JSON.parse(
     readFileSync(resolve(FIXTURE_DIR, 'z-cost-plan-in-time.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
-  return migrateInputsToV15(raw.inputs);
+  return migrateInputsToV16(raw.inputs);
 }
 
 /**
@@ -698,7 +701,7 @@ export function costPlanInTimeInputs(): CalculatorInputsV15 {
  * (cost-plan-in-time-docs.ts), built the same one-field-changed way, over
  * this file's own independently-loaded document rather than that module's.
  */
-export function costPlanInTimeNoAllowanceInputs(): CalculatorInputsV15 {
+export function costPlanInTimeNoAllowanceInputs(): CalculatorInputsV16 {
   const inputs = costPlanInTimeInputs();
   return {
     ...inputs,

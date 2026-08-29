@@ -16,9 +16,10 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
-  CalculatorInputsV14, CalculatorInputsV15,
+  CalculatorInputsV14, CalculatorInputsV15, CalculatorInputsV16,
   EquitySource, FacilityTerms,
 } from './model/finance-types';
+import { migrateV15toV16 } from './model/migrate';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
 import type { SourceRecord } from './model/due-diligence';
@@ -645,4 +646,11 @@ export function defaultCalculatorInputsV15(project?: DefaultDocumentProject, now
       downside: withLevers(v14.scenarios.downside), severe: withLevers(v14.scenarios.severe),
     },
   };
+}
+
+/** R16b spec §26.1. Exactly what `migrateV15toV16` makes of the v15 default —
+ *  the construction every default since v7 has used, pinned in
+ *  `conversion-defaults.test.ts` against the migration itself. */
+export function defaultCalculatorInputsV16(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV16 {
+  return migrateV15toV16(defaultCalculatorInputsV15(project, now));
 }

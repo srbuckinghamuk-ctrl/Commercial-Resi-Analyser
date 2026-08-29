@@ -1,14 +1,14 @@
 import { useMemo } from 'react';
 import type { ScenarioOverrides } from '../../lib/conversion-types';
-import type { AppraisalRun, CalculatorInputsV15, ValidationIssue } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV16, ValidationIssue } from '../../lib/model';
 import { runAppraisal, validateInputs, isProgrammeNetwork } from '../../lib/model';
 import { applyScenario } from '../../lib/model/apply-scenario';
 import { unmeasuredCellNote } from '../../lib/sensitivity-format';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV15;
-  onChange: (partial: Partial<CalculatorInputsV15>) => void;
+  inputs: CalculatorInputsV16;
+  onChange: (partial: Partial<CalculatorInputsV16>) => void;
 }
 
 type ScenarioKey = 'base' | 'upside' | 'downside' | 'severe';
@@ -69,7 +69,7 @@ type ScenarioOutcome =
   | { ok: true; run: AppraisalRun }
   | { ok: false; errors: ValidationIssue[] };
 
-function measureScenario(inputs: CalculatorInputsV15, overrides: ScenarioOverrides): ScenarioOutcome {
+function measureScenario(inputs: CalculatorInputsV16, overrides: ScenarioOverrides): ScenarioOutcome {
   const levered = applyScenario(inputs, overrides);
   const errors = validateInputs(levered).filter((i) => i.severity === 'error');
   return errors.length > 0 ? { ok: false, errors } : { ok: true, run: runAppraisal(levered) };

@@ -5,7 +5,7 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV15,
+  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV15, CalculatorInputsV16,
   AreaBridgeInputs, MonitoringStatement,
 } from './model';
 import {
@@ -2317,7 +2317,7 @@ describe('§23.8 due diligence on the memo', () => {
   /** Fixture Y with every entered item green-with-evidence or n/a-with-notes —
    *  the twin the §13 "fully evidenced" arm is written for. Built by mapping
    *  the loaded document's items, not by restating 24 override entries. */
-  function fullyEvidencedDoc(): CalculatorInputsV15 {
+  function fullyEvidencedDoc(): CalculatorInputsV16 {
     const doc = ddDoc();
     return {
       ...doc,

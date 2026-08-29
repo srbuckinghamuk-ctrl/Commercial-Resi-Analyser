@@ -88,16 +88,6 @@ NON_NEGATIVE_MONEY: list[tuple[str, Callable[[AnyCalculatorInputs], float]]] = [
     ("acquisition.legal_fees_pence", lambda i: i.acquisition.legal_fees_pence),
     ("acquisition.survey_cost_pence", lambda i: i.acquisition.survey_cost_pence),
     ("acquisition.other_acquisition_costs_pence", lambda i: i.acquisition.other_acquisition_costs_pence),
-    ("conversion_costs.prior_approval_fee_per_dwelling_pence",
-     lambda i: i.conversion_costs.prior_approval_fee_per_dwelling_pence),
-    ("conversion_costs.cil_s106_pence", lambda i: i.conversion_costs.cil_s106_pence),
-    ("conversion_costs.architect_pence", lambda i: i.conversion_costs.architect_pence),
-    ("conversion_costs.structural_engineer_pence", lambda i: i.conversion_costs.structural_engineer_pence),
-    ("conversion_costs.mande_pence", lambda i: i.conversion_costs.mande_pence),
-    ("conversion_costs.planning_consultant_pence", lambda i: i.conversion_costs.planning_consultant_pence),
-    ("conversion_costs.building_control_pence", lambda i: i.conversion_costs.building_control_pence),
-    ("conversion_costs.other_professional_fees_pence",
-     lambda i: i.conversion_costs.other_professional_fees_pence),
     ("conversion_costs.construction_cost_per_sqm_pence",
      lambda i: i.conversion_costs.construction_cost_per_sqm_pence),
     ("conversion_costs.fire_safety_pence", lambda i: i.conversion_costs.fire_safety_pence),
@@ -135,8 +125,6 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
     # where there is no `areas` attribute to have a basis at all).
     if (areas is None or areas.basis == "manual") and bridge.developed_area_sqm < 0:
         err("conversion_costs.total_construction_sqm", "Area cannot be negative.")
-    if inputs.conversion_costs.contingency_pct < 0:
-        err("conversion_costs.contingency_pct", "Contingency cannot be negative.")
     for idx, u in enumerate(inputs.unit_mix.units):
         if u.floor_area_sqm < 0:
             err(f"unit_mix.units[{idx}].floor_area_sqm", "Unit area cannot be negative.")

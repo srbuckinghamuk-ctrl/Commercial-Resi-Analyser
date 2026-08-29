@@ -460,11 +460,33 @@ export interface CalculatorInputsV15 extends Omit<CalculatorInputsV14, 'inputs_v
   inputs_version: 15;
 }
 
+/**
+ * R16b spec §26.1. The five cost fields the v7+ engine still reads. The nine
+ * removed fields (`contingency_pct` and the eight fee fields) have been dead
+ * since v7 copied them into `cost_plan`; they live on only on the v1 shape
+ * (`ConversionCostInputs`), which the v6→v7 seed and the v1 facility
+ * bootstrap read. Not a subclass: a narrowing cannot be expressed by extension.
+ */
+export interface ConversionCostInputsV16 {
+  construction_cost_per_sqm_pence: number;
+  total_construction_sqm: number;
+  fire_safety_pence: number;
+  sound_insulation_pence: number;
+  part_l_compliance_pence: number;
+}
+
+/** R16b spec §26.1. Narrows `conversion_costs`; nothing is added. */
+export interface CalculatorInputsV16
+  extends Omit<CalculatorInputsV15, 'inputs_version' | 'conversion_costs'> {
+  inputs_version: 16;
+  conversion_costs: ConversionCostInputsV16;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
   | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-  | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15;
+  | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15 | CalculatorInputsV16;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'

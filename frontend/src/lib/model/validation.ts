@@ -3,6 +3,7 @@ import type {
   RefinanceInputsV9, RefinanceInputsV10, SalesPhasingTrancheV9,
 } from './finance-types';
 import { MONITORING_CATEGORIES } from './finance-types';
+import type { ConversionCostInputs } from '../conversion-types';
 import { OPEX_CODES, resolveStabilisationMonth } from './investment-case';
 import { computeLenderGdv } from './lender-valuation';
 import { unitAncillaryValuePence } from '../conversion-calc-engine';
@@ -17,7 +18,7 @@ import { unitAncillaryValuePence } from '../conversion-calc-engine';
 import { regimeFor, selectBandSet } from '../tax/acquisition-tax';
 import { areaBridge } from './areas';
 import {
-  computeCostPlan, FEE_CODE_CATEGORY, PRICE_BASIS_VALUES, QS_STAGES, QS_STATUSES,
+  computeCostPlan, costPlanFromLegacyCosts, FEE_CODE_CATEGORY, PRICE_BASIS_VALUES, QS_STAGES, QS_STATUSES,
 } from './cost-plan';
 import {
   DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES,
@@ -80,14 +81,6 @@ const NON_NEGATIVE_MONEY: Array<[string, (i: AnyCalculatorInputs) => number]> = 
   ['acquisition.legal_fees_pence', (i) => i.acquisition.legal_fees_pence],
   ['acquisition.survey_cost_pence', (i) => i.acquisition.survey_cost_pence],
   ['acquisition.other_acquisition_costs_pence', (i) => i.acquisition.other_acquisition_costs_pence],
-  ['conversion_costs.prior_approval_fee_per_dwelling_pence', (i) => i.conversion_costs.prior_approval_fee_per_dwelling_pence],
-  ['conversion_costs.cil_s106_pence', (i) => i.conversion_costs.cil_s106_pence],
-  ['conversion_costs.architect_pence', (i) => i.conversion_costs.architect_pence],
-  ['conversion_costs.structural_engineer_pence', (i) => i.conversion_costs.structural_engineer_pence],
-  ['conversion_costs.mande_pence', (i) => i.conversion_costs.mande_pence],
-  ['conversion_costs.planning_consultant_pence', (i) => i.conversion_costs.planning_consultant_pence],
-  ['conversion_costs.building_control_pence', (i) => i.conversion_costs.building_control_pence],
-  ['conversion_costs.other_professional_fees_pence', (i) => i.conversion_costs.other_professional_fees_pence],
   ['conversion_costs.construction_cost_per_sqm_pence', (i) => i.conversion_costs.construction_cost_per_sqm_pence],
   ['conversion_costs.fire_safety_pence', (i) => i.conversion_costs.fire_safety_pence],
   ['conversion_costs.sound_insulation_pence', (i) => i.conversion_costs.sound_insulation_pence],
@@ -119,13 +112,6 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   // `areas` block to have a basis at all).
   if ((areas == null || areas.basis === 'manual') && bridge.developed_area_sqm < 0) {
     err('conversion_costs.total_construction_sqm', 'Area cannot be negative.');
-  }
-  // R10 Task 9: contingency_pct is now legacy (run.metrics.cost_plan.contingency
-  // is the resolved figure), but this validates the raw manual/pre-v7 input, which
-  // still exists and is still user-editable until Task 12 rebuilds the cost page.
-  // eslint-disable-next-line no-restricted-syntax -- R10 Task 12 replaces this read
-  if (inputs.conversion_costs.contingency_pct < 0) {
-    err('conversion_costs.contingency_pct', 'Contingency cannot be negative.');
   }
   for (const [idx, u] of inputs.unit_mix.units.entries()) {
     if (u.floor_area_sqm < 0) err(`unit_mix.units[${idx}].floor_area_sqm`, 'Unit area cannot be negative.');
@@ -393,6 +379,18 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
         warn(`cost_plan.fee_lines[${idx}].basis`,
           'This fee line resolves against a zero base and will compute to zero.');
       }
+    });
+  } else {
+    // R16b Task 2 (spec §26.7's pre-v7 hole check): a pre-v7 document has no
+    // raw `cost_plan` block, so the block above never runs for it and never
+    // sees its SEEDED fee lines (`costPlanFromLegacyCosts`, the same
+    // derivation `costPlanOf` gives the engine). Before this release a
+    // negative legacy fee on such a document was still caught, by the now-
+    // deleted `NON_NEGATIVE_MONEY` row on the raw `conversion_costs` field.
+    // This replaces that cover for the one case the block above cannot
+    // reach, with the identical message the v7+ branch already uses.
+    costPlanFromLegacyCosts(inputs.conversion_costs as ConversionCostInputs).fee_lines.forEach((fl, idx) => {
+      if (fl.amount_pence < 0) err(`cost_plan.fee_lines[${idx}].amount_pence`, 'Fee line amount cannot be negative.');
     });
   }
 

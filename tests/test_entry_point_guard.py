@@ -50,7 +50,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api.app import app
-from app.financial_model.migrate import migrate_inputs_to_v15
+from app.financial_model.migrate import migrate_inputs_to_v15, migrate_inputs_to_v16
 from app.persistence.database import Base, get_db
 
 APP_ROOT = Path(__file__).resolve().parents[1] / "app"
@@ -115,7 +115,7 @@ def test_migrate_module_exports_the_version_chain_this_guard_is_derived_from():
     """Non-vacuity, part 1: if the regex stopped matching, ``VERSIONS`` would be
     empty and every assertion below would pass over nothing."""
     assert len(VERSIONS) > 1
-    assert NEWEST == 15
+    assert NEWEST == 16
     assert 13 in VERSIONS
 
 
@@ -261,7 +261,7 @@ async def test_the_server_migrates_a_stored_v10_document_to_v13_as_reconciled(_g
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 15
+    assert saved["inputs_snapshot"]["inputs_version"] == 16
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["investment_case"] is not None
     assert saved["inputs_snapshot"]["monitoring"] is None
@@ -278,7 +278,7 @@ async def test_the_server_migrates_a_stored_v10_document_to_v13_as_reconciled(_g
     # does not hardcode "15" precisely so it keeps holding without edits after
     # the next cutover, the same way this file's own NEWEST constant does.
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 15
+    assert saved["inputs_version"] == 16
 
 
 @pytest.mark.asyncio
@@ -333,12 +333,12 @@ async def test_the_server_round_trips_a_native_v12_document_as_reconciled(_guard
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 15
+    assert saved["inputs_snapshot"]["inputs_version"] == 16
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["unit_sales"] is not None
     assert saved["inputs_snapshot"]["due_diligence"] is not None
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 15
+    assert saved["inputs_version"] == 16
 
 
 @pytest.mark.asyncio
@@ -390,12 +390,12 @@ async def test_the_server_round_trips_a_native_v13_document_as_reconciled(_guard
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 15
+    assert saved["inputs_snapshot"]["inputs_version"] == 16
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["due_diligence"]["source_record"] == posted_inputs["due_diligence"]["source_record"]
     assert saved["inputs_snapshot"]["due_diligence"]["items"] == posted_inputs["due_diligence"]["items"]
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 15
+    assert saved["inputs_version"] == 16
 
 
 @pytest.mark.asyncio
@@ -423,8 +423,8 @@ async def test_the_server_round_trips_a_native_v14_document_as_reconciled(_guard
         (REPO_ROOT / "fixtures" / "financial-model" / "y-due-diligence.json")
         .read_text(encoding="utf-8"),
     )
-    posted_inputs = migrate_inputs_to_v15(fixture["inputs"], None).model_dump(mode="json")
-    assert posted_inputs["inputs_version"] == 15
+    posted_inputs = migrate_inputs_to_v16(fixture["inputs"], None).model_dump(mode="json")
+    assert posted_inputs["inputs_version"] == 16
     assert posted_inputs["due_diligence"] is not None
     assert posted_inputs["scenarios"]["base"]["programme_slip_months"] == 0
 
@@ -450,7 +450,7 @@ async def test_the_server_round_trips_a_native_v14_document_as_reconciled(_guard
     assert resp.status_code == 201, resp.text
     saved = resp.json()
 
-    assert saved["inputs_snapshot"]["inputs_version"] == 15
+    assert saved["inputs_snapshot"]["inputs_version"] == 16
     assert saved["status"] != "legacy_unreconciled"
     assert saved["inputs_snapshot"]["due_diligence"]["source_record"] == posted_inputs["due_diligence"]["source_record"]
     assert saved["inputs_snapshot"]["due_diligence"]["items"] == posted_inputs["due_diligence"]["items"]
@@ -475,7 +475,7 @@ async def test_the_server_round_trips_a_native_v14_document_as_reconciled(_guard
             assert key in overrides, (scenario, key)
             assert overrides[key] == 0, (scenario, key)
     assert saved["inputs_version"] == saved["inputs_snapshot"]["inputs_version"]
-    assert saved["inputs_version"] == 15
+    assert saved["inputs_version"] == 16
 
 
 @pytest.mark.asyncio

@@ -1157,11 +1157,37 @@ class CalculatorInputsV15(CalculatorInputsV14):
     inputs_version: Literal[15] = 15  # type: ignore[assignment]
 
 
+# --- Release 16b (calc 2.17.0 -> 2.18.0): inputs v16 removes the nine dead
+# cost fields (spec Sec 26.1, Sec 26.7) --------------------------------------
+
+
+class ConversionCostInputsV16(Model):
+    """R16b spec Sec 26.1. The five cost fields the v7+ engine still reads.
+    The nine removed fields live on only on the v1 shape (ConversionCostInputs),
+    which the v6->v7 seed and the v1 facility bootstrap read. Not a subclass:
+    a narrowing cannot be expressed by extension. Twin of
+    ConversionCostInputsV16 in finance-types.ts."""
+
+    construction_cost_per_sqm_pence: int = Field(ge=0)
+    total_construction_sqm: float = Field(ge=0)
+    fire_safety_pence: int = Field(ge=0)
+    sound_insulation_pence: int = Field(ge=0)
+    part_l_compliance_pence: int = Field(ge=0)
+
+
+class CalculatorInputsV16(CalculatorInputsV15):
+    """R16b spec Sec 26.1. Narrows `conversion_costs`; nothing is added.
+    Subclasses V15 for the reason V15 subclasses V14 (isinstance dispatch)."""
+
+    inputs_version: Literal[16] = 16  # type: ignore[assignment]
+    conversion_costs: ConversionCostInputsV16  # type: ignore[assignment]
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
     | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-    | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15
+    | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15 | CalculatorInputsV16
 )
 
 
@@ -1173,6 +1199,10 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R16b Task 2: without this branch a v16 document falls through to the
+    # CalculatorInputsV2 default, silently dropping every post-v2 field.
+    if version == 16:
+        return CalculatorInputsV16.model_validate(doc)
     # R16 Task 4: without this branch a v15 document falls through to the
     # CalculatorInputsV2 default, silently dropping the four stress-pack
     # scenario fields and every other post-v2 field.

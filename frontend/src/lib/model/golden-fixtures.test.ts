@@ -19,7 +19,7 @@ import type { AppraisalRun } from './index';
 import type { AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV15 } from './finance-types';
 import { migrateInputsToV15 } from './migrate';
 import { STRESS_PACK, resolveStress, runStressPack } from './stress-pack';
-import type { ScenarioOverrides } from '../conversion-types';
+import type { ScenarioOverrides, ConversionCostInputs } from '../conversion-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 
@@ -1135,7 +1135,11 @@ describe('golden fixtures (shared with the Python engine)', () => {
           qs: null,
         });
       } else {
-        expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs));
+        // R16b: this branch is reached only by a pre-v7 fixture (the filter above
+        // excludes v8-14, and no fixture here is v15/v16 either), which is the only
+        // shape `costPlanFromLegacyCosts` reads — the cast is needed because `tsc`
+        // sees the full `AnyCalculatorInputs` union on `fx.inputs.conversion_costs`.
+        expect(migrated.cost_plan).toEqual(costPlanFromLegacyCosts(fx.inputs.conversion_costs as ConversionCostInputs));
       }
 
       expect(after.metrics).toEqual(before.metrics);

@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FinancialAppraisal, LenderCase, LenderCaseEvent, LenderCaseStatus, Project } from '../../types';
-import type { CalculatorInputsV15 } from '../../lib/model';
+import type { CalculatorInputsV16 } from '../../lib/model';
 import {
   createLenderCase, getLenderCase, listLenderCaseEvents, listLenderCaseHistory,
   transitionLenderCase, ApiError, formatApiErrorDetail,
@@ -28,7 +28,7 @@ import { ALLOWED_TRANSITIONS, structurallyEqual } from '../../lib/report-provena
 interface Props {
   project: Project;
   appraisalRecord: FinancialAppraisal | null;
-  inputs: CalculatorInputsV15;
+  inputs: CalculatorInputsV16;
 }
 
 const TEXT = '#e2e8f0';

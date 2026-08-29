@@ -1,12 +1,12 @@
 import type {
-  CalculatorInputs, FinanceInputs, ProposedUnit, ProposedUnitV6, UnitMixInputsV6,
+  CalculatorInputs, ConversionCostInputs, FinanceInputs, ProposedUnit, ProposedUnitV6, UnitMixInputsV6,
   ScenarioOverrides,
 } from '../conversion-types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
-  CalculatorInputsV14, CalculatorInputsV15,
+  CalculatorInputsV14, CalculatorInputsV15, CalculatorInputsV16, ConversionCostInputsV16,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -1684,4 +1684,116 @@ export function migrateInputsToV15(
     };
   }
   return migrateV14toV15(migrateInputsToV14(snapshot, project));
+}
+
+// --- Release 16b (calc 2.17.0 -> 2.18.0): inputs v16 removes the nine dead
+// cost fields (spec §26.1, §26.7) ---------------------------------------
+
+/** The nine keys v16 removes from `conversion_costs`. Exported for the gate
+ *  and the entry-point round trip, which assert their absence on stored JSON. */
+export const LEGACY_COST_KEYS = [
+  'contingency_pct',
+  'prior_approval_fee_per_dwelling_pence', 'cil_s106_pence', 'architect_pence',
+  'structural_engineer_pence', 'mande_pence', 'planning_consultant_pence',
+  'building_control_pence', 'other_professional_fees_pence',
+] as const;
+
+/** A REBUILD from the five kept fields, not a delete of nine keys from a copy:
+ *  an unexpected tenth legacy key cannot ride through (spec §26.7). */
+export function v16ConversionCosts(
+  cc: ConversionCostInputs | ConversionCostInputsV16,
+): ConversionCostInputsV16 {
+  return {
+    construction_cost_per_sqm_pence: cc.construction_cost_per_sqm_pence,
+    total_construction_sqm: cc.total_construction_sqm,
+    fire_safety_pence: cc.fire_safety_pence,
+    sound_insulation_pence: cc.sound_insulation_pence,
+    part_l_compliance_pence: cc.part_l_compliance_pence,
+  };
+}
+
+/** `inputs_version === 16` AND `due_diligence` present AND `conversion_costs`
+ *  is an object WITHOUT `contingency_pct` — a document relabelled 16 that still
+ *  carries the key is a spoofed relabel and is refused (spec §26.7). */
+export function isV16(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV16 {
+  if (snapshot.inputs_version !== 16 || !('due_diligence' in snapshot)) return false;
+  const cc = snapshot.conversion_costs;
+  return cc != null && typeof cc === 'object' && !('contingency_pct' in cc);
+}
+
+export function migrateV15toV16(v15: CalculatorInputsV15): CalculatorInputsV16 {
+  if (isV16(v15 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV15toV16: input is already a v16 document');
+  }
+  return {
+    ...v15,
+    inputs_version: 16,
+    conversion_costs: v16ConversionCosts(v15.conversion_costs),
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V16: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+export function migrateInputsToV16(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV16 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V16.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV16: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V16.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 16 && !isV16(snapshot)) {
+    throw new Error(
+      'migrateInputsToV16: inputs_version is 16 but the document fails the v16 structural check '
+      + '(missing `due_diligence`, or `conversion_costs` still carries `contingency_pct`) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV16(snapshot)) {
+    const defaults = migrateV15toV16(migrateInputsToV15({}, project));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV16>;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 16,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      // Merged, then REBUILT: the merge fills a missing kept field from the
+      // defaults; the rebuild drops anything the saved block carried beyond
+      // the five (spec §26.7).
+      conversion_costs: v16ConversionCosts({ ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) }),
+      cost_plan: { ...defaults.cost_plan, ...(saved.cost_plan ?? {}) },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      monitoring: saved.monitoring ?? null,
+      unit_sales: saved.unit_sales ?? null,
+      due_diligence: saved.due_diligence ?? defaults.due_diligence,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV15toV16(migrateInputsToV15(snapshot, project));
 }

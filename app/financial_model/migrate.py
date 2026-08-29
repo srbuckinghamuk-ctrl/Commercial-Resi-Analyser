@@ -36,6 +36,7 @@ from .types import (
     CalculatorInputsV13,
     CalculatorInputsV14,
     CalculatorInputsV15,
+    CalculatorInputsV16,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -354,11 +355,13 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     # release earlier -- this is the EIGHTH consecutive release to need this
     # exact fix: R15b for v14, R15 for v13, R13b for v12, R13 for v10, R12
     # for v9, R11 for v8, R10 for v7.
+    # R16b Task 2: is_v16 belongs here for the same reason is_v15 did -- the NINTH consecutive release.
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
         or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot) or is_v11(snapshot)
         or is_v12(snapshot) or is_v13(snapshot) or is_v14(snapshot) or is_v15(snapshot)
+        or is_v16(snapshot)
     )
 
 
@@ -2217,3 +2220,93 @@ def migrate_inputs_to_v15(
             "due_diligence": snapshot.get("due_diligence"),
         })
     return migrate_v14_to_v15(migrate_inputs_to_v14(snapshot, project))
+
+
+# --- Release 16b (calc 2.17.0 -> 2.18.0): inputs v16 removes the nine dead
+# cost fields (spec Sec 26.1, Sec 26.7) --------------------------------------
+
+_V16_KEPT_COST_FIELDS = (
+    "construction_cost_per_sqm_pence", "total_construction_sqm",
+    "fire_safety_pence", "sound_insulation_pence", "part_l_compliance_pence",
+)
+_V16_REMOVED_COST_FIELDS = (
+    "contingency_pct",
+    "prior_approval_fee_per_dwelling_pence", "cil_s106_pence", "architect_pence",
+    "structural_engineer_pence", "mande_pence", "planning_consultant_pence",
+    "building_control_pence", "other_professional_fees_pence",
+)
+
+
+def _v16_conversion_costs(cc: dict[str, Any]) -> dict[str, Any]:
+    """A REBUILD from the five kept fields, not a delete of nine keys from a
+    copy: an unexpected tenth legacy key cannot ride through (Sec 26.7).
+    Port of v16ConversionCosts."""
+    return {k: cc[k] for k in _V16_KEPT_COST_FIELDS}
+
+
+def is_v16(snapshot: dict[str, Any]) -> bool:
+    """`inputs_version == 16` AND `due_diligence` present AND `conversion_costs`
+    is a dict WITHOUT `contingency_pct`. Port of isV16."""
+    if snapshot.get("inputs_version") != 16 or "due_diligence" not in snapshot:
+        return False
+    cc = snapshot.get("conversion_costs")
+    return isinstance(cc, dict) and "contingency_pct" not in cc
+
+
+def migrate_v15_to_v16(v15: dict[str, Any] | CalculatorInputsV15) -> CalculatorInputsV16:
+    """Port of migrateV15toV16. Stamps 16 and rebuilds `conversion_costs`
+    from the five kept fields. Refuses a document that is already v16."""
+    if isinstance(v15, CalculatorInputsV16):
+        raise ValueError("migrate_v15_to_v16: input is already a v16 document")
+    if isinstance(v15, BaseModel):
+        doc = v15.model_dump(mode="json")
+    else:
+        if is_v16(v15):
+            raise ValueError("migrate_v15_to_v16: input is already a v16 document")
+        doc = dict(v15)
+    doc["conversion_costs"] = _v16_conversion_costs(doc["conversion_costs"])
+    doc["inputs_version"] = 16
+    return CalculatorInputsV16.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V16 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+
+
+def migrate_inputs_to_v16(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV16:
+    """Normalises any stored snapshot (v1-v16) to v16. Port of
+    migrateInputsToV16, structurally identical to migrate_inputs_to_v15."""
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V16:
+        raise ValueError(
+            f"migrate_inputs_to_v16: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V16}, or absent for a v1 document)"
+        )
+    if version == 16 and not is_v16(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v16: inputs_version is 16 but the document fails "
+            "the v16 structural check (missing `due_diligence`, or `conversion_costs` "
+            "still carries `contingency_pct`) -- refusing to silently reinterpret it via the v1 fallback path"
+        )
+    if is_v16(snapshot):
+        defaults = migrate_v15_to_v16(migrate_inputs_to_v15({}, project)).model_dump(mode="json")
+        merged = _merge_saved_onto_defaults(defaults, snapshot)
+        return CalculatorInputsV16.model_validate({
+            **merged,
+            "inputs_version": 16,
+            # Merged (a missing kept field is default-filled), then REBUILT
+            # (anything beyond the five is dropped) -- Sec 26.7.
+            "conversion_costs": _v16_conversion_costs(merged["conversion_costs"]),
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": {**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})},
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+            "monitoring": snapshot.get("monitoring"),
+            "unit_sales": snapshot.get("unit_sales"),
+            "due_diligence": snapshot.get("due_diligence"),
+        })
+    return migrate_v15_to_v16(migrate_inputs_to_v15(snapshot, project))

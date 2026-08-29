@@ -110,7 +110,21 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  the golden cases must render), and `memo-fixtures.ts` still calls
  *  `migrateInputsToV11`/`migrateInputsToV12` for its deliberately
  *  version-pinned monitoring/unit-sales fixtures, so it would still fail
- *  "calls only the newest version" without the exemption. */
+ *  "calls only the newest version" without the exemption.
+ *
+ *  R16b Task 2: `lib/model/__fixtures__/cost-plan-in-time-docs.ts`,
+ *  `lib/model/__fixtures__/due-diligence-docs.ts` and
+ *  `lib/report-qa/memo-fixtures.ts` still need their exemptions, unchanged --
+ *  all three now call `migrateInputsToV16`, not `migrateInputsToV15`, for
+ *  their cost-plan-in-time/due-diligence fixtures, and `memo-fixtures.ts`
+ *  still calls `migrateInputsToV11`/`migrateInputsToV12` for its
+ *  deliberately version-pinned monitoring/unit-sales fixtures. Correction:
+ *  `due-diligence-docs.ts`'s own paragraph above (R15 Task 3) has read
+ *  "`migrateInputsToV13`" since R16 Task 4 quietly moved it to v14 then v15
+ *  without updating this comment -- its exemption is, and always was, the
+ *  same "newest entry point" reason `cost-plan-in-time-docs.ts` states, not
+ *  a genuine version pin like `investment-case-docs.ts`/`unit-sales-docs.ts`
+ *  above. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
@@ -171,7 +185,7 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(15);
+    expect(NEWEST).toBe(16);
     expect(VERSIONS).toContain(13);
   });
 

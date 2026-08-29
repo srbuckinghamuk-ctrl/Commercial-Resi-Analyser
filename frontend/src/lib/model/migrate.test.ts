@@ -15,12 +15,14 @@ import {
   migrateV12toV13, migrateInputsToV13,
   isV14, migrateV13toV14, migrateInputsToV14,
   isV15, migrateV14toV15, migrateInputsToV15,
+  isV16, migrateV15toV16, migrateInputsToV16, LEGACY_COST_KEYS,
 } from './migrate';
 import { ENTERED_CODES } from './due-diligence';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
-  CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14,
+  CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14, CalculatorInputsV15,
+  AnyCalculatorInputs,
   MonitoringCategory, MonitoringLineInputs,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
@@ -2104,5 +2106,59 @@ describe('v15 migration -- spec §25.7', () => {
       fixtureDocs.find(({ file }) => file === 'j-blended-refinance.json')!.doc.inputs as Record<string, unknown>,
     );
     expect(() => migrateV14toV15(v15 as unknown as CalculatorInputsV14)).toThrow(/already a v15 document/);
+  });
+});
+
+describe('v16 migration -- shape (spec §26.7)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+  const rawQ = JSON.parse(readFileSync(join(FIXTURE_DIR, 'q-detailed-cost-plan.json'), 'utf-8')).inputs as Record<string, unknown>;
+
+  it('removes exactly the nine keys on Q, and Q carried all nine (the one-arm proof)', () => {
+    const before = migrateInputsToV15(rawQ);
+    for (const k of LEGACY_COST_KEYS) expect(k in before.conversion_costs, k).toBe(true);
+    const after = migrateV15toV16(before);
+    expect(after.inputs_version).toBe(16);
+    for (const k of LEGACY_COST_KEYS) expect(k in after.conversion_costs, k).toBe(false);
+    expect(Object.keys(after.conversion_costs).sort()).toEqual([
+      'construction_cost_per_sqm_pence', 'fire_safety_pence', 'part_l_compliance_pence',
+      'sound_insulation_pence', 'total_construction_sqm',
+    ]);
+    // The five kept fields are byte-equal.
+    for (const k of Object.keys(after.conversion_costs) as (keyof typeof after.conversion_costs)[]) {
+      expect(after.conversion_costs[k]).toBe(before.conversion_costs[k]);
+    }
+    const { inputs_version: _a, conversion_costs: _b, ...restBefore } = before;
+    const { inputs_version: _c, conversion_costs: _d, ...restAfter } = after;
+    expect(restAfter).toEqual(restBefore);
+  });
+
+  it('isV16 refuses a spoofed relabel that still carries contingency_pct', () => {
+    const v16 = migrateInputsToV16(rawQ) as unknown as Record<string, unknown>;
+    expect(isV16(v16)).toBe(true);
+    expect(isV16({ ...v16, conversion_costs: { ...(v16.conversion_costs as object), contingency_pct: 10 } })).toBe(false);
+    expect(isV16({ ...v16, inputs_version: 15 })).toBe(false);
+    const { due_diligence: _dd, ...noDd } = v16;
+    expect(isV16(noDd)).toBe(false);
+  });
+
+  it('the isV16 merge branch rebuilds conversion_costs, so a stray legacy key does not ride through', () => {
+    const v16 = migrateInputsToV16(rawQ) as unknown as Record<string, unknown>;
+    const spiked = { ...v16, conversion_costs: { ...(v16.conversion_costs as object), architect_pence: 1 } };
+    expect(isV16(spiked)).toBe(true); // the structural check looks at contingency_pct only
+    expect('architect_pence' in migrateInputsToV16(spiked).conversion_costs).toBe(false);
+  });
+
+  it('refuses double migration and unrecognised versions', () => {
+    expect(() => migrateInputsToV16({ inputs_version: 17 })).toThrow(/unrecognised inputs_version 17/);
+    expect(() => migrateInputsToV16({ inputs_version: 16 })).toThrow(/fails the v16 structural check/);
+    const v16 = migrateInputsToV16(rawQ);
+    expect(() => migrateV15toV16(v16 as unknown as CalculatorInputsV15)).toThrow(/already a v16 document/);
+  });
+
+  it('a negative legacy fee on a raw v6 document is still reported, through the seeded fee line', () => {
+    const rawN = JSON.parse(readFileSync(join(FIXTURE_DIR, 'n-area-bridge.json'), 'utf-8')).inputs as Record<string, unknown>;
+    const spiked = { ...rawN, conversion_costs: { ...(rawN.conversion_costs as object), architect_pence: -1 } };
+    const issues = validateInputs(spiked as unknown as AnyCalculatorInputs);
+    expect(issues.some((i) => i.severity === 'error' && i.field.startsWith('cost_plan.fee_lines['))).toBe(true);
   });
 });

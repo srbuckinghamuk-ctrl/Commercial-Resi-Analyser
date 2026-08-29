@@ -4,13 +4,14 @@ import {
   defaultCalculatorInputsV5, defaultCalculatorInputsV6, defaultCalculatorInputsV7,
   defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
   defaultCalculatorInputsV11, defaultCalculatorInputsV12, defaultCalculatorInputsV13,
-  defaultCalculatorInputsV14, defaultCalculatorInputsV15,
+  defaultCalculatorInputsV14, defaultCalculatorInputsV15, defaultCalculatorInputsV16,
   captureSourceRecord,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
   migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13, migrateV13toV14, migrateV14toV15,
+  migrateV15toV16,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -635,5 +636,28 @@ describe('defaultCalculatorInputsV15 (R16 Task 4, spec §25.7)', () => {
 
   it('does not capture a source record when no project is given', () => {
     expect(defaultCalculatorInputsV15().due_diligence.source_record).toBeNull();
+  });
+});
+
+describe('defaultCalculatorInputsV16 (R16b Task 2, spec §26.1)', () => {
+  it('is exactly what migrateV15toV16 makes of the v15 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV16>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV16()))
+      .toEqual(stripIds(migrateV15toV16(defaultCalculatorInputsV15())));
+  });
+
+  it('starts with inputs_version 16 and exactly the five kept cost keys', () => {
+    const v16 = defaultCalculatorInputsV16();
+    expect(v16.inputs_version).toBe(16);
+    expect(Object.keys(v16.conversion_costs).sort()).toEqual([
+      'construction_cost_per_sqm_pence', 'fire_safety_pence', 'part_l_compliance_pence',
+      'sound_insulation_pence', 'total_construction_sqm',
+    ]);
+    // Non-vacuity: the v15 default DID carry the removed keys.
+    expect('contingency_pct' in defaultCalculatorInputsV15().conversion_costs).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import ScenariosPage from './ScenariosPage';
 import { ddDoc } from '../../lib/model/__fixtures__/due-diligence-docs';
 import { icDoc } from '../../lib/model/__fixtures__/investment-case-docs';
-import { migrateInputsToV15 } from '../../lib/model';
+import { migrateInputsToV16 } from '../../lib/model';
 import type { ScenarioOverrides } from '../../lib/conversion-types';
 
 // Exhaustiveness (R9's lesson): this Record fails to COMPILE the moment a field
@@ -43,7 +43,7 @@ describe('ScenariosPage (R16 spec §25)', () => {
   });
 
   it('a card whose levered document fails validation is "not measured", not appraised (spec §12.7)', () => {
-    const base = migrateInputsToV15(icDoc() as unknown as Record<string, unknown>);
+    const base = migrateInputsToV16(icDoc() as unknown as Record<string, unknown>);
     const doc = { ...base, scenarios: { ...base.scenarios, downside: { ...base.scenarios.downside, refi_ltv_adjustment_pct: 100 } } };
     render(<ScenariosPage inputs={doc} onChange={() => {}} />);
     expect(screen.getAllByText('not measured').length).toBeGreaterThan(0);

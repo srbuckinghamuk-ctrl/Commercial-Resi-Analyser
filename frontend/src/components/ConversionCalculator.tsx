@@ -1,9 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV15 } from '../lib/model';
+import { migrateInputsToV16 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV15 } from '../lib/model';
-import { defaultCalculatorInputsV15 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV16 } from '../lib/model';
+import { defaultCalculatorInputsV16 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
@@ -101,8 +101,8 @@ const STATUS_BANNER: Record<
 
 export default function ConversionCalculator({ project }: Props) {
   const [activePage, setActivePage] = useState<CalcPage>('acquisition');
-  const [inputs, setInputs] = useState<CalculatorInputsV15>(() =>
-    defaultCalculatorInputsV15(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV16>(() =>
+    defaultCalculatorInputsV16(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -112,7 +112,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV15(project));
+      setInputs(defaultCalculatorInputsV16(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -200,8 +200,10 @@ export default function ConversionCalculator({ project }: Props) {
             // that used to sit here: the migration's return type is the
             // state's type, so no cast is needed to bridge them at this call
             // site.
+            // R16b Task 6 (spec 26.7): the server boundary moved to v16
+            // (app/api/app.py) and this moved WITH IT, in the same commit.
             setInputs(
-              migrateInputsToV15(appraisal.inputs_snapshot as Record<string, unknown>, project),
+              migrateInputsToV16(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -230,21 +232,21 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV15 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV16 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
   // R15 Task 13 (R15b Task 6 moved the state on again, to v14 natively; R16
-  // Task 4 moves it to v15). The
+  // Task 4 moved it to v15; R16b Task 2 moves it to v16). The
   // widened `Omit<CalculatorInputsV15, 'inputs_version'>` R15 Task 9
-  // introduced is no longer needed -- `Partial<CalculatorInputsV15>` says the same thing the
+  // introduced is no longer needed -- `Partial<CalculatorInputsV16>` says the same thing the
   // simple way. `inputs_version` still cannot be restamped by a caller of
   // this callback in practice (every page only ever writes its own section),
   // but nothing here specially protects it any more; the cutover -- this
   // function -- was the one thing allowed to change the document's version,
   // and it already has.
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV15>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV16>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -306,9 +308,9 @@ export default function ConversionCalculator({ project }: Props) {
       // reconciles it. The migration runs outside the updater so the updater
       // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
-        let adopted: CalculatorInputsV15 | null = null;
+        let adopted: CalculatorInputsV16 | null = null;
         try {
-          adopted = migrateInputsToV15(result.inputs_snapshot, project);
+          adopted = migrateInputsToV16(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was
