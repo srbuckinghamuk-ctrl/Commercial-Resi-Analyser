@@ -10,8 +10,9 @@ import { runStressPack } from './model/stress-pack';
 import type { StressResult } from './model/stress-pack';
 import { SCENARIO_FIELD } from './safe-sensitivity';
 import {
-  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, formatStressSetting, flagShortCodes,
+  LEVER_LABEL, LEVER_SHORT, formatRangeLabel, formatStepLabel, stressSettingText, flagShortCodes,
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
+  STRESS_SIGN_CONVENTION,
 } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 import { repairGluedDescription, humanise, penceToPoundsExact, signedPenceToPounds } from './format';
@@ -446,6 +447,23 @@ export interface MemoSensitivityTables {
    * (generateInvestmentMemo's own local) because the two suites are measured
    * independently here, even though in practice both fail on the same
    * condition — the base document, not a levered one.
+   *
+   * Fix wave M7 — what a reader must not mistake for a live path. This field is
+   * **unreachable by construction from `generateInvestmentMemo`**, and always
+   * has been: that caller reaches the §25 block only inside `if (sens)`, and
+   * `sens` is null exactly when `sensitivityTables` threw. Inside
+   * `sensitivityTables` itself, `runSensitivity` runs BEFORE `runStressPack`
+   * and throws `InvalidBaseDocumentError` on the identical predicate (the base
+   * document's own `validation_errors`), so a base bad enough to set this field
+   * has already aborted the whole function. The memo prints
+   * `sensitivityFailureMessage` for that document instead, and never this.
+   *
+   * The field and its `catch` are kept regardless, because they are the
+   * documented contract of the exported `sensitivityTables()` — the only
+   * surface from which the two predicates diverging (a future §12.7 narrowing
+   * on one side and not the other) could ever be observed, and the place a
+   * caller other than the memo would meet `runStressPack`'s documented throw.
+   * Deleting them would trade a stated non-outcome for an unhandled one.
    */
   stressFailureMessage: string | null;
 }
@@ -502,33 +520,21 @@ export function sensitivityTables(
 
   const cellNotes = unmeasuredCellNotes(result.matrix);
 
-  // R16 spec §25. `risks_crystallise` (the pack's ninth entry) is the one stress
-  // whose settings are DERIVED from the document rather than fixed magnitudes
-  // (§25.3) — its `construction_cost` setting is a percentage computed to full
-  // precision (e.g. 9.807692307692), not one of the fixed-step levers'
-  // round numbers, so it is quoted to 2dp here rather than `formatStepLabel`'s
-  // usual 0dp for a percent lever (that would print "+10%", silently rounding
-  // away the derivation the parenthetical right after it then states in pence).
-  // The recorded-Σ/item-count parenthetical is only ever non-null for this one
-  // stress (`derivation` is null on every other entry, §25.3), and prints the
-  // real published fields — never a float interpolated raw (whole item counts
-  // and whole months only; the pence figure goes through `fmt`).
-  const settingCell = (s: StressResult): string => {
-    const parts = s.settings.map((setting) => (
-      s.derivation !== null && setting.lever === 'construction_cost'
-        ? formatStressSetting(setting, 2)
-        : formatStressSetting(setting)
-    ));
-    let text = parts.join(', ');
-    if (s.derivation !== null) {
-      const { cost_impact_pence, stated_item_count, programme_impact_max_months } = s.derivation;
-      const months = programme_impact_max_months ?? 0;
-      text += ` (${fmt(cost_impact_pence)} recorded; ${stated_item_count} `
-        + `item${stated_item_count === 1 ? '' : 's'}, largest ${months} month${months === 1 ? '' : 's'})`;
-    }
-    if (s.note !== null) text += ` ${s.note}`;
-    return text;
-  };
+  // R16 spec §25.5, fix wave FI1. The settings-and-derivation half of this cell
+  // is `stressSettingText` (sensitivity-format.ts) — the same function the
+  // Sensitivity page's own stress table calls, so the two surfaces cannot print
+  // different text for the same entry on the same document, which is exactly
+  // what they did before this fix. The 2dp quote for entry 9's derived
+  // `construction_cost` setting and the recorded-pounds parenthetical both live
+  // there now; §25.5 makes them normative for both surfaces, not just this one.
+  //
+  // What stays here is `s.note`: the memo appends it to the same string (an
+  // autoTable cell is one string), while the page renders it as its own
+  // italic `<div>` beneath the settings. That is a real presentation
+  // difference, not drift.
+  const settingCell = (s: StressResult): string => (
+    s.note !== null ? `${stressSettingText(s)} ${s.note}` : stressSettingText(s)
+  );
 
   let stressRows: string[][] = [];
   let stressFailureMessage: string | null = null;
@@ -545,6 +551,13 @@ export function sensitivityTables(
         : flagShortCodes(s.metrics.flags) || '-',
     ]);
   } catch (err) {
+    // Fix wave M7. `runStressPack`'s documented failure on an invalid base
+    // document (spec §12.7), caught so this exported function returns a value
+    // rather than throwing a second, differently-named error for the same
+    // cause. `runSensitivity` at the top of this function already throws on
+    // that identical predicate, so in practice this catch does not fire —
+    // and `generateInvestmentMemo` could not observe it if it did. See
+    // `stressFailureMessage`'s field comment for the full reasoning.
     if (!(err instanceof InvalidBaseDocumentError)) throw err;
     stressFailureMessage = err.message;
   }
@@ -2926,7 +2939,13 @@ export function generateInvestmentMemo(
     y = subHeading(y, 'Standard Lender Stresses (spec §25)');
     y = bodyText(
       y,
-      'Nine standard stresses, each a full re-run of the appraisal with the committed facility held fixed. An inapplicable stress is printed with the reason it cannot move this scheme rather than omitted (spec §25.4).',
+      // Fix wave FI2: the sign-convention clause. Entry 7's normative label
+      // ("Refinance LTV -10 pp") and its Setting cell ("Refinance LTV +10.0 pp")
+      // read as a contradiction without it. Shared verbatim with the
+      // Sensitivity page's own caption via `STRESS_SIGN_CONVENTION`.
+      'Nine standard stresses, each a full re-run of the appraisal with the committed facility held fixed. '
+      + 'An inapplicable stress is printed with the reason it cannot move this scheme rather than omitted (spec §25.4). '
+      + STRESS_SIGN_CONVENTION,
     );
     if (sens.stressRows.length > 0) {
       table({
@@ -2959,6 +2978,16 @@ export function generateInvestmentMemo(
       });
       y = lastAutoTableFinalY(doc) + 4;
     } else if (sens.stressFailureMessage !== null) {
+      // Fix wave M7: unreachable by construction FROM HERE, and kept anyway.
+      // This branch sits inside `if (sens)`, so it only runs when
+      // `sensitivityTables` returned — which means its `runSensitivity` call
+      // did NOT throw, on the identical predicate (`InvalidBaseDocumentError`
+      // over the base document's validation errors) that is the only way
+      // `runStressPack` sets `stressFailureMessage`. A base document bad enough
+      // to reach here has already left `sens` null and printed
+      // `sensitivityFailureMessage` above. This branch is the honest rendering
+      // of a value `sensitivityTables()`'s published type permits; it is not a
+      // path the memo exercises. See that field's comment.
       y = bodyText(y, sens.stressFailureMessage);
     }
     y += 2;

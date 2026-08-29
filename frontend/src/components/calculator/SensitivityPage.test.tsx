@@ -8,7 +8,7 @@ import type { CalculatorInputsV8, CalculatorInputsV9, ProgrammeNetwork } from '.
 import { unitSalesDoc } from '../../lib/model/__fixtures__/unit-sales-docs';
 import { ddDoc } from '../../lib/model/__fixtures__/due-diligence-docs';
 import { STRESS_PACK } from '../../lib/model/stress-pack';
-import { formatStressSetting } from '../../lib/sensitivity-format';
+import { formatStressSetting, STRESS_SIGN_CONVENTION } from '../../lib/sensitivity-format';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 const fixtureF = JSON.parse(
@@ -537,9 +537,27 @@ describe('SensitivityPage — Region 0: standard lender stresses', () => {
 
     const risksRow = rows.find((r) => /Recorded risks crystallise/.test(r.textContent ?? '')) as HTMLElement;
     const risksSettingCell = within(risksRow).getAllByRole('cell')[1];
-    // Both of this stress's settings (construction_cost, programme_slip) are
-    // 0dp levers -- neither should ever carry a ".0", index-bound or not.
+    // Fix wave FI1 (spec §25.5). Entry 9's `construction_cost` setting is
+    // DERIVED from the document, so it is quoted to 2dp on BOTH surfaces --
+    // this page and the memo -- through the shared `stressSettingText`. Until
+    // this fix the page passed no `decimals` and printed "+10%", silently
+    // rounding away the derivation the memo stated to the penny on the same
+    // document. `9.807692307692` is ddDoc's own figure (stress-pack.test.ts
+    // pins it), so "+9.81%" is `(9.807692307692).toFixed(2)`.
+    expect(risksSettingCell.textContent).toContain('+9.81%');
+    // The array-index regression this test was written for: `programme_slip`
+    // is a 0dp month lever and must never carry a ".0". Neither does "+9.81%",
+    // nor the "£25,500 recorded; 4 items, largest 3 months" parenthetical.
     expect(risksSettingCell.textContent).not.toMatch(/\.0/);
+  });
+
+  // Fix wave FI2. Entry 7's normative label reads "Refinance LTV -10 pp" while
+  // its Setting cell reads "Refinance LTV +10.0 pp" (the adverse-positive lever
+  // convention). The label does not change; the convention is stated once
+  // beneath the table, in the same words the memo's own method sentence uses.
+  it('states the adverse-positive sign convention beneath the stress table', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    expect(document.body.textContent).toContain(STRESS_SIGN_CONVENTION);
   });
 });
 

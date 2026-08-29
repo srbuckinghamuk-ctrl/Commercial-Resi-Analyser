@@ -10,8 +10,8 @@ import type {
 import { safeRunSensitivity, safeRunStressPack } from '../../lib/safe-sensitivity';
 import {
   LEVER_LABEL, LEVER_SHORT, selectableLevers, SENSITIVITY_METRICS,
-  formatStepLabel, formatRangeLabel, formatStressSetting, flagShortCodes, isMeasuredBar,
-  omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote,
+  formatStepLabel, formatRangeLabel, stressSettingText, flagShortCodes, isMeasuredBar,
+  omittedTornadoNotes, unmeasuredCellNotes, unmeasuredCellNote, STRESS_SIGN_CONVENTION,
 } from '../../lib/sensitivity-format';
 import type { SensitivityMetricKey } from '../../lib/sensitivity-format';
 import { penceToPounds, formatPct, signedPenceToPounds } from '../../lib/format';
@@ -294,7 +294,7 @@ export default function SensitivityPage({ inputs }: Props) {
       {pack.ok && (
         <table
           aria-label="Standard lender stresses"
-          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 28 }}
+          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 8 }}
         >
           <thead>
             <tr style={{ borderBottom: `1px solid ${BORDER}` }}>
@@ -317,7 +317,15 @@ export default function SensitivityPage({ inputs }: Props) {
                 <tr key={s.key} style={{ borderBottom: `1px solid ${PANEL}` }}>
                   <td style={{ padding: '8px 12px', color: TEXT }}>{s.label}</td>
                   <td style={{ padding: '8px 12px', color: TEXT }}>
-                    {s.settings.map((setting) => formatStressSetting(setting)).join(', ')}
+                    {/* R16 spec §25.5, fix wave FI1: the whole Setting-cell rule
+                        (per-lever precision, entry 9's 2dp derived cost
+                        percentage, the recorded-pounds parenthetical) is
+                        `stressSettingText` — the same function the investment
+                        memo's own stress table calls. Before this the page
+                        printed neither the 2dp quote nor the parenthetical, so
+                        the two surfaces disagreed on entry 9. `s.note` stays
+                        the page's own italic <div> below. */}
+                    {stressSettingText(s)}
                     {s.note != null && (
                       <div style={{ color: MUTED, fontSize: 12, fontStyle: 'italic', marginTop: 2 }}>
                         {s.note}
@@ -346,6 +354,19 @@ export default function SensitivityPage({ inputs }: Props) {
             })}
           </tbody>
         </table>
+      )}
+      {/* Fix wave FI2. Entry 7's label reads "Refinance LTV -10 pp" while its
+          Setting reads "Refinance LTV +10.0 pp", and a reader with only the
+          table in front of them has no way to tell that is a convention rather
+          than a contradiction. The label is normative (spec §25.2) and stays;
+          the convention it is quoted against is stated once, here, and in the
+          memo's own method sentence (export-investment-memo.ts §25 block) in
+          the same words. Every lever's Setting is signed so that POSITIVE is
+          the adverse direction, which for `refi_ltv` means a lower cap. */}
+      {pack.ok && (
+        <p style={{ color: MUTED, fontSize: 12, marginBottom: 28, maxWidth: 780 }}>
+          {STRESS_SIGN_CONVENTION}
+        </p>
       )}
     </>
   );

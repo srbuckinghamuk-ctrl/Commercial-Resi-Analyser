@@ -1,6 +1,8 @@
 import type { FlagCode } from './model';
 import type { MeasuredMetrics, SensitivityCell, SensitivityLever, TornadoBar } from './model/sensitivity';
 import { LEVER_ORDER } from './model/sensitivity';
+import type { StressResult } from './model/stress-pack';
+import { penceToPounds } from './format';
 
 /**
  * Presentation for the spec §12 sensitivity suite, shared by the investment
@@ -138,6 +140,85 @@ export function formatStressSetting(
   const text = signed(s.value, decimals);
   const unit = PERCENT_LEVERS.includes(s.lever) ? '%' : MONTH_LEVERS.includes(s.lever) ? ' months' : ' pp';
   return `${LEVER_LABEL[s.lever]} ${text}${unit}`;
+}
+
+/**
+ * The one sentence of sign convention both stress-pack tables print beneath
+ * themselves (fix wave FI2), shared so the memo and the Sensitivity page cannot
+ * state it differently.
+ *
+ * It exists because entry 7's normative label (`Refinance LTV -10 pp`, spec
+ * §25.2) and its Setting cell (`Refinance LTV +10.0 pp`) look like a
+ * contradiction to a reader holding only the table. They are not: the label
+ * names the commercial move in the direction a lender would describe it, while
+ * every Setting is quoted in the adverse-positive lever convention `§12.1` uses
+ * throughout — a positive magnitude is always the adverse direction, which for
+ * `refi_ltv` is a LOWER cap. The label is normative and is not changed; the
+ * convention is simply stated.
+ *
+ * ASCII only (a hyphen, not an em-dash): this string is drawn into a PDF by
+ * jsPDF as well as rendered in the browser.
+ */
+export const STRESS_SIGN_CONVENTION =
+  "Settings are quoted in each lever's own sign convention - a positive value is the adverse move.";
+
+/**
+ * The WHOLE Setting-cell rule for one stress-pack entry (R16 spec §25.5): every
+ * setting quoted in its own lever's label and unit, joined with ", ", followed by
+ * entry 9's derivation parenthetical where there is one.
+ *
+ * Shared by the investment memo's §10 stress table (export-investment-memo.ts)
+ * and the calculator's Sensitivity page Region 0 table (SensitivityPage.tsx).
+ * Sharing it is the point, and the reason it exists: fix wave FI1 found the two
+ * surfaces printing DIFFERENT text for the same entry on the same document —
+ * the page called `formatStressSetting` with no `decimals` and printed no
+ * parenthetical at all, while the memo passed `2` for the derived
+ * `construction_cost` setting and appended the recorded-pounds parenthetical.
+ * §25.5 makes the 2dp quote normative for BOTH surfaces, so the rule is owned
+ * here once rather than restated per caller.
+ *
+ * Two rules it encodes:
+ *
+ * 1. **2dp for entry 9's `construction_cost` setting.** `risks_crystallise` is
+ *    the one stress whose settings are DERIVED from the document rather than
+ *    fixed magnitudes (§25.3) — `derivation !== null` is exactly that condition
+ *    (`derivation` is null on every other entry). Its cost percentage is
+ *    computed to full precision (e.g. 9.807692307692), so `formatStepLabel`'s
+ *    usual 0dp for a percent lever would print "+10%", silently rounding away
+ *    the derivation the parenthetical right after it then states in pounds.
+ *
+ * 2. **The parenthetical states only what the document knows** (spec §1.5:
+ *    null means unknown, 0 means known zero). Fix wave M6: a document whose
+ *    assessed due-diligence items state no programme impact carries
+ *    `programme_impact_max_months = null`, and printing `?? 0` there read as
+ *    "largest 0 months" — a known zero asserted where the document says
+ *    nothing. That clause is now omitted entirely on a null. The parenthetical
+ *    as a whole is suppressed on an INAPPLICABLE entry 9 (§25.4): neither half
+ *    of the derivation applies there, every published figure in it is a zero or
+ *    a null that no item put there, and the entry already prints the engine's
+ *    own note saying which fact it lacks — a "(£0 recorded; 0 items)" beside
+ *    that note would be the same §1.5 mistake one level up.
+ *
+ * The caller keeps ownership of `stress.note`: the memo appends it to this
+ * string, the page renders it as its own `<div>` beneath the settings, and
+ * those two placements are genuinely different presentation rather than a
+ * drift worth collapsing.
+ */
+export function stressSettingText(stress: StressResult): string {
+  const text = stress.settings.map((setting) => (
+    stress.derivation !== null && setting.lever === 'construction_cost'
+      ? formatStressSetting(setting, 2)
+      : formatStressSetting(setting)
+  )).join(', ');
+  if (stress.derivation === null || !stress.applicable) return text;
+  // Whole item counts and whole months only — never a float interpolated raw;
+  // the pence figure goes through `penceToPounds` (the memo's own `fmt`).
+  const { cost_impact_pence, stated_item_count, programme_impact_max_months } = stress.derivation;
+  const items = `${stated_item_count} item${stated_item_count === 1 ? '' : 's'}`;
+  const largest = programme_impact_max_months === null
+    ? ''
+    : `, largest ${programme_impact_max_months} month${programme_impact_max_months === 1 ? '' : 's'}`;
+  return `${text} (${penceToPounds(cost_impact_pence)} recorded; ${items}${largest})`;
 }
 
 /** A tornado range with the unit stated once: "-10% to +10%", "-3 to +3 months". */

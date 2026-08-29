@@ -2,9 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   LEVER_LABEL, LEVER_SHORT, formatStepLabel, formatRangeLabel, flagShortCodes, unmeasuredCellNotes,
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNote, selectableLevers,
+  stressSettingText, STRESS_SIGN_CONVENTION,
 } from './sensitivity-format';
 import { LEVER_ORDER } from './model/sensitivity';
 import type { SensitivityCell, TornadoBar } from './model/sensitivity';
+import { NOTE_NO_COST_IMPACT } from './model/stress-pack';
+import type { StressDerivation, StressResult } from './model/stress-pack';
 
 describe('sensitivity-format', () => {
   // The short labels are load-bearing: they reproduce the memo's historical
@@ -300,5 +303,138 @@ describe('selectableLevers', () => {
     const levers = selectableLevers(false, false);
     expect(levers).not.toContain('phase_slip');
     expect(levers).not.toContain('sales_slip');
+  });
+});
+
+// Fix wave FI1/M6 (R16 spec §25.5). `stressSettingText` is the single owner of
+// the stress pack's Setting-cell rule, called by BOTH the investment memo's §10
+// table and the Sensitivity page's Region 0 table. Before the fix the page
+// called `formatStressSetting` with no `decimals` and printed no derivation
+// parenthetical, while the memo passed 2 and did -- so the two surfaces printed
+// different text for entry 9 on the same document. These pin the rule itself,
+// independently of either surface's rendering.
+describe('stressSettingText (spec §25.5)', () => {
+  /** A `StressResult` with only the fields this presentation function reads.
+   *  The metrics half is never touched here, so it is filled with the §12.7
+   *  unmeasured shape rather than a fabricated appraisal. */
+  const stress = (over: Partial<StressResult>): StressResult => ({
+    key: 'risks_crystallise',
+    label: 'Recorded risks crystallise',
+    settings: [],
+    derivation: null,
+    applicable: true,
+    note: null,
+    metrics: {
+      profit_pence: null,
+      profit_on_cost_pct: null,
+      profit_on_gdv_pct: null,
+      irr_annual_pct: null,
+      ltgdv_developer_pct: null,
+      peak_debt_pence: null,
+      flags: [],
+      validation_errors: [],
+    },
+    delta_profit_pence: null,
+    ...over,
+  });
+
+  const derivation = (over: Partial<StressDerivation> = {}): StressDerivation => ({
+    cost_impact_pence: 2_550_000,
+    base_build_pence: 26_000_000,
+    cost_pct: 9.807692307692,
+    programme_impact_months: 7,
+    programme_impact_max_months: 3,
+    stated_item_count: 4,
+    ...over,
+  });
+
+  it('quotes a fixed-magnitude entry at its own lever precision, with no parenthetical', () => {
+    const text = stressSettingText(stress({
+      key: 'opex_vacancy',
+      label: 'Opex +10%, vacancy +5 pp',
+      settings: [
+        { lever: 'operating_cost', value: 10, phase_id: null },
+        { lever: 'vacancy', value: 5, phase_id: null },
+      ],
+    }));
+    expect(text).toBe('Operating cost +10%, Vacancy +5.0 pp');
+  });
+
+  it("quotes entry 9's derived construction_cost setting to 2dp and appends the derivation", () => {
+    // Fixture Y's own derivation (stress-pack.test.ts pins these figures):
+    // `signed(9.807692307692, 0)` would print "+10%", rounding away the very
+    // quantity the parenthetical then states in pounds.
+    const text = stressSettingText(stress({
+      settings: [
+        { lever: 'construction_cost', value: 9.807692307692, phase_id: null },
+        { lever: 'programme_slip', value: 7, phase_id: null },
+      ],
+      derivation: derivation(),
+    }));
+    expect(text).toBe(
+      'Construction cost +9.81%, Programme slip +7 months (£25,500 recorded; 4 items, largest 3 months)',
+    );
+  });
+
+  // Fix wave M6. Spec §1.5: null means UNKNOWN, 0 means known zero. A document
+  // whose assessed due-diligence items state a cost impact but no programme
+  // impact carries `programme_impact_max_months = null`; `?? 0` printed
+  // "largest 0 months" there, asserting a known zero the document never stated.
+  it('omits the "largest N months" clause when no assessed item states a programme impact', () => {
+    const text = stressSettingText(stress({
+      settings: [
+        { lever: 'construction_cost', value: 13.461538461538, phase_id: null },
+        { lever: 'programme_slip', value: 0, phase_id: null },
+      ],
+      derivation: derivation({
+        cost_impact_pence: 3_500_000,
+        cost_pct: 13.461538461538,
+        programme_impact_months: 0,
+        programme_impact_max_months: null,
+        stated_item_count: 1,
+      }),
+    }));
+    expect(text).not.toContain('largest 0 months');
+    expect(text).not.toContain('largest');
+    expect(text).toBe('Construction cost +13.46%, Programme slip +0 months (£35,000 recorded; 1 item)');
+  });
+
+  // The whole parenthetical goes when neither half of the derivation applies
+  // (§25.4): every figure in it would then be a zero or a null no item put
+  // there, and the entry already prints the engine's own note saying so.
+  it('suppresses the derivation parenthetical entirely on an inapplicable entry 9', () => {
+    const text = stressSettingText(stress({
+      applicable: false,
+      settings: [
+        { lever: 'construction_cost', value: 0, phase_id: null },
+        { lever: 'programme_slip', value: 0, phase_id: null },
+      ],
+      derivation: derivation({
+        cost_impact_pence: 0,
+        cost_pct: null,
+        programme_impact_months: 0,
+        programme_impact_max_months: null,
+        stated_item_count: 0,
+      }),
+      note: NOTE_NO_COST_IMPACT,
+    }));
+    expect(text).toBe('Construction cost +0.00%, Programme slip +0 months');
+    expect(text).not.toContain('recorded');
+    // The note is the caller's to place (the memo appends it, the page renders
+    // it in its own <div>), so it is not part of this string either way.
+    expect(text).not.toContain(NOTE_NO_COST_IMPACT);
+  });
+});
+
+// Fix wave FI2. One sentence, shared verbatim by both stress-pack tables, so a
+// reader meeting entry 7's "Refinance LTV -10 pp" label beside its
+// "Refinance LTV +10.0 pp" Setting can tell a convention from a contradiction.
+describe('STRESS_SIGN_CONVENTION', () => {
+  it('is ASCII-only prose naming the adverse-positive convention', () => {
+    expect(STRESS_SIGN_CONVENTION).toBe(
+      "Settings are quoted in each lever's own sign convention - a positive value is the adverse move.",
+    );
+    // eslint-disable-next-line no-control-regex
+    expect(STRESS_SIGN_CONVENTION).toMatch(/^[\x00-\x7F]*$/);
   });
 });

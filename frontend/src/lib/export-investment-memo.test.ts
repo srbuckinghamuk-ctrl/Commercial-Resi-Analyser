@@ -21,7 +21,7 @@ import { documentText, documentProse, watermarkTexts } from './report-qa/report-
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity';
 import * as sensitivityModule from './model/sensitivity';
 import { InvalidBaseDocumentError } from './model/sensitivity';
-import { LEVER_LABEL } from './sensitivity-format';
+import { LEVER_LABEL, STRESS_SIGN_CONVENTION } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
 import {
   anchoredSlippedDoc, investmentCaseDoc, explicitRefinanceDoc, memoText,
@@ -1215,6 +1215,24 @@ describe('generateInvestmentMemo — standard lender stresses (spec §25)', () =
     expect(prose).toContain('Construction cost +9.81%');
     expect(prose).toContain('Programme slip +7 months');
     expect(prose).toContain('£25,500 recorded; 4 items, largest 3 months');
+  });
+
+  // Fix wave FI2. Entry 7's normative label ("Refinance LTV -10 pp", spec
+  // §25.2) sits one column left of its Setting cell ("Refinance LTV +10.0 pp"),
+  // and the two read as a contradiction to anyone who does not already know the
+  // adverse-positive lever convention. The label stays; the method sentence
+  // gains the convention, in the same words the Sensitivity page's own caption
+  // prints (`STRESS_SIGN_CONVENTION`, sensitivity-format.ts) so the two
+  // surfaces cannot state it differently.
+  it('states the adverse-positive sign convention in the method sentence, alongside both readings of entry 7', async () => {
+    const run = runAppraisal(dueDiligenceInputs());
+    const blob = generateInvestmentMemo(mockProject, run, mockEligibility);
+    const prose = documentProse(await inspectPdf(blob));
+
+    expect(prose).toContain(STRESS_SIGN_CONVENTION);
+    // Both halves of the apparent contradiction the sentence resolves.
+    expect(prose).toContain('Refinance LTV -10 pp');
+    expect(prose).toContain('Refinance LTV +10.0 pp');
   });
 });
 
