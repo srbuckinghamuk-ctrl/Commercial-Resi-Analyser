@@ -1,9 +1,12 @@
-import type { CalculatorInputsV16, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV17, AppraisalRun } from '../../lib/model';
 import type { AreaBridgeInputs } from '../../lib/model';
+import { areaUnitLabel, displayArea, entryAreaToSqm, formatAreaBoth } from '../../lib/area-units';
+import { useAreaUnit } from '../../lib/area-unit-context';
+import AreaUnitToggle from '../AreaUnitToggle';
 
 interface Props {
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   run: AppraisalRun;
 }
 
@@ -17,22 +20,30 @@ const AMBER = '#f59e0b';
 /** Same row shape as `ConversionCostsPage`'s `CostRow` — 260px label column,
  * `#0f172a` field background, `#1e3a5f` border. Renamed per the brief: every
  * field here is an entered line of `AreaBridgeInputs`, never a derived one. */
+/** R17 spec §27.2. `value` is the canonical m² figure and stays so: the
+ *  display unit converts it at render time and a typed ft² figure converts
+ *  ONCE on entry (`entryAreaToSqm`, 4 dp of m²). The other unit is printed
+ *  as secondary text. */
 function AreaRow({ id, label, value, onChangeValue }: {
   id: string;
   label: string;
   value: number;
   onChangeValue: (v: number) => void;
 }) {
+  const { unit } = useAreaUnit();
+  const shown = unit === 'metric' ? value : Math.round(displayArea(value, unit) * 1e4) / 1e4;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-      <label htmlFor={id} style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label}</label>
+      <label htmlFor={id} style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label} ({areaUnitLabel(unit)})</label>
       <input
         id={id}
         type="number"
-        value={value}
-        onChange={(e) => onChangeValue(Number(e.target.value))}
+        value={shown}
+        title={formatAreaBoth(value, unit)}
+        onChange={(e) => onChangeValue(entryAreaToSqm(Number(e.target.value), unit))}
         style={{ width: 140, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
       />
+      <span style={{ color: '#64748b', fontSize: 12 }}>{formatAreaBoth(value, unit)}</span>
     </div>
   );
 }
@@ -98,28 +109,31 @@ export default function AreasPage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>2. Areas</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <h3 style={{ color: '#e2e8f0', fontSize: 18, margin: 0 }}>2. Areas</h3>
+        <AreaUnitToggle compact />
+      </div>
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
         Existing and proposed
       </h4>
-      <AreaRow id="area-existing-gia" label="Existing GIA (m²)" value={areas.existing_gia_sqm} onChangeValue={(v) => updateAreas({ existing_gia_sqm: v })} />
-      <AreaRow id="area-demolished-gia" label="Demolished (m²)" value={areas.demolished_gia_sqm} onChangeValue={(v) => updateAreas({ demolished_gia_sqm: v })} />
-      <AreaRow id="area-extension-gia" label="Extension (m²)" value={areas.extension_gia_sqm} onChangeValue={(v) => updateAreas({ extension_gia_sqm: v })} />
+      <AreaRow id="area-existing-gia" label="Existing GIA" value={areas.existing_gia_sqm} onChangeValue={(v) => updateAreas({ existing_gia_sqm: v })} />
+      <AreaRow id="area-demolished-gia" label="Demolished" value={areas.demolished_gia_sqm} onChangeValue={(v) => updateAreas({ demolished_gia_sqm: v })} />
+      <AreaRow id="area-extension-gia" label="Extension" value={areas.extension_gia_sqm} onChangeValue={(v) => updateAreas({ extension_gia_sqm: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
         Not part of the residential works
       </h4>
-      <AreaRow id="area-retained-commercial" label="Retained commercial (m²)" value={areas.retained_commercial_gia_sqm} onChangeValue={(v) => updateAreas({ retained_commercial_gia_sqm: v })} />
-      <AreaRow id="area-untouched" label="Untouched (m²)" value={areas.untouched_gia_sqm} onChangeValue={(v) => updateAreas({ untouched_gia_sqm: v })} />
+      <AreaRow id="area-retained-commercial" label="Retained commercial" value={areas.retained_commercial_gia_sqm} onChangeValue={(v) => updateAreas({ retained_commercial_gia_sqm: v })} />
+      <AreaRow id="area-untouched" label="Untouched" value={areas.untouched_gia_sqm} onChangeValue={(v) => updateAreas({ untouched_gia_sqm: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
         Non-saleable internal
       </h4>
-      <AreaRow id="area-circulation" label="Circulation / common (m²)" value={areas.circulation_common_sqm} onChangeValue={(v) => updateAreas({ circulation_common_sqm: v })} />
-      <AreaRow id="area-plant" label="Plant / riser (m²)" value={areas.plant_riser_sqm} onChangeValue={(v) => updateAreas({ plant_riser_sqm: v })} />
-      <AreaRow id="area-store" label="Store / bin / cycle (m²)" value={areas.store_bin_cycle_sqm} onChangeValue={(v) => updateAreas({ store_bin_cycle_sqm: v })} />
-      <AreaRow id="area-amenity" label="Amenity (m²)" value={areas.amenity_sqm} onChangeValue={(v) => updateAreas({ amenity_sqm: v })} />
+      <AreaRow id="area-circulation" label="Circulation / common" value={areas.circulation_common_sqm} onChangeValue={(v) => updateAreas({ circulation_common_sqm: v })} />
+      <AreaRow id="area-plant" label="Plant / riser" value={areas.plant_riser_sqm} onChangeValue={(v) => updateAreas({ plant_riser_sqm: v })} />
+      <AreaRow id="area-store" label="Store / bin / cycle" value={areas.store_bin_cycle_sqm} onChangeValue={(v) => updateAreas({ store_bin_cycle_sqm: v })} />
+      <AreaRow id="area-amenity" label="Amenity" value={areas.amenity_sqm} onChangeValue={(v) => updateAreas({ amenity_sqm: v })} />
 
       <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
         External
@@ -127,7 +141,7 @@ export default function AreasPage({ inputs, onChange, run }: Props) {
       <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
         Recorded for the schedule; never part of the GIA reconciliation.
       </div>
-      <AreaRow id="area-external-amenity" label="External amenity (m²)" value={areas.external_amenity_sqm} onChangeValue={(v) => updateAreas({ external_amenity_sqm: v })} />
+      <AreaRow id="area-external-amenity" label="External amenity" value={areas.external_amenity_sqm} onChangeValue={(v) => updateAreas({ external_amenity_sqm: v })} />
 
       <h4 style={{ color: '#e2e8f0', fontSize: 15, marginTop: 28, marginBottom: 12 }}>Reconciliation</h4>
       <div style={{ padding: 16, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>

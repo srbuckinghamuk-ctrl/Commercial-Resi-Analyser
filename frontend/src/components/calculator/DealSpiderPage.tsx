@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, EligibilityAssessment } from '../../types';
 import type { DealSpiderInputs } from '../../lib/conversion-types';
-import type { CalculatorInputsV16 } from '../../lib/model';
+import type { CalculatorInputsV17 } from '../../lib/model';
 import {
   CLASS_MA_AXES,
   computeSpider,
@@ -14,8 +14,8 @@ import { getEligibility } from '../../lib/api';
 import { penceToPounds } from '../../lib/format';
 
 interface Props {
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   project: Project;
 }
 

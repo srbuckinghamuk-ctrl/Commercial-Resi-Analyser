@@ -355,14 +355,14 @@ export default function SensitivityPage({ inputs }: Props) {
           </tbody>
         </table>
       )}
-      {/* Fix wave FI2. Entry 7's label reads "Refinance LTV -10 pp" while its
-          Setting reads "Refinance LTV +10.0 pp", and a reader with only the
-          table in front of them has no way to tell that is a convention rather
-          than a contradiction. The label is normative (spec §25.2) and stays;
-          the convention it is quoted against is stated once, here, and in the
-          memo's own method sentence (export-investment-memo.ts §25 block) in
-          the same words. Every lever's Setting is signed so that POSITIVE is
-          the adverse direction, which for `refi_ltv` means a lower cap. */}
+      {/* Fix wave FI2 / R17 spec §13.2. Entry 7's label reads "Refinance LTV
+          -10 pp"; its Setting cell (from `stressSettingText`, the one owner)
+          now says in words "Maximum refinance LTV reduced by 10.0 percentage
+          points." rather than the adverse-positive "+10.0 pp" quote. The
+          label is normative (spec §25.2) and stays; the sign convention the
+          OTHER levers' Settings are quoted against is stated once, here, and
+          in the memo's own method sentence (export-investment-memo.ts §25
+          block) in the same words: POSITIVE is the adverse direction. */}
       {pack.ok && (
         <p style={{ color: MUTED, fontSize: 12, marginBottom: 28, maxWidth: 780 }}>
           {STRESS_SIGN_CONVENTION}

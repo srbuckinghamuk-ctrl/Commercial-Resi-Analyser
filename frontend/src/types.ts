@@ -228,6 +228,15 @@ export interface LenderCase {
   stale: boolean;
   created_at: string;
   updated_at: string;
+  /** R17 (spec §21.1 amended, design §10.2): the optimistic-concurrency
+   *  counter (starts at 1, +1 per write) and the user id behind each display
+   *  name. The server always sends `version`; it is optional here only so
+   *  pre-R17 fixtures still type-check. The ids are null on legacy rows. */
+  version?: number;
+  created_by_user_id?: string | null;
+  submitted_by_user_id?: string | null;
+  reviewer_user_id?: string | null;
+  decided_by_user_id?: string | null;
 }
 
 /** One row of the append-only change log (spec §21.5). Integer id — the
@@ -240,6 +249,129 @@ export interface LenderCaseEvent {
   actor: string;
   note: string | null;
   occurred_at: string;
+  /** R17 (spec §21.5 amended): who, why, and the state the write left
+   *  behind. Null on pre-R17 events. */
+  actor_user_id?: string | null;
+  idempotency_key?: string | null;
+  reason?: string | null;
+  input_snapshot_hash?: string | null;
+  outputs_hash?: string | null;
+  case_hash_after?: string | null;
+  case_version_after?: number | null;
+}
+
+/** R17 (design §10.2): the transition request. `actor` is gone -- the server
+ *  writes the authenticated user's name; `expected_version` and
+ *  `expected_case_hash` are the values of the last GET; `idempotency_key` is
+ *  minted per confirmation and reused on a retry of that same confirmation. */
+export interface LenderCaseTransitionBody {
+  to_status: LenderCaseStatus;
+  note?: string;
+  conditions?: string;
+  reason?: string;
+  expected_version: number;
+  expected_case_hash: string;
+  idempotency_key: string;
+}
+
+// --- Authentication (R17, design §10.1) ---
+
+export type UserRole = 'developer' | 'broker' | 'underwriter' | 'credit_approver' | 'administrator';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  display_name: string;
+  role: UserRole;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: AuthUser;
+}
+
+// --- Appraisal versions (R17, design §11) ---
+
+/** A pre-save or pre-resave copy of a stored appraisal. */
+export interface AppraisalVersion {
+  id: string;
+  appraisal_id?: string;
+  project_id: string;
+  reason: 'save' | 'governed_resave' | string;
+  inputs_snapshot?: Record<string, unknown>;
+  calc_version?: string | null;
+  inputs_version?: number | null;
+  outputs?: AppraisalOutputs | null;
+  input_hash?: string | null;
+  outputs_hash?: string | null;
+  audit_hash?: string | null;
+  superseded_at?: string | null;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+/** `POST /appraisals/{project_id}/resave`: the new row plus the id of the
+ *  version row that holds its previous state. */
+export type ResaveAppraisalResponse = FinancialAppraisal & { previous_version_id: string | null };
+
+/** `GET /appraisals/stale`: a stored row whose versions are behind the server's. */
+export interface StaleAppraisal {
+  id?: string;
+  project_id: string;
+  calc_version?: string | null;
+  inputs_version?: number | null;
+  [key: string]: unknown;
+}
+
+// --- Benchmark sets and index datasets (R17, spec §27.6) ---
+
+/** The header of an elemental benchmark set as `GET /benchmark-sets` lists it
+ *  (everything but `rates`). The document adds `rates` and, when the derived
+ *  read was asked for, `currentised`. Kept loose: the server owns the shape. */
+export interface BenchmarkSetHeader {
+  id: string;
+  provider_type: string;
+  dataset_version: string;
+  content_hash?: string | null;
+  imported_by?: string | null;
+  created_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface BenchmarkSetDocument extends BenchmarkSetHeader {
+  rates: Record<string, unknown>[];
+  currentised?: unknown;
+}
+
+export interface IndexDatasetHeader {
+  id: string;
+  publisher: string;
+  series_code: string;
+  series_name: string | null;
+  dataset_version: string;
+  source_url: string | null;
+  licence: string | null;
+  publication_date: string | null;
+  retrieved_at: string | null;
+  base_period: string | null;
+  source_file_sha256: string | null;
+  content_hash: string | null;
+  imported_by: string | null;
+  imported_by_user_id: string | null;
+  notes: string | null;
+  created_at: string | null;
+  observation_count: number;
+  first_period: string | null;
+  last_period: string | null;
+}
+
+export interface IndexObservation { period: string; value: number }
+
+export interface IndexDatasetDocument extends IndexDatasetHeader {
+  observations: IndexObservation[];
 }
 
 export interface FinancialAppraisalCreate {

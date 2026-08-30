@@ -3,8 +3,10 @@ import type { Project, EligibilityAssessment, LenderCase } from '../types';
 import { getEligibility, getAppraisal, getLenderCase, isNotFound } from '../lib/api';
 import { SnapshotMissingError } from '../lib/export-errors';
 import { computeSpider } from '../lib/deal-spider';
-import { runAppraisal, migrateInputsToV16 } from '../lib/model';
+import { runAppraisal, migrateInputsToV17 } from '../lib/model';
 import { buildProvenance } from '../lib/report-provenance';
+import { useAreaUnit } from '../lib/area-unit-context';
+import { sqftToSqm } from '../lib/area-units';
 
 interface ExportPageProps {
   projects: Project[];
@@ -39,7 +41,9 @@ function normaliseUnitAreas(raw: Record<string, unknown>): Record<string, unknow
           typeof u.floor_area_sqm === 'number'
             ? u.floor_area_sqm
             : typeof u.floor_area_sqft === 'number'
-              ? Math.round((u.floor_area_sqft as number) * 0.092903 * 100) / 100
+              // R17 (spec §27.2): the one conversion module; the 2 dp rounding
+              // this legacy-record normalisation always applied is kept.
+              ? Math.round(sqftToSqm(u.floor_area_sqft as number) * 100) / 100
               : 0,
       })),
     },
@@ -50,6 +54,9 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
   // The router-based shell has no notion of a globally "selected" project, so
   // the export page owns the choice itself.
   const [selectedId, setSelectedId] = useState<string>('');
+  // R17 (spec §27.2, design decision 2): the report unit is a presentation
+  // preference held outside the document, passed to the memo as an option.
+  const { unit: areaUnit } = useAreaUnit();
   const selectedProject = projects.find((p) => p.id === selectedId) ?? null;
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -123,12 +130,12 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
         // it to v11; R13b Task 15 (spec §22.9) moved it to v12; R15 Task 13
         // (spec §23.10) moved it to v13; R15b Task 6 (spec §24.8) moved it to
         // v14; R16 Task 4 (spec §25.1) moved it to v15; R16b Task 2
-        // (spec §26.1) moves it to
-        // v16, in the SAME commit as the server -- each vN entry point
+        // (spec §26.1) moved it to v16; R17 Task 3 (spec §27.7) moves it to
+        // v17, in the SAME commit as the server -- each vN entry point
         // throws on a v(N+1) document (spec §3.5's guard against the
         // v1-fallback corruption path), so this must track the server
         // boundary exactly or every export throws.
-        spider = computeSpider(migrateInputsToV16(normaliseUnitAreas(raw), selectedProject), eligibility);
+        spider = computeSpider(migrateInputsToV17(normaliseUnitAreas(raw), selectedProject), eligibility);
       }
 
       const blob = generateAppraisalPdf(selectedProject, appraisal, spider);
@@ -169,14 +176,15 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       // moved this to v7; R11 Task 10 moved it to v8; R12 Task 18b moved it to
       // v9; R13 Task 18 moved it to v10; R14 Task 14 moved it to v11; R13b
       // Task 15 moved it to v12; R15 Task 13 moved it to v13; R15b Task 6
-      // moved it to v14; R16 Task 4 moved it to v15; R16b Task 2 moves it to
-      // v16, matching the server boundary, which moves in the same commit.
+      // moved it to v14; R16 Task 4 moved it to v15; R16b Task 2 moved it to
+      // v16; R17 Task 3 moves it to v17, matching the server boundary, which
+      // moves in the same commit.
       // R12 Task 18b was also where
       // a stored v8 explicit
       // programme first reached the memo's programme section (spec §18.10):
       // the migration turns it into a predecessor-free network on load,
       // which derives the identical windows.
-      const run = runAppraisal(migrateInputsToV16(normaliseUnitAreas(raw), selectedProject));
+      const run = runAppraisal(migrateInputsToV17(normaliseUnitAreas(raw), selectedProject));
 
       let eligibility: EligibilityAssessment | null = null;
       try {
@@ -201,7 +209,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
       // the report as a recomputation when they differ, rather than letting a
       // stored hash sit beside figures it does not describe.
       const provenance = buildProvenance(run, appraisal, { lenderCase });
-      const blob = generateInvestmentMemo(selectedProject, run, eligibility, provenance);
+      const blob = generateInvestmentMemo(selectedProject, run, eligibility, provenance, { areaUnit });
       const safeName = selectedProject.address_postcode || selectedProject.id.slice(0, 8);
       downloadBlob(blob, `investment-memo-${safeName}.pdf`);
     } catch (err) {
@@ -225,7 +233,7 @@ export default function ExportPage({ projects, projectsLoading, backendOffline }
     } finally {
       setLoading(null);
     }
-  }, [selectedProject]);
+  }, [selectedProject, areaUnit]);
 
   const handleExcel = useCallback(async () => {
     if (projects.length === 0) return;

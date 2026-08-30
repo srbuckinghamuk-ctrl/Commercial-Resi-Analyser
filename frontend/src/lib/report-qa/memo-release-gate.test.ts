@@ -19,8 +19,13 @@ import {
   bridgeAndAncillaryInputs, bridgeAncillaryScottishUnconfirmedInputs,
   detailedCostPlanInputs, investmentCaseInputs, monitoringOnSiteInputs,
   unitSalesLedgerInputs, dueDiligenceInputs, dueDiligenceFinalInputs,
-  costPlanInTimeInputs, costPlanInTimeNoAllowanceInputs,
+  costPlanInTimeInputs, costPlanInTimeNoAllowanceInputs, benchmarkInputs,
 } from './memo-fixtures';
+// R17 (spec §12). The flipped-provider copies are built over the shared AB
+// loader's `docABWith`; the memo-fixtures route above stays independent.
+import { docABWith } from '../model/__fixtures__/elemental-benchmark-docs';
+import { BENCHMARK_LIMITATION_SENTENCE, PROVIDER_LABEL } from '../model/elemental-benchmark';
+import { SQFT_PER_SQM } from '../area-units';
 import { humanise } from '../format';
 
 /**
@@ -127,6 +132,11 @@ const ROUTES: Array<[string, () => AnyCalculatorInputs]> = [
   // arm of both the cost-section disclosure sentence and the §13.4 ending.
   ['cost plan in time (Z)', costPlanInTimeInputs],
   ['cost plan in time, no allowance', costPlanInTimeNoAllowanceInputs],
+  // R17 (spec §12, §27.8). Fixture AB: the first route carrying a benchmark
+  // block, so §12C — a ten-column comparison table, a currentisation
+  // paragraph, warning lines and a source table — prints for the first time
+  // under the page-bounds, sparse-page, orphan-heading and footer gates.
+  ['elemental benchmark (AB)', benchmarkInputs],
 ];
 
 describe('investment memorandum release gate', () => {
@@ -577,7 +587,9 @@ describe('investment memorandum release gate', () => {
     expect(run.metrics.equity_multiple).toBeNull();
 
     const text = documentText(info);
-    expect(text).toContain('Return on Equity (unrealised)');
+    // R17 (spec §13.1): the same words every UI page prints.
+    expect(text).toContain('Unrealised Return on Equity');
+    expect(text).not.toContain('Return on Equity (unrealised)');
     expect(documentProse(info)).toContain('not available — no sale or refinance modelled within the term');
     // The figure that confused the audit's reviewer must not appear at all.
     expect(text).not.toContain('0.00x');
@@ -590,7 +602,7 @@ describe('investment memorandum release gate', () => {
 
     const text = documentText(info);
     expect(text).toContain(`${run.metrics.equity_multiple!.toFixed(2)}x`);
-    expect(text).not.toContain('Return on Equity (unrealised)');
+    expect(text).not.toContain('Unrealised Return on Equity');
   });
 
   it('distinguishes a partial retention from nothing realised at all', async () => {
@@ -1157,5 +1169,98 @@ describe('R16 Task 9 — the standard lender stresses and the scenario/DD fixes 
     const prose = documentProse(info);
     expect(prose).toContain('RIBA Stage 3 / Issued');
     expect(prose).not.toContain('riba_3 / issued');
+  });
+});
+
+// R17 (spec §12). Content gates for §12C — the heading words are the engine's
+// provider label, "BCIS" never appears as a claim the application makes, the
+// limitation sentence is verbatim, and the provenance panel names the set.
+describe('elemental benchmark section (R17, spec §12)', () => {
+  // Table cells wrap, and documentText joins drawn items with newlines: a
+  // label and its value are separate items, so assertions run over the
+  // whitespace-flattened text.
+  const flat = (i: PdfDocumentInfo): string => documentText(i).replace(/\s+/g, ' ');
+  const FORBIDDEN = ['BCIS cost plan', 'BCIS verified', 'BCIS valuation'];
+  const NOT_VERIFIED = 'The application has not independently verified the user\'s licence or the underlying BCIS data.';
+
+  it('prints §12C under the User/QS label with the limitation sentence and the provenance rows', async () => {
+    const { info, run } = await report(benchmarkInputs());
+    const eb = run.metrics.elemental_benchmark!;
+    expect(eb).not.toBeNull();
+    const text = flat(info);
+    const prose = documentProse(info);
+    expect(text).toContain(`12C. Elemental Cost Benchmark — ${PROVIDER_LABEL.user_qs}`);
+    expect(prose).toContain(BENCHMARK_LIMITATION_SENTENCE);
+    expect(text).toContain('Report area unit m²');
+    expect(text).toContain(`Benchmark dataset ${eb.dataset_version} (${eb.content_hash})`);
+    expect(text).toContain(`Index dataset ${eb.index_dataset_version ?? 'none'}`);
+    for (const banned of FORBIDDEN) expect(text).not.toContain(banned);
+    expect(text).not.toContain(NOT_VERIFIED);
+    expect(prose).toContain('This PDF is not tagged to PDF/UA; the generator library exposes no structure tree.');
+  });
+
+  it('never prints §12C or the benchmark provenance rows on a route without a benchmark', async () => {
+    const { info, run } = await report(costPlanInTimeInputs());
+    expect(run.metrics.elemental_benchmark).toBeNull();
+    const text = flat(info);
+    expect(text).not.toContain('12C. Elemental Cost Benchmark');
+    expect(text).not.toContain('Benchmark dataset');
+    expect(text).toContain('Report area unit m²');
+  });
+
+  it('qualifies a user-supplied BCIS licensed set as unverified, and never as a BCIS cost plan', async () => {
+    const inputs = docABWith((b) => {
+      // Spec §27.5 rule 10: what the licensed tier owes.
+      b.set.provider_type = 'bcis_licensed';
+      b.set.provider_name = 'BCIS (user licence)';
+      b.set.source_title = 'BCIS elemental export (user-supplied)';
+      b.set.licence_or_permission = 'User licence ref TEST-0001';
+      b.set.source_publication_date = b.set.source_publication_date ?? '2025-06-15';
+      b.set.location_factor = b.set.location_factor ?? 95;
+      b.set.base_index_name = b.set.base_index_name ?? 'TEST index';
+      b.set.base_index_value = b.set.base_index_value ?? 120;
+    });
+    const { info, run } = await report(inputs);
+    expect(run.metrics.elemental_benchmark!.provider_type).toBe('bcis_licensed');
+    const text = flat(info);
+    expect(text).toContain(`12C. Elemental Cost Benchmark — ${PROVIDER_LABEL.bcis_licensed}`);
+    expect(text).toContain('User-supplied BCIS licensed benchmark');
+    expect(documentProse(info)).toContain(NOT_VERIFIED);
+    for (const banned of FORBIDDEN) expect(text).not.toContain(banned);
+    expect(overflowingItems(info)).toEqual([]);
+  });
+
+  it('labels a public benchmark as such with none of the forbidden strings', async () => {
+    const inputs = docABWith((b) => {
+      // Spec §27.5 rule 11: what the public tier owes.
+      b.set.provider_type = 'public_benchmark';
+      b.set.provider_name = 'Test public publisher';
+      b.set.source_title = 'Public elemental rates (test)';
+      b.set.source_url = 'https://example.test/rates';
+      b.set.licence_or_permission = 'Open Government Licence v3.0';
+      b.set.source_publication_date = b.set.source_publication_date ?? '2025-06-15';
+      b.set.retrieved_at = '2026-06-01';
+    });
+    const { info, run } = await report(inputs);
+    expect(run.metrics.elemental_benchmark!.provider_type).toBe('public_benchmark');
+    const text = flat(info);
+    expect(text).toContain(`12C. Elemental Cost Benchmark — ${PROVIDER_LABEL.public_benchmark}`);
+    expect(text).toContain('Public benchmark');
+    expect(text).not.toContain('BCIS');
+    for (const banned of FORBIDDEN) expect(text).not.toContain(banned);
+    expect(overflowingItems(info)).toEqual([]);
+  });
+
+  it('prints the imperial report unit, the ft² rates and the conversion clause when asked', async () => {
+    const run = runAppraisal(benchmarkInputs());
+    const blob = generateInvestmentMemo(qaProject, run, qaEligibility, provenanceFor(run), { areaUnit: 'imperial' });
+    const info = await inspectPdf(blob);
+    const text = flat(info);
+    expect(text).toContain(`Report area unit ft² (1 m² = ${SQFT_PER_SQM} ft²)`);
+    expect(text).toContain('ft²');
+    expect(text).toContain('£/ft²');
+    expect(overflowingItems(info)).toEqual([]);
+    expect(sparsePages(info)).toEqual([]);
+    expect(orphanHeadings(info)).toEqual([]);
   });
 });

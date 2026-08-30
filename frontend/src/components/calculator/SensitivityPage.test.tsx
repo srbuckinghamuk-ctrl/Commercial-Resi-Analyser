@@ -551,13 +551,30 @@ describe('SensitivityPage — Region 0: standard lender stresses', () => {
     expect(risksSettingCell.textContent).not.toMatch(/\.0/);
   });
 
-  // Fix wave FI2. Entry 7's normative label reads "Refinance LTV -10 pp" while
-  // its Setting cell reads "Refinance LTV +10.0 pp" (the adverse-positive lever
-  // convention). The label does not change; the convention is stated once
-  // beneath the table, in the same words the memo's own method sentence uses.
+  // Fix wave FI2. Entry 7's normative label reads "Refinance LTV -10 pp"; the
+  // other levers' Settings are quoted adverse-positive. The label does not
+  // change; the convention is stated once beneath the table, in the same
+  // words the memo's own method sentence uses.
   it('states the adverse-positive sign convention beneath the stress table', () => {
     render(<SensitivityPage inputs={ddDoc()} />);
     expect(document.body.textContent).toContain(STRESS_SIGN_CONVENTION);
+  });
+
+  // R17 spec §13.2. Entry 7's Setting cell says what the lever does in words,
+  // through the shared `stressSettingText`; the "+10.0 pp" quote that read as
+  // a contradiction of the "-10 pp" label is gone from the page.
+  it('prints the refi_ltv Setting as the reduced-by sentence, never "Refinance LTV +10.0 pp"', () => {
+    render(<SensitivityPage inputs={ddDoc()} />);
+    const table = screen.getByRole('table', { name: /standard lender stresses/i });
+    const rows = within(table).getAllByRole('row');
+    const refiRow = rows.find((r) => /Refinance LTV -10 pp/.test(r.textContent ?? '')) as HTMLElement;
+    expect(refiRow).toBeDefined();
+    const settingCell = within(refiRow).getAllByRole('cell')[1];
+    expect(settingCell.childNodes[0].textContent).toBe(
+      'Maximum refinance LTV reduced by 10.0 percentage points.',
+    );
+    expect(document.body.textContent).toContain('Refinance LTV -10 pp');
+    expect(document.body.textContent).not.toContain('Refinance LTV +10.0 pp');
   });
 });
 

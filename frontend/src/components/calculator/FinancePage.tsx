@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type {
-  CalculatorInputsV16, AppraisalRun, FacilityTerms, EquitySource,
+  CalculatorInputsV17, AppraisalRun, FacilityTerms, EquitySource,
   LenderValuation, MonitoringInputs, FundingSource, InterestType, ArrangementFeeBasis,
   ExitFeeBasis, EquityDrawRule, EquityClassification, EvidenceStatus,
 } from '../../lib/model';
@@ -12,8 +12,8 @@ import MonitoringEditor from './MonitoringEditor';
 import { PenceRow, NumRow } from './form-rows';
 
 interface Props {
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   run: AppraisalRun;
 }
 

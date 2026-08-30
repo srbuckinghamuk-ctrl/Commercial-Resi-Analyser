@@ -16,10 +16,46 @@ import type {
   EligibilityRunResponse,
   LenderCase,
   LenderCaseEvent,
-  LenderCaseStatus,
+  LenderCaseTransitionBody,
+  AuthUser,
+  LoginResponse,
+  AppraisalVersion,
+  ResaveAppraisalResponse,
+  StaleAppraisal,
+  BenchmarkSetHeader,
+  BenchmarkSetDocument,
+  IndexDatasetHeader,
+  IndexDatasetDocument,
 } from '../types';
 
-const HEADERS = { 'Content-Type': 'application/json' };
+// --- Bearer token (R17, design §10.6) ---
+//
+// A module-level store rather than React state so that `request()` -- and
+// every caller of it -- sends `Authorization: Bearer …` on every call without
+// threading the token through each function. AuthProvider (lib/auth.tsx) is
+// the only writer; it sets the token on login/restore and clears it on logout.
+
+let authToken: string | null = null;
+
+export function setAuthToken(token: string | null): void {
+  authToken = token && token.length > 0 ? token : null;
+}
+
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
+/** The Authorization header alone (for multipart requests, whose
+ *  Content-Type the browser must set with its boundary). */
+function authHeaders(): Record<string, string> {
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+/** JSON headers plus the bearer token when one is set. A function, not a
+ *  constant: the token changes over the page's life. */
+function headers(): Record<string, string> {
+  return { 'Content-Type': 'application/json', ...authHeaders() };
+}
 
 /**
  * Thrown for any non-2xx response. `detail` carries the parsed body's
@@ -68,7 +104,13 @@ export function formatApiErrorDetail(detail: unknown): string[] {
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options);
+  // The bearer token rides on every request, whatever headers the caller
+  // supplied; a caller's explicit Authorization (none today) would win.
+  const init: RequestInit = {
+    ...options,
+    headers: { ...authHeaders(), ...((options?.headers as Record<string, string> | undefined) ?? {}) },
+  };
+  const response = await fetch(url, init);
   if (!response.ok) {
     const text = await response.text();
     let detail: unknown;
@@ -99,29 +141,29 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 export async function createProject(data: ProjectCreate): Promise<Project> {
   return request<Project>('/api/v1/projects', {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
 
 export async function listProjects(): Promise<Project[]> {
-  return request<Project[]>('/api/v1/projects', { headers: HEADERS });
+  return request<Project[]>('/api/v1/projects', { headers: headers() });
 }
 
 export async function getProject(id: string): Promise<Project> {
-  return request<Project>(`/api/v1/projects/${id}`, { headers: HEADERS });
+  return request<Project>(`/api/v1/projects/${id}`, { headers: headers() });
 }
 
 export async function updateProject(id: string, data: ProjectUpdate): Promise<Project> {
   return request<Project>(`/api/v1/projects/${id}`, {
     method: 'PUT',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  const response = await fetch(`/api/v1/projects/${id}`, { method: 'DELETE', headers: HEADERS });
+  const response = await fetch(`/api/v1/projects/${id}`, { method: 'DELETE', headers: headers() });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`HTTP ${response.status}: ${text}`);
@@ -135,14 +177,14 @@ export async function changeStage(
 ): Promise<Project> {
   return request<Project>(`/api/v1/projects/${id}/stage`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify({ to_stage: toStage, notes }),
   });
 }
 
 export async function listTransitions(projectId: string): Promise<StageTransition[]> {
   return request<StageTransition[]>(`/api/v1/projects/${projectId}/transitions`, {
-    headers: HEADERS,
+    headers: headers(),
   });
 }
 
@@ -154,14 +196,14 @@ export async function createEligibility(
 ): Promise<EligibilityAssessment> {
   return request<EligibilityAssessment>(`/api/v1/eligibility/${projectId}`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
 
 export async function getEligibility(projectId: string): Promise<EligibilityAssessment> {
   return request<EligibilityAssessment>(`/api/v1/eligibility/${projectId}`, {
-    headers: HEADERS,
+    headers: headers(),
   });
 }
 
@@ -171,7 +213,7 @@ export async function updateEligibility(
 ): Promise<EligibilityAssessment> {
   return request<EligibilityAssessment>(`/api/v1/eligibility/${projectId}`, {
     method: 'PUT',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
@@ -181,14 +223,14 @@ export async function updateEligibility(
 export async function createAppraisal(data: FinancialAppraisalCreate): Promise<FinancialAppraisal> {
   return request<FinancialAppraisal>('/api/v1/appraisals', {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
 
 export async function getAppraisal(projectId: string): Promise<FinancialAppraisal> {
   return request<FinancialAppraisal>(`/api/v1/appraisals/${projectId}`, {
-    headers: HEADERS,
+    headers: headers(),
   });
 }
 
@@ -198,7 +240,7 @@ export async function updateAppraisal(
 ): Promise<FinancialAppraisal> {
   return request<FinancialAppraisal>(`/api/v1/appraisals/${projectId}`, {
     method: 'PUT',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
@@ -222,7 +264,7 @@ export async function saveAppraisal(
 export async function scrapeUrl(url: string): Promise<ApiResponse> {
   return request<ApiResponse>('/api/v1/scrape-url', {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify({ url }),
   });
 }
@@ -232,14 +274,14 @@ export async function scrapeUrl(url: string): Promise<ApiResponse> {
 export async function lookupPostcode(postcode: string): Promise<PostcodeLookup> {
   return request<PostcodeLookup>(
     `/api/v1/lookup/postcode/${encodeURIComponent(postcode)}`,
-    { headers: HEADERS },
+    { headers: headers() },
   );
 }
 
 export async function lookupFlood(postcode: string): Promise<FloodRisk> {
   return request<FloodRisk>(
     `/api/v1/lookup/flood/${encodeURIComponent(postcode)}`,
-    { headers: HEADERS },
+    { headers: headers() },
   );
 }
 
@@ -247,14 +289,14 @@ export async function lookupEpc(postcode: string, address?: string): Promise<Epc
   const params = address ? `?address=${encodeURIComponent(address)}` : '';
   return request<EpcData>(
     `/api/v1/lookup/epc/${encodeURIComponent(postcode)}${params}`,
-    { headers: HEADERS },
+    { headers: headers() },
   );
 }
 
 export async function lookupArticle4(lpaCode: string): Promise<Article4Data> {
   return request<Article4Data>(
     `/api/v1/lookup/article4/${encodeURIComponent(lpaCode)}`,
-    { headers: HEADERS },
+    { headers: headers() },
   );
 }
 
@@ -266,7 +308,7 @@ export async function runEligibility(
 ): Promise<EligibilityRunResponse> {
   return request<EligibilityRunResponse>(`/api/v1/eligibility/${projectId}/run`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify({ manual_overrides: manualOverrides }),
   });
 }
@@ -274,35 +316,161 @@ export async function runEligibility(
 // --- Lender Cases (R14b, spec §21) ---
 
 export async function getLenderCase(projectId: string): Promise<LenderCase | null> {
-  return request<LenderCase | null>(`/api/v1/lender-cases/${projectId}`, { headers: HEADERS });
+  return request<LenderCase | null>(`/api/v1/lender-cases/${projectId}`, { headers: headers() });
 }
 
-export async function createLenderCase(
-  projectId: string,
-  createdBy: string,
-): Promise<LenderCase> {
+/** R17 (design §10.2): `{project_id}` only -- the actor is the bearer
+ *  token's user. A `created_by` would be a 422. */
+export async function createLenderCase(projectId: string): Promise<LenderCase> {
   return request<LenderCase>('/api/v1/lender-cases', {
     method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify({ project_id: projectId, created_by: createdBy }),
+    headers: headers(),
+    body: JSON.stringify({ project_id: projectId }),
   });
 }
 
+/** R17 (design §10.2/10.4): the body carries the concurrency comparands and
+ *  the per-confirmation idempotency key; no `actor`. Undefined optional
+ *  fields are dropped by JSON.stringify, so `note`/`conditions`/`reason` are
+ *  only sent when given. */
 export async function transitionLenderCase(
   projectId: string,
-  data: { to_status: LenderCaseStatus; actor: string; note?: string; conditions?: string },
+  data: LenderCaseTransitionBody,
 ): Promise<LenderCase> {
   return request<LenderCase>(`/api/v1/lender-cases/${projectId}/transition`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: headers(),
     body: JSON.stringify(data),
   });
 }
 
 export async function listLenderCaseHistory(projectId: string): Promise<LenderCase[]> {
-  return request<LenderCase[]>(`/api/v1/lender-cases/${projectId}/history`, { headers: HEADERS });
+  return request<LenderCase[]>(`/api/v1/lender-cases/${projectId}/history`, { headers: headers() });
 }
 
 export async function listLenderCaseEvents(projectId: string): Promise<LenderCaseEvent[]> {
-  return request<LenderCaseEvent[]>(`/api/v1/lender-cases/${projectId}/events`, { headers: HEADERS });
+  return request<LenderCaseEvent[]>(`/api/v1/lender-cases/${projectId}/events`, { headers: headers() });
+}
+
+// --- Authentication (R17, design §10.1) ---
+
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  return request<LoginResponse>('/api/v1/auth/login', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+/** The bearer token's user; 401 (ApiError) when there is no valid token. */
+export async function me(): Promise<AuthUser> {
+  return request<AuthUser>('/api/v1/auth/me', { headers: headers() });
+}
+
+/** 204 -- tokens are stateless; the client drops its copy (design §10.1). */
+export async function logout(): Promise<void> {
+  return request<void>('/api/v1/auth/logout', { method: 'POST', headers: headers() });
+}
+
+// --- Appraisal versions and the governed resave (R17, design §11) ---
+
+/** Authenticated, any role: migrates the stored row to the current inputs
+ *  version, recalculates, and keeps the previous state as a version row. */
+export async function resaveAppraisal(projectId: string): Promise<ResaveAppraisalResponse> {
+  return request<ResaveAppraisalResponse>(`/api/v1/appraisals/${projectId}/resave`, {
+    method: 'POST',
+    headers: headers(),
+  });
+}
+
+export async function listAppraisalVersions(projectId: string): Promise<AppraisalVersion[]> {
+  return request<AppraisalVersion[]>(`/api/v1/appraisals/${projectId}/versions`, { headers: headers() });
+}
+
+/** Every stored row whose inputs_version or calc_version is behind the server's. */
+export async function listStaleAppraisals(): Promise<StaleAppraisal[]> {
+  return request<StaleAppraisal[]>('/api/v1/appraisals/stale', { headers: headers() });
+}
+
+// --- Benchmark sets and index datasets (R17, spec §27.6; app/benchmarks/router.py) ---
+//
+// Every route is authenticated; imports need administrator or underwriter.
+// There is no PUT or DELETE: sets and dataset versions are immutable.
+
+export async function listBenchmarkSets(): Promise<BenchmarkSetHeader[]> {
+  return request<BenchmarkSetHeader[]>('/api/v1/benchmark-sets', { headers: headers() });
+}
+
+/** The set document; with BOTH `currentisationDate` (ISO date) and
+ *  `currentIndexValue` the server adds `currentised` -- a derived read that
+ *  writes nothing. One without the other is a 422 from the server. */
+export async function getBenchmarkSet(
+  id: string,
+  opts: { currentisationDate?: string; currentIndexValue?: number } = {},
+): Promise<BenchmarkSetDocument> {
+  const params = new URLSearchParams();
+  if (opts.currentisationDate != null) params.set('currentisation_date', opts.currentisationDate);
+  if (opts.currentIndexValue != null) params.set('current_index_value', String(opts.currentIndexValue));
+  const query = params.toString();
+  return request<BenchmarkSetDocument>(
+    `/api/v1/benchmark-sets/${encodeURIComponent(id)}${query ? `?${query}` : ''}`,
+    { headers: headers() },
+  );
+}
+
+/** JSON import: an ElementalBenchmarkSet document without id/created_at/content_hash. */
+export async function importBenchmarkSet(doc: Record<string, unknown>): Promise<BenchmarkSetDocument> {
+  return request<BenchmarkSetDocument>('/api/v1/benchmark-sets', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify(doc),
+  });
+}
+
+/** Multipart import: the template-column CSV plus the header fields as a
+ *  JSON object in the `header` form field. No Content-Type header: the
+ *  browser sets multipart/form-data with its boundary. */
+export async function importBenchmarkSetCsv(
+  file: File | Blob,
+  header: Record<string, unknown>,
+): Promise<BenchmarkSetDocument> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('header', JSON.stringify(header));
+  return request<BenchmarkSetDocument>('/api/v1/benchmark-sets/import-csv', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  });
+}
+
+/** The import template's path. The route is authenticated, so a bare
+ *  `<a href>` will 401 -- fetch it with `fetchBenchmarkTemplate` and hand the
+ *  text to the user instead. */
+export const benchmarkTemplateUrl = '/api/v1/benchmark-sets/template.csv';
+
+export async function fetchBenchmarkTemplate(): Promise<string> {
+  const response = await fetch(benchmarkTemplateUrl, { headers: authHeaders() });
+  const text = await response.text();
+  if (!response.ok) throw new ApiError(response.status, `HTTP ${response.status}: ${text}`, text || undefined);
+  return text;
+}
+
+export async function listIndexDatasets(): Promise<IndexDatasetHeader[]> {
+  return request<IndexDatasetHeader[]>('/api/v1/index-datasets', { headers: headers() });
+}
+
+export async function getIndexDataset(id: string): Promise<IndexDatasetDocument> {
+  return request<IndexDatasetDocument>(`/api/v1/index-datasets/${encodeURIComponent(id)}`, { headers: headers() });
+}
+
+/** JSON `{publisher, series_code, series_name?, dataset_version, source_url,
+ *  licence, publication_date?, retrieved_at, base_period, notes?,
+ *  observations: [{period, value}]}`. */
+export async function importIndexDataset(doc: Record<string, unknown>): Promise<IndexDatasetDocument> {
+  return request<IndexDatasetDocument>('/api/v1/index-datasets', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify(doc),
+  });
 }

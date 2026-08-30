@@ -22,7 +22,9 @@ export const PAGE_OWNERSHIP = {
   acquisition: ['acquisition'],
   areas: ['areas'],
   unit_mix: ['unit_mix'],
-  conversion_costs: ['conversion_costs', 'cost_plan'],
+  // R17 Task 3 (spec §27.7): the benchmark layer is applied to the cost plan
+  // from this page, so its validation roots belong here.
+  conversion_costs: ['conversion_costs', 'cost_plan', 'elemental_benchmark'],
   vat: ['vat'],
   finance: ['finance', 'equity_sources', 'lender_valuation', 'monitoring'],
   programme: ['programme'],

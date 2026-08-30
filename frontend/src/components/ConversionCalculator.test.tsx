@@ -154,7 +154,9 @@ describe('ConversionCalculator — Lender Case is page 16 (R14b)', () => {
   it('mounts the Lender Case page on its tab', async () => {
     renderCalculator();
     fireEvent.click(screen.getByRole('link', { name: '16. Lender Case' }));
-    expect(await screen.findByText('No lender case')).toBeInTheDocument();
+    // R17 (design §10.6): every lender-case route is authenticated, so the
+    // signed-out page (no AuthProvider here) is the sign-in prompt.
+    expect(await screen.findByText(/Sign in to open or move a lender case/)).toBeInTheDocument();
   });
 });
 
@@ -225,7 +227,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
         };
       };
 
-    expect(sentSnapshot.inputs_version).toBe(16);
+    expect(sentSnapshot.inputs_version).toBe(17);
     expect(sentSnapshot.acquisition.jurisdiction).toBe('england_ni');
     expect(sentSnapshot.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sentSnapshot.acquisition.jurisdiction_evidence_status).toBe('unconfirmed');
@@ -323,7 +325,7 @@ describe('ConversionCalculator loads a stored v4 snapshot onto v12 (R8 Task 10, 
           };
         };
       };
-    expect(sent.inputs_version).toBe(16);
+    expect(sent.inputs_version).toBe(17);
     expect(sent.areas.basis).toBe('manual');
     expect(sent.areas.existing_gia_sqm).toBe(0);
     expect(sent.cost_plan.mode).toBe('headline');
@@ -448,7 +450,7 @@ describe('ConversionCalculator adopts the saved snapshot the server returns (R8 
       inputs_version: number;
       acquisition: { jurisdiction_source: string; acquisition_date: string | null };
     };
-    expect(sent.inputs_version).toBe(16);
+    expect(sent.inputs_version).toBe(17);
     expect(sent.acquisition.jurisdiction_source).toBe('migrated_default');
     expect(sent.acquisition.acquisition_date).toBeNull();
   });

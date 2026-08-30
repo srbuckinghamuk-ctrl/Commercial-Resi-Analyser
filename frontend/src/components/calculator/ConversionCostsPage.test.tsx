@@ -3,9 +3,9 @@ import { resolve } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import ConversionCostsPage from './ConversionCostsPage';
-import { runAppraisal, migrateInputsToV16 } from '../../lib/model';
-import type { AppraisalRun, CalculatorInputsV16, CostPackage, FeeLine } from '../../lib/model';
-import { defaultCalculatorInputsV16 } from '../../lib/conversion-defaults';
+import { runAppraisal, migrateInputsToV17 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV17, CostPackage, FeeLine } from '../../lib/model';
+import { defaultCalculatorInputsV17 } from '../../lib/conversion-defaults';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
 import type { ProposedUnitV6 } from '../../lib/conversion-types';
 import { ddDoc, QS } from '../../lib/model/__fixtures__/due-diligence-docs';
@@ -14,15 +14,16 @@ import { docZ, docZNoAllowance } from '../../lib/model/__fixtures__/cost-plan-in
 // R15b Task 9 (spec §24.6). Fixture Q (fixtures/financial-model/q-detailed-cost-plan.json):
 // detailed mode, `programme: null` -- the auto-path document the phase picker
 // must show disabled on. Loaded the same way package-timing.test.ts's `load()`
-// loads it: raw JSON through `migrateInputsToV16` (R16b Task 2 moved this on
-// from `migrateInputsToV15`, which itself moved it on from `migrateInputsToV14`),
-// never a hand-authored object.
+// loads it: raw JSON through `migrateInputsToV17` (R17 Task 3 moved this on
+// from `migrateInputsToV16`, which itself moved it on from `migrateInputsToV15`,
+// which itself moved it on from `migrateInputsToV14`), never a hand-authored
+// object.
 const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
-function docQ(): CalculatorInputsV16 {
+function docQ(): CalculatorInputsV17 {
   const raw = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'q-detailed-cost-plan.json'), 'utf-8')) as {
     inputs: Record<string, unknown>;
   };
-  return migrateInputsToV16(raw.inputs);
+  return migrateInputsToV17(raw.inputs);
 }
 
 /**
@@ -33,8 +34,8 @@ function docQ(): CalculatorInputsV16 {
  * 40, retained 100 -> developed 520) so the bridge-derived figure asserted
  * here (520) is the same one that suite already pins.
  */
-function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV16 {
-  const inputs = defaultCalculatorInputsV16();
+function baseInputs(basis: 'manual' | 'bridge_derived'): CalculatorInputsV17 {
+  const inputs = defaultCalculatorInputsV17();
   return {
     ...inputs,
     areas: {
@@ -101,7 +102,7 @@ describe('ConversionCostsPage — construction area basis selector', () => {
 // so a component that recomputed the contingency amount itself, instead of
 // reading the run, would render something else (or throw).
 function runWithContingencyAmount(amountPence: number): AppraisalRun {
-  const inputs = defaultCalculatorInputsV16();
+  const inputs = defaultCalculatorInputsV17();
   const run = runAppraisal(inputs);
   return {
     ...run,
@@ -130,8 +131,8 @@ function runWithContingencyAmount(amountPence: number): AppraisalRun {
 // value, so a label that happened to equal the code's human name would make
 // this test ambiguous for a reason that has nothing to do with what it is
 // checking.
-function detailedInputs(): CalculatorInputsV16 {
-  const base = defaultCalculatorInputsV16();
+function detailedInputs(): CalculatorInputsV17 {
+  const base = defaultCalculatorInputsV17();
   return {
     ...base,
     finance: { ...base.finance, funding_source: 'cash', term_months: 12 },
@@ -144,10 +145,10 @@ function detailedInputs(): CalculatorInputsV16 {
       packages: [
         { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
           amount_pence: 1_000_000, contingency_class: 'existing_building',
-          lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
+          lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null, benchmark_origin: null },
         { id: 'p2', code: 'structure', label: 'Structural frame', amount_pence: 3_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
-          price_basis: null },
+          price_basis: null, benchmark_origin: null },
       ],
       contingency: [
         { name: 'general', pct: 5 },
@@ -169,7 +170,7 @@ function detailedInputs(): CalculatorInputsV16 {
 
 describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan, never recomputes them', () => {
   it('renders the contingency amount from the run, not from its own arithmetic', () => {
-    const inputs = defaultCalculatorInputsV16();
+    const inputs = defaultCalculatorInputsV17();
     const run = runWithContingencyAmount(12_345_678);
     render(<ConversionCostsPage inputs={inputs} run={run} onChange={vi.fn()} />);
     expect(screen.getByText(/123,456\.78/)).toBeInTheDocument();
@@ -192,7 +193,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
     expect(screen.getByDisplayValue('Structure')).toBeInTheDocument();
     // And the negative half — without it, a grid rendered unconditionally passes.
     cleanup();
-    const headline: CalculatorInputsV16 = {
+    const headline: CalculatorInputsV17 = {
       ...inputs,
       cost_plan: { ...inputs.cost_plan, mode: 'headline' as const, packages: [] },
     };
@@ -233,8 +234,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   // duplicated -- and that it happens through the SAME onChange every other
   // edit on this page uses, not a second code path.
   it('offers to convert compliance allowances into a package when switching to detailed mode', () => {
-    const base = defaultCalculatorInputsV16();
-    const inputs: CalculatorInputsV16 = {
+    const base = defaultCalculatorInputsV17();
+    const inputs: CalculatorInputsV17 = {
       ...base,
       conversion_costs: {
         ...base.conversion_costs,
@@ -266,7 +267,7 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('switches mode without prompting when there is no compliance to convert', () => {
-    const inputs = defaultCalculatorInputsV16(); // compliance fields are 0 by default
+    const inputs = defaultCalculatorInputsV17(); // compliance fields are 0 by default
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     const confirmSpy = vi.spyOn(window, 'confirm');
@@ -280,8 +281,8 @@ describe('ConversionCostsPage — reads cost figures from run.metrics.cost_plan,
   });
 
   it('leaves the compliance fields untouched when the user declines the conversion', () => {
-    const base = defaultCalculatorInputsV16();
-    const inputs: CalculatorInputsV16 = {
+    const base = defaultCalculatorInputsV17();
+    const inputs: CalculatorInputsV17 = {
       ...base,
       conversion_costs: { ...base.conversion_costs, fire_safety_pence: 200_000 },
     };
@@ -329,7 +330,7 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 
   it('allows switching back to headline once every package is zeroed', () => {
     const inputs = detailedInputs();
-    const zeroed: CalculatorInputsV16 = {
+    const zeroed: CalculatorInputsV17 = {
       ...inputs,
       cost_plan: {
         ...inputs.cost_plan,
@@ -354,8 +355,8 @@ describe('ConversionCostsPage — the return trip cannot lose money (C2, fix rou
 // construction_total 4,400,000 (no compliance, no other fee lines) are
 // pinned literals so the resolved-base assertions below are falsifiable,
 // not just "some text appeared".
-function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV16 {
-  const base = defaultCalculatorInputsV16();
+function feeTestInputs(feeLines: FeeLine[]): CalculatorInputsV17 {
+  const base = defaultCalculatorInputsV17();
   return {
     ...base,
     areas: { ...base.areas, basis: 'manual' },
@@ -507,8 +508,8 @@ function unit(id: string): ProposedUnitV6 {
 
 describe('ConversionCostsPage — a per_dwelling fixed fee shows its resolved (multiplied) amount (I3, fix round 1)', () => {
   it('shows the resolved amount, not the per-dwelling figure typed in', () => {
-    const base = defaultCalculatorInputsV16();
-    const inputs: CalculatorInputsV16 = {
+    const base = defaultCalculatorInputsV17();
+    const inputs: CalculatorInputsV17 = {
       ...base,
       unit_mix: { units: ['u1', 'u2', 'u3'].map(unit) },
       cost_plan: {
@@ -609,7 +610,7 @@ describe('ConversionCostsPage — per-line VAT override control (spec §17.2 rul
   });
 
   it('does not render the override control in headline mode', () => {
-    const inputs = defaultCalculatorInputsV16();
+    const inputs = defaultCalculatorInputsV17();
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText(/vat override/i)).not.toBeInTheDocument();
@@ -627,7 +628,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('shows "No QS recorded" unchecked, and the editable fields, when cost_plan.qs is set', () => {
-    const inputs: CalculatorInputsV16 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV17 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.getByLabelText('No QS recorded')).not.toBeChecked();
@@ -651,7 +652,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('checking "No QS recorded" writes qs: null', () => {
-    const inputs: CalculatorInputsV16 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV17 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
@@ -662,7 +663,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('editing the QS source writes through, leaving the other QS fields untouched', () => {
-    const inputs: CalculatorInputsV16 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV17 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     const onChange = vi.fn();
     render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={run} />);
@@ -675,7 +676,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('shows the rule-8 issue text when run.validation carries it', () => {
-    const inputs: CalculatorInputsV16 = {
+    const inputs: CalculatorInputsV17 = {
       ...detailedInputs(),
       cost_plan: { ...detailedInputs().cost_plan, qs: { ...QS, source: '' } },
     };
@@ -686,7 +687,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
   });
 
   it('shows no rule-8 issue text on a valid QS record', () => {
-    const inputs: CalculatorInputsV16 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
+    const inputs: CalculatorInputsV17 = { ...detailedInputs(), cost_plan: { ...detailedInputs().cost_plan, qs: QS } };
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText('QS provenance needs a source.')).not.toBeInTheDocument();
@@ -695,7 +696,7 @@ describe('ConversionCostsPage — QS provenance card (spec 23.6)', () => {
 
 describe('ConversionCostsPage — per-package price basis (spec 23.6)', () => {
   it('lists Unset / Fixed price / Provisional sum / Estimate, selected at Unset for a null price_basis', () => {
-    const inputs = detailedInputs(); // both packages price_basis: null
+    const inputs = detailedInputs(); // both packages price_basis: null, benchmark_origin: null
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
 
@@ -707,7 +708,7 @@ describe('ConversionCostsPage — per-package price basis (spec 23.6)', () => {
   });
 
   it('changing a price basis select writes price_basis on that package only', () => {
-    const inputs = detailedInputs(); // p1, p2, both price_basis: null
+    const inputs = detailedInputs(); // p1, p2, both price_basis: null, benchmark_origin: null
     const onChange = vi.fn();
     render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
 
@@ -725,7 +726,7 @@ describe('ConversionCostsPage — per-package price basis (spec 23.6)', () => {
     });
   });
 
-  it('writes price_basis: null when switching a select back to Unset', () => {
+  it('writes price_basis: null, benchmark_origin: null when switching a select back to Unset', () => {
     const inputs = detailedInputs();
     inputs.cost_plan.packages[0].price_basis = 'estimate';
     const onChange = vi.fn();
@@ -739,7 +740,7 @@ describe('ConversionCostsPage — per-package price basis (spec 23.6)', () => {
     expect(updated.price_basis).toBeNull();
   });
 
-  it('newPackage() seeds price_basis: null', () => {
+  it('newPackage() seeds price_basis: null, benchmark_origin: null', () => {
     const inputs = detailedInputs();
     const onChange = vi.fn();
     render(<ConversionCostsPage inputs={inputs} onChange={onChange} run={runAppraisal(inputs)} />);
@@ -771,7 +772,7 @@ describe('ConversionCostsPage — price basis coverage line (spec 23.6)', () => 
   });
 
   it('is absent in headline mode', () => {
-    const inputs = defaultCalculatorInputsV16(); // headline, no packages
+    const inputs = defaultCalculatorInputsV17(); // headline, no packages
     const run = runAppraisal(inputs);
     render(<ConversionCostsPage inputs={inputs} onChange={vi.fn()} run={run} />);
     expect(screen.queryByText(/Fixed-price coverage/)).not.toBeInTheDocument();

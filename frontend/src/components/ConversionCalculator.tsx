@@ -1,13 +1,15 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useParams, useNavigate, NavLink, Navigate } from 'react-router-dom';
 import type { Project, FinancialAppraisal, FinancialAppraisalCreate } from '../types';
-import { migrateInputsToV16 } from '../lib/model';
+import { migrateInputsToV17 } from '../lib/model';
 import { safeRunAppraisal } from '../lib/safe-run';
-import type { AppraisalRun, CalculatorInputsV16 } from '../lib/model';
-import { defaultCalculatorInputsV16 } from '../lib/conversion-defaults';
+import type { AppraisalRun, CalculatorInputsV17 } from '../lib/model';
+import { defaultCalculatorInputsV17 } from '../lib/conversion-defaults';
 import { getAppraisal, saveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
 import CalculatorErrorBoundary from './CalculatorErrorBoundary';
 import CalculatorFailurePanel from './CalculatorFailurePanel';
+import AreaUnitToggle from './AreaUnitToggle';
+import { AreaUnitProvider } from '../lib/area-unit-context';
 import { PAGES, STAGES, pageForSlug, calculatorPath, FIRST_PAGE } from './calculator/pages';
 import type { CalcPage } from './calculator/pages';
 import { pageStatus } from './calculator/page-status';
@@ -64,8 +66,8 @@ export default function ConversionCalculator({ project }: Props) {
   const navigate = useNavigate();
   const resolvedPage = pageForSlug(pageSlug);
   const activePage: CalcPage = resolvedPage ?? FIRST_PAGE;
-  const [inputs, setInputs] = useState<CalculatorInputsV16>(() =>
-    defaultCalculatorInputsV16(project ?? undefined),
+  const [inputs, setInputs] = useState<CalculatorInputsV17>(() =>
+    defaultCalculatorInputsV17(project ?? undefined),
   );
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -75,7 +77,7 @@ export default function ConversionCalculator({ project }: Props) {
 
   useEffect(() => {
     if (project) {
-      setInputs(defaultCalculatorInputsV16(project));
+      setInputs(defaultCalculatorInputsV17(project));
       setSavedId(null);
       setAppraisalRecord(null);
       setSaveError(null);
@@ -157,7 +159,9 @@ export default function ConversionCalculator({ project }: Props) {
             // same shape (R15 Task 13 moved that shared type to
             // CalculatorInputsV13, one version on from R13b Task 15; R15b
             // Task 6 moved it on again, to CalculatorInputsV14; R16 Task 4
-            // moves it on again, to CalculatorInputsV15).
+            // moved it on again, to CalculatorInputsV15; R16b Task 2 moved it
+            // on again, to CalculatorInputsV16; R17 Task 3 moves it on again,
+            // to CalculatorInputsV17).
             //
             // R8 Task 11 retired the `as unknown as CalculatorInputsV4` cast
             // that used to sit here: the migration's return type is the
@@ -165,8 +169,20 @@ export default function ConversionCalculator({ project }: Props) {
             // site.
             // R16b Task 2 (spec 26.7): the server boundary moved to v16
             // (app/api/app.py) and this moved WITH IT, in the same commit.
+            // R17 Task 3 (spec 27.7): the server boundary moved to v17
+            // (app/api/app.py) and this moved WITH IT, in the same commit --
+            // this is the move that makes R17's elemental cost benchmark
+            // reachable at all. Every arm the release builds (the nullable
+            // `elemental_benchmark` block, `CostPackage.benchmark_origin`, the
+            // due-diligence source records and the surfaces that read them)
+            // is only ever exercised by a v17 document, and until this line
+            // named the v17 entry point no user could hold one. The migration
+            // writes the block null, every package origin null and the record
+            // arrays empty, so a loaded v16 document computes exactly what it
+            // did before this move; the benchmark layer stays advisory until
+            // a user applies rows to the cost plan.
             setInputs(
-              migrateInputsToV16(appraisal.inputs_snapshot as Record<string, unknown>, project),
+              migrateInputsToV17(appraisal.inputs_snapshot as Record<string, unknown>, project),
             );
             setSavedId(appraisal.id);
           }
@@ -199,21 +215,22 @@ export default function ConversionCalculator({ project }: Props) {
 
   // The most recent inputs the engine could compute, so the failure panel can
   // offer a genuine undo. Recorded after commit -- never mutated during render.
-  const lastComputableInputs = useRef<CalculatorInputsV16 | null>(null);
+  const lastComputableInputs = useRef<CalculatorInputsV17 | null>(null);
   useEffect(() => {
     if (runResult.ok) lastComputableInputs.current = inputs;
   }, [runResult, inputs]);
 
   // R15 Task 13 (R15b Task 6 moved the state on again, to v14 natively; R16
-  // Task 4 moved it to v15; R16b Task 2 moves it to v16). The
+  // Task 4 moved it to v15; R16b Task 2 moved it to v16; R17 Task 3 moves
+  // it to v17). The
   // widened `Omit<CalculatorInputsV15, 'inputs_version'>` R15 Task 9
-  // introduced is no longer needed -- `Partial<CalculatorInputsV16>` says the same thing the
+  // introduced is no longer needed -- `Partial<CalculatorInputsV17>` says the same thing the
   // simple way. `inputs_version` still cannot be restamped by a caller of
   // this callback in practice (every page only ever writes its own section),
   // but nothing here specially protects it any more; the cutover -- this
   // function -- was the one thing allowed to change the document's version,
   // and it already has.
-  const updateInputs = useCallback((partial: Partial<CalculatorInputsV16>) => {
+  const updateInputs = useCallback((partial: Partial<CalculatorInputsV17>) => {
     setInputs((prev) => ({ ...prev, ...partial }));
   }, []);
 
@@ -275,9 +292,9 @@ export default function ConversionCalculator({ project }: Props) {
       // reconciles it. The migration runs outside the updater so the updater
       // stays pure (React may invoke it more than once).
       if (result.inputs_snapshot && typeof result.inputs_snapshot === 'object') {
-        let adopted: CalculatorInputsV16 | null = null;
+        let adopted: CalculatorInputsV17 | null = null;
         try {
-          adopted = migrateInputsToV16(result.inputs_snapshot, project);
+          adopted = migrateInputsToV17(result.inputs_snapshot, project);
         } catch {
           // The save itself succeeded, so this must not surface as a save
           // failure. Keeping the local document is the same state the app was
@@ -319,6 +336,7 @@ export default function ConversionCalculator({ project }: Props) {
   }
 
   return (
+    <AreaUnitProvider>
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 100px)' }}>
       {/* Sub-nav */}
       <div
@@ -372,6 +390,11 @@ export default function ConversionCalculator({ project }: Props) {
             ))}
           </div>
         ))}
+        {/* R17 spec §27.2: the m² / ft² display preference, shown once for
+            every page. A preference, not an input: it never touches `inputs`. */}
+        <div style={{ marginLeft: 'auto', alignSelf: 'center', padding: '0 14px', flexShrink: 0 }}>
+          <AreaUnitToggle compact />
+        </div>
       </div>
 
       {/* Page content — CRITICAL 1d: scoped to the page body + run-derived UI
@@ -586,5 +609,6 @@ export default function ConversionCalculator({ project }: Props) {
         </button>
       </div>
     </div>
+    </AreaUnitProvider>
   );
 }

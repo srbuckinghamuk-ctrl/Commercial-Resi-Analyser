@@ -250,3 +250,131 @@ describe('getAppraisal', () => {
     expect(result.outputs).toBeNull();
   });
 });
+
+// --- R17 (design §10.6): the bearer token and the governed request shapes ---
+
+describe('bearer token (R17)', () => {
+  it('sends Authorization: Bearer on every request once a token is set, and not before', async () => {
+    const { setAuthToken, getAuthToken } = await import('./api');
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve([]), headers: { get: () => 'application/json' } });
+
+    setAuthToken(null);
+    await listProjects();
+    const before = mockFetch.mock.calls[0][1] as RequestInit;
+    expect((before.headers as Record<string, string>).Authorization).toBeUndefined();
+
+    setAuthToken('tok-123');
+    expect(getAuthToken()).toBe('tok-123');
+    await listProjects();
+    const after = mockFetch.mock.calls[1][1] as RequestInit;
+    expect((after.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
+    expect((after.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+
+    setAuthToken(null);
+    await listProjects();
+    const cleared = mockFetch.mock.calls[2][1] as RequestInit;
+    expect((cleared.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it('a 401 surfaces as an ApiError carrying the server detail', async () => {
+    const { me } = await import('./api');
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 401, text: () => Promise.resolve(JSON.stringify({ detail: 'authentication required' })),
+    });
+    let caught: unknown;
+    try { await me(); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(401);
+    expect((caught as ApiError).detail).toBe('authentication required');
+  });
+
+  it('login POSTs {email, password} to /api/v1/auth/login', async () => {
+    const { login } = await import('./api');
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ token: 't', user: { id: 'u' } }) });
+    await login('a@b.test', 'pw');
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/auth/login', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ email: 'a@b.test', password: 'pw' }),
+    }));
+  });
+});
+
+describe('lender-case requests (R17)', () => {
+  it('createLenderCase sends {project_id} only', async () => {
+    const { createLenderCase } = await import('./api');
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: () => Promise.resolve({ id: 'c1' }) });
+    await createLenderCase('p1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/lender-cases', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ project_id: 'p1' }),
+    }));
+  });
+
+  it('transitionLenderCase sends the R17 body shape and no actor', async () => {
+    const { transitionLenderCase } = await import('./api');
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: 'c1' }) });
+    await transitionLenderCase('p1', {
+      to_status: 'submitted', note: 'n', reason: 'r',
+      expected_version: 2, expected_case_hash: 'h'.repeat(64), idempotency_key: 'k-1',
+    });
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/lender-cases/p1/transition');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      to_status: 'submitted', note: 'n', reason: 'r',
+      expected_version: 2, expected_case_hash: 'h'.repeat(64), idempotency_key: 'k-1',
+    });
+  });
+});
+
+describe('appraisal versions and benchmarks (R17)', () => {
+  it('resaveAppraisal POSTs to /resave and returns previous_version_id', async () => {
+    const { resaveAppraisal } = await import('./api');
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: 'a1', previous_version_id: 'v1' }) });
+    const r = await resaveAppraisal('p1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/appraisals/p1/resave', expect.objectContaining({ method: 'POST' }));
+    expect(r.previous_version_id).toBe('v1');
+  });
+
+  it('listAppraisalVersions and listStaleAppraisals hit their paths', async () => {
+    const { listAppraisalVersions, listStaleAppraisals } = await import('./api');
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve([]) });
+    await listAppraisalVersions('p1');
+    await listStaleAppraisals();
+    expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/appraisals/p1/versions');
+    expect(mockFetch.mock.calls[1][0]).toBe('/api/v1/appraisals/stale');
+  });
+
+  it('getBenchmarkSet builds the currentisation query only when asked', async () => {
+    const { getBenchmarkSet } = await import('./api');
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ id: 'b1', rates: [] }) });
+    await getBenchmarkSet('b1');
+    await getBenchmarkSet('b1', { currentisationDate: '2026-06-01', currentIndexValue: 112.5 });
+    expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/benchmark-sets/b1');
+    expect(mockFetch.mock.calls[1][0]).toBe('/api/v1/benchmark-sets/b1?currentisation_date=2026-06-01&current_index_value=112.5');
+  });
+
+  it('importBenchmarkSetCsv posts multipart with file and header, no JSON content-type', async () => {
+    const { importBenchmarkSetCsv, setAuthToken } = await import('./api');
+    setAuthToken('tok');
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: () => Promise.resolve({ id: 'b1', rates: [] }) });
+    await importBenchmarkSetCsv(new Blob(['id,element\n']), { provider_type: 'x' });
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/benchmark-sets/import-csv');
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).get('header')).toBe(JSON.stringify({ provider_type: 'x' }));
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok');
+    setAuthToken(null);
+  });
+
+  it('index dataset functions hit their paths', async () => {
+    const { listIndexDatasets, getIndexDataset, importIndexDataset, benchmarkTemplateUrl } = await import('./api');
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    await listIndexDatasets();
+    await getIndexDataset('d1');
+    await importIndexDataset({ publisher: 'ONS' });
+    expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/index-datasets');
+    expect(mockFetch.mock.calls[1][0]).toBe('/api/v1/index-datasets/d1');
+    expect(mockFetch.mock.calls[2]).toEqual(['/api/v1/index-datasets', expect.objectContaining({ method: 'POST' })]);
+    expect(benchmarkTemplateUrl).toBe('/api/v1/benchmark-sets/template.csv');
+  });
+});

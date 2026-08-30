@@ -4,8 +4,8 @@ import { resolve, join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import AppraisalSummaryPage from './AppraisalSummaryPage';
 import { runAppraisal } from '../../lib/model';
-import type { CalculatorInputsV16, MonitoringStatement, MonitoringStatementLine } from '../../lib/model';
-import { defaultCalculatorInputsV16 } from '../../lib/conversion-defaults';
+import type { CalculatorInputsV17, MonitoringStatement, MonitoringStatementLine } from '../../lib/model';
+import { defaultCalculatorInputsV17 } from '../../lib/conversion-defaults';
 import { penceToPounds } from '../../lib/format';
 
 // R14 fix-wave finding 3b: a hand-built literal statement, same shape
@@ -77,7 +77,7 @@ const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
 // version the file actually holds rather than the v4 it used to claim.
 const fixtureG = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'g-lender-valuation.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV16 };
+) as { inputs: CalculatorInputsV17 };
 
 // R11 spec §17.13 (ruling R45). The pinned VAT fixture itself is fully
 // recoverable (total_irrecoverable_pence 0 by construction, so the §17.5
@@ -86,17 +86,17 @@ const fixtureG = JSON.parse(
 // irrecoverable figure without touching the fixture on disk.
 const vatFixture = JSON.parse(
   readFileSync(join(FIXTURE_DIR, 'r-vat-quarterly.json'), 'utf-8'),
-) as { inputs: CalculatorInputsV16 };
+) as { inputs: CalculatorInputsV17 };
 
-function inputsWithIrrecoverableVat(): CalculatorInputsV16 {
-  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV16;
+function inputsWithIrrecoverableVat(): CalculatorInputsV17 {
+  const cloned = JSON.parse(JSON.stringify(vatFixture.inputs)) as CalculatorInputsV17;
   const construction = cloned.vat.treatments.find((t) => t.category === 'construction')!;
   construction.recoverable_pct = 50;
   return cloned;
 }
 
 describe('AppraisalSummaryPage — null lender state', () => {
-  const inputs = defaultCalculatorInputsV16();
+  const inputs = defaultCalculatorInputsV17();
   const run = runAppraisal(inputs);
 
   it('renders the existing not-available treatment for lender GDV and LTGDV lender', () => {
@@ -117,6 +117,27 @@ describe('AppraisalSummaryPage — null lender state', () => {
     expect(run.metrics.developer_breakeven_pence).toBeNull();
     const naNodes = screen.getAllByText('n/a');
     expect(naNodes.length).toBeGreaterThan(0);
+  });
+});
+
+// R17 spec §13.1. The ROE card is labelled by the engine's own flag; both
+// branches are exercised on one real run by overriding only the flag.
+describe('AppraisalSummaryPage — unrealised ROE label (R17 spec §13.1)', () => {
+  const inputs = defaultCalculatorInputsV17();
+  const run = runAppraisal(inputs);
+
+  it('prints "Unrealised Return on Equity" when the flag is true', () => {
+    const flagged = { ...run, metrics: { ...run.metrics, return_on_equity_is_unrealised: true } };
+    render(<AppraisalSummaryPage inputs={inputs} run={flagged} onChange={vi.fn()} />);
+    expect(screen.getByText('Unrealised Return on Equity')).toBeInTheDocument();
+    expect(screen.queryByText('Return on Equity')).not.toBeInTheDocument();
+  });
+
+  it('prints "Return on Equity" when the flag is false', () => {
+    const flagged = { ...run, metrics: { ...run.metrics, return_on_equity_is_unrealised: false } };
+    render(<AppraisalSummaryPage inputs={inputs} run={flagged} onChange={vi.fn()} />);
+    expect(screen.getByText('Return on Equity')).toBeInTheDocument();
+    expect(screen.queryByText('Unrealised Return on Equity')).not.toBeInTheDocument();
   });
 });
 
@@ -200,7 +221,7 @@ describe('AppraisalSummaryPage — VAT LTC caveat (spec §17.13, ruling R34/R45)
 });
 
 describe('AppraisalSummaryPage — monitoring cost-to-complete wiring (R14 fix wave finding 3b)', () => {
-  const inputs = defaultCalculatorInputsV16();
+  const inputs = defaultCalculatorInputsV17();
   const baseRun = runAppraisal(inputs);
 
   it('renders the "Monitoring cost-to-complete" heading when metrics.monitoring_statement is non-null', () => {

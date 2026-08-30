@@ -5,12 +5,14 @@ import { listProjects } from './lib/api';
 
 import Pipeline from './components/Pipeline';
 import NewProject from './components/NewProject';
-import ExportPage from './components/ExportPage';
 import ProjectDetail from './components/ProjectDetail';
 import LazyLoadBoundary from './components/LazyLoadBoundary';
+import { AuthProvider, useAuth } from './lib/auth';
 
 const ConversionCalculator = lazy(() => import('./components/ConversionCalculator'));
 const PropertyMap = lazy(() => import('./components/PropertyMap'));
+const LoginPage = lazy(() => import('./components/LoginPage'));
+const ExportPage = lazy(() => import('./components/ExportPage'));
 
 const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
   { to: '/', label: 'Pipeline', end: true },
@@ -87,7 +89,46 @@ function ProjectRoute({
   return <ProjectDetail project={project} view={view} onProjectUpdated={onProjectsChanged} />;
 }
 
+/** Header sign-in state (R17, design §10.6): who is signed in and their role,
+ *  with sign out; otherwise a link to /login that remembers where the user
+ *  was. Browsing never needs a token, so this is informational until a write
+ *  to governance is attempted. */
+function AuthStatus() {
+  const { user, loading, logout } = useAuth();
+  const location = useLocation();
+  if (loading) return <span style={{ color: '#64748b', fontSize: 13 }}>Checking sign-in…</span>;
+  if (user == null) {
+    return (
+      <Link to="/login" state={{ from: location.pathname }} style={{ color: '#93c5fd', fontSize: 13, textDecoration: 'none' }}>
+        Sign in
+      </Link>
+    );
+  }
+  return (
+    <span style={{ color: '#94a3b8', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span>
+        <span style={{ color: '#e2e8f0' }}>{user.display_name}</span> · {user.role}
+      </span>
+      <button
+        type="button"
+        onClick={() => void logout()}
+        style={{ padding: '4px 12px', background: '#1e3a5f', color: '#e2e8f0', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
+      >
+        Sign out
+      </button>
+    </span>
+  );
+}
+
 export default function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  );
+}
+
+function AppShell() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [backendOffline, setBackendOffline] = useState(false);
@@ -153,17 +194,20 @@ export default function App() {
         <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>
           <Link to="/" style={{ color: '#e2e8f0', textDecoration: 'none' }}>Commercial to Resi</Link>
         </h1>
-        {backendOffline && (
-          <span role="status" style={{ color: '#ef4444', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
-            Can't reach the server — retrying…
-            <button
-              onClick={() => void loadProjects()}
-              style={{ padding: '4px 12px', background: '#1e3a5f', color: '#e2e8f0', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
-            >
-              Retry now
-            </button>
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          {backendOffline && (
+            <span role="status" style={{ color: '#ef4444', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+              Can't reach the server — retrying…
+              <button
+                onClick={() => void loadProjects()}
+                style={{ padding: '4px 12px', background: '#1e3a5f', color: '#e2e8f0', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
+              >
+                Retry now
+              </button>
+            </span>
+          )}
+          <AuthStatus />
+        </div>
       </header>
 
       {/* Navigation */}
@@ -207,6 +251,7 @@ export default function App() {
                 element={<Pipeline projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} />}
               />
               <Route path="/new" element={<NewProject onProjectCreated={handleProjectCreated} />} />
+              <Route path="/login" element={<LoginPage />} />
               <Route
                 path="/projects/:id"
                 element={<ProjectRoute projects={projects} loading={loading} backendOffline={backendOffline} onProjectsChanged={loadProjects} onRetry={loadProjects} view="overview" />}

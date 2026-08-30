@@ -1,15 +1,16 @@
 import { useCallback } from 'react';
 import type { Project } from '../../types';
 import type {
-  AppraisalRun, CalculatorInputsV16, ValidationIssue,
+  AppraisalRun, CalculatorInputsV17, ValidationIssue,
 } from '../../lib/model';
 import type {
-  DdCategory, DdItem, DdRow, DdSourceConflict, DdStatus, DueDiligenceInputs, SourceRecord,
+  DdCategory, DdItem, DdRow, DdSourceConflict, DdStatus, SourceRecord,
 } from '../../lib/model';
 import { DD_CATALOGUE, DD_CATEGORIES, DD_STATUSES } from '../../lib/model';
 import { captureSourceRecord } from '../../lib/conversion-defaults';
 import { PenceInput } from './form-rows';
 import RiskRegisterPage from './RiskRegisterPage';
+import SourceRecordsEditor from './SourceRecordsEditor';
 
 /**
  * R15 Task 9, spec §23.8. Page 13: the due-diligence evidence schedule, the
@@ -27,10 +28,10 @@ import RiskRegisterPage from './RiskRegisterPage';
  */
 interface Props {
   /** R15 Task 13 (the entry-point cutover): the calculator's state is a
-   *  native `CalculatorInputsV16` document, so `due_diligence` is always
+   *  native `CalculatorInputsV17` document, so `due_diligence` is always
    *  present and the schedule editor always renders alongside the register. */
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   run: AppraisalRun;
   project: Project | null;
   /** Injected so the re-capture timestamp is reproducible in tests. */
@@ -355,10 +356,12 @@ function ListingProse({ project }: { project: Project }) {
 
 export default function DueDiligencePage({ inputs, onChange, run, project, now }: Props) {
   // R15 Task 13 (the entry-point cutover): `inputs` is always a native
-  // `CalculatorInputsV16`, so `due_diligence` is always present -- the
+  // `CalculatorInputsV17`, so `due_diligence` is always present -- the
   // `'due_diligence' in inputs` guard and every `dd == null` early return it
-  // forced below are gone with the V12 arm of `Props['inputs']`.
-  const dd: DueDiligenceInputs = inputs.due_diligence;
+  // forced below are gone with the V12 arm of `Props['inputs']`. R17 Task 3:
+  // the type is inferred (`DueDiligenceInputsV17`), not annotated, so the
+  // `{ ...dd, items }` writes below carry the v17 record arrays through.
+  const dd = inputs.due_diligence;
   const result = run.metrics.due_diligence;
   const totals = result.totals;
 
@@ -450,6 +453,10 @@ export default function DueDiligencePage({ inputs, onChange, run, project, now }
         canCapture={project != null}
         onCapture={recapture}
       />
+
+      {/* R17 spec §4.3: the per-document source records and the engine-derived
+          field conflicts, beneath the single captured listing record. */}
+      <SourceRecordsEditor inputs={inputs} onChange={onChange} run={run} project={project} />
 
       {DD_CATEGORIES.map((category) => {
         const summary = result.categories.find((c) => c.category === category)!;

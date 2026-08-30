@@ -15,6 +15,13 @@ import {
   STRESS_SIGN_CONVENTION,
 } from './sensitivity-format';
 import { formatProgrammeMonth, programmeAnchor } from './programme-months';
+import {
+  SQFT_PER_SQM, areaUnitLabel, formatAreaWithUnit, formatRatePence, rateUnitLabel,
+  sqmToSqft as sqmToSqftExact,
+} from './area-units';
+import type { AreaUnit } from './area-units';
+import { BENCHMARK_LIMITATION_SENTENCE, NO_LOCATION_SENTENCE } from './model/elemental-benchmark';
+import type { ElementalBenchmarkRow } from './model/elemental-benchmark';
 import { repairGluedDescription, humanise, penceToPoundsExact, signedPenceToPounds } from './format';
 import { PAGE_H, PAGE_W } from './report-layout';
 import { buildProvenance, formatGeneratedAt, lenderCaseLabel } from './report-provenance';
@@ -335,8 +342,12 @@ function fmtDate(iso: string | null): string {
   return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/** R17 (spec §27.2). A whole-ft² display figure from the canonical m² area,
+ *  through the one conversion module — the memo's own `10.7639` literal is
+ *  retired. Rounded to a whole foot because that is what this document has
+ *  always printed; the unrounded conversion is `sqmToSqftExact`. */
 function sqmToSqft(sqm: number): number {
-  return Math.round(sqm * 10.7639);
+  return Math.round(sqmToSqftExact(sqm));
 }
 
 /** Presentational unit conversion of an already-authoritative pence total — not a formula. */
@@ -579,6 +590,7 @@ export function generateInvestmentMemo(
   run: AppraisalRun,
   eligibility?: EligibilityAssessment | null,
   provenance?: ReportProvenance | null,
+  options?: { areaUnit?: AreaUnit },
 ): Blob {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const { inputs, metrics, model, schedule } = run;
@@ -587,6 +599,24 @@ export function generateInvestmentMemo(
   // case to be approved, so the report says so and stays a DRAFT rather than
   // silently dropping the panel.
   const prov = provenance ?? buildProvenance(run, null);
+  // R17 (spec §27.2, design decision 2). The report unit is a presentation
+  // preference passed in explicitly — never read off the document, which
+  // stores m² and pence per m² only. The explicit option wins over the unit a
+  // caller recorded on the provenance block; absent both, metric — and the
+  // metric document is byte-for-byte what it was before the option existed.
+  const areaUnit: AreaUnit = options?.areaUnit ?? prov.reportAreaUnit ?? 'metric';
+  const imperial = areaUnit === 'imperial';
+  /** An area whose metric wording is fixed by this document's history: the
+   *  metric text is passed through untouched; imperial prints the display
+   *  conversion through area-units.ts. */
+  const areaText = (sqm: number, metricText: string): string =>
+    imperial ? formatAreaWithUnit(sqm, 'imperial') : metricText;
+  /** A canonical pence-per-m² rate, same rule as `areaText`. */
+  const rateText = (pencePerSqm: number, metricText: string): string =>
+    imperial ? formatRatePence(pencePerSqm, 'imperial') : metricText;
+  const reportAreaUnitText = imperial
+    ? `ft² (1 m² = ${SQFT_PER_SQM} ft²)`
+    : 'm²';
   // The two conditions are separate (spec Sec 13.3): an unreconciled run's
   // figures may be wrong; a reconciled but unapproved run's figures are sound
   // and merely unapproved. Only the first may claim the model is at fault.
@@ -995,8 +1025,9 @@ export function generateInvestmentMemo(
   // figures were arithmetically right and together they told a non-specialist
   // reader something false. The engine now says which basis it is on; the memo
   // says so on the page.
+  // R17 (spec §13.1): the same words every UI page and the quick PDF print.
   const roeLabel = metrics.return_on_equity_is_unrealised
-    ? 'Return on Equity (unrealised)'
+    ? 'Unrealised Return on Equity'
     : 'Return on Equity';
 
   const equityMultipleValue = metrics.equity_multiple === null
@@ -1184,6 +1215,15 @@ export function generateInvestmentMemo(
       // printed here so a reader can see the tax basis without re-running.
       ['Tax jurisdiction applied', `${JURISDICTION_LABEL[prov.jurisdiction]} (${tax.regime})${taxBasisQualifier}`],
       ['Acquisition tax table version', prov.taxTableVersion],
+      // R17 (spec §12, §27.2). The unit this document prints — a display
+      // choice, not a document fact, so it is stated rather than hashed.
+      ['Report area unit', reportAreaUnitText],
+      // R17 (spec §12). With a benchmark, the set and index versions the
+      // advisory comparison in Section 12C was computed from.
+      ...(prov.benchmarkDatasetVersion !== null ? ([
+        ['Benchmark dataset', `${prov.benchmarkDatasetVersion} (${prov.benchmarkContentHash ?? 'no content hash'})`],
+        ['Index dataset', prov.indexDatasetVersion ?? 'none'],
+      ] as [string, string][]) : []),
     ],
     styles: { fontSize: 8, cellPadding: 2 },
     headStyles: { fillColor: [30, 58, 95], textColor: 255 },
@@ -1337,7 +1377,7 @@ export function generateInvestmentMemo(
   y = subHeading(y, 'Description');
   y = bodyText(
     y,
-    `Conversion of existing ${project.use_class.replace(/_/g, ' ')} premises to ${unitCount} residential unit${unitCount !== 1 ? 's' : ''} comprising a total of ${totalSqm.toLocaleString()} m² (${totalSqft.toLocaleString()} sq ft) net internal area.`,
+    `Conversion of existing ${project.use_class.replace(/_/g, ' ')} premises to ${unitCount} residential unit${unitCount !== 1 ? 's' : ''} comprising a total of ${imperial ? `${totalSqft.toLocaleString()} ft² (${totalSqm.toLocaleString()} m²)` : `${totalSqm.toLocaleString()} m² (${totalSqft.toLocaleString()} sq ft)`} net internal area.`,
   );
 
   // R15 (spec §23.8). The two facts a reader of a conversion scheme checks
@@ -1384,13 +1424,18 @@ export function generateInvestmentMemo(
   table({
     startY: y,
     margin: { left: MARGIN_L, right: MARGIN_R },
-    head: [['Unit', 'Type', 'NIA (m²)', 'NIA (sq ft)', 'Balcony/Terrace (m²)', 'Parking (spaces)', 'Est. Value', '£/sq ft', 'Notes']],
+    // R17 (spec §27.2): the report unit is the primary column, the other unit
+    // the secondary one; the balcony column follows the report unit. Metric
+    // order is what this table has always printed.
+    head: [['Unit', 'Type', ...(imperial ? ['NIA (ft²)', 'NIA (m²)', 'Balcony/Terrace (ft²)'] : ['NIA (m²)', 'NIA (sq ft)', 'Balcony/Terrace (m²)']), 'Parking (spaces)', 'Est. Value', '£/sq ft', 'Notes']],
     body: inputs.unit_mix.units.map((u, i) => [
       `${i + 1}`,
       unitLabel(u.type),
-      u.floor_area_sqm.toLocaleString(),
-      sqmToSqft(u.floor_area_sqm).toLocaleString(),
-      unitAncillaryOf(u).balcony_terrace_sqm.toLocaleString(),
+      ...(imperial
+        ? [sqmToSqft(u.floor_area_sqm).toLocaleString(), u.floor_area_sqm.toLocaleString(),
+          sqmToSqft(unitAncillaryOf(u).balcony_terrace_sqm).toLocaleString()]
+        : [u.floor_area_sqm.toLocaleString(), sqmToSqft(u.floor_area_sqm).toLocaleString(),
+          unitAncillaryOf(u).balcony_terrace_sqm.toLocaleString()]),
       unitAncillaryOf(u).parking_spaces.toLocaleString(),
       fmt(u.estimated_value_pence),
       perSqftPence(u.estimated_value_pence, u.floor_area_sqm),
@@ -1399,8 +1444,7 @@ export function generateInvestmentMemo(
     foot: [[
       '',
       `${unitCount} units`,
-      totalSqm.toLocaleString(),
-      totalSqft.toLocaleString(),
+      ...(imperial ? [totalSqft.toLocaleString(), totalSqm.toLocaleString()] : [totalSqm.toLocaleString(), totalSqft.toLocaleString()]),
       '',
       '',
       fmt(metrics.gdv_pence),
@@ -1460,7 +1504,7 @@ export function generateInvestmentMemo(
     table({
       startY: y,
       margin: { left: MARGIN_L, right: MARGIN_R },
-      head: [['Area Reconciliation', 'm²']],
+      head: [['Area Reconciliation', areaUnitLabel(areaUnit)]],
       body: ([
         ['Existing GIA', bridge.existing_gia_sqm],
         ['less demolished', -bridge.demolished_gia_sqm],
@@ -1476,7 +1520,9 @@ export function generateInvestmentMemo(
         ['Available for units', bridge.available_for_units_sqm],
         ['less unit NIA', -bridge.unit_nia_sqm],
         ['Unallocated', bridge.unallocated_sqm],
-      ] as Array<[string, number]>).map(([label, value]) => [label, value.toFixed(1)]),
+      ] as Array<[string, number]>).map(([label, value]) => [
+        label, imperial ? sqmToSqftExact(value).toFixed(1) : value.toFixed(1),
+      ]),
       styles: { fontSize: 9, cellPadding: 2 },
       headStyles: { fillColor: [30, 58, 95], textColor: 255 },
       bodyStyles: { textColor: [51, 65, 85] },
@@ -1529,7 +1575,7 @@ export function generateInvestmentMemo(
   if (unallocatedIssue) {
     y = captionText(
       y,
-      `${bridge.unallocated_sqm.toFixed(1)} m² of the developed area is unallocated — `
+      `${areaText(bridge.unallocated_sqm, `${bridge.unallocated_sqm.toFixed(1)} m²`)} of the developed area is unallocated — `
       + 'see the area schedule above.',
     );
   }
@@ -1573,7 +1619,7 @@ export function generateInvestmentMemo(
     for (const u of compsWithNotes) {
       y = bodyText(
         y,
-        `${unitLabel(u.type)} (${u.floor_area_sqm} m²) at ${fmt(u.estimated_value_pence)} — ${u.comparable_notes}`,
+        `${unitLabel(u.type)} (${areaText(u.floor_area_sqm, `${u.floor_area_sqm} m²`)}) at ${fmt(u.estimated_value_pence)} — ${u.comparable_notes}`,
       );
     }
   }
@@ -1808,7 +1854,7 @@ export function generateInvestmentMemo(
           ]),
         ]
       : [
-          ['  Build rate', `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`, ''],
+          ['  Build rate', rateText(inputs.conversion_costs.construction_cost_per_sqm_pence, `${fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)}/m²`), ''],
           // R10 Task 13 fix round 1 (F2). Without this row six real amounts
           // (build rate, three compliance fields, the contingency amount, the
           // construction sub-total) appeared with no printed figure for the
@@ -2175,17 +2221,20 @@ export function generateInvestmentMemo(
   }
   y = bodyText(
     y,
-    // With a calendar anchor the peak-debt month reads as a date, matching the
-    // dated tables in this section and the calculator's own tiles. Without one
-    // the original 1-based prose is kept: re-basing the number under a labelling
-    // change would alter what this document states the peak-debt month is.
+    // R17 (spec §13.3, design decision 8). One labeller for every month this
+    // document prints: `formatProgrammeMonth` reads the ledger index (Month 0
+    // is the acquisition month) and prints a calendar month only when the
+    // programme is anchored. The pre-R17 no-anchor branch added one to the
+    // index, so the prose named a month the cashflow table below did not.
     `Total programme: ${inputs.finance.term_months} months. Peak senior debt of ${fmt(metrics.peak_debt_pence)} is reached in ${
       metrics.peak_debt_month === null
         ? 'month —'
-        : anchor != null
-          ? monthLabel(metrics.peak_debt_month)
-          : `month ${metrics.peak_debt_month + 1}`
+        : monthLabel(metrics.peak_debt_month)
     } of the programme. Total interest cost: ${fmt(model.totals.interest_pence)}.`,
+  );
+  y = bodyText(
+    y,
+    'Months are ledger months: Month 0 is the acquisition month; where a programme anchor exists, calendar months are printed instead.',
   );
   if (network == null && programme == null) {
     // §6 auto-window disclosure — a `programme == null` document has no
@@ -2240,21 +2289,30 @@ export function generateInvestmentMemo(
     y = bodyText(y, 'Cost to complete: not available.');
   } else {
     const ctc = metrics.cost_to_complete;
-    // `CostToCompleteSummary.months[].month` (and `first_shortfall_month`) is already 1-indexed
-    // (cost-to-complete.ts: labels run `m = 1..term`) — unlike `model.months` in the Monthly
-    // Cashflow table above, which is 0-indexed ledger months and genuinely needs `+ 1` for
-    // display. No `+ 1` here: the UI's CostToCompleteCard renders these raw, and the PDF must
-    // match it and the underlying data exactly.
+    // R17 (spec §13.3). `CostToCompleteSummary.months[].month` runs `m = 1..term`
+    // (cost-to-complete.ts): label `m` is the position at the START of ledger
+    // month `m` — after ledger month `m − 1` has spent and drawn — and its
+    // "remaining" figures cover ledger months `m .. term − 1`. So the ledger
+    // month a row refers to IS `m`, and it is printed through the one
+    // labeller, with no offset: `Month m` without an anchor (the same text
+    // this table always printed), the calendar month with one. The last row,
+    // `m = term`, is the terminal checkpoint after the final ledger month
+    // (`term − 1`), which the caption below says.
     y = bodyText(
       y,
-      `First funding shortfall: ${ctc.first_shortfall_month !== null ? `month ${ctc.first_shortfall_month}` : 'none — fully funded throughout'}. Maximum shortfall: ${fmt(ctc.max_shortfall_pence)}.`,
+      `First funding shortfall: ${ctc.first_shortfall_month !== null ? `from ${monthLabel(ctc.first_shortfall_month)}` : 'none — fully funded throughout'}. Maximum shortfall: ${fmt(ctc.max_shortfall_pence)}.`,
+    );
+    y = captionText(
+      y,
+      'Each row states the cost still to be incurred and the funding still available from the start of the named ledger month, '
+      + `after the preceding month's spend and draw; the final row (${monthLabel(schedule.term_months)}) is the checkpoint after the last ledger month.`,
     );
     table({
       startY: y,
       margin: { left: MARGIN_L, right: MARGIN_R },
       head: [['Month', 'Remaining Cost', 'Remaining Funding', 'Surplus']],
       body: ctc.months.map((m) => [
-        `Month ${m.month}`,
+        monthLabel(m.month),
         fmt(m.remaining_cost_pence),
         fmt(m.remaining_funding_pence),
         fmt(m.surplus_pence),
@@ -2747,7 +2805,7 @@ export function generateInvestmentMemo(
       recordParts.push(`${ddRecord.lease_years_remaining} years unexpired`);
     }
     if (ddRecord.floor_area_sqm !== null) {
-      recordParts.push(`floor area ${ddRecord.floor_area_sqm.toLocaleString()} m²`);
+      recordParts.push(`floor area ${areaText(ddRecord.floor_area_sqm, `${ddRecord.floor_area_sqm.toLocaleString()} m²`)}`);
     }
     if (ddRecord.use_class) recordParts.push(`use class ${ddRecord.use_class}`);
     if (ddRecord.epc_rating) recordParts.push(`EPC ${ddRecord.epc_rating}`);
@@ -2939,10 +2997,13 @@ export function generateInvestmentMemo(
     y = subHeading(y, 'Standard Lender Stresses (spec §25)');
     y = bodyText(
       y,
-      // Fix wave FI2: the sign-convention clause. Entry 7's normative label
-      // ("Refinance LTV -10 pp") and its Setting cell ("Refinance LTV +10.0 pp")
-      // read as a contradiction without it. Shared verbatim with the
-      // Sensitivity page's own caption via `STRESS_SIGN_CONVENTION`.
+      // Fix wave FI2: the sign-convention clause, for the levers other than
+      // entry 7. R17 (spec §13.2): entry 7's Setting cell no longer prints
+      // "+10.0 pp" beside its "-10 pp" label — `stressSettingText` prints
+      // "Maximum refinance LTV reduced by 10.0 percentage points." for it —
+      // and the convention sentence is retained for the other levers. Shared
+      // verbatim with the Sensitivity page's own caption via
+      // `STRESS_SIGN_CONVENTION`.
       'Nine standard stresses, each a full re-run of the appraisal with the committed facility held fixed. '
       + 'An inapplicable stress is printed with the reason it cannot move this scheme rather than omitted (spec §25.4). '
       + STRESS_SIGN_CONVENTION,
@@ -3179,7 +3240,7 @@ export function generateInvestmentMemo(
       const yieldPct = cv > 0 ? (annualRent / cv) * 100 : 0;
       return [
         unit ? unitLabel(unit.type) : '—',
-        unit ? `${unit.floor_area_sqm} m²` : '—',
+        unit ? areaText(unit.floor_area_sqm, `${unit.floor_area_sqm} m²`) : '—',
         fmt(r.monthly_rent_pence),
         fmt(annualRent),
         fmt(cv),
@@ -3450,8 +3511,8 @@ export function generateInvestmentMemo(
       // cp.implied_rate_pence_per_sqm (spec §16.8, base build ÷ developed area),
       // labelled as implied so it reads as derived, not entered.
       cp.mode === 'detailed'
-        ? ['Build rate £/m²', cp.implied_rate_pence_per_sqm === null ? 'n/a — zero area' : fmt(cp.implied_rate_pence_per_sqm), 'Implied — base build ÷ developed area (spec §16.8), not an entered figure']
-        : ['Build rate £/m²', fmt(inputs.conversion_costs.construction_cost_per_sqm_pence), 'Assumption — verify with QS'],
+        ? [`Build rate ${rateUnitLabel(areaUnit)}`, cp.implied_rate_pence_per_sqm === null ? 'n/a — zero area' : rateText(cp.implied_rate_pence_per_sqm, fmt(cp.implied_rate_pence_per_sqm)), 'Implied — base build ÷ developed area (spec §16.8), not an entered figure']
+        : [`Build rate ${rateUnitLabel(areaUnit)}`, rateText(inputs.conversion_costs.construction_cost_per_sqm_pence, fmt(inputs.conversion_costs.construction_cost_per_sqm_pence)), 'Assumption — verify with QS'],
       // R10 Task 13 (CARRIED-1, spec §16): one row per contingency class, each
       // with its own NAMED, resolved base — the static "On base build cost
       // only" string is retired because the base now differs by class and is
@@ -3512,6 +3573,205 @@ export function generateInvestmentMemo(
     alternateRowStyles: { fillColor: [241, 245, 249] },
   });
   y = lastAutoTableFinalY(doc) + 8;
+
+  // ── Section 12C: Elemental Cost Benchmark (R17, spec §12 / §27) ──
+  //
+  // Printed only when the engine computed a benchmark result. Every figure
+  // below is a field of `metrics.elemental_benchmark` — a result row or the
+  // totals block — and the memo performs no benchmark arithmetic: the one
+  // thing it does to a number is the §27.2 display conversion of a stored
+  // pence-per-m² rate into the report unit. The heading carries the engine's
+  // own provider label, which never says "BCIS" unless the provider is the
+  // user-supplied licensed tier — and then the body says what the application
+  // has and has not verified.
+  const eb = metrics.elemental_benchmark;
+  if (eb !== null) {
+    y = subHeading(y, `12C. Elemental Cost Benchmark — ${eb.provider_label}`);
+    if (eb.provider_type === 'bcis_licensed') {
+      y = bodyText(y, 'The application has not independently verified the user\'s licence or the underlying BCIS data.');
+    }
+    const rateInUnit = (pencePerSqm: number | null): string =>
+      pencePerSqm === null ? '—' : formatRatePence(pencePerSqm, areaUnit);
+    const basisLabel = (r: ElementalBenchmarkRow): string => {
+      switch (r.measurement_basis) {
+        case 'area': return `area (${r.original_unit === 'gbp_per_sqft' ? '£/ft²' : '£/m²'})`;
+        case 'per_unit': return 'per unit';
+        case 'per_item': return 'per item';
+        case 'percentage': return 'percentage';
+        case 'lump_sum': return 'lump sum';
+      }
+    };
+    const quantityText = (r: ElementalBenchmarkRow): string => {
+      switch (r.measurement_basis) {
+        case 'area': return formatAreaWithUnit(r.quantity, areaUnit);
+        case 'per_unit': return `${r.quantity.toLocaleString()} unit${r.quantity === 1 ? '' : 's'}`;
+        case 'per_item': return `${r.quantity.toLocaleString()} item${r.quantity === 1 ? '' : 's'}`;
+        case 'percentage': return 'of elemental subtotal';
+        case 'lump_sum': return '1';
+      }
+    };
+    const originalRateText = (r: ElementalBenchmarkRow): string => {
+      switch (r.measurement_basis) {
+        case 'area': return rateInUnit(r.canonical_rate_pence_per_sqm);
+        case 'per_unit': return `${fmt(r.original_rate_pence)}/unit`;
+        case 'per_item': return `${fmt(r.original_rate_pence)}/item`;
+        case 'percentage': return r.rate_pct === null ? '—' : `${r.rate_pct}%`;
+        case 'lump_sum': return fmt(r.original_rate_pence);
+      }
+    };
+    const currentisedRateText = (r: ElementalBenchmarkRow): string => {
+      if (r.measurement_basis === 'area') return rateInUnit(r.currentised_rate_pence_per_sqm);
+      if (r.measurement_basis === 'percentage') return '—';
+      return r.currentised_rate_pence === null ? '—' : fmt(r.currentised_rate_pence);
+    };
+    const locationText = eb.location_evidenced && eb.location_factor !== null
+      ? `Location factor ${eb.location_factor} (multiplier ${eb.location_multiplier})`
+      : NO_LOCATION_SENTENCE;
+    const statedAt = eb.currentisation_date ?? eb.base_date;
+
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Item', 'Value']],
+      body: [
+        ['Provider', `${eb.provider_label} (classification: ${eb.provider_type})`],
+        ['Benchmark set', eb.set_name],
+        ['Building function / project type', `${eb.building_function} / ${eb.project_type.replace(/_/g, ' ')}`],
+        ['Specification level', eb.specification_level || 'not stated'],
+        ['Region', eb.region || 'not stated'],
+        ['Base date', eb.base_date],
+        ['Currentisation date', eb.currentisation_date ?? 'none — rates compared at their base date'],
+        ['Location adjustment', locationText],
+        ['Report unit', reportAreaUnitText],
+        ['Benchmark base build', `${fmt(eb.totals.benchmark_base_construction_pence)} (${rateInUnit(eb.totals.benchmark_rate_pence_per_sqm)})`],
+        ['QS / developer base build', `${fmt(eb.totals.qs_base_construction_pence)} (${rateInUnit(eb.totals.qs_rate_pence_per_sqm)})`],
+        // Plain hyphen: helvetica carries no U+2212 glyph and jsPDF would
+        // switch the whole cell to a 16-bit encoding that the text checks
+        // cannot read.
+        ['Variance (benchmark - QS)', `${signedPenceToPounds(eb.totals.difference_pence)} (${fmtPctSafe(eb.totals.difference_pct)})`],
+      ],
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: { 0: { cellWidth: 52, fontStyle: 'bold' } },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+
+    y = subHeading(y, 'Elemental comparison');
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Element', 'Basis', 'Quantity', 'Original rate', 'Currentised rate', 'Adj.',
+        'Benchmark', 'QS', 'Variance', 'Evidence']],
+      body: eb.rows.map((r) => [
+        r.element_label,
+        basisLabel(r),
+        quantityText(r),
+        originalRateText(r),
+        currentisedRateText(r),
+        r.adjustment_pct === 0 ? '—' : `${r.adjustment_pct}%`,
+        fmt(r.benchmark_amount_pence),
+        r.qs_amount_pence === null ? '—' : fmt(r.qs_amount_pence),
+        r.variance_pence === null ? '—' : `${signedPenceToPounds(r.variance_pence)} (${fmtPctSafe(r.variance_pct)})`,
+        `${r.evidence_status}${r.outside_range === true ? ' (outside IQR)' : ''}`,
+      ]),
+      foot: [[
+        'Benchmark base build', '', '', '', '', '',
+        fmt(eb.totals.benchmark_base_construction_pence),
+        fmt(eb.totals.qs_base_construction_pence),
+        `${signedPenceToPounds(eb.totals.difference_pence)} (${fmtPctSafe(eb.totals.difference_pct)})`,
+        '',
+      ]],
+      // Ten columns: 7 pt, as every table wider than the risk register uses.
+      // Fixed widths summing to CONTENT_W (170 mm), each clearing its
+      // column's longest single word at 7 pt ("unverified", "percentage").
+      styles: { fontSize: 7, cellPadding: 1.2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      footStyles: { fillColor: [226, 232, 240], textColor: [30, 58, 95], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: {
+        0: { cellWidth: 21 },
+        1: { cellWidth: 17 },
+        2: { cellWidth: 17, halign: 'right' },
+        3: { cellWidth: 17, halign: 'right' },
+        4: { cellWidth: 17, halign: 'right' },
+        5: { cellWidth: 9, halign: 'right' },
+        6: { cellWidth: 17, halign: 'right' },
+        7: { cellWidth: 17, halign: 'right' },
+        8: { cellWidth: 22, halign: 'right' },
+        9: { cellWidth: 16 },
+      },
+    });
+    y = lastAutoTableFinalY(doc) + 3;
+    y = captionText(
+      y,
+      `Rates are printed in ${rateUnitLabel(areaUnit)} and areas in ${areaUnitLabel(areaUnit)}. The document stores square metres and pence per `
+      + 'square metre; an imperial figure is a display conversion at the §27.2 header clause 1 m² = '
+      + `${SQFT_PER_SQM} ft². Non-area bases print their own unit. Every figure is a field of the engine's `
+      + 'result block; nothing is recomputed here.',
+    );
+
+    const unmatched = eb.rows.filter((r) => r.target_cost_package_id === null).map((r) => r.element_label);
+    y = bodyText(
+      y,
+      `Unmatched elements (no target cost-plan package): ${unmatched.length === 0 ? 'none' : unmatched.join(', ')}. `
+      + `Unmapped QS amount (packages no element targets): ${fmt(eb.totals.unmapped_qs_amount_pence)}.`,
+    );
+
+    y = subHeading(y, 'Currentisation');
+    y = bodyText(
+      y,
+      eb.currentisation_factor !== null
+        ? `Index ratio: ${eb.base_index_name} ${eb.base_index_value} at ${eb.base_date} to `
+          + `${eb.current_index_name} ${eb.current_index_value} at ${eb.currentisation_date}; `
+          + `currentisation factor ${eb.currentisation_factor}. ${locationText}${eb.location_evidenced ? '.' : ''}`
+        : `Rates are not currentised (method: none) — compared at their base date, ${eb.base_date}. `
+          + `${locationText}${eb.location_evidenced ? '.' : ''}`,
+    );
+    y = bodyText(
+      y,
+      `Benchmark amounts are stated at ${statedAt}. Where applied to the cost plan they are inflated to each `
+      + 'package\'s spend midpoint by the cost-plan inflation line (§24.3) and by nothing else.',
+    );
+    for (const w of eb.warnings) {
+      y = infoRequired(y, `${w.message} (${w.code}, ${w.severity})`);
+    }
+
+    y = subHeading(y, 'Source, retrieval and evidence');
+    const evidenceTally = (['verified', 'unverified', 'draft', 'estimated'] as const)
+      .map((s) => `${s} ${eb.rows.filter((r) => r.evidence_status === s).length}`)
+      .join(', ');
+    table({
+      startY: y,
+      margin: { left: MARGIN_L, right: MARGIN_R },
+      head: [['Field', 'Value']],
+      body: [
+        ['Set name', eb.set_name],
+        ['Dataset version', eb.dataset_version],
+        ['Content hash', eb.content_hash],
+        ['Index dataset version', eb.index_dataset_version ?? 'none'],
+        ['Library set', eb.library_set_id ?? 'not taken from the library'],
+        ['Evidence status (rows)', evidenceTally],
+        ['Elements without evidence', `${eb.totals.elements_without_evidence}`],
+        ['Elements outside the interquartile range', `${eb.totals.elements_outside_range}`],
+        ['Unpriced elements', `${eb.totals.unpriced_elements}`],
+        ['Coverage', fmtPctSafe(eb.totals.coverage_pct)],
+      ],
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255 },
+      bodyStyles: { textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
+      columnStyles: { 0: { cellWidth: 52, fontStyle: 'bold' } },
+    });
+    y = lastAutoTableFinalY(doc) + 6;
+    y = bodyText(
+      y,
+      `${BENCHMARK_LIMITATION_SENTENCE} The comparison is advisory: it enters no total in this appraisal `
+      + `(enters_tdc: ${eb.enters_tdc}).`,
+    );
+  }
 
   y = subHeading(y, 'B. Information Required');
   const infoItems = [
@@ -3616,6 +3876,18 @@ export function generateInvestmentMemo(
     + 'It is suitable for sponsor review and for preliminary lender appraisal. It is not a credit paper, '
     + 'a valuation, a cost plan, a tax opinion or a legal report, and no lender should rely on it for a '
     + 'credit decision without independently verifying the matters listed below.',
+  );
+
+  // R17 (spec §12, §27.2). The unit methodology, stated once: the canonical
+  // basis is metric, and the report unit is a display choice made outside the
+  // document.
+  y = bodyText(
+    y,
+    'Areas and rates are stored in square metres and pence per square metre; this document prints '
+    + `${areaUnitLabel(areaUnit)}${imperial
+        ? `, and every imperial figure is a display conversion at 1 m² = ${SQFT_PER_SQM} ft² — no stored value is changed by the choice of unit`
+        : ' (imperial secondary figures, where printed, are display conversions at 1 m² = '
+          + `${SQFT_PER_SQM} ft²)`}.`,
   );
 
   y = subHeading(y, 'What the figures rest on');
@@ -3739,7 +4011,24 @@ export function generateInvestmentMemo(
       : 'No area schedule has been entered for this appraisal. Areas are taken from the unit schedule and the entered construction area only, with no existing-to-developed reconciliation to check them against.',
     // R15 (spec §23.8/§13.4). See `ddLimitation` above.
     ddLimitation(),
+    // R17 (spec §13.4, design decision 11). jsPDF 4.2.1 exposes no structure
+    // tree, MarkInfo or role map, so the file cannot be tagged; the memo says
+    // so rather than asserting a /Marked flag it does not honour. Title,
+    // subject, language and DisplayDocTitle are still set (report-layout.ts).
+    'This PDF is not tagged to PDF/UA; the generator library exposes no structure tree.',
   ];
+  if (eb !== null) {
+    // R17 (spec §27.4). The benchmark is advisory by construction: the engine
+    // pins `enters_tdc` false, and this document's construction cost, total
+    // development cost, peak debt and profit are what they would be with no
+    // benchmark block at all.
+    limitations.push(
+      `The elemental cost benchmark in Section 12C (${eb.provider_label}) is advisory: it enters no total — `
+      + 'construction cost, total development cost, peak debt and profit are unchanged by it '
+      + `(enters_tdc: ${eb.enters_tdc}). Its rates are compared against the cost plan, not adopted by it; a package `
+      + 'created from it is an ordinary estimate-basis package of the cost plan, and only the cost-plan inflation line moves it in time.',
+    );
+  }
   if (metrics.lender_gdv_pence === null) {
     limitations.push('No lender-underwritten valuation has been provided. Every loan-to-value figure on a lender basis is therefore unavailable rather than assumed from the developer GDV.');
   }

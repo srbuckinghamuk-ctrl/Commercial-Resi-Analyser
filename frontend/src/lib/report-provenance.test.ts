@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  draftReason, documentStatus, buildProvenance, ALLOWED_TRANSITIONS, structurallyEqual,
+  draftReason, documentStatus, buildProvenance, ALLOWED_TRANSITIONS, ROLE_TRANSITIONS,
+  CREATE_ROLES, canTransition, structurallyEqual, dueDiligenceGateFor,
 } from './report-provenance';
+import { emptyClaims } from './model/due-diligence';
+import type { SourceConflictResolution, SourceEvidenceRecord } from './model/due-diligence';
+import type { CalculatorInputsV17 } from './model/finance-types';
 import type { DraftReason } from './report-provenance';
 import type { LenderCase } from '../types';
 import {
@@ -10,7 +14,7 @@ import {
 } from './model';
 import type { AnyCalculatorInputs, CalculatorInputsV8 } from './model';
 import {
-  qaProject, sellAllInputs, legacyV1Snapshot, welshInputs,
+  qaProject, sellAllInputs, legacyV1Snapshot, welshInputs, costPlanInTimeInputs, benchmarkInputs,
 } from './report-qa/memo-fixtures';
 import { ddDoc } from './model/__fixtures__/due-diligence-docs';
 
@@ -399,6 +403,34 @@ describe('R14b — the transition table mirror (spec §21.2)', () => {
   });
 });
 
+describe('R17 — the role matrix mirror (spec §21.2 amended, design §10.3)', () => {
+  it('is exactly the Python table', () => {
+    // Mirrors tests/test_provenance.py::TestRoleTransitions::test_the_table_is_exactly_the_design_sec_10_3_table.
+    expect(ROLE_TRANSITIONS).toEqual({
+      submitted: ['developer', 'broker', 'administrator'],
+      under_review: ['underwriter', 'credit_approver'],
+      information_required: ['underwriter', 'credit_approver'],
+      credit_approved: ['credit_approver'],
+      approved_with_conditions: ['credit_approver'],
+      declined: ['credit_approver'],
+      superseded: ['developer', 'broker', 'underwriter', 'credit_approver', 'administrator'],
+    });
+    expect(CREATE_ROLES).toEqual(['developer', 'broker', 'administrator']);
+  });
+
+  it('canTransition reads the table and nothing else', () => {
+    expect(canTransition('developer', 'submitted')).toBe(true);
+    expect(canTransition('developer', 'under_review')).toBe(false);
+    expect(canTransition('underwriter', 'credit_approved')).toBe(false);
+    expect(canTransition('credit_approver', 'declined')).toBe(true);
+    expect(canTransition('broker', 'superseded')).toBe(true);
+    // Creation is not a transition; nobody "transitions" to draft.
+    expect(canTransition('administrator', 'draft')).toBe(false);
+    // An unknown role is never allowed, superseded included.
+    expect(canTransition('viewer', 'superseded')).toBe(false);
+  });
+});
+
 describe('R14b — structurallyEqual (the unsaved-edit staleness check)', () => {
   it('ignores key order', () => {
     expect(structurallyEqual({ a: 1, b: { c: [1, 2] } }, { b: { c: [1, 2] }, a: 1 })).toBe(true);
@@ -578,5 +610,84 @@ describe('buildProvenance derives the due-diligence gate', () => {
     expect('due_diligence' in run.inputs).toBe(false);
     const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
     expect(prov.dueDiligenceComplete).toBe(true);
+  });
+});
+
+// R17 (spec §23.5 amended, design decision 12). The gate's second count:
+// two source records disagreeing on a claim, with no evidenced resolution,
+// holds the document in DRAFT under the SAME reason the unknown items do.
+// Twin of tests/test_provenance.py::TestDueDiligenceComplete.
+describe('R17 — the source-conflict half of the due-diligence gate', () => {
+  const evidence = { source: 'Site solicitor', reference: 'Report ref 1', date: '2026-08-01' };
+  const evidenced = () => ddDoc({
+    status: { cil_s106: 'green', leases_tenancies: 'green', fire_strategy: 'green' },
+    evidence: { cil_s106: evidence, leases_tenancies: evidence, fire_strategy: evidence },
+  });
+  const record = (id: string, kind: SourceEvidenceRecord['kind'], existingUse: string): SourceEvidenceRecord => ({
+    id, kind, captured_at: '2026-08-01', reference: `ref ${id}`, captured_by: 'tester',
+    narrative_excerpt: null, claims: { ...emptyClaims(), existing_use: existingUse },
+  });
+  const conflicting = [record('rec-1', 'listing_structured', 'office'), record('rec-2', 'measured_survey', 'retail')];
+  const withRecords = (
+    records: SourceEvidenceRecord[], resolutions: SourceConflictResolution[],
+  ): CalculatorInputsV17 => {
+    const doc = evidenced();
+    return { ...doc, due_diligence: { ...doc.due_diligence, source_records: records, source_resolutions: resolutions } };
+  };
+
+  it('two conflicting records without a resolution hold the document in DRAFT', () => {
+    const run = runAppraisal(withRecords(conflicting, []));
+    expect(run.metrics.due_diligence.totals.entered_unknown_count).toBe(0);
+    expect(run.metrics.due_diligence.unresolved_source_conflicts).toBe(1);
+    expect(dueDiligenceGateFor(run).dueDiligenceComplete).toBe(false);
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBe('due_diligence_incomplete');
+    expect(prov.documentStatus).toBe('DRAFT');
+  });
+
+  it('an evidenced resolution closes the gate', () => {
+    const resolution: SourceConflictResolution = {
+      id: 'res-1', field: 'existing_use', resolved_value: 'office', chosen_record_id: 'rec-1',
+      evidence_reference: 'Survey p.3', resolved_by: 'tester', resolved_at: '2026-08-02', reason: 'measured',
+    };
+    const run = runAppraisal(withRecords(conflicting, [resolution]));
+    expect(run.metrics.due_diligence.unresolved_source_conflicts).toBe(0);
+    expect(dueDiligenceGateFor(run).dueDiligenceComplete).toBe(true);
+    const prov = buildProvenance(run, null, { lenderCaseStatus: 'credit_approved' });
+    expect(prov.draftReason).toBeNull();
+    expect(prov.documentStatus).toBe('FINAL');
+  });
+});
+
+// R17 (spec §12, §27.2). The three panel rows the benchmark release adds:
+// the report unit (a presentation preference, stated and never hashed) and,
+// when the run carries a benchmark block, the set and index versions the
+// memo's §12C comparison was computed from — read off the run's own result
+// block, never re-derived.
+describe('report area unit and benchmark rows (R17, spec §12)', () => {
+  it('defaults the report unit to metric and prints no benchmark rows without a block', () => {
+    const run = runAppraisal(costPlanInTimeInputs());
+    expect(run.metrics.elemental_benchmark).toBeNull();
+    const prov = buildProvenance(run, null);
+    expect(prov.reportAreaUnit).toBe('metric');
+    expect(prov.benchmarkDatasetVersion).toBeNull();
+    expect(prov.benchmarkContentHash).toBeNull();
+    expect(prov.indexDatasetVersion).toBeNull();
+  });
+
+  it('carries the caller\'s area unit', () => {
+    const run = runAppraisal(costPlanInTimeInputs());
+    expect(buildProvenance(run, null, { areaUnit: 'imperial' }).reportAreaUnit).toBe('imperial');
+  });
+
+  it('reports the benchmark set and index dataset versions off the result block', () => {
+    const run = runAppraisal(benchmarkInputs());
+    const eb = run.metrics.elemental_benchmark!;
+    expect(eb).not.toBeNull();
+    const prov = buildProvenance(run, null);
+    expect(prov.benchmarkDatasetVersion).toBe(eb.dataset_version);
+    expect(prov.benchmarkContentHash).toBe(eb.content_hash);
+    expect(prov.benchmarkContentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(prov.indexDatasetVersion).toBe(eb.index_dataset_version);
   });
 });

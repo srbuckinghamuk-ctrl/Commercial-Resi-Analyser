@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   LEVER_LABEL, LEVER_SHORT, formatStepLabel, formatRangeLabel, flagShortCodes, unmeasuredCellNotes,
   isMeasuredBar, omittedTornadoNotes, unmeasuredCellNote, selectableLevers,
-  stressSettingText, STRESS_SIGN_CONVENTION,
+  stressSettingText, STRESS_SIGN_CONVENTION, formatStressSetting,
 } from './sensitivity-format';
 import { LEVER_ORDER } from './model/sensitivity';
 import type { SensitivityCell, TornadoBar } from './model/sensitivity';
@@ -511,9 +511,58 @@ describe('stressSettingText (spec §25.5)', () => {
   });
 });
 
+// R17 spec §13.2. Entry 7's Setting cell no longer prints the adverse-positive
+// quote ("Refinance LTV +10.0 pp") beside its "-10 pp" label; it says in words
+// what the lever does, with the magnitude read from the setting (1 dp).
+describe('formatStressSetting refi_ltv special case (R17 spec §13.2)', () => {
+  it('prints the verbatim sentence for the standard -10 pp entry', () => {
+    expect(formatStressSetting({ lever: 'refi_ltv', value: 10 })).toBe(
+      'Maximum refinance LTV reduced by 10.0 percentage points.',
+    );
+  });
+
+  it('formats the magnitude from the setting at 1 dp, not from a literal', () => {
+    expect(formatStressSetting({ lever: 'refi_ltv', value: 12.5 })).toBe(
+      'Maximum refinance LTV reduced by 12.5 percentage points.',
+    );
+    expect(formatStressSetting({ lever: 'refi_ltv', value: 7 })).toBe(
+      'Maximum refinance LTV reduced by 7.0 percentage points.',
+    );
+    // An explicit `decimals` never reintroduces the signed-pp form.
+    expect(formatStressSetting({ lever: 'refi_ltv', value: 10 }, 2)).toBe(
+      'Maximum refinance LTV reduced by 10.0 percentage points.',
+    );
+  });
+
+  it('reaches both consumers through stressSettingText, with no "+10.0 pp" quote', () => {
+    const text = stressSettingText({
+      key: 'refi_ltv_down',
+      label: 'Refinance LTV -10 pp',
+      settings: [{ lever: 'refi_ltv', value: 10 }],
+      derivation: null,
+      applicable: true,
+      note: null,
+      metrics: {
+        profit_pence: null, profit_on_cost_pct: null, profit_on_gdv_pct: null, irr_annual_pct: null,
+        ltgdv_developer_pct: null, peak_debt_pence: null, flags: [], validation_errors: [],
+      },
+      delta_profit_pence: null,
+    } as unknown as StressResult);
+    expect(text).toBe('Maximum refinance LTV reduced by 10.0 percentage points.');
+    expect(text).not.toContain('Refinance LTV +10.0 pp');
+  });
+
+  it('leaves the other percentage-point levers in the signed convention', () => {
+    expect(formatStressSetting({ lever: 'abnormal_cost', value: 10 })).toBe('Abnormal cost +10.0 pp');
+    expect(formatStressSetting({ lever: 'saleable_area', value: -10 })).toBe('Saleable area -10%');
+    // Axis captions are unchanged: the lever's step label still carries its sign.
+    expect(formatStepLabel('refi_ltv', 10)).toBe('+10.0 pp');
+  });
+});
+
 // Fix wave FI2. One sentence, shared verbatim by both stress-pack tables, so a
-// reader meeting entry 7's "Refinance LTV -10 pp" label beside its
-// "Refinance LTV +10.0 pp" Setting can tell a convention from a contradiction.
+// reader meeting entry 7's "Refinance LTV -10 pp" label can tell a convention
+// from a contradiction. Retained for the other levers after R17 spec §13.2.
 describe('STRESS_SIGN_CONVENTION', () => {
   it('is ASCII-only prose naming the adverse-positive convention', () => {
     expect(STRESS_SIGN_CONVENTION).toBe(

@@ -131,11 +131,25 @@ export function formatStepLabel(lever: SensitivityLever, step: number): string {
  * quote everywhere else. Kept minimal and local to this function: it does not
  * feed back into `formatStepLabel` or `decimalsFor`, which stay the single
  * source for every other caller's precision.
+ *
+ * R17 spec §13.2: `refi_ltv` is the one lever whose Setting is NOT quoted in
+ * the adverse-positive convention. Entry 7's normative label reads
+ * `Refinance LTV -10 pp` (spec §25.2) and its Setting used to read
+ * `Refinance LTV +10.0 pp`, and the sign-convention sentence alone did not
+ * stop readers seeing a contradiction. The Setting now says what the lever
+ * does in words -- "Maximum refinance LTV reduced by 10.0 percentage
+ * points." -- with the magnitude taken from the setting itself (1 dp, the
+ * lever's own precision), never a hard-coded literal. The label is
+ * unchanged and `formatStepLabel` (axis captions) is unchanged; both
+ * consumers of the Setting cell reach this through `stressSettingText`.
  */
 export function formatStressSetting(
   s: { lever: SensitivityLever; value: number },
   decimals?: number,
 ): string {
+  if (s.lever === 'refi_ltv') {
+    return `Maximum refinance LTV reduced by ${Math.abs(s.value).toFixed(1)} percentage points.`;
+  }
   if (decimals === undefined) return `${LEVER_LABEL[s.lever]} ${formatStepLabel(s.lever, s.value)}`;
   const text = signed(s.value, decimals);
   const unit = PERCENT_LEVERS.includes(s.lever) ? '%' : MONTH_LEVERS.includes(s.lever) ? ' months' : ' pp';
@@ -148,13 +162,13 @@ export function formatStressSetting(
  * state it differently.
  *
  * It exists because entry 7's normative label (`Refinance LTV -10 pp`, spec
- * §25.2) and its Setting cell (`Refinance LTV +10.0 pp`) look like a
- * contradiction to a reader holding only the table. They are not: the label
+ * §25.2) and its Setting cell (then `Refinance LTV +10.0 pp`) looked like a
+ * contradiction to a reader holding only the table. They were not: the label
  * names the commercial move in the direction a lender would describe it, while
- * every Setting is quoted in the adverse-positive lever convention `§12.1` uses
- * throughout — a positive magnitude is always the adverse direction, which for
- * `refi_ltv` is a LOWER cap. The label is normative and is not changed; the
- * convention is simply stated.
+ * every other Setting is quoted in the adverse-positive lever convention
+ * `§12.1` uses throughout — a positive magnitude is always the adverse
+ * direction. R17 spec §13.2 made `refi_ltv`'s Setting say so in words
+ * (`formatStressSetting`); this sentence is retained for the other levers.
  *
  * ASCII only (a hyphen, not an em-dash): this string is drawn into a PDF by
  * jsPDF as well as rendered in the browser.

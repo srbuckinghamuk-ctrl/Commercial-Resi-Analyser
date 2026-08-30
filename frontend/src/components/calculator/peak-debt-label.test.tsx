@@ -5,9 +5,9 @@ import FinancePage from './FinancePage';
 import InvestorSummaryPage from './InvestorSummaryPage';
 import {
   runAppraisal, migrateV8toV9, migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13,
-  migrateV13toV14, migrateV14toV15, migrateV15toV16,
+  migrateV13toV14, migrateV14toV15, migrateV15toV16, migrateV16toV17,
 } from '../../lib/model';
-import type { CalculatorInputsV16 } from '../../lib/model';
+import type { CalculatorInputsV17 } from '../../lib/model';
 import { defaultCalculatorInputsV8 } from '../../lib/conversion-defaults';
 import type { Project } from '../../types';
 
@@ -43,7 +43,7 @@ const PROJECT = {
  * hand-built network so the fixture cannot drift from the migration chain it
  * is meant to mirror.
  */
-function anchoredInputs(anchor: string | null): CalculatorInputsV16 {
+function anchoredInputs(anchor: string | null): CalculatorInputsV17 {
   const inputs = defaultCalculatorInputsV8();
   inputs.finance.funding_source = 'development_finance';
   inputs.finance.committed_net_facility_pence = 60_000_000;
@@ -62,7 +62,7 @@ function anchoredInputs(anchor: string | null): CalculatorInputsV16 {
       statutory: { start_offset: 1, duration_months: 5, curve: { kind: 'straight_line' } },
     },
   };
-  return migrateV15toV16(migrateV14toV15(migrateV13toV14(migrateV12toV13(migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(inputs))))))));
+  return migrateV16toV17(migrateV15toV16(migrateV14toV15(migrateV13toV14(migrateV12toV13(migrateV11toV12(migrateV10toV11(migrateV9toV10(migrateV8toV9(inputs)))))))));
 }
 
 /** The peak-debt month is shown on four surfaces. Before this fix the Cashflow

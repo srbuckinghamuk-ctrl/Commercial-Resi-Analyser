@@ -36,3 +36,19 @@ describe('formatProgrammeMonth', () => {
     expect(formatProgrammeMonth('2026-01', 23)).toBe('Dec 2027');
   });
 });
+
+// R17 (spec §13.3, design decision 8). Month labels are the ledger index:
+// the acquisition month is 0, an entered `reporting_month: 11` prints as
+// "Month 11", and the same function labels a calendar month only when the
+// programme is anchored — no surface adds one.
+describe('ledger-index convention (R17)', () => {
+  it('prints the ledger index itself, with the acquisition month at 0', () => {
+    expect(formatProgrammeMonth(null, 0)).toBe('Month 0');
+    expect(formatProgrammeMonth(null, 11)).toBe('Month 11');
+    expect(formatProgrammeMonth(null, 12)).toBe('Month 12');
+  });
+  it('maps the same index to the anchor month plus that many months', () => {
+    expect(formatProgrammeMonth('2026-09', 0)).toBe('Sep 2026');
+    expect(formatProgrammeMonth('2026-09', 11)).toBe('Aug 2027');
+  });
+});

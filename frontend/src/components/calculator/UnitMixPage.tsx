@@ -1,12 +1,15 @@
 import { useCallback } from 'react';
 import type { ProposedUnitV6, UnitType } from '../../lib/conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from '../../lib/conversion-types';
-import type { CalculatorInputsV16, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV17, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
+import { areaUnitLabel, displayArea, entryAreaToSqm, formatAreaBoth, formatAreaWithUnit } from '../../lib/area-units';
+import { useAreaUnit } from '../../lib/area-unit-context';
+import AreaUnitToggle from '../AreaUnitToggle';
 
 interface Props {
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   run: AppraisalRun;
 }
 
@@ -19,6 +22,11 @@ const UNIT_TYPES: { value: UnitType; label: string }[] = [
 
 export default function UnitMixPage({ inputs, onChange, run }: Props) {
   const units = inputs.unit_mix.units;
+  // R17 spec §27.2: the stored figure is always m²; the display unit converts
+  // at render time and a typed ft² figure converts once on entry.
+  const { unit: areaUnit } = useAreaUnit();
+  const shownArea = (sqm: number): number => (areaUnit === 'metric' ? sqm : Math.round(displayArea(sqm, areaUnit) * 1e4) / 1e4);
+  const footerArea = (sqm: number): string => formatAreaWithUnit(sqm, areaUnit, areaUnit === 'metric' ? 0 : 1);
 
   const updateUnits = useCallback(
     (newUnits: ProposedUnitV6[]) => {
@@ -69,7 +77,10 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
 
   return (
     <div>
-      <h3 style={{ color: '#e2e8f0', fontSize: 18, marginBottom: 20 }}>3. Unit Mix & Schedule</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <h3 style={{ color: '#e2e8f0', fontSize: 18, margin: 0 }}>3. Unit Mix & Schedule</h3>
+        <AreaUnitToggle compact />
+      </div>
 
       {units.map((unit, i) => (
         <div
@@ -105,11 +116,12 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
               </select>
             </div>
             <div>
-              <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Floor area (m²)</label>
+              <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Floor area ({areaUnitLabel(areaUnit)})</label>
               <input
                 type="number"
-                value={unit.floor_area_sqm}
-                onChange={(e) => updateUnit(unit.id, { floor_area_sqm: Number(e.target.value) })}
+                value={shownArea(unit.floor_area_sqm)}
+                title={formatAreaBoth(unit.floor_area_sqm, areaUnit)}
+                onChange={(e) => updateUnit(unit.id, { floor_area_sqm: entryAreaToSqm(Number(e.target.value), areaUnit) })}
                 style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
               />
             </div>
@@ -149,11 +161,12 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
             </div>
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
               <div>
-                <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Balcony/terrace (m²)</label>
+                <label style={{ color: '#94a3b8', fontSize: 13, display: 'block', marginBottom: 4 }}>Balcony/terrace ({areaUnitLabel(areaUnit)})</label>
                 <input
                   type="number"
-                  value={unit.ancillary.balcony_terrace_sqm}
-                  onChange={(e) => updateAncillary(unit, { balcony_terrace_sqm: Number(e.target.value) })}
+                  value={shownArea(unit.ancillary.balcony_terrace_sqm)}
+                  title={formatAreaBoth(unit.ancillary.balcony_terrace_sqm, areaUnit)}
+                  onChange={(e) => updateAncillary(unit, { balcony_terrace_sqm: entryAreaToSqm(Number(e.target.value), areaUnit) })}
                   style={{ width: 120, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
                 />
               </div>
@@ -212,9 +225,9 @@ export default function UnitMixPage({ inputs, onChange, run }: Props) {
             or the reconciliation table. */}
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: 8 }}>
           <span>Units: {units.length}</span>
-          <span>Total NIA: {run.metrics.area_bridge.unit_nia_sqm.toLocaleString()} m²</span>
-          <span style={{ color: '#64748b' }}>
-            Ancillary: {run.metrics.area_bridge.ancillary_balcony_terrace_sqm.toLocaleString()} m²
+          <span title={formatAreaBoth(run.metrics.area_bridge.unit_nia_sqm, areaUnit)}>Total NIA: {footerArea(run.metrics.area_bridge.unit_nia_sqm)}</span>
+          <span style={{ color: '#64748b' }} title={formatAreaBoth(run.metrics.area_bridge.ancillary_balcony_terrace_sqm, areaUnit)}>
+            Ancillary: {footerArea(run.metrics.area_bridge.ancillary_balcony_terrace_sqm)}{' '}
             balcony/terrace · {run.metrics.area_bridge.ancillary_parking_spaces} parking
           </span>
         </div>

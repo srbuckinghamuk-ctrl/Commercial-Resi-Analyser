@@ -17,6 +17,7 @@ import type { FinancialAppraisal, LenderCase, LenderCaseStatus } from '../types'
 import type { AppraisalRun, ReconciliationStatus } from './model';
 import { CALC_VERSION, vatBasisGate } from './model';
 import type { Jurisdiction } from './tax/acquisition-tax';
+import type { AreaUnit } from './area-units';
 
 /** Where a lender case has reached. Populated from R14b; was null-only until
  *  then. Canonical in ../types; re-exported here so existing importers of
@@ -40,6 +41,38 @@ export const ALLOWED_TRANSITIONS: Record<LenderCaseStatus, readonly LenderCaseSt
   declined: ['superseded'],
   superseded: [],
 };
+
+/** R17 (spec §21.2 amended, design §10.3): the five roles. Mirrors
+ *  app/auth/roles.py ROLES. */
+export type UserRole = 'developer' | 'broker' | 'underwriter' | 'credit_approver' | 'administrator';
+
+/** R17, normative on the server (`ROLE_TRANSITIONS` in provenance.py); this
+ *  mirror drives the UI's buttons only — the server refuses regardless. Which
+ *  roles may move a case INTO each status; creation (→ draft) is CREATE_ROLES.
+ *  `superseded` is any authenticated role, written as the full set rather
+ *  than an "any" sentinel. Pinned literally by mirrored tests. */
+export const ROLE_TRANSITIONS: Record<Exclude<LenderCaseStatus, 'draft'>, readonly UserRole[]> = {
+  submitted: ['developer', 'broker', 'administrator'],
+  under_review: ['underwriter', 'credit_approver'],
+  information_required: ['underwriter', 'credit_approver'],
+  credit_approved: ['credit_approver'],
+  approved_with_conditions: ['credit_approver'],
+  declined: ['credit_approver'],
+  superseded: ['developer', 'broker', 'underwriter', 'credit_approver', 'administrator'],
+};
+
+/** Who may open a case (→ draft). Same row as → submitted, stated separately
+ *  because creation is not a transition in ALLOWED_TRANSITIONS. */
+export const CREATE_ROLES: readonly UserRole[] = ['developer', 'broker', 'administrator'];
+
+/** True when `role` may move a case into `to` under ROLE_TRANSITIONS. Says
+ *  nothing about legality from the current status (ALLOWED_TRANSITIONS) or
+ *  maker-checker, which only the server can judge. Port of provenance.py's
+ *  can_transition. */
+export function canTransition(role: string, to: LenderCaseStatus): boolean {
+  if (to === 'draft') return false;
+  return (ROLE_TRANSITIONS[to] as readonly string[]).includes(role);
+}
 
 export interface ReportProvenance {
   /** Stored appraisal record id, or null when the report is built from an unsaved run. */
@@ -112,9 +145,23 @@ export interface ReportProvenance {
    *  or when the document predates due diligence altogether (the R8
    *  exemption: it is not re-graded against a condition that post-dates it). */
   dueDiligenceComplete: boolean;
+  /** R17, spec §12/§27.2. The unit the report prints areas and rates in — a
+   *  presentation preference held outside the document (design decision 2),
+   *  so it is stated on the panel and never hashed. `'metric'` unless the
+   *  caller says otherwise; the memo's explicit option wins over this. */
+  reportAreaUnit: AreaUnit;
+  /** R17, spec §12. The benchmark set the advisory comparison in the memo's
+   *  §12C was computed from — `dataset_version` and `content_hash` of
+   *  `metrics.elemental_benchmark`; all three null when the run carries no
+   *  benchmark block. */
+  benchmarkDatasetVersion: string | null;
+  benchmarkContentHash: string | null;
+  indexDatasetVersion: string | null;
 }
 
 export interface ProvenanceOptions {
+  /** R17, spec §27.2. The report's display unit; defaults to metric. */
+  areaUnit?: AreaUnit;
   /** Injected so a report's bytes are reproducible in tests. */
   now?: Date;
   timeZone?: string;
@@ -325,11 +372,20 @@ export function jurisdictionRecordedOn(run: AppraisalRun): boolean {
  * count (`totals.entered_unknown_count`); a derived row's `unknown` is a fact
  * about another block's inputs, not evidence anyone can go and gather on the
  * due-diligence page, so it must not gate the document a second time here.
+ *
+ * R17 (spec §23.5 amended, design decision 12): the gate also reads
+ * `unresolved_source_conflicts` — two source records disagreeing on a claim
+ * with no evidenced resolution is exactly the "unevidenced fact under a FINAL
+ * banner" the seventh condition exists to refuse. Both counts are the
+ * engine's own (`due_diligence.ts`); this function reads, it does not derive.
+ * Port of provenance.py's `due_diligence_complete`.
  */
 export function dueDiligenceGateFor(run: AppraisalRun): DueDiligenceGate {
+  if (!('due_diligence' in run.inputs)) return { dueDiligenceComplete: true };
+  const dd = run.metrics.due_diligence;
   return {
-    dueDiligenceComplete: !('due_diligence' in run.inputs)
-      || run.metrics.due_diligence.totals.entered_unknown_count === 0,
+    dueDiligenceComplete: dd.totals.entered_unknown_count === 0
+      && dd.unresolved_source_conflicts === 0,
   };
 }
 
@@ -357,7 +413,11 @@ export function buildProvenance(
     scenarioName = 'Base Case',
     lenderCaseStatus = null,
     lenderCase = null,
+    areaUnit = 'metric',
   } = options;
+  // R17 (spec §12). Read off the run's own result block, never re-derived:
+  // the panel names the set the §12C comparison was computed from.
+  const benchmark = run.metrics.elemental_benchmark;
   // The full case object wins over the bare status when both are supplied —
   // the status option survives for the tests and callers that predate R14b.
   const caseStatus = lenderCase?.status ?? lenderCaseStatus;
@@ -406,6 +466,10 @@ export function buildProvenance(
     lenderCase,
     lenderCaseStale,
     dueDiligenceComplete,
+    reportAreaUnit: areaUnit,
+    benchmarkDatasetVersion: benchmark?.dataset_version ?? null,
+    benchmarkContentHash: benchmark?.content_hash ?? null,
+    indexDatasetVersion: benchmark?.index_dataset_version ?? null,
   };
 }
 

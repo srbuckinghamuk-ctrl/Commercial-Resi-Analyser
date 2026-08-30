@@ -1,10 +1,12 @@
 import type { Project } from '../../types';
-import type { CalculatorInputsV16, AppraisalRun } from '../../lib/model';
+import type { CalculatorInputsV17, AppraisalRun } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
+import { formatAreaWithUnit } from '../../lib/area-units';
+import { useAreaUnit } from '../../lib/area-unit-context';
 
 interface Props {
-  inputs: CalculatorInputsV16;
+  inputs: CalculatorInputsV17;
   run: AppraisalRun;
   project: Project;
 }
@@ -14,6 +16,7 @@ function pctOrNa(v: number | null): string {
 }
 
 export default function InvestorSummaryPage({ inputs, run, project }: Props) {
+  const { unit: areaUnit } = useAreaUnit();
   const { metrics, model } = run;
   const highRisks = inputs.risks.filter((r) => r.impact === 'high');
 
@@ -25,7 +28,7 @@ export default function InvestorSummaryPage({ inputs, run, project }: Props) {
       <div style={{ padding: 24, background: '#0f172a', borderRadius: 8, border: '1px solid #1e3a5f' }}>
         <h2 style={{ color: '#e2e8f0', fontSize: 20, marginBottom: 4 }}>{project.address_raw}</h2>
         <p style={{ color: '#64748b', fontSize: 14, marginBottom: 24 }}>
-          {project.use_class.replace('_', ' ')} | {project.floor_area_sqm?.toLocaleString() ?? '—'} m² | {project.tenure}
+          {project.use_class.replace('_', ' ')} | {project.floor_area_sqm != null ? formatAreaWithUnit(project.floor_area_sqm, areaUnit, 0) : '—'} | {project.tenure}
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
@@ -47,7 +50,8 @@ export default function InvestorSummaryPage({ inputs, run, project }: Props) {
             { label: 'Profit on Cost', value: pctOrNa(metrics.profit_on_cost_pct) },
             { label: 'Profit on GDV', value: pctOrNa(metrics.profit_on_gdv_pct) },
             { label: 'IRR (Annual)', value: pctOrNa(metrics.irr_annual_pct) },
-            { label: 'Return on Equity', value: pctOrNa(metrics.return_on_equity_pct) },
+            // R17 spec §13.1: labelled by the engine's own realisation flag.
+            { label: metrics.return_on_equity_is_unrealised ? 'Unrealised Return on Equity' : 'Return on Equity', value: pctOrNa(metrics.return_on_equity_pct) },
           ].map((m) => (
             <div key={m.label}>
               <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 4 }}>{m.label}</div>
@@ -64,7 +68,7 @@ export default function InvestorSummaryPage({ inputs, run, project }: Props) {
             ) : (
               inputs.unit_mix.units.map((u, i) => (
                 <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: '#e2e8f0', fontSize: 14 }}>
-                  <span>Unit {i + 1} — {u.type} ({u.floor_area_sqm} m²)</span>
+                  <span>Unit {i + 1} — {u.type} ({formatAreaWithUnit(u.floor_area_sqm, areaUnit, areaUnit === 'metric' ? 0 : 1)})</span>
                   <span>{penceToPounds(u.estimated_value_pence)}</span>
                 </div>
               ))

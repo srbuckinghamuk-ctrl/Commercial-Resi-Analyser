@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runAppraisal } from '../../lib/model';
-import { defaultCalculatorInputsV16 } from '../../lib/conversion-defaults';
+import { defaultCalculatorInputsV17 } from '../../lib/conversion-defaults';
 import { PAGES } from './pages';
 import { PAGE_OWNERSHIP, fieldRoot, pageStatus } from './page-status';
 
@@ -122,7 +122,7 @@ describe('page ownership (spec §26.5)', () => {
 });
 
 describe('pageStatus', () => {
-  const run = runAppraisal(defaultCalculatorInputsV16());
+  const run = runAppraisal(defaultCalculatorInputsV17());
 
   it('counts owned errors per page and nothing on output pages', () => {
     const spiked = {

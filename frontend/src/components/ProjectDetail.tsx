@@ -2,11 +2,15 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { Project, PipelineStage, UseClass, Tenure, EligibilityAssessment as EligibilityType, FinancialAppraisal, StageTransition } from '../types';
 import { PIPELINE_STAGES, USE_CLASS_OPTIONS, TENURE_OPTIONS } from '../types';
-import { changeStage, getEligibility, getAppraisal, updateProject, listTransitions } from '../lib/api';
+import { changeStage, getEligibility, getAppraisal, updateProject, listTransitions, resaveAppraisal, ApiError, formatApiErrorDetail } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { CALC_VERSION } from '../lib/model/finance-types';
 import { formatUseClass, humanise } from '../lib/format';
 import { activeDeadline, todayIso } from '../lib/deadlines';
 import { calculatorPath, FIRST_PAGE } from './calculator/pages';
 import EligibilityWizard from './EligibilityWizard';
+import { formatAreaBoth, formatAreaWithUnit } from '../lib/area-units';
+import { useAreaUnit } from '../lib/area-unit-context';
 
 interface ProjectDetailProps {
   project: Project;
@@ -35,6 +39,8 @@ const STAGE_HINTS: Record<PipelineStage, string | null> = {
 };
 
 export default function ProjectDetail({ project, view, onProjectUpdated }: ProjectDetailProps) {
+  // R17 spec §27.2: display preference only (read-only here; the calculator owns the toggle).
+  const { unit: areaUnit } = useAreaUnit();
   const navigate = useNavigate();
   const [eligibility, setEligibility] = useState<EligibilityType | null>(null);
   const [appraisal, setAppraisal] = useState<FinancialAppraisal | null>(null);
@@ -42,6 +48,23 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
   const [advancing, setAdvancing] = useState(false);
   const [stageError, setStageError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  // R17 (design §11): the governed resave. Any signed-in role may run it.
+  const { user: authUser } = useAuth();
+  const [resaving, setResaving] = useState(false);
+  const [resaveError, setResaveError] = useState<string | null>(null);
+
+  const handleResave = async () => {
+    setResaving(true);
+    setResaveError(null);
+    try {
+      await resaveAppraisal(project.id);
+      setAppraisal(await getAppraisal(project.id));
+    } catch (e) {
+      setResaveError(e instanceof ApiError ? formatApiErrorDetail(e.detail).join('; ') || e.message : String(e));
+    } finally {
+      setResaving(false);
+    }
+  };
 
   const currentStageIndex = PIPELINE_STAGES.findIndex((s) => s.value === project.stage);
   const nextStage = currentStageIndex < PIPELINE_STAGES.length - 1 ? PIPELINE_STAGES[currentStageIndex + 1] : null;
@@ -133,7 +156,7 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
           <span>£{(project.price_pence / 100).toLocaleString()}</span>
           <span>{formatUseClass(project.use_class)}</span>
           {project.address_postcode && <span>{project.address_postcode}</span>}
-          {project.floor_area_sqm && <span>{project.floor_area_sqm.toLocaleString()} m²</span>}
+          {project.floor_area_sqm && <span title={formatAreaBoth(project.floor_area_sqm, areaUnit, 0)}>{formatAreaWithUnit(project.floor_area_sqm, areaUnit, 0)}</span>}
           {project.tenure !== 'unknown' && <span>{humanise(project.tenure)}</span>}
         </div>
         {project.source_url && (
@@ -420,6 +443,36 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
         />
       </div>
 
+      {/* R17 (design §11): a stored row behind the current inputs/calc
+          versions is flagged; the governed resave migrates and recalculates
+          it, keeping the previous state as a version row. Browsing needs no
+          account; the resave does. */}
+      {appraisal && (appraisal.inputs_version !== 17 || appraisal.calc_version !== CALC_VERSION) && (
+        <div
+          role="status"
+          style={{ background: '#451a03', border: '1px solid #f59e0b', borderRadius: 8, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}
+        >
+          <span style={{ color: '#fbbf24', fontSize: 13 }}>
+            Stored under inputs v{appraisal.inputs_version ?? 1} / calc {appraisal.calc_version ?? 'none'} — governed resave required
+          </span>
+          {authUser != null ? (
+            <button
+              type="button"
+              disabled={resaving}
+              onClick={() => void handleResave()}
+              style={{ padding: '4px 12px', background: resaving ? '#334155' : '#1e3a5f', color: '#e2e8f0', border: 'none', borderRadius: 4, cursor: resaving ? 'not-allowed' : 'pointer', fontSize: 12 }}
+            >
+              {resaving ? 'Resaving…' : 'Resave'}
+            </button>
+          ) : (
+            <Link to="/login" state={{ from: `/projects/${project.id}` }} style={{ color: '#93c5fd', fontSize: 12 }}>
+              Sign in to resave
+            </Link>
+          )}
+          {resaveError != null && <span style={{ color: '#fca5a5', fontSize: 12 }}>{resaveError}</span>}
+        </div>
+      )}
+
       {/* Key metrics (if appraisal exists) */}
       {appraisal && (() => {
         // R16b spec §26.3: outputs.metrics is the only stored copy. A row
@@ -467,7 +520,19 @@ export default function ProjectDetail({ project, view, onProjectUpdated }: Proje
                   <MetricTile label="Profit on GDV" value={`${metrics.profit_on_gdv_pct.toFixed(1)}%`} />
                 )}
                 {metrics.return_on_equity_pct != null && (
-                  <MetricTile label="Return on Equity" value={`${metrics.return_on_equity_pct.toFixed(1)}%`} />
+                  // R17 spec §13.1: the flag is read from the stored
+                  // outputs.metrics; a row saved before the flag existed has
+                  // no key and says so rather than guessing a basis.
+                  <MetricTile
+                    label={
+                      metrics.return_on_equity_is_unrealised == null
+                        ? 'Return on Equity (realisation basis not recorded)'
+                        : metrics.return_on_equity_is_unrealised
+                          ? 'Unrealised Return on Equity'
+                          : 'Return on Equity'
+                    }
+                    value={`${metrics.return_on_equity_pct.toFixed(1)}%`}
+                  />
                 )}
                 {metrics.irr_annual_pct != null && (
                   <MetricTile label="IRR" value={`${metrics.irr_annual_pct.toFixed(1)}%`} />

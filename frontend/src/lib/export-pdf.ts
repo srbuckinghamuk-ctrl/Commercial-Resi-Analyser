@@ -71,7 +71,8 @@ export function buildAppraisalContent(project: Project, appraisal: FinancialAppr
   lines.push(`  Total Cost: ${m?.total_development_cost_pence ? formatPence(m.total_development_cost_pence) : 'N/A'}`);
   lines.push(`  Profit on Cost: ${m?.profit_on_cost_pct != null ? formatPct(m.profit_on_cost_pct) : 'N/A'}`);
   lines.push(`  Profit on GDV: ${m?.profit_on_gdv_pct != null ? formatPct(m.profit_on_gdv_pct) : 'N/A'}`);
-  lines.push(`  Return on Equity: ${m?.return_on_equity_pct != null ? formatPct(m.return_on_equity_pct) : 'N/A'}`);
+  // R17 spec §13.1: the stored flag names the basis of the figure.
+  lines.push(`  ${m?.return_on_equity_is_unrealised ? 'Unrealised Return on Equity' : 'Return on Equity'}: ${m?.return_on_equity_pct != null ? formatPct(m.return_on_equity_pct) : 'N/A'}`);
   lines.push(`  IRR: ${m?.irr_annual_pct != null ? formatPct(m.irr_annual_pct) : 'N/A'}`);
   lines.push(`  Residual Land Value: ${m?.rlv_pence ? formatPence(m.rlv_pence) : 'N/A'}`);
   lines.push('');

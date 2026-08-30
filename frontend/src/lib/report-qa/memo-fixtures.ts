@@ -20,10 +20,10 @@ import type {
 } from '../model';
 import {
   migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateInputsToV11, migrateInputsToV12,
-  migrateInputsToV16,
+  migrateInputsToV17,
 } from '../model';
 import type {
-  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV16,
+  CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV17,
 } from '../model/finance-types';
 import type { Jurisdiction } from '../tax/acquisition-tax';
 
@@ -480,17 +480,17 @@ export function detailedCostPlanInputs(): CalculatorInputsV8 {
         {
           id: 'pkg-structure', code: 'structure', label: 'Structural repairs',
           amount_pence: 20_000_000, contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null, price_basis: null,
+          phase_id: null, price_basis: null, benchmark_origin: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope — windows, cladding, roof',
           amount_pence: 10_000_000, contingency_class: 'existing_building', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null, price_basis: null,
+          phase_id: null, price_basis: null, benchmark_origin: null,
         },
         {
           id: 'pkg-externals', code: 'externals', label: 'Externals and landscaping',
           amount_pence: 5_000_000, contingency_class: 'abnormal', lender_eligible: false, notes: '', vat_override: null,
-          phase_id: null, price_basis: null,
+          phase_id: null, price_basis: null, benchmark_origin: null,
         },
       ],
       contingency: [
@@ -602,16 +602,21 @@ export function unitSalesLedgerInputs(): CalculatorInputsV12 {
  * output is unchanged by the move. R16 Task 4 moved it on again to v15
  * (spec §25.7) for the identical reason -- the four Sec 25.1 lever fields
  * are inert on every fixture in this file, so the sweep's rendered output is
- * unchanged by this move too. R16b Task 2 moves it on again to v16 (spec
+ * unchanged by this move too. R16b Task 2 moved it on again to v16 (spec
  * §26.1) for the identical reason -- the nine legacy cost fields removed
  * from `conversion_costs` are dead on every fixture in this file, so the
- * sweep's rendered output is unchanged by this move too.
+ * sweep's rendered output is unchanged by this move too. R17 Task 3 moves it
+ * on again to v17 (spec §27.7) for the identical reason -- the migration
+ * writes `elemental_benchmark` null, every package's `benchmark_origin` null
+ * and the due-diligence record arrays empty, and the benchmark layer is
+ * advisory until a user applies rows to the cost plan, so the sweep's
+ * rendered output is unchanged by this move too.
  */
-export function dueDiligenceInputs(): CalculatorInputsV16 {
+export function dueDiligenceInputs(): CalculatorInputsV17 {
   const raw = JSON.parse(
     readFileSync(resolve(FIXTURE_DIR, 'y-due-diligence.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
-  return migrateInputsToV16(raw.inputs);
+  return migrateInputsToV17(raw.inputs);
 }
 
 /**
@@ -627,7 +632,7 @@ export function dueDiligenceInputs(): CalculatorInputsV16 {
  * second JSON fixture, so the two twins cannot drift apart on any field
  * except the ones named here.
  */
-export function dueDiligenceFinalInputs(): CalculatorInputsV16 {
+export function dueDiligenceFinalInputs(): CalculatorInputsV17 {
   const doc = dueDiligenceInputs();
   const record = doc.due_diligence.source_record;
   return {
@@ -640,6 +645,8 @@ export function dueDiligenceFinalInputs(): CalculatorInputsV16 {
       (source, i) => (i === 0 ? { ...source, evidence_status: 'confirmed' as const } : source),
     ),
     due_diligence: {
+      // R17 Task 3: the v17 record arrays ride through unchanged (empty on Y).
+      ...doc.due_diligence,
       // is_vacant: the occupation conflict fires on a listing that records the
       // property as occupied against a green vacant-possession row.
       // floor_area_sqm: 600 is the document's own existing GIA, so the
@@ -685,11 +692,11 @@ export function dueDiligenceFinalInputs(): CalculatorInputsV16 {
  * `dueDiligenceInputs` immediately above gives for reading fixture Y's JSON a
  * second time rather than importing `ddDoc()`.
  */
-export function costPlanInTimeInputs(): CalculatorInputsV16 {
+export function costPlanInTimeInputs(): CalculatorInputsV17 {
   const raw = JSON.parse(
     readFileSync(resolve(FIXTURE_DIR, 'z-cost-plan-in-time.json'), 'utf-8'),
   ) as { inputs: Record<string, unknown> };
-  return migrateInputsToV16(raw.inputs);
+  return migrateInputsToV17(raw.inputs);
 }
 
 /**
@@ -701,10 +708,30 @@ export function costPlanInTimeInputs(): CalculatorInputsV16 {
  * (cost-plan-in-time-docs.ts), built the same one-field-changed way, over
  * this file's own independently-loaded document rather than that module's.
  */
-export function costPlanInTimeNoAllowanceInputs(): CalculatorInputsV16 {
+export function costPlanInTimeNoAllowanceInputs(): CalculatorInputsV17 {
   const inputs = costPlanInTimeInputs();
   return {
     ...inputs,
     cost_plan: { ...inputs.cost_plan, qs: { ...inputs.cost_plan.qs!, inflation: null } },
   };
+}
+
+/**
+ * R17 (spec §12, §27.8). Fixture AB (fixtures/financial-model/
+ * ab-elemental-benchmark.json): fixture Z plus an embedded `user_qs`
+ * benchmark set of seven fictional rates (TEST FIXTURE — NOT MARKET DATA),
+ * seven selections mapped to Z's packages, an index ratio of exactly 1.05, a
+ * location factor of 95 and one prior application — the release's golden
+ * benchmark case, and the first route on which the memo's §12C prints.
+ *
+ * Loaded independently of `docAB()` (frontend/src/lib/model/__fixtures__/
+ * elemental-benchmark-docs.ts) for the reason `costPlanInTimeInputs` above
+ * gives for fixture Z: a fixture satisfying one suite must not quietly move
+ * another's ground.
+ */
+export function benchmarkInputs(): CalculatorInputsV17 {
+  const raw = JSON.parse(
+    readFileSync(resolve(FIXTURE_DIR, 'ab-elemental-benchmark.json'), 'utf-8'),
+  ) as { inputs: Record<string, unknown> };
+  return migrateInputsToV17(raw.inputs);
 }

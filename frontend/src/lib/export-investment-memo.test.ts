@@ -5,7 +5,7 @@ import { generateInvestmentMemo, sourcesAndUsesTotals, sensitivityTables } from 
 import type { Project, EligibilityAssessment } from '../types';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5, CalculatorInputsV6,
-  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV15, CalculatorInputsV16,
+  CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV11, CalculatorInputsV15, CalculatorInputsV17,
   AreaBridgeInputs, MonitoringStatement,
 } from './model';
 import {
@@ -17,6 +17,7 @@ import { buildProvenance } from './report-provenance';
 import type { UnitAncillary } from './conversion-types';
 import { DEFAULT_UNIT_ANCILLARY } from './conversion-types';
 import { inspectPdf } from './report-qa/pdf-inspect';
+import type { PdfDocumentInfo } from './report-qa/pdf-inspect';
 import { documentText, documentProse, watermarkTexts } from './report-qa/report-checks';
 import { runSensitivity, DEFAULT_SENSITIVITY_CONFIG } from './model/sensitivity';
 import * as sensitivityModule from './model/sensitivity';
@@ -41,6 +42,10 @@ import { ddDoc, memoText as ddMemoText } from './model/__fixtures__/due-diligenc
 // source for this fixture; a second JSON load here would risk drifting from
 // what the Costs page and cost-plan tests exercise.
 import { docZ, docZNoAllowance } from './model/__fixtures__/cost-plan-in-time-docs';
+// R17 (spec §12, §27). Fixture AB and the benchmark constants the memo prints verbatim.
+import { docAB, docABWith } from './model/__fixtures__/elemental-benchmark-docs';
+import { BENCHMARK_LIMITATION_SENTENCE, NO_LOCATION_SENTENCE } from './model/elemental-benchmark';
+import { SQFT_PER_SQM } from './area-units';
 // Controller ruling (spec §1.5, follow-up to Task 10): the auto-path
 // negative control for the package-timing suffix — a detailed-mode document
 // with no phase network at all, so `resolved_phase_id` is null on every
@@ -469,14 +474,14 @@ describe('generateInvestmentMemo', () => {
       };
       const blob = generateInvestmentMemo(mockProject, run, null);
       const text = await pdfText(blob);
-      expect(text).toContain('First funding shortfall: month 3');
+      expect(text).toContain('First funding shortfall: from Month 3');
       expect(text).toContain('Month 1');
       expect(text).toContain('Month 2');
       expect(text).toContain('Month 3');
       // Never the shifted label a copy-paste from the 0-indexed Monthly Cashflow table would
       // produce (that table's own genuine "Month 4" cells, from unrelated 0-indexed ledger
       // months, are expected elsewhere in the same document, so this only pins the callout text):
-      expect(text).not.toContain('First funding shortfall: month 4');
+      expect(text).not.toContain('First funding shortfall: from Month 4');
     });
 
     it('never substitutes a number for the lender-basis figures when no lender valuation is recorded', async () => {
@@ -1218,7 +1223,9 @@ describe('generateInvestmentMemo — standard lender stresses (spec §25)', () =
   });
 
   // Fix wave FI2. Entry 7's normative label ("Refinance LTV -10 pp", spec
-  // §25.2) sits one column left of its Setting cell ("Refinance LTV +10.0 pp"),
+  // §25.2) used to sit one column left of a Setting cell reading "Refinance LTV
+  // +10.0 pp". R17 (spec §13.2): the cell now prints the plain sentence and the
+  // "+10.0 pp" reading is gone; the convention sentence stays for the other levers.
   // and the two read as a contradiction to anyone who does not already know the
   // adverse-positive lever convention. The label stays; the method sentence
   // gains the convention, in the same words the Sensitivity page's own caption
@@ -1232,7 +1239,8 @@ describe('generateInvestmentMemo — standard lender stresses (spec §25)', () =
     expect(prose).toContain(STRESS_SIGN_CONVENTION);
     // Both halves of the apparent contradiction the sentence resolves.
     expect(prose).toContain('Refinance LTV -10 pp');
-    expect(prose).toContain('Refinance LTV +10.0 pp');
+    expect(prose).toContain('Maximum refinance LTV reduced by 10.0 percentage points.');
+    expect(prose).not.toContain('Refinance LTV +10.0 pp');
   });
 });
 
@@ -2317,7 +2325,7 @@ describe('§23.8 due diligence on the memo', () => {
   /** Fixture Y with every entered item green-with-evidence or n/a-with-notes —
    *  the twin the §13 "fully evidenced" arm is written for. Built by mapping
    *  the loaded document's items, not by restating 24 override entries. */
-  function fullyEvidencedDoc(): CalculatorInputsV16 {
+  function fullyEvidencedDoc(): CalculatorInputsV17 {
     const doc = ddDoc();
     return {
       ...doc,
@@ -2658,5 +2666,100 @@ describe('R15b cost plan in time (spec §24.6)', () => {
     expect(text).not.toContain('per-package programme');
     expect(text).not.toContain('uniform ratio');
     expect(text).not.toContain('No inflation');
+  });
+});
+
+// R17 (spec §12, §13, §27.2). The memo's benchmark section, the report unit,
+// the month convention, the ROE label and the PDF/UA statement.
+describe('R17 benchmark governance on the memo (spec §12 / §13)', () => {
+  const flat = (i: PdfDocumentInfo): string => documentText(i).replace(/\s+/g, ' ');
+  async function prose(blob: Blob): Promise<string> {
+    return documentProse(await inspectPdf(blob));
+  }
+
+  it('labels an unrealised return on equity with the same words every page prints', async () => {
+    const run = runAppraisal(baseInputs());
+    const text = flat(await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility)));
+    expect(text).not.toContain('Return on Equity (unrealised)');
+    if (run.metrics.return_on_equity_is_unrealised) {
+      expect(text).toContain('Unrealised Return on Equity');
+    } else {
+      expect(text).toContain('Return on Equity');
+      expect(text).not.toContain('Unrealised Return on Equity');
+    }
+  });
+
+  it('names the same ledger month in the peak-debt prose and the cashflow table on a no-anchor fixture', async () => {
+    const run = runAppraisal(baseInputs());
+    expect(programmeAnchor(run.inputs)).toBeNull();
+    expect(run.inputs.finance.term_months).toBe(12);
+    const peak = run.metrics.peak_debt_month!;
+    expect(peak).not.toBeNull();
+    const info = await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility));
+    const text = documentProse(info);
+    expect(text).toContain(`is reached in ${formatProgrammeMonth(null, peak)} of the programme`);
+    expect(text).not.toContain(`is reached in month ${peak + 1} of`);
+    // The cashflow table's own cell for that ledger month, drawn as one item.
+    const cells = info.pages.flatMap((p) => p.items.map((i) => i.text));
+    expect(cells).toContain(`Month ${peak}`);
+    expect(text).toContain('Months are ledger months: Month 0 is the acquisition month; where a programme anchor exists, calendar months are printed instead.');
+  });
+
+  it('states the PDF/UA limitation and the unit methodology in the basis of preparation', async () => {
+    const text = await prose(generateInvestmentMemo(mockProject, runAppraisal(baseInputs()), mockEligibility));
+    expect(text).toContain('This PDF is not tagged to PDF/UA; the generator library exposes no structure tree.');
+    expect(text).toContain('Areas and rates are stored in square metres and pence per square metre');
+    expect(text).toContain(`1 m² = ${SQFT_PER_SQM} ft²`);
+    expect(flat(await inspectPdf(generateInvestmentMemo(mockProject, runAppraisal(baseInputs()), mockEligibility)))).toContain('Report area unit m²');
+  });
+
+  it('prints §12C from the result block, with the provider label and the limitation sentence verbatim', async () => {
+    const run = runAppraisal(docAB());
+    const eb = run.metrics.elemental_benchmark!;
+    expect(eb.provider_type).toBe('user_qs');
+    const info = await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility));
+    const text = documentProse(info);
+    const all = flat(info);
+    expect(all).toContain('12C. Elemental Cost Benchmark — User/QS benchmark');
+    expect(text).toContain(BENCHMARK_LIMITATION_SENTENCE);
+    expect(text).toContain(
+      `Benchmark amounts are stated at ${eb.currentisation_date}. Where applied to the cost plan they are inflated to each package's spend midpoint by the cost-plan inflation line (§24.3) and by nothing else.`,
+    );
+    expect(text).toContain(`currentisation factor ${eb.currentisation_factor}`);
+    expect(text).toContain(`enters_tdc: false`);
+    for (const w of eb.warnings) expect(text).toContain(w.message);
+    for (const r of eb.rows) expect(all).toContain(r.element_label);
+    expect(all).toContain(eb.content_hash);
+    expect(all).toContain(`Benchmark dataset ${eb.dataset_version} (${eb.content_hash})`);
+    expect(all).toContain(`Index dataset ${eb.index_dataset_version ?? 'none'}`);
+    for (const banned of ['BCIS cost plan', 'BCIS verified', 'BCIS valuation']) expect(all).not.toContain(banned);
+    // Location is evidenced on AB, so the no-evidence sentence is absent.
+    expect(eb.location_evidenced).toBe(true);
+    expect(text).not.toContain(NO_LOCATION_SENTENCE);
+  });
+
+  it('prints the no-location sentence when the set carries no location factor', async () => {
+    const run = runAppraisal(docABWith((b) => { b.set.location_factor = null; }));
+    const text = await prose(generateInvestmentMemo(mockProject, run, mockEligibility));
+    expect(text).toContain(NO_LOCATION_SENTENCE);
+  });
+
+  it('prints the report unit as ft² with the conversion clause when asked for imperial, and metric otherwise', async () => {
+    const run = runAppraisal(docAB());
+    const imperial = flat(await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility, null, { areaUnit: 'imperial' })));
+    expect(imperial).toContain(`Report area unit ft² (1 m² = ${SQFT_PER_SQM} ft²)`);
+    expect(imperial).toContain('£/ft²');
+    expect(imperial).toContain('NIA (ft²)');
+    const metric = flat(await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility)));
+    expect(metric).toContain('Report area unit m²');
+    expect(metric).not.toContain('NIA (ft²)');
+  });
+
+  it('prints the same metric text whether the option is omitted or passed explicitly', async () => {
+    const run = runAppraisal(baseInputs());
+    const prov = buildProvenance(run, null, { now: new Date('2026-08-30T09:00:00Z'), timeZone: 'Europe/London' });
+    const a = flat(await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility, prov)));
+    const b = flat(await inspectPdf(generateInvestmentMemo(mockProject, run, mockEligibility, prov, { areaUnit: 'metric' })));
+    expect(a).toBe(b);
   });
 });

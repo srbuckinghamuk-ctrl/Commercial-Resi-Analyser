@@ -109,6 +109,33 @@ describe('buildAppraisalContent', () => {
     expect(text).toContain('IRR');
   });
 
+  // R17 spec §13.1: the ROE line is labelled by the stored realisation flag.
+  it('labels ROE "Unrealised Return on Equity" when the stored flag is true', () => {
+    const appraisal = {
+      ...mockAppraisal,
+      outputs: {
+        ...(mockAppraisal.outputs as object),
+        metrics: { ...(mockAppraisal.outputs as { metrics: object }).metrics, return_on_equity_is_unrealised: true },
+      },
+    } as unknown as FinancialAppraisal;
+    const text = buildAppraisalContent(mockProject, appraisal).join('\n');
+    expect(text).toContain('  Unrealised Return on Equity: 62.5%');
+    expect(text).not.toContain('  Return on Equity:');
+  });
+
+  it('labels ROE "Return on Equity" when the stored flag is false', () => {
+    const appraisal = {
+      ...mockAppraisal,
+      outputs: {
+        ...(mockAppraisal.outputs as object),
+        metrics: { ...(mockAppraisal.outputs as { metrics: object }).metrics, return_on_equity_is_unrealised: false },
+      },
+    } as unknown as FinancialAppraisal;
+    const text = buildAppraisalContent(mockProject, appraisal).join('\n');
+    expect(text).toContain('  Return on Equity: 62.5%');
+    expect(text).not.toContain('Unrealised');
+  });
+
   it('includes appraisal name', () => {
     const lines = buildAppraisalContent(mockProject, mockAppraisal);
     expect(lines.some((l) => l.includes('Base Case'))).toBe(true);

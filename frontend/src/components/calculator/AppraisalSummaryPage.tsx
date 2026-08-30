@@ -1,4 +1,4 @@
-import type { AppraisalRun, CalculatorInputsV16 } from '../../lib/model';
+import type { AppraisalRun, CalculatorInputsV17 } from '../../lib/model';
 import { penceToPounds } from '../../lib/format';
 import { formatProgrammeMonth, programmeAnchor } from '../../lib/programme-months';
 import ReconciliationStrip from './ReconciliationStrip';
@@ -6,8 +6,8 @@ import CostToCompleteCard from './CostToCompleteCard';
 import MonitoringStatementCard from './MonitoringStatementCard';
 
 interface Props {
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   run: AppraisalRun;
 }
 
@@ -47,7 +47,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * null, whether because no lender valuation was recorded or because a recorded one could not
  * be computed (metrics.ts collapses both cases to null; the entry card on the Finance page
  * surfaces the distinction via its own validation messages). */
-function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV16; run: AppraisalRun }) {
+function LenderVarianceBridge({ inputs, run }: { inputs: CalculatorInputsV17; run: AppraisalRun }) {
   const { metrics } = run;
   const lv = inputs.lender_valuation;
 
@@ -216,7 +216,7 @@ export default function AppraisalSummaryPage({ inputs, run }: Props) {
           tooltip="§3.17: (1 + monthly IRR)^12 − 1, solved from the developer equity cash-flow vector (§3.15). Never a synthetic flow."
         />
         <MetricCard
-          label="Return on equity"
+          label={metrics.return_on_equity_is_unrealised ? 'Unrealised Return on Equity' : 'Return on Equity'}
           value={pctOrNa(metrics.return_on_equity_pct)}
           tooltip="Numerator = profit after finance (§3.12). Denominator = total equity contributed — committed equity + additional uncommitted equity (§3.15). Zero equity → n/a."
         />

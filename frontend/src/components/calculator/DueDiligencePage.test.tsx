@@ -247,4 +247,15 @@ describe('DueDiligencePage — coverage and the project log', () => {
     expect(within(log).getByRole('button', { name: '+ Add Risk' })).toBeInTheDocument();
   }, SCHEDULE_RENDER_TIMEOUT_MS);
 
+  it('renders the source-records editor beneath the captured record (R17 §4.3)', () => {
+    const inputs = ddDoc();
+    const run = runAppraisal(inputs);
+    render(<DueDiligencePage inputs={inputs} onChange={vi.fn()} run={run} project={FIXTURE_PROJECT} />);
+
+    const editor = screen.getByTestId('source-records-editor');
+    expect(within(editor).getByRole('heading', { name: 'Source records' })).toBeInTheDocument();
+    expect(within(editor).getByRole('button', { name: 'Add source record' })).toBeInTheDocument();
+    expect(within(editor).getByRole('button', { name: 'Capture from appraisal inputs' })).toBeInTheDocument();
+  }, SCHEDULE_RENDER_TIMEOUT_MS);
+
 });

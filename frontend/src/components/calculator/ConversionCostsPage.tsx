@@ -1,5 +1,5 @@
 import type {
-  CalculatorInputsV16, AppraisalRun, AreaBasis,
+  CalculatorInputsV17, AppraisalRun, AreaBasis,
   CostPlanMode, CostPackage, CostPackageCode, ContingencyClassName, FeeBasis, FeeLine,
   VatOverride, RecoveryBasis, QsProvenance, PriceBasis, ValidationIssue, ProgrammeNetwork,
 } from '../../lib/model';
@@ -8,16 +8,21 @@ import {
   isProgrammeNetwork,
 } from '../../lib/model';
 import { penceToPounds, penceToPoundsExact, humanise, formatPct } from '../../lib/format';
+import { areaUnitLabel, displayArea, entryAreaToSqm, entryRateToPencePerSqm, formatAreaBoth, formatAreaWithUnit, ratePerSqmToPerSqft, rateUnitLabel } from '../../lib/area-units';
+import type { AreaUnit } from '../../lib/area-units';
+import { useAreaUnit } from '../../lib/area-unit-context';
+import ElementalBenchmarkPanel from './ElementalBenchmarkPanel';
 
 interface Props {
   /** R15 Task 13 (the entry-point cutover) narrowed the union `Task 10`
    *  introduced to `CalculatorInputsV13` alone; R15b Task 6 moved it on
    *  again, to `CalculatorInputsV14`; R16 Task 4 moved it on again, to
-   *  `CalculatorInputsV15`; R16b Task 2 moves it on again, to
-   *  `CalculatorInputsV16`: the calculator's state is now a
-   *  native v16 document. */
-  inputs: CalculatorInputsV16;
-  onChange: (partial: Partial<CalculatorInputsV16>) => void;
+   *  `CalculatorInputsV15`; R16b Task 2 moved it on again, to
+   *  `CalculatorInputsV16`; R17 Task 3 moves it on again, to
+   *  `CalculatorInputsV17`: the calculator's state is now a
+   *  native v17 document. */
+  inputs: CalculatorInputsV17;
+  onChange: (partial: Partial<CalculatorInputsV17>) => void;
   run: AppraisalRun;
 }
 
@@ -73,20 +78,54 @@ function PenceCostRow({ label, penceValue, onChangePence }: {
   );
 }
 
-function CostRow({ label, value, onChangeValue }: {
+/** R17 spec §27.2: an area editor. `sqm` is the canonical m² figure; the
+ *  display unit converts it at render time and a typed ft² figure converts
+ *  ONCE on entry (`entryAreaToSqm`, 4 dp of m²). The other unit is printed as
+ *  secondary text. Per-unit and lump-sum rows are NOT this row. */
+function AreaCostRow({ label, sqm, unit, onChangeSqm }: {
   label: string;
-  value: number;
-  onChangeValue: (v: number) => void;
+  sqm: number;
+  unit: AreaUnit;
+  onChangeSqm: (sqm: number) => void;
 }) {
+  const shown = unit === 'metric' ? sqm : Math.round(displayArea(sqm, unit) * 1e4) / 1e4;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-      <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label}</label>
+      <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label} ({areaUnitLabel(unit)})</label>
       <input
         type="number"
-        value={value}
-        onChange={(e) => onChangeValue(Number(e.target.value))}
+        value={shown}
+        title={formatAreaBoth(sqm, unit)}
+        onChange={(e) => onChangeSqm(entryAreaToSqm(Number(e.target.value), unit))}
         style={{ width: 140, padding: '6px 10px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
       />
+      <span style={{ color: '#64748b', fontSize: 12 }}>{formatAreaBoth(sqm, unit)}</span>
+    </div>
+  );
+}
+
+/** R17 spec §27.2: a £-per-area rate editor. `pencePerSqm` is canonical; in
+ *  imperial the field shows £/ft² and a typed £/ft² converts on entry with
+ *  `entryRateToPencePerSqm` (unrounded: rounding happens at the amount). */
+function RateCostRow({ label, pencePerSqm, unit, onChangePencePerSqm }: {
+  label: string;
+  pencePerSqm: number;
+  unit: AreaUnit;
+  onChangePencePerSqm: (pencePerSqm: number) => void;
+}) {
+  const shownPounds = unit === 'metric' ? pencePerSqm / 100 : Math.round(ratePerSqmToPerSqft(pencePerSqm)) / 100;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+      <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>{label} ({rateUnitLabel(unit)})</label>
+      <div style={{ position: 'relative', width: 140 }}>
+        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontSize: 14 }}>£</span>
+        <input
+          type="number"
+          value={shownPounds}
+          onChange={(e) => onChangePencePerSqm(entryRateToPencePerSqm(Math.round(Number(e.target.value) * 100), unit))}
+          style={{ width: '100%', padding: '6px 10px 6px 24px', background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: 4, color: '#e2e8f0', fontSize: 14 }}
+        />
+      </div>
     </div>
   );
 }
@@ -226,10 +265,12 @@ function newPackage(): CostPackage {
     vat_override: null,
     phase_id: null,
     price_basis: null,
+    benchmark_origin: null,
   };
 }
 
 export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
+  const { unit: areaUnit } = useAreaUnit();
   const costs = inputs.conversion_costs;
   const costPlan = inputs.cost_plan;
   const result = run.metrics.cost_plan;
@@ -540,28 +581,29 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
       </div>
       {inputs.areas.basis === 'bridge_derived' ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-          <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Total construction m²</label>
-          <span style={{ color: '#e2e8f0', fontSize: 14 }}>
-            {run.metrics.developed_area_sqm.toLocaleString()} m²
+          <label style={{ color: '#94a3b8', width: 260, fontSize: 14 }}>Total construction area ({areaUnitLabel(areaUnit)})</label>
+          <span style={{ color: '#e2e8f0', fontSize: 14 }} title={formatAreaBoth(run.metrics.developed_area_sqm, areaUnit)}>
+            {formatAreaWithUnit(run.metrics.developed_area_sqm, areaUnit, areaUnit === 'metric' ? 0 : 1)}
           </span>
           <span style={{ color: '#64748b', fontSize: 12 }}>
-            derived: proposed GIA {run.metrics.area_bridge.proposed_gia_sqm.toLocaleString()} m²
+            derived: proposed GIA {formatAreaWithUnit(run.metrics.area_bridge.proposed_gia_sqm, areaUnit, areaUnit === 'metric' ? 0 : 1)}
             less retained and untouched area
           </span>
         </div>
       ) : (
-        <CostRow
-          label="Total construction m²"
+        <AreaCostRow
+          label="Total construction area"
+          unit={areaUnit}
           // eslint-disable-next-line no-restricted-syntax -- legitimate manual-basis area editor (spec §15.3); see the comment above
-          value={costs.total_construction_sqm}
-          onChangeValue={(v) => updateCosts({ total_construction_sqm: v })}
+          sqm={costs.total_construction_sqm}
+          onChangeSqm={(v) => updateCosts({ total_construction_sqm: v })}
         />
       )}
 
       {costPlan.mode === 'headline' ? (
         <>
           <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Construction</h4>
-          <PenceCostRow label="Cost per m² (£)" penceValue={costs.construction_cost_per_sqm_pence} onChangePence={(v) => updateCosts({ construction_cost_per_sqm_pence: v })} />
+          <RateCostRow label="Cost per area" unit={areaUnit} pencePerSqm={costs.construction_cost_per_sqm_pence} onChangePencePerSqm={(v) => updateCosts({ construction_cost_per_sqm_pence: v })} />
 
           <h4 style={{ color: '#94a3b8', fontSize: 14, marginTop: 24, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>Building Regs Compliance</h4>
           <PenceCostRow label="Fire safety (£)" penceValue={costs.fire_safety_pence} onChangePence={(v) => updateCosts({ fire_safety_pence: v })} />
@@ -884,6 +926,11 @@ export default function ConversionCostsPage({ inputs, onChange, run }: Props) {
           <span>{penceToPounds(result.conversion_total_pence)}</span>
         </div>
       </div>
+
+      {/* R17 spec §27. The elemental benchmark layer: advisory, rendered once
+          at the foot of this page; its only route into the cost plan is the
+          apply seam (apply-benchmark.ts), via onChange. */}
+      <ElementalBenchmarkPanel inputs={inputs} onChange={onChange} run={run} />
     </div>
   );
 }
