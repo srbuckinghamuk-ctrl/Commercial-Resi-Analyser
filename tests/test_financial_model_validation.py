@@ -15,6 +15,7 @@ from app.financial_model import run_appraisal
 from app.financial_model.areas import DEFAULT_AREA_BRIDGE
 from app.financial_model.engine import run_ledger
 from app.financial_model.migrate import (
+    migrate_inputs_to_v17,
     PROGRAMME_FIELD_ALIASES,
     default_calculator_inputs_v2,
     migrate_inputs_to_v4,
@@ -32,6 +33,9 @@ from app.financial_model.migrate import (
 from app.financial_model.schedule import build_schedule
 from app.financial_model.types import (
     AreaBridgeInputs,
+    SourceClaims,
+    SourceConflictResolution,
+    SourceEvidenceRecord,
     CalculatorInputsV2,
     CalculatorInputsV3,
     CalculatorInputsV4,
@@ -81,6 +85,7 @@ from app.financial_model.vat import DEFAULT_VAT, VAT_CHARGE_CATEGORIES, default_
 
 from .fixtures_cost_plan_in_time import doc_z, doc_z_no_allowance, parse
 from .fixtures_due_diligence import QS, dd_doc, raw_y_as_v12
+from .fixtures_elemental_benchmark import doc_ab, doc_ab_with, doc_ab_without_benchmark, raw_ab
 from .fixtures_investment_case import ic_doc
 from .fixtures_unit_sales import no_programme_doc, unit_sales_doc
 
@@ -3363,3 +3368,332 @@ class TestTenderPriceInflationValidation:
         our_fields = [i.field for i in self._errors(parsed) if i.field.startswith("cost_plan.qs.inflation")]
         assert our_fields == []
         assert self._inflation_warn_fields(parsed) == []
+
+
+class TestElementalBenchmarkValidation:
+    """Sec 27.5. Twin of validation.test.ts's '27.5 elemental benchmark validation'.
+
+    Reachability, stated once: rule 4's negative ``original_rate_pence`` (``int``,
+    ``ge=0``) and rule 15's ``field`` (a ``Literal``) are 422s here and are
+    asserted as ``ValidationError``; the float arms of rules 5, 7, 8 and 9 ARE
+    reachable, because the schema does not set ``allow_inf_nan=False`` and
+    ``doc_ab_with`` mutates a Python dict, which can spell ``nan`` and ``inf``
+    where a JSON payload cannot. Rule 3's and rule 9's unit mismatches are
+    live too: both members are valid Literals, only their pairing is wrong."""
+
+    @staticmethod
+    def _errors(doc):
+        return [i for i in validate_inputs(doc) if i.severity == "error"]
+
+    def _our_fields(self, doc):
+        return [
+            i.field for i in self._errors(doc)
+            if i.field.startswith("elemental_benchmark") or i.field.endswith(".benchmark_origin")
+            or i.field.startswith("due_diligence.source_re")
+        ]
+
+    def _has(self, doc, field_, message):
+        return any(i.field == field_ and i.message == message for i in self._errors(doc))
+
+    @staticmethod
+    def _record(record_id, existing_use=None):
+        return SourceEvidenceRecord(
+            id=record_id, kind="listing_structured", captured_at="2026-08-01", reference=f"ref {record_id}",
+            captured_by="tester", claims=SourceClaims(existing_use=existing_use),
+        )
+
+    @staticmethod
+    def _resolution(**changes):
+        base = dict(
+            id="res-1", field="existing_use", resolved_value="office", chosen_record_id="rec-1",
+            evidence_reference="Survey p.3", resolved_by="tester", resolved_at="2026-08-02", reason="measured",
+        )
+        return SourceConflictResolution(**{**base, **changes})
+
+    @staticmethod
+    def _with_records(records, resolutions=()):
+        doc = doc_ab()
+        doc.due_diligence.source_records = list(records)
+        doc.due_diligence.source_resolutions = list(resolutions)
+        return doc
+
+    def test_fixture_ab_is_clean_under_every_rule_in_this_block(self):
+        assert self._our_fields(doc_ab()) == []
+
+    def test_rule_1_rate_ids_unique_and_a_selection_resolves_to_its_own_element(self):
+        def dup(b):
+            b["set"]["rates"][1]["id"] = b["set"]["rates"][0]["id"]
+        assert self._has(doc_ab_with(dup), "elemental_benchmark.set.rates[1].id",
+                         'Benchmark rate id "r-strip" is not unique.')
+
+        def ghost(b):
+            b["selections"][0]["benchmark_rate_id"] = "r-ghost"
+        assert self._has(doc_ab_with(ghost), "elemental_benchmark.selections[0].benchmark_rate_id",
+                         'Benchmark rate "r-ghost" is not in the benchmark set.')
+
+        def wrong(b):
+            b["selections"][0]["benchmark_rate_id"] = "r-frame"
+        assert self._has(doc_ab_with(wrong), "elemental_benchmark.selections[0].benchmark_rate_id",
+                         'Benchmark rate "r-frame" prices element "frame_alterations", not "strip_out".')
+
+        def unpriced(b):
+            b["selections"][0]["benchmark_rate_id"] = None
+        assert self._our_fields(doc_ab_with(unpriced)) == []
+
+    def test_rule_2_element_codes_unique_and_catalogue_members(self):
+        def bad(b):
+            b["selections"][0]["element_code"] = "ghost_element"
+        assert self._has(doc_ab_with(bad), "elemental_benchmark.selections[0].element_code",
+                         'Element code "ghost_element" is not in the element catalogue.')
+
+        def dup(b):
+            b["selections"][1]["element_code"] = b["selections"][0]["element_code"]
+        assert self._has(doc_ab_with(dup), "elemental_benchmark.selections[1].element_code",
+                         'Element "strip_out" is selected more than once.')
+
+    def test_rule_3_the_unit_agrees_with_the_basis(self):
+        def mismatch(b):
+            b["set"]["rates"][0]["original_unit"] = "gbp_per_unit"
+        assert self._has(doc_ab_with(mismatch), "elemental_benchmark.set.rates[0].original_unit",
+                         'Benchmark rate unit "gbp_per_unit" does not agree with measurement basis "area".')
+
+        def sqft(b):
+            b["set"]["rates"][0]["original_unit"] = "gbp_per_sqft"
+        assert self._our_fields(doc_ab_with(sqft)) == []
+
+    def test_rule_4_pence_is_pydantic_guarded_and_rate_pct_present_iff_percentage(self):
+        def neg(b):
+            b["set"]["rates"][0]["original_rate_pence"] = -1
+        with pytest.raises(ValidationError):
+            doc_ab_with(neg)
+
+        def missing(b):
+            b["set"]["rates"][6]["rate_pct"] = None
+        assert self._has(doc_ab_with(missing), "elemental_benchmark.set.rates[6].rate_pct",
+                         "A percentage benchmark rate needs a rate_pct.")
+
+        def neg_pct(b):
+            b["set"]["rates"][6]["rate_pct"] = -5
+        assert self._has(doc_ab_with(neg_pct), "elemental_benchmark.set.rates[6].rate_pct",
+                         "Benchmark rate_pct must be zero or more.")
+
+        def stray(b):
+            b["set"]["rates"][0]["rate_pct"] = 3
+        assert self._has(doc_ab_with(stray), "elemental_benchmark.set.rates[0].rate_pct",
+                         "Only a percentage benchmark rate carries a rate_pct.")
+
+    def test_rule_5_an_adjustment_needs_a_reason_and_stays_above_minus_100(self):
+        def no_reason(b):
+            b["selections"][0]["adjustment_pct"] = 5
+            b["selections"][0]["adjustment_reason"] = "  "
+        assert self._has(doc_ab_with(no_reason), "elemental_benchmark.selections[0].adjustment_reason",
+                         "A benchmark adjustment needs a reason.")
+
+        def reasoned(b):
+            b["selections"][0]["adjustment_pct"] = 5
+            b["selections"][0]["adjustment_reason"] = "scope"
+        assert self._our_fields(doc_ab_with(reasoned)) == []
+
+        def floor(b):
+            b["selections"][0]["adjustment_pct"] = -100
+            b["selections"][0]["adjustment_reason"] = "gone"
+        assert self._has(doc_ab_with(floor), "elemental_benchmark.selections[0].adjustment_pct",
+                         "Benchmark adjustment must be greater than -100%.")
+
+        def nan(b):
+            b["selections"][0]["adjustment_pct"] = float("nan")
+            b["selections"][0]["adjustment_reason"] = "x"
+        assert self._has(doc_ab_with(nan), "elemental_benchmark.selections[0].adjustment_pct",
+                         "Benchmark adjustment must be greater than -100%.")
+
+    def test_rule_6_index_names_both_set_or_both_empty_and_equal(self):
+        def half(b):
+            b["set"]["current_index_name"] = None
+        assert self._has(doc_ab_with(half), "elemental_benchmark.set.base_index_name",
+                         "Base and current index names must both be set, or both be empty.")
+
+        def differ(b):
+            b["set"]["current_index_name"] = "OTHER index"
+        assert self._has(doc_ab_with(differ), "elemental_benchmark.set.current_index_name",
+                         "Base and current index names must name the same index.")
+
+        def neither(b):
+            for key in ("base_index_name", "current_index_name", "base_index_value", "current_index_value"):
+                b["set"][key] = None
+        assert self._our_fields(doc_ab_with(neither)) == []
+
+    def test_rule_7_index_values_finite_and_above_zero(self):
+        for bad in (0, -1, float("inf"), float("nan")):
+            def base(b, bad=bad):
+                b["set"]["base_index_value"] = bad
+            assert self._has(doc_ab_with(base), "elemental_benchmark.set.base_index_value",
+                             "Base index value must be a finite number greater than zero."), bad
+
+            def current(b, bad=bad):
+                b["set"]["current_index_value"] = bad
+            assert self._has(doc_ab_with(current), "elemental_benchmark.set.current_index_value",
+                             "Current index value must be a finite number greater than zero."), bad
+
+        def fine(b):
+            b["set"]["base_index_value"] = 0.5
+        assert self._our_fields(doc_ab_with(fine)) == []
+
+    def test_rule_8_location_factors_finite_and_above_zero(self):
+        def set0(b):
+            b["set"]["location_factor"] = 0
+        assert self._has(doc_ab_with(set0), "elemental_benchmark.set.location_factor",
+                         "Location factor must be a finite number greater than zero.")
+
+        def rate_neg(b):
+            b["set"]["rates"][2]["location_factor"] = -1
+        assert self._has(doc_ab_with(rate_neg), "elemental_benchmark.set.rates[2].location_factor",
+                         "Location factor must be a finite number greater than zero.")
+
+        def rate_ok(b):
+            b["set"]["rates"][2]["location_factor"] = 1.1
+        assert self._our_fields(doc_ab_with(rate_ok)) == []
+
+    def test_rule_9_quantity_and_quantity_unit(self):
+        def neg(b):
+            b["selections"][0]["quantity"] = -1
+        assert self._has(doc_ab_with(neg), "elemental_benchmark.selections[0].quantity",
+                         "Benchmark quantity must be a finite number, zero or more.")
+
+        def nan(b):
+            b["selections"][0]["quantity"] = float("nan")
+        assert self._has(doc_ab_with(nan), "elemental_benchmark.selections[0].quantity",
+                         "Benchmark quantity must be a finite number, zero or more.")
+
+        def unit(b):
+            b["selections"][4]["quantity_unit"] = "sqm"
+        assert self._has(doc_ab_with(unit), "elemental_benchmark.selections[4].quantity_unit",
+                         'Benchmark quantity unit "sqm" does not agree with the rate\'s basis "per_unit" (expected "unit").')
+
+    def test_rule_10_a_bcis_licensed_set_owes_eight_fields(self):
+        def blank(b):
+            s = b["set"]
+            s["provider_type"] = "bcis_licensed"
+            s["source_title"] = ""
+            s["licence_or_permission"] = " "
+            s["imported_by"] = ""
+            s["building_function"] = ""
+            for key in ("source_publication_date", "location_factor", "base_index_name", "current_index_name",
+                        "base_index_value", "current_index_value"):
+                s[key] = None
+        d = doc_ab_with(blank)
+        assert self._our_fields(d) == [
+            "elemental_benchmark.set.source_title", "elemental_benchmark.set.licence_or_permission",
+            "elemental_benchmark.set.imported_by", "elemental_benchmark.set.building_function",
+            "elemental_benchmark.set.source_publication_date", "elemental_benchmark.set.location_factor",
+            "elemental_benchmark.set.base_index_name", "elemental_benchmark.set.base_index_value",
+        ]
+        assert self._has(d, "elemental_benchmark.set.source_title",
+                         "A BCIS-licensed benchmark set needs a source title (the BCIS dataset or product).")
+
+        def full(b):
+            s = b["set"]
+            s["provider_type"] = "bcis_licensed"
+            s["source_title"] = "BCIS Elemental"
+            s["licence_or_permission"] = "licence 1"
+            s["imported_by"] = "qs"
+            s["building_function"] = "offices"
+            s["source_publication_date"] = "2026-01-01"
+        assert self._our_fields(doc_ab_with(full)) == []
+
+    def test_rule_11_a_public_benchmark_set_owes_six_fields(self):
+        def blank(b):
+            s = b["set"]
+            s["provider_type"] = "public_benchmark"
+            s["provider_name"] = ""
+            s["source_title"] = ""
+            s["source_url"] = None
+            s["licence_or_permission"] = ""
+            s["source_publication_date"] = None
+            s["retrieved_at"] = None
+        d = doc_ab_with(blank)
+        assert self._our_fields(d) == [
+            "elemental_benchmark.set.provider_name", "elemental_benchmark.set.source_title",
+            "elemental_benchmark.set.source_url", "elemental_benchmark.set.licence_or_permission",
+            "elemental_benchmark.set.source_publication_date", "elemental_benchmark.set.retrieved_at",
+        ]
+        assert self._has(d, "elemental_benchmark.set.source_url", "A public benchmark set needs a source URL.")
+
+        def full(b):
+            s = b["set"]
+            s["provider_type"] = "public_benchmark"
+            s["provider_name"] = "ONS"
+            s["source_title"] = "OPI"
+            s["source_url"] = "https://example.test/opi"
+            s["licence_or_permission"] = "OGL v3"
+            s["source_publication_date"] = "2026-01-01"
+            s["retrieved_at"] = "2026-02-01"
+        assert self._our_fields(doc_ab_with(full)) == []
+
+    def test_rule_12_a_user_qs_set_owes_three_fields(self):
+        def blank(b):
+            b["set"]["source_title"] = ""
+            b["set"]["imported_by"] = " "
+            b["set"]["base_date"] = ""
+        d = doc_ab_with(blank)
+        assert self._our_fields(d) == [
+            "elemental_benchmark.set.source_title", "elemental_benchmark.set.imported_by",
+            "elemental_benchmark.set.base_date",
+        ]
+        assert self._has(d, "elemental_benchmark.set.base_date", "A user QS benchmark set needs a base date.")
+
+    def test_rule_13_an_orphaned_or_foreign_origin_is_an_error(self):
+        orphan = doc_ab_without_benchmark()
+        assert self._has(
+            orphan, "cost_plan.packages[5].benchmark_origin",
+            "Package carries a benchmark origin but the document has no benchmark set - remove the origin "
+            "or restore the set.",
+        )
+        # Every other benchmark rule is silent on a None block.
+        assert self._our_fields(orphan) == ["cost_plan.packages[5].benchmark_origin"]
+
+        raw = raw_ab()
+        raw["cost_plan"]["packages"][5]["benchmark_origin"]["set_id"] = "set-other"
+        foreign = migrate_inputs_to_v17(raw)
+        assert self._has(
+            foreign, "cost_plan.packages[5].benchmark_origin",
+            'Package benchmark origin names set "set-other" but the document\'s benchmark set is "set-ab".',
+        )
+
+        raw = raw_ab()
+        raw["elemental_benchmark"] = None
+        raw["cost_plan"]["packages"][5]["benchmark_origin"] = None
+        assert self._our_fields(migrate_inputs_to_v17(raw)) == []
+
+    def test_rule_14_a_target_names_a_plan_package_and_only_in_detailed_mode(self):
+        def ghost(b):
+            b["selections"][0]["target_cost_package_id"] = "pkg-ghost"
+        assert self._has(doc_ab_with(ghost), "elemental_benchmark.selections[0].target_cost_package_id",
+                         'Benchmark target package "pkg-ghost" is not on the cost plan.')
+
+        raw = raw_ab()
+        raw["cost_plan"]["mode"] = "headline"
+        headline = migrate_inputs_to_v17(raw)
+        assert self._has(
+            headline, "elemental_benchmark.selections[0].target_cost_package_id",
+            "A benchmark target package applies to a detailed cost plan only - switch to detailed mode or "
+            "clear the target.",
+        )
+        # The one untargeted selection (preliminaries) raises nothing in headline mode.
+        assert [f for f in self._our_fields(headline) if f.endswith("selections[6].target_cost_package_id")] == []
+
+    def test_rule_15_source_records_and_resolutions(self):
+        assert self._our_fields(self._with_records([])) == []
+        dup = self._with_records([self._record("rec-1", "office"), self._record("rec-1", "retail")])
+        assert self._has(dup, "due_diligence.source_records[1].id", 'Source record id "rec-1" is not unique.')
+        # `field` is a Literal: the stray key is a 422, not an issue (TS raises the issue).
+        with pytest.raises(ValidationError):
+            self._resolution(field="epc_rating")
+        ghost = self._with_records([self._record("rec-1")], [self._resolution(chosen_record_id="rec-9")])
+        assert self._has(ghost, "due_diligence.source_resolutions[0].chosen_record_id",
+                         'Source resolution names record "rec-9", which is not a source record.')
+        fine = self._with_records(
+            [self._record("rec-1", "office"), self._record("rec-2", "retail")], [self._resolution()],
+        )
+        assert self._our_fields(fine) == []
+        unnamed = self._with_records([self._record("rec-1")], [self._resolution(chosen_record_id=None)])
+        assert self._our_fields(unnamed) == []

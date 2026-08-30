@@ -734,6 +734,21 @@ class VatOverride(Model):
 PriceBasis = Literal["fixed_price", "provisional_sum", "estimate"]
 
 
+# R17 spec Sec 27.1. Defined here, ahead of CostPackage, which needs
+# `benchmark_origin: BenchmarkOrigin | None` at class-definition time -- the
+# same forward-ref reasoning as PriceBasis/VatOverride above. Mirrors
+# BenchmarkOrigin in elemental-benchmark.ts.
+class BenchmarkOrigin(Model):
+    kind: Literal["benchmark"] = "benchmark"
+    set_id: str
+    set_content_hash: str
+    benchmark_rate_id: str | None = None
+    element_code: str
+    applied_at: str
+    applied_by: str
+    currentisation_method: Literal["index_ratio", "none"] = "none"
+
+
 class CostPackage(Model):
     """Mirrors CostPackage in cost-plan.ts, field for field and in order."""
 
@@ -769,6 +784,11 @@ class CostPackage(Model):
     # R15 spec Sec 23.6. None = not classified (the migration default). Read
     # only by compute_cost_plan's price-basis summary.
     price_basis: PriceBasis | None = None
+    # R17 spec Sec 27.1. Non-null only on a package the benchmark apply action
+    # created. None on every migrated row and on every package a user typed.
+    # Read by the benchmark engine's applied_without_currentisation warning and
+    # the apply action's duplicate guard -- never by any total.
+    benchmark_origin: BenchmarkOrigin | None = None
 
 
 class ContingencyClass(Model):
@@ -1114,9 +1134,63 @@ class SourceRecord(Model):
     epc_rating: str | None = None
 
 
+SourceRecordKind = Literal[
+    "listing_narrative", "listing_structured", "measured_survey", "valuation",
+    "title", "planning", "appraisal_inputs", "other",
+]
+SourceClaimField = Literal[
+    "existing_use", "proposed_use", "floor_area_sqm", "tenure",
+    "upper_parts_included", "vacant_possession",
+]
+
+
+class SourceClaims(Model):
+    """R17 spec Sec 23.5 (amended). Mirrors SourceClaims in due-diligence.ts.
+    A None claim is "this source says nothing about it", never a value."""
+
+    existing_use: str | None = None
+    proposed_use: str | None = None
+    floor_area_sqm: float | None = Field(default=None, ge=0)
+    tenure: Literal["freehold", "leasehold", "unknown"] | None = None
+    upper_parts_included: bool | None = None
+    vacant_possession: bool | None = None
+
+
+class SourceEvidenceRecord(Model):
+    """R17 spec Sec 23.5 (amended). Mirrors SourceEvidenceRecord in due-diligence.ts."""
+
+    id: str
+    kind: SourceRecordKind
+    captured_at: str
+    reference: str = ""
+    captured_by: str = ""
+    # Stored and printed; never parsed (spec Sec 27.9 limitation 10).
+    narrative_excerpt: str | None = None
+    claims: SourceClaims = Field(default_factory=SourceClaims)
+
+
+class SourceConflictResolution(Model):
+    """R17 spec Sec 23.5 (amended). Mirrors SourceConflictResolution in due-diligence.ts."""
+
+    id: str
+    field: SourceClaimField
+    resolved_value: str | float | bool | None = None
+    chosen_record_id: str | None = None
+    evidence_reference: str = ""
+    resolved_by: str = ""
+    resolved_at: str = ""
+    reason: str = ""
+
+
 class DueDiligenceInputs(Model):
     source_record: SourceRecord | None = None
     items: list[DdItem] = Field(default_factory=list, max_length=1200)
+    # R17 spec Sec 27.1. Both lists are present on every v17 document ([] by
+    # migration); on a pre-v17 document the key is absent and pydantic's
+    # default reads that as no records -- the same "absent key" reading the
+    # v14 `inflation` field relies on.
+    source_records: list[SourceEvidenceRecord] = Field(default_factory=list, max_length=200)
+    source_resolutions: list[SourceConflictResolution] = Field(default_factory=list, max_length=200)
 
 
 class CalculatorInputsV13(CalculatorInputsV12):
@@ -1183,11 +1257,138 @@ class CalculatorInputsV16(CalculatorInputsV15):
     conversion_costs: ConversionCostInputsV16  # type: ignore[assignment]
 
 
+# --- Release 17 (calc 2.18.0 -> 2.19.0): the elemental cost benchmark layer
+# (spec Sec 27.1) ------------------------------------------------------------
+
+ProviderType = Literal["bcis_licensed", "public_benchmark", "user_qs"]
+BenchmarkProjectType = Literal["new_build", "refurbishment", "conversion"]
+MeasurementBasis = Literal["area", "per_unit", "per_item", "percentage", "lump_sum"]
+OriginalUnit = Literal["gbp_per_sqm", "gbp_per_sqft", "gbp_per_unit", "gbp_per_item", "pct", "gbp"]
+QuantityUnit = Literal["sqm", "unit", "item", "each", "pct_base"]
+RateEvidenceStatus = Literal["verified", "unverified", "draft", "estimated"]
+
+
+class ElementalBenchmarkRate(Model):
+    """Mirrors ElementalBenchmarkRate in elemental-benchmark.ts field for field.
+    Bounds are deliberately loose here (>= 0 on the money figures); spec
+    Sec 27.5's rules are validation.py's, with spec-worded messages, not 422s."""
+
+    id: str
+    element_code: str
+    element_label: str = ""
+    description: str = ""
+    measurement_basis: MeasurementBasis
+    original_unit: OriginalUnit
+    original_rate_pence: int = Field(default=0, ge=0)
+    rate_pct: float | None = None
+    lower_quartile_rate_pence: int | None = Field(default=None, ge=0)
+    median_rate_pence: int | None = Field(default=None, ge=0)
+    upper_quartile_rate_pence: int | None = Field(default=None, ge=0)
+    sample_count: int | None = Field(default=None, ge=0)
+    location_factor: float | None = None
+    evidence_status: RateEvidenceStatus = "unverified"
+    source_reference: str = ""
+    notes: str = ""
+
+
+class ElementalBenchmarkSet(Model):
+    """Mirrors ElementalBenchmarkSet in elemental-benchmark.ts field for field."""
+
+    id: str
+    name: str
+    provider_type: ProviderType
+    provider_name: str = ""
+    source_title: str = ""
+    source_url: str | None = None
+    source_publication_date: str | None = None
+    retrieved_at: str | None = None
+    licence_or_permission: str = ""
+    dataset_version: str = ""
+    building_function: str = ""
+    project_type: BenchmarkProjectType = "conversion"
+    specification_level: str = ""
+    region: str = ""
+    location_factor: float | None = None
+    location_factor_source: str | None = None
+    base_date: str = ""
+    base_index_name: str | None = None
+    base_index_value: float | None = None
+    current_index_name: str | None = None
+    current_index_value: float | None = None
+    index_dataset_version: str | None = None
+    currentisation_date: str | None = None
+    currency: Literal["GBP"] = "GBP"
+    notes: str = ""
+    imported_by: str = ""
+    created_at: str = ""
+    source_file_sha256: str | None = None
+    content_hash: str = ""
+    rates: list[ElementalBenchmarkRate] = Field(default_factory=list, max_length=500)
+
+
+class SchemeElementalCostSelection(Model):
+    """Mirrors SchemeElementalCostSelection in elemental-benchmark.ts."""
+
+    element_code: str
+    benchmark_rate_id: str | None = None
+    quantity: float = 0.0
+    quantity_unit: QuantityUnit = "sqm"
+    adjustment_pct: float = 0.0
+    adjustment_reason: str = ""
+    include_in_cost_plan: bool = False
+    target_cost_package_id: str | None = None
+    selected_by: str = ""
+    selected_at: str = ""
+
+
+class BenchmarkThresholds(Model):
+    material_variance_pct: float = 15.0
+    stale_after_months: int = 12
+    min_coverage_pct: float = 60.0
+
+
+class BenchmarkApplication(Model):
+    """Mirrors BenchmarkApplication in elemental-benchmark.ts. The previous
+    cost plan is kept as the raw document (a dict) -- it is an audit record,
+    never re-priced."""
+
+    id: str
+    applied_at: str
+    applied_by: str
+    set_id: str
+    set_content_hash: str
+    element_codes: list[str] = Field(default_factory=list)
+    created_package_ids: list[str] = Field(default_factory=list)
+    replaced_package_ids: list[str] = Field(default_factory=list)
+    previous_cost_plan: dict = Field(default_factory=dict)
+
+
+class SchemeElementalBenchmark(Model):
+    """Mirrors SchemeElementalBenchmark in elemental-benchmark.ts."""
+
+    set: ElementalBenchmarkSet
+    selections: list[SchemeElementalCostSelection] = Field(default_factory=list, max_length=200)
+    thresholds: BenchmarkThresholds = Field(default_factory=BenchmarkThresholds)
+    applications: list[BenchmarkApplication] = Field(default_factory=list, max_length=200)
+    library_set_id: str | None = None
+
+
+class CalculatorInputsV17(CalculatorInputsV16):
+    """R17 spec Sec 27.1. Adds the nullable elemental_benchmark block; the
+    package origin and the source records are declared on their own models
+    with None/[] defaults. Subclasses V16 for the reason V16 subclasses V15
+    (isinstance dispatch). Twin of CalculatorInputsV17 in finance-types.ts."""
+
+    inputs_version: Literal[17] = 17  # type: ignore[assignment]
+    elemental_benchmark: SchemeElementalBenchmark | None = None
+
+
 AnyCalculatorInputs = (
     CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
     | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
     | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
     | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15 | CalculatorInputsV16
+    | CalculatorInputsV17
 )
 
 
@@ -1199,6 +1400,11 @@ def parse_calculator_inputs(doc: dict) -> AnyCalculatorInputs:
     that reads a mixed-version corpus (the golden fixtures, the API boundary)
     would otherwise re-implement the same ``inputs_version`` switch."""
     version = doc.get("inputs_version")
+    # R17 Task 3: without this branch a v17 document falls through to the
+    # CalculatorInputsV2 default, silently dropping the benchmark block and
+    # every other post-v2 field.
+    if version == 17:
+        return CalculatorInputsV17.model_validate(doc)
     # R16b Task 2: without this branch a v16 document falls through to the
     # CalculatorInputsV2 default, silently dropping every post-v2 field.
     if version == 16:
@@ -1305,7 +1511,10 @@ FlagCode = Literal[
     # inflation allowance (qs["inflation"] None) but the calendar is known (a
     # resolved acquisition date) and at least one package spend midpoint
     # falls after the QS base date (latest_midpoint_months_from_base > 0).
-    "no_inflation_allowance",
+    "no_inflation_allowance",    # R17 spec Sec 27.5 / Sec 23.5 (amended).
+    "benchmark_warning",
+    "benchmark_material_variance",
+    "source_conflict_unresolved",
 ]
 
-CALC_VERSION = "2.18.0"
+CALC_VERSION = "2.19.0"

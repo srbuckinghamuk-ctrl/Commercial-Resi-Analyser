@@ -11,12 +11,21 @@ import hashlib
 
 from app.financial_model.provenance import (
     ALLOWED_TRANSITIONS,
+    CREATE_ROLES,
+    ROLE_TRANSITIONS,
+    can_transition,
     APPROVED_STATUSES,
     document_status,
     draft_reason,
+    due_diligence_complete,
     is_stale,
 )
 from app.financial_model.hashing import case_hash, _utc_iso
+from app.financial_model import run_appraisal
+from app.financial_model.due_diligence import DdTotals, DueDiligenceResult
+from app.financial_model.types import SourceClaims, SourceConflictResolution, SourceEvidenceRecord
+
+from .fixtures_due_diligence import dd_doc
 
 
 class TestDraftReasonOrdering:
@@ -175,6 +184,36 @@ class TestAllowedTransitions:
                 assert "superseded" in allowed
 
 
+class TestRoleTransitions:
+    def test_the_table_is_exactly_the_design_sec_10_3_table(self):
+        # R17. Restated literally and mirrored literally in
+        # report-provenance.test.ts, the ALLOWED_TRANSITIONS discipline.
+        assert ROLE_TRANSITIONS == {
+            "submitted": ("developer", "broker", "administrator"),
+            "under_review": ("underwriter", "credit_approver"),
+            "information_required": ("underwriter", "credit_approver"),
+            "credit_approved": ("credit_approver",),
+            "approved_with_conditions": ("credit_approver",),
+            "declined": ("credit_approver",),
+            "superseded": (
+                "developer", "broker", "underwriter", "credit_approver", "administrator",
+            ),
+        }
+        assert CREATE_ROLES == ("developer", "broker", "administrator")
+
+    def test_every_non_draft_status_has_a_row(self):
+        assert set(ROLE_TRANSITIONS) == set(ALLOWED_TRANSITIONS) - {"draft"}
+
+    def test_can_transition_reads_the_table_and_nothing_else(self):
+        assert can_transition("developer", "submitted")
+        assert not can_transition("developer", "under_review")
+        assert not can_transition("underwriter", "credit_approved")
+        assert can_transition("credit_approver", "declined")
+        assert can_transition("broker", "superseded")
+        assert not can_transition("administrator", "draft")
+        assert not can_transition("viewer", "superseded")
+
+
 class TestCaseHash:
     def test_recomputable_from_the_printed_parts(self):
         # Spec Sec 21.4: derived here independently -- sha256 over the joined
@@ -221,3 +260,72 @@ class TestCaseHash:
         naive = datetime(2026, 8, 24, 12, 30, 45, 123456)
         assert _utc_iso(aware) == _utc_iso(naive) == "2026-08-24T12:30:45.123456Z"
         assert _utc_iso(None) == ""
+
+
+class TestDueDiligenceComplete:
+    """R17 (spec Sec 23.5 amended, design decision 12). The gate's second
+    count: two source records disagreeing on a claim, with no evidenced
+    resolution, hold the document in DRAFT under the SAME reason the unknown
+    items do. Twin of report-provenance.test.ts's 'R17 -- the source-conflict
+    half of the due-diligence gate'."""
+
+    EVIDENCE = {"source": "Site solicitor", "reference": "Report ref 1", "date": "2026-08-01"}
+
+    @classmethod
+    def _evidenced(cls):
+        return dd_doc({
+            "status": {"cil_s106": "green", "leases_tenancies": "green", "fire_strategy": "green"},
+            "evidence": {"cil_s106": cls.EVIDENCE, "leases_tenancies": cls.EVIDENCE, "fire_strategy": cls.EVIDENCE},
+        })
+
+    @staticmethod
+    def _record(record_id, kind, existing_use):
+        return SourceEvidenceRecord(
+            id=record_id, kind=kind, captured_at="2026-08-01", reference=f"ref {record_id}",
+            captured_by="tester", claims=SourceClaims(existing_use=existing_use),
+        )
+
+    def _with_records(self, records, resolutions):
+        doc = self._evidenced()
+        doc.due_diligence.source_records = list(records)
+        doc.due_diligence.source_resolutions = list(resolutions)
+        return doc
+
+    def _conflicting(self):
+        return [
+            self._record("rec-1", "listing_structured", "office"),
+            self._record("rec-2", "measured_survey", "retail"),
+        ]
+
+    def test_reads_both_counts_and_treats_no_result_as_complete(self):
+        assert due_diligence_complete(None) is True
+        assert due_diligence_complete(DueDiligenceResult(totals=DdTotals(entered_unknown_count=0))) is True
+        assert due_diligence_complete(DueDiligenceResult(totals=DdTotals(entered_unknown_count=1))) is False
+        assert due_diligence_complete(DueDiligenceResult(
+            totals=DdTotals(entered_unknown_count=0), unresolved_source_conflicts=1,
+        )) is False
+
+    def test_two_conflicting_records_without_a_resolution_hold_the_document_in_draft(self):
+        run = run_appraisal(self._with_records(self._conflicting(), []))
+        dd = run.metrics.due_diligence
+        assert dd.totals.entered_unknown_count == 0
+        assert dd.unresolved_source_conflicts == 1
+        assert due_diligence_complete(dd) is False
+        assert draft_reason(
+            report_safe=True, senior_repaid=True, lender_case_status="credit_approved",
+            due_diligence_complete=due_diligence_complete(dd),
+        ) == "due_diligence_incomplete"
+
+    def test_an_evidenced_resolution_closes_the_gate(self):
+        resolution = SourceConflictResolution(
+            id="res-1", field="existing_use", resolved_value="office", chosen_record_id="rec-1",
+            evidence_reference="Survey p.3", resolved_by="tester", resolved_at="2026-08-02", reason="measured",
+        )
+        run = run_appraisal(self._with_records(self._conflicting(), [resolution]))
+        dd = run.metrics.due_diligence
+        assert dd.unresolved_source_conflicts == 0
+        assert due_diligence_complete(dd) is True
+        assert draft_reason(
+            report_safe=True, senior_repaid=True, lender_case_status="credit_approved",
+            due_diligence_complete=due_diligence_complete(dd),
+        ) is None

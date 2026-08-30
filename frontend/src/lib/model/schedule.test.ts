@@ -363,7 +363,7 @@ describe('buildSchedule follows the cost plan, not legacy fields, when they disa
         packages: [{
           id: 'p1', code: 'structure', label: 'Structure', amount_pence: 10_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null,
-          phase_id: null, price_basis: null,
+          phase_id: null, price_basis: null, benchmark_origin: null,
         }],
         contingency: [
           { name: 'general', pct: 10 },
@@ -588,7 +588,7 @@ describe('phase-driven spend — §18.5', () => {
       packages: [{
         id: 'p1', code: 'structure', label: 'Structure', amount_pence: 6_000_000,
         contingency_class: 'general', lender_eligible: true, notes: '',
-        vat_override: null, phase_id: 'strip_out', price_basis: null,
+        vat_override: null, phase_id: 'strip_out', price_basis: null, benchmark_origin: null,
       }],
       contingency: defaultContingencyClasses(0),
       fee_lines: [],
@@ -827,10 +827,10 @@ describe('phase-driven spend — §18.5', () => {
       packages: [
         { id: 'p1', code: 'structure', label: 'Structure A', amount_pence: 1_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
-          price_basis: null },
+          price_basis: null, benchmark_origin: null },
         { id: 'p2', code: 'envelope', label: 'Structure B', amount_pence: 1_000_000,
           contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
-          price_basis: null },
+          price_basis: null, benchmark_origin: null },
       ],
       contingency: defaultContingencyClasses(0),
       fee_lines: [],

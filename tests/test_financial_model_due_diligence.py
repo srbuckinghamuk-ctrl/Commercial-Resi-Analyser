@@ -8,11 +8,17 @@ from app.financial_model.due_diligence import (
     DERIVED_CODES,
     ENTERED_CODES,
     construction_start_month,
+    derive_source_field_conflicts,
     due_diligence_flags,
     months_between,
 )
 from app.financial_model.schedule import build_schedule
-from app.financial_model.types import parse_calculator_inputs
+from app.financial_model.types import (
+    SourceClaims,
+    SourceConflictResolution,
+    SourceEvidenceRecord,
+    parse_calculator_inputs,
+)
 
 from .fixtures_cost_plan_in_time import doc_z, doc_z_no_allowance, parse
 from .fixtures_due_diligence import FIXTURE_DIR, QS, compute, dd_doc, raw_y_as_v12
@@ -395,3 +401,84 @@ def test_consent_flag_moves_under_the_phase_slip_lever():
     slipped_consent = compute(slipped).consent_expiry
     assert (slipped_consent.construction_start_month, slipped_consent.expires_before_start) == (7, True)
     assert "consent_expires_before_start" in {f.code for f in run_appraisal(slipped).metrics.flags}
+
+
+class TestSourceFieldConflicts:
+    """R17 spec Sec 23.5 (amended), design decision 12. Twin of
+    due-diligence.test.ts's 'deriveSourceFieldConflicts (23.5 amended)'."""
+
+    @staticmethod
+    def _record(record_id, kind, **claims):
+        return SourceEvidenceRecord(
+            id=record_id, kind=kind, captured_at="2026-08-01", reference=f"ref {record_id}",
+            captured_by="tester", claims=SourceClaims(**claims),
+        )
+
+    @staticmethod
+    def _resolution(**changes):
+        base = dict(
+            id="res-1", field="existing_use", resolved_value="office", chosen_record_id="rec-1",
+            evidence_reference="Survey p.3", resolved_by="tester", resolved_at="2026-08-02", reason="measured",
+        )
+        return SourceConflictResolution(**{**base, **changes})
+
+    def _office_vs_retail(self):
+        return [
+            self._record("rec-1", "listing_structured", existing_use="Office"),
+            self._record("rec-2", "measured_survey", existing_use="retail"),
+        ]
+
+    def test_office_vs_retail_is_one_unresolved_conflict_naming_both_records(self):
+        out = derive_source_field_conflicts(self._office_vs_retail(), [])
+        assert [asdict(c) for c in out] == [{
+            "field": "existing_use",
+            "values": [
+                {"record_id": "rec-1", "kind": "listing_structured", "value": "Office"},
+                {"record_id": "rec-2", "kind": "measured_survey", "value": "retail"},
+            ],
+            "resolved": False,
+            "resolution_id": None,
+        }]
+
+    def test_strings_agree_case_insensitively_after_trimming_and_one_record_never_conflicts(self):
+        assert derive_source_field_conflicts([
+            self._record("rec-1", "listing_structured", existing_use=" office "),
+            self._record("rec-2", "valuation", existing_use="OFFICE"),
+        ], []) == []
+        assert derive_source_field_conflicts(self._office_vs_retail()[:1], []) == []
+
+    def test_areas_within_5_pct_agree_and_beyond_5_pct_conflict(self):
+        def areas(a, b):
+            return derive_source_field_conflicts([
+                self._record("rec-1", "listing_structured", floor_area_sqm=a),
+                self._record("rec-2", "measured_survey", floor_area_sqm=b),
+            ], [])
+        assert areas(100, 104) == []
+        assert areas(100, 105) == []
+        assert [c.field for c in areas(100, 105.5)] == ["floor_area_sqm"]
+        assert [c.field for c in areas(110, 100)] == ["floor_area_sqm"]
+
+    def test_a_blank_evidence_reference_does_not_resolve_and_an_evidenced_one_does(self):
+        records = self._office_vs_retail()
+        assert derive_source_field_conflicts(records, [self._resolution(evidence_reference="  ")])[0].resolved is False
+        assert derive_source_field_conflicts(records, [self._resolution(resolved_by="")])[0].resolved is False
+        # A resolution on another field says nothing about this one.
+        assert derive_source_field_conflicts(records, [self._resolution(field="tenure")])[0].resolved is False
+        resolved = derive_source_field_conflicts(records, [self._resolution()])
+        assert resolved[0].resolved is True
+        assert resolved[0].resolution_id == "res-1"
+
+    def test_the_source_conflict_unresolved_flag_names_both_values(self):
+        doc = dd_doc()
+        doc.due_diligence.source_records = self._office_vs_retail()
+        doc.due_diligence.source_resolutions = []
+        run = run_appraisal(doc)
+        assert run.metrics.due_diligence.unresolved_source_conflicts == 1
+        flag = next(f for f in run.metrics.flags if f.code == "source_conflict_unresolved")
+        assert flag.severity == "red"
+        assert flag.message == (
+            "source conflict on existing_use is unresolved - listing_structured: Office | "
+            "measured_survey: retail; record an evidenced resolution"
+        )
+        doc.due_diligence.source_resolutions = [self._resolution()]
+        assert "source_conflict_unresolved" not in {f.code for f in run_appraisal(doc).metrics.flags}

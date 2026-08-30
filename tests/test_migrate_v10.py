@@ -138,11 +138,11 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 9
     ]
-    assert len(version_excluded) == 7, (
+    assert len(version_excluded) == 8, (
         "the v10-native fixture count changed -- confirm the new fixture is meant "
         "to be outside the migration gate, then update this bound deliberately"
     )
-    assert sorted(p.stem for p in version_excluded) == [
+    assert sorted(p.stem for p in version_excluded) == ["ab-elemental-benchmark", 
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
         "w-monitoring-on-site", "x-unit-sales-ledger", "y-due-diligence",
         "z-cost-plan-in-time",

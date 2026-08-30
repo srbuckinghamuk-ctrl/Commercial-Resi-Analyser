@@ -34,7 +34,11 @@ import type { UnitSalesInputs } from './unit-sales';
 // input types live in due-diligence.ts (the unit-sales pattern above).
 // R15 Task 5: `DueDiligenceResult` now exists (`computeDueDiligence`'s return
 // type) and `AppraisalResultV2.due_diligence` reads it below.
-import type { DueDiligenceInputs, DueDiligenceResult } from './due-diligence';
+import type { DueDiligenceInputs, DueDiligenceInputsV17, DueDiligenceResult } from './due-diligence';
+// R17 spec §27.1/§27.4: the benchmark block is the only top-level v17
+// addition; its input and result types live in elemental-benchmark.ts (the
+// unit-sales pattern above).
+import type { SchemeElementalBenchmark, ElementalBenchmarkResult } from './elemental-benchmark';
 
 export type { SpendCurve };
 
@@ -482,11 +486,27 @@ export interface CalculatorInputsV16
   conversion_costs: ConversionCostInputsV16;
 }
 
+/**
+ * R17 spec §27.1. Three additions, all inert until a user enters something:
+ * the nullable top-level `elemental_benchmark` block (null on every migrated
+ * document), `benchmark_origin: null` on every cost-plan package (declared on
+ * `CostPackage`, cost-plan.ts), and the due-diligence source records
+ * (`due_diligence.source_records` / `source_resolutions`, both `[]` on
+ * migration). `isV17`/`migrateV16toV17` enforce the written shape.
+ */
+export interface CalculatorInputsV17
+  extends Omit<CalculatorInputsV16, 'inputs_version' | 'due_diligence'> {
+  inputs_version: 17;
+  due_diligence: DueDiligenceInputsV17;
+  elemental_benchmark: SchemeElementalBenchmark | null;
+}
+
 export type AnyCalculatorInputs =
   CalculatorInputsV2 | CalculatorInputsV3 | CalculatorInputsV4
   | CalculatorInputsV5 | CalculatorInputsV6 | CalculatorInputsV7 | CalculatorInputsV8
   | CalculatorInputsV9 | CalculatorInputsV10 | CalculatorInputsV11 | CalculatorInputsV12
-  | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15 | CalculatorInputsV16;
+  | CalculatorInputsV13 | CalculatorInputsV14 | CalculatorInputsV15 | CalculatorInputsV16
+  | CalculatorInputsV17;
 
 export type FlagCode =
   | 'facility_exceeded' | 'funding_gap' | 'interest_reserve_exhausted'
@@ -535,7 +555,16 @@ export type FlagCode =
    *  allowance (`qs.inflation` null) but the calendar is known (a resolved
    *  acquisition date) and at least one package spend midpoint falls after
    *  the QS base date (`latest_midpoint_months_from_base > 0`). */
-  | 'no_inflation_allowance';
+  | 'no_inflation_allowance'
+  /** R17 spec §27.5. One amber flag per benchmark warning other than the
+   *  material-variance one. Advisory: the benchmark layer enters no total. */
+  | 'benchmark_warning'
+  /** R17 spec §27.5. Red: the benchmark base build differs from the QS/
+   *  developer figure by more than `thresholds.material_variance_pct`. */
+  | 'benchmark_material_variance'
+  /** R17 spec §23.5 (amended). Red, one per claims field on which two or more
+   *  structured source records disagree and no evidenced resolution exists. */
+  | 'source_conflict_unresolved';
 
 export interface ModelFlag {
   code: FlagCode;
@@ -894,6 +923,12 @@ export interface AppraisalResultV2 {
    *  schedule's `vat` and the acquisition tax already derived; never recomputed
    *  by the UI or the memo; never null — a pre-v13 document is read as the seed. */
   due_diligence: DueDiligenceResult;
+  /** R17 spec §27.4. Computed ONCE in `deriveMetrics`, from the input block,
+   *  the `costPlan` already derived and `developed_area_sqm`; never recomputed
+   *  by the UI or the memo. null exactly when the input `elemental_benchmark`
+   *  block is null (every migrated document). ADVISORY: `enters_tdc` is a
+   *  pinned literal `false`, and nothing here feeds any other result field. */
+  elemental_benchmark: ElementalBenchmarkResult | null;
   /** Ledger flags (model.flags, unmutated) followed by metric flags computed by
    * deriveMetrics itself (senior/developer breakeven unsolvable, cap-exhausted).
    * Wired in Release 3a Task 6 — deriveMetrics is pure and no longer mutates
@@ -901,4 +936,4 @@ export interface AppraisalResultV2 {
   flags: ModelFlag[];
 }
 
-export const CALC_VERSION = '2.18.0';
+export const CALC_VERSION = '2.19.0';

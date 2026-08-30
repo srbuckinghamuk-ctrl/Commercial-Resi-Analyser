@@ -1,7 +1,8 @@
 /**
  * R15 spec §23. The shared due-diligence document builders. Every builder
  * starts from fixture Y (fixtures/financial-model/y-due-diligence.json) via
- * `migrateInputsToV16` (R16b Task 2 moved this on from `migrateInputsToV15`,
+ * `migrateInputsToV17` (R17 Task 3 moved this on from `migrateInputsToV16`,
+ * spec §27.7, which itself moved it on from `migrateInputsToV15`, spec §26.1,
  * which itself moved it on from `migrateInputsToV14`, spec §25.7, which
  * itself moved it on from `migrateInputsToV13`, spec §24.8) — never a
  * hand-authored default object — so the tests and the golden corpus share
@@ -11,7 +12,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { migrateInputsToV16 } from '../migrate';
+import { migrateInputsToV17 } from '../migrate';
 import { buildSchedule } from '../schedule';
 import { computeDueDiligence, defaultDueDiligence } from '../due-diligence';
 import { runAppraisal } from '../index';
@@ -22,7 +23,7 @@ import { FIXTURE_PROJECT } from './investment-case-docs';
 import type { DueDiligenceResult } from '../due-diligence';
 import type { QsProvenance, PriceBasis } from '../cost-plan';
 import type {
-  AnyCalculatorInputs, CalculatorInputsV16, LenderValuation, Schedule,
+  AnyCalculatorInputs, CalculatorInputsV17, LenderValuation, Schedule,
 } from '../finance-types';
 
 const FIXTURE_DIR = resolve(__dirname, '../../../../../fixtures/financial-model');
@@ -117,7 +118,7 @@ export interface DdDocOverrides {
 }
 
 /** Fixture Y, optionally altered. See {@link DdDocOverrides}. */
-export function ddDoc(overrides: DdDocOverrides = {}): CalculatorInputsV16 {
+export function ddDoc(overrides: DdDocOverrides = {}): CalculatorInputsV17 {
   const o = overrides;
   const raw = rawY();
   const dd = raw.due_diligence as { source_record: Record<string, unknown> | null; items: RawItem[] };
@@ -209,7 +210,7 @@ export function ddDoc(overrides: DdDocOverrides = {}): CalculatorInputsV16 {
   }
   if ('programme' in o && o.programme === null) raw.programme = null;
 
-  return migrateInputsToV16(raw);
+  return migrateInputsToV17(raw);
 }
 
 export function scheduleFor(doc: AnyCalculatorInputs): Schedule {
@@ -229,8 +230,8 @@ export function computeFor(doc: AnyCalculatorInputs): DueDiligenceResult {
 
 /** Runs a document through the real memo generator and returns its extracted
  *  text. Copied from `unit-sales-docs.ts`'s `memoText`, widened to accept a
- *  `CalculatorInputsV16` document. */
-export async function memoText(doc: CalculatorInputsV16): Promise<string> {
+ *  `CalculatorInputsV17` document. */
+export async function memoText(doc: CalculatorInputsV17): Promise<string> {
   const run = runAppraisal(doc);
   const blob = generateInvestmentMemo(FIXTURE_PROJECT, run);
   const info = await inspectPdf(blob);

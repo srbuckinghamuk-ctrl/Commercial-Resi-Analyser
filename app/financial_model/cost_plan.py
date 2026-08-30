@@ -42,6 +42,10 @@ class CostPackageLine:
     months_from_base: float | None = None
     inflation_factor: float | None = None
     inflation_pence: int = 0
+    # R17 spec Sec 27.1. Carried straight through from the input line (the
+    # phase_id treatment); None on every row the apply action did not create.
+    # A dict (model_dump) so the result stays JSON-shaped like `qs` above.
+    benchmark_origin: dict[str, Any] | None = None
 
 
 @dataclass
@@ -224,6 +228,12 @@ def compute_cost_plan(inputs, area_sqm: float, unit_count: int) -> CostPlanResul
             start_month=start, finish_month=finish, midpoint_month=midpoint,
             months_from_base=months_from_base, inflation_factor=factor,
             inflation_pence=inflation_pence,
+            # getattr: a pre-v17 CostPackage model has the attribute (declared
+            # with a None default) but a raw namespace might not.
+            benchmark_origin=(
+                None if getattr(p, "benchmark_origin", None) is None
+                else p.benchmark_origin.model_dump(mode="json")
+            ),
         ))
 
     # Spec Sec 1.1: the fractional-area product rounds once, at source.

@@ -6,7 +6,7 @@ import pytest
 
 from app.financial_model import run_appraisal
 from app.financial_model.apply_scenario import apply_scenario
-from app.financial_model.migrate import migrate_inputs_to_v15
+from app.financial_model.migrate import migrate_inputs_to_v15, migrate_inputs_to_v17
 from app.financial_model.sensitivity import InvalidBaseDocumentError
 from app.financial_model.stress_pack import STRESS_PACK, StressDefinition, resolve_stress, run_stress_pack
 from app.financial_model.types import ScenarioOverrides
@@ -122,7 +122,7 @@ def test_inapplicable_implies_equal_to_base_corpus_wide():
         doc = json.loads(path.read_text(encoding="utf-8"))
         if "inputs" not in doc:
             continue  # suite fixture, no inputs of its own
-        inputs = migrate_inputs_to_v15(doc["inputs"], None)
+        inputs = migrate_inputs_to_v17(doc["inputs"], None)  # corpus-wide: fixture AB (R17) is v17-native
         try:
             result = run_stress_pack(inputs)
         except InvalidBaseDocumentError:

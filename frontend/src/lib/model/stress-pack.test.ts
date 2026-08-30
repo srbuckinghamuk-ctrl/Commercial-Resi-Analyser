@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runAppraisal, computeCostPlan, developedAreaSqm } from './index';
 import { applyScenario } from './apply-scenario';
-import { migrateInputsToV15 } from './migrate';
+import { migrateInputsToV15, migrateInputsToV17 } from './migrate';
 import { InvalidBaseDocumentError } from './sensitivity';
 import { STRESS_PACK, resolveStress, runStressPack } from './stress-pack';
 import { ddDoc } from './__fixtures__/due-diligence-docs';
@@ -175,7 +175,7 @@ describe('the standard lender stress pack', () => {
         inputs?: Record<string, unknown>;
       };
       if (doc.inputs === undefined) continue; // suite fixture, no inputs of its own
-      const inputs = migrateInputsToV15(doc.inputs);
+      const inputs = migrateInputsToV17(doc.inputs); // corpus-wide: fixture AB (R17) is v17-native
       let result;
       try {
         result = runStressPack(inputs);

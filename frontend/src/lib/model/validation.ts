@@ -21,8 +21,10 @@ import {
   computeCostPlan, costPlanFromLegacyCosts, FEE_CODE_CATEGORY, PRICE_BASIS_VALUES, QS_STAGES, QS_STATUSES,
 } from './cost-plan';
 import {
-  DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES,
+  DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES, SOURCE_CLAIM_FIELDS,
 } from './due-diligence';
+import { ELEMENT_CODES, QUANTITY_UNIT_FOR_BASIS, UNITS_FOR_BASIS } from './elemental-benchmark';
+import type { ElementalBenchmarkRate } from './elemental-benchmark';
 import { VAT_CHARGE_CATEGORIES, isPurchaseVatChargeable, vatReturnPeriods } from './vat';
 import { pct } from './pct';
 import {
@@ -1256,6 +1258,7 @@ export function validateInputs(inputs: AnyCalculatorInputs): ValidationIssue[] {
   }
 
   validateDueDiligence(inputs, issues);
+  validateElementalBenchmark(inputs, issues);
 
   // R8 (spec §14). Read through an `in` guard: v2–v4 documents carry none of
   // these fields and must not be reported as failing rules that did not exist
@@ -1489,6 +1492,36 @@ export function validateDueDiligence(inputs: AnyCalculatorInputs, issues: Valida
         err('due_diligence.source_record.tenure', 'Listing tenure must be freehold, leasehold or unknown.');
       }
     }
+
+    // --- R17 §27.5 rule 15 begin ---
+    // R17 spec §27.5 rule 15 — the structured source records (§23.5
+    // amended). Read structurally: a pre-v17 document has neither array, and
+    // `'elemental_benchmark' in inputs` is the v17 discriminator that narrows
+    // `due_diligence` to its v17 shape (the `dd` binding above is the v13
+    // type every later version extends). Both loops are no-ops on empty
+    // arrays (every migrated document), so a document that never recorded a
+    // source claim raises nothing here.
+    if ('elemental_benchmark' in inputs) {
+      const ddV17 = inputs.due_diligence;
+      const seenRecordIds = new Set<string>();
+      ddV17.source_records.forEach((record, i) => {
+        if (seenRecordIds.has(record.id)) {
+          err(`due_diligence.source_records[${i}].id`, `Source record id "${record.id}" is not unique.`);
+        }
+        seenRecordIds.add(record.id);
+      });
+      ddV17.source_resolutions.forEach((res, i) => {
+        const field = `due_diligence.source_resolutions[${i}]`;
+        if (!(SOURCE_CLAIM_FIELDS as readonly string[]).includes(res.field)) {
+          err(`${field}.field`, `Source resolution field "${res.field}" is not a source claim field.`);
+        }
+        if (res.chosen_record_id != null && !seenRecordIds.has(res.chosen_record_id)) {
+          err(`${field}.chosen_record_id`,
+            `Source resolution names record "${res.chosen_record_id}", which is not a source record.`);
+        }
+      });
+    }
+    // --- R17 §27.5 rule 15 end ---
   }
 
   // Rules 8 and 9 — §23.6's cost-plan provenance. Read structurally: a pre-v13
@@ -1565,6 +1598,202 @@ export function validateDueDiligence(inputs: AnyCalculatorInputs, issues: Valida
       }
     });
   }
+}
+
+/** R17 spec §27.5 rules 7/8: a finite number strictly above zero. `> 0`
+ *  alone would pass `Infinity`, so finiteness is asserted first. */
+function isPositiveFinite(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+/**
+ * R17 spec §27.5 — the elemental benchmark's INPUT-only rules (rules 1–14;
+ * rule 15, the source records, lives in `validateDueDiligence` above beside
+ * the §23.5 block it amends). The twelve `BenchmarkWarning`s are result data
+ * (`computeElementalBenchmark`'s own) and are never raised here.
+ *
+ * Read structurally, exactly like `validateDueDiligence`: a pre-v17 document
+ * has no `elemental_benchmark` key, and a v17 document with the block `null`
+ * raises nothing from rules 1–12 and 14 — rule 13 is the ONE rule that runs
+ * against a null block, because an orphaned `benchmark_origin` on a package
+ * is exactly the state a nulled block leaves behind. Mirrors validation.py's
+ * `validate_elemental_benchmark`.
+ *
+ * Several arms are LIVE here and Pydantic-guarded in the Python engine (rule
+ * 4's negative `original_rate_pence`, rule 3's/9's enum members, rule 15's
+ * claim field) — kept in both for the reason `validateDueDiligence`'s
+ * docstring gives.
+ */
+export function validateElementalBenchmark(inputs: AnyCalculatorInputs, issues: ValidationIssue[]): void {
+  const err = (field: string, message: string) => issues.push({ severity: 'error', field, message });
+  // --- R17 §27.5 benchmark begin ---
+  if (!('elemental_benchmark' in inputs)) return;
+  const block = inputs.elemental_benchmark;
+  const plan = inputs.cost_plan;
+
+  // Rule 13 — runs whether or not the block is present: an origin that names
+  // no set, or another set, is an error, not a silent tag.
+  plan.packages.forEach((p, i) => {
+    const origin = p.benchmark_origin ?? null;
+    if (origin == null) return;
+    if (block == null) {
+      err(`cost_plan.packages[${i}].benchmark_origin`,
+        'Package carries a benchmark origin but the document has no benchmark set - remove the origin or restore the set.');
+    } else if (origin.set_id !== block.set.id) {
+      err(`cost_plan.packages[${i}].benchmark_origin`,
+        `Package benchmark origin names set "${origin.set_id}" but the document's benchmark set is "${block.set.id}".`);
+    }
+  });
+  if (block == null) return;
+
+  const set = block.set;
+  const setField = 'elemental_benchmark.set';
+
+  // Rule 1 (first half) and rules 3, 4, 8 — the rate rows.
+  const rateById = new Map<string, ElementalBenchmarkRate>();
+  set.rates.forEach((rate, i) => {
+    const field = `${setField}.rates[${i}]`;
+    if (rateById.has(rate.id)) {
+      err(`${field}.id`, `Benchmark rate id "${rate.id}" is not unique.`);
+    } else {
+      rateById.set(rate.id, rate);
+    }
+    // Rule 3.
+    const allowed = UNITS_FOR_BASIS[rate.measurement_basis] ?? [];
+    if (!allowed.includes(rate.original_unit)) {
+      err(`${field}.original_unit`,
+        `Benchmark rate unit "${rate.original_unit}" does not agree with measurement basis "${rate.measurement_basis}".`);
+    }
+    // Rule 4.
+    if (!Number.isFinite(rate.original_rate_pence) || rate.original_rate_pence < 0) {
+      err(`${field}.original_rate_pence`, 'Benchmark rate must be zero or more pence.');
+    }
+    if (rate.measurement_basis === 'percentage') {
+      if (rate.rate_pct == null) {
+        err(`${field}.rate_pct`, 'A percentage benchmark rate needs a rate_pct.');
+      } else if (!Number.isFinite(rate.rate_pct) || rate.rate_pct < 0) {
+        err(`${field}.rate_pct`, 'Benchmark rate_pct must be zero or more.');
+      }
+    } else if (rate.rate_pct != null) {
+      err(`${field}.rate_pct`, 'Only a percentage benchmark rate carries a rate_pct.');
+    }
+    // Rule 8, the per-rate override.
+    if (rate.location_factor != null && !isPositiveFinite(rate.location_factor)) {
+      err(`${field}.location_factor`, 'Location factor must be a finite number greater than zero.');
+    }
+  });
+
+  // Rules 1 (second half), 2, 5, 9, 14 — the selections.
+  const seenElements = new Set<string>();
+  const packageIds = new Set(plan.packages.map((p) => p.id));
+  block.selections.forEach((sel, i) => {
+    const field = `elemental_benchmark.selections[${i}]`;
+    // Rule 2.
+    if (!(ELEMENT_CODES as readonly string[]).includes(sel.element_code)) {
+      err(`${field}.element_code`, `Element code "${sel.element_code}" is not in the element catalogue.`);
+    } else if (seenElements.has(sel.element_code)) {
+      err(`${field}.element_code`, `Element "${sel.element_code}" is selected more than once.`);
+    }
+    seenElements.add(sel.element_code);
+    // Rule 1 — null is "selected but unpriced", not a dangling reference.
+    const rate = sel.benchmark_rate_id == null ? null : (rateById.get(sel.benchmark_rate_id) ?? null);
+    if (sel.benchmark_rate_id != null && rate == null) {
+      err(`${field}.benchmark_rate_id`, `Benchmark rate "${sel.benchmark_rate_id}" is not in the benchmark set.`);
+    } else if (rate != null && rate.element_code !== sel.element_code) {
+      err(`${field}.benchmark_rate_id`,
+        `Benchmark rate "${rate.id}" prices element "${rate.element_code}", not "${sel.element_code}".`);
+    }
+    // Rule 5. `!(x > -100)` so NaN fires as well as -100 itself.
+    if (sel.adjustment_pct !== 0 && sel.adjustment_reason.trim() === '') {
+      err(`${field}.adjustment_reason`, 'A benchmark adjustment needs a reason.');
+    }
+    if (!(sel.adjustment_pct > -100)) {
+      err(`${field}.adjustment_pct`, 'Benchmark adjustment must be greater than -100%.');
+    }
+    // Rule 9.
+    if (!Number.isFinite(sel.quantity) || sel.quantity < 0) {
+      err(`${field}.quantity`, 'Benchmark quantity must be a finite number, zero or more.');
+    }
+    if (rate != null) {
+      const expected = QUANTITY_UNIT_FOR_BASIS[rate.measurement_basis];
+      if (sel.quantity_unit !== expected) {
+        err(`${field}.quantity_unit`,
+          `Benchmark quantity unit "${sel.quantity_unit}" does not agree with the rate's basis "${rate.measurement_basis}" (expected "${expected}").`);
+      }
+    }
+    // Rule 14.
+    if (sel.target_cost_package_id != null) {
+      if (plan.mode !== 'detailed') {
+        err(`${field}.target_cost_package_id`,
+          'A benchmark target package applies to a detailed cost plan only - switch to detailed mode or clear the target.');
+      } else if (!packageIds.has(sel.target_cost_package_id)) {
+        err(`${field}.target_cost_package_id`,
+          `Benchmark target package "${sel.target_cost_package_id}" is not on the cost plan.`);
+      }
+    }
+  });
+
+  // Rules 6–8 — the set's currentisation and location inputs.
+  const baseNamed = set.base_index_name != null;
+  const currentNamed = set.current_index_name != null;
+  if (baseNamed !== currentNamed) {
+    err(`${setField}.base_index_name`, 'Base and current index names must both be set, or both be empty.');
+  } else if (baseNamed && set.base_index_name !== set.current_index_name) {
+    err(`${setField}.current_index_name`, 'Base and current index names must name the same index.');
+  }
+  if (set.base_index_value != null && !isPositiveFinite(set.base_index_value)) {
+    err(`${setField}.base_index_value`, 'Base index value must be a finite number greater than zero.');
+  }
+  if (set.current_index_value != null && !isPositiveFinite(set.current_index_value)) {
+    err(`${setField}.current_index_value`, 'Current index value must be a finite number greater than zero.');
+  }
+  if (set.location_factor != null && !isPositiveFinite(set.location_factor)) {
+    err(`${setField}.location_factor`, 'Location factor must be a finite number greater than zero.');
+  }
+
+  // Rules 10–12 — what each provider type owes. One table per type, checked
+  // as blank-after-trim (strings) or null (dates and numbers).
+  const blank = (value: string | null) => value == null || value.trim() === '';
+  if (set.provider_type === 'bcis_licensed') {
+    if (blank(set.source_title)) {
+      err(`${setField}.source_title`, 'A BCIS-licensed benchmark set needs a source title (the BCIS dataset or product).');
+    }
+    if (blank(set.licence_or_permission)) {
+      err(`${setField}.licence_or_permission`, 'A BCIS-licensed benchmark set needs a licence or permission statement.');
+    }
+    if (blank(set.imported_by)) err(`${setField}.imported_by`, 'A BCIS-licensed benchmark set needs an importer.');
+    if (blank(set.building_function)) {
+      err(`${setField}.building_function`, 'A BCIS-licensed benchmark set needs a building function.');
+    }
+    if (set.source_publication_date == null) {
+      err(`${setField}.source_publication_date`, 'A BCIS-licensed benchmark set needs a source publication date.');
+    }
+    if (set.location_factor == null) {
+      err(`${setField}.location_factor`, 'A BCIS-licensed benchmark set needs a location factor.');
+    }
+    if (set.base_index_name == null) {
+      err(`${setField}.base_index_name`, 'A BCIS-licensed benchmark set needs a base index name.');
+    }
+    if (set.base_index_value == null) {
+      err(`${setField}.base_index_value`, 'A BCIS-licensed benchmark set needs a base index value.');
+    }
+  } else if (set.provider_type === 'public_benchmark') {
+    if (blank(set.provider_name)) err(`${setField}.provider_name`, 'A public benchmark set needs a provider name.');
+    if (blank(set.source_title)) err(`${setField}.source_title`, 'A public benchmark set needs a source title.');
+    if (blank(set.source_url)) err(`${setField}.source_url`, 'A public benchmark set needs a source URL.');
+    if (blank(set.licence_or_permission)) {
+      err(`${setField}.licence_or_permission`, 'A public benchmark set needs a licence or permission statement.');
+    }
+    if (set.source_publication_date == null) {
+      err(`${setField}.source_publication_date`, 'A public benchmark set needs a source publication date.');
+    }
+    if (set.retrieved_at == null) err(`${setField}.retrieved_at`, 'A public benchmark set needs a retrieved_at date.');
+  } else if (set.provider_type === 'user_qs') {
+    if (blank(set.source_title)) err(`${setField}.source_title`, 'A user QS benchmark set needs a source title.');
+    if (blank(set.imported_by)) err(`${setField}.imported_by`, 'A user QS benchmark set needs an importer.');
+    if (blank(set.base_date)) err(`${setField}.base_date`, 'A user QS benchmark set needs a base date.');
+  }
+  // --- R17 §27.5 benchmark end ---
 }
 
 /**

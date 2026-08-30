@@ -70,7 +70,7 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if "inputs" in _FIXTURE_DOCS[p]
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 14
     ]
-    assert sorted(p.stem for p in version_excluded) == []
+    assert sorted(p.stem for p in version_excluded) == ["ab-elemental-benchmark"]
 
 
 def _metrics_dict(metrics) -> dict:

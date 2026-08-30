@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.financial_model import run_appraisal
-from app.financial_model.migrate import migrate_inputs_to_v14
+from app.financial_model.migrate import migrate_inputs_to_v17
 from app.financial_model.unit_sales import compute_unit_sales
 from .fixtures_unit_sales import (
     anchor_resolver, held_twin_doc, no_programme_doc, pc_early_doc, residue_doc, sold_gross, unit_sales_doc,
@@ -138,13 +138,13 @@ def test_unit_sales_gross_equals_schedule_gross_sales_corpus_wide():
 
     Corpus-wide over every fixture carrying its own inputs; fixture K names a
     `base_fixture` instead, so APPRAISAL_FIXTURES already excludes it. Each is
-    migrated to v14 (R15b Task 7: fixture Z is v14-native) so the identity is
+    migrated to v17 (R17: fixture AB is v17-native) so the identity is
     asserted on the document shape the engine actually receives today. Twin
     of unit-sales.test.ts's own corpus-wide check."""
     checked = 0
     for path in APPRAISAL_FIXTURES:
         raw = json.loads(path.read_text(encoding="utf-8"))["inputs"]
-        run = run_appraisal(migrate_inputs_to_v14(raw, None))
+        run = run_appraisal(migrate_inputs_to_v17(raw, None))
         unit_sales = run.metrics.unit_sales
         if unit_sales is None:
             continue

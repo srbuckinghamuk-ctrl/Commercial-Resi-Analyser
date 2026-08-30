@@ -131,3 +131,52 @@ class TestYorkAuditCase:
         assert run.metrics.has_realisation_event is False
         assert run.metrics.equity_multiple is None
         assert run.metrics.return_on_equity_pct is not None
+
+
+class TestYorkAfterTheGovernedResave:
+    """R17 spec Sec 11 / migration notes Sec 20.4: the resave migrates the
+    stored v3 document to v17 and recalculates; it changes no financial
+    assumption, so every audited figure is identical before and after, and
+    the two evidence records the reconcile script adds move no metric --
+    they raise the unresolved-conflict flag that keeps the case DRAFT."""
+
+    @staticmethod
+    def _v17(snapshot: dict):
+        from app.financial_model.migrate import migrate_inputs_to_v17
+        return migrate_inputs_to_v17(snapshot)
+
+    def test_every_pinned_figure_survives_the_resave_migration(self):
+        from app.financial_model.migrate import migrate_inputs_to_v3
+        before = york_run().metrics
+        after = run_appraisal(self._v17(migrate_inputs_to_v3(york_v1_snapshot()))).metrics
+        for name in (
+            "acquisition_cost_pence", "acquisition_tax_pence", "gdv_pence",
+            "construction_cost_pence", "professional_fees_pence", "statutory_costs_pence",
+            "cost_before_finance_pence", "finance_costs_pence", "total_development_cost_pence",
+            "profit_pence", "profit_on_cost_pct", "profit_on_gdv_pct", "peak_debt_pence",
+            "irr_annual_pct", "equity_multiple", "return_on_equity_pct",
+        ):
+            assert getattr(after, name) == getattr(before, name), name
+        assert after.total_development_cost_pence == 76_490_630
+
+    def test_the_two_evidence_records_move_no_metric_and_raise_the_conflict(self):
+        from dataclasses import asdict
+
+        from app.financial_model.migrate import migrate_inputs_to_v3
+        from scripts.york_reconcile import build_source_records, metric_differences
+
+        base = self._v17(migrate_inputs_to_v3(york_v1_snapshot())).model_dump(mode="json")
+        with_records = {**base, "due_diligence": {
+            **base["due_diligence"],
+            "source_records": build_source_records(
+                {"use_class": "office"}, "Retail premises; upper parts sold off.",
+                "2026-08-30T00:00:00+00:00",
+            ),
+        }}
+        before = run_appraisal(self._v17(base))
+        after = run_appraisal(self._v17(with_records))
+        assert metric_differences(asdict(before.metrics), asdict(after.metrics)) == []
+        assert after.metrics.due_diligence.unresolved_source_conflicts >= 1
+        assert "source_conflict_unresolved" in {f.code for f in after.metrics.flags}
+        assert "source_conflict_unresolved" not in {f.code for f in before.metrics.flags}
+        assert after.reconciliation.report_safe is False

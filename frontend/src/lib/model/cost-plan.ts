@@ -4,6 +4,7 @@
  *  AcquisitionInputsV5 (R8) and UnitMixInputsV6 (R9). */
 
 import type { VatOverride } from './vat';
+import type { BenchmarkOrigin } from './elemental-benchmark';
 import { pct } from './pct';
 import { computePackageTiming } from './package-timing';
 import { monthsBetween } from './due-diligence';
@@ -67,6 +68,13 @@ export interface CostPackage {
   /** R15 spec §23.6. null = not classified (the migration default). Read only
    *  by computeCostPlan's price-basis summary. */
   price_basis: PriceBasis | null;
+  /** R17 spec §27.1. Non-null only on a package the benchmark apply action
+   *  created: which set, which rate, which element, when, by whom, and whether
+   *  the set was currentised at the time. null on every migrated row and on
+   *  every package a user typed. Carried through to the result line verbatim;
+   *  read by the benchmark engine's `applied_without_currentisation` warning
+   *  and by the apply action's duplicate guard — never by any total. */
+  benchmark_origin: BenchmarkOrigin | null;
 }
 
 /** R11 spec §17.8. One mechanism: the package's own `contingency_class` tag.
@@ -257,6 +265,9 @@ export interface CostPackageLine {
   months_from_base: number | null;
   inflation_factor: number | null;
   inflation_pence: number;
+  /** R17 spec §27.1. Carried straight through from the input line (the
+   *  `phase_id` treatment); null on every row the apply action did not create. */
+  benchmark_origin: BenchmarkOrigin | null;
 }
 
 export interface ContingencyLine {
@@ -428,6 +439,8 @@ export function computeCostPlan(
       resolved_phase_id: t?.phase_id ?? null,
       start_month: start, finish_month: finish, midpoint_month: midpoint,
       months_from_base: monthsFromBase, inflation_factor: factor, inflation_pence: inflationPence,
+      // `?? null`: a raw pre-v17 stored document has no `benchmark_origin` key.
+      benchmark_origin: p.benchmark_origin ?? null,
     };
   });
 

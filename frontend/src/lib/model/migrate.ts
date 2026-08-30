@@ -7,6 +7,7 @@ import type {
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
   CalculatorInputsV14, CalculatorInputsV15, CalculatorInputsV16, ConversionCostInputsV16,
+  CalculatorInputsV17,
   AcquisitionInputsV5, EquitySource, FacilityTerms, LenderValuation,
   ProgrammeInputs, SalesPhasingInputs, RefinanceInputs, ProgrammeNetwork, PhaseCode,
 } from './finance-types';
@@ -19,6 +20,7 @@ import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { costPlanFromLegacyCosts } from './cost-plan';
 import { defaultVatInputs } from './vat';
 import { defaultDueDiligence } from './due-diligence';
+import type { DueDiligenceInputsV17 } from './due-diligence';
 
 export { defaultDueDiligence };
 
@@ -1796,4 +1798,121 @@ export function migrateInputsToV16(
     };
   }
   return migrateV15toV16(migrateInputsToV15(snapshot, project));
+}
+
+// --- Release 17 (calc 2.18.0 -> 2.19.0): inputs v17 adds the nullable
+// elemental_benchmark block, CostPackage.benchmark_origin and the
+// due-diligence source records (spec §27.1, §27.7) ------------------------
+
+/** R17 spec §27.7. `inputs_version == 17` AND the `elemental_benchmark` key
+ *  present AND every cost-plan package carrying the `benchmark_origin` key
+ *  AND `due_diligence.source_records` present. Key PRESENCE, not value: a
+ *  document relabelled 17 without the migration's writes is the spoof this
+ *  check exists to refuse. */
+export function isV17(snapshot: Record<string, unknown>): snapshot is Record<string, unknown> & CalculatorInputsV17 {
+  if (snapshot.inputs_version !== 17 || !('elemental_benchmark' in snapshot)) return false;
+  const plan = snapshot.cost_plan;
+  if (plan == null || typeof plan !== 'object') return false;
+  const packages = (plan as { packages?: unknown }).packages;
+  if (!Array.isArray(packages) || !packages.every((p) => p != null && typeof p === 'object' && 'benchmark_origin' in p)) return false;
+  const dd = snapshot.due_diligence;
+  return dd != null && typeof dd === 'object' && 'source_records' in dd && 'source_resolutions' in dd;
+}
+
+/** R17 spec §27.7. Writes `elemental_benchmark: null`, `benchmark_origin:
+ *  null` on every package and the two empty record arrays. Every migrated
+ *  document is therefore inert on the benchmark layer, and the v16 -> v17
+ *  identity gate asserts no figure moves. */
+export function migrateV16toV17(v16: CalculatorInputsV16): CalculatorInputsV17 {
+  if (isV17(v16 as unknown as Record<string, unknown>)) {
+    throw new Error('migrateV16toV17: input is already a v17 document');
+  }
+  return {
+    ...v16,
+    inputs_version: 17,
+    cost_plan: {
+      ...v16.cost_plan,
+      packages: v16.cost_plan.packages.map((p) => ({ ...p, benchmark_origin: p.benchmark_origin ?? null })),
+    },
+    due_diligence: {
+      ...v16.due_diligence,
+      source_records: (v16.due_diligence as Partial<DueDiligenceInputsV17>).source_records ?? [],
+      source_resolutions: (v16.due_diligence as Partial<DueDiligenceInputsV17>).source_resolutions ?? [],
+    },
+    elemental_benchmark: (v16 as unknown as Partial<CalculatorInputsV17>).elemental_benchmark ?? null,
+  };
+}
+
+const RECOGNISED_INPUTS_VERSIONS_V17: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+
+export function migrateInputsToV17(
+  snapshot: Record<string, unknown>,
+  project?: { id: string; price_pence: number; floor_area_sqm: number | null; floors?: number | null },
+): CalculatorInputsV17 {
+  const version = snapshot.inputs_version;
+  if (
+    version !== undefined && version !== null
+    && !RECOGNISED_INPUTS_VERSIONS_V17.includes(version as number)
+  ) {
+    throw new Error(
+      `migrateInputsToV17: unrecognised inputs_version ${JSON.stringify(version)} `
+      + `(expected one of ${RECOGNISED_INPUTS_VERSIONS_V17.join(', ')}, or absent for a v1 document)`,
+    );
+  }
+  if (version === 17 && !isV17(snapshot)) {
+    throw new Error(
+      'migrateInputsToV17: inputs_version is 17 but the document fails the v17 structural check '
+      + '(missing `elemental_benchmark`, a package without `benchmark_origin`, or `due_diligence` without its source-record arrays) -- refusing to silently reinterpret it via the v1 fallback path',
+    );
+  }
+  if (isV17(snapshot)) {
+    const defaults = migrateV16toV17(migrateInputsToV16({}, project));
+    const saved = snapshot as unknown as Partial<CalculatorInputsV17>;
+    const savedDd = saved.due_diligence;
+    return {
+      ...defaults,
+      ...saved,
+      inputs_version: 17,
+      areas: { ...defaults.areas, ...(saved.areas ?? {}) },
+      acquisition: { ...defaults.acquisition, ...(saved.acquisition ?? {}) },
+      unit_mix: unitsWithAncillary(saved.unit_mix ?? defaults.unit_mix),
+      conversion_costs: v16ConversionCosts({ ...defaults.conversion_costs, ...(saved.conversion_costs ?? {}) }),
+      cost_plan: {
+        ...defaults.cost_plan,
+        ...(saved.cost_plan ?? {}),
+        packages: (saved.cost_plan?.packages ?? defaults.cost_plan.packages).map((p) => ({ ...p, benchmark_origin: p.benchmark_origin ?? null })),
+      },
+      vat: { ...defaults.vat, ...(saved.vat ?? {}) },
+      finance: { ...defaults.finance, ...(saved.finance ?? {}) },
+      equity_sources: saved.equity_sources ?? defaults.equity_sources,
+      exit_strategy: { ...defaults.exit_strategy, ...(saved.exit_strategy ?? {}) },
+      risks: saved.risks ?? defaults.risks,
+      programme: saved.programme ?? null,
+      sales_phasing: saved.sales_phasing ?? null,
+      refinance: saved.refinance ?? null,
+      investment_case: saved.investment_case ?? null,
+      monitoring: saved.monitoring ?? null,
+      unit_sales: saved.unit_sales ?? null,
+      due_diligence: savedDd == null ? defaults.due_diligence : {
+        ...defaults.due_diligence,
+        ...savedDd,
+        source_records: savedDd.source_records ?? [],
+        source_resolutions: savedDd.source_resolutions ?? [],
+      },
+      elemental_benchmark: saved.elemental_benchmark ?? null,
+      scenarios: {
+        base: { ...defaults.scenarios.base, ...(saved.scenarios?.base ?? {}) },
+        upside: { ...defaults.scenarios.upside, ...(saved.scenarios?.upside ?? {}) },
+        downside: { ...defaults.scenarios.downside, ...(saved.scenarios?.downside ?? {}) },
+        severe: { ...defaults.scenarios.severe, ...(saved.scenarios?.severe ?? {}) },
+      },
+      deal_spider: {
+        ...defaults.deal_spider,
+        ...(saved.deal_spider ?? {}),
+        weights: { ...defaults.deal_spider.weights, ...(saved.deal_spider?.weights ?? {}) },
+      },
+      lender_valuation: saved.lender_valuation ?? null,
+    };
+  }
+  return migrateV16toV17(migrateInputsToV16(snapshot, project));
 }

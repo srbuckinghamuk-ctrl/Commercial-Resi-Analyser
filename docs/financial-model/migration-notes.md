@@ -1,4 +1,4 @@
-# Financial Model — Migration Notes (v1 → v2 → v3 … → v16)
+# Financial Model — Migration Notes (v1 → v2 → v3 … → v17)
 
 **Status:** Authoritative. Describes how pre-Release-1 ("v1") appraisal snapshots are migrated to
 the `2.0.0` calculation specification's input shape ("v2"), the database schema change that makes
@@ -1637,3 +1637,137 @@ from the first load after this release until the next save, because the
 live document is v16 and the locked snapshot v15. Accurate, and the same at
 every boundary. No fixture pin's **value** moves; fifteen
 fixtures lose one pinned **key**.
+
+## 20. v16 → v17 (Release 17, calc `2.19.0`)
+
+**What's added.** `CalculatorInputsV17` is `CalculatorInputsV16` with three
+additions, every one of them inert until a user enters something. Nothing is
+removed and nothing is renamed.
+
+| v16 field | v17 field | Behaviour |
+|---|---|---|
+| *(absent)* | `elemental_benchmark` | Top-level, nullable `SchemeElementalBenchmark` block (§27.1); written `null` by migration. The engine derives `metrics.elemental_benchmark` from it — `null` exactly when the block is `null` — and nothing derived enters `construction_total_pence`, TDC, peak debt or profit (§27.4, `enters_tdc` is a pinned literal `false`) |
+| *(absent)* | `cost_plan.packages[].benchmark_origin` | Nullable `BenchmarkOrigin` on every package; written `null` by migration. Provenance only — never priced |
+| *(absent)* | `due_diligence.source_records` + `source_resolutions` | The §23.5 (amended) source-evidence records and their conflict resolutions; both written `[]` by migration. The conflict schedule derives from them and is `[]` on every document with fewer than two records |
+
+**Why addition is inert.** Every migrated document carries `null`, `null` and
+`[]` — the values each reader takes as "nothing entered". The benchmark
+computation short-circuits to `null` on a `null` block; a `null` package
+origin is never read by the pricing path at all; two empty record arrays
+yield no conflicts. So a v16 document and its v17 migration price to the
+same figures through the 2.19.0 engine, which is what the identity gate
+asserts, corpus-wide, with no exclusion.
+
+**Implementation** (`migrateV16toV17` / `migrate_v16_to_v17`,
+`migrateInputsToV17` / `migrate_inputs_to_v17`, `isV17` / `is_v17`). The
+entry point mirrors `migrateInputsToV16`'s shape, its version predicate and
+its two refusals. `isV17` / `is_v17` discriminate on `inputs_version == 17`
+**and** the `elemental_benchmark` key present **and** every package carrying
+the `benchmark_origin` key **and** `due_diligence` carrying both record
+arrays — key **presence**, not value, because a document relabelled 17
+without the migration's writes is exactly the spoof the check exists to
+refuse. The merge branch (a document already v17) preserves a saved
+benchmark block and a saved package origin byte for byte, and re-writes the
+`null` / `[]` defaults only where a key is absent.
+
+### 20.1 The identity claim, and where it is tested
+
+`migrate.test.ts` ("v17 migration -- the identity gate") and
+`tests/test_migrate_v17.py`: corpus-wide, raw ≤ v16 through the 2.19.0 engine
+against migrated v17 through the same engine — metrics, ledger and schedule
+identical with **no exclusion at all** (`calc_version` is the same constant on
+both arms), and `metrics.elemental_benchmark` asserted **present and `null` on
+both arms** — so a later change that synthesises a result block for a
+document with no input block fails there, not silently. The default
+`SensitivityResult` is identical on F/U/Y/Z. The validation gate keeps R12's
+three properties with **both** exception lists empty and asserted empty:
+nothing was removed, so there is no v16-only rule, and the three additions
+are inert, so there is no v17-only rule that a migrated document can trip.
+
+### 20.2 The one-arm proof, on the stored JSON
+
+Fixtures Q (`q-detailed-cost-plan`, a v7 document) and Z
+(`z-cost-plan-in-time`, a v14 document): after migration the block is `null`,
+every package carries `benchmark_origin: null`, both record arrays are `[]`,
+and — with those keys removed and `inputs_version` set aside — the rest of
+the document deep-equals `migrateInputsToV16(raw)`. In Python the strip is
+applied to **both** arms, because pydantic declares `benchmark_origin` and
+the two record lists with defaults, so a v16 `model_dump(mode="json")` already
+shows them (a parsed model cannot show a key's absence — §19.2's caveat).
+
+### 20.3 The boundary round trip and the entry-point cutover
+
+`ConversionCalculator.tsx`, `ExportPage.tsx` and `app/api/app.py` move to
+the v17 entry point in one commit; both guards pin `NEWEST == 17`. The
+governance `inputs_version` stays derived from the document. As at every
+boundary since R10, `is_v2_or_later` must recognise a v17 raw payload as
+not-legacy in the same commit, or every appraisal saved after this release
+would carry the red "Legacy -- recalculation required" banner from its first
+save (`test_is_v2_or_later_recognises_v17` is the test that fails if it is
+forgotten).
+
+**The consequence a reader must not mistake for a defect.** Every stored
+appraisal's `input_hash` moves on its next save (three keys join the
+document), and every stored appraisal's `outputs_hash` and `audit_hash` move
+on its next save too, because one key — `elemental_benchmark` — joins the
+result (§27.4). That is why this release is calc 2.19.0 and not a silent
+addition. Every live lender case goes stale at that save (§21.3), as at every
+boundary — a case locked at v16 shows `LenderCasePage`'s "unsaved edits differ
+from the locked snapshot" banner from the first load after this release
+until the next save, because the live document is v17 and the locked
+snapshot v16. Accurate, and the same at every boundary. No fixture pin's
+**value** moves; the ≤ v16 fixtures gain one pinned **key**, `null` on all of
+them; fixture AB (§27.8) is the only document on which it is not.
+
+### 20.4 The York appraisal after R17
+
+The audited York (Stonegate) row is the one stored appraisal that predates
+every boundary since v3: saved under calc `2.1.0`, `inputs_version: 3`,
+`status: 'draft'`, no `outputs`, no hashes. Nothing before this release
+could move it without a person re-saving it from the calculator, which
+would have replaced the stored document with whatever the client held.
+
+`POST /api/v1/appraisals/{project_id}/resave` (authenticated, any role;
+spec §11) is the governed way. It (1) writes the row's current state to
+`appraisal_versions` exactly as stored — the v3 snapshot byte for byte,
+`calc_version '2.1.0'`, `inputs_version 3`, the null outputs and hashes,
+`reason 'governed_resave'`, `superseded_by` = the actor's display name and
+id; then (2) recalculates from the **stored** snapshot through
+`calculate_authoritative` — the same path a partial `PUT {}` takes —
+migrating v3 → v17, running calc `2.19.0`, and stamping `input_hash`,
+`outputs_hash` and `audit_hash`; and (3) returns the row with
+`previous_version_id`. Every ordinary save (`POST` on an existing row and
+`PUT`) now records its pre-save state the same way with `reason 'save'`;
+`GET /appraisals/{project_id}/versions` lists them newest first, and
+`GET /appraisals/stale` lists every row still behind the server's
+versions (York before the resave; nothing after it).
+
+**Why York stays DRAFT.** The resave changes no financial assumption:
+`tests/test_york_audit_case.py::TestYorkAfterTheGovernedResave` pins every
+audited figure identical across the v3 → v17 migration (TDC
+76,490,630 pence, profit 48,509,370, peak debt 1,142,430, the rest), and
+`test_appraisal_governance.py` pins the resave's metrics equal to the
+direct `PUT {}` recalculation. The status the recalculation earns is
+`'draft'`, not `'reconciled'`: the migrated facility terms still carry
+`requires_confirmation: true` (audit §6.1's 527,437.40 net facility was
+derived from `ltv_pct`, never confirmed), so `report_safe` is false. It is
+not `'legacy_unreconciled'` either — that status is for a v1 document,
+and the stored one is v3.
+
+`scripts/york_reconcile.py` then adds what the audit found missing. It
+repairs the stored description by the client's narrow rule only (a known
+leading label glued to a capital letter — `DescriptionRetail…` →
+`Retail…`), printing the original; runs the resave; and writes two
+`due_diligence.source_records` with **no resolution**: `listing_structured`
+(existing use = the project row's `use_class`, `office`) and
+`listing_narrative` (retail on ground and basement; upper parts sold off on
+a 999-year lease and run as Airbnb accommodation; `upper_parts_included:
+false`; the repaired description as the excerpt). Before that write it
+asserts every metric of the recalculated document equals the resave's —
+only `due_diligence` and `flags` may move — and aborts otherwise. The
+engine derives the `existing_use` conflict and raises
+`source_conflict_unresolved` (red), which the due-diligence gate turns
+into a FINAL refusal. Decision 12 applies: the project's structured use is
+never rewritten; a person resolves the conflict with evidence, and until
+they do — and confirm the facility, jurisdiction, VAT and equity items the
+script's blocker list prints — the case is correctly a draft.

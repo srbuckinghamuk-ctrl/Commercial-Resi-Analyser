@@ -80,6 +80,7 @@ const fixtures: Fixture[] = fixtureFiles
 const EXPECTED_FIXTURE_STEMS = [
   'a-all-cash',
   'aa-stress-pack',
+  'ab-elemental-benchmark',
   'f-dev-finance-12mo',
   'g-lender-valuation',
   'h-programme-scurve',
@@ -261,6 +262,27 @@ const FLAT_KEYS: Record<string, (run: AppraisalRun) => unknown> = {
   // computing the schedule. Filtered rather than pinned whole, so an unrelated
   // flag from another release cannot break fixture Y.
   flag_codes_r15: (r) => r.metrics.flags.filter((f) => R15_FLAG_CODES.has(f.code)).map((f) => f.code),
+  // R17 spec §27.4, fixture AB: the benchmark rows, the warning list and the
+  // per-package timing/origin columns are ARRAYS of objects, so they are pinned
+  // as parallel flat arrays in catalogue order — `benchmark_row_element_codes`
+  // is what makes the other row arrays positional against a pinned shape. The
+  // scalar totals and the set-level factors go through the dotted path.
+  benchmark_row_element_codes: (r) => r.metrics.elemental_benchmark!.rows.map((x) => x.element_code),
+  benchmark_row_currentised_rates_pence_per_sqm: (r) =>
+    r.metrics.elemental_benchmark!.rows.map((x) => x.currentised_rate_pence_per_sqm),
+  benchmark_row_amounts_pence: (r) => r.metrics.elemental_benchmark!.rows.map((x) => x.benchmark_amount_pence),
+  benchmark_row_qs_amounts_pence: (r) => r.metrics.elemental_benchmark!.rows.map((x) => x.qs_amount_pence),
+  benchmark_row_variances_pence: (r) => r.metrics.elemental_benchmark!.rows.map((x) => x.variance_pence),
+  benchmark_row_forward_inflation_factors: (r) =>
+    r.metrics.elemental_benchmark!.rows.map((x) => x.forward_inflation_factor),
+  benchmark_row_forward_inflated_amounts_pence: (r) =>
+    r.metrics.elemental_benchmark!.rows.map((x) => x.forward_inflated_benchmark_amount_pence),
+  benchmark_row_outside_range: (r) => r.metrics.elemental_benchmark!.rows.map((x) => x.outside_range),
+  benchmark_warning_codes: (r) => r.metrics.elemental_benchmark!.warnings.map((w) => w.code),
+  package_inflation_factors: (r) => r.metrics.cost_plan.packages.map((x) => x.inflation_factor),
+  package_inflation_pence: (r) => r.metrics.cost_plan.packages.map((x) => x.inflation_pence),
+  package_benchmark_origin_element_codes: (r) =>
+    r.metrics.cost_plan.packages.map((x) => x.benchmark_origin?.element_code ?? null),
 };
 
 /** Resolves a dotted `expected_metrics` key (R9: `area_bridge.<field>`) against the
@@ -362,13 +384,17 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // document (spec §24) -- so every migrate-to-vN loop below excludes it by
   // the same design that excluded T/U/V/W/X/Y from the earlier loops.
   const v14Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 14);
+  // R17 Task 9: fixture AB is BORN at v17 -- the corpus's first v17-native
+  // document (spec §27) -- so every migrate-to-vN loop below excludes it by
+  // the same design that excluded T/U/V/W/X/Y/Z from the earlier loops.
+  const v17Fixtures = appraisalFixtures.filter((f) => versionOf(f) === 17);
 
-  it('every fixture is v5 through v14, and each group is non-empty', () => {
+  it('every fixture is v5 through v14 or v17, and each group is non-empty', () => {
     expect(
       v5Fixtures.length + v6Fixtures.length + v7Fixtures.length
       + v8Fixtures.length + v9Fixtures.length + v10Fixtures.length
       + v11Fixtures.length + v12Fixtures.length + v13Fixtures.length
-      + v14Fixtures.length,
+      + v14Fixtures.length + v17Fixtures.length,
     ).toBe(appraisalFixtures.length);
     expect(v5Fixtures.length).toBeGreaterThan(0);
     expect(v6Fixtures.map((f) => f.name).sort()).toEqual([
@@ -401,6 +427,9 @@ describe('golden fixtures (shared with the Python engine)', () => {
     ]);
     expect(v14Fixtures.map((f) => f.name)).toEqual([
       'Z — cost plan in time, tender-price inflation allowance, curve-aware package timing, VAT-charged package',
+    ]);
+    expect(v17Fixtures.map((f) => f.name)).toEqual([
+      'AB — elemental benchmark, TEST FIXTURE — NOT MARKET DATA',
     ]);
   });
 
@@ -476,7 +505,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // for the identical reason one version further on (`monitoring`).
   // R15b Task 7 widens it once more to v14, for the identical reason one
   // version further on (fixture Z is v14-native).
-  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13, 14].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13, 14, 17].includes(versionOf(f)))) {
     // R9: the same identity guarantee at the head of the chain — migrateInputsToV6
     // accepts a v5 document (upgrade path) and a v6 one (merge branch) alike. The
     // merge branch is the one that matters for the new fixtures: it must carry `areas`
@@ -498,7 +527,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // for the identical reason one version further on (`monitoring`).
   // R15b Task 7 widens it once more to v14, for the identical reason one
   // version further on (fixture Z is v14-native).
-  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14].includes(versionOf(f)))) {
+  for (const fx of appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14, 17].includes(versionOf(f)))) {
     // R10: the same identity guarantee one version further on, and the one that now
     // covers v5 through v7 — migrateInputsToV7 accepts v5, v6 and v7 documents alike
     // (upgrade, upgrade, merge). The merge branch matters for fixture Q: it must carry
@@ -556,12 +585,13 @@ describe('golden fixtures (shared with the Python engine)', () => {
   );
   const nonEnglishFixtures = appraisalFixtures.filter((fx) => jurisdictionOf(fx) !== 'england_ni');
 
-  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12, v13, v14 and non-English ones', () => {
+  it('the pre-R8 loop covers every England/NI v5 fixture and excludes only the v6, v7, v8, v9, v10, v11, v12, v13, v14, v17 and non-English ones', () => {
     // Without this, deleting a fixture's `jurisdiction` field — or mistyping it — would
     // quietly move it out of the loop above and reduce coverage without failing.
     expect(nonEnglishFixtures.map((f) => jurisdictionOf(f))).toEqual(['wales', 'scotland']);
     const excluded = appraisalFixtures.filter((fx) => !preR8Fixtures.includes(fx));
     expect(excluded.map((f) => f.name).sort()).toEqual([
+      'AB — elemental benchmark, TEST FIXTURE — NOT MARKET DATA',
       'M — Welsh acquisition, LTT non-residential, all-cash',
       'N — full area bridge, bridge-derived construction area, all-cash',
       'O — ancillary value, blended exit, one unit sold and one retained',
@@ -627,7 +657,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
         jurisdictionOf(fx) !== 'england_ni'
           || versionOf(fx) === 6 || versionOf(fx) === 7 || versionOf(fx) === 8
           || versionOf(fx) === 9 || versionOf(fx) === 10 || versionOf(fx) === 11
-          || versionOf(fx) === 12 || versionOf(fx) === 13 || versionOf(fx) === 14,
+          || versionOf(fx) === 12 || versionOf(fx) === 13 || versionOf(fx) === 14 || versionOf(fx) === 17,
         `${fx.name} is excluded from the pre-R8 loop for no stated reason`,
       ).toBe(true);
     }
@@ -998,6 +1028,46 @@ describe('golden fixtures (shared with the Python engine)', () => {
         ],
       },
     },
+    {
+      namePrefix: 'AB — elemental benchmark',
+      wrongValues: {
+        // truly the seven codes in CATALOGUE order (kitchens before mechanical,
+        // preliminaries before external works) — the last two transposed
+        benchmark_row_element_codes: [
+          'strip_out', 'frame_alterations', 'external_walls_facade', 'kitchens',
+          'mechanical_services', 'external_works', 'preliminaries',
+        ],
+        // truly 7980 on the strip-out row (8,000 × 1.05 × 0.95)
+        benchmark_row_currentised_rates_pence_per_sqm: [7981, 26842.501601669814, 24937.5, null, 17955, null, null],
+        // truly 4,788,000 on the strip-out row
+        benchmark_row_amounts_pence: [4788001, 16105501, 13466250, 3192000, 10773000, 6397470, 4987500],
+        // truly 6,000,000 on the strip-out row
+        benchmark_row_qs_amounts_pence: [6000001, 24000000, 18000000, 3192000, 12000000, null, 6000000],
+        // truly −1,212,000 on the strip-out row
+        benchmark_row_variances_pence: [-1212001, -7894499, -4533750, 0, -1227000, null, -1012500],
+        // truly 1.042137414046715 on the enabling package's row (an adjacent double is NOT a
+        // usable wrong value: 1.0421374140467151 parses to the same IEEE double)
+        benchmark_row_forward_inflation_factors: [
+          1.05, 1.062576670087961, 1.062576670087961, 1.062576670087961,
+          1.072078163381325, null, 1.062576670087961,
+        ],
+        // truly 4,989,754 on the strip-out row
+        benchmark_row_forward_inflated_amounts_pence: [4989755, 17113330, 14308923, 3391745, 11549498, null, 5299601],
+        // truly [false, null, null, null, true, null, null] — the mechanical row is outside
+        benchmark_row_outside_range: [false, null, null, null, false, null, null],
+        // truly three codes — deduplicated to two, which a set-valued filter would return
+        benchmark_warning_codes: ['incomplete_coverage', 'material_variance'],
+        // truly six factors; the kitchens package (index 5) shares structure's 1.0625…
+        package_inflation_factors: [
+          1.042137414046715, 1.062576670087961, 1.062576670087961, 1.072078163381325,
+          1.062576670087961, 1.05,
+        ],
+        // truly 199,745 on the kitchens package
+        package_inflation_pence: [252824, 1501840, 1126380, 864938, 375460, 199746],
+        // truly only the sixth package carries an origin
+        package_benchmark_origin_element_codes: [null, null, null, null, 'kitchens', 'kitchens'],
+      },
+    },
   ];
 
   for (const { namePrefix, wrongValues } of negativeControls) {
@@ -1036,7 +1106,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `vat`,
   // `programme`'s v9 shape, `refinance`'s v10 narrowing AND `investment_case`
   // to produce a v6 one). R14 Task 8 widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13, 14].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![7, 8, 9, 10, 11, 12, 13, 14, 17].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v6 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -1103,7 +1173,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // refuses a v10 document identically (it would have to drop `refinance`'s
   // v10 narrowing and `investment_case` to produce a v7 one). R14 Task 8
   // widens it once more to v11 (`monitoring`).
-  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14].includes(versionOf(f))).map((f) => f.name))(
+  it.each(appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14, 17].includes(versionOf(f))).map((f) => f.name))(
     'migrating %s to v7 moves no computed figure',
     (name) => {
       const fx = appraisalFixtures.find((f) => f.name === name)!;
@@ -1180,7 +1250,7 @@ describe('golden fixtures (shared with the Python engine)', () => {
   // v10 narrowing and `investment_case` to produce a v8 one). R14 Task 8
   // widens it once more to v11 (`monitoring`); `preV8Fixtures` therefore stays
   // at 12, since fixture W was never inside this gate.
-  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14].includes(versionOf(f)));
+  const preV8Fixtures = appraisalFixtures.filter((f) => ![8, 9, 10, 11, 12, 13, 14, 17].includes(versionOf(f)));
 
   it.each(preV8Fixtures.map((f) => f.name))(
     'migrating %s to v8 moves no computed figure, and writes the specified block',

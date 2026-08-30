@@ -239,9 +239,9 @@ def test_v14_no_qs_has_no_inflation_anywhere():
     assert dumped["cost_plan"]["qs"] is None
 
 
-def test_calc_version_is_2_18_0():
+def test_calc_version_is_2_19_0():
     from app.financial_model.types import CALC_VERSION
-    assert CALC_VERSION == "2.18.0"
+    assert CALC_VERSION == "2.19.0"
 
 
 def _minimal_v15_doc() -> dict:
@@ -267,3 +267,60 @@ def test_parse_dispatch_routes_v15_to_v15():
     assert isinstance(parsed, CalculatorInputsV15)
     assert parsed.inputs_version == 15
     assert parsed.due_diligence.items == []
+
+
+def _minimal_v16_doc() -> dict:
+    """R16b spec Sec 26.1. A valid v16 document: a v15 document with
+    `conversion_costs` rebuilt from the five kept fields -- nothing is added;
+    v16 is the one narrowing-only version in the chain. Backfilled by R17
+    Task 3: R16b shipped without this helper/dispatch pair."""
+    doc = _minimal_v15_doc()
+    doc["inputs_version"] = 16
+    doc["conversion_costs"] = {
+        k: doc["conversion_costs"][k] for k in (
+            "construction_cost_per_sqm_pence", "total_construction_sqm",
+            "fire_safety_pence", "sound_insulation_pence", "part_l_compliance_pence",
+        )
+    }
+    return doc
+
+
+def test_parse_dispatch_routes_v16_to_v16():
+    from app.financial_model.types import CalculatorInputsV16, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v16_doc())
+    assert isinstance(parsed, CalculatorInputsV16)
+    assert parsed.inputs_version == 16
+    assert sorted(parsed.conversion_costs.model_dump()) == [
+        "construction_cost_per_sqm_pence", "fire_safety_pence", "part_l_compliance_pence",
+        "sound_insulation_pence", "total_construction_sqm",
+    ]
+
+
+def _minimal_v17_doc() -> dict:
+    """R17 spec Sec 27.1 / Sec 27.7. A valid v17 document: a v16 document with
+    the nullable `elemental_benchmark` block written null, `benchmark_origin`
+    written null on every package and the two due-diligence record arrays
+    written empty -- the shape `migrate_v16_to_v17` writes, applied by hand
+    here so this test does not depend on the migration."""
+    doc = _minimal_v16_doc()
+    doc["inputs_version"] = 17
+    doc["elemental_benchmark"] = None
+    doc["cost_plan"]["packages"] = [
+        {**p, "benchmark_origin": None} for p in doc["cost_plan"]["packages"]
+    ]
+    doc["due_diligence"]["source_records"] = []
+    doc["due_diligence"]["source_resolutions"] = []
+    return doc
+
+
+def test_parse_dispatch_routes_v17_to_v17():
+    from app.financial_model.types import CalculatorInputsV17, parse_calculator_inputs
+
+    parsed = parse_calculator_inputs(_minimal_v17_doc())
+    assert isinstance(parsed, CalculatorInputsV17)
+    assert parsed.inputs_version == 17
+    assert parsed.elemental_benchmark is None
+    assert all(p.benchmark_origin is None for p in parsed.cost_plan.packages)
+    assert parsed.due_diligence.source_records == []
+    assert parsed.due_diligence.source_resolutions == []

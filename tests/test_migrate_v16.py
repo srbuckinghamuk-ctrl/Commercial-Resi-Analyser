@@ -123,7 +123,7 @@ FIXTURES = [
 def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     assert len(FIXTURES) >= 20
     assert [p.stem for p in ALL_FIXTURES
-            if "inputs" in _FIXTURE_DOCS[p] and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 15] == []
+            if "inputs" in _FIXTURE_DOCS[p] and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 15] == ["ab-elemental-benchmark"]
 
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)

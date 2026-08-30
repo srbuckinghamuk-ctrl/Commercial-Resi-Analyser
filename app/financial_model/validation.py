@@ -5,12 +5,13 @@ import datetime
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Callable, get_args
+from typing import Any, Callable, get_args
 
 from .acquisition_tax import regime_for, select_band_set
 from .areas import area_bridge
 from .cost_plan import compute_cost_plan
-from .due_diligence import DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES
+from .due_diligence import DD_CATEGORIES, DD_STATUSES, DERIVED_CODES, ENTERED_CODES, SOURCE_CLAIM_FIELDS
+from .elemental_benchmark import ELEMENT_CODES, QUANTITY_UNIT_FOR_BASIS, UNITS_FOR_BASIS
 from .engine import MonthlyModel, pct
 from .investment_case import OPEX_CODES, resolve_stabilisation_month
 from .lender_valuation import compute_lender_gdv
@@ -1450,6 +1451,7 @@ def validate_inputs(inputs: AnyCalculatorInputs) -> list[ValidationIssue]:
                 )
 
     validate_due_diligence(inputs, issues)
+    validate_elemental_benchmark(inputs, issues)
 
     # R8 (spec Sec 14). Mirrors validation.ts's `'jurisdiction' in inputs.acquisition`
     # guard: v2-v4 documents carry none of these fields via getattr(..., None) and
@@ -1715,6 +1717,30 @@ def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationI
             if record.tenure is not None and record.tenure not in SOURCE_TENURES:
                 err("due_diligence.source_record.tenure", "Listing tenure must be freehold, leasehold or unknown.")
 
+        # --- R17 Sec 27.5 rule 15 begin ---
+        # R17 spec Sec 27.5 rule 15 -- the structured source records (Sec 23.5
+        # amended). Read structurally: DueDiligenceInputs defaults both lists
+        # to [] (the v17 migration writes them empty and a pre-v17 document
+        # has no key), so both loops are no-ops on every document that never
+        # recorded a source claim. `field` is a Literal here (Pydantic-guarded,
+        # see the docstring); `chosen_record_id` and the id uniqueness are
+        # live. Mirrors the block of the same name in validateDueDiligence.
+        seen_record_ids: set[str] = set()
+        for i, rec in enumerate(dd.source_records):
+            if rec.id in seen_record_ids:
+                err(f"due_diligence.source_records[{i}].id", f"Source record id \"{rec.id}\" is not unique.")
+            seen_record_ids.add(rec.id)
+        for i, res in enumerate(dd.source_resolutions):
+            field_ = f"due_diligence.source_resolutions[{i}]"
+            if res.field not in SOURCE_CLAIM_FIELDS:
+                err(f"{field_}.field", f"Source resolution field \"{res.field}\" is not a source claim field.")
+            if res.chosen_record_id is not None and res.chosen_record_id not in seen_record_ids:
+                err(
+                    f"{field_}.chosen_record_id",
+                    f"Source resolution names record \"{res.chosen_record_id}\", which is not a source record.",
+                )
+        # --- R17 Sec 27.5 rule 15 end ---
+
     # Rules 8 and 9 -- Sec 23.6's cost-plan provenance. Read structurally: a
     # pre-v13 document has neither attribute, and a migrated v13 document
     # carries `qs: None` and `price_basis: None` on every package.
@@ -1793,6 +1819,225 @@ def validate_due_diligence(inputs: AnyCalculatorInputs, issues: list[ValidationI
                     f"cost_plan.packages[{i}].price_basis",
                     "Package price basis must be fixed_price, provisional_sum, estimate or unset.",
                 )
+
+
+def _is_positive_finite(value: float) -> bool:
+    """R17 spec Sec 27.5 rules 7/8: a finite number strictly above zero. `> 0`
+    alone would pass `inf`, so finiteness is asserted first. Mirrors
+    validation.ts's `isPositiveFinite`."""
+    return math.isfinite(value) and value > 0
+
+
+def validate_elemental_benchmark(inputs: AnyCalculatorInputs, issues: list[ValidationIssue]) -> None:
+    """R17 spec Sec 27.5 -- the elemental benchmark's INPUT-only rules (rules
+    1-14; rule 15, the source records, lives in ``validate_due_diligence``
+    above beside the Sec 23.5 block it amends). The twelve BenchmarkWarnings
+    are result data (``compute_elemental_benchmark``'s own) and are never
+    raised here.
+
+    Read structurally, exactly like ``validate_due_diligence``: a pre-v17
+    document has no ``elemental_benchmark`` attribute, and a v17 document
+    with the block None raises nothing from rules 1-12 and 14 -- rule 13 is
+    the ONE rule that runs against a None block, because an orphaned
+    ``benchmark_origin`` on a package is exactly the state a nulled block
+    leaves behind. Mirrors validation.ts's ``validateElementalBenchmark``.
+
+    Several arms are Pydantic-guarded here and live only in the TS engine
+    (rule 3's units and rule 9's quantity unit are ``Literal``s so a stray
+    member is a 422, and rule 4's ``original_rate_pence`` is ``int, ge=0``);
+    they are kept for the reason ``validate_due_diligence``'s docstring
+    gives. The float arms ARE reachable here: this schema does not set
+    ``allow_inf_nan=False``, so ``nan`` and ``inf`` parse from a Python dict
+    (the R16b precedent -- a JSON payload cannot spell either, but a fixture
+    mutation can, and the rule must hold for both engines' inputs)."""
+
+    def err(field_: str, message: str) -> None:
+        issues.append(ValidationIssue(severity="error", field=field_, message=message))
+
+    # --- R17 Sec 27.5 benchmark begin ---
+    if not hasattr(inputs, "elemental_benchmark"):
+        return
+    block = inputs.elemental_benchmark
+    plan = inputs.cost_plan
+
+    # Rule 13 -- runs whether or not the block is present: an origin that
+    # names no set, or another set, is an error, not a silent tag.
+    for i, package in enumerate(plan.packages):
+        origin = getattr(package, "benchmark_origin", None)
+        if origin is None:
+            continue
+        if block is None:
+            err(
+                f"cost_plan.packages[{i}].benchmark_origin",
+                "Package carries a benchmark origin but the document has no benchmark set - remove the "
+                "origin or restore the set.",
+            )
+        elif origin.set_id != block.set.id:
+            err(
+                f"cost_plan.packages[{i}].benchmark_origin",
+                f"Package benchmark origin names set \"{origin.set_id}\" but the document's benchmark "
+                f"set is \"{block.set.id}\".",
+            )
+    if block is None:
+        return
+
+    bset = block.set
+    set_field = "elemental_benchmark.set"
+
+    # Rule 1 (first half) and rules 3, 4, 8 -- the rate rows.
+    rate_by_id: dict[str, Any] = {}
+    for i, rate in enumerate(bset.rates):
+        field_ = f"{set_field}.rates[{i}]"
+        if rate.id in rate_by_id:
+            err(f"{field_}.id", f"Benchmark rate id \"{rate.id}\" is not unique.")
+        else:
+            rate_by_id[rate.id] = rate
+        # Rule 3 (Literal-guarded here).
+        allowed = UNITS_FOR_BASIS.get(rate.measurement_basis, ())
+        if rate.original_unit not in allowed:
+            err(
+                f"{field_}.original_unit",
+                f"Benchmark rate unit \"{rate.original_unit}\" does not agree with measurement basis "
+                f"\"{rate.measurement_basis}\".",
+            )
+        # Rule 4 (the pence arm is ge=0-guarded here; rate_pct is live).
+        if not math.isfinite(rate.original_rate_pence) or rate.original_rate_pence < 0:
+            err(f"{field_}.original_rate_pence", "Benchmark rate must be zero or more pence.")
+        if rate.measurement_basis == "percentage":
+            if rate.rate_pct is None:
+                err(f"{field_}.rate_pct", "A percentage benchmark rate needs a rate_pct.")
+            elif not math.isfinite(rate.rate_pct) or rate.rate_pct < 0:
+                err(f"{field_}.rate_pct", "Benchmark rate_pct must be zero or more.")
+        elif rate.rate_pct is not None:
+            err(f"{field_}.rate_pct", "Only a percentage benchmark rate carries a rate_pct.")
+        # Rule 8, the per-rate override.
+        if rate.location_factor is not None and not _is_positive_finite(rate.location_factor):
+            err(f"{field_}.location_factor", "Location factor must be a finite number greater than zero.")
+
+    # Rules 1 (second half), 2, 5, 9, 14 -- the selections.
+    seen_elements: set[str] = set()
+    package_ids = {p.id for p in plan.packages}
+    for i, sel in enumerate(block.selections):
+        field_ = f"elemental_benchmark.selections[{i}]"
+        # Rule 2.
+        if sel.element_code not in ELEMENT_CODES:
+            err(f"{field_}.element_code", f"Element code \"{sel.element_code}\" is not in the element catalogue.")
+        elif sel.element_code in seen_elements:
+            err(f"{field_}.element_code", f"Element \"{sel.element_code}\" is selected more than once.")
+        seen_elements.add(sel.element_code)
+        # Rule 1 -- None is "selected but unpriced", not a dangling reference.
+        rate = None if sel.benchmark_rate_id is None else rate_by_id.get(sel.benchmark_rate_id)
+        if sel.benchmark_rate_id is not None and rate is None:
+            err(
+                f"{field_}.benchmark_rate_id",
+                f"Benchmark rate \"{sel.benchmark_rate_id}\" is not in the benchmark set.",
+            )
+        elif rate is not None and rate.element_code != sel.element_code:
+            err(
+                f"{field_}.benchmark_rate_id",
+                f"Benchmark rate \"{rate.id}\" prices element \"{rate.element_code}\", not "
+                f"\"{sel.element_code}\".",
+            )
+        # Rule 5. `not (x > -100)` so nan fires as well as -100 itself.
+        if sel.adjustment_pct != 0 and sel.adjustment_reason.strip() == "":
+            err(f"{field_}.adjustment_reason", "A benchmark adjustment needs a reason.")
+        if not (sel.adjustment_pct > -100):
+            err(f"{field_}.adjustment_pct", "Benchmark adjustment must be greater than -100%.")
+        # Rule 9 (the unit arm is Literal-guarded against a stray member, but
+        # a member that disagrees with the rate's basis is live).
+        if not math.isfinite(sel.quantity) or sel.quantity < 0:
+            err(f"{field_}.quantity", "Benchmark quantity must be a finite number, zero or more.")
+        if rate is not None:
+            expected = QUANTITY_UNIT_FOR_BASIS[rate.measurement_basis]
+            if sel.quantity_unit != expected:
+                err(
+                    f"{field_}.quantity_unit",
+                    f"Benchmark quantity unit \"{sel.quantity_unit}\" does not agree with the rate's basis "
+                    f"\"{rate.measurement_basis}\" (expected \"{expected}\").",
+                )
+        # Rule 14.
+        if sel.target_cost_package_id is not None:
+            if plan.mode != "detailed":
+                err(
+                    f"{field_}.target_cost_package_id",
+                    "A benchmark target package applies to a detailed cost plan only - switch to detailed "
+                    "mode or clear the target.",
+                )
+            elif sel.target_cost_package_id not in package_ids:
+                err(
+                    f"{field_}.target_cost_package_id",
+                    f"Benchmark target package \"{sel.target_cost_package_id}\" is not on the cost plan.",
+                )
+
+    # Rules 6-8 -- the set's currentisation and location inputs.
+    base_named = bset.base_index_name is not None
+    current_named = bset.current_index_name is not None
+    if base_named != current_named:
+        err(f"{set_field}.base_index_name", "Base and current index names must both be set, or both be empty.")
+    elif base_named and bset.base_index_name != bset.current_index_name:
+        err(f"{set_field}.current_index_name", "Base and current index names must name the same index.")
+    if bset.base_index_value is not None and not _is_positive_finite(bset.base_index_value):
+        err(f"{set_field}.base_index_value", "Base index value must be a finite number greater than zero.")
+    if bset.current_index_value is not None and not _is_positive_finite(bset.current_index_value):
+        err(f"{set_field}.current_index_value", "Current index value must be a finite number greater than zero.")
+    if bset.location_factor is not None and not _is_positive_finite(bset.location_factor):
+        err(f"{set_field}.location_factor", "Location factor must be a finite number greater than zero.")
+
+    # Rules 10-12 -- what each provider type owes. One table per type, checked
+    # as blank-after-trim (strings) or None (dates and numbers).
+    def blank(value: str | None) -> bool:
+        return value is None or value.strip() == ""
+
+    if bset.provider_type == "bcis_licensed":
+        if blank(bset.source_title):
+            err(
+                f"{set_field}.source_title",
+                "A BCIS-licensed benchmark set needs a source title (the BCIS dataset or product).",
+            )
+        if blank(bset.licence_or_permission):
+            err(
+                f"{set_field}.licence_or_permission",
+                "A BCIS-licensed benchmark set needs a licence or permission statement.",
+            )
+        if blank(bset.imported_by):
+            err(f"{set_field}.imported_by", "A BCIS-licensed benchmark set needs an importer.")
+        if blank(bset.building_function):
+            err(f"{set_field}.building_function", "A BCIS-licensed benchmark set needs a building function.")
+        if bset.source_publication_date is None:
+            err(
+                f"{set_field}.source_publication_date",
+                "A BCIS-licensed benchmark set needs a source publication date.",
+            )
+        if bset.location_factor is None:
+            err(f"{set_field}.location_factor", "A BCIS-licensed benchmark set needs a location factor.")
+        if bset.base_index_name is None:
+            err(f"{set_field}.base_index_name", "A BCIS-licensed benchmark set needs a base index name.")
+        if bset.base_index_value is None:
+            err(f"{set_field}.base_index_value", "A BCIS-licensed benchmark set needs a base index value.")
+    elif bset.provider_type == "public_benchmark":
+        if blank(bset.provider_name):
+            err(f"{set_field}.provider_name", "A public benchmark set needs a provider name.")
+        if blank(bset.source_title):
+            err(f"{set_field}.source_title", "A public benchmark set needs a source title.")
+        if blank(bset.source_url):
+            err(f"{set_field}.source_url", "A public benchmark set needs a source URL.")
+        if blank(bset.licence_or_permission):
+            err(
+                f"{set_field}.licence_or_permission",
+                "A public benchmark set needs a licence or permission statement.",
+            )
+        if bset.source_publication_date is None:
+            err(f"{set_field}.source_publication_date", "A public benchmark set needs a source publication date.")
+        if bset.retrieved_at is None:
+            err(f"{set_field}.retrieved_at", "A public benchmark set needs a retrieved_at date.")
+    elif bset.provider_type == "user_qs":
+        if blank(bset.source_title):
+            err(f"{set_field}.source_title", "A user QS benchmark set needs a source title.")
+        if blank(bset.imported_by):
+            err(f"{set_field}.imported_by", "A user QS benchmark set needs an importer.")
+        if blank(bset.base_date):
+            err(f"{set_field}.base_date", "A user QS benchmark set needs a base date.")
+    # --- R17 Sec 27.5 benchmark end ---
 
 
 def validate_monitoring(inputs: AnyCalculatorInputs, issues: list[ValidationIssue]) -> None:

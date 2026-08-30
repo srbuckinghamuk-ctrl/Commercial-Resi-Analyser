@@ -1011,10 +1011,10 @@ describe('R9 — the appraisal result carries the area bridge', () => {
         packages: [
           { id: 'p1', code: 'enabling_strip_out_asbestos', label: 'Strip out',
             amount_pence: 1_000_000, contingency_class: 'existing_building',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null, benchmark_origin: null },
           { id: 'p2', code: 'structure', label: 'Structure', amount_pence: 3_000_000,
             contingency_class: 'general', lender_eligible: true, notes: '', vat_override: null, phase_id: null,
-            price_basis: null },
+            price_basis: null, benchmark_origin: null },
         ],
         contingency: [
           { name: 'general', pct: 5 },

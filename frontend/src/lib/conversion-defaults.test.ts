@@ -5,13 +5,14 @@ import {
   defaultCalculatorInputsV8, defaultCalculatorInputsV9, defaultCalculatorInputsV10,
   defaultCalculatorInputsV11, defaultCalculatorInputsV12, defaultCalculatorInputsV13,
   defaultCalculatorInputsV14, defaultCalculatorInputsV15, defaultCalculatorInputsV16,
+  defaultCalculatorInputsV17,
   captureSourceRecord,
   DEFAULT_CONVERSION_COSTS, DEFAULT_SCENARIOS,
 } from './conversion-defaults';
 import {
   migrateInputs, migrateV4toV5, migrateV5toV6, migrateV6toV7, migrateV7toV8, migrateV8toV9,
   migrateV9toV10, migrateV10toV11, migrateV11toV12, migrateV12toV13, migrateV13toV14, migrateV14toV15,
-  migrateV15toV16,
+  migrateV15toV16, migrateV16toV17,
   costPlanFromLegacyCosts, VAT_CHARGE_CATEGORIES,
 } from './model';
 import { CLASS_MA_AXES } from './deal-spider';
@@ -659,5 +660,32 @@ describe('defaultCalculatorInputsV16 (R16b Task 2, spec §26.1)', () => {
     ]);
     // Non-vacuity: the v15 default DID carry the removed keys.
     expect('contingency_pct' in defaultCalculatorInputsV15().conversion_costs).toBe(true);
+  });
+});
+
+describe('defaultCalculatorInputsV17 (R17 Task 3, spec §27.7)', () => {
+  it('is exactly what migrateV16toV17 makes of the v16 defaults', () => {
+    const stripIds = (d: ReturnType<typeof defaultCalculatorInputsV17>) => ({
+      ...d,
+      risks: d.risks.map((r) => ({ ...r, id: '' })),
+      equity_sources: d.equity_sources.map((e) => ({ ...e, id: '' })),
+    });
+    expect(stripIds(defaultCalculatorInputsV17()))
+      .toEqual(stripIds(migrateV16toV17(defaultCalculatorInputsV16())));
+  });
+
+  it('starts with inputs_version 17, a present-and-null benchmark block, a null origin on every package and empty source records', () => {
+    const v17 = defaultCalculatorInputsV17();
+    expect(v17.inputs_version).toBe(17);
+    expect('elemental_benchmark' in v17).toBe(true);
+    expect(v17.elemental_benchmark).toBeNull();
+    for (const p of v17.cost_plan.packages) {
+      expect('benchmark_origin' in p).toBe(true);
+      expect(p.benchmark_origin).toBeNull();
+    }
+    expect(v17.due_diligence.source_records).toEqual([]);
+    expect(v17.due_diligence.source_resolutions).toEqual([]);
+    // Non-vacuity: the v16 default carried no benchmark block.
+    expect('elemental_benchmark' in defaultCalculatorInputsV16()).toBe(false);
   });
 });

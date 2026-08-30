@@ -13,7 +13,7 @@ import {
 } from '../conversion-defaults';
 import type {
   AnyCalculatorInputs, CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV6,
-  CalculatorInputsV7, CalculatorInputsV9, CalculatorInputsV16, LenderValuation,
+  CalculatorInputsV7, CalculatorInputsV9, CalculatorInputsV17, LenderValuation,
 } from './';
 import type { Phase } from './programme';
 import type { ScenarioOverrides } from '../conversion-types';
@@ -380,10 +380,10 @@ describe('the cost lever reaches both modes (R10 spec §3.5)', () => {
         packages: [
           { id: 'p1', code: 'structure', label: 'Structure',
             amount_pence: 3_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null, benchmark_origin: null },
           { id: 'p2', code: 'envelope', label: 'Envelope',
             amount_pence: 1_000_000, contingency_class: 'general',
-            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null },
+            lender_eligible: true, notes: '', vat_override: null, phase_id: null, price_basis: null, benchmark_origin: null },
         ],
         contingency,
         fee_lines: [],
@@ -865,14 +865,14 @@ describe('R15b spec §24 — the levers reach the cost plan in time (Task 8)', (
     saleable_area: 0, abnormal_cost: 0, programme_slip: 0, refi_ltv: 0,
   };
 
-  function applyLever(doc: CalculatorInputsV16, lever: SensitivityLever): CalculatorInputsV16 {
+  function applyLever(doc: CalculatorInputsV17, lever: SensitivityLever): CalculatorInputsV17 {
     if (lever === 'phase_slip') {
       return applyScenario(doc, { ...BASE_OVERRIDES, phase_slip_phase_id: 'construction', phase_slip_months: 1 });
     }
     return applyScenario(doc, { ...BASE_OVERRIDES, [NON_PHASE_SLIP_FIELD[lever]]: LEVER_MAGNITUDE[lever] });
   }
 
-  function applyInOrder(order: SensitivityLever[]): CalculatorInputsV16 {
+  function applyInOrder(order: SensitivityLever[]): CalculatorInputsV17 {
     return order.reduce((d, lever) => applyLever(d, lever), docZ());
   }
 

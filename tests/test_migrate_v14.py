@@ -86,7 +86,7 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
         if _FIXTURE_DOCS[p].get("kind") != "sensitivity"
         and _FIXTURE_DOCS[p]["inputs"].get("inputs_version", 2) > 13
     ]
-    assert sorted(p.stem for p in version_excluded) == ["z-cost-plan-in-time"]
+    assert sorted(p.stem for p in version_excluded) == ["ab-elemental-benchmark", "z-cost-plan-in-time"]
 
 
 def _metrics_dict(metrics) -> dict:

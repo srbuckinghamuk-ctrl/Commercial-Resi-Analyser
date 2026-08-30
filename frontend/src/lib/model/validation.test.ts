@@ -29,10 +29,11 @@ import type {
   CalculatorInputsV10, CalculatorInputsV11, MonitoringCategory, MonitoringInputs, MonitoringLineInputs,
 } from './finance-types';
 import { unitSalesDoc, noProgrammeDoc } from './__fixtures__/unit-sales-docs';
-import type { AnyCalculatorInputs, CalculatorInputsV12, CalculatorInputsV16 } from './finance-types';
+import type { AnyCalculatorInputs, CalculatorInputsV12, CalculatorInputsV17 } from './finance-types';
 import { migrateInputsToV12, migrateInputsToV13 } from './migrate';
 import { QS, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
 import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
+import { docAB, docABWith, docABWithoutBenchmark } from './__fixtures__/elemental-benchmark-docs';
 import type { PriceBasis, QsStage, QsStatus } from './cost-plan';
 
 type MinimalUnit = Pick<ProposedUnitV6, 'id' | 'floor_area_sqm' | 'estimated_value_pence'>
@@ -944,6 +945,7 @@ describe('R10 — cost plan validation', () => {
       contingency_class: 'general', lender_eligible: true, notes: '',
       vat_override: null, ...overrides, phase_id: overrides.phase_id ?? null,
       price_basis: overrides.price_basis ?? null,
+      benchmark_origin: overrides.benchmark_origin ?? null,
     };
   }
 
@@ -1305,7 +1307,7 @@ describe('R11 — VAT validation (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override, phase_id: null, price_basis: null,
+      vat_override: override, phase_id: null, price_basis: null, benchmark_origin: null,
     };
   }
 
@@ -1631,7 +1633,7 @@ describe('R11 — VAT warnings (spec §17.9)', () => {
     return {
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: override, phase_id: null, price_basis: null,
+      vat_override: override, phase_id: null, price_basis: null, benchmark_origin: null,
     };
   }
 
@@ -1842,7 +1844,7 @@ function detailedCostPlan(): CostPlanInputs {
     packages: [{
       id: 'pkg-1', code: 'structure', label: 'Structure', amount_pence: 1_000_000,
       contingency_class: 'general', lender_eligible: true, notes: '',
-      vat_override: null, phase_id: null, price_basis: null,
+      vat_override: null, phase_id: null, price_basis: null, benchmark_origin: null,
     }],
     contingency: [
       { name: 'general', pct: 5 }, { name: 'existing_building', pct: 0 }, { name: 'abnormal', pct: 0 },
@@ -2934,18 +2936,18 @@ describe('§23.9 due diligence validation', () => {
 // Twin of TestDueDiligenceValidation's "Sec 24.7" tests in
 // tests/test_financial_model_validation.py.
 describe('§24.7 tender-price inflation validation', () => {
-  const errs = (d: CalculatorInputsV16) => validateInputs(d).filter((i) => i.severity === 'error');
-  const warns = (d: CalculatorInputsV16) => validateInputs(d).filter((i) => i.severity === 'warning');
-  const errFields = (d: CalculatorInputsV16) => errs(d).map((i) => i.field);
-  const has = (d: CalculatorInputsV16, field: string, message: string) =>
+  const errs = (d: CalculatorInputsV17) => validateInputs(d).filter((i) => i.severity === 'error');
+  const warns = (d: CalculatorInputsV17) => validateInputs(d).filter((i) => i.severity === 'warning');
+  const errFields = (d: CalculatorInputsV17) => errs(d).map((i) => i.field);
+  const has = (d: CalculatorInputsV17, field: string, message: string) =>
     errs(d).some((i) => i.field === field && i.message === message);
-  const warnHas = (d: CalculatorInputsV16, field: string, message: string) =>
+  const warnHas = (d: CalculatorInputsV17, field: string, message: string) =>
     warns(d).some((i) => i.field === field && i.message === message);
   // Z is registered for VAT and carries a genuine, unrelated §17.9 warning
   // (the final VAT return period's reclaim falls outside the term) — scoped
   // to this rule's own field so that warning does not make every "no warning
   // fires" assertion below vacuous.
-  const inflationWarnFields = (d: CalculatorInputsV16) =>
+  const inflationWarnFields = (d: CalculatorInputsV17) =>
     warns(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
 
   it('Z is accepted: a real allowance, a real calendar, a real base date', () => {
@@ -3032,5 +3034,242 @@ describe('§24.7 tender-price inflation validation', () => {
     const ourFields = errs(d).filter((i) => i.field.startsWith('cost_plan.qs.inflation')).map((i) => i.field);
     expect(ourFields).toEqual([]);
     expect(inflationWarnFields(d)).toEqual([]);
+  });
+});
+
+// Twin of TestElementalBenchmarkValidation in tests/test_financial_model_validation.py.
+describe('§27.5 elemental benchmark validation', () => {
+  const errs = (d: AnyCalculatorInputs) => validateInputs(d).filter((i) => i.severity === 'error');
+  /** Only the fields this block owns: the benchmark block, a package's origin
+   *  and the two source-record arrays. AB carries one unrelated §17.9 VAT
+   *  warning, so a whole-list emptiness assertion would be wrong here. */
+  const ourFields = (d: AnyCalculatorInputs) => errs(d)
+    .filter((i) => i.field.startsWith('elemental_benchmark') || i.field.endsWith('.benchmark_origin')
+      || i.field.startsWith('due_diligence.source_re'))
+    .map((i) => i.field);
+  const has = (d: AnyCalculatorInputs, field: string, message: string) =>
+    errs(d).some((i) => i.field === field && i.message === message);
+
+  const record = (id: string, existingUse: string | null = null): dueDiligenceModule.SourceEvidenceRecord => ({
+    id, kind: 'listing_structured', captured_at: '2026-08-01', reference: `ref ${id}`, captured_by: 'tester',
+    narrative_excerpt: null, claims: { ...dueDiligenceModule.emptyClaims(), existing_use: existingUse },
+  });
+  const resolution = (changes: Partial<dueDiligenceModule.SourceConflictResolution> = {}): dueDiligenceModule.SourceConflictResolution => ({
+    id: 'res-1', field: 'existing_use', resolved_value: 'office', chosen_record_id: 'rec-1',
+    evidence_reference: 'Survey p.3', resolved_by: 'tester', resolved_at: '2026-08-02', reason: 'measured',
+    ...changes,
+  });
+  const withRecords = (
+    records: dueDiligenceModule.SourceEvidenceRecord[], resolutions: dueDiligenceModule.SourceConflictResolution[] = [],
+  ): CalculatorInputsV17 => {
+    const doc = docAB();
+    return { ...doc, due_diligence: { ...doc.due_diligence, source_records: records, source_resolutions: resolutions } };
+  };
+
+  it('fixture AB is clean under every rule in this block', () => {
+    expect(ourFields(docAB())).toEqual([]);
+  });
+
+  it('rule 1 - rate ids unique; a selection resolves to a rate of its own element', () => {
+    const dup = docABWith((b) => { b.set.rates[1].id = b.set.rates[0].id; });
+    expect(has(dup, 'elemental_benchmark.set.rates[1].id', 'Benchmark rate id "r-strip" is not unique.')).toBe(true);
+    const ghost = docABWith((b) => { b.selections[0].benchmark_rate_id = 'r-ghost'; });
+    expect(has(ghost, 'elemental_benchmark.selections[0].benchmark_rate_id',
+      'Benchmark rate "r-ghost" is not in the benchmark set.')).toBe(true);
+    const wrong = docABWith((b) => { b.selections[0].benchmark_rate_id = 'r-frame'; });
+    expect(has(wrong, 'elemental_benchmark.selections[0].benchmark_rate_id',
+      'Benchmark rate "r-frame" prices element "frame_alterations", not "strip_out".')).toBe(true);
+    // null is "selected but unpriced", never a dangling reference.
+    const unpriced = docABWith((b) => { b.selections[0].benchmark_rate_id = null; });
+    expect(ourFields(unpriced)).toEqual([]);
+  });
+
+  it('rule 2 - element codes unique and catalogue members', () => {
+    const bad = docABWith((b) => { b.selections[0].element_code = 'ghost_element' as never; });
+    expect(has(bad, 'elemental_benchmark.selections[0].element_code',
+      'Element code "ghost_element" is not in the element catalogue.')).toBe(true);
+    const dup = docABWith((b) => { b.selections[1].element_code = b.selections[0].element_code; });
+    expect(has(dup, 'elemental_benchmark.selections[1].element_code',
+      'Element "strip_out" is selected more than once.')).toBe(true);
+  });
+
+  it('rule 3 - the unit agrees with the basis', () => {
+    const d = docABWith((b) => { b.set.rates[0].original_unit = 'gbp_per_unit'; });
+    expect(has(d, 'elemental_benchmark.set.rates[0].original_unit',
+      'Benchmark rate unit "gbp_per_unit" does not agree with measurement basis "area".')).toBe(true);
+    const sqft = docABWith((b) => { b.set.rates[0].original_unit = 'gbp_per_sqft'; });
+    expect(ourFields(sqft)).toEqual([]);
+  });
+
+  it('rule 4 - pence non-negative; rate_pct present iff percentage, non-negative', () => {
+    const neg = docABWith((b) => { b.set.rates[0].original_rate_pence = -1; });
+    expect(has(neg, 'elemental_benchmark.set.rates[0].original_rate_pence', 'Benchmark rate must be zero or more pence.')).toBe(true);
+    const missing = docABWith((b) => { b.set.rates[6].rate_pct = null; });
+    expect(has(missing, 'elemental_benchmark.set.rates[6].rate_pct', 'A percentage benchmark rate needs a rate_pct.')).toBe(true);
+    const negPct = docABWith((b) => { b.set.rates[6].rate_pct = -5; });
+    expect(has(negPct, 'elemental_benchmark.set.rates[6].rate_pct', 'Benchmark rate_pct must be zero or more.')).toBe(true);
+    const stray = docABWith((b) => { b.set.rates[0].rate_pct = 3; });
+    expect(has(stray, 'elemental_benchmark.set.rates[0].rate_pct', 'Only a percentage benchmark rate carries a rate_pct.')).toBe(true);
+  });
+
+  it('rule 5 - an adjustment needs a reason and stays above -100%', () => {
+    const noReason = docABWith((b) => { b.selections[0].adjustment_pct = 5; b.selections[0].adjustment_reason = '  '; });
+    expect(has(noReason, 'elemental_benchmark.selections[0].adjustment_reason', 'A benchmark adjustment needs a reason.')).toBe(true);
+    const reasoned = docABWith((b) => { b.selections[0].adjustment_pct = 5; b.selections[0].adjustment_reason = 'scope'; });
+    expect(ourFields(reasoned)).toEqual([]);
+    const floor = docABWith((b) => { b.selections[0].adjustment_pct = -100; b.selections[0].adjustment_reason = 'gone'; });
+    expect(has(floor, 'elemental_benchmark.selections[0].adjustment_pct', 'Benchmark adjustment must be greater than -100%.')).toBe(true);
+    const nan = docABWith((b) => { b.selections[0].adjustment_pct = Number.NaN; b.selections[0].adjustment_reason = 'x'; });
+    expect(has(nan, 'elemental_benchmark.selections[0].adjustment_pct', 'Benchmark adjustment must be greater than -100%.')).toBe(true);
+  });
+
+  it('rule 6 - index names both set or both empty, and equal', () => {
+    const half = docABWith((b) => { b.set.current_index_name = null; });
+    expect(has(half, 'elemental_benchmark.set.base_index_name',
+      'Base and current index names must both be set, or both be empty.')).toBe(true);
+    const differ = docABWith((b) => { b.set.current_index_name = 'OTHER index'; });
+    expect(has(differ, 'elemental_benchmark.set.current_index_name',
+      'Base and current index names must name the same index.')).toBe(true);
+    const neither = docABWith((b) => {
+      b.set.base_index_name = null; b.set.current_index_name = null;
+      b.set.base_index_value = null; b.set.current_index_value = null;
+    });
+    expect(ourFields(neither)).toEqual([]);
+  });
+
+  it('rule 7 - index values finite and above zero: 0, -1, NaN and Infinity all fire', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const base = docABWith((b) => { b.set.base_index_value = bad; });
+      expect(has(base, 'elemental_benchmark.set.base_index_value',
+        'Base index value must be a finite number greater than zero.')).toBe(true);
+      const current = docABWith((b) => { b.set.current_index_value = bad; });
+      expect(has(current, 'elemental_benchmark.set.current_index_value',
+        'Current index value must be a finite number greater than zero.')).toBe(true);
+    }
+    expect(ourFields(docABWith((b) => { b.set.base_index_value = 0.5; }))).toEqual([]);
+  });
+
+  it('rule 8 - location factors (set and per-rate) finite and above zero', () => {
+    const set0 = docABWith((b) => { b.set.location_factor = 0; });
+    expect(has(set0, 'elemental_benchmark.set.location_factor', 'Location factor must be a finite number greater than zero.')).toBe(true);
+    const rateNeg = docABWith((b) => { b.set.rates[2].location_factor = -1; });
+    expect(has(rateNeg, 'elemental_benchmark.set.rates[2].location_factor',
+      'Location factor must be a finite number greater than zero.')).toBe(true);
+    expect(ourFields(docABWith((b) => { b.set.rates[2].location_factor = 1.1; }))).toEqual([]);
+  });
+
+  it('rule 9 - quantity finite and non-negative; the quantity unit agrees with the rate basis', () => {
+    const neg = docABWith((b) => { b.selections[0].quantity = -1; });
+    expect(has(neg, 'elemental_benchmark.selections[0].quantity', 'Benchmark quantity must be a finite number, zero or more.')).toBe(true);
+    const nan = docABWith((b) => { b.selections[0].quantity = Number.NaN; });
+    expect(has(nan, 'elemental_benchmark.selections[0].quantity', 'Benchmark quantity must be a finite number, zero or more.')).toBe(true);
+    const unit = docABWith((b) => { b.selections[4].quantity_unit = 'sqm'; });
+    expect(has(unit, 'elemental_benchmark.selections[4].quantity_unit',
+      'Benchmark quantity unit "sqm" does not agree with the rate\'s basis "per_unit" (expected "unit").')).toBe(true);
+  });
+
+  it('rule 10 - a BCIS-licensed set owes eight fields', () => {
+    const blank = docABWith((b) => {
+      b.set.provider_type = 'bcis_licensed';
+      b.set.source_title = ''; b.set.licence_or_permission = ' '; b.set.imported_by = ''; b.set.building_function = '';
+      b.set.source_publication_date = null; b.set.location_factor = null;
+      b.set.base_index_name = null; b.set.current_index_name = null; b.set.base_index_value = null; b.set.current_index_value = null;
+    });
+    expect(ourFields(blank)).toEqual([
+      'elemental_benchmark.set.source_title', 'elemental_benchmark.set.licence_or_permission',
+      'elemental_benchmark.set.imported_by', 'elemental_benchmark.set.building_function',
+      'elemental_benchmark.set.source_publication_date', 'elemental_benchmark.set.location_factor',
+      'elemental_benchmark.set.base_index_name', 'elemental_benchmark.set.base_index_value',
+    ]);
+    expect(has(blank, 'elemental_benchmark.set.source_title',
+      'A BCIS-licensed benchmark set needs a source title (the BCIS dataset or product).')).toBe(true);
+    const full = docABWith((b) => {
+      b.set.provider_type = 'bcis_licensed';
+      b.set.source_title = 'BCIS Elemental'; b.set.licence_or_permission = 'licence 1'; b.set.imported_by = 'qs';
+      b.set.building_function = 'offices'; b.set.source_publication_date = '2026-01-01';
+    });
+    expect(ourFields(full)).toEqual([]);
+  });
+
+  it('rule 11 - a public benchmark set owes six fields', () => {
+    const blank = docABWith((b) => {
+      b.set.provider_type = 'public_benchmark';
+      b.set.provider_name = ''; b.set.source_title = ''; b.set.source_url = null; b.set.licence_or_permission = '';
+      b.set.source_publication_date = null; b.set.retrieved_at = null;
+    });
+    expect(ourFields(blank)).toEqual([
+      'elemental_benchmark.set.provider_name', 'elemental_benchmark.set.source_title', 'elemental_benchmark.set.source_url',
+      'elemental_benchmark.set.licence_or_permission', 'elemental_benchmark.set.source_publication_date',
+      'elemental_benchmark.set.retrieved_at',
+    ]);
+    expect(has(blank, 'elemental_benchmark.set.source_url', 'A public benchmark set needs a source URL.')).toBe(true);
+    const full = docABWith((b) => {
+      b.set.provider_type = 'public_benchmark';
+      b.set.provider_name = 'ONS'; b.set.source_title = 'OPI'; b.set.source_url = 'https://example.test/opi';
+      b.set.licence_or_permission = 'OGL v3'; b.set.source_publication_date = '2026-01-01'; b.set.retrieved_at = '2026-02-01';
+    });
+    expect(ourFields(full)).toEqual([]);
+  });
+
+  it('rule 12 - a user QS set owes a source title, an importer and a base date', () => {
+    const blank = docABWith((b) => { b.set.source_title = ''; b.set.imported_by = ' '; b.set.base_date = ''; });
+    expect(ourFields(blank)).toEqual([
+      'elemental_benchmark.set.source_title', 'elemental_benchmark.set.imported_by', 'elemental_benchmark.set.base_date',
+    ]);
+    expect(has(blank, 'elemental_benchmark.set.base_date', 'A user QS benchmark set needs a base date.')).toBe(true);
+  });
+
+  it('rule 13 - an orphaned or foreign benchmark origin is an error, not a silent tag', () => {
+    const orphan = docABWithoutBenchmark();
+    expect(has(orphan, 'cost_plan.packages[5].benchmark_origin',
+      'Package carries a benchmark origin but the document has no benchmark set - remove the origin or restore the set.')).toBe(true);
+    // Every other benchmark rule is silent on a null block.
+    expect(ourFields(orphan)).toEqual(['cost_plan.packages[5].benchmark_origin']);
+    const doc = docAB();
+    const foreign: CalculatorInputsV17 = {
+      ...doc,
+      cost_plan: {
+        ...doc.cost_plan,
+        packages: doc.cost_plan.packages.map((p) => (
+          p.benchmark_origin == null ? p : { ...p, benchmark_origin: { ...p.benchmark_origin, set_id: 'set-other' } }
+        )),
+      },
+    };
+    expect(has(foreign, 'cost_plan.packages[5].benchmark_origin',
+      'Package benchmark origin names set "set-other" but the document\'s benchmark set is "set-ab".')).toBe(true);
+    // The block removed AND the origin removed: nothing to say.
+    const clean: CalculatorInputsV17 = {
+      ...orphan,
+      cost_plan: { ...orphan.cost_plan, packages: orphan.cost_plan.packages.map((p) => ({ ...p, benchmark_origin: null })) },
+    };
+    expect(ourFields(clean)).toEqual([]);
+  });
+
+  it('rule 14 - a target names a plan package, and only in detailed mode', () => {
+    const ghost = docABWith((b) => { b.selections[0].target_cost_package_id = 'pkg-ghost'; });
+    expect(has(ghost, 'elemental_benchmark.selections[0].target_cost_package_id',
+      'Benchmark target package "pkg-ghost" is not on the cost plan.')).toBe(true);
+    const doc = docAB();
+    const headline: CalculatorInputsV17 = { ...doc, cost_plan: { ...doc.cost_plan, mode: 'headline' } };
+    expect(has(headline, 'elemental_benchmark.selections[0].target_cost_package_id',
+      'A benchmark target package applies to a detailed cost plan only - switch to detailed mode or clear the target.')).toBe(true);
+    // The one untargeted selection (preliminaries) raises nothing in headline mode.
+    expect(ourFields(headline).filter((f) => f.endsWith('selections[6].target_cost_package_id'))).toEqual([]);
+  });
+
+  it('rule 15 - source record ids unique, resolutions name a claim field and a real record', () => {
+    expect(ourFields(withRecords([]))).toEqual([]);
+    const dup = withRecords([record('rec-1', 'office'), record('rec-1', 'retail')]);
+    expect(has(dup, 'due_diligence.source_records[1].id', 'Source record id "rec-1" is not unique.')).toBe(true);
+    const badField = withRecords([record('rec-1')], [resolution({ field: 'epc_rating' as never })]);
+    expect(has(badField, 'due_diligence.source_resolutions[0].field',
+      'Source resolution field "epc_rating" is not a source claim field.')).toBe(true);
+    const ghost = withRecords([record('rec-1')], [resolution({ chosen_record_id: 'rec-9' })]);
+    expect(has(ghost, 'due_diligence.source_resolutions[0].chosen_record_id',
+      'Source resolution names record "rec-9", which is not a source record.')).toBe(true);
+    const fine = withRecords([record('rec-1', 'office'), record('rec-2', 'retail')], [resolution()]);
+    expect(ourFields(fine)).toEqual([]);
+    // A resolution that names no record is not a dangling reference.
+    expect(ourFields(withRecords([record('rec-1')], [resolution({ chosen_record_id: null })]))).toEqual([]);
   });
 });

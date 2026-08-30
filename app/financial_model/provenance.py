@@ -12,7 +12,7 @@ client.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 LenderCaseStatus = Literal[
     "draft", "submitted", "under_review", "information_required",
@@ -38,6 +38,57 @@ ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "declined": ("superseded",),
     "superseded": (),
 }
+
+#: R17 (spec Sec 21.2 amended, design Sec 10.3), normative. Which roles may
+#: move a case INTO each status; creation (-> draft) is CREATE_ROLES. The
+#: server enforces this table; report-provenance.ts mirrors it literally for
+#: the UI's buttons only, pinned by tests restating the whole table in both
+#: languages. `superseded` is any authenticated role, so its row is the full
+#: role set rather than an "any" sentinel -- a sentinel would need a second
+#: rule to interpret it, and the full set is what the sentinel would mean.
+ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "submitted": ("developer", "broker", "administrator"),
+    "under_review": ("underwriter", "credit_approver"),
+    "information_required": ("underwriter", "credit_approver"),
+    "credit_approved": ("credit_approver",),
+    "approved_with_conditions": ("credit_approver",),
+    "declined": ("credit_approver",),
+    "superseded": ("developer", "broker", "underwriter", "credit_approver", "administrator"),
+}
+
+#: Who may open a case (-> draft). Same row as `-> submitted`, stated
+#: separately because creation is not a transition in ALLOWED_TRANSITIONS.
+CREATE_ROLES: tuple[str, ...] = ("developer", "broker", "administrator")
+
+#: The three statuses maker-checker guards (design decision 6).
+DECISION_STATUSES: tuple[str, ...] = ("credit_approved", "approved_with_conditions", "declined")
+
+
+def can_transition(role: str, to_status: str) -> bool:
+    """True when `role` may move a case into `to_status` under
+    ROLE_TRANSITIONS. Says nothing about whether the move is legal from the
+    current status (ALLOWED_TRANSITIONS) or about maker-checker, which are
+    the endpoint's next two checks."""
+    return role in ROLE_TRANSITIONS.get(to_status, ())
+
+
+def due_diligence_complete(dd_result: Any) -> bool:
+    """Spec Sec 23.7's seventh FINAL condition, read off the computed
+    due-diligence result: no ENTERED item still `unknown` (a derived row's
+    unknown is a fact about another block, never gathered evidence) and --
+    R17, spec Sec 23.5 amended, design decision 12 -- no source-field
+    conflict left without an evidenced resolution. Both counts are the
+    engine's own (`due_diligence.py`); this reads, it does not derive. A
+    caller with no due-diligence result at all (a pre-v13 document) passes
+    None and is complete, the R8 exemption `dueDiligenceGateFor` applies.
+    Port of report-provenance.ts's `dueDiligenceGateFor`."""
+    if dd_result is None:
+        return True
+    return (
+        dd_result.totals.entered_unknown_count == 0
+        and getattr(dd_result, "unresolved_source_conflicts", 0) == 0
+    )
+
 
 DraftReason = Literal[
     "unreconciled", "senior_not_repaid", "tax_basis_unconfirmed",

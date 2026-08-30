@@ -16,10 +16,10 @@ import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV6, CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9,
   CalculatorInputsV10, CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13,
-  CalculatorInputsV14, CalculatorInputsV15, CalculatorInputsV16,
+  CalculatorInputsV14, CalculatorInputsV15, CalculatorInputsV16, CalculatorInputsV17,
   EquitySource, FacilityTerms,
 } from './model/finance-types';
-import { migrateV15toV16 } from './model/migrate';
+import { migrateV15toV16, migrateV16toV17 } from './model/migrate';
 import { costPlanFromLegacyCosts } from './model/cost-plan';
 import { defaultVatInputs } from './model/vat';
 import type { SourceRecord } from './model/due-diligence';
@@ -685,4 +685,13 @@ export function defaultCalculatorInputsV15(project?: DefaultDocumentProject, now
  *  build` all confirm it at runtime, not just in principle. */
 export function defaultCalculatorInputsV16(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV16 {
   return migrateV15toV16(defaultCalculatorInputsV15(project, now));
+}
+
+/** R17 Task 3 (spec §27.7, the entry-point cutover). `inputs_version`, the
+ *  null `elemental_benchmark`, every package's null `benchmark_origin` and the
+ *  two empty source-record arrays are the only differences from the v16
+ *  default -- pinned by construction through `migrateV16toV17`, the same
+ *  cycle-safe hoisted import the v16 default relies on above. */
+export function defaultCalculatorInputsV17(project?: DefaultDocumentProject, now?: Date): CalculatorInputsV17 {
+  return migrateV16toV17(defaultCalculatorInputsV16(project, now));
 }

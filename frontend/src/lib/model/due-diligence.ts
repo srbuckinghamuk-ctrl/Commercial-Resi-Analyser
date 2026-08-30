@@ -64,6 +64,66 @@ export interface DueDiligenceInputs {
   items: DdItem[];
 }
 
+/** R17 spec §23.5 (amended). Which document a claim came from. */
+export type SourceRecordKind =
+  | 'listing_narrative' | 'listing_structured' | 'measured_survey' | 'valuation'
+  | 'title' | 'planning' | 'appraisal_inputs' | 'other';
+export const SOURCE_RECORD_KINDS: readonly SourceRecordKind[] = [
+  'listing_narrative', 'listing_structured', 'measured_survey', 'valuation',
+  'title', 'planning', 'appraisal_inputs', 'other',
+];
+
+/** R17 spec §23.5 (amended). The structured claims a source can make. A null
+ *  claim is "this source says nothing about it", never a value. */
+export interface SourceClaims {
+  existing_use: string | null;
+  proposed_use: string | null;
+  floor_area_sqm: number | null;
+  tenure: 'freehold' | 'leasehold' | 'unknown' | null;
+  upper_parts_included: boolean | null;
+  vacant_possession: boolean | null;
+}
+export type SourceClaimField = keyof SourceClaims;
+export const SOURCE_CLAIM_FIELDS: readonly SourceClaimField[] = [
+  'existing_use', 'proposed_use', 'floor_area_sqm', 'tenure', 'upper_parts_included', 'vacant_possession',
+];
+
+export interface SourceEvidenceRecord {
+  id: string;
+  kind: SourceRecordKind;
+  captured_at: string;   // ISO yyyy-mm-dd
+  reference: string;
+  captured_by: string;
+  /** Stored and printed; never parsed (spec §27.9 limitation 10). */
+  narrative_excerpt: string | null;
+  claims: SourceClaims;
+}
+
+export interface SourceConflictResolution {
+  id: string;
+  field: SourceClaimField;
+  resolved_value: string | number | boolean | null;
+  chosen_record_id: string | null;
+  evidence_reference: string;
+  resolved_by: string;
+  resolved_at: string;   // ISO yyyy-mm-dd
+  reason: string;
+}
+
+/** R17 spec §27.1. v17's due-diligence block: the two record arrays are
+ *  present on every v17 document (`[]` by migration), never absent. */
+export interface DueDiligenceInputsV17 extends DueDiligenceInputs {
+  source_records: SourceEvidenceRecord[];
+  source_resolutions: SourceConflictResolution[];
+}
+
+export function emptyClaims(): SourceClaims {
+  return {
+    existing_use: null, proposed_use: null, floor_area_sqm: null,
+    tenure: null, upper_parts_included: null, vacant_possession: null,
+  };
+}
+
 export interface DdCatalogueEntry {
   code: DdItemCode | DdDerivedCode;
   category: DdCategory;
@@ -261,6 +321,23 @@ export interface DdConsentExpiry {
   expires_before_start: boolean;
 }
 
+/** R17 spec §23.5 (amended). One structured claim, as a source made it. */
+export interface DdSourceClaimValue {
+  record_id: string;
+  kind: SourceRecordKind;
+  value: string | number | boolean;
+}
+
+/** R17 spec §23.5 (amended). A claims field on which two or more source
+ *  records disagree. `resolved` is true only when a resolution names the
+ *  field with a non-blank `evidence_reference` and `resolved_by`. */
+export interface DdSourceFieldConflict {
+  field: SourceClaimField;
+  values: DdSourceClaimValue[];
+  resolved: boolean;
+  resolution_id: string | null;
+}
+
 export interface DueDiligenceResult {
   rows: DdRow[];
   categories: DdCategorySummary[];
@@ -268,6 +345,53 @@ export interface DueDiligenceResult {
   source_record: SourceRecord | null;
   source_conflicts: DdSourceConflict[];
   consent_expiry: DdConsentExpiry | null;
+  /** R17 spec §23.5 (amended). Derived from `due_diligence.source_records`
+   *  and `source_resolutions`; `[]` on every document with fewer than two
+   *  records. The engine never picks a winner. */
+  source_field_conflicts: DdSourceFieldConflict[];
+  /** R17. Count of `source_field_conflicts` with `resolved === false`; the
+   *  seventh FINAL condition reads it beside `entered_unknown_count`. */
+  unresolved_source_conflicts: number;
+}
+
+/** R17 spec §23.5 (amended). Two non-null claims conflict when they differ:
+ *  strings case-insensitively after trimming; areas when they disagree by
+ *  more than 5% of the smaller (multiplied out, never a float quotient);
+ *  booleans and enums by value. */
+function claimsDiffer(field: SourceClaimField, a: string | number | boolean, b: string | number | boolean): boolean {
+  if (field === 'floor_area_sqm') {
+    const x = Number(a); const y = Number(b);
+    const smaller = Math.min(x, y);
+    return Math.abs(x - y) * 20 > smaller;
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    return a.trim().toLowerCase() !== b.trim().toLowerCase();
+  }
+  return a !== b;
+}
+
+export function deriveSourceFieldConflicts(
+  records: SourceEvidenceRecord[],
+  resolutions: SourceConflictResolution[],
+): DdSourceFieldConflict[] {
+  const out: DdSourceFieldConflict[] = [];
+  for (const field of SOURCE_CLAIM_FIELDS) {
+    const values: DdSourceClaimValue[] = [];
+    for (const r of records) {
+      const v = r.claims[field];
+      if (v != null && !(typeof v === 'string' && v.trim() === '')) {
+        values.push({ record_id: r.id, kind: r.kind, value: v });
+      }
+    }
+    if (values.length < 2) continue;
+    const conflicting = values.some((v) => claimsDiffer(field, values[0].value, v.value));
+    if (!conflicting) continue;
+    const resolution = resolutions.find(
+      (res) => res.field === field && res.evidence_reference.trim() !== '' && res.resolved_by.trim() !== '',
+    ) ?? null;
+    out.push({ field, values, resolved: resolution != null, resolution_id: resolution?.id ?? null });
+  }
+  return out;
 }
 
 export const OCCUPATION_CONFLICT =
@@ -472,6 +596,11 @@ export function computeDueDiligence(
     };
   }
 
+  // R17 spec §23.5 (amended). `?? []`: a raw pre-v17 stored document has no
+  // `source_records` key at all — read as "no records", not as an error.
+  const v17 = dd as (DueDiligenceInputs & Partial<DueDiligenceInputsV17>) | null;
+  const fieldConflicts = deriveSourceFieldConflicts(v17?.source_records ?? [], v17?.source_resolutions ?? []);
+
   return {
     rows,
     categories,
@@ -479,6 +608,8 @@ export function computeDueDiligence(
     source_record: sourceRecord == null ? null : { ...sourceRecord },
     source_conflicts: conflicts,
     consent_expiry: consent,
+    source_field_conflicts: fieldConflicts,
+    unresolved_source_conflicts: fieldConflicts.filter((c) => !c.resolved).length,
   };
 }
 
@@ -503,6 +634,16 @@ export function dueDiligenceFlags(result: DueDiligenceResult, costPlan: CostPlan
     out.push({
       code: 'source_conflict', severity: 'red', month: null, amount_pence: null,
       message: c.statement,
+    });
+  }
+  // R17 spec §23.5 (amended). One red flag per unresolved field; the values
+  // are named so the reader sees the disagreement, not only that one exists.
+  for (const c of result.source_field_conflicts) {
+    if (c.resolved) continue;
+    const named = c.values.map((v) => `${v.kind}: ${String(v.value)}`).join(' | ');
+    out.push({
+      code: 'source_conflict_unresolved', severity: 'red', month: null, amount_pence: null,
+      message: `source conflict on ${c.field} is unresolved - ${named}; record an evidenced resolution`,
     });
   }
   const ce = result.consent_expiry;

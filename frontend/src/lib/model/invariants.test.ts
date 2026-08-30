@@ -6,7 +6,7 @@ import { pct } from './metrics';
 import { exitFeeAmount } from './monthly-engine';
 import {
   migrateInputsToV8, migrateInputsToV9, migrateInputsToV10, migrateInputsToV11, migrateInputsToV12,
-  migrateInputsToV13, migrateInputsToV14,
+  migrateInputsToV13, migrateInputsToV14, migrateInputsToV17,
 } from './migrate';
 import { spreadByCurve } from './curves';
 import { buildSchedule } from './schedule';
@@ -135,7 +135,34 @@ function variants(
   // further on (migrateInputsToV13 refuses a v14 document). v14 adds no new
   // anchor-bearing field over v13, so the branch needs no extra orphaning
   // beyond what the v13 arm already does.
-  if (storedVersion >= 14) {
+  // R17 Task 9: and once more for v17 -- fixture AB (v17-native) cannot go
+  // through migrateInputsToV14 (it refuses a v17 document). v17 adds no
+  // anchor-bearing field, so the arm needs no extra orphaning either.
+  if (storedVersion >= 17) {
+    const v17 = migrateInputsToV17(clone() as unknown as Record<string, unknown>);
+    v17.programme = networkForTerm(v17.finance.term_months);
+    if (v17.sales_phasing != null) {
+      v17.sales_phasing.tranches = v17.sales_phasing.tranches.map((t) => ({ ...t, anchor: null }));
+    }
+    if (v17.refinance != null) v17.refinance = { ...v17.refinance, anchor: null };
+    if (v17.investment_case != null) {
+      v17.investment_case = {
+        ...v17.investment_case,
+        stabilisation: { ...v17.investment_case.stabilisation, anchor: null },
+      };
+    }
+    if (v17.unit_sales != null) {
+      v17.unit_sales = {
+        ...v17.unit_sales,
+        units: v17.unit_sales.units.map((row) => ({
+          ...row,
+          exchange: row.exchange != null ? { ...row.exchange, anchor: null } : null,
+          completion: { ...row.completion, anchor: null },
+        })),
+      };
+    }
+    programmed = v17;
+  } else if (storedVersion >= 14) {
     const v14 = migrateInputsToV14(clone() as unknown as Record<string, unknown>);
     v14.programme = networkForTerm(v14.finance.term_months);
     if (v14.sales_phasing != null) {

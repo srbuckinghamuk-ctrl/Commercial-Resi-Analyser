@@ -20,6 +20,7 @@ from .breakeven import (
 from .cost_plan import CostPlanResult, compute_cost_plan
 from .cost_to_complete import CostToCompleteSummary, compute_cost_to_complete
 from .due_diligence import DueDiligenceResult, compute_due_diligence, due_diligence_flags
+from .elemental_benchmark import ElementalBenchmarkResult, benchmark_flags, compute_elemental_benchmark
 from .engine import MonthlyModel, ModelFlag, exit_fee_amount, money_round, pct, run_ledger
 from .investment_case import InvestmentCaseResult
 from .lender_valuation import compute_lender_gdv
@@ -242,6 +243,12 @@ class AppraisalResultV2:
     # vat and the acquisition tax already derived; never recomputed by the UI or
     # the memo; never None -- a pre-v13 document is read as the seed.
     due_diligence: DueDiligenceResult
+    # R17 spec Sec 27.4. Computed ONCE in derive_metrics, from the input block,
+    # the cost_plan already derived and developed_area_sqm; never recomputed
+    # by the UI or the memo. None exactly when the input elemental_benchmark
+    # block is None (every migrated document). ADVISORY: enters_tdc is a
+    # pinned literal False, and nothing here feeds any other result field.
+    elemental_benchmark: ElementalBenchmarkResult | None
     # Ledger flags (model.flags, unmutated) followed by metric flags computed by
     # derive_metrics itself (senior/developer breakeven unsolvable, cap-exhausted).
     # Wired in Release 3a Task 6 -- derive_metrics is pure and no longer mutates
@@ -808,6 +815,13 @@ def derive_metrics(
     due_diligence = compute_due_diligence(inputs, cost_plan, schedule.vat, acquisition_tax, schedule)
     flags.extend(due_diligence_flags(due_diligence, cost_plan))
 
+    # R17 spec Sec 27.4. Computed ONCE, here, from the input block, the
+    # cost_plan already derived and the developed area -- the UI and the memo
+    # never call compute_elemental_benchmark themselves. None exactly when the
+    # input block is None. ADVISORY: it reads cost_plan and nothing reads it back.
+    elemental_benchmark = compute_elemental_benchmark(inputs, cost_plan, bridge.developed_area_sqm)
+    flags.extend(benchmark_flags(elemental_benchmark))
+
     return AppraisalResultV2(
         calc_version=CALC_VERSION,
         gdv_pence=t.gdv_pence,
@@ -888,5 +902,6 @@ def derive_metrics(
         unit_sales=schedule.unit_sales,
         monitoring_statement=monitoring_statement,
         due_diligence=due_diligence,
+        elemental_benchmark=elemental_benchmark,
         flags=flags,
     )

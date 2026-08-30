@@ -79,7 +79,7 @@ def test_the_migration_corpus_is_not_empty_and_did_not_silently_shrink():
     # R15 Task 3 adds the v13-native fixture Y. R15b Task 7 adds the
     # v14-native fixture Z, above this gate's `<= 12` filter for the same
     # reason Y is.
-    assert sorted(p.stem for p in version_excluded) == ["y-due-diligence", "z-cost-plan-in-time"]
+    assert sorted(p.stem for p in version_excluded) == ["ab-elemental-benchmark", "y-due-diligence", "z-cost-plan-in-time"]
 
 
 def _metrics_dict(metrics) -> dict:

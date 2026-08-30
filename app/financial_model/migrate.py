@@ -37,6 +37,7 @@ from .types import (
     CalculatorInputsV14,
     CalculatorInputsV15,
     CalculatorInputsV16,
+    CalculatorInputsV17,
     ConversionCostInputs,
     cost_plan_from_legacy_costs,
 )
@@ -356,12 +357,13 @@ def is_v2_or_later(snapshot: dict[str, Any]) -> bool:
     # exact fix: R15b for v14, R15 for v13, R13b for v12, R13 for v10, R12
     # for v9, R11 for v8, R10 for v7.
     # R16b Task 2: is_v16 belongs here for the same reason is_v15 did -- the NINTH consecutive release.
+    # R17 Task 3: is_v17 belongs here for the same reason -- the TENTH.
     return (
         is_v2(snapshot) or is_v3(snapshot) or is_v4(snapshot)
         or is_v5(snapshot) or is_v6(snapshot) or is_v7(snapshot)
         or is_v8(snapshot) or is_v9(snapshot) or is_v10(snapshot) or is_v11(snapshot)
         or is_v12(snapshot) or is_v13(snapshot) or is_v14(snapshot) or is_v15(snapshot)
-        or is_v16(snapshot)
+        or is_v16(snapshot) or is_v17(snapshot)
     )
 
 
@@ -2310,3 +2312,112 @@ def migrate_inputs_to_v16(
             "due_diligence": snapshot.get("due_diligence"),
         })
     return migrate_v15_to_v16(migrate_inputs_to_v15(snapshot, project))
+
+
+# --- Release 17 (calc 2.18.0 -> 2.19.0): inputs v17 adds the nullable
+# elemental_benchmark block, CostPackage.benchmark_origin and the
+# due-diligence source records (spec Sec 27.1, Sec 27.7) --------------------
+
+
+def _v17_cost_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Writes `benchmark_origin: None` onto every package that lacks the key.
+    Port of the package map inside migrateV16toV17."""
+    if plan is None:
+        return {}
+    packages = [
+        {**p, "benchmark_origin": p.get("benchmark_origin")} for p in (plan.get("packages") or [])
+    ]
+    return {**plan, "packages": packages}
+
+
+def _v17_due_diligence(dd: dict[str, Any] | None) -> dict[str, Any]:
+    """Writes the two empty record arrays when absent. Port of the
+    due_diligence spread inside migrateV16toV17."""
+    base = dict(dd or {})
+    base["source_records"] = base.get("source_records") or []
+    base["source_resolutions"] = base.get("source_resolutions") or []
+    return base
+
+
+def is_v17(snapshot: dict[str, Any]) -> bool:
+    """`inputs_version == 17` AND `elemental_benchmark` key present AND every
+    package carries the `benchmark_origin` key AND `due_diligence` carries
+    both record arrays. Port of isV17 -- key PRESENCE, not value."""
+    if snapshot.get("inputs_version") != 17 or "elemental_benchmark" not in snapshot:
+        return False
+    plan = snapshot.get("cost_plan")
+    if not isinstance(plan, dict):
+        return False
+    packages = plan.get("packages")
+    if not isinstance(packages, list) or not all(
+        isinstance(p, dict) and "benchmark_origin" in p for p in packages
+    ):
+        return False
+    dd = snapshot.get("due_diligence")
+    return isinstance(dd, dict) and "source_records" in dd and "source_resolutions" in dd
+
+
+def migrate_v16_to_v17(v16: dict[str, Any] | CalculatorInputsV16) -> CalculatorInputsV17:
+    """Port of migrateV16toV17. Stamps 17, writes the null benchmark block, the
+    null origin on every package and the empty record arrays. Refuses a
+    document that is already v17."""
+    if isinstance(v16, CalculatorInputsV17):
+        raise ValueError("migrate_v16_to_v17: input is already a v17 document")
+    if isinstance(v16, BaseModel):
+        doc = v16.model_dump(mode="json")
+    else:
+        if is_v17(v16):
+            raise ValueError("migrate_v16_to_v17: input is already a v17 document")
+        doc = dict(v16)
+    doc["cost_plan"] = _v17_cost_plan(doc.get("cost_plan"))
+    doc["due_diligence"] = _v17_due_diligence(doc.get("due_diligence"))
+    doc["elemental_benchmark"] = doc.get("elemental_benchmark")
+    doc["inputs_version"] = 17
+    return CalculatorInputsV17.model_validate(doc)
+
+
+_RECOGNISED_VERSIONS_V17 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+
+
+def migrate_inputs_to_v17(
+    snapshot: dict[str, Any], project: dict[str, Any] | None = None,
+) -> CalculatorInputsV17:
+    """Normalises any stored snapshot (v1-v17) to v17. Port of
+    migrateInputsToV17, structurally identical to migrate_inputs_to_v16."""
+    version = snapshot.get("inputs_version")
+    if version is not None and version not in _RECOGNISED_VERSIONS_V17:
+        raise ValueError(
+            f"migrate_inputs_to_v17: unrecognised inputs_version {version!r} "
+            f"(expected one of {_RECOGNISED_VERSIONS_V17}, or absent for a v1 document)"
+        )
+    if version == 17 and not is_v17(snapshot):
+        raise ValueError(
+            "migrate_inputs_to_v17: inputs_version is 17 but the document fails "
+            "the v17 structural check (missing `elemental_benchmark`, a package without "
+            "`benchmark_origin`, or `due_diligence` without its source-record arrays) "
+            "-- refusing to silently reinterpret it via the v1 fallback path"
+        )
+    if is_v17(snapshot):
+        defaults = migrate_v16_to_v17(migrate_inputs_to_v16({}, project)).model_dump(mode="json")
+        merged = _merge_saved_onto_defaults(defaults, snapshot)
+        saved_dd = snapshot.get("due_diligence")
+        return CalculatorInputsV17.model_validate({
+            **merged,
+            "inputs_version": 17,
+            "conversion_costs": _v16_conversion_costs(merged["conversion_costs"]),
+            "areas": {**defaults["areas"], **(snapshot.get("areas") or {})},
+            "cost_plan": _v17_cost_plan({**defaults["cost_plan"], **(snapshot.get("cost_plan") or {})}),
+            "vat": {**defaults["vat"], **(snapshot.get("vat") or {})},
+            "programme": snapshot.get("programme"),
+            "sales_phasing": snapshot.get("sales_phasing"),
+            "refinance": snapshot.get("refinance"),
+            "investment_case": snapshot.get("investment_case"),
+            "monitoring": snapshot.get("monitoring"),
+            "unit_sales": snapshot.get("unit_sales"),
+            "due_diligence": (
+                defaults["due_diligence"] if saved_dd is None
+                else _v17_due_diligence({**defaults["due_diligence"], **saved_dd})
+            ),
+            "elemental_benchmark": snapshot.get("elemental_benchmark"),
+        })
+    return migrate_v16_to_v17(migrate_inputs_to_v16(snapshot, project))

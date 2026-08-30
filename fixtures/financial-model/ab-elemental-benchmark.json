@@ -1,0 +1,1771 @@
+{
+  "name": "AB — elemental benchmark, TEST FIXTURE — NOT MARKET DATA",
+  "kind": "pipeline",
+  "note": "R17 spec §27. Fixture Z (detailed plan, phase network, 6% allowance) carrying a user_qs benchmark set of seven fictional rates — five area rows (one priced per ft² at source), one per-unit row, one lump sum and one percentage row — currentised by the index ratio 126/120 = 1.05 and a location factor of 95 (multiplier 0.95), with one row adjusted −10% for a stated reason, seven selections mapped one-to-one onto the plan's packages, and one application already performed: the kitchens row was applied as a draft `finishes` package carrying `benchmark_origin`, and the QS base date was aligned to the currentisation date (2026-06-01) as the apply seam requires (§27.3). Every rate is fictional: TEST FIXTURE — NOT MARKET DATA. The benchmark figures are hand-derived in test-cases.md §27 before either engine runs; the ledger-dependent figures (TDC, peak debt, profit) are identity-asserted against the same document with the benchmark block removed (the advisory proof), fixture AA's rule. The material-variance threshold is set to 10% (not the 15% default) so the red flag fires on a −13.7% variance and the threshold is shown to be configurable.",
+  "inputs": {
+    "inputs_version": 17,
+    "project_id": null,
+    "acquisition": {
+      "purchase_price_pence": 100000000,
+      "legal_fees_pence": 500000,
+      "survey_cost_pence": 300000,
+      "broker_fee_pct": 1.0,
+      "other_acquisition_costs_pence": 0,
+      "jurisdiction": "england_ni",
+      "jurisdiction_source": "user",
+      "jurisdiction_evidence_status": "confirmed",
+      "acquisition_date": "2026-08-01",
+      "acquisition_tax_override_pence": null,
+      "acquisition_tax_override_reason": ""
+    },
+    "unit_mix": {
+      "units": [
+        {
+          "id": "u1",
+          "type": "2bed",
+          "floor_area_sqm": 70.0,
+          "estimated_value_pence": 55000000,
+          "comparable_notes": "",
+          "ancillary": {
+            "balcony_terrace_sqm": 0.0,
+            "balcony_terrace_value_pence": 0,
+            "parking_spaces": 0,
+            "parking_value_pence": 0
+          }
+        },
+        {
+          "id": "u2",
+          "type": "2bed",
+          "floor_area_sqm": 70.0,
+          "estimated_value_pence": 55000000,
+          "comparable_notes": "",
+          "ancillary": {
+            "balcony_terrace_sqm": 0.0,
+            "balcony_terrace_value_pence": 0,
+            "parking_spaces": 0,
+            "parking_value_pence": 0
+          }
+        },
+        {
+          "id": "u3",
+          "type": "3bed",
+          "floor_area_sqm": 90.0,
+          "estimated_value_pence": 70000000,
+          "comparable_notes": "",
+          "ancillary": {
+            "balcony_terrace_sqm": 0.0,
+            "balcony_terrace_value_pence": 0,
+            "parking_spaces": 0,
+            "parking_value_pence": 0
+          }
+        },
+        {
+          "id": "u4",
+          "type": "3bed",
+          "floor_area_sqm": 90.0,
+          "estimated_value_pence": 70000000,
+          "comparable_notes": "",
+          "ancillary": {
+            "balcony_terrace_sqm": 0.0,
+            "balcony_terrace_value_pence": 0,
+            "parking_spaces": 0,
+            "parking_value_pence": 0
+          }
+        }
+      ]
+    },
+    "conversion_costs": {
+      "construction_cost_per_sqm_pence": 0,
+      "total_construction_sqm": 600.0,
+      "fire_safety_pence": 0,
+      "sound_insulation_pence": 0,
+      "part_l_compliance_pence": 0
+    },
+    "finance": {
+      "funding_source": "development_finance",
+      "day_one_advance_pence": 0,
+      "day_one_market_value_pence": null,
+      "development_cost_advance_pct": 100.0,
+      "committed_net_facility_pence": 100000000,
+      "committed_gross_facility_pence": 110000000,
+      "annual_interest_rate_pct": 12.0,
+      "interest_type": "rolled_up",
+      "arrangement_fee_pct": 2.0,
+      "arrangement_fee_basis": "committed_net_facility",
+      "exit_fee_pct": 1.0,
+      "exit_fee_basis": "committed_gross_facility",
+      "broker_fee_pence": 0,
+      "lender_legal_fee_pence": 0,
+      "valuation_fee_pence": 0,
+      "monitoring_surveyor_fee_pence": 0,
+      "interest_reserve_pence": null,
+      "term_months": 24,
+      "equity_draw_rule": "equity_first",
+      "sales_sweep_pct": 100.0,
+      "legacy_leverage_pct": null,
+      "requires_confirmation": false,
+      "enforcement_cost_assumption_pence": 0
+    },
+    "equity_sources": [
+      {
+        "id": "e1",
+        "classification": "cash",
+        "amount_pence": 105750000,
+        "timing_month": 0,
+        "repayment_priority": 1,
+        "evidence_status": "confirmed",
+        "notes": ""
+      }
+    ],
+    "exit_strategy": {
+      "route": "sell_all",
+      "selling_agent_fee_pct": 1.5,
+      "selling_legal_fee_pence": 500000,
+      "retained_units": []
+    },
+    "risks": [],
+    "scenarios": {
+      "base": {
+        "label": "Base Case",
+        "gdv_adjustment_pct": 0.0,
+        "construction_cost_adjustment_pct": 0.0,
+        "timeline_adjustment_months": 0.0,
+        "interest_rate_adjustment_pct": 0.0,
+        "phase_slip_phase_id": null,
+        "phase_slip_months": 0,
+        "exit_yield_adjustment_pct": 0.0,
+        "operating_cost_adjustment_pct": 0.0,
+        "vacancy_adjustment_pct": 0.0,
+        "sales_slip_months": 0,
+        "saleable_area_adjustment_pct": 0.0,
+        "abnormal_cost_adjustment_pct": 0.0,
+        "programme_slip_months": 0,
+        "refi_ltv_adjustment_pct": 0.0
+      },
+      "upside": {
+        "label": "Upside",
+        "gdv_adjustment_pct": 10.0,
+        "construction_cost_adjustment_pct": -5.0,
+        "timeline_adjustment_months": -2.0,
+        "interest_rate_adjustment_pct": 0.0,
+        "phase_slip_phase_id": null,
+        "phase_slip_months": 0,
+        "exit_yield_adjustment_pct": 0.0,
+        "operating_cost_adjustment_pct": 0.0,
+        "vacancy_adjustment_pct": 0.0,
+        "sales_slip_months": 0,
+        "saleable_area_adjustment_pct": 0.0,
+        "abnormal_cost_adjustment_pct": 0.0,
+        "programme_slip_months": 0,
+        "refi_ltv_adjustment_pct": 0.0
+      },
+      "downside": {
+        "label": "Downside",
+        "gdv_adjustment_pct": -10.0,
+        "construction_cost_adjustment_pct": 15.0,
+        "timeline_adjustment_months": 3.0,
+        "interest_rate_adjustment_pct": 1.0,
+        "phase_slip_phase_id": null,
+        "phase_slip_months": 0,
+        "exit_yield_adjustment_pct": 0.0,
+        "operating_cost_adjustment_pct": 0.0,
+        "vacancy_adjustment_pct": 0.0,
+        "sales_slip_months": 0,
+        "saleable_area_adjustment_pct": 0.0,
+        "abnormal_cost_adjustment_pct": 0.0,
+        "programme_slip_months": 0,
+        "refi_ltv_adjustment_pct": 0.0
+      },
+      "severe": {
+        "label": "Severe",
+        "gdv_adjustment_pct": -15.0,
+        "construction_cost_adjustment_pct": 20.0,
+        "timeline_adjustment_months": 6.0,
+        "interest_rate_adjustment_pct": 2.0,
+        "phase_slip_phase_id": null,
+        "phase_slip_months": 0,
+        "exit_yield_adjustment_pct": 0.0,
+        "operating_cost_adjustment_pct": 0.0,
+        "vacancy_adjustment_pct": 0.0,
+        "sales_slip_months": 0,
+        "saleable_area_adjustment_pct": 0.0,
+        "abnormal_cost_adjustment_pct": 0.0,
+        "programme_slip_months": 0,
+        "refi_ltv_adjustment_pct": 0.0
+      }
+    },
+    "deal_spider": {
+      "storeys": 4,
+      "building_height_m": 13.0,
+      "bsa_higher_risk": false,
+      "daylight_pass_pct": 100.0,
+      "absorption_months": 6.0,
+      "exit_sell": true,
+      "exit_refinance": false,
+      "exit_hold": false,
+      "exit_part_sale": false,
+      "prior_approval_window_months": 3.0,
+      "programme_contingency_months": 2.0,
+      "cil_offset_pence": 0,
+      "target_profit_on_cost_pct": 20.0,
+      "weights": {
+        "margin_resilience": 1.0,
+        "prior_approval": 1.0,
+        "deliverability": 1.0,
+        "building_safety": 1.0,
+        "tax_advantage": 1.0,
+        "programme": 1.0,
+        "sales_velocity": 1.0,
+        "exit_optionality": 1.0,
+        "acquisition_headroom": 1.0
+      }
+    },
+    "lender_valuation": null,
+    "programme": {
+      "anchor_month": "2026-08",
+      "phases": [
+        {
+          "id": "acquisition",
+          "code": "acquisition",
+          "label": "Acquisition",
+          "duration_months": 1,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": []
+        },
+        {
+          "id": "planning",
+          "code": "planning",
+          "label": "Prior approval / planning",
+          "duration_months": 3,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "acquisition",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "conditions",
+          "code": "conditions",
+          "label": "Discharge of conditions",
+          "duration_months": 2,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "planning",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "design",
+          "code": "design",
+          "label": "Technical design",
+          "duration_months": 4,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "planning",
+              "type": "SS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "procurement",
+          "code": "procurement",
+          "label": "Procurement and main contract",
+          "duration_months": 2,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "design",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "strip_out",
+          "code": "strip_out",
+          "label": "Enabling works and strip-out",
+          "duration_months": 2,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "conditions",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "construction",
+          "code": "construction",
+          "label": "Main construction",
+          "duration_months": 6,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "procurement",
+              "type": "FS",
+              "lag_months": 0
+            },
+            {
+              "phase_id": "strip_out",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "testing",
+          "code": "testing",
+          "label": "Testing and commissioning",
+          "duration_months": 1,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "construction",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "building_control",
+          "code": "building_control",
+          "label": "Building control and warranty sign-off",
+          "duration_months": 1,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "testing",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "practical_completion",
+          "code": "practical_completion",
+          "label": "Practical completion",
+          "duration_months": 0,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "building_control",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "marketing",
+          "code": "marketing",
+          "label": "Marketing and reservations",
+          "duration_months": 4,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "construction",
+              "type": "SS",
+              "lag_months": 3
+            }
+          ]
+        },
+        {
+          "id": "unit_completions",
+          "code": "unit_completions",
+          "label": "Unit completions",
+          "duration_months": 2,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "practical_completion",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "sales",
+          "code": "sales",
+          "label": "Sales run-off",
+          "duration_months": 3,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "unit_completions",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "maturity_tail",
+          "code": "maturity_tail",
+          "label": "Maturity",
+          "duration_months": 0,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "straight_line"
+          },
+          "predecessors": [
+            {
+              "phase_id": "sales",
+              "type": "FS",
+              "lag_months": 0
+            }
+          ]
+        },
+        {
+          "id": "mande_fitout",
+          "code": "other",
+          "label": "M&E fit-out",
+          "duration_months": 3,
+          "slip_months": 0,
+          "start_offset": 0,
+          "curve": {
+            "kind": "back_loaded"
+          },
+          "predecessors": [
+            {
+              "phase_id": "construction",
+              "type": "SS",
+              "lag_months": 3
+            }
+          ]
+        }
+      ],
+      "category_phase_ids": {
+        "construction": "construction",
+        "professional": "design",
+        "statutory": "conditions"
+      }
+    },
+    "sales_phasing": {
+      "tranches": [
+        {
+          "month_offset": 20,
+          "pct_of_gross_receipts": 30.0,
+          "anchor": {
+            "phase_id": "unit_completions",
+            "offset_months": 0
+          }
+        },
+        {
+          "month_offset": 21,
+          "pct_of_gross_receipts": 70.0,
+          "anchor": {
+            "phase_id": "unit_completions",
+            "offset_months": 3
+          }
+        }
+      ]
+    },
+    "refinance": null,
+    "areas": {
+      "basis": "manual",
+      "existing_gia_sqm": 0.0,
+      "demolished_gia_sqm": 0.0,
+      "extension_gia_sqm": 0.0,
+      "retained_commercial_gia_sqm": 0.0,
+      "untouched_gia_sqm": 0.0,
+      "circulation_common_sqm": 0.0,
+      "plant_riser_sqm": 0.0,
+      "store_bin_cycle_sqm": 0.0,
+      "amenity_sqm": 0.0,
+      "external_amenity_sqm": 0.0
+    },
+    "cost_plan": {
+      "mode": "detailed",
+      "packages": [
+        {
+          "id": "pkg-enabling",
+          "code": "enabling_strip_out_asbestos",
+          "label": "Enabling works, strip-out & asbestos removal",
+          "amount_pence": 6000000,
+          "contingency_class": "existing_building",
+          "lender_eligible": true,
+          "notes": "Tagged to the strip_out phase (spec §18.5) — the whole point of the per-line override.",
+          "vat_override": null,
+          "phase_id": "strip_out",
+          "price_basis": "fixed_price",
+          "benchmark_origin": null
+        },
+        {
+          "id": "pkg-structure",
+          "code": "structure",
+          "label": "Structural repairs and new floors",
+          "amount_pence": 24000000,
+          "contingency_class": "existing_building",
+          "lender_eligible": true,
+          "notes": "",
+          "vat_override": null,
+          "phase_id": null,
+          "price_basis": "fixed_price",
+          "benchmark_origin": null
+        },
+        {
+          "id": "pkg-envelope",
+          "code": "envelope",
+          "label": "Envelope — windows, cladding, roof",
+          "amount_pence": 18000000,
+          "contingency_class": "general",
+          "lender_eligible": true,
+          "notes": "",
+          "vat_override": null,
+          "phase_id": null,
+          "price_basis": "fixed_price",
+          "benchmark_origin": null
+        },
+        {
+          "id": "pkg-mande",
+          "code": "mech_elec_public_health",
+          "label": "M&E and public health installations",
+          "amount_pence": 12000000,
+          "contingency_class": "general",
+          "lender_eligible": true,
+          "notes": "",
+          "vat_override": null,
+          "phase_id": "mande_fitout",
+          "price_basis": "estimate",
+          "benchmark_origin": null
+        },
+        {
+          "id": "pkg-externals",
+          "code": "externals",
+          "label": "Externals and landscaping",
+          "amount_pence": 6000000,
+          "contingency_class": "abnormal",
+          "lender_eligible": false,
+          "notes": "",
+          "vat_override": {
+            "rate_pct": 20.0,
+            "recoverable_pct": 0.0,
+            "recovery_basis": "blocked"
+          },
+          "phase_id": null,
+          "price_basis": "provisional_sum",
+          "benchmark_origin": null
+        },
+        {
+          "id": "pkg-bm-kitchens",
+          "code": "finishes",
+          "label": "Kitchens (benchmark)",
+          "amount_pence": 3192000,
+          "contingency_class": "general",
+          "lender_eligible": true,
+          "notes": "Created by the benchmark apply action",
+          "vat_override": null,
+          "phase_id": null,
+          "price_basis": "estimate",
+          "benchmark_origin": {
+            "kind": "benchmark",
+            "set_id": "set-ab",
+            "set_content_hash": "087c57e76aeb98e5814faf68991481d579a28ad4c650c186f4d38acd9e3d6baf",
+            "benchmark_rate_id": "r-kitchens",
+            "element_code": "kitchens",
+            "applied_at": "2026-06-02T09:30:00Z",
+            "applied_by": "Fixture author",
+            "currentisation_method": "index_ratio"
+          }
+        }
+      ],
+      "contingency": [
+        {
+          "name": "general",
+          "pct": 5.0
+        },
+        {
+          "name": "existing_building",
+          "pct": 0.0
+        },
+        {
+          "name": "abnormal",
+          "pct": 0.0
+        }
+      ],
+      "fee_lines": [
+        {
+          "id": "fee-architect",
+          "code": "architect",
+          "category": "professional",
+          "label": "Architect",
+          "basis": "fixed",
+          "amount_pence": 4000000,
+          "pct": 0.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        },
+        {
+          "id": "fee-structural",
+          "code": "structural_engineer",
+          "category": "professional",
+          "label": "Structural engineer",
+          "basis": "fixed",
+          "amount_pence": 1600000,
+          "pct": 0.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        },
+        {
+          "id": "fee-mande",
+          "code": "mande",
+          "category": "professional",
+          "label": "M&E consultant",
+          "basis": "fixed",
+          "amount_pence": 800000,
+          "pct": 0.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        },
+        {
+          "id": "fee-other-prof",
+          "code": "other_professional",
+          "category": "professional",
+          "label": "Other professional fees",
+          "basis": "fixed",
+          "amount_pence": 1600000,
+          "pct": 0.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        },
+        {
+          "id": "fee-prior-approval",
+          "code": "prior_approval",
+          "category": "statutory",
+          "label": "Prior approval fee",
+          "basis": "fixed",
+          "amount_pence": 150000,
+          "pct": 0.0,
+          "per_dwelling": true,
+          "vat_override": null,
+          "phase_id": "planning"
+        },
+        {
+          "id": "fee-cil",
+          "code": "cil_s106",
+          "category": "statutory",
+          "label": "CIL / S106",
+          "basis": "fixed",
+          "amount_pence": 2400000,
+          "pct": 0.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        },
+        {
+          "id": "fee-building-control",
+          "code": "building_control",
+          "category": "statutory",
+          "label": "Building control",
+          "basis": "fixed",
+          "amount_pence": 400000,
+          "pct": 0.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        },
+        {
+          "id": "fee-pm",
+          "code": "other_professional",
+          "category": "professional",
+          "label": "Project manager",
+          "basis": "pct_of_construction_total",
+          "amount_pence": 0,
+          "pct": 1.0,
+          "per_dwelling": false,
+          "vat_override": null,
+          "phase_id": null
+        }
+      ],
+      "qs": {
+        "source": "Gleeds",
+        "stage": "riba_3",
+        "date": "2026-02-15",
+        "status": "issued",
+        "base_date": "2026-06-01",
+        "inflation": {
+          "annual_pct": 6.0
+        }
+      }
+    },
+    "vat": {
+      "registered": true,
+      "return_frequency": "quarterly",
+      "first_period_end_month": 2,
+      "repayment_lag_months": 1,
+      "treatments": [
+        {
+          "category": "acquisition",
+          "rate_pct": 0.0,
+          "recoverable_pct": 0.0,
+          "recovery_basis": "unconfirmed",
+          "evidence_status": "unconfirmed",
+          "notes": ""
+        },
+        {
+          "category": "construction",
+          "rate_pct": 0.0,
+          "recoverable_pct": 0.0,
+          "recovery_basis": "unconfirmed",
+          "evidence_status": "unconfirmed",
+          "notes": ""
+        },
+        {
+          "category": "professional",
+          "rate_pct": 0.0,
+          "recoverable_pct": 0.0,
+          "recovery_basis": "unconfirmed",
+          "evidence_status": "unconfirmed",
+          "notes": ""
+        },
+        {
+          "category": "statutory",
+          "rate_pct": 0.0,
+          "recoverable_pct": 0.0,
+          "recovery_basis": "unconfirmed",
+          "evidence_status": "unconfirmed",
+          "notes": ""
+        },
+        {
+          "category": "selling",
+          "rate_pct": 0.0,
+          "recoverable_pct": 0.0,
+          "recovery_basis": "unconfirmed",
+          "evidence_status": "unconfirmed",
+          "notes": ""
+        },
+        {
+          "category": "lender_ancillary",
+          "rate_pct": 0.0,
+          "recoverable_pct": 0.0,
+          "recovery_basis": "unconfirmed",
+          "evidence_status": "unconfirmed",
+          "notes": ""
+        }
+      ],
+      "purchase": {
+        "vendor_opted_to_tax": false,
+        "togc_treatment": "unconfirmed",
+        "evidence_status": "unconfirmed",
+        "notes": ""
+      }
+    },
+    "investment_case": null,
+    "monitoring": null,
+    "unit_sales": null,
+    "due_diligence": {
+      "source_record": null,
+      "items": [
+        {
+          "id": "dd-planning_route",
+          "code": "planning_route",
+          "category": "planning",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-planning_conditions",
+          "code": "planning_conditions",
+          "category": "planning",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-article_4_direction",
+          "code": "article_4_direction",
+          "category": "planning",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-conservation_listed",
+          "code": "conservation_listed",
+          "category": "planning",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-cil_s106",
+          "code": "cil_s106",
+          "category": "planning",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-title_report",
+          "code": "title_report",
+          "category": "title_occupation",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-vacant_possession",
+          "code": "vacant_possession",
+          "category": "title_occupation",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-leases_tenancies",
+          "code": "leases_tenancies",
+          "category": "title_occupation",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-rights_of_light",
+          "code": "rights_of_light",
+          "category": "title_occupation",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-party_wall",
+          "code": "party_wall",
+          "category": "title_occupation",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-structural_survey",
+          "code": "structural_survey",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-asbestos_survey",
+          "code": "asbestos_survey",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-measured_survey",
+          "code": "measured_survey",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-higher_risk_building",
+          "code": "higher_risk_building",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-fire_strategy",
+          "code": "fire_strategy",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-acoustic_thermal",
+          "code": "acoustic_thermal",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-services_mande",
+          "code": "services_mande",
+          "category": "existing_building",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-procurement_contractor",
+          "code": "procurement_contractor",
+          "category": "construction",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-warranties_building_control",
+          "code": "warranties_building_control",
+          "category": "construction",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-insurance",
+          "code": "insurance",
+          "category": "construction",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-sponsor_entity",
+          "code": "sponsor_entity",
+          "category": "finance",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-sales_evidence",
+          "code": "sales_evidence",
+          "category": "exit",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        },
+        {
+          "id": "dd-exit_route_evidence",
+          "code": "exit_route_evidence",
+          "category": "exit",
+          "label": "",
+          "status": "unknown",
+          "evidence": null,
+          "expiry_date": null,
+          "owner": "",
+          "due_date": null,
+          "cost_impact_pence": null,
+          "programme_impact_months": null,
+          "action": "",
+          "notes": ""
+        }
+      ],
+      "source_records": [],
+      "source_resolutions": []
+    },
+    "elemental_benchmark": {
+      "set": {
+        "id": "set-ab",
+        "name": "AB — elemental benchmark, TEST FIXTURE — NOT MARKET DATA",
+        "provider_type": "user_qs",
+        "provider_name": "Test fixture (fictional QS)",
+        "source_title": "TEST FIXTURE — NOT MARKET DATA: fictional elemental cost plan",
+        "source_url": null,
+        "source_publication_date": "2025-06-15",
+        "retrieved_at": null,
+        "licence_or_permission": "Test-only fictional data; no licence required",
+        "dataset_version": "TEST-1",
+        "building_function": "Residential conversion (fictional)",
+        "project_type": "conversion",
+        "specification_level": "Mid",
+        "region": "Yorkshire and the Humber (fictional factor)",
+        "location_factor": 95.0,
+        "location_factor_source": "TEST FIXTURE — NOT MARKET DATA",
+        "base_date": "2025-06-01",
+        "base_index_name": "TEST index",
+        "base_index_value": 120.0,
+        "current_index_name": "TEST index",
+        "current_index_value": 126.0,
+        "index_dataset_version": "TEST-INDEX-1",
+        "currentisation_date": "2026-06-01",
+        "currency": "GBP",
+        "notes": "TEST FIXTURE — NOT MARKET DATA",
+        "imported_by": "Fixture author",
+        "created_at": "2026-06-02T09:00:00Z",
+        "source_file_sha256": null,
+        "content_hash": "087c57e76aeb98e5814faf68991481d579a28ad4c650c186f4d38acd9e3d6baf",
+        "rates": [
+          {
+            "id": "r-strip",
+            "element_code": "strip_out",
+            "element_label": "Strip-out",
+            "description": "Soft strip of office fit-out",
+            "measurement_basis": "area",
+            "original_unit": "gbp_per_sqm",
+            "original_rate_pence": 8000,
+            "rate_pct": null,
+            "lower_quartile_rate_pence": 7000,
+            "median_rate_pence": 8000,
+            "upper_quartile_rate_pence": 9000,
+            "sample_count": 10,
+            "location_factor": null,
+            "evidence_status": "verified",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": ""
+          },
+          {
+            "id": "r-frame",
+            "element_code": "frame_alterations",
+            "element_label": "Structural frame alterations",
+            "description": "New openings and strengthening",
+            "measurement_basis": "area",
+            "original_unit": "gbp_per_sqft",
+            "original_rate_pence": 2500,
+            "rate_pct": null,
+            "lower_quartile_rate_pence": null,
+            "median_rate_pence": null,
+            "upper_quartile_rate_pence": null,
+            "sample_count": null,
+            "location_factor": null,
+            "evidence_status": "verified",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": "Priced per ft² at source"
+          },
+          {
+            "id": "r-facade",
+            "element_code": "external_walls_facade",
+            "element_label": "External walls and façade",
+            "description": "Façade repair and thermal upgrade",
+            "measurement_basis": "area",
+            "original_unit": "gbp_per_sqm",
+            "original_rate_pence": 25000,
+            "rate_pct": null,
+            "lower_quartile_rate_pence": null,
+            "median_rate_pence": null,
+            "upper_quartile_rate_pence": null,
+            "sample_count": null,
+            "location_factor": null,
+            "evidence_status": "unverified",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": ""
+          },
+          {
+            "id": "r-mech",
+            "element_code": "mechanical_services",
+            "element_label": "Mechanical services",
+            "description": "Heating, ventilation and hot water",
+            "measurement_basis": "area",
+            "original_unit": "gbp_per_sqm",
+            "original_rate_pence": 18000,
+            "rate_pct": null,
+            "lower_quartile_rate_pence": 20000,
+            "median_rate_pence": 22000,
+            "upper_quartile_rate_pence": 25000,
+            "sample_count": 6,
+            "location_factor": null,
+            "evidence_status": "verified",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": ""
+          },
+          {
+            "id": "r-kitchens",
+            "element_code": "kitchens",
+            "element_label": "Kitchens",
+            "description": "Fitted kitchen per dwelling",
+            "measurement_basis": "per_unit",
+            "original_unit": "gbp_per_unit",
+            "original_rate_pence": 800000,
+            "rate_pct": null,
+            "lower_quartile_rate_pence": null,
+            "median_rate_pence": null,
+            "upper_quartile_rate_pence": null,
+            "sample_count": null,
+            "location_factor": null,
+            "evidence_status": "verified",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": ""
+          },
+          {
+            "id": "r-ext",
+            "element_code": "external_works",
+            "element_label": "External works",
+            "description": "Yard, bin store and access",
+            "measurement_basis": "lump_sum",
+            "original_unit": "gbp",
+            "original_rate_pence": 5000000,
+            "rate_pct": null,
+            "lower_quartile_rate_pence": null,
+            "median_rate_pence": null,
+            "upper_quartile_rate_pence": null,
+            "sample_count": null,
+            "location_factor": null,
+            "evidence_status": "estimated",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": ""
+          },
+          {
+            "id": "r-prelims",
+            "element_code": "preliminaries",
+            "element_label": "Preliminaries",
+            "description": "Main contractor preliminaries",
+            "measurement_basis": "percentage",
+            "original_unit": "pct",
+            "original_rate_pence": 0,
+            "rate_pct": 12.0,
+            "lower_quartile_rate_pence": null,
+            "median_rate_pence": null,
+            "upper_quartile_rate_pence": null,
+            "sample_count": null,
+            "location_factor": null,
+            "evidence_status": "verified",
+            "source_reference": "TEST FIXTURE — NOT MARKET DATA",
+            "notes": ""
+          }
+        ]
+      },
+      "selections": [
+        {
+          "element_code": "strip_out",
+          "benchmark_rate_id": "r-strip",
+          "quantity": 600.0,
+          "quantity_unit": "sqm",
+          "adjustment_pct": 0.0,
+          "adjustment_reason": "",
+          "include_in_cost_plan": false,
+          "target_cost_package_id": "pkg-enabling",
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        },
+        {
+          "element_code": "frame_alterations",
+          "benchmark_rate_id": "r-frame",
+          "quantity": 600.0,
+          "quantity_unit": "sqm",
+          "adjustment_pct": 0.0,
+          "adjustment_reason": "",
+          "include_in_cost_plan": false,
+          "target_cost_package_id": "pkg-structure",
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        },
+        {
+          "element_code": "external_walls_facade",
+          "benchmark_rate_id": "r-facade",
+          "quantity": 600.0,
+          "quantity_unit": "sqm",
+          "adjustment_pct": -10.0,
+          "adjustment_reason": "Façade largely retained; scope reduced",
+          "include_in_cost_plan": false,
+          "target_cost_package_id": "pkg-envelope",
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        },
+        {
+          "element_code": "mechanical_services",
+          "benchmark_rate_id": "r-mech",
+          "quantity": 600.0,
+          "quantity_unit": "sqm",
+          "adjustment_pct": 0.0,
+          "adjustment_reason": "",
+          "include_in_cost_plan": false,
+          "target_cost_package_id": "pkg-mande",
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        },
+        {
+          "element_code": "kitchens",
+          "benchmark_rate_id": "r-kitchens",
+          "quantity": 4,
+          "quantity_unit": "unit",
+          "adjustment_pct": 0.0,
+          "adjustment_reason": "",
+          "include_in_cost_plan": true,
+          "target_cost_package_id": "pkg-bm-kitchens",
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        },
+        {
+          "element_code": "external_works",
+          "benchmark_rate_id": "r-ext",
+          "quantity": 1,
+          "quantity_unit": "each",
+          "adjustment_pct": 0.0,
+          "adjustment_reason": "",
+          "include_in_cost_plan": false,
+          "target_cost_package_id": "pkg-externals",
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        },
+        {
+          "element_code": "preliminaries",
+          "benchmark_rate_id": "r-prelims",
+          "quantity": 0,
+          "quantity_unit": "pct_base",
+          "adjustment_pct": 0.0,
+          "adjustment_reason": "",
+          "include_in_cost_plan": false,
+          "target_cost_package_id": null,
+          "selected_by": "Fixture author",
+          "selected_at": "2026-06-02"
+        }
+      ],
+      "thresholds": {
+        "material_variance_pct": 10.0,
+        "stale_after_months": 12,
+        "min_coverage_pct": 60.0
+      },
+      "applications": [
+        {
+          "id": "app-1",
+          "applied_at": "2026-06-02T09:30:00Z",
+          "applied_by": "Fixture author",
+          "set_id": "set-ab",
+          "set_content_hash": "087c57e76aeb98e5814faf68991481d579a28ad4c650c186f4d38acd9e3d6baf",
+          "element_codes": [
+            "kitchens"
+          ],
+          "created_package_ids": [
+            "pkg-bm-kitchens"
+          ],
+          "replaced_package_ids": [],
+          "previous_cost_plan": {
+            "mode": "detailed",
+            "packages": [
+              {
+                "id": "pkg-enabling",
+                "code": "enabling_strip_out_asbestos",
+                "label": "Enabling works, strip-out & asbestos removal",
+                "amount_pence": 6000000,
+                "contingency_class": "existing_building",
+                "lender_eligible": true,
+                "notes": "Tagged to the strip_out phase (spec §18.5) — the whole point of the per-line override.",
+                "vat_override": null,
+                "phase_id": "strip_out",
+                "price_basis": "fixed_price",
+                "benchmark_origin": null
+              },
+              {
+                "id": "pkg-structure",
+                "code": "structure",
+                "label": "Structural repairs and new floors",
+                "amount_pence": 24000000,
+                "contingency_class": "existing_building",
+                "lender_eligible": true,
+                "notes": "",
+                "vat_override": null,
+                "phase_id": null,
+                "price_basis": "fixed_price",
+                "benchmark_origin": null
+              },
+              {
+                "id": "pkg-envelope",
+                "code": "envelope",
+                "label": "Envelope — windows, cladding, roof",
+                "amount_pence": 18000000,
+                "contingency_class": "general",
+                "lender_eligible": true,
+                "notes": "",
+                "vat_override": null,
+                "phase_id": null,
+                "price_basis": "fixed_price",
+                "benchmark_origin": null
+              },
+              {
+                "id": "pkg-mande",
+                "code": "mech_elec_public_health",
+                "label": "M&E and public health installations",
+                "amount_pence": 12000000,
+                "contingency_class": "general",
+                "lender_eligible": true,
+                "notes": "",
+                "vat_override": null,
+                "phase_id": "mande_fitout",
+                "price_basis": "estimate",
+                "benchmark_origin": null
+              },
+              {
+                "id": "pkg-externals",
+                "code": "externals",
+                "label": "Externals and landscaping",
+                "amount_pence": 6000000,
+                "contingency_class": "abnormal",
+                "lender_eligible": false,
+                "notes": "",
+                "vat_override": {
+                  "rate_pct": 20.0,
+                  "recoverable_pct": 0.0,
+                  "recovery_basis": "blocked"
+                },
+                "phase_id": null,
+                "price_basis": "provisional_sum",
+                "benchmark_origin": null
+              }
+            ],
+            "contingency": [
+              {
+                "name": "general",
+                "pct": 5.0
+              },
+              {
+                "name": "existing_building",
+                "pct": 0.0
+              },
+              {
+                "name": "abnormal",
+                "pct": 0.0
+              }
+            ],
+            "fee_lines": [
+              {
+                "id": "fee-architect",
+                "code": "architect",
+                "category": "professional",
+                "label": "Architect",
+                "basis": "fixed",
+                "amount_pence": 4000000,
+                "pct": 0.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              },
+              {
+                "id": "fee-structural",
+                "code": "structural_engineer",
+                "category": "professional",
+                "label": "Structural engineer",
+                "basis": "fixed",
+                "amount_pence": 1600000,
+                "pct": 0.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              },
+              {
+                "id": "fee-mande",
+                "code": "mande",
+                "category": "professional",
+                "label": "M&E consultant",
+                "basis": "fixed",
+                "amount_pence": 800000,
+                "pct": 0.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              },
+              {
+                "id": "fee-other-prof",
+                "code": "other_professional",
+                "category": "professional",
+                "label": "Other professional fees",
+                "basis": "fixed",
+                "amount_pence": 1600000,
+                "pct": 0.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              },
+              {
+                "id": "fee-prior-approval",
+                "code": "prior_approval",
+                "category": "statutory",
+                "label": "Prior approval fee",
+                "basis": "fixed",
+                "amount_pence": 150000,
+                "pct": 0.0,
+                "per_dwelling": true,
+                "vat_override": null,
+                "phase_id": "planning"
+              },
+              {
+                "id": "fee-cil",
+                "code": "cil_s106",
+                "category": "statutory",
+                "label": "CIL / S106",
+                "basis": "fixed",
+                "amount_pence": 2400000,
+                "pct": 0.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              },
+              {
+                "id": "fee-building-control",
+                "code": "building_control",
+                "category": "statutory",
+                "label": "Building control",
+                "basis": "fixed",
+                "amount_pence": 400000,
+                "pct": 0.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              },
+              {
+                "id": "fee-pm",
+                "code": "other_professional",
+                "category": "professional",
+                "label": "Project manager",
+                "basis": "pct_of_construction_total",
+                "amount_pence": 0,
+                "pct": 1.0,
+                "per_dwelling": false,
+                "vat_override": null,
+                "phase_id": null
+              }
+            ],
+            "qs": {
+              "source": "Gleeds",
+              "stage": "riba_3",
+              "date": "2026-02-15",
+              "status": "issued",
+              "base_date": "2026-06-01",
+              "inflation": {
+                "annual_pct": 6.0
+              }
+            }
+          }
+        }
+      ],
+      "library_set_id": null
+    }
+  },
+  "expected_metrics": {
+    "elemental_benchmark.provider_type": "user_qs",
+    "elemental_benchmark.provider_label": "User/QS benchmark",
+    "elemental_benchmark.currentisation_factor": 1.05,
+    "elemental_benchmark.currentisation_method": "index_ratio",
+    "elemental_benchmark.location_factor": 95.0,
+    "elemental_benchmark.location_multiplier": 0.95,
+    "elemental_benchmark.location_evidenced": true,
+    "elemental_benchmark.area_sqm": 600.0,
+    "elemental_benchmark.cost_plan_mode": "detailed",
+    "elemental_benchmark.content_hash": "087c57e76aeb98e5814faf68991481d579a28ad4c650c186f4d38acd9e3d6baf",
+    "elemental_benchmark.enters_tdc": false,
+    "benchmark_row_element_codes": [
+      "strip_out",
+      "frame_alterations",
+      "external_walls_facade",
+      "kitchens",
+      "mechanical_services",
+      "preliminaries",
+      "external_works"
+    ],
+    "benchmark_row_currentised_rates_pence_per_sqm": [
+      7980.0,
+      26842.501601669814,
+      24937.5,
+      null,
+      17955.0,
+      null,
+      null
+    ],
+    "benchmark_row_amounts_pence": [
+      4788000,
+      16105501,
+      13466250,
+      3192000,
+      10773000,
+      6397470,
+      4987500
+    ],
+    "benchmark_row_qs_amounts_pence": [
+      6000000,
+      24000000,
+      18000000,
+      3192000,
+      12000000,
+      null,
+      6000000
+    ],
+    "benchmark_row_variances_pence": [
+      -1212000,
+      -7894499,
+      -4533750,
+      0,
+      -1227000,
+      null,
+      -1012500
+    ],
+    "benchmark_row_forward_inflation_factors": [
+      1.042137414046715,
+      1.062576670087961,
+      1.062576670087961,
+      1.062576670087961,
+      1.072078163381325,
+      null,
+      1.062576670087961
+    ],
+    "benchmark_row_forward_inflated_amounts_pence": [
+      4989754,
+      17113330,
+      14308923,
+      3391745,
+      11549498,
+      null,
+      5299601
+    ],
+    "benchmark_row_outside_range": [
+      false,
+      null,
+      null,
+      null,
+      true,
+      null,
+      null
+    ],
+    "benchmark_warning_codes": [
+      "incomplete_coverage",
+      "material_variance",
+      "source_unverified"
+    ],
+    "elemental_benchmark.totals.benchmark_base_construction_pence": 59709721,
+    "elemental_benchmark.totals.elemental_subtotal_pence": 53312251,
+    "elemental_benchmark.totals.qs_base_construction_pence": 69192000,
+    "elemental_benchmark.totals.difference_pence": -9482279,
+    "elemental_benchmark.totals.difference_pct": -13.7,
+    "elemental_benchmark.totals.benchmark_rate_pence_per_sqm": 99516,
+    "elemental_benchmark.totals.qs_rate_pence_per_sqm": 115320,
+    "elemental_benchmark.totals.mapped_qs_amount_pence": 69192000,
+    "elemental_benchmark.totals.unmapped_qs_amount_pence": 0,
+    "elemental_benchmark.totals.unpriced_elements": 0,
+    "elemental_benchmark.totals.elements_without_evidence": 2,
+    "elemental_benchmark.totals.elements_outside_range": 1,
+    "elemental_benchmark.totals.coverage_pct": 17.65,
+    "cost_plan.base_build_pence": 69192000,
+    "cost_plan.inflation_total_pence": 4321187,
+    "cost_plan.contingency_total_pence": 3459600,
+    "cost_plan.construction_total_pence": 76972787,
+    "cost_plan.implied_rate_pence_per_sqm": 115320,
+    "package_inflation_factors": [
+      1.042137414046715,
+      1.062576670087961,
+      1.062576670087961,
+      1.072078163381325,
+      1.062576670087961,
+      1.062576670087961
+    ],
+    "package_inflation_pence": [
+      252824,
+      1501840,
+      1126380,
+      864938,
+      375460,
+      199745
+    ],
+    "package_benchmark_origin_element_codes": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      "kitchens"
+    ],
+    "developed_area_sqm": 600.0
+  }
+}

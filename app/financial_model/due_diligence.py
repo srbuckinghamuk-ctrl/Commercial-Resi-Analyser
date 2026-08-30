@@ -211,6 +211,25 @@ class DdConsentExpiry:
 
 
 @dataclass
+class DdSourceClaimValue:
+    """R17 spec Sec 23.5 (amended). Mirrors DdSourceClaimValue in due-diligence.ts."""
+
+    record_id: str
+    kind: str
+    value: Any
+
+
+@dataclass
+class DdSourceFieldConflict:
+    """R17 spec Sec 23.5 (amended). Mirrors DdSourceFieldConflict in due-diligence.ts."""
+
+    field: str
+    values: list[DdSourceClaimValue] = field(default_factory=list)
+    resolved: bool = False
+    resolution_id: str | None = None
+
+
+@dataclass
 class DueDiligenceResult:
     rows: list[DdRow] = field(default_factory=list)
     categories: list[DdCategorySummary] = field(default_factory=list)
@@ -218,6 +237,60 @@ class DueDiligenceResult:
     source_record: dict[str, Any] | None = None
     source_conflicts: list[DdSourceConflict] = field(default_factory=list)
     consent_expiry: DdConsentExpiry | None = None
+    # R17 spec Sec 23.5 (amended). Derived from due_diligence.source_records
+    # and source_resolutions; [] on every document with fewer than two
+    # records. The engine never picks a winner.
+    source_field_conflicts: list[DdSourceFieldConflict] = field(default_factory=list)
+    unresolved_source_conflicts: int = 0
+
+
+SOURCE_CLAIM_FIELDS = (
+    "existing_use", "proposed_use", "floor_area_sqm", "tenure",
+    "upper_parts_included", "vacant_possession",
+)
+
+
+def _claims_differ(field_name: str, a: Any, b: Any) -> bool:
+    """Mirrors claimsDiffer: strings case-insensitively after trimming; areas
+    when they disagree by more than 5% of the smaller (multiplied out, never
+    a float quotient); booleans and enums by value."""
+    if field_name == "floor_area_sqm":
+        x = float(a)
+        y = float(b)
+        smaller = min(x, y)
+        return abs(x - y) * 20 > smaller
+    if isinstance(a, str) and isinstance(b, str):
+        return a.strip().lower() != b.strip().lower()
+    return a != b
+
+
+def derive_source_field_conflicts(records: list[Any], resolutions: list[Any]) -> list[DdSourceFieldConflict]:
+    """Port of deriveSourceFieldConflicts."""
+    out: list[DdSourceFieldConflict] = []
+    for field_name in SOURCE_CLAIM_FIELDS:
+        values: list[DdSourceClaimValue] = []
+        for r in records:
+            v = getattr(r.claims, field_name)
+            if v is not None and not (isinstance(v, str) and v.strip() == ""):
+                values.append(DdSourceClaimValue(record_id=r.id, kind=r.kind, value=v))
+        if len(values) < 2:
+            continue
+        if not any(_claims_differ(field_name, values[0].value, v.value) for v in values):
+            continue
+        resolution = next(
+            (
+                res for res in resolutions
+                if res.field == field_name and res.evidence_reference.strip() != ""
+                and res.resolved_by.strip() != ""
+            ),
+            None,
+        )
+        out.append(DdSourceFieldConflict(
+            field=field_name, values=values,
+            resolved=resolution is not None,
+            resolution_id=None if resolution is None else resolution.id,
+        ))
+    return out
 
 
 OCCUPATION_CONFLICT = (
@@ -390,11 +463,32 @@ def compute_due_diligence(
         start = construction_start_month(inputs, schedule)
         consent = DdConsentExpiry(expiry_month, start, expiry_month < start)
 
+    # R17 spec Sec 23.5 (amended). getattr with a [] default: a pre-v17
+    # document's DueDiligenceInputs model carries the attribute with its
+    # default, and a None dd block has no records at all.
+    field_conflicts = derive_source_field_conflicts(
+        list(getattr(dd, "source_records", None) or []),
+        list(getattr(dd, "source_resolutions", None) or []),
+    )
+
     return DueDiligenceResult(
         rows=rows, categories=categories, totals=totals,
         source_record=None if source_record is None else source_record.model_dump(mode="json"),
         source_conflicts=conflicts, consent_expiry=consent,
+        source_field_conflicts=field_conflicts,
+        unresolved_source_conflicts=sum(1 for c in field_conflicts if not c.resolved),
     )
+
+
+def _claim_str(value: Any) -> str:
+    """JavaScript's String(value) for the three claim types: booleans render
+    lower-case, floats without a trailing `.0` when integral (JS `String(252)`
+    is "252" whether the value came from 252 or 252.0)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def due_diligence_flags(result: DueDiligenceResult, cost_plan: CostPlanResult) -> list[ModelFlag]:
@@ -419,6 +513,20 @@ def due_diligence_flags(result: DueDiligenceResult, cost_plan: CostPlanResult) -
         out.append(ModelFlag(
             code="source_conflict", severity="red", month=None, amount_pence=None,
             message=c.statement,
+        ))
+    # R17 spec Sec 23.5 (amended). One red flag per unresolved field; the
+    # values are named so the reader sees the disagreement, not only that one
+    # exists. Mirrors dueDiligenceFlags.
+    for fc in result.source_field_conflicts:
+        if fc.resolved:
+            continue
+        named = " | ".join(f"{v.kind}: {_claim_str(v.value)}" for v in fc.values)
+        out.append(ModelFlag(
+            code="source_conflict_unresolved", severity="red", month=None, amount_pence=None,
+            message=(
+                f"source conflict on {fc.field} is unresolved - {named}; "
+                "record an evidenced resolution"
+            ),
         ))
     ce = result.consent_expiry
     if ce is not None and ce.expires_before_start:

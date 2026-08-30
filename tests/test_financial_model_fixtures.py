@@ -26,6 +26,7 @@ from app.financial_model.migrate import (
     migrate_inputs_to_v13,
     migrate_inputs_to_v14,
     migrate_inputs_to_v15,
+    migrate_inputs_to_v17,
 )
 from app.financial_model.due_diligence import DD_CATALOGUE
 from app.financial_model.schedule import build_schedule
@@ -66,6 +67,7 @@ FIXTURES = sorted(FIXTURE_DIR.glob("*.json"))
 EXPECTED_FIXTURE_STEMS = [
     "a-all-cash",
     "aa-stress-pack",
+    "ab-elemental-benchmark",
     "f-dev-finance-12mo",
     "g-lender-valuation",
     "h-programme-scurve",
@@ -310,6 +312,44 @@ _FLAT_KEYS = {
     "flag_codes_r15": (
         lambda r: [f.code for f in r.metrics.flags if f.code in _R15_FLAG_CODES]
     ),
+    # R17 spec Sec 27.4, fixture AB. Mirrors golden-fixtures.test.ts's twelve
+    # benchmark/package mappers: arrays of objects pinned as parallel flat arrays.
+    "benchmark_row_element_codes": (
+        lambda r: [x.element_code for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_currentised_rates_pence_per_sqm": (
+        lambda r: [x.currentised_rate_pence_per_sqm for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_amounts_pence": (
+        lambda r: [x.benchmark_amount_pence for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_qs_amounts_pence": (
+        lambda r: [x.qs_amount_pence for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_variances_pence": (
+        lambda r: [x.variance_pence for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_forward_inflation_factors": (
+        lambda r: [x.forward_inflation_factor for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_forward_inflated_amounts_pence": (
+        lambda r: [x.forward_inflated_benchmark_amount_pence for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_row_outside_range": (
+        lambda r: [x.outside_range for x in r.metrics.elemental_benchmark.rows]
+    ),
+    "benchmark_warning_codes": (
+        lambda r: [w.code for w in r.metrics.elemental_benchmark.warnings]
+    ),
+    "package_inflation_factors": (
+        lambda r: [x.inflation_factor for x in r.metrics.cost_plan.packages]
+    ),
+    "package_inflation_pence": (
+        lambda r: [x.inflation_pence for x in r.metrics.cost_plan.packages]
+    ),
+    "package_benchmark_origin_element_codes": (
+        lambda r: [(x.benchmark_origin or {}).get("element_code") for x in r.metrics.cost_plan.packages]
+    ),
 }
 
 
@@ -403,6 +443,10 @@ _V13_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) 
 # (spec Sec 24), so every migrate-to-vN parametrisation below excludes it by the
 # same design that excluded T/U/V/W/X/Y from the earlier ones.
 _V14_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 14]
+# R17 Task 9: fixture AB is BORN at v17 -- the corpus's first v17-native document
+# (spec Sec 27) -- so every migrate-to-vN loop excludes it by the same design that
+# excluded T/U/V/W/X/Y/Z from the earlier loops.
+_V17_FIXTURES = [p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) == 17]
 
 
 def test_every_fixture_is_v5_to_v14_and_each_group_is_non_empty() -> None:
@@ -411,7 +455,7 @@ def test_every_fixture_is_v5_to_v14_and_each_group_is_non_empty() -> None:
     assert (
         len(_V5_FIXTURES) + len(_V6_FIXTURES) + len(_V7_FIXTURES) + len(_V8_FIXTURES)
         + len(_V9_FIXTURES) + len(_V10_FIXTURES) + len(_V11_FIXTURES) + len(_V12_FIXTURES)
-        + len(_V13_FIXTURES) + len(_V14_FIXTURES)
+        + len(_V13_FIXTURES) + len(_V14_FIXTURES) + len(_V17_FIXTURES)
         == len(APPRAISAL_FIXTURES)
     )
     assert len(_V5_FIXTURES) > 0
@@ -428,6 +472,7 @@ def test_every_fixture_is_v5_to_v14_and_each_group_is_non_empty() -> None:
     assert [p.stem for p in _V12_FIXTURES] == ["x-unit-sales-ledger"]
     assert [p.stem for p in _V13_FIXTURES] == ["y-due-diligence"]
     assert [p.stem for p in _V14_FIXTURES] == ["z-cost-plan-in-time"]
+    assert [p.stem for p in _V17_FIXTURES] == ["ab-elemental-benchmark"]
 
 
 def test_the_v9_corpus_contains_a_float_bearing_phase_and_a_critical_phase() -> None:
@@ -507,7 +552,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v5(path: Path) -> N
 # Task 7 widens it once more to v14 -- fixture Z is v14-native and
 # migrate_inputs_to_v6 refuses it identically.
 _PRE_V7_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11, 12, 13, 14)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (7, 8, 9, 10, 11, 12, 13, 14, 17)
 ]
 
 
@@ -535,7 +580,7 @@ def test_fixtures_reproduce_their_metrics_after_migration_to_v6(path: Path) -> N
 # R15b Task 7 widens it once more to v14, for the identical reason one version
 # further on (fixture Z is v14-native).
 _PRE_V8_FIXTURES = [
-    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11, 12, 13, 14)
+    p for p in APPRAISAL_FIXTURES if _version_of(_load_fixture(p)) not in (8, 9, 10, 11, 12, 13, 14, 17)
 ]
 
 
@@ -1186,7 +1231,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
     assert [_jurisdiction_of(p) for p in _NON_ENGLISH_FIXTURES] == ["wales", "scotland"]
     excluded = [p for p in APPRAISAL_FIXTURES if p not in _PRE_R8_FIXTURES]
     assert [p.stem for p in excluded] == [
-        "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
+        "ab-elemental-benchmark", "m-wales-jurisdiction", "n-area-bridge", "o-ancillary-value", "p-scotland-levered",
         "q-detailed-cost-plan", "r-vat-quarterly", "s-dated-programme",
         "t-investment-case", "u-investment-case-ltv-binds", "v-exhausted-reserve",
         "w-monitoring-on-site", "x-unit-sales-ledger", "y-due-diligence",
@@ -1250,6 +1295,7 @@ def test_the_pre_r8_parametrisation_covers_every_england_ni_v5_fixture() -> None
             or version == 12
             or version == 13
             or version == 14
+            or version == 17
         ), f"{path.stem} is excluded from the pre-R8 parametrisation for no stated reason"
 
 
@@ -1587,6 +1633,34 @@ _NEGATIVE_CONTROLS = [
             "provisional_sums_present",
         ],
     }),
+    # R17 fixture AB. Mirrors golden-fixtures.test.ts's negativeControls entry for AB.
+    ("ab-elemental-benchmark", {
+        "benchmark_row_element_codes": [
+            "strip_out", "frame_alterations", "external_walls_facade", "kitchens",
+            "mechanical_services", "external_works", "preliminaries",
+        ],
+        "benchmark_row_currentised_rates_pence_per_sqm": [
+            7981, 26842.501601669814, 24937.5, None, 17955, None, None,
+        ],
+        "benchmark_row_amounts_pence": [4788001, 16105501, 13466250, 3192000, 10773000, 6397470, 4987500],
+        "benchmark_row_qs_amounts_pence": [6000001, 24000000, 18000000, 3192000, 12000000, None, 6000000],
+        "benchmark_row_variances_pence": [-1212001, -7894499, -4533750, 0, -1227000, None, -1012500],
+        "benchmark_row_forward_inflation_factors": [
+            1.05, 1.062576670087961, 1.062576670087961, 1.062576670087961,
+            1.072078163381325, None, 1.062576670087961,
+        ],
+        "benchmark_row_forward_inflated_amounts_pence": [
+            4989755, 17113330, 14308923, 3391745, 11549498, None, 5299601,
+        ],
+        "benchmark_row_outside_range": [False, None, None, None, False, None, None],
+        "benchmark_warning_codes": ["incomplete_coverage", "material_variance"],
+        "package_inflation_factors": [
+            1.042137414046715, 1.062576670087961, 1.062576670087961, 1.072078163381325,
+            1.062576670087961, 1.05,
+        ],
+        "package_inflation_pence": [252824, 1501840, 1126380, 864938, 375460, 199746],
+        "package_benchmark_origin_element_codes": [None, None, None, None, "kitchens", "kitchens"],
+    }),
 ]
 
 
@@ -1753,7 +1827,13 @@ def _invariant_variants(inputs: AnyCalculatorInputs) -> list[tuple[str, AnyCalcu
     # orphaning beyond what the v13 arm already does.
     # `isinstance(programmed, CalculatorInputsV9)` still holds for a v14
     # result unchanged: CalculatorInputsV14 subclasses CalculatorInputsV13.
-    if inputs.inputs_version >= 14:
+    # R17 Task 9: and once more for v17 -- fixture AB (v17-native) cannot go
+    # through migrate_inputs_to_v14 (it refuses a v17 document). v17 adds no
+    # anchor-bearing field, so the arm needs no extra orphaning either.
+    # `isinstance(programmed, CalculatorInputsV9)` still holds: V17 subclasses V16.
+    if inputs.inputs_version >= 17:
+        programmed = migrate_inputs_to_v17(inputs.model_dump(mode="json"), None)
+    elif inputs.inputs_version >= 14:
         programmed = migrate_inputs_to_v14(inputs.model_dump(mode="json"), None)
     elif inputs.inputs_version >= 13:
         programmed = migrate_inputs_to_v13(inputs.model_dump(mode="json"))

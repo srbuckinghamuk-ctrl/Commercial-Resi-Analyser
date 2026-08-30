@@ -1,7 +1,7 @@
 import type {
   AnyCalculatorInputs, AppraisalResultV2, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10,
   CalculatorInputsV11, CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14, CalculatorInputsV15,
-  CalculatorInputsV16,
+  CalculatorInputsV16, CalculatorInputsV17,
   ModelFlag, MonthlyModel, Schedule, UnitSalesResult,
 } from './finance-types';
 import type { InvestmentCaseResult } from './investment-case';
@@ -18,6 +18,7 @@ import { areaBridge } from './areas';
 import { computeCostPlan } from './cost-plan';
 import { computeMonitoringStatement } from './monitoring';
 import { computeDueDiligence, dueDiligenceFlags } from './due-diligence';
+import { computeElementalBenchmark, benchmarkFlags } from './elemental-benchmark';
 import type { MonitoringStatement, MonitoringStatementLine } from './monitoring';
 import { calculateGdvBreakdown } from '../conversion-calc-engine';
 import { chargeableConsiderationPence } from './vat';
@@ -244,7 +245,7 @@ function vatCarryInterestPence(
   if (!vat.registered) return 0;
   const counterfactual: CalculatorInputsV8 | CalculatorInputsV9 | CalculatorInputsV10
     | CalculatorInputsV11 | CalculatorInputsV12 | CalculatorInputsV13 | CalculatorInputsV14
-    | CalculatorInputsV15 | CalculatorInputsV16 = {
+    | CalculatorInputsV15 | CalculatorInputsV16 | CalculatorInputsV17 = {
     ...inputs,
     vat: { ...vat, registered: false },
     // R33. `buildSchedule` charges acquisition tax through its own site
@@ -582,6 +583,21 @@ export function deriveMetrics(
   const dueDiligence = computeDueDiligence(inputs, costPlan, schedule.vat, acquisitionTax, schedule);
   flags.push(...dueDiligenceFlags(dueDiligence, costPlan));
 
+  // R17 spec §27.4. Computed ONCE, here, from the input block, the `costPlan`
+  // already derived and the developed area — the UI and the memo never call
+  // `computeElementalBenchmark` themselves. null exactly when the input block
+  // is null. ADVISORY: it reads `costPlan` and nothing reads it back.
+  const elementalBenchmark = computeElementalBenchmark(
+    {
+      elemental_benchmark: 'elemental_benchmark' in inputs ? inputs.elemental_benchmark : null,
+      // A pre-v5 document has no `acquisition_date`; the engine reads the key optionally.
+      acquisition: inputs.acquisition as { acquisition_date?: string | null },
+    },
+    costPlan,
+    bridge.developed_area_sqm,
+  );
+  flags.push(...benchmarkFlags(elementalBenchmark));
+
   return {
     calc_version: CALC_VERSION,
     gdv_pence: t.gdv_pence,
@@ -656,6 +672,7 @@ export function deriveMetrics(
     unit_sales: schedule.unit_sales,
     monitoring_statement: monitoringStatement,
     due_diligence: dueDiligence,
+    elemental_benchmark: elementalBenchmark,
     flags,
   };
 }

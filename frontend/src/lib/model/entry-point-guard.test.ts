@@ -124,7 +124,21 @@ const FRONTEND_SRC = resolve(__dirname, '../..');
  *  without updating this comment -- its exemption is, and always was, the
  *  same "newest entry point" reason `cost-plan-in-time-docs.ts` states, not
  *  a genuine version pin like `investment-case-docs.ts`/`unit-sales-docs.ts`
- *  above. */
+ *  above.
+ *
+ *  R17 Task 3: `lib/model/__fixtures__/elemental-benchmark-docs.ts` is exempt
+ *  for the same "newest entry point" reason `cost-plan-in-time-docs.ts`
+ *  states -- it builds the benchmark test document (fixture AB: Z plus a
+ *  `user_qs` benchmark set, selections and one prior application) by loading
+ *  its JSON through `migrateInputsToV17`, is test support, and is imported
+ *  only by `.test.ts` files, so it reaches no user. Without the exemption it
+ *  would join the file-enumeration test's pinned list for a reason that has
+ *  nothing to do with a stale call site. `cost-plan-in-time-docs.ts`,
+ *  `due-diligence-docs.ts` and `memo-fixtures.ts` keep their exemptions,
+ *  unchanged -- all three now call `migrateInputsToV17`, not
+ *  `migrateInputsToV16`, for their fixtures, and `memo-fixtures.ts` still
+ *  calls `migrateInputsToV11`/`migrateInputsToV12` for its deliberately
+ *  version-pinned monitoring/unit-sales fixtures. */
 const EXEMPT = new Set([
   'lib/model/migrate.ts',
   'lib/model/index.ts',
@@ -132,6 +146,7 @@ const EXEMPT = new Set([
   'lib/model/__fixtures__/unit-sales-docs.ts',
   'lib/model/__fixtures__/due-diligence-docs.ts',
   'lib/model/__fixtures__/cost-plan-in-time-docs.ts',
+  'lib/model/__fixtures__/elemental-benchmark-docs.ts',
   'lib/report-qa/memo-fixtures.ts',
 ]);
 
@@ -185,7 +200,7 @@ describe('inputs-version entry points (spec §18.7)', () => {
     // Non-vacuity, part 1. If the regex above stopped matching, VERSIONS would
     // be empty and every assertion below would pass over nothing.
     expect(VERSIONS.length).toBeGreaterThan(1);
-    expect(NEWEST).toBe(16);
+    expect(NEWEST).toBe(17);
     expect(VERSIONS).toContain(13);
   });
 

@@ -16,18 +16,21 @@ import {
   isV14, migrateV13toV14, migrateInputsToV14,
   isV15, migrateV14toV15, migrateInputsToV15,
   isV16, migrateV15toV16, migrateInputsToV16, LEGACY_COST_KEYS,
+  isV17, migrateV16toV17, migrateInputsToV17,
 } from './migrate';
 import { ENTERED_CODES } from './due-diligence';
 import type {
   CalculatorInputsV2, CalculatorInputsV3, CalculatorInputsV4, CalculatorInputsV5,
   CalculatorInputsV7, CalculatorInputsV8, CalculatorInputsV9, CalculatorInputsV10, CalculatorInputsV11,
   CalculatorInputsV12, CalculatorInputsV13, CalculatorInputsV14, CalculatorInputsV15,
+  CalculatorInputsV16,
   AnyCalculatorInputs,
   MonitoringCategory, MonitoringLineInputs,
 } from './finance-types';
 import { defaultCalculatorInputsV2 } from '../conversion-defaults';
 import { VAT_CHARGE_CATEGORIES, defaultVatInputs, defaultVatTreatments } from './vat';
 import { runAppraisal } from './index';
+import type { SchemeElementalBenchmark, BenchmarkOrigin } from './index';
 import { validateInputs } from './validation';
 import { runSensitivity } from './sensitivity';
 
@@ -555,12 +558,14 @@ function detailedV7Document(): CalculatorInputsV7 {
           vat_override: { rate_pct: 20, recoverable_pct: 100, recovery_basis: 'zero_rated_sale' },
           phase_id: null,
           price_basis: null,
+          benchmark_origin: null,
         },
         {
           id: 'pkg-envelope', code: 'envelope', label: 'Envelope',
           amount_pence: 10_000_000, contingency_class: 'existing_building',
           lender_eligible: true, notes: '', vat_override: null, phase_id: null,
           price_basis: null,
+          benchmark_origin: null,
         },
       ],
       contingency: v7.cost_plan.contingency.map((c) => ({
@@ -1025,8 +1030,9 @@ describe('v10 migration -- spec §19.9', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 9,
     );
-    expect(versionExcluded.length).toBe(7);
+    expect(versionExcluded.length).toBe(8);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'ab-elemental-benchmark.json',
       't-investment-case.json', 'u-investment-case-ltv-binds.json',
       'v-exhausted-reserve.json', 'w-monitoring-on-site.json', 'x-unit-sales-ledger.json',
       'y-due-diligence.json', 'z-cost-plan-in-time.json',
@@ -1272,8 +1278,9 @@ describe('v11 migration -- spec §20.1', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 10,
     );
-    expect(versionExcluded.length).toBe(4);
+    expect(versionExcluded.length).toBe(5);
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'ab-elemental-benchmark.json',
       'w-monitoring-on-site.json', 'x-unit-sales-ledger.json', 'y-due-diligence.json',
       'z-cost-plan-in-time.json',
     ]);
@@ -1467,6 +1474,7 @@ describe('v12 migration -- spec §22.9', () => {
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 11,
     );
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'ab-elemental-benchmark.json',
       'x-unit-sales-ledger.json', 'y-due-diligence.json', 'z-cost-plan-in-time.json',
     ]);
   });
@@ -1614,6 +1622,7 @@ describe('v13 migration -- spec §23.10', () => {
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 12,
     );
     expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'ab-elemental-benchmark.json',
       'y-due-diligence.json', 'z-cost-plan-in-time.json',
     ]);
   });
@@ -1811,7 +1820,8 @@ describe('v14 migration -- spec §24.8', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => doc.kind !== 'sensitivity' && versionOf(doc) > 13,
     );
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['z-cost-plan-in-time.json']);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([
+      'ab-elemental-benchmark.json', 'z-cost-plan-in-time.json']);
   });
 
   // `calc_version` only — no other exclusion. `metrics` (flags included, in
@@ -1995,7 +2005,7 @@ describe('v15 migration -- spec §25.7', () => {
     const versionExcluded = fixtureDocs.filter(
       ({ doc }) => 'inputs' in doc && versionOf(doc) > 14,
     );
-    expect(versionExcluded.map(({ file }) => file).sort()).toEqual([]);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['ab-elemental-benchmark.json']);
   });
 
   // `calc_version` only -- no other exclusion. This migration's one write is
@@ -2188,7 +2198,7 @@ describe('v16 migration -- the identity gate (spec §26.7)', () => {
 
   it('the migration corpus is not empty and did not silently shrink', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(20);
-    expect(fixtureDocs.filter(({ doc }) => 'inputs' in doc && versionOf(doc) > 15).map(({ file }) => file)).toEqual([]);
+    expect(fixtureDocs.filter(({ doc }) => 'inputs' in doc && versionOf(doc) > 15).map(({ file }) => file)).toEqual(['ab-elemental-benchmark.json']);
   });
 
   // NO exclusion at all -- not even calc_version, which is the same constant on
@@ -2246,4 +2256,219 @@ describe('v16 migration -- the identity gate (spec §26.7)', () => {
     const spiked = { ...v15, conversion_costs: { ...(v15.conversion_costs as object), architect_pence: 999_999_999, contingency_pct: 99 } };
     expect(runAppraisal(migrateInputsToV15(spiked)).metrics).toEqual(runAppraisal(migrateInputsToV15(rawQ)).metrics);
   });
+});
+
+describe('v17 migration -- shape (spec §27.7)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+  const rawQ = JSON.parse(readFileSync(join(FIXTURE_DIR, 'q-detailed-cost-plan.json'), 'utf-8')).inputs as Record<string, unknown>;
+  const rawZ = JSON.parse(readFileSync(join(FIXTURE_DIR, 'z-cost-plan-in-time.json'), 'utf-8')).inputs as Record<string, unknown>;
+
+  /** The v17 document with its three additions removed, and inputs_version set aside. */
+  const stripV17 = (doc: ReturnType<typeof migrateInputsToV17>): Record<string, unknown> => {
+    const { inputs_version: _v, elemental_benchmark: _eb, cost_plan, due_diligence, ...rest } = doc;
+    const { source_records: _sr, source_resolutions: _sx, ...dd } = due_diligence;
+    return {
+      ...rest,
+      cost_plan: { ...cost_plan, packages: cost_plan.packages.map(({ benchmark_origin: _bo, ...p }) => p) },
+      due_diligence: dd,
+    };
+  };
+
+  for (const [name, raw] of [['Q (v7)', rawQ], ['Z (v14)', rawZ]] as const) {
+    it(`adds exactly the three keys on ${name}, all inert, and nothing else moves (the one-arm proof)`, () => {
+      const before = migrateInputsToV16(raw);
+      const after = migrateInputsToV17(raw);
+      expect(after.inputs_version).toBe(17);
+      expect('elemental_benchmark' in after).toBe(true);
+      expect(after.elemental_benchmark).toBeNull();
+      expect(after.cost_plan.packages.length).toBeGreaterThan(0);
+      for (const p of after.cost_plan.packages) {
+        expect('benchmark_origin' in p, p.id).toBe(true);
+        expect(p.benchmark_origin, p.id).toBeNull();
+      }
+      expect(after.due_diligence.source_records).toEqual([]);
+      expect(after.due_diligence.source_resolutions).toEqual([]);
+      const { inputs_version: _b, ...restBefore } = before;
+      expect(stripV17(after)).toEqual(restBefore);
+    });
+  }
+
+  it('isV17 refuses a spoofed relabel that lacks any one of the written keys', () => {
+    const v17 = migrateInputsToV17(rawQ) as unknown as Record<string, unknown>;
+    expect(isV17(v17)).toBe(true);
+    expect(isV17({ ...v17, inputs_version: 16 })).toBe(false);
+    const { elemental_benchmark: _eb, ...noBlock } = v17;
+    expect(isV17(noBlock)).toBe(false);
+    const plan = v17.cost_plan as { packages: Record<string, unknown>[] };
+    expect(plan.packages.length).toBeGreaterThan(0);
+    const { benchmark_origin: _bo, ...firstStripped } = plan.packages[0];
+    expect(isV17({ ...v17, cost_plan: { ...plan, packages: [firstStripped, ...plan.packages.slice(1)] } })).toBe(false);
+    const { source_records: _sr, ...ddNoRecords } = v17.due_diligence as Record<string, unknown>;
+    expect(isV17({ ...v17, due_diligence: ddNoRecords })).toBe(false);
+  });
+
+  it('the isV17 merge branch preserves a saved benchmark block and a saved package origin byte for byte', () => {
+    const v17 = migrateInputsToV17(rawQ);
+    const block: SchemeElementalBenchmark = {
+      set: {
+        id: 'set-1',
+        name: 'TEST FIXTURE -- NOT MARKET DATA',
+        provider_type: 'user_qs',
+        provider_name: 'Test QS',
+        source_title: 'Test cost plan',
+        source_url: null,
+        source_publication_date: null,
+        retrieved_at: null,
+        licence_or_permission: 'test',
+        dataset_version: '1',
+        building_function: 'residential',
+        project_type: 'conversion',
+        specification_level: 'standard',
+        region: 'UK',
+        location_factor: null,
+        location_factor_source: null,
+        base_date: '2026-01',
+        base_index_name: null,
+        base_index_value: null,
+        current_index_name: null,
+        current_index_value: null,
+        index_dataset_version: null,
+        currentisation_date: null,
+        currency: 'GBP',
+        notes: '',
+        imported_by: 'test',
+        created_at: '2026-08-30T00:00:00Z',
+        source_file_sha256: null,
+        content_hash: 'deadbeef',
+        rates: [{
+          id: 'r1',
+          element_code: 'strip_out',
+          element_label: 'Strip-out',
+          description: '',
+          measurement_basis: 'area',
+          original_unit: 'gbp_per_sqm',
+          original_rate_pence: 100_000,
+          rate_pct: null,
+          lower_quartile_rate_pence: null,
+          median_rate_pence: null,
+          upper_quartile_rate_pence: null,
+          sample_count: null,
+          location_factor: null,
+          evidence_status: 'unverified',
+          source_reference: '',
+          notes: '',
+        }],
+      },
+      selections: [{
+        element_code: 'strip_out',
+        benchmark_rate_id: 'r1',
+        quantity: 100,
+        quantity_unit: 'sqm',
+        adjustment_pct: 0,
+        adjustment_reason: '',
+        include_in_cost_plan: false,
+        target_cost_package_id: null,
+        selected_by: '',
+        selected_at: '',
+      }],
+      thresholds: { material_variance_pct: 15, stale_after_months: 12, min_coverage_pct: 60 },
+      applications: [],
+      library_set_id: null,
+    };
+    const origin: BenchmarkOrigin = {
+      kind: 'benchmark',
+      set_id: 'set-1',
+      set_content_hash: 'deadbeef',
+      benchmark_rate_id: 'r1',
+      element_code: 'strip_out',
+      applied_at: '2026-08-30T00:00:00Z',
+      applied_by: 'test',
+      currentisation_method: 'none',
+    };
+    const [first, ...others] = v17.cost_plan.packages;
+    const saved = {
+      ...v17,
+      elemental_benchmark: block,
+      cost_plan: { ...v17.cost_plan, packages: [{ ...first, benchmark_origin: origin }, ...others] },
+    };
+    const again = migrateInputsToV17(saved as unknown as Record<string, unknown>);
+    expect(JSON.stringify(again.elemental_benchmark)).toBe(JSON.stringify(block));
+    expect(JSON.stringify(again.cost_plan.packages[0].benchmark_origin)).toBe(JSON.stringify(origin));
+    for (const p of again.cost_plan.packages.slice(1)) expect(p.benchmark_origin, p.id).toBeNull();
+  });
+
+  it('refuses double migration and unrecognised versions', () => {
+    expect(() => migrateInputsToV17({ inputs_version: 18 })).toThrow(/unrecognised inputs_version 18/);
+    expect(() => migrateInputsToV17({ inputs_version: 17 })).toThrow(/fails the v17 structural check/);
+    const v17 = migrateInputsToV17(rawQ);
+    expect(() => migrateV16toV17(v17 as unknown as CalculatorInputsV16)).toThrow(/already a v17 document/);
+  });
+});
+
+describe('v17 migration -- the identity gate (spec §27.7)', () => {
+  const FIXTURE_DIR = resolve(__dirname, '../../../../fixtures/financial-model');
+  interface FixtureFile { name: string; kind: string; inputs?: Record<string, unknown> }
+  const fixtureFiles = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+  const fixtureDocs: Array<{ file: string; doc: FixtureFile }> = fixtureFiles.map((file) => ({
+    file, doc: JSON.parse(readFileSync(join(FIXTURE_DIR, file), 'utf-8')) as FixtureFile,
+  }));
+  const versionOf = (doc: FixtureFile): number =>
+    (doc.inputs as { inputs_version?: number } | undefined)?.inputs_version ?? 2;
+  const fixtures = fixtureDocs.filter(({ doc }) => 'inputs' in doc && versionOf(doc) <= 16);
+
+  it('the migration corpus is not empty and did not silently shrink', () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(20);
+    // R17 spec §27.8 adds the v17-native fixture AB, above this gate's `<= 16`
+    // filter for the same reason Z sat above the v13 gate's. Named exactly:
+    // any OTHER fixture above the filter is a silent shrink, not an authoring.
+    const versionExcluded = fixtureDocs.filter(({ doc }) => 'inputs' in doc && versionOf(doc) > 16);
+    expect(versionExcluded.map(({ file }) => file).sort()).toEqual(['ab-elemental-benchmark.json']);
+  });
+
+  // NO exclusion at all -- not even calc_version, which is the same constant on
+  // both arms. `metrics.elemental_benchmark` is compared PRESENT AND NULL on
+  // both arms: a later change that synthesises a result block for a document
+  // with no input block fails here, not silently.
+  for (const { file, doc } of fixtures) {
+    it(`${file}: no computed figure moves from v16 to v17`, () => {
+      const v16Run = runAppraisal(migrateInputsToV16(doc.inputs!));
+      const v17Run = runAppraisal(migrateInputsToV17(doc.inputs!));
+      expect(v16Run.metrics.elemental_benchmark, `${file}: v16 arm synthesised a benchmark block`).toBeNull();
+      expect(v17Run.metrics.elemental_benchmark, `${file}: v17 arm synthesised a benchmark block`).toBeNull();
+      expect(v17Run.metrics, `${file}: metrics moved`).toEqual(v16Run.metrics);
+      expect(v17Run.model, `${file}: a ledger figure moved`).toEqual(v16Run.model);
+      expect(v17Run.schedule, `${file}: a schedule figure moved`).toEqual(v16Run.schedule);
+    });
+  }
+
+  for (const stem of ['f-dev-finance-12mo', 'u-investment-case-ltv-binds', 'y-due-diligence', 'z-cost-plan-in-time']) {
+    it(`${stem}: the default sensitivity suite is identical on both arms`, () => {
+      const raw = fixtureDocs.find(({ file }) => file === `${stem}.json`)!.doc.inputs!;
+      expect(runSensitivity(migrateInputsToV17(raw))).toEqual(runSensitivity(migrateInputsToV16(raw)));
+    });
+  }
+
+  // The three validation properties (R12's form). Nothing is removed and the
+  // three additions are inert (null / [] on every migrated document), so BOTH
+  // exception lists are empty, and asserted empty.
+  const V16_ONLY_RULES: string[] = [];
+  const V17_ONLY_RULES: string[] = [];
+
+  it('the exception lists are exactly zero and exactly zero', () => {
+    expect(V16_ONLY_RULES).toHaveLength(0);
+    expect(V17_ONLY_RULES).toHaveLength(0);
+  });
+
+  const key = (i: { severity: string; field: string; message: string }) => JSON.stringify([i.severity, i.field, i.message]);
+  for (const { file, doc } of fixtures) {
+    it(`${file}: every v16 issue has a v17 counterpart, and no v17 issue is new (properties 1-3)`, () => {
+      const v16Issues = validateInputs(migrateInputsToV16(doc.inputs!));
+      const v17Issues = validateInputs(migrateInputsToV17(doc.inputs!));
+      const v16Kept = new Set(v16Issues.filter((i) => !V16_ONLY_RULES.includes(i.field)).map(key));
+      const v17Set = new Set(v17Issues.map(key));
+      expect(v17Set).toEqual(v16Kept);
+      expect(v17Issues.filter((i) => V16_ONLY_RULES.includes(i.field))).toEqual([]);
+      expect(v17Issues.filter((i) => V17_ONLY_RULES.includes(i.field))).toEqual([]);
+    });
+  }
 });

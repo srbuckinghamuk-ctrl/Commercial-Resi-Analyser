@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES, constructionStartMonth, dueDiligenceFlags,
-  monthsBetween,
+  DD_CATALOGUE, DERIVED_CODES, ENTERED_CODES, constructionStartMonth, deriveSourceFieldConflicts,
+  dueDiligenceFlags, emptyClaims, monthsBetween,
 } from './due-diligence';
 import { migrateInputsToV12 } from './migrate';
 import { applyScenario } from './apply-scenario';
@@ -11,8 +11,10 @@ import { buildSchedule } from './schedule';
 import { runAppraisal } from './index';
 import { QS, computeFor, ddDoc, rawYAsV12 } from './__fixtures__/due-diligence-docs';
 import { docZ, docZNoAllowance } from './__fixtures__/cost-plan-in-time-docs';
-import type { DdItemCode, DdRow } from './due-diligence';
-import type { AnyCalculatorInputs, CalculatorInputsV16, LenderValuation } from './finance-types';
+import type {
+  DdItemCode, DdRow, SourceClaims, SourceConflictResolution, SourceEvidenceRecord,
+} from './due-diligence';
+import type { AnyCalculatorInputs, CalculatorInputsV17, LenderValuation } from './finance-types';
 
 /** R15 spec §23. Twin of test_financial_model_due_diligence.py. */
 
@@ -256,7 +258,7 @@ const R15_FLAG_CODES = new Set([
 
 describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
   it('tax_basis goes unknown through the VAT half alone', () => {
-    const taxBasis = (doc: CalculatorInputsV16): DdRow =>
+    const taxBasis = (doc: CalculatorInputsV17): DdRow =>
       computeFor(doc).rows.find((x) => x.code === 'tax_basis')!;
 
     expect(taxBasis(ddDoc({ vat: VAT_BEARING_UNCONFIRMED })).status).toBe('unknown');
@@ -478,5 +480,87 @@ describe('the arms fixture Y alone cannot reach (§23.3, §23.9)', () => {
       .toEqual([7, true]);
     expect(runAppraisal(slipped).metrics.flags.map((f) => f.code))
       .toContain('consent_expires_before_start');
+  });
+});
+
+// R17 spec §23.5 (amended), design decision 12. Twin of
+// tests/test_financial_model_due_diligence.py::TestSourceFieldConflicts.
+describe('deriveSourceFieldConflicts (§23.5 amended)', () => {
+  const record = (
+    id: string, kind: SourceEvidenceRecord['kind'], claims: Partial<SourceClaims>,
+  ): SourceEvidenceRecord => ({
+    id, kind, captured_at: '2026-08-01', reference: `ref ${id}`, captured_by: 'tester',
+    narrative_excerpt: null, claims: { ...emptyClaims(), ...claims },
+  });
+  const resolution = (changes: Partial<SourceConflictResolution> = {}): SourceConflictResolution => ({
+    id: 'res-1', field: 'existing_use', resolved_value: 'office', chosen_record_id: 'rec-1',
+    evidence_reference: 'Survey p.3', resolved_by: 'tester', resolved_at: '2026-08-02', reason: 'measured',
+    ...changes,
+  });
+  const officeVsRetail = [
+    record('rec-1', 'listing_structured', { existing_use: 'Office' }),
+    record('rec-2', 'measured_survey', { existing_use: 'retail' }),
+  ];
+
+  it('office vs retail is one unresolved conflict naming both records', () => {
+    const out = deriveSourceFieldConflicts(officeVsRetail, []);
+    expect(out).toEqual([{
+      field: 'existing_use',
+      values: [
+        { record_id: 'rec-1', kind: 'listing_structured', value: 'Office' },
+        { record_id: 'rec-2', kind: 'measured_survey', value: 'retail' },
+      ],
+      resolved: false,
+      resolution_id: null,
+    }]);
+  });
+
+  it('strings agree case-insensitively after trimming; one record is never a conflict', () => {
+    expect(deriveSourceFieldConflicts([
+      record('rec-1', 'listing_structured', { existing_use: ' office ' }),
+      record('rec-2', 'valuation', { existing_use: 'OFFICE' }),
+    ], [])).toEqual([]);
+    expect(deriveSourceFieldConflicts([officeVsRetail[0]], [])).toEqual([]);
+  });
+
+  it('areas within 5% agree; beyond 5% conflict', () => {
+    const areas = (a: number, b: number) => deriveSourceFieldConflicts([
+      record('rec-1', 'listing_structured', { floor_area_sqm: a }),
+      record('rec-2', 'measured_survey', { floor_area_sqm: b }),
+    ], []);
+    expect(areas(100, 104)).toEqual([]);
+    expect(areas(100, 105)).toEqual([]);
+    expect(areas(100, 105.5).map((c) => c.field)).toEqual(['floor_area_sqm']);
+    expect(areas(110, 100).map((c) => c.field)).toEqual(['floor_area_sqm']);
+  });
+
+  it('a blank evidence_reference (or resolved_by) does not resolve; an evidenced one does', () => {
+    expect(deriveSourceFieldConflicts(officeVsRetail, [resolution({ evidence_reference: '  ' })])[0].resolved).toBe(false);
+    expect(deriveSourceFieldConflicts(officeVsRetail, [resolution({ resolved_by: '' })])[0].resolved).toBe(false);
+    // A resolution on another field says nothing about this one.
+    expect(deriveSourceFieldConflicts(officeVsRetail, [resolution({ field: 'tenure' })])[0].resolved).toBe(false);
+    const resolved = deriveSourceFieldConflicts(officeVsRetail, [resolution()]);
+    expect(resolved[0].resolved).toBe(true);
+    expect(resolved[0].resolution_id).toBe('res-1');
+  });
+
+  it('the source_conflict_unresolved flag names both values', () => {
+    const base = ddDoc();
+    const doc: CalculatorInputsV17 = {
+      ...base,
+      due_diligence: { ...base.due_diligence, source_records: officeVsRetail, source_resolutions: [] },
+    };
+    const run = runAppraisal(doc);
+    expect(run.metrics.due_diligence.unresolved_source_conflicts).toBe(1);
+    const flag = run.metrics.flags.find((f) => f.code === 'source_conflict_unresolved');
+    expect(flag?.severity).toBe('red');
+    expect(flag?.message).toBe(
+      'source conflict on existing_use is unresolved - listing_structured: Office | measured_survey: retail; '
+      + 'record an evidenced resolution',
+    );
+    const resolvedRun = runAppraisal({
+      ...doc, due_diligence: { ...doc.due_diligence, source_resolutions: [resolution()] },
+    });
+    expect(resolvedRun.metrics.flags.some((f) => f.code === 'source_conflict_unresolved')).toBe(false);
   });
 });
