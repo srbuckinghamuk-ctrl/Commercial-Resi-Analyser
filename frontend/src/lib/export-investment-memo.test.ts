@@ -2763,3 +2763,30 @@ describe('R17 benchmark governance on the memo (spec §12 / §13)', () => {
     expect(a).toBe(b);
   });
 });
+
+
+describe('R17 spec §23.5 — unresolved source conflicts reach the memo', () => {
+  it('prints an Information Required line naming both claims, and not the did-not-run sentence', async () => {
+    const { defaultCalculatorInputsV17 } = await import('./conversion-defaults');
+    const { runAppraisal } = await import('./model');
+    const base = defaultCalculatorInputsV17();
+    const record = (id: string, kind: 'listing_structured' | 'listing_narrative', use: string) => ({
+      id, kind, captured_at: '2026-08-30', reference: id, captured_by: 'test', narrative_excerpt: null,
+      claims: { existing_use: use, proposed_use: null, floor_area_sqm: null, tenure: null, upper_parts_included: null, vacant_possession: null },
+    });
+    const inputs = {
+      ...base,
+      due_diligence: {
+        ...base.due_diligence,
+        source_records: [record('a', 'listing_structured', 'office'), record('b', 'listing_narrative', 'retail')],
+      },
+    };
+    const run = runAppraisal(inputs);
+    expect(run.metrics.due_diligence.unresolved_source_conflicts).toBe(1);
+    const text = await pdfText(generateInvestmentMemo(mockProject, run, null));
+    // Asserted as line-sized fragments: infoRequired wraps a long sentence across Tj strings.
+    expect(text).toContain('existing_use is unresolved');
+    expect(text).toContain('listing_narrative: retail');
+    expect(text).not.toContain('source-conflict checks did not run');
+  });
+});

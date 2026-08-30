@@ -2794,10 +2794,24 @@ export function generateInvestmentMemo(
   for (const conflict of dd.source_conflicts) {
     y = infoRequired(y, conflict.statement);
   }
+  // R17 spec §23.5 (amended): every UNRESOLVED structured source conflict is
+  // an Information Required line naming the field and each source's claim —
+  // the engine derived the disagreement; the memo neither resolves nor
+  // rewords it. A resolved conflict prints nothing here (its resolution is
+  // evidence, not an outstanding item).
+  for (const fc of dd.source_field_conflicts) {
+    if (fc.resolved) continue;
+    const named = fc.values.map((v) => `${v.kind}: ${String(v.value)}`).join(' | ');
+    y = infoRequired(y, `Source conflict on ${fc.field} is unresolved - ${named}; an evidenced resolution is required`);
+  }
 
   const ddRecord = dd.source_record;
   if (ddRecord === null) {
-    y = bodyText(y, 'No listing record captured; source-conflict checks did not run.');
+    // The pre-R17 sentence is kept verbatim when nothing else was checked; with
+    // structured source records present the field checks above DID run.
+    y = bodyText(y, dd.source_field_conflicts.length === 0
+      ? 'No listing record captured; source-conflict checks did not run.'
+      : 'No listing record captured; the structured source records were checked (see above).');
   } else {
     const recordParts: string[] = [];
     if (ddRecord.tenure) recordParts.push(`tenure ${ddRecord.tenure}`);
