@@ -1,6 +1,12 @@
 # Second-audit remediation — release plan (R7 → R16)
 
 Source: `docs/reviews/2026-08-17-lender-readiness-second-audit.md` (69/100).
+
+**Title range.** The plan's title names R7 → R16 because that is the second
+audit's span; R16b was the split platform half of R16, and **R17** — the first
+release from the *third* audit (`docs/reviews/2026-08-30-lender-readiness-third-audit.md`,
+86/100) — is recorded on this same table rather than a new document so the
+version record stays in one place. The title is left as written.
 Every release ships with: spec section, migration (where the input schema moves),
 independently-derived golden tests, and the full gate set (vitest, pytest, eslint,
 `tsc -b`, production build).
@@ -23,6 +29,7 @@ Both engines mirror. No calculation logic in React components or report generato
 | **R15b** — **DONE, shipped** | The cost plan in time: per-package programme (§16.9 limitation 1), tender-price inflation from `qs.base_date` to each package's spend midpoint (§7.5's inflation ask), per-package draw eligibility (§16.9 limitation 2, §20.5 limitation 3) | P1 | inputs v14, calc 2.16.0 |
 | **R16** — **DONE, shipped** | The standard lender stress pack: a closed, spec-numbered pack of nine standard stresses run as §12.5 cells in both engines and printed in memo §10 and on the Sensitivity page; the four levers it needs (`saleable_area`, `abnormal_cost`, `programme_slip`, `refi_ltv`); every remaining `ScenarioOverrides` field gets a Scenarios-page input; the R15/R15b review minors | P1 | inputs v15, calc 2.17.0 |
 | **R16b** — **DONE, shipped** | Platform: UX stage grouping and URL-routed calculator pages, the bundle split, legacy stored columns / `sdlt_pence` / `conversion_costs.contingency_pct` / the eight legacy fee fields, the cash-flow page's eligibility column (§24.9 deferred it as page work) | P2 | inputs v16, Alembic 007, **calc 2.18.0** (the row's "no calc bump expected" was wrong: `sdlt_pence` leaving the result changes `outputs_hash` — see the R16b design) |
+| **R17** — **in progress** | The elemental cost benchmark layer (three provider tiers, none bundling BCIS data), a global m²/ft² display toggle on one canonical basis, index-ratio currentisation kept separate from the package inflation engine, authenticated lender-case governance with maker-checker separation, the governed resave of the York appraisal, structured source reconciliation, and the four presentation corrections (unrealised ROE, the stress Setting cell, month labels, PDF/UA stated) | P0/P1 | inputs v17, Alembic 008, **calc 2.19.0** (the result gains `elemental_benchmark`, null on every migrated document — `outputs_hash` moves, no computed value does) |
 
 **R16 UX debt recorded by R13b — paid.** The R12/R13 override fields (`phase_slip_*`, `exit_yield_adjustment_pct`, `operating_cost_adjustment_pct`, `vacancy_adjustment_pct`) had no ScenariosPage input; `sales_slip_months` got one in R13b, and R16 gave every remaining field one — including its own four — pinned exhaustively at both ends: `SCENARIO_INPUT_META` in `ScenariosPage.tsx` closes with `satisfies Record<Exclude<keyof ScenarioOverrides, 'label' | 'phase_slip_phase_id'>, { label: string; step: string }>` (a missing field fails `tsc`), and `RENDERED_LABEL` in `ScenariosPage.test.tsx` asserts every label over the same key set is rendered. A fourteenth lever cannot ship UI-less.
 
@@ -257,6 +264,37 @@ same figures under its own names); for a pre-R1 `legacy_unreconciled` row
 with null `outputs`, those columns are the only stored copy of the
 superseded client-computed figures and are not recoverable once dropped —
 snapshot the database before running `alembic upgrade head`.
+
+**R17 deploy note.** Alembic 008 adds the benchmark library
+(`benchmark_sets`, `benchmark_rates`), the index series (`index_datasets`,
+`index_observations`), `users`, `appraisal_versions` and the lender-case
+governance columns; it drops nothing. After `alembic upgrade head`: load the
+shipped ONS OPI series with `python -m app.benchmarks.seed` (it reads
+`data/index-datasets/*.json`; no elemental rates are seeded — the library
+ships empty of them by design); create the first administrator either through
+`ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` at startup or with
+`python -m app.auth.cli create-user`; and set a real `API_SECRET_KEY` — with
+`ENVIRONMENT=production` the default key is a startup error. Every stored
+appraisal's `input_hash`, `outputs_hash` and `audit_hash` move on its next
+save and every live lender case goes stale at that save, as at every
+boundary. Legacy lender cases (created before 008, no user ids) cannot be
+decided: supersede and recreate.
+
+**R17 status (calc 2.19.0, inputs v17):** in progress. The engine halves are
+built and green in both languages — `elemental-benchmark.ts` /
+`elemental_benchmark.py`, `area-units.ts` / `area_units.py`, the v16 → v17
+migration and its corpus-wide identity gate (metrics compared with
+`elemental_benchmark` present and null on both arms, no exclusion), fixture
+AB with every benchmark figure hand-derived in test-cases §27 and the ledger
+metrics identity-asserted against the block-less twin (49 vitest cases across
+the benchmark, area-unit and hash files; 94 pytest cases across the
+benchmark, area-unit and migrate-v17 files). Spec §27 is written, with §13.1,
+§5.7, §13.5, §16.9 and §24.9 amended; §21 and §23.5 are amended alongside.
+Alembic 008, the authenticated lender-case routes, the benchmark and
+index-dataset API, the governed resave, the York reconciliation script, the
+memo's §12C and the four presentation corrections are in flight on the same
+branch; this paragraph is rewritten to "shipped" when the five gates pass on
+the merged branch and not before.
 
 **R16b status (calc 2.18.0, inputs v16):** shipped. It removed the last two
 "stale legacy columns" the audit's §6.4 named: the seven duplicated

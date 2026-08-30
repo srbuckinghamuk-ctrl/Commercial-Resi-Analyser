@@ -1,7 +1,7 @@
 # Financial Model — Governance
 
 **Status:** Authoritative. Describes how the calculation model in
-`docs/financial-model/calculation-specification.md` (calc version `2.17.0`, inputs `v15`) is owned, changed,
+`docs/financial-model/calculation-specification.md` (calc version `2.19.0`, inputs `v17`) is owned, changed,
 versioned and gated for release. This document is the answer to the audit's P0 finding
 ("Model governance, calculation versioning and release gates" — score 3/5 under "Overall Product
 Quality") and to prohibited-calculation #9 in the spec (§11): *"Any report/export/page recomputing
@@ -141,6 +141,11 @@ being told — so this list and the code cannot silently drift apart:
 | U — retain-all with an investment case, LTV binds | v10 | T's twin, identical but for `cap_yield_pct` and `takeout.ltv_cap_pct`, so the binding constraint flips to **LTV** — added R13. |
 | V — exhausted interest reserve, rolled-up development finance | v10 | R14 §5.10's positive case for the C1 correction: a rolled-up facility whose interest reserve is far smaller than the interest accrued, so a **real** shortfall survives the correction alongside a real `funding_gap_pence` — added R14; test-cases §20.1. |
 | **W — monitoring statement on site, detailed cost plan, one ineligible package** | **v11** | **R14 §20: the first v11-native document and the release's cross-engine penny-agreement carrier — a `monitoring` block at reporting month 6, a lender-ineligible package driving `lender_eligible_ratio`, and the corpus's only detailed-mode fixture still reaching §7's fully-realised profit identity — added R14; test-cases §20.4.** |
+| X — unit sales ledger, released deposits, per-unit costs, anchored completions | v12 | R13b §22: the unit-level sales ledger with deposits released at exchange, per-unit cost overrides and completions anchored to the programme — added R13b; test-cases §22. |
+| Y — due-diligence evidence schedule, source record, price basis and QS provenance | v13 | R15 §23: the 28-item due-diligence catalogue with RAG/unknown statuses, cost and programme impacts, a source record and QS provenance on the cost plan — added R15; test-cases §23. Base document for AA and, through Z, for AB. |
+| Z — cost plan in time, tender-price inflation allowance, curve-aware package timing, VAT-charged package | v14 | R15b §24: the corpus's document with packages in more than one spend window and an ineligible package among them — the only fixture whose `funding_gap_pence` moved at R15b — added R15b; test-cases §24. Base document for AB. |
+| AA — the standard lender stress pack over fixtures Y and U | `kind: sensitivity` (no inputs of its own) | R16 §25: the nine-entry stress pack run over two base documents, with hand-derived settings and identity-asserted metrics — added R16; test-cases §25. |
+| AB — elemental benchmark, TEST FIXTURE — NOT MARKET DATA | v17 | R17 §27: fixture Z with `qs.base_date` moved to the currentisation date, an embedded `user_qs` set of seven fictional rates (one priced per ft² at source), index ratio 1.05 and location factor 95, one −10% adjustment, seven mapped selections, one prior application and a 10% material-variance threshold — every benchmark figure hand-derived, the ledger metrics identity-asserted against the block-less twin (the advisory proof) — added R17; test-cases §27. Excluded from the migration gates that predate v17, as Z is from those that predate v14. |
 
 (A, F–M carry `inputs_version: 5` in their stored JSON regardless of which release originally
 authored them — every fixture below v6 was brought up to the then-current schema rather than
@@ -160,7 +165,7 @@ rather than through the whole-corpus loops every other fixture runs through.
 
 Two independent version numbers travel with every appraisal document:
 
-- **`calc_version`** — semver of the specification's implementation. Currently `"2.13.0"`
+- **`calc_version`** — semver of the specification's implementation. Currently `"2.19.0"`
   (single source of truth `CALC_VERSION` in `app/financial_model/types.py`, re-exported by
   `app/financial_model/__init__.py`; TS mirror `frontend/src/lib/model/finance-types.ts`).
   Outputs are only comparable within one `calc_version` — a report or comparison spanning two
@@ -184,19 +189,29 @@ Two independent version numbers travel with every appraisal document:
   `CalculatorInputsV10` shape (adds the top-level `investment_case` block, narrows
   `refinance.investment_value_pence`/`ltv_pct` to nullable and adds the
   `arrangement_fee_basis`/`arrangement_fee_pct` pair, spec §19); `11` = Release 14's
-  `CalculatorInputsV11` shape (adds the top-level nullable `monitoring` block, spec §20). Every
-  new save persists `inputs_version: 11` — the migration chain
-  v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11 is applied in-place before persistence, so the stored
-  document is never left in an older shape after a save. An *unrecognised* `inputs_version` (12,
+  `CalculatorInputsV11` shape (adds the top-level nullable `monitoring` block, spec §20); `12` =
+  Release 13b's `CalculatorInputsV12` shape (adds the top-level nullable `unit_sales` block and
+  `sales_slip_months`, spec §22); `13` = Release 15's `CalculatorInputsV13` shape (adds the
+  non-nullable `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, spec §23);
+  `14` = Release 15b's `CalculatorInputsV14` shape (adds `cost_plan.qs.inflation`, spec §24);
+  `15` = Release 16's `CalculatorInputsV15` shape (adds the four stress-pack scenario fields,
+  spec §25); `16` = Release 16b's `CalculatorInputsV16` shape (removes
+  `conversion_costs.contingency_pct` and the eight legacy fee fields, spec §26.1); `17` =
+  Release 17's `CalculatorInputsV17` shape (adds the nullable top-level `elemental_benchmark`
+  block, `CostPackage.benchmark_origin` and the due-diligence `source_records` /
+  `source_resolutions` arrays, all inert on migration, spec §27.1). Every
+  new save persists `inputs_version: 17` — the migration chain
+  v1→v2→…→v16→v17 is applied in-place before persistence, so the stored
+  document is never left in an older shape after a save. An *unrecognised* `inputs_version` (18,
   99) is rejected with a 422 by both engines rather than falling through to the v1 fallback
   path, which would silently rebuild the finance block.
 
-`calc_version` and `inputs_version` are independent axes. Calc `2.13.0` consumes v2 through v11
+`calc_version` and `inputs_version` are independent axes. Calc `2.19.0` consumes v2 through v17
 input documents directly (`run_appraisal` takes the union; a v2 document's lender-basis metrics
 are null, a document with `programme: null` produces a byte-identical schedule to its v3 source,
 and a document with no `cost_plan` at all is read through `costPlanFromLegacyCosts`/
-`cost_plan_from_legacy_costs`, spec §16.7), but **v11 is canonical server-side** [R14, following
-the same rule since R10's v7]: `calculate_authoritative` migrates whatever arrives to v11 before
+`cost_plan_from_legacy_costs`, spec §16.7), but **v17 is canonical server-side** [R17, following
+the same rule since R10's v7]: `calculate_authoritative` migrates whatever arrives to v17 before
 validating, calculating and persisting it, so no older-shaped input reaches the engines without
 migration and no older-shaped document is ever stored.
 
@@ -218,6 +233,8 @@ Alembic revision the release shipped, where it moved the persistence schema at a
 | R15 | 2.15.0 | v13 | — | The due-diligence evidence schedule: 28-item catalogue, RAG/unknown, derived rows, source-conflict flags, QS provenance and price basis, the seventh FINAL condition | §23 |
 | R15b | 2.16.0 | v14 | — | The cost plan in time: per-package timing from the phase, tender-price inflation to the spend midpoint, per-month lender-eligible construction | §24 |
 | R16 | 2.17.0 | v15 | — | The standard lender stress pack: nine closed stresses run as §12.5 cells, four new levers (`saleable_area`, `abnormal_cost`, `programme_slip`, `refi_ltv`), Scenarios page and memo adopt §12.7 | §25 |
+| R16b | 2.18.0 | v16 | 007 | The platform half: `sdlt_pence` leaves the result (the calc bump), nine dead `conversion_costs` fields leave the document, the seven duplicated summary columns leave `financial_appraisals`, URL-routed calculator pages with stages, the bundle gate, the cash-flow eligibility column | §26 |
+| R17 | 2.19.0 | v17 | 008 | The elemental cost benchmark layer (three provider tiers, no bundled BCIS data; the result gains `elemental_benchmark`, null on every migrated document — the calc bump), the exact m²/ft² display convention on one canonical basis, index-ratio currentisation kept separate from §24.3, authenticated lender-case governance with maker-checker, the governed resave and `appraisal_versions`, structured source-record reconciliation, the four presentation corrections | §27; §21, §23.5, §13.1, §5.7, §13.5 amended |
 
 **Why R14b bumps neither number.** Nothing inside `inputs_snapshot` moves and no arithmetic
 changes, so an inputs bump would be a lie and a calc bump would be worse than one: `calc_version`
@@ -409,6 +426,8 @@ module**, and reading its underlying data outside that module is a build failure
 |---|---|---|
 | Construction cost area (spec §15.3/§15.4) | `developedAreaSqm(inputs)` / `developed_area_sqm(inputs)` in `areas.ts` / `areas.py` — or `areaBridge`/`area_bridge` from the same module where the caller needs the whole reconciliation rather than the scalar (only `derive_metrics` and `validate_inputs` do; see spec §15.4) | the `total_construction_sqm` field |
 | Acquisition tax (spec §14) | `calculateAcquisitionTax()` / `calculate_acquisition_tax()` in `acquisition-tax.ts` / `acquisition_tax.py` | the `TAX_TABLES` band table, **and** `selectBandSet` / `select_band_set` |
+| Benchmark set identity (spec §27.6) [R17] | `benchmarkContentHash()` / `benchmark_content_hash()` in `elemental-benchmark.ts` / `elemental_benchmark.py` — the one normalisation (strip `content_hash`, `id`, `created_at`, `imported_by`; sort rates by `element_code`, `id`) feeding `canonicalHash` / `canonical_hash` | any hand-built hash over a set, and any comparison of two sets by field-wise equality where identity is meant |
+| The m² ⇄ ft² constant (spec §27.2) [R17] | `SQFT_PER_SQM` and the four conversions in `area-units.ts` / `area_units.py` (`sqmToSqft`, `sqftToSqm`, `ratePerSqmToPerSqft`, `ratePerSqftToPerSqm`), with the display formatters for anything printed | the literals `10.7639`, `10.764`, `0.092903` and any private conversion helper. **One recorded exception:** `lender-valuation.ts` / `lender_valuation.py` keep their own `SQFT_PER_SQM = 10.7639` — the `global_per_sqft` basis' *stored calculation convention*, a calculation input pinned by fixture G's `lender_gdv_pence` (spec §27.9 limitation 6). It is not a display constant and must not be "corrected" to the exact figure; that one module is the allowlisted exception. |
 
 [R9 fix round 2 — the whole-branch review. `selectBandSet`/`select_band_set` was
 added to the second row's off-limits column because it was a read path the guard
@@ -644,6 +663,27 @@ stranding, whereas a per-table override sized to the Limitations table's own
 fixture's finding without moving the general trade-off, leaving the next
 table that lands just past 110 mm to reproduce the same defect under a
 different name.]
+
+[R17. An **eighth** condition joins the FINAL gate through the existing due-diligence
+mechanism rather than beside it: an *unresolved source conflict* — two or more
+`due_diligence.source_records` carrying differing non-null claims for one field
+(strings compared trimmed and case-insensitively; areas differing by more than 5%) with
+no `source_resolutions` entry naming that field with a non-empty `evidence_reference`
+and `resolved_by` — raises the red flag `source_conflict_unresolved` and defeats FINAL
+(spec §23.5 as amended, §27.1). The engine derives the conflict and never picks a
+winner; the narrative excerpt is stored and printed, not parsed. The York appraisal
+carries exactly this conflict after its governed resave (`office` structured against
+retail-below/Airbnb-above narrative) and stays DRAFT until a person resolves it with
+evidence.]
+
+**PDF/UA [R17].** The generated memo is **not** tagged to PDF/UA and this document
+records why rather than letting a `/Marked true` flag assert what the file does not
+have: jsPDF 4.2.1 exposes no structure tree, `MarkInfo` or role map (verified against
+the shipped dist). What is set — title, subject, language, `DisplayDocTitle` — stays,
+and the basis of preparation states, verbatim, *"This PDF is not tagged to PDF/UA; the
+generator library exposes no structure tree."* (spec §13.5, §27.9 limitation 9). A
+future library change that can emit a structure tree reopens this note; nothing else
+does.
 
 ### 12.3 The audit hash
 

@@ -1,10 +1,11 @@
 # Calculation Specification — Commercial-to-Residential Development Appraisal
 
-**Status:** Authoritative. Calculation version `2.18.0`.
+**Status:** Authoritative. Calculation version `2.19.0`.
 **Date:** 29 August 2026
 **Scope:** Defines every financial quantity the application computes, stores or reports. Any output not derivable from this specification must not be displayed to a user or exported. The monthly engine described here is the single source of truth; no UI page, report, export or backend endpoint may re-implement a formula defined here.
 
 **Changelog:**
+- **2.19.0** — the elemental cost benchmark layer and its governance (§27, R17). Inputs v17 (§27.1) adds the nullable top-level `elemental_benchmark` block, `CostPackage.benchmark_origin` and the due-diligence source records (`source_records`, `source_resolutions`); the v16 → v17 migration writes the block null, every package origin null and both record arrays empty, so every migrated document is inert. Alembic 008 adds the benchmark library, index-series, user and appraisal-version tables and the governance columns. No existing computed value changed — the result gains `elemental_benchmark` (null on every migrated document) and the benchmark layer is advisory until a user applies rows to the cost plan, which is an ordinary cost-plan edit; `outputs_hash` and `audit_hash` move because the result shape changed. The v16 → v17 identity gate asserts it corpus-wide, comparing `metrics` with `elemental_benchmark` present and null on both arms, `model` and `schedule`, with no exclusion.
 - **2.18.0** — the platform half of R16 (§26, R16b). **Removes `sdlt_pence` from the result**: the R8 alias carried `acquisition_tax_pence`'s value under an England/NI-only name and had one remaining reader; every other result field is unchanged and no computed value moves (the v15 → v16 identity gate asserts it corpus-wide). Because the result shape changed, `outputs_hash` — and so `audit_hash` — moves for identical inputs; that is why this is a calc bump and not a silent removal. Inputs v16 (§26.1) removes `conversion_costs.contingency_pct` and the eight legacy fee fields, dead since v7 copied them into `cost_plan`. Alembic 007 drops the seven stored summary columns (§26.3). The calculator gains addresses and stages (§26.5), the bundle a gate (§26.6), the cash-flow page its eligibility column (§26.4).
 - **2.17.0** — the standard lender stress pack (§25, R16), with inputs v15 adding four `ScenarioOverrides` fields, all written at their identity zero: `saleable_area_adjustment_pct`, `abnormal_cost_adjustment_pct`, `programme_slip_months` and `refi_ltv_adjustment_pct`. §12.1's lever table goes from nine rows to thirteen — `saleable_area` (unit areas **and** values, §25.1), `abnormal_cost` (the `abnormal` contingency class, §16.3), `programme_slip` (every predecessor-free phase of the network, §18.9) and `refi_ltv` (the take-out's LTV cap, §19.8) — and gains its first two pairs of levers writing a **shared** field: `saleable_area` with `gdv` (`estimated_value_pence`) and `programme_slip` with `phase_slip` (`slip_months`). Both composition orders are stated there — immaterial for the additive pair, and **area first, then `gdv`, each rounding once** for the other, which is why a cell now applies its settings newest lever first rather than in caller order. `STRESS_PACK` is a closed, normative list of nine stresses (§25.2), each run as one §12.5 cell through §12.7's validity rule, two of them carrying settings derived from the base document (§25.3) — one average unit's share of area and value, and the recorded due-diligence risks crystallising, which is §23.9's note built. An inapplicable stress is measured, marked and printed with the fact it lacks (§25.4). Memo §10 and the Sensitivity page print the nine rows; the Scenarios page gains an input for every remaining `ScenarioOverrides` field, and both the scenario cards and the memo's comparison adopt §12.7 in place of appraising an unvalidated levered document (§25.6). Calc 2.17.0 (R16) adds §25's stress pack and four levers. **It changes no existing computed value** — the v15 identity gate compares metrics (flags strictly), ledger, schedule and, on four named fixtures, the default sensitivity suite, with no exclusion. §23.9's "recorded for R16's presets" note becomes a historical note.
 - **2.16.0** — the cost plan in time (§24, R15b), with inputs v14 adding one nested field, `cost_plan.qs.inflation: { annual_pct } | null`. Every detailed package gains a resolved-phase window, curve and curve-weighted spend midpoint (§24.2, `resolved_phase_id`, `midpoint_month`), a tender-price inflation allowance from `qs.base_date` to that midpoint (§24.3, `inflation_pence`, `inflation_total_pence` inside `construction_total_pence`), and a per-month lender-eligible draw share that §4.2(b)'s advance cap now reads in place of R14's single ratio (§24.4, `uses[m].lender_eligible_construction_pence`). One flag is added: `no_inflation_allowance`. **It changes `construction_total_pence` on any document carrying a recorded allowance (an additive line; `0` elsewhere) and moves `funding_gap_pence` and its dependent metrics on fixture S alone** — the corpus's one document with packages in more than one spend window and an ineligible package among them; every other document's per-month share recovers R14's uniform-ratio figure exactly (§24.4's recovery claim, asserted corpus-wide). The v13 → v14 identity gate compares metrics, ledger and schedule, the new fields included, on both arms **with no exclusion**, and the flag list is compared with strict equality, `no_inflation_allowance` asserted by name as the sole addition. §16.9 limitations 1 and 2, §16.9's inflation line, §20.5 limitation 3 and §23.11 limitation 6 become historical notes.
@@ -62,7 +63,7 @@ All calculations are pure functions of the input document. No wall-clock time, r
 
 ### 1.6 Versioning
 
-Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22); `13` (**inputs v13**) = calc 2.15.0+ (adds the non-nullable top-level `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, §23); `14` (**inputs v14**) = calc 2.16.0+ (adds `cost_plan.qs.inflation`, §24); `15` (**inputs v15**) = calc 2.17.0+ (adds the four stress-pack scenario fields, §25); `16` (**inputs v16**) = calc 2.18.0+ (removes `conversion_costs.contingency_pct` and the eight legacy fee fields, dead since v7 — §26.1). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
+Every appraisal document carries `calc_version` (semver of this specification's implementation) and `inputs_version` (schema version of the input document): `1` = legacy pre-spec snapshot; `2` = this specification (calc 1.0); `3` = calc 2.x (adds optional `lender_valuation` block); `4` = calc 2.2.0+ (adds optional `programme`, `sales_phasing`, `refinance` blocks); `5` = calc 2.7.0+ (adds jurisdiction, acquisition date and acquisition tax override); `6` = calc 2.8.0+ (adds the entered `areas` block and per-unit `ancillary`, §15); `7` = calc 2.9.0+ (adds the `cost_plan` block: mode, package schedule, three contingency classes, fee lines, §16); `8` = calc 2.10.0+ (adds the `vat` block and the per-line `vat_override`, §17); `9` = calc 2.11.0+ (turns `programme` into a precedence network and adds `phase_id` on packages and fee lines, `anchor` on sale tranches and `refinance`, and the two `phase_slip` scenario fields, §18); `10` (**inputs v10**) = calc 2.12.0+ (adds the top-level `investment_case` block and narrows `refinance.investment_value_pence`/`ltv_pct` to nullable alongside a new `arrangement_fee_basis`/`arrangement_fee_pct` pair, §19); `11` (**inputs v11**) = calc 2.13.0+ (adds the top-level nullable `monitoring` block, §20); `12` (**inputs v12**) = calc 2.14.0+ (adds the top-level nullable `unit_sales` block and the `sales_slip_months` scenario field, §22); `13` (**inputs v13**) = calc 2.15.0+ (adds the non-nullable top-level `due_diligence` block, `cost_plan.qs` and `CostPackage.price_basis`, §23); `14` (**inputs v14**) = calc 2.16.0+ (adds `cost_plan.qs.inflation`, §24); `15` (**inputs v15**) = calc 2.17.0+ (adds the four stress-pack scenario fields, §25); `16` (**inputs v16**) = calc 2.18.0+ (removes `conversion_costs.contingency_pct` and the eight legacy fee fields, dead since v7 — §26.1); `17` (**inputs v17**) = calc 2.19.0+ (adds the nullable top-level `elemental_benchmark` block, `CostPackage.benchmark_origin` and the due-diligence source records, all inert on migration — §27.1). Outputs are only comparable within a `calc_version`. Calc 2.6.0 (R7) adds §3.16.1's realisation basis and §13's report provenance; it moves `equity_multiple` from `0` to `null` for schedules with no realisation event and changes no other computed value.
 
 Calc 2.17.0 (R16) adds §25's standard lender stress pack, four sensitivity levers and the four
 inputs-v15 scenario fields they are written through. **It changes no existing computed value** —
@@ -458,6 +459,7 @@ As defined in §2. Reported with utilisation: net = cumulative draws + capitalis
 ### 5.7 Peak debt [R1]
 
 - **Definition:** `max` over months of the intra-month maximum balance = `opening + draw + capitalised_fees + interest_accrued (if rolled up)` before that month's repayment. Reported with its month index (date from the programme in R2), committed gross facility, facility headroom at peak, interest-reserve remaining at peak, and contingency remaining at peak.
+- **Month labels [R17 — calc 2.19.0].** The reported month index **is the ledger index**: zero-based, with the acquisition month at `Month 0`, the same axis every entered month offset (`timing_month`, `month_offset`, `reporting_month`) is expressed on. Every page, table and memo sentence prints `Month n` from that index through one labeller (`formatProgrammeMonth`); no consumer adds one. Where a programme anchor exists (§18.2), calendar months are printed instead, from the same function. Peak-debt prose and the cash-flow table therefore name the same month by construction (the third audit's §8.4 finding was the memo's `+ 1`).
 
 ### 5.8 Interest reserve [R1 input & tracking]
 
@@ -921,6 +923,9 @@ Every generated appraisal report prints, before any figure, a panel carrying:
 | Approval conditions | the case's `conditions` (§21.2 — set only by `approved_with_conditions`) | — (row omitted unless the case records conditions) [R14b] |
 | Case locked audit hash | the case's `locked_audit_hash` — the audit hash **as at lock time**, which is the eighth component of `case_hash` and is not the "Audit hash" row above | — [R14b] |
 | Case hash | the case's `case_hash` (§13.2.1) | — [R14b] |
+| Report area unit | the display preference the memo was generated under (§27.2): `m²`, or `ft², 1 m² = 10.7639104167097 ft²` — a presentation option passed to the generator, never an input | — (always present; the canonical figures are metric) [R17] |
+| Benchmark dataset | `metrics.elemental_benchmark.dataset_version` and its `content_hash` (§27.6), printed `<version> (<content_hash>)` beside the provider label | — (row omitted when `elemental_benchmark` is null) [R17] |
+| Index dataset | `metrics.elemental_benchmark.index_dataset_version` with `base_index_name`, the two observations and the resulting `currentisation_factor`; "not currentised" when the method is `none` | — (row omitted when `elemental_benchmark` is null) [R17] |
 
 - **The case rows are the case hash's components, and that is why they are there
   [R14b].** They are not decoration and are not a subset chosen for readability.
@@ -1247,6 +1252,20 @@ failing condition:
 
 Automated report QA asserts these against the generated PDF's own content
 streams — position and measured width, not the generator's intentions.
+
+**Month-label convention [R17 — calc 2.19.0].** Every month the memo prints
+is a ledger month on §5.7's axis: `Month 0` is the acquisition month and
+every offset is zero-based, exactly as entered. The memo's Programme section
+states this once — *"Months are ledger months: Month 0 is the acquisition
+month; where a programme anchor exists, calendar months are printed
+instead."* — and every month label in the document (the peak-debt sentence,
+the cash-flow and cost-to-complete tables, the programme table) comes from
+the one labeller, `formatProgrammeMonth`, so prose and table cannot disagree
+by one. The basis of preparation also states the report area unit
+(§27.2's methodology sentence, printed once) and, verbatim, *"This PDF is not
+tagged to PDF/UA; the generator library exposes no structure tree."* — the
+title, subject, language and `DisplayDocTitle` metadata stay (§27.9
+limitation 9).
 
 1. **No drawn item leaves the page.** Every text item's bounding box, the draft
    banner included, sits inside the media box within 0.5 mm.
@@ -1740,6 +1759,7 @@ Recorded so they are not read as oversights.
 - **No per-package programme.** Every package spread with the construction curve (§6); there was no per-package start offset, duration or curve. R12 (§18) shipped dated, dependent programme *phases* instead — phase-level, not package-level — so this remained open.
 
   **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24.2 gives every package its resolved phase's window, curve and a curve-weighted spend midpoint, and the Costs page gains the phase picker to write it. What is retained is the narrower §24.9 limitation 5: a package's programme is its phase, and there is no per-package offset inside one.
+  **[R17 — calc 2.19.0] The benchmark layer does not reopen this.** §27's elemental benchmark compares an externally sourced, index-currentised rate set against the *plan* (`base_build_pence`, or the targeted package's uninflated `amount_pence`), stated at `currentisation_date`; it carries no forward step of its own. Where benchmark rows are applied, `qs.base_date` is forced equal to `currentisation_date` and §24.3 remains the single forward mechanism (§27.3's seam). A dated index series (§27.6) currentises benchmark rates *to* the base date; it does not replace the flat allowance *from* it — §24.9 limitation 1 stands.
 - **`lender_eligible` acts as a uniform ratio on the construction line, not a per-package draw profile.** Wired in calc 2.13.0 (R14): `lender_eligible_base_pence / base_build_pence` scaled §4.2(b)'s cap base as one ratio applied to the whole monthly construction line, so contingency and compliance followed it proportionally, and an ineligible package's own spend months were not distinguished from any other package's. Recorded again as §20.5 limitation 3.
 
   **[R15b — calc 2.16.0] Resolved; kept as a historical note.** §24.4 replaces the single ratio with a per-month share computed from each package's own resolved window and unrounded spend weights, and §4.2(b) reads the per-month figure. The share recovers this exact ratio, every month, on every document whose packages share one spend window (the auto path, the legacy arm, and any network where every package resolves to one phase); it departs only on fixture S. What survives is the narrower §24.9 limitation 3: the share is a ratio over per-package weights, not a per-package ledger, and contingency and compliance still follow the month's share rather than carrying an eligibility rule of their own (§24.9 limitation 4).
@@ -3353,6 +3373,24 @@ the endpoint, because a check that lives in one code path is not an invariant.
 authentication, so the record says who *claims* to have acted and the change log
 says when; see §21.6 limitation 1.
 
+[R17 — calc 2.19.0] **Actors are authenticated users; the names stay.** The four
+free-text columns are no longer client-supplied: each is written by the server
+from the authenticated user's `display_name`, and beside each sits the user's id
+(`created_by_user_id`, `submitted_by_user_id`, `reviewer_user_id`,
+`decided_by_user_id`, migration 008). The names remain because they are
+components of `case_hash` (§21.4) — the hash formula does not change — and the
+ids are what governance evaluates (maker-checker, §21.2). The ids are nullable
+because every pre-R17 row has none; such a row is a **legacy case** and §21.5
+says what it may still do. A case also carries an integer **`version`**, 1 at
+creation and incremented by every transition, which with `case_hash` is the
+client's optimistic-concurrency token (§21.5). The creation body is
+`{project_id}` alone; a sent `created_by` is a **422** (`extra='forbid'`), not
+silently ignored, so a client still on the R14b shape learns it is wrong rather
+than believing its name was recorded. Creation requires a role in `CREATE_ROLES`
+(`developer`, `broker`, `administrator`) — an unauthenticated request is a
+**401** and a wrong role a **403**, both checked before the R14b preconditions
+above, which then run in their R14b order.
+
 ### 21.2 The state machine
 
 The statuses are the union `report-provenance.ts` has carried since R7:
@@ -3384,6 +3422,42 @@ second escape route.
 hand-kept list of enabled actions is a second copy of the state machine, and the
 copy is what goes stale.
 
+[R17 — calc 2.19.0] **The role matrix.** A second normative table,
+`ROLE_TRANSITIONS`, says which roles (`app/auth/roles.py`: `developer`,
+`broker`, `underwriter`, `credit_approver`, `administrator`) may move a case
+*into* each status. It lives once per language beside `ALLOWED_TRANSITIONS` —
+`provenance.py` enforces it, `report-provenance.ts` mirrors it for the UI's
+buttons only — and is pinned by tests restating the whole table in both
+languages, the same discipline as the transition table:
+
+| To | Roles |
+|---|---|
+| `draft` (creation, `CREATE_ROLES`) | `developer`, `broker`, `administrator` |
+| `submitted` | `developer`, `broker`, `administrator` |
+| `under_review` | `underwriter`, `credit_approver` |
+| `information_required` | `underwriter`, `credit_approver` |
+| `credit_approved` | `credit_approver` |
+| `approved_with_conditions` | `credit_approver` |
+| `declined` | `credit_approver` |
+| `superseded` | any authenticated role — written as the full five-member set, not an "any" sentinel that would need a second rule to read it |
+
+`can_transition(role, to_status)` (`canTransition` in TypeScript) reads the
+table and nothing else: it says nothing about legality from the current status,
+which stays `ALLOWED_TRANSITIONS`'s question, and nothing about maker-checker.
+An administrator is **not** a universal actor: the role opens and submits cases
+and supersedes them, and cannot review or decide one.
+
+**Maker-checker is a user-id rule, not a role rule.** A decision
+(`credit_approved`, `approved_with_conditions`, `declined` — `DECISION_STATUSES`)
+is refused with a **403** when the actor's id is the case's `created_by_user_id`
+or its `submitted_by_user_id`, whatever the actor's role now says; `→ under_review`
+is refused with a 403 when the actor's id is `submitted_by_user_id`. Both compare
+ids, so promoting the submitter to `credit_approver` does not let them approve
+their own submission. A legacy case (§21.1) whose `submitted_by_user_id` is null
+cannot have the rule evaluated at all, and a decision on it is a **409** —
+"this case was submitted without an authenticated user — supersede it and
+recreate" — supersede being what still works on it.
+
 Per-transition side effects, applied server-side in the same transaction as the
 event write:
 
@@ -3400,6 +3474,11 @@ event write:
   died — a superseded approval still reads as an approval that once held.
 - Every transition, creation included, writes its change-log event and recomputes
   `case_hash` (§13.2.1).
+- [R17 — calc 2.19.0] Every actor column above is written as the pair (display
+  name, user id) from the authenticated user; every transition also sets
+  `version = version + 1`, and the update's compare-and-swap predicate is on
+  **status and version both** (§21.5). The `→ superseded` rule is unchanged: name
+  and id land in the event only.
 
 **The conditions rule: one field, one meaning.** `conditions` is **required** for
 `approved_with_conditions` and **must be absent** on every other transition;
@@ -3415,6 +3494,10 @@ a second request. A transition against a project with no live case is a **404**.
 A `to_status` that is not a member of the union at all is a **422** — not a 409:
 409 says "not from here", and an unknown status is not a state the document could
 ever be in.
+
+[R17 — calc 2.19.0] Two more codes join them: **401** for any unauthenticated
+request on any of the five routes, and **403** for a role the matrix does not
+admit or a maker-checker refusal. The full check order is §21.5's.
 
 ### 21.3 Staleness
 
@@ -3491,6 +3574,41 @@ repositories that flush and endpoints that commit.
 | `GET /lender-cases/{project_id}/history` | Every case the project has ever had, superseded included, newest first, each with its derived `stale`. |
 | `GET /lender-cases/{project_id}/events` | The change log across all of the project's cases, newest first. |
 
+[R17 — calc 2.19.0] **Amended contract.** Every route above requires an
+authenticated user (**401** otherwise); the two reads and the history are open to
+any authenticated role. The bodies change shape — both models are
+`extra='forbid'`, so a sent `created_by` or `actor` is a 422:
+
+| Endpoint | R17 behaviour |
+|---|---|
+| `POST /lender-cases` `{project_id}` | As before, after a role check: 403 unless the user's role is in `CREATE_ROLES` (§21.1). Writes `created_by` = display name, `created_by_user_id`, `version = 1`, and a creation event carrying `actor_user_id`, `input_snapshot_hash` and `outputs_hash` (the locked hashes), `case_hash_after` and `case_version_after = 1`; its `idempotency_key` and `reason` are null. |
+| `POST /lender-cases/{project_id}/transition` `{to_status, note?, conditions?, reason?, expected_version, expected_case_hash, idempotency_key}` | The checks run in this order, each named by its code so a client can tell which rule it hit: **404** no live case → **422** unknown status → **idempotent replay** (below) → **409** illegal transition (§21.2 table) → **403** role (`ROLE_TRANSITIONS`) → **403** maker-checker → **409** legacy case (decision with null `submitted_by_user_id`) → **409** "locked snapshot integrity failure" → **409** "case hash mismatch" (`expected_case_hash` ≠ the row's `case_hash`) → **409** "stale version" (`expected_version` ≠ the row's `version`) → **422** conditions rule → the write, under a compare-and-swap on status **and** version (a lost race is the R14b 409). `reason` is free text for the change log and never lands on the case. |
+
+**Idempotency.** The client mints `idempotency_key` per confirmation (≤ 64
+characters, no `|` or control character); it is stored on the event, unique per
+case (`uq_lender_case_event_idempotency`). A repeat with the same key and the
+same `to_status` is a **200 that writes nothing** and returns the case as it now
+stands — same `version`, same `case_hash`, no new event; the same key with a
+different `to_status` is a **409**. The replay check sits *before* the legality
+and concurrency checks on purpose: a client retrying a request whose first
+attempt succeeded is now looking at a case that has moved — its
+`expected_version` is stale and its old `to_status` is no longer legal from here
+— and a replay that could only ever answer 409 would not be idempotency. Two
+requests with the same key racing past the lookup are caught by the unique
+index; the loser rolls back with its case update and answers 409.
+
+**The integrity check, and what it cannot see.** Before any transition the
+server re-parses `locked_inputs_snapshot` with the version-dispatching parser
+and recomputes `input_hash` over it exactly as the appraisal save path did; a
+result that differs from `locked_input_hash` is a row edited under the
+application, and is refused as "locked snapshot integrity failure". The check
+runs **only when the snapshot parses**: a snapshot this build cannot read (a
+pre-R17 test row's `{}`, a schema no longer parsed) yields no hash to compare,
+and the transition proceeds to the next check rather than being refused for a
+reason that is not tampering. The untampered walks in the test module are the
+other half of the guard — they prove the recomputation reproduces the stored
+hash when nothing was touched.
+
 **The change log is append-only.** Events are rows in their own table
 (`lender_case_events`), never a mutable JSON column on the case — a log that can
 be rewritten by the thing it logs is not a log. Each event records `from_status`,
@@ -3498,6 +3616,13 @@ be rewritten by the thing it logs is not a log. Each event records `from_status`
 exactly once per case, on the creation event. Every case write, creation
 included, writes its event **in the same transaction** as the write it records,
 so the log cannot be missing an entry for a state the case actually reached.
+
+[R17 — calc 2.19.0] Each event additionally records `actor_user_id`,
+`idempotency_key`, `reason`, `input_snapshot_hash` and `outputs_hash` (the
+case's locked hashes at the time of the write), and the state the write left
+behind: `case_hash_after` and `case_version_after`. All are nullable because
+pre-R17 events carry none of them; on an R17 event only `idempotency_key` and
+`reason` may be null (the creation event has no key; `reason` is optional).
 
 **Newest-first ordering is by the events' integer key, not by timestamp.**
 [Refined at plan time, against the design's first draft.] The event table takes
@@ -3518,7 +3643,9 @@ sort applied after a `LIMIT` would be wrong in any case.
 **Governance rules live in one place per language.** They live in
 `app/financial_model/provenance.py`: `ALLOWED_TRANSITIONS` (§21.2),
 `APPROVED_STATUSES`, `is_stale` (§21.3), and the six-member `DraftReason` with
-`draft_reason` and `document_status` (§13.3). The transition endpoint validates
+`draft_reason` and `document_status` (§13.3). [R17 — calc 2.19.0] R17 adds
+`ROLE_TRANSITIONS`, `CREATE_ROLES`, `DECISION_STATUSES` and `can_transition`
+(§21.2) to the same module and the same mirror. The transition endpoint validates
 against the first and the read shape derives its `stale` flag with the third; the
 document-status half has no server consumer yet and is ported anyway, because a
 governance rule that exists in one language is a rule the other language can
@@ -3542,6 +3669,12 @@ Recorded so they are not read as oversights.
    single-user product gains very little from it today. The change log's value is
    unaffected: it is an accurate record of what was asserted and when, which is
    what a later reviewer needs in order to ask the right question.
+   [R17 — calc 2.19.0] **Superseded.** R17 ships the users table, sessions and
+   role-based authentication (`app/auth`), and every lender-case write path
+   records the authenticated user's id beside the display name (§21.1). The
+   limitation survives only for legacy cases — rows written before R17, whose id
+   columns are null — and §21.2's maker-checker rule refuses to decide those,
+   so the remedy is supersede-and-recreate (limitation 3).
 2. **No drawdown-request or certificate history.** §20.5 limitation 5 names the
    change log as where such a history would live. The *case* change log ships
    here; a monitoring statement is still one statement per document, overwritten
@@ -3926,6 +4059,8 @@ Rule 2's test is the **strict, integer-safe** form of "more than 25%": multiplie
 **What this does and does not catch.** Rule 1 fires only where the scraper structured the occupation fact. Where the contradiction lives in the listing's prose it is invisible to both rules, and this specification says so rather than pretending a keyword match is evidence (§23.11 limitation 1). What catches that case is §23.7: `vacant_possession` is seeded `unknown`, the document is DRAFT under *DUE DILIGENCE INCOMPLETE* until someone evidences it, and the page shows the listing's description beside the item being evidenced. The contradiction stops being silent the moment the model refuses to assume vacancy.
 
 A `null` `source_record` is disclosed, not hidden: the memo prints *"No listing record captured; source-conflict checks did not run."*
+
+**[R17 — calc 2.19.0] Structured source records and the field-conflict rule (§27.1, design decision 12).** Beside the single captured listing record, inputs v17 adds two arrays to `due_diligence`, both `[]` on every migrated document: `source_records[]` — one `SourceEvidenceRecord` per source (`kind` ∈ `listing_narrative | listing_structured | measured_survey | valuation | title | planning | appraisal_inputs | other`, with `captured_at`, `reference`, `captured_by`, an unparsed `narrative_excerpt` and a `claims` block of six nullable fields: `existing_use`, `proposed_use`, `floor_area_sqm`, `tenure`, `upper_parts_included`, `vacant_possession`) — and `source_resolutions[]` (`field`, `resolved_value`, `chosen_record_id`, `evidence_reference`, `resolved_by`, `resolved_at`, `reason`). A `null` claim is "this source says nothing", never a value. **The conflict rule:** a field is in conflict when two or more records carry non-null claims for it that differ — strings compared trimmed and case-insensitively, `floor_area_sqm` when the two figures disagree by more than 5% of the smaller (`|a − b| × 20 > min(a, b)`, multiplied out, so exactly 5% does **not** fire), booleans and `tenure` by value. A conflict is **resolved** when a resolution names that field with a non-blank `evidence_reference` **and** a non-blank `resolved_by`; a resolution on another field, or one with blank evidence, resolves nothing. The engine never picks a winner. The result gains `source_field_conflicts[]` (each naming the field, every claiming record's `record_id`, `kind` and `value`, `resolved` and `resolution_id`) and `unresolved_source_conflicts`, the count of those still `resolved: false`; each unresolved conflict raises one **red** `source_conflict_unresolved` flag whose message names every value (`source conflict on <field> is unresolved - <kind>: <value> | <kind>: <value>; record an evidenced resolution`). **The gate:** §23.7's seventh FINAL condition now reads two counts — `entered_unknown_count === 0` **and** `unresolved_source_conflicts === 0` — through the same `due_diligence_incomplete` reason (`dueDiligenceGateFor` / `due_diligence_complete`); two records disagreeing on a claim with no evidenced resolution is exactly the unevidenced fact a FINAL banner must not cover. §27.5 rule 15 validates the arrays (record ids unique; a resolution's `field` a claims key and its `chosen_record_id`, when set, a record on the document). The project's structured use is not rewritten by any of this.
 
 ### 23.6 QS provenance and the price basis
 
@@ -4668,6 +4803,14 @@ Recorded so they are not read as oversights.
 1. **One rate, flat.** A single annual tender-price rate for the whole plan;
    no dated index table, no per-package rate. A plan whose packages carry
    different indices records one.
+   **[R17 — calc 2.19.0]** Still one rate, still flat. §27's index-ratio
+   currentisation moves an elemental benchmark rate from its own base date
+   *to* `currentisation_date`, and apply forces `qs.base_date` equal to that
+   date, so §24.3 stays the product's single forward step (§27.3); the
+   benchmark compares against the plan at the base date and enters nothing.
+   A versioned dated index series (§27.6) is now stored, but it is not read
+   by this section — per-package index selection remains out of scope.
+
 2. **Inflation is on packages only.** Fee lines are not inflated (an
    appointment is priced at appointment); contingency bases are uninflated
    by design (§24.3). A `pct_of_construction_total` fee follows the
@@ -5504,7 +5647,10 @@ root elsewhere in the file.
 module at the call (`export-pdf`, `export-excel`, `export-investment-memo`),
 so `jspdf`, `jspdf-autotable` and `xlsx` leave the entry. `PropertyMap`
 (`leaflet`, `react-leaflet`) and `ConversionCalculator` are `React.lazy`
-route elements under one `Suspense` fallback in `App.tsx`.
+route elements under one `Suspense` fallback in `App.tsx`; R17 adds
+`LoginPage` and `ExportPage` to that set — `ExportPage`'s static
+`runAppraisal` import had placed the whole `model` chunk in the entry
+closure, and §27's engine additions pushed it past the ceiling (502.1 kB).
 `report-layout.ts`'s `import type { jsPDF }` is a type and costs nothing.
 
 **Gate.** `vite.config.ts` sets `build.manifest: true`. `package.json`'s
@@ -5627,3 +5773,647 @@ Recorded so they are not read as oversights.
 7. **`total_construction_sqm` stays behind §15.4's accessor.** It is a live
    manual-basis input, not a legacy field, and this release does not touch
    it.
+
+---
+
+## 27. The elemental cost benchmark, area units and authenticated governance [R17 — calc 2.19.0]
+
+The first release from the third audit
+(`docs/reviews/2026-08-30-lender-readiness-third-audit.md`, 86/100): its two
+P0 rows (self-declared lender-case actors; stored appraisals left on old
+versions indefinitely), its P1 rows on the missing BCIS-style benchmark and
+the flat annual inflation, §7.2's unrecorded source conflict on the York
+appraisal, and four presentation defects (§8.4 month labels, §8.8 the stress
+Setting cell, §10 unqualified ROE, §11 PDF/UA). §27 defines the benchmark
+layer, the area-unit convention and the currentisation seam; §21 is amended
+in place for authenticated governance; §23.5 is amended for the structured
+source records; §13.1, §5.7 and §13.5 carry the presentation rules.
+
+**One calc bump, for one reason.** `AppraisalResultV2` gains one field,
+`elemental_benchmark` (null on every migrated document), so every stored
+`outputs` shape changes and `outputs_hash` and `audit_hash` move for
+identical inputs — §1.6's comparability rule makes that a `calc_version`
+change, exactly §26's reasoning for 2.18.0. **No computed figure moves.** The
+benchmark layer is advisory: nothing it computes enters
+`construction_total_pence`, TDC, peak debt or profit unless a user applies
+rows to the cost plan, and an application is an ordinary cost-plan edit that
+the existing engine prices. The v16 → v17 identity gate asserts this
+corpus-wide with no exclusion (§27.7).
+
+### 27.1 Inputs v17
+
+```
+CalculatorInputsV17 = CalculatorInputsV16 +
+  elemental_benchmark: null | SchemeElementalBenchmark
+  cost_plan.packages[].benchmark_origin: null | BenchmarkOrigin       -- null by migration
+  due_diligence.source_records: SourceEvidenceRecord[]               -- [] by migration (§23.5)
+  due_diligence.source_resolutions: SourceConflictResolution[]       -- [] by migration (§23.5)
+```
+
+**The benchmark set travels inside the document.** `elemental_benchmark`
+embeds the full set header *and* its rate rows, plus a reference to the
+library row it came from (`library_set_id`, `content_hash`). Both engines
+compute the benchmark result from the document alone — parity by
+construction — and a historic appraisal is reproducible without the library.
+A library-only reference is rejected: the Python engine could not run a
+fixture, and a later library import could silently change a stored
+appraisal's comparison.
+
+```
+SchemeElementalBenchmark:
+  set:            ElementalBenchmarkSet          -- header + rates, embedded
+  selections:     SchemeElementalCostSelection[]
+  thresholds:     { material_variance_pct: number   -- default 15
+                    stale_after_months: integer     -- default 12
+                    min_coverage_pct: number }      -- default 60
+  applications:   BenchmarkApplication[]          -- audit trail of every apply
+  library_set_id: string | null
+```
+
+```
+ElementalBenchmarkSet:
+  id, name
+  provider_type:         'bcis_licensed' | 'public_benchmark' | 'user_qs'
+  provider_name, source_title, source_url (string|null), source_publication_date (ISO|null)
+  retrieved_at (ISO datetime|null), licence_or_permission (string)
+  dataset_version (string), building_function (string)
+  project_type:          'new_build' | 'refurbishment' | 'conversion'
+  specification_level (string), region (string)
+  location_factor (number|null)            -- index, 100 = national base
+  location_factor_source (string|null)
+  base_date (ISO)                          -- the pricing date of the rates
+  base_index_name (string|null), base_index_value (number|null)
+  current_index_name (string|null), current_index_value (number|null)
+  index_dataset_version (string|null)      -- the library index version that supplied the two observations
+  currentisation_date (ISO|null)
+  currency: 'GBP'
+  notes, imported_by (string), created_at (ISO datetime)
+  source_file_sha256 (string|null)         -- hash of the imported file, when there was one
+  content_hash (string)                    -- canonical hash of the normalised set (§27.6)
+  rates: ElementalBenchmarkRate[]
+```
+
+The three provider tiers are labelled, in every result and report, as
+`User-supplied BCIS licensed benchmark`, `Public benchmark` and `User/QS
+benchmark` (`PROVIDER_LABEL`). No provider's rates ship in the repository
+(§27.9 limitation 1); a `bcis_licensed` set is a user-supplied, licensed
+export the application has not verified, and every report says so.
+
+```
+ElementalBenchmarkRate:
+  id, element_code (ElementCode), element_label, description
+  measurement_basis: 'area' | 'per_unit' | 'per_item' | 'percentage' | 'lump_sum'
+  original_unit:     'gbp_per_sqm' | 'gbp_per_sqft' | 'gbp_per_unit' | 'gbp_per_item' | 'pct' | 'gbp'
+  original_rate_pence: integer             -- 0 on a percentage row
+  rate_pct: number | null                  -- percentage rows only; null otherwise
+  lower_quartile_rate_pence, median_rate_pence, upper_quartile_rate_pence: integer | null
+  sample_count: integer | null
+  location_factor: number | null           -- per-rate override of the set's factor; null = inherit
+  evidence_status: 'verified' | 'unverified' | 'draft' | 'estimated'
+  source_reference: string
+  notes: string
+```
+
+`original_unit` agrees with `measurement_basis` (§27.5 rule 3). Unknown
+quartiles and sample counts stay `null`; nothing derives them.
+
+```
+SchemeElementalCostSelection:
+  element_code
+  benchmark_rate_id: string | null         -- null = the element is selected but unpriced
+  quantity: number                         -- CANONICAL: m² for 'area', count for per_unit/per_item, 1 for lump_sum, 0 (unused) for percentage
+  quantity_unit: 'sqm' | 'unit' | 'item' | 'each' | 'pct_base'
+  adjustment_pct: number                   -- user adjustment on the currentised rate; 0 = none
+  adjustment_reason: string                -- required when adjustment_pct != 0 (rule 5)
+  include_in_cost_plan: boolean            -- the apply checkbox
+  target_cost_package_id: string | null    -- the QS package this element is compared against
+  selected_by: string, selected_at: ISO datetime
+```
+
+The selected, currentised and adjusted rates, the benchmark amount, the QS
+amount and the variance are **derived** and live on the result row (§27.4),
+never on the input — a stored derived figure is one that can go stale (the
+R9/R10 lesson).
+
+```
+BenchmarkOrigin:
+  kind: 'benchmark'
+  set_id, set_content_hash, benchmark_rate_id (string|null), element_code
+  applied_at: ISO datetime, applied_by: string
+  currentisation_method: 'index_ratio' | 'none'   -- the set's method at apply time (§27.5 `applied_without_currentisation`)
+
+BenchmarkApplication:
+  id, applied_at, applied_by, set_id, set_content_hash
+  element_codes: ElementCode[]
+  created_package_ids: string[], replaced_package_ids: string[]
+  previous_cost_plan: CostPlanInputs       -- the plan as it was immediately before this apply
+```
+
+**The element catalogue.** Thirty-nine `ElementCode`s, fixed in both engines
+in one order (`ELEMENT_CATALOGUE`), each with a label, a default
+`measurement_basis` and a default `CostPackageCode` used when a draft
+package is created:
+
+| Code | Label | Default basis | Default package |
+|---|---|---|---|
+| `facilitating_works` | Facilitating works | lump_sum | enabling_strip_out_asbestos |
+| `surveys_investigations` | Surveys and investigations | lump_sum | enabling_strip_out_asbestos |
+| `strip_out` | Strip-out | area | enabling_strip_out_asbestos |
+| `demolition` | Demolition | area | enabling_strip_out_asbestos |
+| `asbestos_removal` | Asbestos removal | lump_sum | enabling_strip_out_asbestos |
+| `substructure_alterations` | Substructure alterations | area | structure |
+| `frame_alterations` | Structural frame alterations | area | structure |
+| `upper_floors_strengthening` | Upper floors and structural strengthening | area | structure |
+| `roof_works` | Roof works | area | roof_windows |
+| `stairs_ramps` | Stairs and ramps | per_item | structure |
+| `external_walls_facade` | External walls and façade | area | envelope |
+| `windows_external_doors` | Windows and external doors | area | roof_windows |
+| `internal_walls_partitions` | Internal walls and partitions | area | partitions |
+| `internal_doors` | Internal doors | per_item | partitions |
+| `wall_finishes` | Wall finishes | area | finishes |
+| `floor_finishes` | Floor finishes | area | finishes |
+| `ceiling_finishes` | Ceiling finishes | area | finishes |
+| `ffe` | Fittings, furnishings and equipment | per_unit | finishes |
+| `kitchens` | Kitchens | per_unit | finishes |
+| `bathrooms` | Bathrooms | per_unit | finishes |
+| `sanitary_installations` | Sanitary installations | per_unit | mech_elec_public_health |
+| `mechanical_services` | Mechanical services | area | mech_elec_public_health |
+| `electrical_services` | Electrical services | area | mech_elec_public_health |
+| `fire_alarm_life_safety` | Fire alarm and life-safety systems | area | fire_acoustic_thermal |
+| `sprinklers` | Sprinklers | area | fire_acoustic_thermal |
+| `smoke_ventilation` | Smoke ventilation | lump_sum | fire_acoustic_thermal |
+| `acoustic_upgrades` | Acoustic upgrades | area | fire_acoustic_thermal |
+| `thermal_part_l_upgrades` | Thermal and Part L upgrades | area | fire_acoustic_thermal |
+| `drainage_alterations` | Drainage alterations | lump_sum | drainage_utilities |
+| `incoming_utility_upgrades` | Incoming utility upgrades | lump_sum | drainage_utilities |
+| `lifts` | Lifts | per_item | lift |
+| `builders_work_in_connection` | Builders' work in connection | percentage | other |
+| `preliminaries` | Preliminaries | percentage | other |
+| `main_contractor_ohp` | Main contractor overhead and profit | percentage | other |
+| `design_development_allowance` | Design-development allowance | percentage | other |
+| `external_works` | External works | area | externals |
+| `landscaping` | Landscaping | area | externals |
+| `risk_allowances` | Risk allowances | percentage | other |
+| `other_conversion_works` | Other conversion works | lump_sum | other |
+
+The default basis is a suggestion for the import template; a rate row's own
+`measurement_basis` governs. The **core** coverage set is every
+non-percentage element — thirty-four of the thirty-nine
+(`CORE_ELEMENT_COUNT`), the denominator of `coverage_pct`.
+
+**Migration** (§27.7) writes `elemental_benchmark: null`, `benchmark_origin:
+null` on every package and both source-record arrays empty, so every
+migrated document is inert under this section.
+
+### 27.2 Area units: the exact conversion
+
+```
+SQFT_PER_SQM = 10.7639104167097          -- exact to the digits given; both engines carry this literal
+
+area_ft2          = area_m2 × SQFT_PER_SQM
+rate_per_ft2      = rate_per_m2 ÷ SQFT_PER_SQM
+rate_per_m2       = rate_per_ft2 × SQFT_PER_SQM
+```
+
+- **The canonical basis is square metres and pence per square metre.** A
+  document stores m² and pence per m² only. The unit toggle is a
+  presentation preference held outside the document (React context plus
+  `localStorage`, key `cra.area_unit`), passed to the memo as an explicit
+  option and printed there. It is not an input: a preference that moved
+  `input_hash` would make a lender case stale for a display choice.
+- A rate imported or typed in £/ft² is converted **once**, on entry, to a
+  float pence-per-m² figure (`canonical_rate_pence_per_sqm`, unrounded);
+  rounding happens only at the money boundary of an *amount*.
+- Toggling changes no stored value: the display conversion is applied to the
+  canonical figure at each render, so N toggles produce the same canonical
+  value as zero toggles.
+- An area typed in ft² is converted with `sqftToSqm` / `sqft_to_sqm` and
+  stored to 4 dp of m² — the entry precision the UI states. `1,076.39 ft²`
+  therefore stores `99.9999 m²` (100 m² is `1,076.391 ft²` to three places);
+  a rate typed in £/ft² is stored unrounded.
+- Money is never rounded twice: `benchmark_amount_pence` is the one rounding
+  in the chain (§27.3).
+- Percentage, per-unit, per-item and lump-sum rows carry no area and are
+  unaffected by the toggle.
+- Displays print the primary unit and the other unit in secondary text.
+
+The worked invariant: `620 m² × 125,000 p/m² = 77,500,000 p`. In imperial the
+same document prints `6,673.62445836 ft²` (8 dp) and
+`11,612.88 p/ft²` (`125,000 ÷ 10.7639104167097 = 11,612.88…`); their product
+is the same `77,500,000 p` before the one rounding, and the ft² figures are
+only ever printed, never stored.
+
+Module: `frontend/src/lib/area-units.ts` and
+`app/financial_model/area_units.py` (exact twins; the `SQFT_PER_SQM` literal
+is pinned equal across the two by a parity test that reads the TypeScript
+source). The memo's three private literals (`10.7639`, `0.092903`, a
+module-private `sqmToSqft`) are retired in favour of the module. The
+lender-valuation module's `SQFT_PER_SQM = 10.7639` is the `global_per_sqft`
+basis' **stored calculation convention** and a calculation input — changing
+it would move `lender_gdv_pence` on fixture G; it is left as it is and its
+comment says so (§27.9 limitation 6).
+
+### 27.3 Currentisation, location and the amount
+
+Per set:
+
+```
+currentisation_factor = current_index_value ÷ base_index_value     -- null unless both non-null, finite and > 0
+location_multiplier   = location_factor ÷ 100                     -- 1.0 when location_factor is null
+                                                                  -- a per-rate location_factor overrides the set's
+```
+
+Per rate (area basis; the other money bases substitute their own canonical
+rate per unit, per item or the lump sum, with `quantity` a count or `1`):
+
+```
+canonical_rate_pence_per_sqm = original_rate_pence                       -- gbp_per_sqm
+                             = original_rate_pence × SQFT_PER_SQM         -- gbp_per_sqft  (float, unrounded)
+currentised_rate             = canonical_rate × (currentisation_factor ?? 1) × location_multiplier
+adjusted_rate                = currentised_rate × (1 + adjustment_pct / 100)
+benchmark_amount_pence       = round_half_up(adjusted_rate × quantity)   -- THE one rounding
+```
+
+Percentage rows: `benchmark_amount_pence = round_half_up(elemental_subtotal_pence
+× rate_pct / 100 × (1 + adjustment_pct / 100))`, where
+`elemental_subtotal_pence` is the sum of every **non-percentage** row's
+rounded amount. Percentage rows are never currentised or location-adjusted:
+a percentage of a currentised base is already current.
+
+Quartiles are currentised by the same factor and multiplier as the rate
+they belong to (a `gbp_per_sqft` quartile is first made canonical); a row is
+`outside_range` when both currentised quartiles exist and its currentised
+rate lies below the lower or above the upper, `null` when no quartiles exist.
+
+Rules:
+
+- **Index ratio whenever two dated observations exist.** `base_index_value`
+  and `current_index_value` come from one named index (`base_index_name ==
+  current_index_name`, §27.5 rule 6) at two periods.
+- **Zero or negative index values are a hard validation error** (§27.5
+  rule 7), never a factor.
+- **Missing either index value → `currentisation_factor: null`,
+  `currentisation_method: 'none'`, warning `rates_not_currentised`.** The
+  rates are then compared at their base date and the report says so.
+  Annual-percentage compounding is offered as a fallback only in the UI's
+  currentisation helper, which then *writes* the derived
+  `current_index_value` as `base × (1 + r)^(months/12)` with
+  `current_index_name = 'assumed: <r>% p.a.'`, so the assumption is visible
+  in the stored document and on the panel — the engine itself has one method.
+- **Location.** `location_factor` null → multiplier 1.0 and the warning
+  `no_location_evidence`, printed as *"No evidenced location adjustment
+  applied."*
+- **Forward inflation is not here.** `forward_inflated_benchmark_amount_pence`
+  on a result row is `round_half_up(benchmark_amount_pence ×
+  inflation_factor)` of the *mapped* cost-plan package
+  (`target_cost_package_id`'s §24.3 factor) — a disclosure of what the
+  package engine would carry, `null` when the row is unmapped or the plan
+  carries no allowance. It enters nothing.
+- **The seam.** Currentisation moves a rate from the set's `base_date` to
+  `currentisation_date`. An applied package's `amount_pence` is
+  `benchmark_amount_pence` — the currentised, adjusted figure at
+  `currentisation_date`. The §24.3 engine inflates it from `qs.base_date`,
+  which apply has ensured equals `currentisation_date`: apply is **refused**,
+  not warned, when a recorded `qs.base_date` differs (a warning would let the
+  double count through). There is one forward step in the product and it is
+  §24.3's.
+
+**Apply creates draft packages; it never overwrites.** One new
+`benchmark_origin`-tagged package per applied element, `price_basis:
+'estimate'`, code from the catalogue's default package. Re-applying an
+element replaces its own earlier benchmark-derived package (same
+`element_code`, same origin) rather than adding a second — the duplicate
+guard. A package without `benchmark_origin`, a `fixed_price` package, or any
+package on a plan whose QS stage is `contract_sum`, is never touched; the
+confirmation lists exactly the packages that will be created or replaced and
+their amounts. The pre-change `cost_plan` is retained in
+`elemental_benchmark.applications[].previous_cost_plan`.
+
+### 27.4 The result block
+
+`AppraisalResultV2.elemental_benchmark: ElementalBenchmarkResult | null`,
+computed once in `deriveMetrics` / `derive_metrics` from the input block,
+the already-derived `cost_plan` result and `developed_area_sqm` (§15.4's
+accessor); null exactly when the input block is null.
+
+```
+ElementalBenchmarkResult:
+  provider_type, provider_label            -- 'User-supplied BCIS licensed benchmark' | 'Public benchmark' | 'User/QS benchmark'
+  set_id, set_name, dataset_version, content_hash, library_set_id
+  building_function, project_type, specification_level, region
+  base_date, currentisation_date
+  base_index_name, base_index_value, current_index_name, current_index_value, index_dataset_version
+  currentisation_factor: number | null
+  currentisation_method: 'index_ratio' | 'none'
+  location_factor: number | null, location_multiplier: number, location_evidenced: boolean
+  area_sqm: number                         -- developed_area_sqm, the area basis every area row defaults to
+  cost_plan_mode: 'headline' | 'detailed'
+  rows: ElementalBenchmarkRow[]            -- one per selection, in CATALOGUE order (not selection order)
+  totals: {
+    benchmark_base_construction_pence      -- Σ rows.benchmark_amount_pence (percentage rows included)
+    elemental_subtotal_pence               -- Σ non-percentage rows
+    qs_base_construction_pence             -- cost_plan.base_build_pence in either mode
+    difference_pence                       -- benchmark − qs
+    difference_pct: number | null          -- pct(difference, qs)
+    benchmark_rate_pence_per_sqm: number | null    -- round_half_up(benchmark ÷ area_sqm), null when area 0
+    qs_rate_pence_per_sqm: number | null           -- cost_plan.implied_rate_pence_per_sqm
+    mapped_qs_amount_pence                 -- Σ amount of packages some row targets (each counted once)
+    unmapped_qs_amount_pence               -- qs_base − mapped
+    unpriced_elements: integer             -- selections with no rate, or a zero quantity on a counted basis
+    elements_without_evidence: integer     -- rows whose rate is not 'verified'
+    elements_outside_range: integer        -- rows with outside_range true
+    coverage_pct: number | null            -- priced non-percentage elements ÷ 34, to 2 dp
+  }
+  warnings: BenchmarkWarning[]             -- §27.5
+  thresholds                               -- the block's thresholds, defaults filled
+  enters_tdc: false                        -- a literal, pinned by test
+```
+
+```
+ElementalBenchmarkRow:
+  element_code, element_label, measurement_basis, original_unit
+  benchmark_rate_id: string | null
+  quantity, quantity_unit
+  original_rate_pence, rate_pct
+  canonical_rate_pence_per_sqm, currentised_rate_pence_per_sqm, adjusted_rate_pence_per_sqm: number | null
+                                                    -- area rows; floats, unrounded; the UI formats
+  currentised_rate_pence, adjusted_rate_pence: number | null
+                                                    -- per-unit, per-item and lump-sum rows; null on area and percentage rows
+  adjustment_pct, adjustment_reason
+  benchmark_amount_pence: integer
+  target_cost_package_id: string | null, target_package_label: string | null
+  qs_amount_pence: integer | null                   -- the target package's amount_pence (base-date, uninflated)
+  variance_pence: integer | null                    -- benchmark − qs
+  variance_pct: number | null
+  forward_inflation_factor: number | null           -- the target package's §24.3 factor
+  forward_inflated_benchmark_amount_pence: integer | null
+  lower_quartile_currentised_pence, median_currentised_pence, upper_quartile_currentised_pence: number | null
+  sample_count: integer | null
+  evidence_status
+  outside_range: boolean | null                     -- null when no quartiles
+  source_reference
+```
+
+**Headline mode:** `qs_base_construction_pence` is the headline
+`base_build_pence`; every row's `qs_amount_pence` is null (no elemental
+allocation is invented) and the totals compare. **Detailed mode:** rows
+compare against their targeted package. A package targeted by two rows is
+counted once in `mapped_qs_amount_pence` and each row's `qs_amount_pence` is
+the whole package; the UI shows the share.
+
+`benchmarkFlags` / `benchmark_flags` project every warning onto the model's
+flag list: `benchmark_material_variance` (red, `amount_pence` the difference)
+for `material_variance`, `benchmark_warning` (amber) for the rest.
+
+### 27.5 Warnings and validation
+
+Warnings are result data (`BenchmarkWarning { code, severity, message }`),
+computed by the engine from the document and deterministic (§1.4 — no wall
+clock; staleness is measured against `currentisation_date`, else
+`acquisition_date`, else reported as `benchmark_age_unknown`):
+
+| Code | Fires when |
+|---|---|
+| `benchmark_stale` | `base_date` is more than `thresholds.stale_after_months` before the reference date |
+| `benchmark_age_unknown` | no reference date exists to measure staleness |
+| `missing_source` | `source_title` blank, or `public_benchmark` with no `source_url`, or `bcis_licensed` with blank `licence_or_permission` |
+| `no_location_evidence` | `location_factor` null |
+| `project_type_mismatch` | `set.project_type !== 'conversion'` |
+| `new_build_benchmark_on_conversion` | `set.project_type === 'new_build'` (in addition to the above) |
+| `incomplete_coverage` | `coverage_pct < thresholds.min_coverage_pct` |
+| `material_variance` | `|difference_pct| > thresholds.material_variance_pct` — **red** |
+| `rates_not_currentised` | `currentisation_method === 'none'` and `base_date !== currentisation_date` |
+| `source_unverified` | any selected row's rate is `draft` or `unverified` |
+| `unpriced_elements` | `totals.unpriced_elements > 0` |
+| `applied_without_currentisation` | any package carries a `benchmark_origin` whose `currentisation_method` is `'none'`, or an application of this set was performed while its method was `'none'` |
+
+Every warning is amber except `material_variance`, which is red. The
+thresholds are inputs, so a lender can see what "material" meant.
+
+Validation (hard errors, both engines, same message text under §9.6's
+drift guard):
+
+1. `elemental_benchmark.set.rates[].id` unique; every `selections[].benchmark_rate_id` resolves to a rate whose `element_code` matches the selection's.
+2. `selections[].element_code` unique and a catalogue member.
+3. `original_unit` agrees with `measurement_basis` (`area` ↔ `gbp_per_sqm|gbp_per_sqft`, `per_unit` ↔ `gbp_per_unit`, `per_item` ↔ `gbp_per_item`, `percentage` ↔ `pct`, `lump_sum` ↔ `gbp`).
+4. `original_rate_pence >= 0`; `rate_pct` non-null iff `percentage`, `0 <= rate_pct`.
+5. `adjustment_pct != 0` requires a non-blank `adjustment_reason`; `-100 < adjustment_pct`.
+6. `base_index_name` and `current_index_name` both null or both non-null and equal.
+7. `base_index_value` / `current_index_value` non-null → finite and `> 0` (`0`, `-1`, `NaN` and `Infinity` all fail, with identical text in both engines).
+8. `location_factor` non-null → finite and `> 0`.
+9. `quantity >= 0`, finite; `quantity_unit` agrees with the rate's basis.
+10. `provider_type === 'bcis_licensed'` requires non-blank `source_title` (the BCIS dataset/product), `licence_or_permission`, `imported_by`, `building_function`, and non-null `source_publication_date`, `location_factor`, `base_index_name`, `base_index_value`.
+11. `provider_type === 'public_benchmark'` requires non-blank `provider_name`, `source_title`, `source_url`, `licence_or_permission`, and non-null `source_publication_date`, `retrieved_at`.
+12. `provider_type === 'user_qs'` requires non-blank `source_title`, `imported_by`, and a non-blank `base_date`.
+13. `cost_plan.packages[].benchmark_origin` non-null requires `elemental_benchmark` non-null with `set.id === origin.set_id` — an orphaned origin is an error, not a silent tag.
+14. `target_cost_package_id` non-null must name a package on the plan (detailed mode only; headline mode forbids it).
+15. `due_diligence.source_records[].id` unique; `source_resolutions[].field` a claims key; `chosen_record_id` non-null must resolve (§23.5).
+
+### 27.6 The library, index datasets, hashing and immutability
+
+Alembic **008** adds:
+
+- `benchmark_sets`, `benchmark_rates` — the library. A set is immutable: no
+  PUT; `content_hash` is unique per `(provider_type, dataset_version,
+  content_hash)`; a re-import of identical content is a 409 naming the
+  existing id. `source_file_sha256` is stored when a file was uploaded.
+- `index_datasets`, `index_observations` — an index series version. Unique
+  on `(publisher, series_code, dataset_version)`; observations unique on
+  `(dataset_id, period)`; periods `YYYY-MM`, validated strictly increasing on
+  import; values finite and `> 0`. No PUT, no DELETE.
+- `users`, and the governance columns of §21 as amended.
+- `appraisal_versions` — the governed resave's superseded snapshots (§27.7).
+
+`content_hash` = `canonical_hash` (the §13.2 encoding) over the normalised
+set: `content_hash`, `id`, `created_at` and `imported_by` removed, and
+`rates` sorted by `element_code` then `id` (`benchmarkContentHash` /
+`benchmark_content_hash`; `library_set_id` is not a set field and never
+enters). Computed by the server on import and by both engines for the
+document's embedded set; the result republishes it; the provenance panel
+prints it beside the dataset version (§13.1).
+
+API (all under `/api/v1`, all authenticated; import routes require
+`administrator` or `underwriter`):
+
+| Route | Behaviour |
+|---|---|
+| `GET /benchmark-sets` | library listing (headers only) |
+| `GET /benchmark-sets/{id}` | one set with rates and, for a `?currentisation_date=&current_index_value=` query, derived currentised rates — computed server-side by the Python engine's own helper, never stored |
+| `POST /benchmark-sets` | JSON import (`ElementalBenchmarkSet` sans hashes); validates §27.5 rules 1–12; 409 on duplicate content; 201 with the stored row |
+| `POST /benchmark-sets/import-csv` | multipart CSV in the template's columns; same validation; records `source_file_sha256` |
+| `GET /benchmark-sets/template.csv` | the element catalogue as an import template: the column header row and a comment row per element |
+| `GET /index-datasets`, `GET /index-datasets/{id}` | listing; one series with observations |
+| `POST /index-datasets` | JSON `{publisher, series_code, series_name, dataset_version, source_url, licence, publication_date, retrieved_at, base_period, observations:[{period,value}]}`; period, monotonic and value validation; 409 on duplicate version |
+| `POST /index-datasets/import-csv` | multipart CSV `period,value` plus the header fields as form fields |
+
+No route fetches anything from the internet. Automatic download is not
+implemented (§27.9 limitation 3); the seed command
+(`python -m app.benchmarks.seed`) reads the repository's
+`data/index-datasets/*.json`.
+
+**The shipped public dataset.** `data/index-datasets/ons-construction-opi-2026q2.json`:
+publisher *Office for National Statistics*, title *Construction Output Price
+Indices (OPIs), Quarter 2 (April to June) 2026*, source URL
+`https://www.ons.gov.uk/file?uri=/businessindustryandtrade/constructionindustry/datasets/interimconstructionoutputpriceindices/current/bulletindataset9.xlsx`,
+released 13 August 2026, retrieved 30 August 2026, source-file SHA-256
+`ea0cbfe6573be52210ea0469f182ac5f03c68af39b193ab0f328feb24626edde`, base
+2015 = 100, monthly January 2014 – June 2026, ten series (`all_new_work`,
+`all_repair_maintenance`, `all_construction`, `new_housing`,
+`new_public_other`, `new_private_industrial`, `new_private_commercial`,
+`new_infrastructure`, `rm_housing`, `rm_non_housing`), licence *Open
+Government Licence v3.0*, Crown copyright. It is shipped as data, not code:
+the engine never reads the file; the document embeds the two index
+observations it uses. It is labelled everywhere as *"ONS Construction Output
+Price Index — a public currentisation proxy; not BCIS TPI and not an
+elemental-cost dataset."*
+
+**The library ships empty of elemental rates.** No lawful, reusable
+elemental-rate source with quartiles and sample counts exists to bundle;
+the only elemental rates in the repository are fixture AB's, named
+`TEST FIXTURE — NOT MARKET DATA`, under `fixtures/`, never seeded.
+
+**Reporting.** The memo gains §12C — *Elemental Cost Benchmark* — after the
+assumption schedule when `metrics.elemental_benchmark` is non-null: provider
+label and classification, building function and project type, base and
+currentisation dates, region and location adjustment (or *"No evidenced
+location adjustment applied."*), the report unit, benchmark base build,
+QS/developer base build, variance amount and %, the elemental comparison
+table (Element / Basis / Quantity / Original rate / Currentised rate /
+Adjustment / Benchmark amount / QS amount / Variance / Evidence), unmatched
+elements, the currentisation calculation printed as its factors, the
+forward-inflation sentence (*"Benchmark amounts are stated at
+<currentisation date>. Where applied to the cost plan they are inflated to
+each package's spend midpoint by the cost-plan inflation line (§24.3) and by
+nothing else."*), source and retrieval, evidence status, and the standing
+limitation, verbatim: *"Benchmark rates are an initial reasonableness check,
+not a substitute for project-specific QS advice, surveys, design development,
+contractor pricing or lender monitoring."* The heading never contains "BCIS"
+unless `provider_type === 'bcis_licensed'`, in which case it reads
+*"User-supplied BCIS licensed benchmark"* and states that the application has
+not independently verified the user's licence or the underlying BCIS data.
+`export-investment-memo.ts` performs no benchmark arithmetic: every printed
+figure is a result-row field (§11 prohibited calculation 9).
+
+### 27.7 Migration and the persistence boundary
+
+`migrateV16toV17` / `migrate_v16_to_v17` write `elemental_benchmark: null`,
+`benchmark_origin: null` on every package, and `source_records: []`,
+`source_resolutions: []` on `due_diligence`; `isV17` / `is_v17` require
+`inputs_version == 17`, the `elemental_benchmark` key present, every package
+carrying the `benchmark_origin` key, and `due_diligence.source_records`
+present. The entry points (`ConversionCalculator.tsx`, `ExportPage.tsx`,
+`app/api/app.py`) move to v17 together; both guards pin `NEWEST == 17`.
+
+**Identity gate:** corpus-wide, raw ≤ v16 through the 2.19.0 engine on both
+arms, comparing `metrics` **with `elemental_benchmark` present and null on
+both**, `model` and `schedule`, with no exclusion; sensitivity arms on
+F/U/Y/Z; R12's three validation properties with both exception lists empty
+and asserted empty. Fixture AB is authored at v17 and is excluded from the
+older migration gates exactly as Z is from the gates that predate its own
+schema.
+
+**The governed resave.** `POST /appraisals/{project_id}/resave`
+(authenticated, any role) reads the stored row, writes its current state to
+`appraisal_versions` (`reason: 'governed_resave'`, the original snapshot,
+versions, outputs and hashes, `superseded_at`), migrates the snapshot to v17,
+runs `calculate_authoritative`, and persists the result with the current
+versions and hashes, returning the new row and `previous_version_id`.
+`GET /appraisals/{project_id}/versions` lists the superseded versions;
+`GET /appraisals/stale` lists every stored row whose `inputs_version` or
+`calc_version` is behind the server's. Every ordinary save
+(`PUT /appraisals/{project_id}`) also writes the pre-save state to
+`appraisal_versions` (`reason: 'save'`). The York appraisal is resaved
+through this route by `scripts/york_reconcile.py`, which repairs the glued
+description label, writes the two conflicting `source_records`
+(`listing_structured` office; `listing_narrative` retail with the upper parts
+sold off) with no resolution, changes no financial assumption, and leaves the
+case DRAFT with `source_conflict_unresolved` raised; the identity of every
+metric before and after the resave is asserted.
+
+**The consequence a reader must not mistake for a defect.** Every stored
+row's `input_hash`, `outputs_hash` and `audit_hash` move on its next save
+(three keys join the document; one joins the result). Every live lender case
+goes stale at that save (§21.3). `spec-versions.test.ts` follows the new
+constants. No fixture pin's value moves; AB is the only new file under
+`fixtures/financial-model/`.
+
+### 27.8 Fixtures
+
+- **Fixture AB — `ab-elemental-benchmark.json`**, `kind: "pipeline"`,
+  authored at v17, named `AB — elemental benchmark, TEST FIXTURE — NOT MARKET
+  DATA`. Base: fixture Z's document (detailed plan, network, 6% allowance,
+  known midpoints) with `qs.base_date` moved to the currentisation date
+  `2026-06-01` (the §27.3 seam), an embedded `user_qs` set of seven rates —
+  four area rows (one in `gbp_per_sqft`), one per-unit row, one lump sum and
+  one percentage row — base index 120.0 at `2025-06`, current index 126.0 at
+  `2026-06` (factor 1.05 exactly), location factor 95 (multiplier 0.95), one
+  row adjusted −10% with a reason, seven selections mapped one-to-one onto
+  Z's packages, a `material_variance_pct` threshold of 10 (not the default
+  15, so the red flag fires on −13.7% and the threshold is shown to be an
+  input), and one application already performed so that the kitchens package
+  carries `benchmark_origin`. Pins, hand-derived in `test-cases.md` §27.1:
+  every row's canonical, currentised and adjusted rate, every amount, the
+  subtotal and percentage row, the totals, each warning, the forward-inflated
+  amounts from Z's factors, `construction_total_pence`, and the identity of
+  the metrics with and without the benchmark block (the advisory proof).
+- **`fixtures/benchmarks/test-elemental-benchmark-set.json`** — the same set
+  as a library import document, used by the API tests, named `TEST FIXTURE —
+  NOT MARKET DATA`. Never seeded.
+- **`fixtures/benchmarks/index-import-*.csv`** — a valid file, a
+  non-monotonic file, a duplicate-period file, a zero-value file and a
+  malformed-header file, for the import tests.
+- **`fixtures/benchmarks/ons-opi-2026q2-sample.csv`** — twelve rows of the
+  real ONS `all_new_work` series with its provenance header, so the import
+  round trip is exercised on genuine data.
+
+### 27.9 Stated limitations
+
+Recorded so they are not read as oversights.
+
+1. **No elemental rates ship.** The library is empty until a user imports a
+   licensed BCIS export or a set they are entitled to redistribute, or enters
+   their own. The product cannot benchmark a scheme out of the box, and says so.
+2. **ONS OPI is an output-price proxy.** It is not a tender-price index and
+   not elemental; using it to currentise elemental rates is an approximation
+   the report labels as such.
+3. **No automatic download.** Refreshing an index means running the seed or
+   the import with a file a person retrieved.
+4. **Single tenant.** Users share one library and one project list; there is
+   no organisation boundary.
+5. **Tokens are stateless.** Logout is client-side discard; a compromised
+   token is valid until expiry. Rotating `API_SECRET_KEY` invalidates all.
+6. **`global_per_sqft` keeps `10.7639`.** The lender-valuation basis is a
+   stored calculation convention pinned by fixture G; the display module's
+   exact constant is not applied to it.
+7. **Headline comparison is a total.** Headline mode compares one figure; no
+   elemental allocation is inferred.
+8. **A percentage element's base is the benchmark subtotal**, not the QS
+   subtotal, so its QS comparison is the target package's whole amount.
+9. **PDF/UA is not achievable with the current library.** jsPDF 4.2.1 exposes
+   no structure tree, `MarkInfo` or role map; the memo keeps title, subject,
+   language and `DisplayDocTitle`, and its basis of preparation says so
+   (§13.5).
+10. **Source-conflict detection is per field on structured claims.** The
+    narrative excerpt is stored and printed; it is not parsed (§23.5).
+
+### Guards this release must watch fail
+
+| Guard | What must fail first |
+|---|---|
+| Advisory-only | Fixture AB's metrics with the benchmark block removed equal its metrics with it present, on `construction_total_pence`, TDC, peak debt and profit — written before the result block exists. Watch it fail by adding the benchmark total to construction |
+| Unit invariance | `benchmark_amount_pence` for an area row equals the amount from the same rate expressed in `gbp_per_sqft`, in both engines, on the 620 m² × £1,250 case and on every AB row. Watch it fail by rounding the canonical rate on entry |
+| Round trip | 1,000 alternating toggles on the AB document leave every canonical value bit-identical. Watch it fail by writing the display conversion back |
+| Single forward step | An applied package's `inflation_pence` equals §24.3's figure from `qs.base_date = currentisation_date`; seeding `qs.base_date = set.base_date` instead must produce a *larger* figure and the apply must be refused. Watch it fail by downgrading the refusal to a warning |
+| Zero/negative index | Rule 7 fires on `0`, `-1`, `NaN`, `Infinity` in both engines with identical text. Watch it fail by treating `NaN` as absent |
+| Labelling | A `public_benchmark` memo contains neither `BCIS cost plan`, `BCIS verified` nor `BCIS valuation`; a `bcis_licensed` memo contains `User-supplied BCIS licensed benchmark` and the not-verified sentence. Watch it fail by printing the provider name in the heading |
+| Duplicate import | The same set posted twice is 409 the second time, naming the first id; a one-rate change is 201 with a different `content_hash`. Watch it fail by hashing the set with `id` left in |
+| Non-monotonic import | The five CSV fixtures produce exactly the five documented 422 messages. Watch it fail by sorting the periods on import |
+| Unauthenticated | Every write route returns 401 with no token and 403 with the wrong role; the R14b test file's positive paths log in. Watch it fail by removing the dependency from one route |
+| Maker-checker | The submitter's token approving the case is 403; a different credit approver's is 200. Watch it fail by comparing roles instead of user ids |
+| Stale version | `expected_version - 1` is 409; a replayed identical `idempotency_key` is 200 and writes no second event; a tampered `expected_case_hash` is 409; a row whose `locked_inputs_snapshot` was edited in the DB is 409. Watch each fail by removing its predicate from the compare-and-swap |
+| York | The resave keeps every metric identical, stores the original snapshot, leaves the row DRAFT and raises `source_conflict_unresolved`. Watch it fail by writing a resolution with an empty `evidence_reference` |
+| Month labels | The memo's peak-debt prose and its cash-flow table name the same month on the R14b release-gate documents. Watch it fail by restoring the `+ 1` |
+| ROE | `ProjectDetail` with `return_on_equity_is_unrealised: true` prints `Unrealised Return on Equity`; with `false` prints `Return on Equity`. Watch it fail by dropping the flag read |
+| Stress cell | Neither the page nor the memo contains `Refinance LTV +10.0 pp`. Watch it fail by removing the `refi_ltv` special case from `formatStressSetting` |
+| Spec-versions pin | `spec-versions.test.ts` red until §1.6 carries `17 (**inputs v17**) = calc 2.19.0+` in both engines |
+| Corpus untouched | No fixture pin's value moves; AB is the only new file under `fixtures/financial-model/`. Watch it fail by moving Z's `qs.base_date` instead of AB's |
