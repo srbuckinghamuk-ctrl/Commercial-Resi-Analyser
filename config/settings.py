@@ -10,8 +10,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/commercial_resi"
 
     # API
-    api_secret_key: str = "change-me-in-production"  # reserved for future auth
+    # Signs every bearer token (app/auth/tokens.py). Rotating it invalidates
+    # them all; the placeholder refuses to start when environment=production.
+    api_secret_key: str = "change-me-in-production"
     api_prefix: str = "/api/v1"
+    # 'development' | 'production' -- only the production check depends on it.
+    environment: str = "development"
+
+    # Authentication (R17, spec Sec 10.1)
+    auth_token_ttl_seconds: int = 43200  # 12 h
+    # Both set + an empty users table at startup => the first administrator.
+    admin_bootstrap_email: str = ""
+    admin_bootstrap_password: str = ""
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000"]
 
     # External APIs

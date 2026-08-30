@@ -235,11 +235,12 @@ class TestAppraisalV5Normalisation:
         # R14 Task 14 (spec Sec 20.1): v11. R13b Task 15 (spec Sec 22.9): v12.
         # R15 Task 13 (spec Sec 23.10): v13. R15b Task 6 (spec Sec 24.8): v14.
         # R16 Task 4 (spec Sec 25.7): v15. R16b Task 2 (spec Sec 26.1): v16.
-        assert body["inputs_version"] == 16
+        # R17 Task 3 (spec Sec 27.7): v17.
+        assert body["inputs_version"] == 17
         snapshot = body["inputs_snapshot"]
 
-        assert snapshot["inputs_version"] == 16
-        # The v9, v10, v11, v12, v13, v14, v15 and v16 steps are purely
+        assert snapshot["inputs_version"] == 17
+        # The v9, v10, v11, v12, v13, v14, v15, v16 and v17 steps are purely
         # additive or narrowing-only on a v4 document with no programme (v10
         # adds `investment_case: null`, an unchanged `refinance: null`; v11
         # adds `monitoring: null`; v12 adds `unit_sales: null`; v13 adds
@@ -249,7 +250,10 @@ class TestAppraisalV5Normalisation:
         # zeroed on every scenario, inert because `ScenarioOverrides` already
         # defaults them to the same zero; v16 narrows `conversion_costs` to
         # its five kept fields, inert because none of the nine removed fields
-        # is read past v7): a null programme stays null and keeps the Sec 6
+        # is read past v7; v17 adds `elemental_benchmark: null`, a null
+        # `benchmark_origin` on every package and empty due-diligence record
+        # arrays, inert because the benchmark layer is advisory until rows are
+        # applied): a null programme stays null and keeps the Sec 6
         # auto windows.
         assert snapshot["programme"] is None
         assert snapshot["investment_case"] is None
@@ -377,7 +381,8 @@ class TestAppraisalV5Normalisation:
         R14 Task 14 moved the stand-in from 11 to 12; R13b Task 15 moved it
         from 12 to 13; R15 Task 13 moved it from 13 to 14; R15b Task 6 moved
         it from 14 to 15; R16 Task 4 moved it from 15 to 16; R16b Task 2
-        moves it from 16 to 17, for the same reason each time: the previous
+        moved it from 16 to 17; R17 Task 3 moves it from 17 to 18, for the
+        same reason each time: the previous
         stand-in became a version this server implements (it just fails ITS
         OWN structural check on a bare `{"inputs_version": N}` document,
         missing the newest block), so it no longer stands in for a version
@@ -388,7 +393,7 @@ class TestAppraisalV5Normalisation:
         resp = await client.post("/api/v1/appraisals", json={
             "project_id": project_id,
             "name": "Future version appraisal",
-            "inputs_snapshot": {"inputs_version": 17},
+            "inputs_snapshot": {"inputs_version": 18},
         })
         assert resp.status_code == 422, resp.text
         assert "unrecognised inputs_version" in resp.text
@@ -455,8 +460,8 @@ class TestAppraisalV13DueDiligence:
         assert resp.status_code == 201, resp.text
         body = resp.json()
 
-        assert body["inputs_version"] == 16
-        assert body["inputs_snapshot"]["inputs_version"] == 16
+        assert body["inputs_version"] == 17
+        assert body["inputs_snapshot"]["inputs_version"] == 17
         assert body["inputs_snapshot"]["due_diligence"]["source_record"] \
             == FIXTURE_Y_INPUTS["due_diligence"]["source_record"]
         assert body["inputs_snapshot"]["due_diligence"]["items"] \

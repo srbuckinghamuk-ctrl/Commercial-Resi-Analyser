@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     func,
     text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncSession, async_sessionmaker, create_async_engine
@@ -235,6 +236,22 @@ class LenderCaseORM(Base):
     submitted_by: Mapped[str | None] = mapped_column(String(256))
     reviewer: Mapped[str | None] = mapped_column(String(256))
     decided_by: Mapped[str | None] = mapped_column(String(256))
+    # --- R17 (spec Sec 10.2): optimistic-concurrency version and the user
+    # identity behind each display name. The names stay: they are case_hash
+    # components. Alembic 008.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    submitted_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    reviewer_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    decided_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
     conditions: Mapped[str | None] = mapped_column(Text)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -258,6 +275,13 @@ class LenderCaseEventORM(Base):
     __tablename__ = "lender_case_events"
     __table_args__ = (
         Index("ix_lender_case_event_case_id", "case_id"),
+        # R17 (spec Sec 10.4): a repeated idempotency_key on one case is
+        # refused by the database. NULL keys (every pre-R17 event) are
+        # distinct in a unique index on both Postgres and SQLite, so keyless
+        # events coexist freely.
+        Index(
+            "uq_lender_case_event_idempotency", "case_id", "idempotency_key", unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -271,5 +295,218 @@ class LenderCaseEventORM(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # --- R17 (spec Sec 10.4): who, why, and the state the write left behind.
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(Text)
+    input_snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    outputs_hash: Mapped[str | None] = mapped_column(String(64))
+    case_hash_after: Mapped[str | None] = mapped_column(String(64))
+    case_version_after: Mapped[int | None] = mapped_column(Integer)
 
     case: Mapped["LenderCaseORM"] = relationship(back_populates="events")
+
+
+# ---------------------------------------------------------------------------
+# R17 (Alembic 008): users, the benchmark library, index datasets and
+# appraisal versions. Every column here is mirrored in
+# migrations/versions/008_benchmark_library_and_users.py so create_all (the
+# test and lifespan path) and the Alembic chain agree.
+# ---------------------------------------------------------------------------
+
+class UserORM(Base):
+    """Spec Sec 10.1. `email` is stored lower-cased; the password is a PBKDF2
+    hash plus its per-user salt (app/auth/passwords.py). Deactivation, not
+    deletion: user ids are referenced by cases, events and versions."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        Index("uq_users_email", "email", unique=True),
+    )
+
+    id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    password_salt: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BenchmarkSetORM(Base):
+    """Spec Sec 27.6. Immutable once imported: no update path exists, and a
+    re-import of identical content is refused by uq_benchmark_set_content."""
+
+    __tablename__ = "benchmark_sets"
+    __table_args__ = (
+        Index(
+            "uq_benchmark_set_content",
+            "provider_type", "dataset_version", "content_hash", unique=True,
+        ),
+    )
+
+    id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    provider_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_title: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    source_publication_date: Mapped[date | None] = mapped_column(Date)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    licence_or_permission: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    building_function: Mapped[str] = mapped_column(String(128), nullable=False)
+    project_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    specification_level: Mapped[str] = mapped_column(String(128), nullable=False)
+    region: Mapped[str] = mapped_column(String(128), nullable=False)
+    location_factor: Mapped[float | None] = mapped_column(Float)
+    location_factor_source: Mapped[str | None] = mapped_column(Text)
+    base_date: Mapped[date] = mapped_column(Date, nullable=False)
+    base_index_name: Mapped[str | None] = mapped_column(String(128))
+    base_index_value: Mapped[float | None] = mapped_column(Float)
+    current_index_name: Mapped[str | None] = mapped_column(String(128))
+    current_index_value: Mapped[float | None] = mapped_column(Float)
+    index_dataset_version: Mapped[str | None] = mapped_column(String(64))
+    currentisation_date: Mapped[date | None] = mapped_column(Date)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="GBP")
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    imported_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    imported_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    source_file_sha256: Mapped[str | None] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    rates: Mapped[list["BenchmarkRateORM"]] = relationship(
+        back_populates="benchmark_set", cascade="all, delete-orphan",
+        order_by="BenchmarkRateORM.position",
+    )
+
+
+class BenchmarkRateORM(Base):
+    __tablename__ = "benchmark_rates"
+    __table_args__ = (
+        Index("ix_benchmark_rate_set_id", "set_id"),
+    )
+
+    id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    # R17 spec Sec 27.6: the import document's own rate id, kept so a set read
+    # back from the library reproduces its content_hash (the row UUID is not in
+    # the hash; this key is).
+    rate_key: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
+    set_id: Mapped[uuid4] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("benchmark_sets.id", ondelete="CASCADE"), nullable=False
+    )
+    element_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    element_label: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    measurement_basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    original_unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    original_rate_pence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    rate_pct: Mapped[float | None] = mapped_column(Float)
+    lower_quartile_rate_pence: Mapped[int | None] = mapped_column(BigInteger)
+    median_rate_pence: Mapped[int | None] = mapped_column(BigInteger)
+    upper_quartile_rate_pence: Mapped[int | None] = mapped_column(BigInteger)
+    sample_count: Mapped[int | None] = mapped_column(Integer)
+    location_factor: Mapped[float | None] = mapped_column(Float)
+    evidence_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    # Import order -- the set's rates are returned in the order they came.
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    benchmark_set: Mapped["BenchmarkSetORM"] = relationship(back_populates="rates")
+
+
+class IndexDatasetORM(Base):
+    """Spec Sec 27.6. One version of one index series; no update, no delete."""
+
+    __tablename__ = "index_datasets"
+    __table_args__ = (
+        Index(
+            "uq_index_dataset_version", "publisher", "series_code", "dataset_version", unique=True,
+        ),
+    )
+
+    id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    publisher: Mapped[str] = mapped_column(String(256), nullable=False)
+    series_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    series_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    dataset_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    licence: Mapped[str] = mapped_column(Text, nullable=False)
+    publication_date: Mapped[date | None] = mapped_column(Date)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    base_period: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_file_sha256: Mapped[str | None] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    imported_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    imported_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    observations: Mapped[list["IndexObservationORM"]] = relationship(
+        back_populates="dataset", cascade="all, delete-orphan",
+        order_by="IndexObservationORM.period",
+    )
+
+
+class IndexObservationORM(Base):
+    __tablename__ = "index_observations"
+    __table_args__ = (
+        Index("ix_index_observation_dataset_id", "dataset_id"),
+        Index("uq_index_observation_period", "dataset_id", "period", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[uuid4] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("index_datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    period: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+
+    dataset: Mapped["IndexDatasetORM"] = relationship(back_populates="observations")
+
+
+class AppraisalVersionORM(Base):
+    """Spec Sec 11. The pre-save state of a financial_appraisals row, written
+    by every save and by the governed resave. Keyed by project like the row
+    it shadows; appraisal_id is copied, not an FK, so history survives the
+    row's replacement."""
+
+    __tablename__ = "appraisal_versions"
+    __table_args__ = (
+        Index("ix_appraisal_version_project_id", "project_id"),
+    )
+
+    id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[uuid4] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    appraisal_id: Mapped[uuid4] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)  # 'save' | 'governed_resave'
+    inputs_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    outputs: Mapped[dict | None] = mapped_column(JSON)
+    validation: Mapped[dict | None] = mapped_column(JSON)
+    calc_version: Mapped[str | None] = mapped_column(String(32))
+    inputs_version: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str | None] = mapped_column(String(32))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    outputs_hash: Mapped[str | None] = mapped_column(String(64))
+    audit_hash: Mapped[str | None] = mapped_column(String(64))
+    superseded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    superseded_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id")
+    )
+    superseded_by: Mapped[str | None] = mapped_column(String(256))

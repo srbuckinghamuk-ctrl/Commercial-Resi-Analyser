@@ -180,7 +180,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     body = resp.json()
 
     assert body["status"] == "legacy_unreconciled"
-    assert body["calc_version"] == "2.18.0"
+    assert body["calc_version"] == "2.19.0"
     # R8 Task 10: the server normalisation chain now runs v1 -> v2 -> v3 -> v4
     # -> v5. R9 Task 3 extends it to v6. R10 Task 6 extends it to v7. R11
     # Task 10 extends it to v8 (spec Sec 17.11), adding the inert VAT block.
@@ -205,8 +205,12 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     # to, so nothing about any figure changes from R15b. R16b Task 2 extends
     # it to v16 (spec Sec 26.1): a v1 document's `conversion_costs` never had
     # the nine removed fields read past v7 anyway, so nothing about any
-    # figure changes from R16.
-    assert body["inputs_snapshot"]["inputs_version"] == 16
+    # figure changes from R16. R17 Task 3 extends it to v17 (spec Sec 27.7):
+    # a v1 document has no benchmark block, so `elemental_benchmark` is
+    # written null, every package origin null and the due-diligence record
+    # arrays empty -- all inert -- so nothing about any figure changes from
+    # R16b.
+    assert body["inputs_snapshot"]["inputs_version"] == 17
     assert body["inputs_snapshot"]["vat"]["registered"] is False
     assert len(body["inputs_snapshot"]["vat"]["treatments"]) == 6
     assert body["inputs_snapshot"]["lender_valuation"] is None
@@ -226,7 +230,7 @@ async def test_v1_snapshot_migrates_to_legacy_unreconciled(client, project):
     assert acq["jurisdiction_evidence_status"] == "unconfirmed"
     assert acq["acquisition_date"] is None
     # Outputs were recalculated by the v2 engine, not just passed through.
-    assert body["outputs"]["metrics"]["calc_version"] == "2.18.0"
+    assert body["outputs"]["metrics"]["calc_version"] == "2.19.0"
 
 
 async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, project):
@@ -254,7 +258,7 @@ async def test_partial_v5_snapshot_is_merged_onto_defaults_not_rejected(client, 
     body = resp.json()
 
     snapshot = body["inputs_snapshot"]
-    assert snapshot["inputs_version"] == 16
+    assert snapshot["inputs_version"] == 17
     assert snapshot["scenarios"]["upside"]["label"] == "Upside"
     assert len(snapshot["deal_spider"]["weights"]) == 9
     # A v5 row is not a legacy v1 migration -- it must not be stamped as one.
@@ -501,7 +505,7 @@ async def test_get_returns_authoritative_outputs(client, project):
     body = resp.json()
 
     assert body["outputs"]["metrics"]["gdv_pence"] == 120_000_000
-    assert body["calc_version"] == "2.18.0"
+    assert body["calc_version"] == "2.19.0"
 
 
 def _programme(construction: dict) -> dict:
@@ -656,12 +660,12 @@ async def test_saved_appraisal_round_trips_as_v9(client, project):
     })
     assert resp.status_code == 201, resp.text
     created = resp.json()
-    assert created["inputs_version"] == 16
-    assert created["inputs_snapshot"]["inputs_version"] == 16
+    assert created["inputs_version"] == 17
+    assert created["inputs_snapshot"]["inputs_version"] == 17
 
     fetched = (await client.get(f"/api/v1/appraisals/{project['id']}")).json()
-    assert fetched["inputs_version"] == 16
-    assert fetched["inputs_snapshot"]["inputs_version"] == 16
+    assert fetched["inputs_version"] == 17
+    assert fetched["inputs_snapshot"]["inputs_version"] == 17
     # Fixture A carries no programme, so v9's two-state field stays null and
     # the Sec 6 auto windows still drive the schedule. Its investment_case is
     # also null, so it stays on the explicit investment_value_pence x ltv_pct
@@ -698,7 +702,7 @@ async def test_resaving_the_v9_document_the_server_returned_is_not_legacy(client
         "inputs_snapshot": first["inputs_snapshot"],
     })
     assert second.status_code == 201, second.text
-    assert second.json()["inputs_version"] == 16
+    assert second.json()["inputs_version"] == 17
     assert second.json()["status"] != "legacy_unreconciled"
 
 
@@ -735,7 +739,7 @@ async def test_stored_explicit_programme_becomes_a_network_without_moving_a_figu
     body = resp.json()
 
     programme = body["inputs_snapshot"]["programme"]
-    assert body["inputs_snapshot"]["inputs_version"] == 16
+    assert body["inputs_snapshot"]["inputs_version"] == 17
     # The v8 shape did not survive; the v9 one is what got stored.
     assert "packages" not in programme
     assert [p["id"] for p in programme["phases"]] == [
@@ -844,7 +848,7 @@ async def test_stored_explicit_programme_keeps_a_timing_sensitive_figure_across_
     })
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["inputs_snapshot"]["inputs_version"] == 16
+    assert body["inputs_snapshot"]["inputs_version"] == 17
     assert "packages" not in body["inputs_snapshot"]["programme"]
 
     metrics = body["outputs"]["metrics"]
@@ -866,3 +870,315 @@ async def test_stored_explicit_programme_keeps_a_timing_sensitive_figure_across_
     # And the fixture is genuinely levered, so "peak debt" is a real quantity
     # rather than a zero that two runs trivially agree on.
     assert before.metrics.peak_debt_pence > 0
+
+
+# ---------------------------------------------------------------------------
+# R17 spec Sec 11: the governed resave, appraisal_versions, the stale listing,
+# and scripts/york_reconcile.py against a York-shaped v3 / 2.1.0 row.
+# ---------------------------------------------------------------------------
+import uuid  # noqa: E402
+from functools import lru_cache  # noqa: E402
+
+from app.auth.passwords import hash_password  # noqa: E402
+from app.financial_model import CALC_VERSION  # noqa: E402
+from app.financial_model.migrate import migrate_inputs_to_v3  # noqa: E402
+from app.persistence.repositories import (  # noqa: E402
+    FinancialAppraisalRepository,
+    UserRepository,
+)
+from scripts import york_reconcile  # noqa: E402
+from tests.test_york_audit_case import york_v1_snapshot  # noqa: E402
+
+GOV_PASSWORD = "correct horse battery"
+YORK_ADDRESS = "12 Stonegate, York, YO1 8AS"
+YORK_GLUED_DESCRIPTION = (
+    "DescriptionRetail premises arranged over ground and basement floors. "
+    "The upper parts have been sold off on a long lease."
+)
+
+
+@lru_cache(maxsize=None)
+def _gov_hashed(password: str) -> tuple[str, str]:
+    return hash_password(password)
+
+
+async def _seed_user(db_engine, *, email: str, display_name: str, role: str = "underwriter"):
+    password_hash, password_salt = _gov_hashed(GOV_PASSWORD)
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+        row = await UserRepository(session).create(
+            email=email, display_name=display_name, role=role,
+            password_hash=password_hash, password_salt=password_salt, is_active=True,
+        )
+        await session.commit()
+        return row
+
+
+async def _login(client, email: str) -> dict:
+    resp = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": GOV_PASSWORD},
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['token']}"}
+
+
+def york_v3_snapshot() -> dict:
+    """The shape the live York row has (spec Sec 1.5): v3, saved under
+    calc 2.1.0, before provenance hashing existed."""
+    return migrate_inputs_to_v3(york_v1_snapshot())
+
+
+async def _seed_york_row(db_engine, project_id: str, snapshot: dict) -> None:
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+        await FinancialAppraisalRepository(session).create({
+            "project_id": uuid.UUID(project_id), "name": "York Stonegate",
+            "inputs_snapshot": snapshot, "outputs": None, "validation": None,
+            "calc_version": "2.1.0", "inputs_version": 3, "status": "draft",
+        })
+        await session.commit()
+
+
+async def _seed_york(
+    client, db_engine, *, description: str | None = YORK_GLUED_DESCRIPTION,
+) -> tuple[dict, dict]:
+    """A York project plus its stored v3 / 2.1.0 appraisal row, inserted
+    directly (the API would migrate it to v17 on the way in)."""
+    resp = await client.post(
+        "/api/v1/projects",
+        json={
+            "address_raw": YORK_ADDRESS, "address_postcode": "YO1 8AS",
+            "price_pence": 42_500_000, "use_class": "office", "description": description,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    project = resp.json()
+    snapshot = york_v3_snapshot()
+    await _seed_york_row(db_engine, project["id"], snapshot)
+    return project, snapshot
+
+
+async def test_governed_resave_of_the_york_row(client, db_engine):
+    user = await _seed_user(db_engine, email="uw@example.com", display_name="Una Underwriter")
+    headers = await _login(client, "uw@example.com")
+    project, snapshot = await _seed_york(client, db_engine)
+    pid = project["id"]
+
+    resp = await client.post(f"/api/v1/appraisals/{pid}/resave", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["inputs_version"] == 17
+    assert body["calc_version"] == CALC_VERSION == "2.19.0"
+    # Not 'reconciled': the migrated facility terms are still unconfirmed, and
+    # not 'legacy_unreconciled': the stored snapshot is v3, not v1.
+    assert body["status"] == "draft"
+    assert body["audit_hash"] and body["input_hash"] and body["outputs_hash"]
+    assert body["previous_version_id"]
+
+    # The pre-resave state is stored exactly as it was.
+    versions = (await client.get(f"/api/v1/appraisals/{pid}/versions")).json()
+    assert [v["reason"] for v in versions] == ["governed_resave"]
+    v = versions[0]
+    assert v["id"] == body["previous_version_id"]
+    assert v["inputs_snapshot"] == snapshot
+    assert (v["calc_version"], v["inputs_version"], v["status"]) == ("2.1.0", 3, "draft")
+    assert v["outputs"] is None and v["audit_hash"] is None
+    assert v["superseded_by"] == f"Una Underwriter ({user.id})"
+    assert v["superseded_by_user_id"] == str(user.id)
+    assert v["appraisal_id"] == body["id"]
+
+    # Every metric equals the direct partial-PUT recalculation of the same
+    # stored snapshot on a second, identical row.
+    resp2 = await client.post(
+        "/api/v1/projects",
+        json={"address_raw": "Twin", "price_pence": 42_500_000, "use_class": "office"},
+    )
+    twin = resp2.json()
+    await _seed_york_row(db_engine, twin["id"], york_v3_snapshot())
+    put = await client.put(f"/api/v1/appraisals/{twin['id']}", json={})
+    assert put.status_code == 200, put.text
+    assert put.json()["outputs"]["metrics"] == body["outputs"]["metrics"]
+    assert put.json()["outputs_hash"] == body["outputs_hash"]
+    assert put.json()["input_hash"] == body["input_hash"]
+
+
+async def test_put_writes_a_save_version_and_versions_are_newest_first(
+    client, db_engine, project,
+):
+    await _seed_user(db_engine, email="dev@example.com", display_name="Dev Eloper", role="developer")
+    headers = await _login(client, "dev@example.com")
+    first = await client.post("/api/v1/appraisals", json={
+        "project_id": project["id"], "name": "A", "inputs_snapshot": fixture_a_inputs(),
+    })
+    assert first.status_code == 201, first.text
+    # A brand-new row has no pre-save state to record.
+    assert (await client.get(f"/api/v1/appraisals/{project['id']}/versions")).json() == []
+
+    resave = await client.post(f"/api/v1/appraisals/{project['id']}/resave", headers=headers)
+    assert resave.status_code == 200, resave.text
+    anonymous_put = await client.put(f"/api/v1/appraisals/{project['id']}", json={"name": "B"})
+    assert anonymous_put.status_code == 200, anonymous_put.text
+    authed_post = await client.post("/api/v1/appraisals", headers=headers, json={
+        "project_id": project["id"], "name": "C", "inputs_snapshot": fixture_a_inputs(),
+    })
+    assert authed_post.status_code == 201, authed_post.text
+
+    versions = (await client.get(f"/api/v1/appraisals/{project['id']}/versions")).json()
+    assert [v["reason"] for v in versions] == ["save", "save", "governed_resave"]
+    # Newest first: the upsert-POST recorded the state the PUT left, the PUT
+    # recorded the state the resave left, the resave recorded the first save.
+    assert versions[0]["superseded_by"].startswith("Dev Eloper (")
+    assert versions[1]["superseded_by"] is None
+    assert versions[0]["audit_hash"] == anonymous_put.json()["audit_hash"]
+    assert versions[1]["audit_hash"] == resave.json()["audit_hash"]
+    assert versions[2]["audit_hash"] == first.json()["audit_hash"]
+    stamps = [v["superseded_at"] for v in versions]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+async def test_stale_listing_shows_the_row_before_the_resave_and_not_after(client, db_engine):
+    await _seed_user(db_engine, email="b@example.com", display_name="Bea Broker", role="broker")
+    headers = await _login(client, "b@example.com")
+    project, _ = await _seed_york(client, db_engine)
+
+    stale = (await client.get("/api/v1/appraisals/stale")).json()
+    assert [s["project_id"] for s in stale] == [project["id"]]
+    row = stale[0]
+    assert (row["inputs_version"], row["calc_version"], row["status"]) == (3, "2.1.0", "draft")
+    assert row["project_address"] == YORK_ADDRESS
+    assert row["name"] == "York Stonegate"
+    assert row["current_inputs_version"] == 17 and row["current_calc_version"] == CALC_VERSION
+    assert row["updated_at"]
+
+    resave = await client.post(f"/api/v1/appraisals/{project['id']}/resave", headers=headers)
+    assert resave.status_code == 200
+    assert (await client.get("/api/v1/appraisals/stale")).json() == []
+
+
+async def test_resave_requires_authentication_and_404s_like_its_neighbours(client, db_engine):
+    project, _ = await _seed_york(client, db_engine)
+    resp = await client.post(f"/api/v1/appraisals/{project['id']}/resave")
+    assert resp.status_code == 401
+    assert (await client.get(f"/api/v1/appraisals/{project['id']}/versions")).status_code == 200
+    await _seed_user(db_engine, email="c@example.com", display_name="Cy")
+    headers = await _login(client, "c@example.com")
+    missing = uuid.uuid4()
+    r = await client.post(f"/api/v1/appraisals/{missing}/resave", headers=headers)
+    assert r.status_code == 404
+    assert (await client.get(f"/api/v1/appraisals/{missing}/versions")).status_code == 404
+    assert (await client.get(f"/api/v1/appraisals/{missing}")).status_code == 404
+
+
+async def test_york_reconcile_script_against_the_in_memory_app(client, db_engine, monkeypatch):
+    await _seed_user(db_engine, email="ops@example.com", display_name="Ops")
+    project, snapshot = await _seed_york(client, db_engine)
+    # A second glued row (a different label) is repaired too; an unglued one is left.
+    glued2 = (await client.post("/api/v1/projects", json={
+        "address_raw": "2 Other Street", "price_pence": 1_000_000, "use_class": "retail",
+        "description": "Key FeaturesVacant possession",
+    })).json()
+    clean = (await client.post("/api/v1/projects", json={
+        "address_raw": "3 Clean Street", "price_pence": 1_000_000, "use_class": "retail",
+        "description": "Description: a plain one",
+    })).json()
+    monkeypatch.setattr(york_reconcile, "make_client", lambda base_url: client)
+    lines: list[str] = []
+    summary = await york_reconcile.reconcile(
+        client, email="ops@example.com", password=GOV_PASSWORD, out=lines.append,
+    )
+
+    # Description repaired by the narrow rule only, and printed before/after.
+    assert set(summary["repaired"]) == {project["id"], glued2["id"]}
+    york = (await client.get(f"/api/v1/projects/{project['id']}")).json()
+    assert york["description"] == YORK_GLUED_DESCRIPTION[len("Description"):]
+    assert york["use_class"] == "office"   # decision 12: never rewritten
+    other = (await client.get(f"/api/v1/projects/{glued2['id']}")).json()
+    assert other["description"] == "Vacant possession"
+    untouched = (await client.get(f"/api/v1/projects/{clean['id']}")).json()
+    assert untouched["description"] == "Description: a plain one"
+    assert any(line.startswith("  before: 'DescriptionRetail") for line in lines)
+    assert any(line.startswith("  after:  'Retail") for line in lines)
+
+    # Resave done: the original v3 snapshot is in history, the row is v17.
+    versions = (await client.get(f"/api/v1/appraisals/{project['id']}/versions")).json()
+    assert [v["reason"] for v in versions] == ["save", "governed_resave"]
+    assert versions[1]["inputs_snapshot"] == snapshot
+    assert versions[1]["id"] == summary["previous_version_id"]
+    resaved_metrics = versions[0]["outputs"]["metrics"]
+
+    # Two records written, no resolution, conflict raised, metrics unchanged.
+    final = (await client.get(f"/api/v1/appraisals/{project['id']}")).json()
+    assert summary["records_written"] == 2
+    records = final["inputs_snapshot"]["due_diligence"]["source_records"]
+    assert [r["kind"] for r in records] == ["listing_structured", "listing_narrative"]
+    assert records[0]["claims"]["existing_use"] == "office"
+    assert records[0]["reference"] == "projects.use_class"
+    assert records[0]["captured_by"] == records[1]["captured_by"] == "york_reconcile.py"
+    assert records[1]["claims"]["existing_use"] == york_reconcile.NARRATIVE_EXISTING_USE
+    assert records[1]["claims"]["upper_parts_included"] is False
+    assert records[1]["narrative_excerpt"] == york["description"]
+    assert final["inputs_snapshot"]["due_diligence"]["source_resolutions"] == []
+    dd = final["outputs"]["metrics"]["due_diligence"]
+    assert dd["unresolved_source_conflicts"] >= 1
+    codes = {f["code"] for f in final["outputs"]["metrics"]["flags"]}
+    assert "source_conflict_unresolved" in codes
+    assert final["status"] == "draft"
+    assert (final["inputs_version"], final["calc_version"]) == (17, CALC_VERSION)
+    assert york_reconcile.metric_differences(resaved_metrics, final["outputs"]["metrics"]) == []
+    assert resaved_metrics["flags"] != final["outputs"]["metrics"]["flags"]
+    assert any("source_conflict_unresolved" in line for line in summary["blockers"])
+    assert any(line.startswith("stored: status=draft inputs_version=17") for line in summary["blockers"])
+    assert (await client.get("/api/v1/appraisals/stale")).json() == []
+
+
+async def test_york_reconcile_dry_run_writes_nothing(client, db_engine):
+    project, snapshot = await _seed_york(client, db_engine)
+    lines: list[str] = []
+    summary = await york_reconcile.reconcile(
+        client, email=None, password=None, dry_run=True, out=lines.append,
+    )
+    assert summary["repaired"] == [project["id"]]
+    still = (await client.get(f"/api/v1/projects/{project['id']}")).json()
+    assert still["description"] == YORK_GLUED_DESCRIPTION
+    stored = (await client.get(f"/api/v1/appraisals/{project['id']}")).json()
+    assert stored["inputs_snapshot"] == snapshot and stored["calc_version"] == "2.1.0"
+    assert (await client.get(f"/api/v1/appraisals/{project['id']}/versions")).json() == []
+    assert any("dry run" in line for line in lines)
+
+
+def test_repair_glued_description_is_the_client_s_narrow_rule():
+    r = york_reconcile.repair_glued_description
+    assert r("DescriptionRetail unit") == "Retail unit"
+    assert r("Full Property DescriptionA shop") == "A shop"
+    assert r("Description: retail unit") == "Description: retail unit"
+    assert r("Description retail") == "Description retail"
+    assert r("Descriptionretail") == "Descriptionretail"
+    assert r("Description") == "Description"
+    assert r("") == "" and r(None) is None
+
+
+def test_persisted_outputs_carry_no_non_finite_float():
+    """R17: Postgres rejects `Infinity` in a JSON column; the acquisition-tax
+    table's open-ended top band is math.inf. The persisted outputs (and so the
+    hash) canonicalise it to null, as the TypeScript engine's JSON does. First
+    exposed by the York resave against the live database."""
+    import math
+
+    from app.api.app import calculate_authoritative
+    from app.models import FinancialAppraisalCreate
+    from tests.test_york_audit_case import york_v1_snapshot
+
+    payload = FinancialAppraisalCreate(
+        project_id="00000000-0000-0000-0000-000000000001", name="York", inputs_snapshot=york_v1_snapshot(),
+    )
+    row = calculate_authoritative(payload)
+
+    def walk(v):
+        if isinstance(v, float):
+            assert math.isfinite(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(row["outputs"])

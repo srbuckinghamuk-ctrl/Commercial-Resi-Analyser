@@ -1,7 +1,9 @@
 import asyncio
+import math
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -18,16 +20,26 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.auth.bootstrap import bootstrap_admin, ensure_secret_is_safe
+from app.auth.deps import AuthenticatedUser, CurrentUser, OptionalUser
+from app.auth.router import auth_router, users_router
+from app.benchmarks.router import benchmark_sets_router, index_datasets_router
 from app.eligibility.engine import run_eligibility
 from app.financial_model import CALC_VERSION, derive_jurisdiction, run_appraisal, validate_inputs
 from app.financial_model.hashing import audit_hash, canonical_hash, case_hash, input_hash
-from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v16
-from app.financial_model.provenance import ALLOWED_TRANSITIONS, is_stale
+from app.financial_model.migrate import is_v2_or_later, migrate_inputs_to_v17
+from app.financial_model.provenance import (
+    ALLOWED_TRANSITIONS, CREATE_ROLES, DECISION_STATUSES, can_transition,
+    is_stale,
+)
+from app.financial_model.types import CalculatorInputsV17, parse_calculator_inputs
 from app.integrations.http import close_client
 from app.integrations.postcodes import lookup_postcode
 from app.logging_config import configure_logging
 from app.models import (
     ApiResponse,
+    AppraisalResaveResponse,
+    AppraisalVersion,
     EligibilityAssessment,
     EligibilityAssessmentCreate,
     EligibilityAssessmentUpdate,
@@ -48,10 +60,12 @@ from app.models import (
     ScrapeUrlRequest,
     StageTransitionCreate,
     StageTransitionResponse,
+    StaleAppraisal,
     UseClass,
 )
-from app.persistence.database import Base, engine, get_db
+from app.persistence.database import AsyncSessionLocal, Base, engine, get_db
 from app.persistence.repositories import (
+    AppraisalVersionRepository,
     EligibilityAssessmentRepository,
     FinancialAppraisalRepository,
     LenderCaseEventRepository,
@@ -77,8 +91,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_secret_is_safe(settings)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await bootstrap_admin(AsyncSessionLocal, settings)
     logger.info("commercial-resi-analyser started")
     yield
     await close_client()
@@ -138,6 +154,10 @@ def create_app() -> FastAPI:
     app.include_router(eligibility_router, prefix=settings.api_prefix, tags=["eligibility"])
     app.include_router(appraisals_router, prefix=settings.api_prefix, tags=["appraisals"])
     app.include_router(lender_cases_router, prefix=settings.api_prefix, tags=["lender-cases"])
+    app.include_router(auth_router, prefix=settings.api_prefix, tags=["auth"])
+    app.include_router(users_router, prefix=settings.api_prefix, tags=["users"])
+    app.include_router(benchmark_sets_router, prefix=settings.api_prefix, tags=["benchmark-sets"])
+    app.include_router(index_datasets_router, prefix=settings.api_prefix, tags=["index-datasets"])
     app.include_router(scrape_router, prefix=settings.api_prefix, tags=["scrape"])
     app.include_router(lookup_router, prefix=settings.api_prefix, tags=["lookup"])
     app.include_router(system_router, tags=["system"])
@@ -390,6 +410,54 @@ def rec_dict(reconciliation) -> dict:
     return asdict(reconciliation)
 
 
+# R17 spec Sec 11. The server's current document version, read off the
+# newest schema class rather than restated as a literal (the same reason
+# calculate_authoritative derives the governance `inputs_version` column).
+CURRENT_INPUTS_VERSION: int = CalculatorInputsV17.model_fields["inputs_version"].default
+
+
+def _version_payload(
+    existing: FinancialAppraisal, *, reason: str, user: AuthenticatedUser | None,
+) -> dict:
+    """The pre-save state of a stored appraisal row, as an appraisal_versions
+    row (R17 spec Sec 11). The snapshot, outputs, validation, versions,
+    status and hashes are copied exactly as stored -- never migrated or
+    recalculated -- so the history row reproduces what the row said before
+    this save replaced it. `superseded_by` is the actor's display name and
+    id when the save was authenticated; None for an anonymous save."""
+    return {
+        "project_id": existing.project_id,
+        "appraisal_id": existing.id,
+        "reason": reason,
+        "inputs_snapshot": existing.inputs_snapshot,
+        "outputs": existing.outputs,
+        "validation": existing.validation,
+        "calc_version": existing.calc_version,
+        "inputs_version": existing.inputs_version,
+        "status": existing.status,
+        "input_hash": existing.input_hash,
+        "outputs_hash": existing.outputs_hash,
+        "audit_hash": existing.audit_hash,
+        # Set here, not by the column's server_default: sqlite's
+        # CURRENT_TIMESTAMP is second-resolution, and two versions written
+        # within a second would then tie on the newest-first ordering.
+        "superseded_at": datetime.now(timezone.utc),
+        "superseded_by_user_id": user.id if user is not None else None,
+        "superseded_by": f"{user.display_name} ({user.id})" if user is not None else None,
+    }
+
+
+def _json_finite(value):
+    """Recursively replace non-finite floats with None (JSON null)."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_finite(v) for v in value]
+    return value
+
+
 def calculate_authoritative(
     payload: FinancialAppraisalCreate, *, derived_jurisdiction: str | None = None,
 ) -> dict:
@@ -481,17 +549,21 @@ def calculate_authoritative(
         # when that block is absent (spec Sec 2) and falls back to the calc
         # 2.1.0 auto windows when `programme` is None (spec Sec 6). This is
         # also what gets persisted as inputs_snapshot. Like
-        # migrate_inputs_to_v6, migrate_inputs_to_v16 already returns a
+        # migrate_inputs_to_v6, migrate_inputs_to_v17 already returns a
         # validated model -- no separate .model_validate call is needed here.
         # R16b Task 2 (spec Sec 26.7): the server boundary moved to v16 and
         # the client (ConversionCalculator.tsx) moved WITH IT, in the same commit.
-        inputs = migrate_inputs_to_v16(raw)
+        # R17 Task 3 (spec Sec 27.7): the boundary moved to v17 the same way,
+        # client and server in one commit. The migration writes the benchmark
+        # block null, every package origin null and the source-record arrays
+        # empty, so a stored v16 document computes exactly what it did before.
+        inputs = migrate_inputs_to_v17(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         # A malformed or unsupported-version inputs_snapshot must 4xx, never
-        # 500 (Task 10 known item #1). migrate_inputs_to_v16 -- like
-        # migrate_inputs_to_v15, migrate_inputs_to_v14, migrate_inputs_to_v13,
+        # 500 (Task 10 known item #1). migrate_inputs_to_v17 -- like
+        # migrate_inputs_to_v16, migrate_inputs_to_v15, migrate_inputs_to_v14, migrate_inputs_to_v13,
         # migrate_inputs_to_v12, migrate_inputs_to_v11, migrate_inputs_to_v10,
         # migrate_inputs_to_v9, migrate_inputs_to_v8, migrate_inputs_to_v7,
         # migrate_inputs_to_v6 and migrate_inputs_to_v5 before it, and the merge helper all three
@@ -547,8 +619,17 @@ def calculate_authoritative(
         else "reconciled" if run.reconciliation.report_safe
         else "draft"
     )
-    outputs = {"metrics": metrics_dict(run.metrics), "reconciliation": rec_dict(run.reconciliation)}
-    return {
+    # R17: a JSON column cannot hold a non-finite float (Postgres rejects
+    # `Infinity`; SQLite, the test target, does not), and the open-ended top
+    # band of every acquisition-tax table is `math.inf`. Canonicalised to
+    # `null` HERE, before the hash, so the stored JSON, the hash a reviewer
+    # recomputes from it and the TypeScript engine (JSON.stringify renders
+    # Infinity as null) all agree. First exposed by the York resave against
+    # the live database; a latent defect on every Postgres save since R8.
+    outputs = _json_finite(
+        {"metrics": metrics_dict(run.metrics), "reconciliation": rec_dict(run.reconciliation)}
+    )
+    return _json_finite({
         "inputs_snapshot": inputs.model_dump(mode="json"),
         "outputs": outputs,
         "validation": {
@@ -566,11 +647,12 @@ def calculate_authoritative(
         # `migrate_inputs_to_v12`; R15 Task 13 moved it on again to
         # `migrate_inputs_to_v13`; R15b Task 6 moved it on again to
         # `migrate_inputs_to_v14`; R16 Task 4 moved it on again to
-        # `migrate_inputs_to_v15`; R16b Task 2 moves it on again to
-        # `migrate_inputs_to_v16`; this line needs no change at all either
+        # `migrate_inputs_to_v15`; R16b Task 2 moved it on again to
+        # `migrate_inputs_to_v16`; R17 Task 3 moves it on again to
+        # `migrate_inputs_to_v17`; this line needs no change at all either
         # time, which is the point of deriving it. `inputs` is already a
-        # `CalculatorInputsV16` here (the `migrate_inputs_to_v16(raw)` call
-        # above), whose `inputs_version` field is `Literal[16] = 16` -- the
+        # `CalculatorInputsV17` here (the `migrate_inputs_to_v17(raw)` call
+        # above), whose `inputs_version` field is `Literal[17] = 17` -- the
         # SAME value this dict's `inputs_snapshot` already carries, for the
         # same reason. Read off the document instead of restating it, so a
         # future version bump cannot leave this column behind again.
@@ -589,11 +671,11 @@ def calculate_authoritative(
             input_hash_value=input_hash(inputs),
             outputs_hash_value=canonical_hash(outputs),
         ),
-    }
+    })
 
 
 @appraisals_router.post("", response_model=FinancialAppraisal, status_code=201)
-async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
+async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep, user: OptionalUser):
     project_repo = ProjectRepository(db)
     project = await project_repo.get_by_id(body.project_id)
     if not project:
@@ -640,11 +722,63 @@ async def create_appraisal(body: FinancialAppraisalCreate, db: DbDep):
     computed = calculate_authoritative(body, derived_jurisdiction=derived_jurisdiction)
     payload = {"name": body.name, **computed}
     if existing:
+        # R17 spec Sec 11: every ordinary save first records the state it
+        # is about to replace.
+        await AppraisalVersionRepository(db).create(
+            _version_payload(existing, reason="save", user=user)
+        )
         appraisal = await repo.update(body.project_id, payload)
     else:
         appraisal = await repo.create({"project_id": body.project_id, **payload})
     await db.commit()
     return appraisal
+
+
+@appraisals_router.get("/stale", response_model=list[StaleAppraisal])
+async def list_stale_appraisals(db: DbDep):
+    """R17 spec Sec 11: every stored row whose inputs_version or calc_version
+    is behind the server's. Declared BEFORE `/{project_id}` so the literal
+    path is matched first rather than read as a (malformed) project id."""
+    return await FinancialAppraisalRepository(db).list_stale(
+        current_inputs_version=CURRENT_INPUTS_VERSION, current_calc_version=CALC_VERSION,
+    )
+
+
+@appraisals_router.get("/{project_id}/versions", response_model=list[AppraisalVersion])
+async def list_appraisal_versions(project_id: UUID, db: DbDep):
+    """R17 spec Sec 11: the project's appraisal history, newest first."""
+    if not await FinancialAppraisalRepository(db).get_by_project_id(project_id):
+        raise HTTPException(status_code=404, detail="Financial appraisal not found")
+    return await AppraisalVersionRepository(db).list_for_project(project_id)
+
+
+@appraisals_router.post("/{project_id}/resave", response_model=AppraisalResaveResponse)
+async def resave_appraisal(project_id: UUID, db: DbDep, user: CurrentUser):
+    """R17 spec Sec 11, the governed resave (authenticated, any role). Writes
+    the stored row's current state to appraisal_versions
+    (`reason: 'governed_resave'`), then recalculates from the STORED snapshot
+    -- migrated to the current document version by calculate_authoritative,
+    exactly as a partial PUT with no inputs_snapshot would -- and persists
+    the result with the current versions and hashes. No input is changed;
+    the status is whatever the recalculation earns (a row whose facility
+    terms are still unconfirmed stays 'draft')."""
+    repo = FinancialAppraisalRepository(db)
+    existing = await repo.get_by_project_id(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Financial appraisal not found")
+    version = await AppraisalVersionRepository(db).create(
+        _version_payload(existing, reason="governed_resave", user=user)
+    )
+    computed = calculate_authoritative(
+        FinancialAppraisalCreate(
+            project_id=project_id, name=existing.name, inputs_snapshot=existing.inputs_snapshot,
+        )
+    )
+    appraisal = await repo.update(project_id, {"name": existing.name, **computed})
+    if not appraisal:
+        raise HTTPException(status_code=404, detail="Financial appraisal not found")
+    await db.commit()
+    return AppraisalResaveResponse(**appraisal.model_dump(), previous_version_id=version.id)
 
 
 @appraisals_router.get("/{project_id}", response_model=FinancialAppraisal)
@@ -657,7 +791,9 @@ async def get_appraisal(project_id: UUID, db: DbDep):
 
 
 @appraisals_router.put("/{project_id}", response_model=FinancialAppraisal)
-async def update_appraisal(project_id: UUID, body: FinancialAppraisalUpdate, db: DbDep):
+async def update_appraisal(
+    project_id: UUID, body: FinancialAppraisalUpdate, db: DbDep, user: OptionalUser,
+):
     repo = FinancialAppraisalRepository(db)
     existing = await repo.get_by_project_id(project_id)
     if not existing:
@@ -683,6 +819,10 @@ async def update_appraisal(project_id: UUID, body: FinancialAppraisalUpdate, db:
         rlv_pence=body.rlv_pence,
     )
     computed = calculate_authoritative(create_payload)
+    # R17 spec Sec 11: the pre-save state is recorded before it is replaced.
+    await AppraisalVersionRepository(db).create(
+        _version_payload(existing, reason="save", user=user)
+    )
     appraisal = await repo.update(project_id, {"name": name, **computed})
     if not appraisal:
         raise HTTPException(status_code=404, detail="Financial appraisal not found")
@@ -698,15 +838,41 @@ lender_cases_router = APIRouter(prefix="/lender-cases")
 def _read_shape(case, appraisal) -> LenderCaseRead:
     """The stored case plus derived staleness (spec Sec 21.3): the live
     appraisal row's input hash no longer matching the locked one. Derived on
-    every read, stored nowhere."""
+    every read, stored nowhere. R17 adds no derivation: the version and the
+    user-id columns come straight off the row."""
     return LenderCaseRead(
         **case.model_dump(),
         stale=is_stale(appraisal.input_hash if appraisal else None, case.locked_input_hash),
     )
 
 
+def _role_forbidden(user: AuthenticatedUser, action: str) -> HTTPException:
+    return HTTPException(
+        status_code=403, detail=f"role '{user.role}' may not {action}",
+    )
+
+
+def _locked_snapshot_hash_or_none(snapshot: dict) -> str | None:
+    """R17 (spec Sec 21.5 amended): the integrity comparand. The locked
+    snapshot is re-parsed with the version-dispatching parser and re-hashed
+    exactly as the appraisal save path hashed it (`input_hash` over the
+    parsed model). None when the snapshot does not parse at all -- a pre-R17
+    test row, or a document whose schema this build no longer reads -- in
+    which case the hash cannot be reproduced and no integrity verdict is
+    possible; only a snapshot that parses to a DIFFERENT hash is a tampered
+    one. This is documented in Sec 21.5 rather than silently swallowed."""
+    try:
+        return input_hash(parse_calculator_inputs(snapshot))
+    except (ValidationError, ValueError, TypeError, AttributeError):
+        return None
+
+
 @lender_cases_router.post("", response_model=LenderCaseRead, status_code=201)
-async def create_lender_case(body: LenderCaseCreate, db: DbDep):
+async def create_lender_case(body: LenderCaseCreate, db: DbDep, user: CurrentUser):
+    # R17 (spec Sec 21.1 amended): the actor is the authenticated user. Role
+    # first (403), then the R14b preconditions in their R14b order.
+    if user.role not in CREATE_ROLES:
+        raise _role_forbidden(user, "open a lender case")
     project = await ProjectRepository(db).get_by_id(body.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -732,6 +898,11 @@ async def create_lender_case(body: LenderCaseCreate, db: DbDep):
             detail=f"A live lender case already exists (status '{live.status}') — supersede it first",
         )
     case_id = uuid4()
+    initial_hash = case_hash(
+        case_id=str(case_id), project_id=str(body.project_id), status="draft",
+        submitted_by=None, reviewer=None, decided_by=None, decided_at=None,
+        locked_audit_hash=appraisal.audit_hash,
+    )
     try:
         case = await repo.create({
             "id": case_id,
@@ -743,16 +914,18 @@ async def create_lender_case(body: LenderCaseCreate, db: DbDep):
             "locked_input_hash": appraisal.input_hash,
             "locked_outputs_hash": appraisal.outputs_hash,
             "locked_audit_hash": appraisal.audit_hash,
-            "case_hash": case_hash(
-                case_id=str(case_id), project_id=str(body.project_id), status="draft",
-                submitted_by=None, reviewer=None, decided_by=None, decided_at=None,
-                locked_audit_hash=appraisal.audit_hash,
-            ),
-            "created_by": body.created_by,
+            "case_hash": initial_hash,
+            "created_by": user.display_name,
+            "created_by_user_id": user.id,
+            "version": 1,
         })
         await LenderCaseEventRepository(db).create({
             "case_id": case.id, "from_status": None, "to_status": "draft",
-            "actor": body.created_by, "note": None,
+            "actor": user.display_name, "note": None,
+            "actor_user_id": user.id, "idempotency_key": None, "reason": None,
+            "input_snapshot_hash": appraisal.input_hash,
+            "outputs_hash": appraisal.outputs_hash,
+            "case_hash_after": initial_hash, "case_version_after": 1,
         })
         await db.commit()
     except IntegrityError:
@@ -773,9 +946,10 @@ async def create_lender_case(body: LenderCaseCreate, db: DbDep):
 
 
 @lender_cases_router.get("/{project_id}", response_model=LenderCaseRead | None)
-async def get_lender_case(project_id: UUID, db: DbDep):
+async def get_lender_case(project_id: UUID, db: DbDep, user: CurrentUser):
     """The live case with derived staleness, or JSON null when none exists —
-    'no case yet' is a normal state, not an error (spec Sec 21.5)."""
+    'no case yet' is a normal state, not an error (spec Sec 21.5). Readable
+    by any authenticated user."""
     project = await ProjectRepository(db).get_by_id(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -787,10 +961,26 @@ async def get_lender_case(project_id: UUID, db: DbDep):
 
 
 @lender_cases_router.post("/{project_id}/transition", response_model=LenderCaseRead)
-async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, db: DbDep):
+async def transition_lender_case(
+    project_id: UUID, body: LenderCaseTransition, db: DbDep, user: CurrentUser,
+):
+    """Spec Sec 21.5 (R17 amended). The checks run in this order, each
+    named by its status code, so a client can tell which rule it hit:
+    404 no live case; 422 unknown status; idempotent replay (200, no write,
+    or 409 when the same key asks for a different status); 409 illegal
+    transition; 403 role; 403 maker-checker; 409 legacy case; 409 locked
+    snapshot integrity; 409 case hash mismatch; 409 stale version; 422
+    conditions rule; then the write under a status-and-version CAS.
+
+    The replay check sits BEFORE the legality and concurrency checks on
+    purpose: a client retrying a request whose first attempt succeeded is
+    now looking at a case that has moved (its old expected_version is stale,
+    its old to_status is no longer legal from here), and a replay that
+    could only ever answer 409 would not be idempotency."""
     from datetime import datetime, timezone
 
     repo = LenderCaseRepository(db)
+    events = LenderCaseEventRepository(db)
     case = await repo.get_live_by_project_id(project_id)
     if not case:
         raise HTTPException(status_code=404, detail="No live lender case for this project")
@@ -799,6 +989,19 @@ async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, d
             "severity": "error", "field": "to_status",
             "message": f"unknown lender-case status '{body.to_status}'",
         }])
+
+    # --- idempotency (Sec 21.5 amended, design Sec 10.4) ---
+    prior = await events.get_by_idempotency_key(case.id, body.idempotency_key)
+    if prior is not None:
+        if prior.to_status == body.to_status:
+            appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
+            return _read_shape(case, appraisal)
+        raise HTTPException(
+            status_code=409,
+            detail=f"idempotency_key '{body.idempotency_key}' was already used on this case "
+                   f"for a transition to '{prior.to_status}', not '{body.to_status}'",
+        )
+
     allowed = ALLOWED_TRANSITIONS[case.status]
     if body.to_status not in allowed:
         raise HTTPException(
@@ -806,6 +1009,52 @@ async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, d
             detail=f"Cannot move a lender case from '{case.status}' to '{body.to_status}'"
                    f" — allowed: {list(allowed)}",
         )
+
+    # --- role matrix (Sec 21.2 amended, design Sec 10.3) ---
+    if not can_transition(user.role, body.to_status):
+        raise _role_forbidden(user, f"move a lender case to '{body.to_status}'")
+
+    # --- maker-checker (design decision 6): a user-id rule, not a role rule ---
+    is_decision = body.to_status in DECISION_STATUSES
+    if is_decision and user.id in {case.created_by_user_id, case.submitted_by_user_id}:
+        raise HTTPException(
+            status_code=403,
+            detail="maker-checker: the user who created or submitted a case may not decide it",
+        )
+    if body.to_status == "under_review" and user.id == case.submitted_by_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="maker-checker: the user who submitted a case may not review it",
+        )
+    if is_decision and case.submitted_by_user_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="this case was submitted without an authenticated user — supersede it and recreate",
+        )
+
+    # --- integrity (design Sec 10.4): a tampered row cannot be advanced ---
+    recomputed = _locked_snapshot_hash_or_none(case.locked_inputs_snapshot)
+    if recomputed is not None and recomputed != case.locked_input_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="locked snapshot integrity failure — the locked inputs no longer hash to "
+                   "locked_input_hash; this case cannot be advanced",
+        )
+
+    # --- optimistic concurrency ---
+    if body.expected_case_hash != case.case_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="case hash mismatch — the case is not the one this request was validated "
+                   "against; re-read and retry",
+        )
+    if body.expected_version != case.version:
+        raise HTTPException(
+            status_code=409,
+            detail=f"stale version — expected {body.expected_version}, the case is at "
+                   f"version {case.version}; re-read and retry",
+        )
+
     # One field, one meaning (spec Sec 21.2): conditions belong to
     # approved_with_conditions and nothing else.
     if body.to_status == "approved_with_conditions":
@@ -821,15 +1070,22 @@ async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, d
         }])
 
     now = datetime.now(timezone.utc)
-    values: dict = {"status": body.to_status}
+    new_version = case.version + 1
+    values: dict = {"status": body.to_status, "version": new_version}
     if body.to_status == "submitted":
-        values |= {"submitted_by": body.actor, "submitted_at": now}
+        values |= {
+            "submitted_by": user.display_name, "submitted_by_user_id": user.id,
+            "submitted_at": now,
+        }
     elif body.to_status == "under_review":
         # A resubmission overwrites the reviewer of record; the event log
         # keeps the history (spec Sec 21.2).
-        values |= {"reviewer": body.actor}
-    elif body.to_status in ("credit_approved", "approved_with_conditions", "declined"):
-        values |= {"decided_by": body.actor, "decided_at": now}
+        values |= {"reviewer": user.display_name, "reviewer_user_id": user.id}
+    elif is_decision:
+        values |= {
+            "decided_by": user.display_name, "decided_by_user_id": user.id,
+            "decided_at": now,
+        }
         if body.to_status == "approved_with_conditions":
             values |= {"conditions": body.conditions}
     # A supersede records its actor in the event only: the case columns keep
@@ -846,7 +1102,9 @@ async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, d
         decided_at=merged["decided_at"],
         locked_audit_hash=case.locked_audit_hash,
     )
-    updated = await repo.update(case.id, values, expected_status=case.status)
+    updated = await repo.update(
+        case.id, values, expected_status=case.status, expected_version=case.version,
+    )
     if updated is None:
         # Compare-and-swap failed: another transition committed against this
         # case between our read (`case`, above) and this write. No event may
@@ -856,18 +1114,36 @@ async def transition_lender_case(project_id: UUID, body: LenderCaseTransition, d
             status_code=409,
             detail="The lender case moved while this transition was validated — re-read and retry",
         )
-    await LenderCaseEventRepository(db).create({
-        "case_id": case.id, "from_status": case.status,
-        "to_status": body.to_status, "actor": body.actor, "note": body.note,
-    })
-    await db.commit()
+    try:
+        await events.create({
+            "case_id": case.id, "from_status": case.status,
+            "to_status": body.to_status, "actor": user.display_name, "note": body.note,
+            "actor_user_id": user.id, "idempotency_key": body.idempotency_key,
+            "reason": body.reason,
+            "input_snapshot_hash": case.locked_input_hash,
+            "outputs_hash": case.locked_outputs_hash,
+            "case_hash_after": values["case_hash"], "case_version_after": new_version,
+        })
+        await db.commit()
+    except IntegrityError:
+        # uq_lender_case_event_idempotency: the same key landed from a
+        # concurrent request between our lookup above and this write. The
+        # case update rolls back with it; the client re-reads and, on its
+        # retry, hits the replay branch.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"idempotency_key '{body.idempotency_key}' was used concurrently on this case"
+                   f" — re-read and retry",
+        )
     appraisal = await FinancialAppraisalRepository(db).get_by_project_id(project_id)
     return _read_shape(updated, appraisal)
 
 
 @lender_cases_router.get("/{project_id}/history", response_model=list[LenderCaseRead])
-async def lender_case_history(project_id: UUID, db: DbDep):
-    """All the project's cases, newest first, superseded included."""
+async def lender_case_history(project_id: UUID, db: DbDep, user: CurrentUser):
+    """All the project's cases, newest first, superseded included. Readable
+    by any authenticated user."""
     project = await ProjectRepository(db).get_by_id(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -877,8 +1153,9 @@ async def lender_case_history(project_id: UUID, db: DbDep):
 
 
 @lender_cases_router.get("/{project_id}/events", response_model=list[LenderCaseEvent])
-async def lender_case_events(project_id: UUID, db: DbDep):
-    """The change log across all the project's cases, newest first."""
+async def lender_case_events(project_id: UUID, db: DbDep, user: CurrentUser):
+    """The change log across all the project's cases, newest first. Readable
+    by any authenticated user."""
     project = await ProjectRepository(db).get_by_id(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")

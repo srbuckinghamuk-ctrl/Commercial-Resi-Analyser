@@ -430,43 +430,102 @@ class FinancialAppraisal(BaseModel):
     updated_at: datetime
 
 
+# --- Appraisal versions and the governed resave (R17, spec Sec 11) ---
+
+
+class AppraisalVersion(BaseModel):
+    """One pre-save state of a financial_appraisals row (appraisal_versions).
+    Written by every ordinary save (`reason: 'save'`) and by the governed
+    resave (`reason: 'governed_resave'`); the snapshot is stored as it was,
+    byte for byte, never migrated."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    appraisal_id: uuid.UUID
+    reason: str
+    inputs_snapshot: dict
+    outputs: dict | None = None
+    validation: dict | None = None
+    calc_version: str | None = None
+    inputs_version: int | None = None
+    status: str | None = None
+    input_hash: str | None = None
+    outputs_hash: str | None = None
+    audit_hash: str | None = None
+    superseded_at: datetime
+    superseded_by_user_id: uuid.UUID | None = None
+    superseded_by: str | None = None
+
+
+class AppraisalResaveResponse(FinancialAppraisal):
+    """The resaved row plus the id of the appraisal_versions row that holds
+    the state it replaced."""
+
+    previous_version_id: uuid.UUID
+
+
+class StaleAppraisal(BaseModel):
+    """A stored appraisal whose inputs_version or calc_version is behind the
+    server's (spec Sec 11, `GET /appraisals/stale`)."""
+
+    project_id: uuid.UUID
+    project_address: str
+    appraisal_id: uuid.UUID
+    name: str
+    inputs_version: int
+    calc_version: str | None = None
+    status: str | None = None
+    updated_at: datetime
+    current_inputs_version: int
+    current_calc_version: str
+
+
 # --- Lender Case (R14b, spec Sec 21) ---
 
 
 class LenderCaseCreate(BaseModel):
-    project_id: uuid.UUID
-    # Free-text actor names, the LenderValuation.author idiom -- the product
-    # has no auth (design decision 4), so the record says who claims to have
-    # acted and the change log says when.
-    created_by: str = Field(min_length=1, max_length=256)
+    # R17 (spec Sec 21.1 amended, design Sec 10.2): the actor is the
+    # authenticated user, never a client-supplied name. A sent `created_by`
+    # is a 422 -- extra='forbid' -- rather than silently ignored, so a client
+    # still on the R14b shape learns it is wrong instead of believing its name
+    # was recorded.
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("created_by")
-    @classmethod
-    def _no_separator(cls, v: str) -> str:
-        if "|" in v or any(ord(c) < 32 for c in v):
-            raise ValueError(
-                "actor names may not contain '|' or control characters — the name is a "
-                "component of the case hash (spec Sec 13.2.1)"
-            )
-        return v
+    project_id: uuid.UUID
+
+
+def _idempotency_key_no_separator(v: str) -> str:
+    if "|" in v or any(ord(c) < 32 for c in v):
+        raise ValueError("idempotency_key may not contain '|' or control characters")
+    return v
 
 
 class LenderCaseTransition(BaseModel):
+    # R17 (spec Sec 21.5 amended, design Sec 10.2/10.4). `actor` is gone: the
+    # server writes the authenticated user's display name. A sent `actor` is
+    # a 422 (extra='forbid'), for the same reason as LenderCaseCreate.
+    model_config = ConfigDict(extra="forbid")
+
     to_status: str
-    actor: str = Field(min_length=1, max_length=256)
     note: str | None = Field(default=None, max_length=10_000)
     # Required for approved_with_conditions, forbidden otherwise (Sec 21.2).
     conditions: str | None = Field(default=None, max_length=10_000)
+    # Free-text reason for the change log (Sec 21.5); never on the case.
+    reason: str | None = Field(default=None, max_length=10_000)
+    # Optimistic concurrency (Sec 21.5): the version and case_hash the client
+    # last read. Either differing from the row is a 409.
+    expected_version: int = Field(ge=1)
+    expected_case_hash: str = Field(min_length=64, max_length=64)
+    # Client-minted per confirmation; a repeat with the same to_status is a
+    # no-op 200, with a different one a 409.
+    idempotency_key: str = Field(min_length=1, max_length=64)
 
-    @field_validator("actor")
+    @field_validator("idempotency_key")
     @classmethod
-    def _no_separator(cls, v: str) -> str:
-        if "|" in v or any(ord(c) < 32 for c in v):
-            raise ValueError(
-                "actor names may not contain '|' or control characters — the name is a "
-                "component of the case hash (spec Sec 13.2.1)"
-            )
-        return v
+    def _key_no_separator(cls, v: str) -> str:
+        return _idempotency_key_no_separator(v)
 
 
 class LenderCase(BaseModel):
@@ -491,6 +550,14 @@ class LenderCase(BaseModel):
     decided_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # --- R17 (spec Sec 21.1 amended): the version counter and the user id
+    # behind each display name. The names stay (case_hash components); the
+    # ids are nullable because pre-R17 rows have none (a "legacy case").
+    version: int = 1
+    created_by_user_id: uuid.UUID | None = None
+    submitted_by_user_id: uuid.UUID | None = None
+    reviewer_user_id: uuid.UUID | None = None
+    decided_by_user_id: uuid.UUID | None = None
 
 
 class LenderCaseRead(LenderCase):
@@ -511,6 +578,15 @@ class LenderCaseEvent(BaseModel):
     actor: str
     note: str | None = None
     occurred_at: datetime
+    # --- R17 (spec Sec 21.5 amended): who, why, and the state the write
+    # left behind. Nullable: pre-R17 events carry none of these.
+    actor_user_id: uuid.UUID | None = None
+    idempotency_key: str | None = None
+    reason: str | None = None
+    input_snapshot_hash: str | None = None
+    outputs_hash: str | None = None
+    case_hash_after: str | None = None
+    case_version_after: int | None = None
 
 
 # --- Stage Transition ---
